@@ -27,7 +27,7 @@ import type {
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
-import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
+import { BUILT_IN_MCP_DOMAINS, PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
@@ -38,6 +38,7 @@ import {
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
+import { MCP_SERVERS_INSTRUCTIONS, registerUserMcpTools } from '@mcp/runtime/userMcpTools.js'
 
 export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request. When the user names an agent by the label shown beside it (such as B28) or by its spoken agent name, pass that as \`label\` or \`name\` exactly as the user said it instead of translating it to a sessionId yourself: it is resolved against what the user sees at the moment of the call. Labels are screen positions that renumber when earlier agents close, move or are pinned, so never reuse a label or sessionId remembered from earlier in the conversation, and repeat the returned displayLabel to the user so they can confirm which agent you reached. Session IDs also change when an agent reloads.`
 
@@ -186,6 +187,10 @@ export function createBuiltInMcpServer(
     registerAiWorkspaceTools(server, scope, dependencies)
   }
 
+  if (scope.domains.includes('mcp_servers')) {
+    registerUserMcpTools(server, scope, dependencies)
+  }
+
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
   }
@@ -229,6 +234,7 @@ function builtInInstructions(
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]
       : []),
@@ -937,7 +943,20 @@ function orchestrationCreateAgentCallKey(
         ].join(' '),
       inputSchema: ORCHESTRATION_CREATE_AGENT_INPUT,
     },
-    async args => {
+    async requested => {
+      // Review round 2 (#1143): a child may not be handed a privileged domain
+      // its parent does not hold itself. Orchestration is on by default, so
+      // without this any ordinary agent — or a prompt injection reaching one —
+      // could spawn a child with mcp_servers (and install a server every
+      // future agent runs) or root_management (skipping its confirmation
+      // dialog). Clamped here, at the one place a model-chosen list enters.
+      const args = {
+        ...requested,
+        ...(requested.builtInMcpDomains
+          ? { builtInMcpDomains: requested.builtInMcpDomains.filter(domain =>
+              !PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has(domain) || scope.domains.includes(domain)) }
+          : {}),
+      }
       const bridge = dependencies.orchestrationBridge
       const manager = dependencies.sessionManager
       if (!bridge || !manager) {

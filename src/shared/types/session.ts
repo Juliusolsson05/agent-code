@@ -2,6 +2,7 @@ import type {
   BuiltInMcpDomain,
   BuiltInMcpServerConfig,
 } from '@mcp/shared/types.js'
+import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 import type { AgentProviderRuntime, SessionKind } from '@shared/types/providerKind.js'
 import type { KillCaller } from '@shared/lifecycle/events.js'
@@ -83,6 +84,11 @@ export type SessionBackendSnapshot = {
    *  observed backend fact, not the renderer's requested policy. It is absent
    *  for terminal sessions, which never receive built-in MCP configuration. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Ids of the user MCP servers (#1143) this backend was launched with. Like
+   *  `builtInMcpDomains`, an observed launch fact reported by main, never the
+   *  renderer's request: main applies defaults, secrets and support at launch,
+   *  and an adopted process keeps whatever it started with. */
+  userMcpServerIds?: string[]
   /** Main-owned logical summary identity when this backend exposes TLDR. */
   tldrIdentity?: string
 }
@@ -100,6 +106,10 @@ export type SessionRecoverOptions = {
   recoverTmuxName?: string
   tldrIdentity?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** The pane's explicit per-agent user MCP choices (bare server id → on/off).
+   *  Used only if recovery has to START a backend; an adopted one keeps the
+   *  servers it was launched with. */
+  userMcpOverrides?: Record<string, boolean>
   /**
    * Opaque renderer-generated generation for this recovery admission.
    *
@@ -685,6 +695,13 @@ export type SessionOptions = {
    *  never the long-lived domain policy; the renderer/session metadata remains
    *  the source of truth for which domains should be enabled. */
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  /** User MCP servers (#1143) already validated, secret-resolved and filtered
+   *  by main for this launch and this provider. Providers only translate them;
+   *  they never decide which ones apply. */
+  userMcpServers?: ResolvedUserMcpServer[]
+  /** Codex only: how to send shell exclusions for the user-server secrets it
+   *  carries, matching the user's own config (see CodexShellPolicyStyle). */
+  userMcpCodexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
   /**
    * Main-owned one-shot boundary invoked by a resumed provider immediately
    * before it acquires exclusive durable-transcript ownership.

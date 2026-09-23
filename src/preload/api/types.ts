@@ -224,6 +224,13 @@ export type SessionSpawnOptions = {
   tldrIdentity?: string
   /** Agent sessions only: built-in Agent Code MCP domains exposed to the child. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /**
+   * Agent sessions only: the pane's explicit per-agent user MCP choices (bare
+   * server id → on/off, #1143). Deliberately NOT a resolved server list: main
+   * owns the server document and secrets and applies the defaults itself, so a
+   * stale renderer snapshot can never attach a deleted or disabled server.
+   */
+  userMcpOverrides?: Record<string, boolean>
 }
 
 export type SessionSpawnResult = {
@@ -238,6 +245,8 @@ export type SessionSpawnResult = {
    * durable workspace persistence, not this response, commits the transaction.
    */
   replacementTransactionId?: string
+  /** Agent sessions only: user MCP servers main actually attached (#1143). */
+  userMcpServerIds?: string[]
 }
 
 export type { ConditionCustomAction }

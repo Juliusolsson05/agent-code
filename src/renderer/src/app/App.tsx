@@ -30,6 +30,7 @@ import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { CliUpdateBanner } from '@renderer/features/cli-updates/CliUpdateBanner'
 import { useCliUpdateSync } from '@renderer/features/cli-updates/store'
 import { useProviderEnablementSync } from '@renderer/features/providers/store'
+import { useUserMcpSync } from '@renderer/features/mcp/store'
 
 // App — the composition root, and ONLY that (issue #494).
 //
@@ -85,6 +86,8 @@ export default function App() {
   // Provider enablement mirror: initial fetch + push subscription, same
   // mount-once contract as useCliUpdateSync above (#1102).
   useProviderEnablementSync()
+  // User MCP servers mirror (#1143): same mount-once contract.
+  useUserMcpSync()
   // Captures feed text selections for "Reply to Selection". Mounted here
   // for the same reason as the sync hooks above: `selectionchange` only
   // fires on `document`, so one listener serves every pane and Reader

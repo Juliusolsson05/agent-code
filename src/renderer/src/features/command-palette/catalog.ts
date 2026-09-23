@@ -3,6 +3,7 @@ import { goalLoopCommands } from '@renderer/features/goal-loop/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
+import { mcpCommands } from '@renderer/features/mcp/commands/mcpCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
@@ -73,6 +74,9 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // regressions to users who navigate by position.
   ...globalEditorCommands,
   ...sessionCommands,
+  // Right after the session commands, where the per-capability MCP toggles it
+  // replaced used to sit (#1143), so the MCP family keeps its browse position.
+  ...mcpCommands,
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,

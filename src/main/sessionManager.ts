@@ -69,6 +69,24 @@ import type {
 } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import {
+  normalizeUserMcpOverrides,
+  type ResolvedUserMcpServer,
+  type UserMcpDroppedServer,
+} from '@shared/userMcp/types.js'
+
+/** Structural so SessionManager does not depend on the service class; see
+ * UserMcpService.resolveForLaunch for the rules it applies. */
+export type UserMcpResolver = (params: {
+  provider: string
+  overrides: Readonly<Record<string, boolean>>
+  cwd: string
+}) => Promise<{
+  servers: ResolvedUserMcpServer[]
+  attachedIds: string[]
+  dropped: UserMcpDroppedServer[]
+  codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+}>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type { PromptGateState } from '@shared/types/session.js'
@@ -218,6 +236,10 @@ type ManagerEvents = {
    *  reconcile could not prepare, and it is being started without them (#1133).
    *  Carries domain names only, never the error: see the pre-spawn gate. */
   'managed-skills-unavailable': [{ sessionId: string; skills: ReportingDomain[] }]
+  // #1143. A user MCP server the agent asked for could not be attached to this
+  // launch (missing secret, unsupported transport, name collision…). The
+  // launch itself proceeded without it.
+  'user-mcp-unavailable': [{ sessionId: string; servers: UserMcpDroppedServer[] }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
@@ -719,6 +741,25 @@ export class SessionManager extends EventEmitter {
     this.lifecycle = new SessionLifecycleJournal(journal)
   }
 
+  /**
+   * User MCP servers (#1143). A setter rather than another positional
+   * constructor argument because the service is optional (tests and the
+   * headless harnesses construct managers without one) and the constructor's
+   * positional list is already long enough that one more slot invites
+   * argument-order bugs at every call site.
+   */
+  setUserMcpResolver(resolver: UserMcpResolver | null): void {
+    this.userMcpResolver = resolver
+  }
+
+  private userMcpResolver: UserMcpResolver | null = null
+  // What each live agent was actually launched with, and the per-agent
+  // choices it was launched from. The first feeds the backend snapshot the
+  // same way builtInMcpHost.sessionDomains does; the second lets a same-rollout
+  // Codex restore relaunch with the predecessor's exact choices.
+  private readonly userMcpAttached = new Map<string, string[]>()
+  private readonly userMcpOverridesBySession = new Map<string, Record<string, boolean>>()
+
   private readonly lifecycle: SessionLifecycleJournal
 
   // Terminal attach/replay state.
@@ -1035,6 +1076,12 @@ export class SessionManager extends EventEmitter {
       this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
+      // Once the backend is gone its user-MCP launch facts must not outlive it
+      // and be reported for a successor. Unconditional (review round 2):
+      // `revokeAgentMcp` is about the built-in host bearer and is false when a
+      // launch had no built-in domains, which leaked these entries.
+      this.userMcpAttached.delete(sessionId)
+      this.userMcpOverridesBySession.delete(sessionId)
     }
     forgetFeedDebugSession(sessionId)
     return true
@@ -2350,6 +2397,7 @@ export class SessionManager extends EventEmitter {
         dangerousMode: predecessorInfo.dangerousMode,
         useProxy: predecessorInfo.useProxy,
         builtInMcpDomains: effectiveDomains,
+        userMcpOverrides: this.userMcpOverridesBySession.get(predecessorSessionId) ?? {},
         tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(predecessorSessionId),
       }
       reservation.restoreOptions = restoreOptions
@@ -2721,6 +2769,56 @@ export class SessionManager extends EventEmitter {
    * The toast would also have claimed "agents started" off a launch that did
    * not happen.
    */
+  /**
+   * Decide which user MCP servers this launch gets (#1143).
+   *
+   * Never throws: a broken MCP document, an unreadable keyring or a bad server
+   * must cost the user that server, not the agent. Every server the agent
+   * asked for but did not get is reported through `user-mcp-unavailable`, so
+   * the absence is visible instead of looking like an attached server whose
+   * tools never appear.
+   */
+  private async resolveUserMcpServers(
+    sessionId: string,
+    kind: SessionKind,
+    options: SessionSpawnOptions,
+  ): Promise<{
+    servers: ResolvedUserMcpServer[]
+    codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+  }> {
+    if (!this.userMcpResolver || !isAgentProviderKind(kind)) return { servers: [] }
+    const overrides = normalizeUserMcpOverrides(options.userMcpOverrides)
+    this.userMcpOverridesBySession.set(sessionId, overrides)
+    try {
+      const resolution = await this.userMcpResolver({ provider: kind, overrides, cwd: options.cwd })
+      this.userMcpAttached.set(sessionId, resolution.attachedIds)
+      if (resolution.dropped.length > 0) {
+        this.journal?.record({
+          area: 'mcp.user',
+          name: 'user_mcp.unavailable',
+          severity: 'warn',
+          ids: { sessionId },
+          // Names and reasons only; reasons are fixed strings built by the
+          // service and never contain a secret value.
+          data: { servers: resolution.dropped.map(server => `${server.name}: ${server.reason}`) },
+        })
+        this.emit('user-mcp-unavailable', { sessionId, servers: resolution.dropped })
+      }
+      return {
+        servers: resolution.servers,
+        ...(resolution.codexShellPolicy ? { codexShellPolicy: resolution.codexShellPolicy } : {}),
+      }
+    } catch (error) {
+      this.userMcpAttached.set(sessionId, [])
+      this.journal?.recordError('user_mcp.resolve_failed', error, undefined, { sessionId })
+      this.emit('user-mcp-unavailable', {
+        sessionId,
+        servers: [{ name: 'MCP servers', reason: 'Your MCP server settings could not be read' }],
+      })
+      return { servers: [] }
+    }
+  }
+
   private reportSkillsUnavailable(sessionId: string, unavailable: readonly ReportingDomain[]): void {
     if (unavailable.length === 0) return
     // Pairs with the `.error` rows (same ids.sessionId): "this session is
@@ -2886,6 +2984,8 @@ export class SessionManager extends EventEmitter {
         })
         mcpRegistered = true
       }
+      const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
+        await this.resolveUserMcpServers(sessionId, kind, options)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
         const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
@@ -2943,6 +3043,8 @@ export class SessionManager extends EventEmitter {
         // `openai_base_url`.
         useProxy: options.useProxy,
         builtInMcpServers,
+        userMcpServers,
+        ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex
@@ -3282,6 +3384,7 @@ export class SessionManager extends EventEmitter {
       return {
         sessionId,
         ...(providerSessionId ? { providerSessionId } : {}),
+        userMcpServerIds: this.userMcpAttached.get(sessionId) ?? [],
       }
     }
 
@@ -5459,6 +5562,7 @@ export class SessionManager extends EventEmitter {
         ? {
             builtInMcpDomains:
               this.builtInMcpHost?.sessionDomains?.(sessionId) ?? [],
+            userMcpServerIds: this.userMcpAttached.get(sessionId) ?? [],
             tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(sessionId),
           }
         : {}),

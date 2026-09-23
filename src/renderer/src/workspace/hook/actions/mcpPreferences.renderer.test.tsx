@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CONFIGURABLE_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types'
 import type { SessionSpawnOptions } from '@preload/api/types'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
-import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
-import type { CommandContext } from '@renderer/features/command-palette/types'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import {
+  reloadSessionWithBuiltInMcpChoice,
+  reloadSessionWithBuiltInMcpOverrides,
+} from '@renderer/workspace/builtInMcpReload'
 import { useSessionActions } from './session'
 import { useProviderActions } from './provider'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
@@ -41,14 +44,15 @@ function setup(meta: Partial<SessionMeta> = { builtInMcpDomains: [], builtInMcpO
   })
   // The commanded session: the focused lane's occupant. (Tree era: the tab's focus.)
   const focused = () => writer.getState().stage.lanes[writer.getState().stage.focusedLane]!.selectedSessionId!
-  const command = async (id: string) => {
-    const run = sessionCommands.find(item => item.id === id)!.run
-    await run({ workspace: {
-      state: writer.getState(), replaceSession: hook.result.current.sessions.replaceSession,
-      showPaneToast: vi.fn(),
-    }, ui: { closePalette: vi.fn() } } as unknown as CommandContext)
-  }
-  return { refs, writer, hook, spawnSession, focused, command }
+  const workspace = () => ({
+    state: writer.getState(), replaceSession: hook.result.current.sessions.replaceSession,
+    showPaneToast: vi.fn(),
+  })
+  const reload = (domain: BuiltInMcpDomain, enabled: boolean) =>
+    reloadSessionWithBuiltInMcpChoice(workspace(), focused(), domain, enabled, { reloaded: 'ok', failed: 'failed' })
+  const reset = () =>
+    reloadSessionWithBuiltInMcpOverrides(workspace(), focused(), {}, { reloaded: 'ok', failed: 'failed' })
+  return { refs, writer, hook, spawnSession, focused, reload, reset }
 }
 
 async function perform(operation: () => Promise<unknown>) {
@@ -72,39 +76,38 @@ describe('global MCP preferences at actual provider replacement', () => {
     expect(h.writer.getState().sessions[h.focused()]!.tldrIdentity).toBe(first.tldrIdentity)
   })
 
-  it.each([
-    { domain: 'tldr', commandId: 'enable-tldr-mcp' },
-    { domain: 'goal', commandId: 'enable-goal-mcp' },
-    // #1006: the sibling command goal_loop lacked.
-    { domain: 'goal_loop', commandId: 'enable-goal-loop-mcp' },
-  ] as const)('preserves a per-agent $domain off override and lets the reset command restore inheritance', async ({ domain, commandId }) => {
+  // These drove the per-capability commands until #1143 retired them into
+  // Agent MCP Servers…; the picker writes through the same reload owner, so the
+  // preference policy is pinned at that owner directly.
+  it.each(['tldr', 'goal', 'goal_loop'] as const)('preserves a per-agent %s off override and lets a reset restore inheritance', async domain => {
     const h = setup({ builtInMcpDomains: [domain], builtInMcpOverrides: {} })
     h.refs.defaultBuiltInMcpDomainsRef.current = [domain]
-    await perform(() => h.command(commandId))
+    await perform(() => h.reload(domain, false))
     expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({ [domain]: false })
     h.refs.defaultBuiltInMcpDomainsRef.current = [domain, 'orchestration']
     await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
     expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual(['orchestration'])
-    await perform(() => h.command('use-global-mcp-settings'))
+    await perform(() => h.reset())
     expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual([domain, 'orchestration'])
     expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toEqual({})
   })
 
-  it('ends a running goal loop when its tools are turned off (#1045 review)', async () => {
-    // The loop is harness-owned and survives the reload, but the reloaded
-    // agent has no goal_loop_complete: it could never report success, and
-    // every continuation would run to the cap. The stop names the session the
-    // loop is filed under, before the replacement exists.
-    const controlGoalLoop = vi.fn(async () => null)
-    const h = setup({ builtInMcpDomains: ['goal_loop'], builtInMcpOverrides: {} })
-    window.api = { ...window.api, controlGoalLoop }
-    h.refs.defaultBuiltInMcpDomainsRef.current = ['goal_loop']
-    await perform(() => h.command('enable-goal-loop-mcp'))
-    expect(controlGoalLoop).toHaveBeenCalledWith({ sessionId: 'original', action: 'stop' })
-    // Turning them back ON must not touch the loop.
-    controlGoalLoop.mockClear()
-    await perform(() => h.command('enable-goal-loop-mcp'))
-    expect(controlGoalLoop).not.toHaveBeenCalled()
+  it('applies each provider its own built-in defaults (#1143)', async () => {
+    const h = setup({ builtInMcpDomains: [], builtInMcpOverrides: {} })
+    h.refs.defaultBuiltInMcpDomainsRef.current = {
+      claude: ['tldr'], codex: ['orchestration'], opencode: [], grok: [],
+    }
+    await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
+    // The fixture agent is Codex, so it gets Codex's column and not Claude's.
+    expect(h.spawnSession.mock.calls.at(-1)![0].builtInMcpDomains).toEqual(['orchestration'])
+  })
+
+  it('sends only the pane\'s user-server choices to main, never a resolved list (#1143)', async () => {
+    const h = setup({ builtInMcpDomains: [], builtInMcpOverrides: { tldr: true, 'user:srv-beeper': false } })
+    await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
+    expect(h.spawnSession.mock.calls.at(-1)![0].userMcpOverrides).toEqual({ 'srv-beeper': false })
+    // And the choice survives the replacement, like a built-in override does.
+    expect(h.writer.getState().sessions[h.focused()]!.builtInMcpOverrides).toMatchObject({ 'user:srv-beeper': false })
   })
 
   it('migrates a legacy agent and resolves bulk reload through the same preference policy', async () => {
