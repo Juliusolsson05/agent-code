@@ -25,6 +25,7 @@ import type {
   OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
+import { BROWSER_INSTRUCTIONS, registerBrowserTools } from '@mcp/runtime/browserTools.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { BUILT_IN_MCP_DOMAINS, PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
@@ -195,6 +196,11 @@ export function createBuiltInMcpServer(
     registerAgentTranscriptTools(server)
   }
 
+  if (scope.domains.includes('browser')) {
+    // Registers nothing while Browser Pocket is off; see registerBrowserTools.
+    registerBrowserTools(server, scope, dependencies.browserPockets)
+  }
+
   if (scope.domains.includes('workflows')) {
     // WHY the service is injected while registration stays request-scoped:
     // BuiltInMcpHttpHost deliberately constructs a fresh McpServer for every
@@ -234,6 +240,7 @@ function builtInInstructions(
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('browser') && dependencies.browserPockets?.isEnabled() ? [BROWSER_INSTRUCTIONS] : []),
     ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]

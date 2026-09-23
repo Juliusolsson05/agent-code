@@ -14,6 +14,7 @@ import { spawn as childSpawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 
 import { TMUX_SESSION_FLAGS } from '@main/tmux/tmuxConfig.js'
+import { parseTmuxPanesAll } from '@main/browserPocket/core/lanePorts.js'
 import type { TerminalForegroundSample } from '@shared/types/terminalForeground.js'
 
 // One `list-panes -a` answers for every session on the server. Tab-separated
@@ -251,6 +252,23 @@ export class TmuxRegistry {
       { timeoutMs: 2000 },
     ).catch(() => '')
     return parsePaneForegroundListing(out, this.namePrefix)
+  }
+
+  /**
+   * Every pane's root process, as `[session name, pane pid]`, for the browser
+   * pocket's lane port watcher (#1142).
+   *
+   * WHY the watcher needs this: tmux daemonizes its server (parent = PID 1),
+   * so a terminal's shell and its `npm run dev` descend from the SERVER, never
+   * from Electron or from the session's attach PTY (recorded 2026-09-22,
+   * src/main/browserPocket/__fixtures__/README.md). The server is shared by
+   * every app instance on the default socket, so callers filter by name.
+   * Same 2 s cap as listPaneForeground: a wedged server must not stall scans.
+   */
+  async listPanePids(): Promise<Array<[string, number]>> {
+    if (!this.isAvailable()) return []
+    const out = await this.runTmuxCapture(['list-panes', '-a', '-F', '#{session_name} #{pane_pid}'], { timeoutMs: 2000 }).catch(() => '')
+    return parseTmuxPanesAll(out)
   }
 
   /** Run a tmux command, resolving with stdout. Reject on non-zero exit or

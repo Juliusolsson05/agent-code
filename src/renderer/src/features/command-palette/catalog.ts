@@ -10,6 +10,7 @@ import { windowCommands } from '@renderer/features/workspace/commands/windowComm
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
 import { setupCommands } from '@renderer/features/setup/commands/setupCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
+import { browserPocketCommands } from '@renderer/features/browser-pocket/commands/browserPocketCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
@@ -80,6 +81,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
+  // Beside Spotlight: the pocket is what sits next to the agent in it (#1142).
+  ...browserPocketCommands,
   ...tldrCommands,
   ...goalLoopCommands,
   ...readerCommands,

@@ -130,6 +130,11 @@ export function coerceSettings(value: unknown): Settings {
       ? DEFAULT_SETTINGS.paletteMouseChord
       : coerceMouseChordBinding(parsed.paletteMouseChord),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
+    // Strict `=== true` for the two risky switches so a malformed or hand-edited
+    // settings file can never turn them on; `!== false` for the harmless one.
+    browserPocketEnabled: parsed.browserPocketEnabled === true,
+    browserPocketOpenLocalhostLinks: parsed.browserPocketOpenLocalhostLinks !== false,
+    browserPocketAllowEvaluate: parsed.browserPocketAllowEvaluate === true,
     // `=== true`: absent → off (the #973 default); an explicit `true` from an
     // older blob keeps autosend on for the user who had it.
     autoSendPromptSuggestion: parsed.autoSendPromptSuggestion === true,

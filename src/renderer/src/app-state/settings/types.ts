@@ -508,6 +508,16 @@ export type Settings = {
    *  DOM, semantic, and feed-debug snapshots, so they are interval-
    *  based rather than emitted on every render. */
   aggressiveDebugPersistence: boolean
+  /** Experimental master switch for the lane browser pocket (#1142). Off ⇒
+   *  no guests, no port scans, no commands, and main registers no browser_*
+   *  tools even for agents whose MCP domains include `browser`. */
+  browserPocketEnabled: boolean
+  /** Route loopback links clicked in an agent's output into that agent's
+   *  pocket instead of the system browser (⌘-click still goes external). */
+  browserPocketOpenLocalhostLinks: boolean
+  /** Registers `browser_evaluate` (arbitrary JS in the page). Off by default:
+   *  page content is untrusted and these agents also have shell access. */
+  browserPocketAllowEvaluate: boolean
   /** When on (default), clicking a prompt-suggestion chip immediately SENDS
    *  that suggestion as the next prompt; when off, clicking only prefills the
    *  composer draft so the user can edit before submitting. The chip is an
@@ -702,6 +712,9 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationMouseButton: 'Middle',
   paletteMouseChord: 'Middle+Right',
   aggressiveDebugPersistence: false,
+  browserPocketEnabled: false,
+  browserPocketOpenLocalhostLinks: true,
+  browserPocketAllowEvaluate: false,
   // Dispatch is the product's command-center view and the way the owner runs
   // the app all day; a public fresh install should open there (#973). The
   // setting still only seeds a workspace that has no workspace.json yet —

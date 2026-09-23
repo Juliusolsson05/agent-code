@@ -36,6 +36,7 @@ import { controlReference as performanceReference } from '@renderer/features/per
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 import { controlReference as goalLoopReference } from '@renderer/features/goal-loop/controlReference'
 import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
+import { controlReference as browserPocketReference } from '@renderer/features/browser-pocket/controlReference'
 import { controlReference as mcpReference } from '@renderer/features/mcp/controlReference'
 
 export const featureReferences = [
@@ -75,6 +76,7 @@ export const featureReferences = [
   ...tldrReference,
   ...goalLoopReference,
   ...agentAnalyticsReference,
+  ...browserPocketReference,
   ...mcpReference,
 ]
 
@@ -100,6 +102,7 @@ export const referenceOwnership = {
   "providers": "providers",
   "mcp": "mcp",
   "agent-analytics": "agent-analytics",
+  "browser-pocket": "browser-pocket",
   "usage-limit": "usage",
   "rendered-content": "rendered-content",
   "dispatch-pin": "pins",

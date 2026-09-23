@@ -15,6 +15,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import type { ExtensionListEntry } from '@shared/types/extensions'
+import { providerSupportsBuiltInMcpDomain, type BuiltInMcpDefaults } from '@mcp/shared/types'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 
@@ -720,6 +722,8 @@ export function getSettingsRegistry(
         'secret', 'token', 'oauth', 'claude', 'codex', 'default', 'reload', 'existing agents',
         'tldr', 'summary', 'goal', 'loop', 'orchestration', 'ai workspace', 'review',
         'transcript', 'transcripts', 'agent management', 'workflow', 'workflows',
+        // #1142: the Browser Pocket MCP lives in this grid too.
+        'browser', 'pocket',
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'mcp-servers' },
@@ -800,6 +804,60 @@ export function getSettingsRegistry(
         onToggle: (ctx, value) => ctx.onChange({
           promptTemplatesInCommandSearchEnabled: value,
         }),
+      },
+    },
+    {
+      id: 'browser-pocket',
+      category: 'experimental',
+      title: 'Browser Pocket',
+      description:
+        'Attach a browser to an agent (⌘⇧B). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. Turning this on also enables the Browser Pocket MCP for new and reloaded agents.',
+      keywords: ['browser', 'preview', 'pocket', 'localhost', 'dev server', 'webview', 'spotlight'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.browserPocketEnabled,
+        onToggle: (ctx, value) => {
+          // Turning the feature on is the moment the user decides agents
+          // should have a browser, so the MCP default follows once, for every
+          // provider that supports the domain. Turning it off does not touch
+          // the MCP grid: with the master switch off main registers no
+          // browser_* tools anyway, and the user's per-provider choice should
+          // be waiting when they turn the feature back on.
+          // Defaults are per provider since the MCP servers grid (#1143), so
+          // this edits each provider's list rather than one shared list.
+          ctx.onChange(value
+            ? { browserPocketEnabled: true, defaultBuiltInMcpDomains: withBrowserMcpDefault(ctx.settings.defaultBuiltInMcpDomains) }
+            : { browserPocketEnabled: false })
+        },
+      },
+    },
+    {
+      id: 'browser-pocket-localhost-links',
+      category: 'experimental',
+      title: 'Open Localhost Links in the Pocket',
+      description:
+        'Clicking a localhost link in an agent\'s output opens it in that agent\'s browser pocket. ⌘-click still opens your browser.',
+      keywords: ['browser', 'pocket', 'links', 'localhost'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.browserPocketOpenLocalhostLinks,
+        onToggle: (ctx, value) => ctx.onChange({ browserPocketOpenLocalhostLinks: value }),
+      },
+    },
+    {
+      id: 'browser-pocket-evaluate',
+      category: 'experimental',
+      title: 'Let Agents Run JavaScript in the Pocket',
+      description:
+        'Adds browser_evaluate, which runs arbitrary JavaScript in the page. Page content is untrusted and agents also have shell access, so leave this off unless you need it.',
+      keywords: ['browser', 'pocket', 'javascript', 'evaluate', 'mcp'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'dangerous' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.browserPocketAllowEvaluate,
+        onToggle: (ctx, value) => ctx.onChange({ browserPocketAllowEvaluate: value }),
       },
     },
     {
@@ -1131,4 +1189,14 @@ export function matchesSettingQuery(definition: SettingDefinition, query: string
     .toLowerCase()
 
   return haystack.includes(normalized)
+}
+
+/** Add the browser domain to every provider's default list that supports it. */
+export function withBrowserMcpDefault(defaults: BuiltInMcpDefaults): BuiltInMcpDefaults {
+  const next = { ...defaults }
+  for (const kind of Object.keys(next) as AgentProviderKind[]) {
+    const domains = next[kind]
+    if (!domains.includes('browser') && providerSupportsBuiltInMcpDomain(kind, 'browser')) next[kind] = [...domains, 'browser']
+  }
+  return next
 }

@@ -323,6 +323,10 @@ export type CommandContext = {
     usageHeaderLevel: UsageHeaderLevel
     dangerousAgentsEnabled: boolean
     aggressiveDebugPersistenceEnabled: boolean
+    /** Experimental Browser Pocket master switch (#1142). Optional so the many
+     *  hand-built test contexts need no edit; absent means off, which is the
+     *  shipped default. */
+    browserPocketEnabled?: boolean
     /**
      * Visibility of the surfaces a command can dismiss.
      *
