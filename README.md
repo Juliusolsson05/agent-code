@@ -5,7 +5,7 @@
 <h1 align="center">Agent Code</h1>
 
 <p align="center">
-  Open-source Electron-based AI-native IDE built around the real Claude Code and Codex CLIs.
+  An IDE for the coding agents you already use.
 </p>
 
 <p align="center">
@@ -19,128 +19,139 @@
 
 ---
 
-Agent Code is an open-source Electron IDE for driving the real Claude Code and
-Codex CLIs from a workspace built for multi-agent development.
+Agent Code is a **harness orchestrator, not a model orchestrator**. It runs the
+real Claude Code, Codex, OpenCode, Pi and Grok CLIs side by side in one
+open-source desktop IDE, and builds the workspace around them that none of
+them ship on their own.
 
 <p align="center">
   <img src="docs/screenshots/tiled-workspace.png" alt="Agent Code tiled workspace with multiple Claude and Codex sessions running side by side across project tabs" />
 </p>
 
-## Why it exists
+## Harness orchestrator, not model orchestrator
 
-Claude Code and Codex are strong runtimes: real permission flows, tool loops,
-compaction, resume behavior, and provider-specific decisions. Wrappers usually
-throw that away — they call a thin API, reuse fragile token paths, or rebuild a
-tiny chat surface. That may look clean, but it loses most of what makes the real
-products useful.
+<p align="center">
+  <img src="docs/screenshots/harness-vs-model-orchestrator.svg" alt="Left: a model orchestrator such as OpenCode or Pi is one reimplemented harness pointed at many models. Right: Agent Code runs the real Claude Code, Codex, OpenCode, Pi and Grok harnesses and puts one IDE on top of all of them." />
+</p>
 
-At the same time, Anthropic is closing OAuth to non-official clients. OpenCode
-and similar projects have already been blocked. The official Claude Code app
-works, but it is not built for deep customization or serious parallelization —
-running many agents means managing panes, prompts, transcripts, worktrees, and
-provider limits manually in a terminal.
+A harness is everything between you and the model: the system prompt, the tool
+definitions, the agent loop, permissions, compaction, resume. It matters as much
+as the model does.
 
-Agent Code takes a third route: keep the native runtimes, own the workspace
-around them.
+OpenCode and Pi are model orchestrators. They are good harnesses in their own
+right: each reimplements the prompting and the tool loop, then lets you point
+that one harness at almost any model.
 
-## How it works
+Agent Code orchestrates harnesses instead. Claude Code is Anthropic's harness,
+tuned for Claude. Codex is OpenAI's, tuned for GPT. Agent Code runs the actual
+binaries under your own login, and treats OpenCode and Pi as harnesses too. You
+pick a harness per pane and mix them in one grid.
 
-Agent Code launches the user's already-installed `claude` and `codex` CLIs
-through two standalone open-source packages:
-[`claude-code-headless`](https://github.com/Juliusolsson05/claude-code-headless)
-and [`codex-headless`](https://github.com/Juliusolsson05/codex-headless).
+- **Nothing is reimplemented, so nothing is lost.** Permission prompts,
+  compaction, slash commands, subagents and resume behave exactly as upstream
+  ships them.
+- **New CLI features work on day one.** It is their CLI, so an upstream release
+  does not wait on us to reimplement anything.
+- **Same login, same subscription.** The CLI signs in the way it always does.
+- **Switch harness mid-task.** A running Codex session can move to Claude Code
+  and back, because Agent Code translates the transcript between harnesses.
 
-They wrap each CLI in a PTY and expose the runtime as an API — JSONL
-transcripts, provider conditions, permission and trust prompts, semantic
-streaming, and screen state for anything the CLI only shows in the terminal.
-Agent Code consumes that API to rebuild the agent surface in React without
-replacing the underlying agent loop. Same auth. Same tools. Same session
-behavior.
+## Build on top of the harness
 
-Because Agent Code also owns transcript translation
-([`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)),
-a running session can move mid-task among Claude Code, Codex, and OpenCode.
+A harness is a terminal program, and its vendor decides what that terminal can
+show. Agent Code is an Electron app that owns the surface around every harness,
+so it can ship workflow and quality-of-life features no single CLI is going to
+build, and they work the same whichever harness is running underneath.
 
-## What you can do with it
+### Example: Goal and TLDR
+
+You have eight agents running. Which one is doing what, and how far along is it?
+
+Goal and TLDR ship in the base install and are off by default. Turn them on and
+each agent gets two MCP tools:
+
+- `goal_set` — what this agent's work is for. Set once it understands the task,
+  changed only when the direction changes.
+- `tldr_update` — where the work is right now, in a sentence or two.
+
+Agent Code renders the answers over your panes. Hold **Cmd+G** to see every
+visible agent's goal and **Cmd+L** to see its latest status. **View TLDR
+History** shows how both evolved over the session.
+
+The harness never knows it is being rendered. It calls a tool; Agent Code draws
+the result. That is the general pattern: an MCP entry point the agent calls,
+with custom rendering on the Agent Code side. Hooks at the first prompt and at
+turn end remind Claude Code and Codex agents that forget to report.
+
+## Everything else on top
 
 - **Tiled workspace** — many agent and terminal sessions in a real pane layout.
-- **Fleet management** — manage detached agents outside the fixed grid. Bulk
-  actions cover the multi-project cases: closing agents that have been inactive
-  across every project, pinning them for quick access, or reattaching them to
-  the grid. **Close Idle Orchestration Agents** sweeps up the finished workers an
+- **Fleet management** — manage detached agents outside the grid: close agents
+  that have been idle across every project, pin them, or reattach them.
+  **Close Idle Orchestration Agents** sweeps up the finished workers an
   orchestration run leaves behind, after confirming the list.
 
   <p align="center">
     <img src="docs/screenshots/close-old-agents.png" alt="Agent Code Close Old Agents modal — inactive-hours threshold, per-project scope, and a preview of the Claude and Codex agents that will be closed" />
   </p>
 
-- **Provider switching** — choose Claude, Codex, OpenCode, or the managed
-  OpenCode Terminal for one session, or move whole provider batches, without
-  losing state.
-- **Custom rendering** — React feed built from committed transcripts, semantic
-  streams, tool calls, and provider conditions. The raw terminal stays available.
-- **Persistent terminals** — tmux-backed shells that survive UI reloads.
-- **Built-in MCP + agent control** — orchestration lets a parent create and
-  coordinate real Agent Code children. The independently configurable Agent
-  Management MCP can inventory every agent in the caller's project — on a
-  lane or parked in the pool — expose transcript/activity evidence, read
-  bounded outputs, and send follow-ups. Destructive close is restricted to an explicit current
-  user request and refuses self-close or multi-session cascades.
+- **Orchestration** — a parent agent can create and coordinate real Agent Code
+  child agents. The separately configurable Agent Management MCP can list every
+  agent in the caller's project, read its transcript and output, and send
+  follow-ups. Closing an agent requires an explicit request from the user and
+  refuses self-close or multi-session cascades.
 
   <p align="center">
     <img src="docs/screenshots/orchestration.png" alt="Agent Code agent index with orchestration MCP tool calls (send_prompt, wait_agents, read_agent, close_run) running in a live session" />
   </p>
 
-- **MCP servers** — add any MCP server (stdio, HTTP or SSE) by pasting the
-  config from its README, for example Beeper Desktop's, and choose per provider
-  which ones new Claude and Codex agents get. **Settings → MCP** shows Agent
-  Code's own MCP servers and yours in one grid with a column per provider, and
-  **Agent MCP Servers…** changes one agent's set with a single reload. Tokens
-  are stored encrypted and reach the server through environment variables,
-  never a config file or the command line. Servers the CLIs already load from
-  their own config are listed read-only and can be copied in.
-- **TLDR peek** — turn on **TLDR** for an agent, then hold **Cmd+L** to
-  see each visible agent’s latest short status centered over its pane.
-  A small footer shows **Last active** and **Note written** independently, using
-  relative times and calendar dates for older activity. Release to return. The
-  **TLDR** palette command also opens the preview; Escape dismisses it. Reporting
-  is off by default. MCP settings apply to new agents and existing agents on their
-  next reload, including the managed reporting skill. Explicit per-agent choices
-  in **Agent MCP Servers…** take priority; its Reset clears them and reloads the
-  agent. Claude and Codex agents with TLDR are asked to set their goal on the
-  first prompt (through Goal instead when Goal MCP is also on), and at turn end to update after work that used tools without a
-  report; the footer notes when that check is not running. **View TLDR History**
-  shows how an agent's status evolved. The editor keeps Cmd+L Select Line.
-- **Goal peek** — turn on **Goal** for an agent, then hold **Cmd+G** to see
-  what each visible agent’s work is for, next to the TLDR’s where-it-is status.
-  Agents set a goal once they understand a task and change it only when the
-  direction changes, so it stays meaningful while the TLDR moves. Goal has its
-  own row in Settings → MCP, and works with or without TLDR; only the agent
-  writes it. Claude and Codex agents with Goal are asked for one at the first
-  prompt and at turn end if it is still missing. **View TLDR History** shows goal
-  changes alongside status updates. The editor keeps Cmd+G Find Next.
-- **Prompt and transcript tools** — search, rewind, duplicate, resume-command
-  copy, prompt templates. Reader Mode gives a paginated, distraction-free view
-  of long sessions for reviewing what an agent actually did.
+- **Your MCP servers** — add any MCP server (stdio, HTTP or SSE) by pasting the
+  config from its README, and choose per harness which ones new agents get.
+  **Settings → MCP** shows Agent Code's own servers and yours in one grid.
+  Tokens are stored encrypted and reach the server through environment
+  variables, never a config file or the command line.
+- **Custom rendering** — a React feed built from committed transcripts, live
+  streams, tool calls and provider prompts. The raw terminal is always one
+  toggle away.
+- **Persistent terminals** — tmux-backed shells that survive UI reloads.
+- **Prompt and transcript tools** — search, rewind, duplicate, copy the resume
+  command, prompt templates. Reader Mode gives a paginated, distraction-free
+  view of long sessions for reviewing what an agent actually did.
 
   <p align="center">
     <img src="docs/screenshots/reader-mode.png" alt="Agent Code Reader Mode — paginated distraction-free view of a long agent session with Older/Newer navigation across project tabs" />
   </p>
 
+- **Managed personal skills** — save shared conventions, write custom skills, or
+  install commit-pinned Agent Skills from public GitHub repositories. Agent Code
+  deploys them to every harness that reads them, and never overwrites files it
+  did not write.
 - **Voice dictation** — via
   [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation).
-- **Managed personal skills** — save shared conventions, author instruction-only
-  custom skills, or review and install commit-pinned Agent Skills from public
-  GitHub repositories. Agent Code deploys them to Claude Code, Codex, and
-  OpenCode with collision-safe ownership and explicit deployment health.
 - **Diagnostics** — durable local evidence for provider exits, transcript
-  drift, rendering issues, and near-OOM events.
+  drift, rendering issues and near-OOM events.
+
+## How it works
+
+Each harness runs as its real native program. Claude Code and Codex run in a PTY
+through [`claude-code-headless`](https://github.com/Juliusolsson05/claude-code-headless)
+and [`codex-headless`](https://github.com/Juliusolsson05/codex-headless); OpenCode,
+Pi and Grok have their own headless packages. Those packages observe the
+program from the outside — the terminal screen, the model stream, the transcript
+files on disk and the process — and expose it as an API. Agent Code reconciles
+those observations into one conversation and renders it in React, without
+replacing the agent loop underneath.
+
+[`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
+translates transcripts between harnesses, which is what makes switching,
+duplicating and rewinding a session possible. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 
 ## Getting started
 
 Requires Node 22.12+ (CI builds on 24 — see `.nvmrc`), plus `claude` and `codex`
-on `PATH`. The headless runtimes live as git submodules, so clone with them
-included:
+on `PATH`, and any other harness CLI you want to use. The headless runtimes live
+as git submodules, so clone with them included:
 
 ```bash
 git clone --recurse-submodules https://github.com/Juliusolsson05/agent-code.git
@@ -155,13 +166,12 @@ If you already cloned without `--recurse-submodules`, initialize them once:
 git submodule update --init --recursive
 ```
 
-**Submodules are load-bearing:** the dev build compiles the five package
-submodules (`claude-code-headless`, `codex-headless`, `opencode-headless`,
-`agent-transcript-parser`, `agent-voice-dictation`) straight from their
-`src/` via Vite aliases, so `npm run dev` will not start without them
-checked out. All submodule repos are public; no special access is needed
-(CI's `SUBMODULE_PAT`/`SUBMODULE_SSH_KEY` plumbing predates them being
-public and is kept for private forks).
+**Submodules are load-bearing:** the dev build compiles the package submodules
+under `packages/` straight from their `src/` via Vite aliases, so `npm run dev`
+will not start without them checked out at their pinned commits. All submodule
+repos are public; no special access is needed (CI's
+`SUBMODULE_PAT`/`SUBMODULE_SSH_KEY` plumbing predates them being public and is
+kept for private forks).
 
 To build distributable macOS DMG and ZIP artifacts for Apple Silicon and Intel:
 
@@ -182,8 +192,17 @@ verifies both thin app bundles before upload. For day-to-day development, use
   — headless Claude Code control layer
 - [`codex-headless`](https://github.com/Juliusolsson05/codex-headless)
   — headless Codex control layer
+- [`opencode-headless`](https://github.com/Juliusolsson05/opencode-headless)
+  and [`opencode-terminal-headless`](https://github.com/Juliusolsson05/opencode-terminal-headless)
+  — structured and terminal OpenCode runtimes
+- [`pi-terminal-headless`](https://github.com/Juliusolsson05/pi-terminal-headless)
+  — headless Pi control layer
+- [`grok-code-headless`](https://github.com/Juliusolsson05/grok-code-headless)
+  — headless Grok control layer
 - [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
-  — Claude/Codex/OpenCode transcript conversion and rewind
+  — transcript conversion and rewind across harnesses
+- [`workflow-mcp`](https://github.com/Juliusolsson05/workflow-mcp)
+  — durable multi-agent workflows over MCP
 - [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation)
   — dictation primitives for agent composer UIs
 
