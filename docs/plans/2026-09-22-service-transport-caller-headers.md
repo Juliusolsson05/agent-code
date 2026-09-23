@@ -65,3 +65,17 @@ and caller-supplied attestation headers are still dropped.
 
 `npx tsc -b` plus targeted vitest under Node 24. Never launch the app:
 two-device acceptance in the installed app stays with the user.
+
+## Review (security, one round)
+
+- **Blocker: net.fetch could forge host headers.** `net.fetch` copied caller
+  headers verbatim and allowed loopback, so any `net.connect` extension could
+  send the marker or forged `x-forwarded-*` to another extension's service
+  port. It now refuses those headers. It also refuses loopback targets on any
+  host-owned port: every running service endpoint and every LAN listener,
+  via `ExtensionServiceHost.isHostOwnedLoopbackPort`.
+- **Listener Host is explicit.** The listener now sets upstream
+  `Host: 127.0.0.1:<port>` itself, because services key listener trust on it.
+- **Docs state the real trust boundary.** Authoring §6b says local programs,
+  including service children, can still dial loopback. §6c says a loopback
+  forwarded peer means local access, and that IPv6 peers are admitted.
