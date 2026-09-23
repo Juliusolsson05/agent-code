@@ -256,6 +256,11 @@ all test runs.
     - /new follow.
     Stable 3/3. `ping` is Claude-only by domain policy, so a transcript tool is used.
   - Rig limit, recorded: the faux model answers a `[call:]` marker found inside pi's compaction summary request with a tool call, which pi refuses as a summary. The test therefore compacts before any marker exists.
+- 2026-09-23 — Done state. CI is green on all three PRs:
+  - pi-terminal-headless#1 at `2100dfc`: Contract, Coverage, Node 22.12, Node 24, Tier commands, quality-gate;
+  - agent-transcript-parser#36 at `e394391`: the same set on Node 20.19/24;
+  - agent-code#1140 at `35b0925f`: quality-gate and minimum-node-fixture-gate.
+  Nothing is merged. The merge order when the owner authorizes it is: package, parser, bump both pointers to the merged commits (no lockfile change needed), then the app.
 
 ---
 
@@ -710,7 +715,7 @@ as others), `piSession.ts` wiring, MCP policy tests.
   (`feat(pi): add Pi as a terminal-only agent provider with transcript support`,
   `Fixes #<issue>`, links to the two component PRs, verification section,
   known limitations incl. anything left faux-only).
-- [ ] **Step 8:** One review round per PR (two orchestrated reviewers per PR,
+- [x] **Step 8:** One review round per PR (two orchestrated reviewers per PR,
   Claude + Codex mix), fix valid findings, CI green. Report and **stop — no
   merge** without explicit confirmation. Merge order when authorized: package,
   parser, bump pointers to merged commits, app.
