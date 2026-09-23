@@ -438,6 +438,9 @@ function GridRowView({
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),
                     resolved.paneLabel,
+                    // The dim overlay below cannot cover a pocket page (it lives
+                    // in the host layer), so the page dims itself from this.
+                    { surface: 'lane', laneIndex, focused, dimmed: !focused },
                   )
                 ) : (
                   <div className="flex h-full min-h-0 flex-col">

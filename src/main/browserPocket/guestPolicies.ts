@@ -1,4 +1,6 @@
 import { isAllowedTopLevelUrl } from '@shared/browserPocket/url.js'
+import { keybindingFromEvent } from '@shared/keybindings.js'
+import type { ForwardedKey } from '@shared/browserPocket/types.js'
 
 /**
  * App chords that must keep working while a pocket page has focus.
@@ -34,18 +36,27 @@ export const POCKET_LOCAL_CHORDS = {
   pick: new Set(['Cmd+Shift+S', 'Ctrl+Shift+S']),
 } as const
 
-type InputLike = { type: string; key: string; alt: boolean; meta: boolean; control: boolean; shift: boolean }
+type InputLike = { type: string; key: string; code: string; alt: boolean; meta: boolean; control: boolean; shift: boolean; isAutoRepeat?: boolean; isComposing?: boolean }
 
-/** Electron's `before-input-event` input → the chord syntax our keybindings use. */
+/**
+ * Electron's `before-input-event` input → the app's canonical chord, through
+ * the SAME grammar the renderer router and the extension input gate use
+ * (@shared/keybindings). It reads the physical `code`, which is what makes ⌥S
+ * work on macOS, where the `key` is "ß". An earlier draft had its own
+ * key-based formatter here; it would have missed every Option chord.
+ */
 export function chordFromInput(input: InputLike): string | null {
-  if (input.type !== 'keyDown') return null
-  if (['Meta', 'Control', 'Alt', 'Shift'].includes(input.key)) return null
-  const key = input.key.length === 1 ? input.key.toUpperCase() : input.key.replace(/^Arrow/, '')
-  return [input.meta && 'Cmd', input.control && 'Ctrl', input.alt && 'Alt', input.shift && 'Shift', key].filter(Boolean).join('+')
+  if (input.type !== 'keyDown' || input.isComposing) return null
+  return keybindingFromEvent({ key: input.key, code: input.code, metaKey: input.meta, ctrlKey: input.control, altKey: input.alt, shiftKey: input.shift })
+}
+
+/** What main sends the renderer so it can replay the key into the router. */
+export function forwardedKeyFromInput(input: InputLike): ForwardedKey {
+  return { key: input.key, code: input.code, meta: input.meta, ctrl: input.control, alt: input.alt, shift: input.shift }
 }
 
 export type GuestPolicyDeps = {
-  forwardChord: (chord: string) => void
+  forwardChord: (key: ForwardedKey) => void
   localAction: (action: keyof typeof POCKET_LOCAL_CHORDS) => void
   /** A trusted key or mouse-down from the human (spec §6.5 takeover). */
   onHumanInput: (at?: { x: number; y: number }) => void
@@ -81,7 +92,7 @@ export function attachGuestPolicies(guest: Electron.WebContents, deps: GuestPoli
       for (const [action, chords] of Object.entries(POCKET_LOCAL_CHORDS) as Array<[keyof typeof POCKET_LOCAL_CHORDS, Set<string>]>) {
         if (chords.has(chord)) { event.preventDefault(); deps.localAction(action); return }
       }
-      if (POCKET_FORWARDED_CHORDS.has(chord)) { event.preventDefault(); deps.forwardChord(chord); return }
+      if (POCKET_FORWARDED_CHORDS.has(chord)) { event.preventDefault(); deps.forwardChord(forwardedKeyFromInput(input)); return }
     }
     // A keystroke here MAY be the user taking control (spec §6.5) — or may be
     // the agent's own CDP Input.dispatchKeyEvent echoing through: whether CDP

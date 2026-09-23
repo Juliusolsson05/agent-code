@@ -4,19 +4,19 @@ import { describe, expect, it } from 'vitest'
 
 import { POCKET_FORWARDED_CHORDS, POCKET_LOCAL_CHORDS, chordFromInput } from './guestPolicies'
 
-const key = (key: string, mods: Partial<{ alt: boolean; meta: boolean; control: boolean; shift: boolean }> = {}, type = 'keyDown') =>
-  ({ type, key, alt: false, meta: false, control: false, shift: false, ...mods })
+const key = (key: string, code: string, mods: Partial<{ alt: boolean; meta: boolean; control: boolean; shift: boolean }> = {}, type = 'keyDown') =>
+  ({ type, key, code, alt: false, meta: false, control: false, shift: false, ...mods })
 
 describe('chordFromInput', () => {
-  it('produces the keybinding syntax', () => {
-    expect(chordFromInput(key('s', { alt: true }))).toBe('Alt+S')
-    expect(chordFromInput(key('b', { meta: true, shift: true }))).toBe('Cmd+Shift+B')
-    expect(chordFromInput(key('ArrowLeft', { alt: true }))).toBe('Alt+Left')
-    expect(chordFromInput(key(',', { meta: true }))).toBe('Cmd+,')
+  it('uses the physical code, so macOS Option chords resolve (⌥S reports key "ß")', () => {
+    expect(chordFromInput(key('ß', 'KeyS', { alt: true }))).toBe('Alt+S')
+    expect(chordFromInput(key('B', 'KeyB', { meta: true, shift: true }))).toBe('Cmd+Shift+B')
+    expect(chordFromInput(key('ArrowLeft', 'ArrowLeft', { alt: true }))).toBe('Alt+Left')
+    expect(chordFromInput(key(',', 'Comma', { meta: true }))).toBe('Cmd+,')
   })
   it('ignores key-up and bare modifiers', () => {
-    expect(chordFromInput(key('b', { meta: true }, 'keyUp'))).toBeNull()
-    expect(chordFromInput(key('Shift', { shift: true }))).toBeNull()
+    expect(chordFromInput(key('b', 'KeyB', { meta: true }, 'keyUp'))).toBeNull()
+    expect(chordFromInput(key('Shift', 'ShiftLeft', { shift: true }))).toBeNull()
   })
 })
 

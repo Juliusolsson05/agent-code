@@ -3,6 +3,7 @@ import { ipcRenderer } from 'electron'
 import { subscribe } from '@preload/api/ipc.js'
 import type { Unsub } from '@preload/api/types.js'
 import type {
+  ForwardedKey,
   LanePort,
   PocketDrivingEvent,
   PocketFlags,
@@ -34,7 +35,7 @@ export const browserPocketApi = {
   clearPocketStorage: (p: { pocketId: string; profile: 'lane' | 'project'; projectId?: string }): Promise<void> =>
     ipcRenderer.invoke('browser-pocket:clear-storage', p),
 
-  onPocketChord: (cb: (p: { chord: string }) => void): Unsub => subscribe('browser-pocket:chord', cb),
+  onPocketChord: (cb: (key: ForwardedKey) => void): Unsub => subscribe('browser-pocket:chord', cb),
   onPocketLocalAction: (cb: (p: { pocketId: string; action: PocketLocalAction }) => void): Unsub => subscribe('browser-pocket:local-action', cb),
   onPocketBlockedPopup: (cb: (p: { pocketId: string; url: string }) => void): Unsub => subscribe('browser-pocket:blocked-popup', cb),
   onPocketOpenRequest: (cb: (p: { sessionId: string; url?: string }) => void): Unsub => subscribe('browser-pocket:open-request', cb),

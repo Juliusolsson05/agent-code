@@ -43,7 +43,7 @@ export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
       guestsWithPolicies.add(guest!.id)
       guest!.once('destroyed', () => guestsWithPolicies.delete(guest!.id))
       attachGuestPolicies(guest!, {
-        forwardChord: chord => { if (!sender.isDestroyed()) sender.send('browser-pocket:chord', { chord }) },
+        forwardChord: key => { if (!sender.isDestroyed()) sender.send('browser-pocket:chord', key) },
         localAction: action => { if (!sender.isDestroyed()) sender.send('browser-pocket:local-action', { pocketId: p.pocketId, action }) },
         onHumanInput: at => deps.noteHumanInput(p.pocketId, at),
         onBlockedPopup: url => { if (!sender.isDestroyed()) sender.send('browser-pocket:blocked-popup', { pocketId: p.pocketId, url }) },

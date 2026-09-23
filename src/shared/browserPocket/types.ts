@@ -38,10 +38,13 @@ export type PocketPickResult = {
 
 export type PortWatchSession = {
   sessionId: string
-  /** Agent roots count only descendants' listeners; see core/lanePorts.ts. */
-  agentPid: number | null
-  /** tmux session names of terminals attributed to this lane. */
+  /** tmux session names of terminals attributed to this lane. Their panes
+   * descend from the daemonized tmux SERVER, never from Electron, so main
+   * resolves them through `tmux list-panes` (core/lanePorts.ts). */
   tmuxNames: string[]
-  /** Direct-PTY terminal pids attributed to this lane. */
-  terminalPids: number[]
+  /** Direct-PTY terminal sessions attributed to this lane (main resolves pids). */
+  terminalSessionIds: string[]
 }
+
+/** A key pressed while a pocket page had focus, replayed into the app's router. */
+export type ForwardedKey = { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
