@@ -5,12 +5,14 @@ import type { SecretCodec } from '@main/keyVault/vaultStore.js'
 import {
   addCodexUserMcpLaunchConfig,
   claudeUserMcpEntries,
+  type CodexShellPolicyStyle,
   type ResolvedUserMcpServer,
 } from '@providers/shared/runtime/userMcpLaunch.js'
 import { importUserMcpConfig } from '@shared/userMcp/importConfig.js'
 import {
   isUserMcpProvider,
   type NativeMcpServer,
+  type NativeMcpServerSource,
   type UserMcpDocument,
   type UserMcpDroppedServer,
   type UserMcpImportResult,
@@ -35,6 +37,7 @@ import {
 import {
   claudeManagedMcpPolicyPresent,
   codexNativeServerNames,
+  codexShellPolicyStyle,
   readNativeMcpServers,
 } from './nativeServers.js'
 import { UserMcpSecretStore } from './secrets.js'
@@ -44,6 +47,8 @@ export type UserMcpLaunchResolution = {
   servers: ResolvedUserMcpServer[]
   attachedIds: string[]
   dropped: UserMcpDroppedServer[]
+  /** Codex only: how to send the shell exclusions for the secrets it carries. */
+  codexShellPolicy?: CodexShellPolicyStyle
 }
 
 export type UserMcpServiceDeps = {
@@ -51,9 +56,10 @@ export type UserMcpServiceDeps = {
   codec: SecretCodec
   /** Injectable for tests; production reads the real CLI config files. */
   native?: {
-    list(): Promise<NativeMcpServer[]>
+    list(): Promise<NativeMcpServerSource[]>
     codexNames(cwd: string): Promise<Set<string>>
     claudeManagedPolicy(): Promise<boolean>
+    codexShellPolicy?(cwd: string): Promise<CodexShellPolicyStyle>
   }
 }
 
@@ -92,6 +98,7 @@ export class UserMcpService {
       list: () => readNativeMcpServers(),
       codexNames: cwd => codexNativeServerNames(cwd),
       claudeManagedPolicy: () => claudeManagedMcpPolicyPresent(),
+      codexShellPolicy: cwd => codexShellPolicyStyle(cwd),
     }
   }
 
@@ -113,7 +120,7 @@ export class UserMcpService {
   async snapshot(): Promise<UserMcpSnapshot> {
     await this.initialize()
     const [native, claudeManagedPolicy] = await Promise.all([
-      this.native.list().catch(() => [] as NativeMcpServer[]),
+      this.native.list().catch(() => [] as NativeMcpServerSource[]),
       this.native.claudeManagedPolicy().catch(() => false),
     ])
     // Names already in the user's own Codex config.toml collide at every Codex
@@ -124,7 +131,8 @@ export class UserMcpService {
     const servers = await Promise.all(this.document.servers.map(server => this.view(server, claudeManagedPolicy, codexNativeNames)))
     return {
       servers,
-      native,
+      // Strip Copy-in material: see NativeMcpServer.copyable.
+      native: native.map(({ entry: _entry, inputs: _inputs, ...view }): NativeMcpServer => view),
       claudeManagedPolicy,
       ...(this.storeProblem ? { storeProblem: this.storeProblem } : {}),
     }
@@ -152,6 +160,15 @@ export class UserMcpService {
       // and launch already refuses to attach the server until it is set.
       const problems = validateServer(server, others)
       if (problems.length > 0) return { ok: false, error: problems[0]!.message, problems }
+      // Changing WHERE a server connects forgets its stored secrets (review
+      // round 1). Otherwise an edit — or an agent's mcp_servers_update after a
+      // prompt injection — could keep `${input:token}` and point the entry at
+      // another host or command, and the next launch would hand the token to
+      // it: exfiltration without ever reading a secret. Secrets supplied in
+      // this same save are set afterwards, so an intentional move that
+      // re-enters the token still works in one step.
+      const destinationChanged = existing !== undefined && destinationOf(existing.entry) !== destinationOf(server.entry)
+      if (destinationChanged) await this.secrets.clearServer(server.id)
       for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
         if (server.inputs.some(candidate => candidate.id === inputId)) {
           await this.secrets.set(server.id, inputId, value)
@@ -165,7 +182,7 @@ export class UserMcpService {
           : [...this.document.servers, server],
       }
       await this.persist()
-      return { ok: true, id: server.id }
+      return { ok: true, id: server.id, ...(destinationChanged ? { secretsCleared: true } : {}) }
     })
   }
 
@@ -300,13 +317,22 @@ export class UserMcpService {
     // Dry-run the provider translator here, where drops can be reported, so
     // the provider session never has to silently omit a server it was handed.
     // Both translators are pure and deterministic over the same input.
+    const codexShellPolicy = provider === 'codex'
+      ? await (this.native.codexShellPolicy?.(params.cwd) ?? Promise.resolve({ style: 'filters' } as const))
+        .catch(() => ({ style: 'filters' } as const))
+      : undefined
     const translatorDrops = provider === 'claude'
       ? claudeUserMcpEntries(candidates).dropped
-      : addCodexUserMcpLaunchConfig(candidates, [], {})
+      : addCodexUserMcpLaunchConfig(candidates, [], {}, codexShellPolicy)
     const refused = new Set(translatorDrops.map(server => server.name))
     dropped.push(...translatorDrops)
     const servers = candidates.filter(server => !refused.has(server.name))
-    return { servers, attachedIds: servers.map(server => server.id), dropped }
+    return {
+      servers,
+      attachedIds: servers.map(server => server.id),
+      dropped,
+      ...(codexShellPolicy ? { codexShellPolicy } : {}),
+    }
   }
 
   private update(id: string, change: (server: UserMcpServer) => UserMcpServer): Promise<UserMcpMutationResult> {
@@ -323,10 +349,11 @@ export class UserMcpService {
   }
 
   private mutate(
-    operation: () => Promise<{ ok: true; id?: string } | { ok: false; error: string; problems?: UserMcpProblem[] }>,
+    operation: () => Promise<{ ok: true; id?: string; secretsCleared?: boolean } | { ok: false; error: string; problems?: UserMcpProblem[] }>,
   ): Promise<UserMcpMutationResult> {
     const run = this.tail.then(async (): Promise<UserMcpMutationResult> => {
       await this.initialize()
+      const before = this.document
       if (this.readFailed) {
         // A transient failure (a restore holding the file, EMFILE while many
         // agents start) usually clears; retry before refusing.
@@ -343,8 +370,18 @@ export class UserMcpService {
         if (!outcome.ok) return outcome
         const snapshot = await this.snapshot()
         for (const listener of this.listeners) listener(snapshot)
-        return { ok: true, snapshot, ...(outcome.id ? { id: outcome.id } : {}) }
+        return {
+          ok: true,
+          snapshot,
+          ...(outcome.id ? { id: outcome.id } : {}),
+          ...(outcome.secretsCleared ? { secretsCleared: true } : {}),
+        }
       } catch (error) {
+        // Review round 1: a failed persist must not leave memory ahead of
+        // disk, or the snapshot shows a server that a restart will lose and a
+        // retry is refused as a duplicate. (Secrets written before the failure
+        // are orphaned blobs at worst; the next save of that server prunes them.)
+        this.document = before
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
     })
@@ -388,4 +425,16 @@ export class UserMcpService {
       support,
     }
   }
+}
+
+/**
+ * Everything that decides where a server's secrets are delivered. Env and
+ * header VALUES are deliberately excluded: they are what the secrets fill in,
+ * and editing a literal header must not cost the user their token.
+ */
+function destinationOf(entry: UserMcpServer['entry']): string {
+  const record = entry as Record<string, unknown>
+  return JSON.stringify([
+    transportOf(entry), record.url, record.command, record.args, record.cwd, record.headersHelper,
+  ])
 }

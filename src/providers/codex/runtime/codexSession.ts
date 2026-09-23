@@ -36,7 +36,7 @@ import type {
 } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
-import { addCodexUserMcpLaunchConfig } from '@providers/shared/runtime/userMcpLaunch.js'
+import { addCodexUserMcpLaunchConfig, type CodexShellPolicyStyle } from '@providers/shared/runtime/userMcpLaunch.js'
 import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding.js'
 
@@ -122,6 +122,7 @@ export type CodexSessionOptions = {
   builtInMcpServers?: BuiltInMcpServerConfig[]
   /** Already filtered and secret-resolved by main (#1143). */
   userMcpServers?: ResolvedUserMcpServer[]
+  userMcpCodexShellPolicy?: CodexShellPolicyStyle
   beforeResumeOwnershipAcquire?: () => Promise<void>
 }
 
@@ -244,6 +245,7 @@ export class CodexSession extends EventEmitter {
   private readonly useProxy: boolean
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
   private readonly userMcpServers: ResolvedUserMcpServer[]
+  private readonly userMcpCodexShellPolicy: CodexShellPolicyStyle | undefined
   private readonly beforeResumeOwnershipAcquire: (() => Promise<void>) | null
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
@@ -266,6 +268,7 @@ export class CodexSession extends EventEmitter {
     this.useProxy = options.useProxy === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
     this.userMcpServers = options.userMcpServers ?? []
+    this.userMcpCodexShellPolicy = options.userMcpCodexShellPolicy
     this.beforeResumeOwnershipAcquire =
       options.beforeResumeOwnershipAcquire ?? null
     // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
@@ -351,7 +354,7 @@ export class CodexSession extends EventEmitter {
     // #1143. Main dry-ran this same translator and reported anything it
     // refuses, so the return value (dropped servers) is empty here by
     // construction; it is not re-reported.
-    addCodexUserMcpLaunchConfig(this.userMcpServers, args, cleanEnv)
+    addCodexUserMcpLaunchConfig(this.userMcpServers, args, cleanEnv, this.userMcpCodexShellPolicy)
     excludeExternalControlFromCodex(args, cleanEnv.CODEX_HOME)
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single

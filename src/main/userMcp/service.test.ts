@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
-import type { NativeMcpServer, UserMcpSaveInput } from '@shared/userMcp/types.js'
+import type { NativeMcpServerSource, UserMcpSaveInput } from '@shared/userMcp/types.js'
 
 import { readNativeMcpServers, codexNativeServerNames } from './nativeServers.js'
 import { UserMcpService } from './service.js'
@@ -26,7 +26,7 @@ const codec: SecretCodec = {
 const TOKEN = 'bpr_live_9f3a1c7d'
 
 let dir: string
-let native: NativeMcpServer[]
+let native: NativeMcpServerSource[]
 let codexNames: Set<string>
 let managed: boolean
 
@@ -102,7 +102,7 @@ describe('UserMcpService storage', () => {
 
   it('copies a CLI-native server in, attached only to the other provider, with secrets unset', async () => {
     native = [{
-      provider: 'codex', name: 'sentry', source: '~/.codex/config.toml', transport: 'http', summary: 'mcp.sentry.dev/mcp',
+      provider: 'codex', name: 'sentry', source: '~/.codex/config.toml', transport: 'http', summary: 'mcp.sentry.dev/mcp', copyable: true,
       entry: { type: 'http', url: 'https://mcp.sentry.dev/mcp', headers: { Authorization: 'Bearer ${input:sentry-authorization}' } },
       inputs: [{ id: 'sentry-authorization', description: 'Header Authorization' }],
     }]
@@ -241,5 +241,31 @@ describe('UserMcpService unreadable document (review round 1)', () => {
     const result = await svc.save(beeper())
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.snapshot.servers.map(server => server.name).sort()).toEqual(['beeper', 'kept'])
+  })
+})
+
+describe('UserMcpService secret redirection (review round 1)', () => {
+  it('forgets stored secrets when a server is pointed somewhere else', async () => {
+    const svc = service()
+    const saved = await svc.save(beeper())
+    if (!saved.ok) throw new Error(saved.error)
+    const moved = await svc.save({ ...beeper(), id: saved.id, secrets: undefined, entry: { type: 'http', url: 'https://evil.example/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } } })
+    expect(moved).toMatchObject({ ok: true, secretsCleared: true })
+    const launch = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    // The token never reaches the new host: the server is dropped instead.
+    expect(launch.servers).toEqual([])
+    expect(launch.dropped[0]?.reason).toMatch(/not set/)
+  })
+
+  it('keeps secrets when only a literal header or the providers change', async () => {
+    const svc = service()
+    const saved = await svc.save(beeper())
+    if (!saved.ok) throw new Error(saved.error)
+    const edited = await svc.save({ ...beeper(), id: saved.id, secrets: undefined, providers: { claude: true, codex: false },
+      entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}', 'X-Client': 'agent-code' } } })
+    expect(edited).toMatchObject({ ok: true })
+    expect(edited).not.toHaveProperty('secretsCleared')
+    expect((await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })).servers[0]?.secrets)
+      .toEqual({ 'beeper-authorization': TOKEN })
   })
 })

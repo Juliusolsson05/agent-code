@@ -116,11 +116,17 @@ export type NativeMcpServer = {
   source: string
   transport: UserMcpTransport | null
   summary: string
-  /** The entry translated to the `mcpServers` shape for Copy in, or null when
-   * it cannot be expressed there. Every env/header VALUE is replaced by an
-   * `${input:…}` reference: native configs routinely hold plaintext tokens,
-   * and this snapshot crosses IPC to the renderer, so the values never leave
-   * main. Copy in therefore creates the server with those secrets unset. */
+  /** Whether Copy in can express this entry as a managed server. The entry
+   * itself stays in main (review round 1): native configs routinely hold
+   * tokens in args and URLs as well as env/headers, and this snapshot crosses
+   * IPC to every window and, via mcp_servers_list, to agents. Copy in runs in
+   * main from main's own read. */
+  copyable: boolean
+}
+
+/** Main-only form of a native server, with what Copy in needs. Every env and
+ * header VALUE is already replaced by an `${input:…}` reference. */
+export type NativeMcpServerSource = NativeMcpServer & {
   entry: UserMcpServerEntry | null
   inputs: UserMcpInput[]
 }
@@ -149,7 +155,9 @@ export type UserMcpSaveInput = {
 }
 
 export type UserMcpMutationResult =
-  | { ok: true; snapshot: UserMcpSnapshot; id?: string }
+  /** `secretsCleared`: the save changed where the server connects, so its
+   * previously stored secrets were forgotten (see UserMcpService.save). */
+  | { ok: true; snapshot: UserMcpSnapshot; id?: string; secretsCleared?: boolean }
   | { ok: false; error: string; problems?: UserMcpProblem[] }
 
 export type UserMcpImportCandidate = {

@@ -699,6 +699,9 @@ export type SessionOptions = {
    *  by main for this launch and this provider. Providers only translate them;
    *  they never decide which ones apply. */
   userMcpServers?: ResolvedUserMcpServer[]
+  /** Codex only: how to send shell exclusions for the user-server secrets it
+   *  carries, matching the user's own config (see CodexShellPolicyStyle). */
+  userMcpCodexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
   /**
    * Main-owned one-shot boundary invoked by a resumed provider immediately
    * before it acquires exclusive durable-transcript ownership.

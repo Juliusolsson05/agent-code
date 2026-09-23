@@ -51,12 +51,16 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   // once at mount AND followed while open, so "MCP Servers" invoked with
   // Settings already showing another category still lands on MCP.
   const requestedCategory = useAppStore(state => state.settingsPageCategory)
+  // The request counter, not the category string, drives the effect: running
+  // "MCP Servers" twice with a sidebar click in between asks for the same
+  // string twice, and only a changed dependency re-applies it (review round 1).
+  const request = useAppStore(state => state.settingsPageRequest)
   const [selectedCategory, setSelectedCategory] = useState<SettingCategoryId | 'all'>(
     () => validCategory(requestedCategory),
   )
   useEffect(() => {
     if (requestedCategory) setSelectedCategory(validCategory(requestedCategory))
-  }, [requestedCategory])
+  }, [requestedCategory, request])
   // null           → editor closed
   // { id: null }   → creating, seeded from the currently applied appearance
   // { id: '...' }  → editing that saved theme

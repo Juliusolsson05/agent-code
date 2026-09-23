@@ -150,7 +150,10 @@ function uniqueInputId(seed: string, taken: Set<string>): string {
   return id
 }
 
-const PLACEHOLDER = /^(<[^>]*>|\[[^\]]*\]|\.\.\.|x{3,}|your[\s_-].*|.*[\s_-]here|changeme|replace[\s_-]?me|token|api[\s_-]?key)$/i
+// `${VAR}` / `${env:VAR}` (review round 1): Claude/Cursor configs reference
+// the user's environment this way. Stored as a secret it would be sent
+// literally, so the server looks configured and fails at tool-call time.
+const PLACEHOLDER = /^(<[^>]*>|\[[^\]]*\]|\.\.\.|x{3,}|your[\s_-].*|.*[\s_-]here|changeme|replace[\s_-]?me|token|api[\s_-]?key|\$\{[^}]+\})$/i
 
 export function isPlaceholder(value: string): boolean {
   return PLACEHOLDER.test(value.trim())

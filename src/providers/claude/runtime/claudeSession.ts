@@ -1203,11 +1203,11 @@ export class ClaudeSession extends EventEmitter {
     const tldrHooks = tldrHookServer(this.builtInMcpServers)
     if (tldrHooks) env[CLAUDE_TLDR_HOOK_TOKEN_ENV] = tldrHooks.bearerToken
     excludeExternalControlFromClaude(args, tldrHooks ? claudeTldrHookSettings(tldrHooks.tldrHooks.baseUrl) : {})
-    // User servers' secret values go into this launch's environment only;
-    // the file carries `${AGENT_CODE_USER_MCP_…}` references (#1143). Main has
-    // already dropped anything the translator would refuse.
+    // User servers (#1143) are resolved INTO the private file, never into
+    // Claude's environment, which every child process and model shell would
+    // inherit; see claudeUserMcpEntries. Main has already dropped anything the
+    // translator would refuse.
     const userMcp = claudeUserMcpEntries(this.userMcpServers)
-    Object.assign(env, userMcp.env)
     this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers, userMcp.entries)
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }

@@ -83,6 +83,9 @@ export function validateEntry(entry: unknown): UserMcpProblem[] {
     }
     if (entry.env !== undefined && !isStringRecord(entry.env)) {
       problems.push({ kind: 'invalid-entry', message: '"env" must map names to string values.' })
+    } else if (isStringRecord(entry.env)) {
+      const bad = Object.keys(entry.env).find(key => !USER_MCP_ENV_KEY_PATTERN.test(key))
+      if (bad !== undefined) problems.push({ kind: 'invalid-entry', message: `"${bad}" is not a valid environment variable name.` })
     }
     if (entry.cwd !== undefined && typeof entry.cwd !== 'string') {
       problems.push({ kind: 'invalid-entry', message: '"cwd" must be a string.' })
@@ -93,6 +96,9 @@ export function validateEntry(entry: unknown): UserMcpProblem[] {
     }
     if (entry.headers !== undefined && !isStringRecord(entry.headers)) {
       problems.push({ kind: 'invalid-entry', message: '"headers" must map names to string values.' })
+    } else if (isStringRecord(entry.headers)) {
+      const bad = Object.keys(entry.headers).find(key => !USER_MCP_HEADER_NAME_PATTERN.test(key))
+      if (bad !== undefined) problems.push({ kind: 'invalid-entry', message: `"${bad}" is not a valid header name (no dots or spaces).` })
     }
   }
   problems.push(...forbiddenSecretProblems(entry))
@@ -184,7 +190,23 @@ export function validateServer(
  * per-agent picker show the server as Codex-unsupported instead of it being
  * dropped at every launch with nothing on screen explaining why.
  */
-export const CODEX_PROTECTED_ENV = /^(PATH|HOME|SHELL|USER|LOGNAME|TMPDIR|LANG|TERM|CODEX_.*|OPENAI_.*|AGENT_CODE_.*)$/
+export const CODEX_PROTECTED_ENV = new RegExp('^(' + [
+  'PATH', 'HOME', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'TERM',
+  'CODEX_.*', 'OPENAI_.*', 'AGENT_CODE_.*',
+  // Review round 1: variables that change how the Codex binary (and its npm
+  // launcher) itself connects, trusts certificates, loads code or logs.
+  'HTTPS?_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_(FILE|DIR)', 'NODE_EXTRA_CA_CERTS',
+  'NODE_OPTIONS', 'RUST_LOG', 'RUST_BACKTRACE', 'DYLD_.*', 'LD_.*',
+].join('|') + ')$', 'i')
+
+/**
+ * Env keys must be plain identifiers and header names plain HTTP tokens
+ * WITHOUT '.'. Codex splits `-c` key paths on every '.', so a dotted key
+ * becomes a nested table and fails config load for the whole Codex launch
+ * (review round 1, reproduced with codex-cli).
+ */
+export const USER_MCP_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+export const USER_MCP_HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+^_`|~-]+$/
 
 /** providerSupport plus the rules that depend on the entry, not just its
  * transport. Every UI surface and launch uses this one. */
@@ -218,19 +240,34 @@ export function providerSupport(
   }
 }
 
+const SENSITIVE_ARG = /(bearer\s|token|secret|passw|api[-_]?key|auth|^sk-|^ghp_|^xox)/i
+
+function redactArg(arg: string): string {
+  return arg.length > 40 || SENSITIVE_ARG.test(arg) ? '…' : arg
+}
+
 export function summarizeEntry(entry: unknown): string {
   if (!isPlainObject(entry)) return ''
   const transport = transportOf(entry)
   if (transport === 'stdio') {
     const args = isStringArray(entry.args) ? entry.args : []
-    return [entry.command as string, ...args].join(' ')
+    // Review round 1: native (and pasted) configs put tokens in args too
+    // (`--header "Authorization: Bearer sk-…"`, `--api-key …`). Summaries go
+    // to every window and to agents, so anything that looks like a credential
+    // or an opaque blob is elided. The full args stay in main.
+    return [entry.command as string, ...args.map(redactArg)].join(' ')
   }
   if (transport) {
     try {
       const url = new URL(entry.url as string)
-      return `${url.host}${url.pathname === '/' ? '' : url.pathname}`
+      // Review round 1: some servers (Zapier-style) carry the credential in a
+      // path segment or the query. Summaries reach the renderer and, through
+      // mcp_servers_list, agents, so long opaque segments and the whole query
+      // are elided. Short readable paths (`/v0/mcp`) are kept for recognition.
+      const path = url.pathname.split('/').map(segment => segment.length > 20 ? '…' : segment).join('/')
+      return `${url.host}${path === '/' ? '' : path}${url.search ? '?…' : ''}`
     } catch {
-      return String(entry.url)
+      return '(invalid URL)'
     }
   }
   return ''

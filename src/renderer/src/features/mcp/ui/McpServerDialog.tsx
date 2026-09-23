@@ -70,28 +70,44 @@ type Draft = {
 
 function AddServer({ onDone }: { onDone: () => void }) {
   const [text, setText] = useState('')
-  const [fallbackName, setFallbackName] = useState('server')
   const [candidates, setCandidates] = useState<UserMcpImportCandidate[]>([])
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [parseError, setParseError] = useState<string | null>(null)
-  const [format, setFormat] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // True from a keystroke until main answers for that text. Add is refused
+  // meanwhile so it can never save a parse of text the user already changed
+  // (review round 1: a token deleted from the box was still saved).
+  const [parsing, setParsing] = useState(false)
+  // Indices already saved in this dialog. A multi-server paste is saved one
+  // server at a time; after a partial failure the retry must continue with the
+  // rest instead of re-adding the first one and failing as a duplicate.
+  const [savedIndices, setSavedIndices] = useState<ReadonlySet<number>>(new Set())
+  // The sanitized text we put in the box ourselves, which must not be
+  // re-imported (it no longer contains the lifted values).
+  const [sanitizedText, setSanitizedText] = useState<string | null>(null)
 
   // Parsing runs in main (the same importer Copy in and tests use) so there is
   // exactly one definition of what a pasted snippet means. Debounced because
-  // every keystroke would otherwise be an IPC round-trip.
+  // every keystroke would otherwise be an IPC round-trip. A bare entry is
+  // imported as "server" and renamed on its card: a separate name field that
+  // re-imported on every keystroke wiped secrets typed into the card.
   useEffect(() => {
+    if (text === sanitizedText) return
     if (!text.trim()) {
       setCandidates([])
       setDrafts([])
       setParseError(null)
+      setParsing(false)
       return
     }
+    setParsing(true)
     let cancelled = false
     const timer = setTimeout(() => {
-      void window.api.userMcpImport(text, fallbackName).then(result => {
+      window.api.userMcpImport(text).then(result => {
         if (cancelled) return
+        setParsing(false)
+        setSavedIndices(new Set())
         if (!result.ok) {
           setParseError(result.error)
           setCandidates([])
@@ -99,7 +115,6 @@ function AddServer({ onDone }: { onDone: () => void }) {
           return
         }
         setParseError(null)
-        setFormat(result.format)
         setCandidates(result.candidates)
         setDrafts(result.candidates.map(candidate => {
           const support = providerSupportForEntry(candidate.entry)
@@ -110,22 +125,41 @@ function AddServer({ onDone }: { onDone: () => void }) {
             secrets: { ...candidate.pendingSecrets },
           }
         }))
+        // Review round 1: once a value has been lifted into a masked secret
+        // field, the raw paste must not keep showing it. The box now shows
+        // what will be stored — references only.
+        if (result.candidates.some(candidate => Object.keys(candidate.pendingSecrets).length > 0)) {
+          const sanitized = JSON.stringify(
+            { mcpServers: Object.fromEntries(result.candidates.map(candidate => [candidate.name, candidate.entry])) },
+            null,
+            2,
+          )
+          setSanitizedText(sanitized)
+          setText(sanitized)
+        }
+      }).catch(error => {
+        if (cancelled) return
+        setParsing(false)
+        setParseError(error instanceof Error ? error.message : String(error))
+        setCandidates([])
+        setDrafts([])
       })
     }, 250)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [text, fallbackName])
+  }, [text, sanitizedText])
 
-  const selected = drafts.filter(draft => draft.include).length
+  const pending = drafts.filter((draft, index) => draft.include && !savedIndices.has(index)).length
   const save = async () => {
+    if (parsing) return
     setSaving(true)
     setSaveError(null)
     try {
       for (const [index, candidate] of candidates.entries()) {
         const draft = drafts[index]!
-        if (!draft.include) continue
+        if (!draft.include || savedIndices.has(index)) continue
         const result = await window.api.userMcpSave({
           name: draft.name,
           enabled: true,
@@ -139,6 +173,7 @@ function AddServer({ onDone }: { onDone: () => void }) {
           setSaveError(`${draft.name}: ${error}`)
           return
         }
+        setSavedIndices(current => new Set([...current, index]))
       }
       onDone()
     } finally {
@@ -165,13 +200,11 @@ function AddServer({ onDone }: { onDone: () => void }) {
           aria-label="MCP server config"
         />
         {parseError ? <div className="text-danger">{parseError}</div> : null}
-        {format === 'entry' ? (
-          <label className="flex items-center gap-2">
-            <span className="text-muted">Name</span>
-            <Input value={fallbackName} onChange={event => setFallbackName(event.target.value)} className="h-7 w-48" />
-          </label>
-        ) : null}
-        {candidates.map((candidate, index) => (
+        {candidates.map((candidate, index) => savedIndices.has(index) ? (
+          <div key={`${candidate.name}:${index}`} className="rounded-slab border border-border px-3 py-2 text-muted">
+            ✓ {drafts[index]!.name} added
+          </div>
+        ) : (
           <CandidateCard
             key={`${candidate.name}:${index}`}
             candidate={candidate}
@@ -189,8 +222,8 @@ function AddServer({ onDone }: { onDone: () => void }) {
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onDone}>Cancel</Button>
-        <Button disabled={saving || selected === 0} onClick={() => void save()}>
-          {selected > 1 ? `Add ${selected} servers` : 'Add server'}
+        <Button disabled={saving || parsing || pending === 0} onClick={() => void save()}>
+          {pending > 1 ? `Add ${pending} servers` : 'Add server'}
         </Button>
       </DialogFooter>
     </>
@@ -248,7 +281,19 @@ function CandidateCard({
   )
 }
 
+/** What another window or an agent could change under an open editor. */
+function editableFingerprint(server: UserMcpServerView): string {
+  return JSON.stringify([server.name, server.enabled, server.providers, server.entry, server.inputs])
+}
+
 function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () => void }) {
+  // Review round 1: the form is initialized once, but `server` keeps updating
+  // from the broadcast. Saving a form opened before another window (or an
+  // agent with MCP Servers) changed the same server would write the old entry
+  // back and prune any secret added since. The fingerprint at open time lets
+  // Save refuse instead.
+  const [openedAs] = useState(() => editableFingerprint(server))
+  const changedElsewhere = editableFingerprint(server) !== openedAs
   const [name, setName] = useState(server.name)
   const [json, setJson] = useState(() => JSON.stringify(server.entry, null, 2))
   const [providers, setProviders] = useState(server.providers)
@@ -279,7 +324,7 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
   const support = providerSupportForEntry(parsed.entry)
 
   const save = async () => {
-    if (!parsed.entry) return
+    if (!parsed.entry || changedElsewhere) return
     setSaving(true)
     setError(null)
     try {
@@ -352,8 +397,19 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
             onChange={setSecretEdits}
           />
         ) : null}
-        {transport === 'http' || transport === 'sse' ? <SignInHelp name={name} url={String((parsed.entry as { url?: unknown } | null)?.url ?? '')} /> : null}
+        {server.transport === 'http' || server.transport === 'sse'
+          ? <SignInHelp name={server.name} url={String((server.entry as { url?: unknown }).url ?? '')} />
+          : null}
         {error ? <div className="text-danger">{error}</div> : null}
+        {changedElsewhere ? (
+          <div className="text-warning">
+            This server was changed in another window or by an agent. Close and reopen it to edit the current version.
+          </div>
+        ) : null}
+        <div className="text-[10px] text-muted">
+          Changing the URL, command, arguments or working directory forgets this server&apos;s stored secrets, so a
+          token can never follow the server to a new destination. Re-enter them here in the same save.
+        </div>
       </div>
       <DialogFooter>
         {confirmDelete ? (
@@ -363,7 +419,7 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
         )}
         <span className="flex-1" />
         <Button variant="outline" onClick={onDone}>Cancel</Button>
-        <Button disabled={saving || !parsed.entry} onClick={() => void save()}>Save</Button>
+        <Button disabled={saving || !parsed.entry || changedElsewhere} onClick={() => void save()}>Save</Button>
       </DialogFooter>
     </>
   )
@@ -386,7 +442,9 @@ function SecretFields({
       {inputs.map(input => {
         const state = states[input.id]
         const edited = values[input.id]
-        const placeholder = state?.set
+        const placeholder = edited === ''
+          ? 'cleared on save'
+          : state?.set
           ? `set${state.hint ? ` (…${state.hint})` : ''} — type to replace`
           : 'not set'
         return (
@@ -397,13 +455,22 @@ function SecretFields({
               autoComplete="off"
               value={edited ?? ''}
               placeholder={placeholder}
-              onChange={event => onChange({ ...values, [input.id]: event.target.value })}
+              onChange={event => {
+                // An emptied field means "leave it as it was", never "delete"
+                // (review round 1): typing then backspacing looked untouched
+                // but sent '' and erased the stored secret. Only Clear deletes.
+                const next = { ...values }
+                if (event.target.value === '') delete next[input.id]
+                else next[input.id] = event.target.value
+                onChange(next)
+              }}
               className="h-7 flex-1"
               aria-label={`Secret ${input.id}`}
             />
             {state?.set && edited === undefined ? (
               <Button size="xs" variant="ghost" onClick={() => onChange({ ...values, [input.id]: '' })}>Clear</Button>
             ) : null}
+            {edited === '' ? <span className="text-[10px] text-warning">will be cleared</span> : null}
           </label>
         )
       })}
@@ -419,7 +486,13 @@ function SecretFields({
  * user, which belongs in a terminal the user controls.
  */
 function SignInHelp({ name, url }: { name: string; url: string }) {
-  const codexCommand = `codex mcp login ${name} -c 'mcp_servers.${name}.url=${JSON.stringify(url)}'`
+  // Built from the SAVED server (not the fields being edited) and every
+  // interpolated piece single-quoted for the shell (review round 1): a URL may
+  // legally contain `'`, and an unquoted piece would run `$(…)` when the user
+  // pastes the command. Names are already restricted to [A-Za-z0-9_-].
+  const codexCommand = ['codex', 'mcp', 'login', name, '-c', `mcp_servers.${name}.url=${JSON.stringify(url)}`]
+    .map(shellQuote)
+    .join(' ')
   const [copied, setCopied] = useState(false)
   return (
     <div className="rounded-slab border border-border px-3 py-2 text-[10px] text-muted">
@@ -441,4 +514,8 @@ function SignInHelp({ name, url }: { name: string; url: string }) {
       <div className="mt-1">Claude: run <code className="font-code text-ink">/mcp</code> in an agent that has {name} attached, then choose Authenticate.</div>
     </div>
   )
+}
+
+function shellQuote(value: string): string {
+  return /^[A-Za-z0-9_./:=-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
 }

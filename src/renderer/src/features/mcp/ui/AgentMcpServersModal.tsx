@@ -203,7 +203,12 @@ export function AgentMcpServersModal() {
             {changed ? 'Changes pending' : pendingReload ? 'Settings changed since this agent started' : ''}
           </span>
           <Button variant="outline" onClick={() => { setDraft(null); close() }}>Cancel</Button>
-          <Button disabled={!changed && !pendingReload} onClick={() => void apply()}>Apply &amp; reload agent</Button>
+          {/* Always enabled (review round 1): a user server turned on in
+              Settings after this agent started shows here as its default
+              "on", with nothing staged, and the agent only gets it on a
+              reload. The renderer cannot always know whether it is attached
+              (launch-time drops), so it must never be the one to refuse. */}
+          <Button onClick={() => void apply()}>{changed ? 'Apply & reload agent' : 'Reload agent'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

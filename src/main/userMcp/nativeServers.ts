@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import TOML from '@iarna/toml'
 
-import type { NativeMcpServer, UserMcpInput, UserMcpServerEntry } from '@shared/userMcp/types.js'
+import type { NativeMcpServerSource, UserMcpInput, UserMcpServerEntry } from '@shared/userMcp/types.js'
 import { isPlainObject, isStringArray, isStringRecord, summarizeEntry, transportOf } from '@shared/userMcp/validate.js'
 
 /**
@@ -68,7 +68,7 @@ export async function claudeManagedMcpPolicyPresent(paths = defaultNativeMcpPath
   }
 }
 
-export async function readNativeMcpServers(paths = defaultNativeMcpPaths()): Promise<NativeMcpServer[]> {
+export async function readNativeMcpServers(paths = defaultNativeMcpPaths()): Promise<NativeMcpServerSource[]> {
   const [claude, codex] = await Promise.all([readClaudeNative(paths), readCodexNative(paths)])
   return [...claude, ...codex]
 }
@@ -90,7 +90,30 @@ export async function codexNativeServerNames(cwd: string, paths = defaultNativeM
   return names
 }
 
-async function readClaudeNative(paths: NativeMcpPaths): Promise<NativeMcpServer[]> {
+/**
+ * Which spelling the user's Codex config uses for shell-environment
+ * exclusions, across the user and project config.toml (see
+ * CodexShellPolicyStyle for why it decides how our exclusions are sent).
+ * Legacy `exclude` entries are returned so they can be re-sent with ours,
+ * because a `-c` array replaces the configured one instead of merging.
+ */
+export async function codexShellPolicyStyle(
+  cwd: string,
+  paths = defaultNativeMcpPaths(),
+): Promise<{ style: 'filters' } | { style: 'legacy'; exclude: string[] }> {
+  let legacy = false
+  const exclude: string[] = []
+  for (const file of [join(codexHome(paths), 'config.toml'), join(cwd, '.codex', 'config.toml')]) {
+    const policy = (await readCodexToml(file)).shell_environment_policy
+    if (!isPlainObject(policy)) continue
+    if (policy.exclude !== undefined || policy.include_only !== undefined) legacy = true
+    // A later (project) layer replaces the array; keep the last one seen.
+    if (isStringArray(policy.exclude)) exclude.splice(0, exclude.length, ...policy.exclude)
+  }
+  return legacy ? { style: 'legacy', exclude } : { style: 'filters' }
+}
+
+async function readClaudeNative(paths: NativeMcpPaths): Promise<NativeMcpServerSource[]> {
   const file = claudeUserConfigFile(paths)
   let parsed: unknown
   try {
@@ -103,7 +126,7 @@ async function readClaudeNative(paths: NativeMcpPaths): Promise<NativeMcpServer[
     nativeServer('claude', name, displayPath(file, paths.home), isPlainObject(raw) ? raw : null))
 }
 
-async function readCodexNative(paths: NativeMcpPaths): Promise<NativeMcpServer[]> {
+async function readCodexNative(paths: NativeMcpPaths): Promise<NativeMcpServerSource[]> {
   const file = join(codexHome(paths), 'config.toml')
   const table = await readCodexMcpTable(file)
   return Object.entries(table).map(([name, raw]) =>
@@ -111,6 +134,11 @@ async function readCodexNative(paths: NativeMcpPaths): Promise<NativeMcpServer[]
 }
 
 async function readCodexMcpTable(file: string): Promise<Record<string, unknown>> {
+  const parsed = await readCodexToml(file)
+  return isPlainObject(parsed.mcp_servers) ? parsed.mcp_servers : {}
+}
+
+async function readCodexToml(file: string): Promise<Record<string, unknown>> {
   let text: string
   try {
     text = await readFile(file, 'utf8')
@@ -118,11 +146,10 @@ async function readCodexMcpTable(file: string): Promise<Record<string, unknown>>
     return {}
   }
   try {
-    const parsed = TOML.parse(text) as Record<string, unknown>
-    return isPlainObject(parsed.mcp_servers) ? parsed.mcp_servers : {}
+    return TOML.parse(text) as Record<string, unknown>
   } catch {
     // An unparseable config.toml also fails Codex itself; we have nothing
-    // useful to add, so it contributes no names rather than blocking launch.
+    // useful to add, so it contributes nothing rather than blocking launch.
     return {}
   }
 }
@@ -155,10 +182,10 @@ function nativeServer(
   name: string,
   source: string,
   raw: Record<string, unknown> | null,
-): NativeMcpServer {
+): NativeMcpServerSource {
   const transport = raw ? transportOf(raw) : null
   if (!raw || !transport) {
-    return { provider, name, source, transport: null, summary: '', entry: null, inputs: [] }
+    return { provider, name, source, transport: null, summary: '', copyable: false, entry: null, inputs: [] }
   }
   const inputs: UserMcpInput[] = []
   const entry: Record<string, unknown> = { ...raw }
@@ -187,6 +214,7 @@ function nativeServer(
     source,
     transport,
     summary: summarizeEntry(raw),
+    copyable: true,
     entry: entry as UserMcpServerEntry,
     inputs,
   }

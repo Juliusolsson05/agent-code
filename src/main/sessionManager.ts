@@ -81,7 +81,12 @@ export type UserMcpResolver = (params: {
   provider: string
   overrides: Readonly<Record<string, boolean>>
   cwd: string
-}) => Promise<{ servers: ResolvedUserMcpServer[]; attachedIds: string[]; dropped: UserMcpDroppedServer[] }>
+}) => Promise<{
+  servers: ResolvedUserMcpServer[]
+  attachedIds: string[]
+  dropped: UserMcpDroppedServer[]
+  codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+}>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type { PromptGateState } from '@shared/types/session.js'
@@ -2777,8 +2782,11 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     kind: SessionKind,
     options: SessionSpawnOptions,
-  ): Promise<ResolvedUserMcpServer[]> {
-    if (!this.userMcpResolver || !isAgentProviderKind(kind)) return []
+  ): Promise<{
+    servers: ResolvedUserMcpServer[]
+    codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+  }> {
+    if (!this.userMcpResolver || !isAgentProviderKind(kind)) return { servers: [] }
     const overrides = normalizeUserMcpOverrides(options.userMcpOverrides)
     this.userMcpOverridesBySession.set(sessionId, overrides)
     try {
@@ -2796,7 +2804,10 @@ export class SessionManager extends EventEmitter {
         })
         this.emit('user-mcp-unavailable', { sessionId, servers: resolution.dropped })
       }
-      return resolution.servers
+      return {
+        servers: resolution.servers,
+        ...(resolution.codexShellPolicy ? { codexShellPolicy: resolution.codexShellPolicy } : {}),
+      }
     } catch (error) {
       this.userMcpAttached.set(sessionId, [])
       this.journal?.recordError('user_mcp.resolve_failed', error, undefined, { sessionId })
@@ -2804,7 +2815,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         servers: [{ name: 'MCP servers', reason: 'Your MCP server settings could not be read' }],
       })
-      return []
+      return { servers: [] }
     }
   }
 
@@ -2973,7 +2984,8 @@ export class SessionManager extends EventEmitter {
         })
         mcpRegistered = true
       }
-      const userMcpServers = await this.resolveUserMcpServers(sessionId, kind, options)
+      const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
+        await this.resolveUserMcpServers(sessionId, kind, options)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
         const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
@@ -3032,6 +3044,7 @@ export class SessionManager extends EventEmitter {
         useProxy: options.useProxy,
         builtInMcpServers,
         userMcpServers,
+        ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex

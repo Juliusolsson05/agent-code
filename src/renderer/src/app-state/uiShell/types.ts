@@ -88,6 +88,9 @@ export type UiShellState = {
    * this slice does not import the settings feature; SettingsPage validates
    * it and falls back to "all". */
   settingsPageCategory: string | null
+  /** Bumped on every openSettingsPage call, so a repeated deep link to the
+   * same category still wins over a sidebar click made in between. */
+  settingsPageRequest: number
   /** Add/Edit MCP server dialog (#1143). One owner so the Settings grid and
    * the "Add MCP Server…" command open the same dialog. */
   mcpServerDialog: { mode: 'add' } | { mode: 'edit'; serverId: string } | null

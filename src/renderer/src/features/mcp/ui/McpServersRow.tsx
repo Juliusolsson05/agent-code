@@ -221,8 +221,8 @@ function NativeServerRow({ server, onCopyIn }: { server: NativeMcpServer; onCopy
       <Button
         size="xs"
         variant="outline"
-        disabled={!server.entry}
-        title={server.entry ? 'Manage a copy here and share it with the other provider' : 'This entry cannot be expressed as a standard MCP config'}
+        disabled={!server.copyable}
+        title={server.copyable ? 'Manage a copy here and share it with the other provider' : 'This entry cannot be expressed as a standard MCP config'}
         onClick={onCopyIn}
       >
         Copy in

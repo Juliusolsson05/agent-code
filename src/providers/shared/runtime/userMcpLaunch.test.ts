@@ -1,8 +1,10 @@
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { createPrivateClaudeMcpConfig } from './builtInMcpLaunch.js'
+import { createPrivateClaudeMcpConfig, sweepStalePrivateMcpConfigs } from './builtInMcpLaunch.js'
 import {
   addCodexUserMcpLaunchConfig,
   claudeUserMcpEntries,
@@ -40,27 +42,32 @@ const beeperStdio: ResolvedUserMcpServer = {
 }
 
 describe('claudeUserMcpEntries', () => {
-  it('replaces secret header values with env references and moves the value to the environment', () => {
-    const { entries, env, dropped } = claudeUserMcpEntries([beeperHttp])
-    expect(dropped).toEqual([])
-    expect(entries).toEqual({
-      beeper: {
-        type: 'http',
-        url: 'http://localhost:23373/v0/mcp',
-        headers: { Authorization: '${AGENT_CODE_USER_MCP_BEEPER_AUTHORIZATION}' },
-      },
+  it('resolves a secret header into that server\'s own entry, never into Claude\'s environment', () => {
+    // Review round 1: Claude hands its whole environment to every MCP child
+    // and to the model's Bash tool, so the value must live only in the entry.
+    const result = claudeUserMcpEntries([beeperHttp])
+    expect(result.dropped).toEqual([])
+    expect(result.entries).toEqual({
+      beeper: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: `Bearer ${TOKEN}` } },
     })
-    expect(env).toEqual({ AGENT_CODE_USER_MCP_BEEPER_AUTHORIZATION: `Bearer ${TOKEN}` })
+    expect(result).not.toHaveProperty('env')
   })
 
   it('keeps literal env values and the server-expanded args of a stdio server', () => {
-    const { entries, env } = claudeUserMcpEntries([beeperStdio])
+    const { entries } = claudeUserMcpEntries([beeperStdio])
     expect(entries['beeper-stdio']).toEqual({
       command: 'npx',
       args: ['-y', '@beeper/mcp-remote', '--header', 'Authorization: Bearer ${ACCESS_TOKEN}'],
-      env: { ACCESS_TOKEN: '${AGENT_CODE_USER_MCP_BEEPER_STDIO_ACCESS_TOKEN}', LOG_LEVEL: 'info' },
+      env: { ACCESS_TOKEN: TOKEN, LOG_LEVEL: 'info' },
     })
-    expect(env).toEqual({ AGENT_CODE_USER_MCP_BEEPER_STDIO_ACCESS_TOKEN: TOKEN })
+  })
+
+  it('drops a server whose env or header names would break Codex -c paths', () => {
+    const dotted: ResolvedUserMcpServer = { id: 'd', name: 'java', entry: { command: 'x', env: { 'java.home': '/opt' } }, secrets: {} }
+    expect(claudeUserMcpEntries([dotted]).dropped[0]?.reason).toMatch(/java\.home/)
+    const args: string[] = []
+    expect(addCodexUserMcpLaunchConfig([dotted], args, {})[0]?.reason).toMatch(/java\.home/)
+    expect(args).toEqual([])
   })
 
   it('drops a server whose secret is missing instead of emitting an empty credential', () => {
@@ -69,7 +76,7 @@ describe('claudeUserMcpEntries', () => {
     expect(dropped).toEqual([{ name: 'beeper', reason: 'A secret is not set' }])
   })
 
-  it('writes one private file containing both built-in and user servers, and no secret', async () => {
+  it('writes one private file containing both built-in and user servers', async () => {
     const { entries } = claudeUserMcpEntries([beeperHttp])
     const config = await createPrivateClaudeMcpConfig(
       [{ name: 'agent_code', url: 'http://127.0.0.1:1/mcp', headers: {}, bearerToken: 'builtin' }],
@@ -78,7 +85,8 @@ describe('claudeUserMcpEntries', () => {
     try {
       const text = await readFile(config!.path, 'utf8')
       expect(Object.keys(JSON.parse(text).mcpServers)).toEqual(['beeper', 'agent_code'])
-      expect(text).not.toContain(TOKEN)
+      // The file is private (0600, removed on stop, swept after a crash).
+      expect((await stat(config!.path)).mode & 0o777).toBe(0o600)
     } finally {
       await config?.dispose()
     }
@@ -96,11 +104,15 @@ describe('addCodexUserMcpLaunchConfig', () => {
     const args: string[] = []
     const env: Record<string, string> = {}
     expect(addCodexUserMcpLaunchConfig([beeperHttp], args, env)).toEqual([])
+    const variable = userMcpSecretVariable('beeper', 'Authorization')
     expect(args).toEqual([
       '--config', 'mcp_servers.beeper.url="http://localhost:23373/v0/mcp"',
-      '--config', 'mcp_servers.beeper.env_http_headers.Authorization="AGENT_CODE_USER_MCP_BEEPER_AUTHORIZATION"',
+      '--config', `mcp_servers.beeper.env_http_headers.Authorization="${variable}"`,
+      // Review round 1: Codex model shells inherit the full environment, so
+      // every secret-bearing variable is excluded from them.
+      '--config', 'shell_environment_policy.filters.AGENT_CODE_USER_MCP_*="exclude"',
     ])
-    expect(env).toEqual({ AGENT_CODE_USER_MCP_BEEPER_AUTHORIZATION: `Bearer ${TOKEN}` })
+    expect(env).toEqual({ [variable]: `Bearer ${TOKEN}` })
     expect(args.join(' ')).not.toContain(TOKEN)
   })
 
@@ -113,12 +125,16 @@ describe('addCodexUserMcpLaunchConfig', () => {
       '--config', 'mcp_servers.beeper-stdio.args=["-y","@beeper/mcp-remote","--header","Authorization: Bearer ${ACCESS_TOKEN}"]',
       '--config', 'mcp_servers.beeper-stdio.env.LOG_LEVEL="info"',
       '--config', 'mcp_servers.beeper-stdio.env_vars=["ACCESS_TOKEN"]',
+      '--config', 'shell_environment_policy.filters.ACCESS_TOKEN="exclude"',
     ])
     expect(env).toEqual({ ACCESS_TOKEN: TOKEN })
     expect(args.join(' ')).not.toContain(TOKEN)
   })
 
   it('drops SSE servers and secrets that would overwrite Codex\'s own environment', () => {
+    expect(addCodexUserMcpLaunchConfig([
+      { id: 'px', name: 'proxied', entry: { command: 'x', env: { HTTPS_PROXY: '${input:p}' } }, secrets: { p: 'http://corp' } },
+    ], [], {})[0]?.name).toBe('proxied')
     const args: string[] = []
     const dropped = addCodexUserMcpLaunchConfig([
       { id: 's', name: 'linear', entry: { type: 'sse', url: 'https://mcp.linear.app/sse' }, secrets: {} },
@@ -146,8 +162,46 @@ describe('addCodexUserMcpLaunchConfig', () => {
 })
 
 describe('userMcpSecretVariable', () => {
-  it('is stable for a server regardless of which other servers are attached', () => {
-    expect(userMcpSecretVariable('beeper', 'Authorization')).toBe('AGENT_CODE_USER_MCP_BEEPER_AUTHORIZATION')
-    expect(userMcpSecretVariable('my-server', 'X-Api-Key')).toBe('AGENT_CODE_USER_MCP_MY_SERVER_X_API_KEY')
+  it('is stable for the same server and key', () => {
+    expect(userMcpSecretVariable('beeper', 'Authorization')).toBe(userMcpSecretVariable('beeper', 'Authorization'))
+    expect(userMcpSecretVariable('beeper', 'Authorization')).toMatch(/^AGENT_CODE_USER_MCP_BEEPER_AUTHORIZATION_[0-9A-F]{10}$/)
+  })
+
+  it('never gives two different (server, key) pairs the same variable (review round 1)', () => {
+    // These folded to the same name before the hash suffix, sending one
+    // server's token to the other server's host.
+    expect(userMcpSecretVariable('linear', 'X-Api-Key')).not.toBe(userMcpSecretVariable('linear-x', 'Api-Key'))
+    expect(userMcpSecretVariable('gh', 'k')).not.toBe(userMcpSecretVariable('_gh', 'k'))
+  })
+})
+
+describe('Codex shell exclusion styles', () => {
+  it('re-sends the user\'s legacy exclude list together with ours, since a -c array replaces it', () => {
+    const args: string[] = []
+    addCodexUserMcpLaunchConfig([beeperHttp], args, {}, { style: 'legacy', exclude: ['MY_SECRET'] })
+    expect(args.at(-1)).toBe('shell_environment_policy.exclude=["MY_SECRET","AGENT_CODE_USER_MCP_*"]')
+    expect(args.join(' ')).not.toContain('shell_environment_policy.filters')
+  })
+
+  it('adds nothing to the shell policy when no secret is carried', () => {
+    const args: string[] = []
+    addCodexUserMcpLaunchConfig([{ id: 'p', name: 'plain', entry: { command: 'x', env: { LOG_LEVEL: 'info' } }, secrets: {} }], args, {})
+    expect(args.join(' ')).not.toContain('shell_environment_policy')
+  })
+})
+
+describe('sweepStalePrivateMcpConfigs', () => {
+  it('removes a crashed run\'s private configs but keeps live ones', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sweep-'))
+    try {
+      await mkdir(join(dir, `agent-code-mcp-${process.pid}-live`))
+      await mkdir(join(dir, 'agent-code-mcp-2147483646-dead'))
+      await mkdir(join(dir, 'agent-code-mcp-legacyXYZ'))
+      await mkdir(join(dir, 'unrelated'))
+      expect(await sweepStalePrivateMcpConfigs(dir)).toBe(2)
+      expect((await readdir(dir)).sort()).toEqual([`agent-code-mcp-${process.pid}-live`, 'unrelated'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -24,6 +24,7 @@ export const createUiShellSlice: StateCreator<
   pinAgentsOpen: false,
   settingsPageOpen: false,
   settingsPageCategory: null,
+  settingsPageRequest: 0,
   mcpServerDialog: null,
   agentMcpServersSessionId: null,
   agentTitlePromptSessionId: null,
@@ -141,7 +142,11 @@ export const createUiShellSlice: StateCreator<
     set({ pinAgentsOpen: false }, false, 'uiShell/closePinAgents'),
 
   openSettingsPage: category =>
-    set({ settingsPageOpen: true, settingsPageCategory: category ?? null }, false, 'uiShell/openSettingsPage'),
+    set(state => ({
+      settingsPageOpen: true,
+      settingsPageCategory: category ?? null,
+      settingsPageRequest: state.settingsPageRequest + 1,
+    }), false, 'uiShell/openSettingsPage'),
   closeSettingsPage: () =>
     set({ settingsPageOpen: false, settingsPageCategory: null }, false, 'uiShell/closeSettingsPage'),
   openMcpServerDialog: target =>

@@ -120,6 +120,36 @@ describe('MCP server dialog', () => {
     expect(document.body.textContent).not.toContain(TOKEN)
   })
 
+  it('does not clear a stored secret when its field is typed in and emptied again (review round 1)', async () => {
+    api.userMcpSave.mockResolvedValue({ ok: true, snapshot: { servers: [server()], native: [], claudeManagedPolicy: false } })
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    const field = screen.getByLabelText('Secret beeper-authorization')
+    fireEvent.change(field, { target: { value: 'x' } })
+    fireEvent.change(field, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
+    expect(api.userMcpSave.mock.calls[0]![0].secrets).toEqual({})
+  })
+
+  it('refuses to save over a server that changed elsewhere while the editor was open (review round 1)', () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    act(() => {
+      useUserMcpStore.setState({ snapshot: { servers: [server({ providers: { claude: true, codex: true } })], native: [], claudeManagedPolicy: false } })
+    })
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true)
+    expect(screen.getByText(/changed in another window or by an agent/)).toBeTruthy()
+  })
+
+  it('shell-quotes the Codex sign-in command so a quote in the URL cannot run code (review round 1)', () => {
+    useUserMcpStore.setState({ snapshot: { servers: [server({ entry: { type: 'http', url: "https://x.dev/mcp?a='$(echo PWNED)'" } })], native: [], claudeManagedPolicy: false } })
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    const command = document.body.textContent ?? ''
+    expect(command).toContain(`codex mcp login beeper -c 'mcp_servers.beeper.url="https://x.dev/mcp?a='\\''$(echo PWNED)'\\''"'`)
+  })
+
   it('adds every server found in a pasted snippet, with its lifted secrets', async () => {
     api.userMcpImport.mockResolvedValue({
       ok: true,
@@ -144,6 +174,8 @@ describe('MCP server dialog', () => {
     vi.useRealTimers()
     const card = screen.getByLabelText('Server name')
     expect((card as HTMLInputElement).value).toBe('beeper')
+    // The lifted token no longer shows in the paste box (review round 1).
+    expect((screen.getByLabelText('MCP server config') as HTMLTextAreaElement).value).not.toContain(TOKEN)
     fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0]).toMatchObject({

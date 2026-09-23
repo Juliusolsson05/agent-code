@@ -6,6 +6,7 @@ import { userMcpOverrideKey, userMcpOverridesFrom } from './types.js'
 import {
   coerceUserMcpDocument,
   providerSupport,
+  summarizeEntry,
   transportOf,
   validateServer,
 } from './validate.js'
@@ -165,5 +166,25 @@ describe('user override keys', () => {
       'user:bad id': true,
       'user:x': 'yes',
     })).toEqual({ 'abc-123': false })
+  })
+})
+
+describe('review round 1 model rules', () => {
+  it('rejects env and header names Codex cannot address', () => {
+    expect(validateServer({ name: 'a', entry: { command: 'x', env: { 'java.home': '/opt' } }, inputs: [] })[0]?.message).toMatch(/java\.home/)
+    expect(validateServer({ name: 'a', entry: { type: 'http', url: 'https://x.dev/mcp', headers: { 'X-Foo.Bar': 'v' } }, inputs: [] })[0]?.message).toMatch(/X-Foo\.Bar/)
+  })
+
+  it('treats the ${VAR} environment idiom as a placeholder, not a secret value', () => {
+    const result = importUserMcpConfig('{"mcpServers":{"gh":{"command":"npx","env":{"GITHUB_TOKEN":"${GITHUB_TOKEN}"}}}}')
+    if (!result.ok) throw new Error(result.error)
+    expect(result.candidates[0]!.pendingSecrets).toEqual({})
+  })
+
+  it('never shows a credential-looking URL path or query in summaries', () => {
+    expect(summarizeEntry({ type: 'http', url: 'https://mcp.zapier.com/api/mcp/s/abcdefghijklmnopqrstuvwxyz0123456789/mcp' }))
+      .toBe('mcp.zapier.com/api/mcp/s/…/mcp')
+    expect(summarizeEntry({ type: 'http', url: 'https://x.dev/mcp?key=secret' })).toBe('x.dev/mcp?…')
+    expect(summarizeEntry({ type: 'http', url: 'http://localhost:23373/v0/mcp' })).toBe('localhost:23373/v0/mcp')
   })
 })
