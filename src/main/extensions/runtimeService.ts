@@ -370,6 +370,9 @@ export class ExtensionRuntimeService {
         case 'service.invoke':
         case 'service.expose':
         case 'net.fetch':
+        case 'secrets.get':
+        case 'secrets.set':
+        case 'secrets.delete':
           result = await this.options.capabilities.invoke(id, runtime.revision, request)
           break
         case 'views.publish': {

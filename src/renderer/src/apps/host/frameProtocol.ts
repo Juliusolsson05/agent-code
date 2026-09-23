@@ -8,6 +8,11 @@ import {
   serviceStopRequestSchema,
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
+  serviceExposeRequestSchema,
+  netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 } from '@shared/types/extensionServices'
 
 // The host <-> extension-frame message contract (WS4, sandbox substrate).
@@ -89,6 +94,17 @@ export const frameRequestSchema = z.discriminatedUnion('method', [
   serviceStopRequestSchema,
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
+  // ── THESE THREE WERE MISSING (#1150) ──
+  // The view bootstrap (frameDocument.ts) has always exposed api.net.fetch and
+  // api.services.expose, and the runtime transport accepted both. This union
+  // did not, so a VIEW's call failed the envelope parse in frameHost and was
+  // dropped without a reply: the promise never settled and the author saw a
+  // hang, not an error. Poker's in-app LAN view calls both.
+  serviceExposeRequestSchema,
+  netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 ])
 
 /**

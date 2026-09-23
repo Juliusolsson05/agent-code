@@ -50,9 +50,19 @@ const api = {
     invoke: (serviceId, name, params) => transport.request({ method: 'service.invoke', serviceId, name, params }),
     expose: (serviceId, lan) => transport.request({ method: 'service.expose', serviceId, lan }),
   },
+  // httpMethod is the SDK's field name; \`method\` was what this bootstrap
+  // read by mistake, so it stays accepted (#1150). Absent fields are OMITTED,
+  // not sent as undefined: main's isExtensionJson admission refuses an
+  // undefined-valued key, so \`fetch(url)\` with no init must not carry four.
   net: {
-    fetch: (url, init) => transport.request({ method: 'net.fetch', url,
-      httpMethod: init && init.method, headers: init && init.headers, body: init && init.body }),
+    fetch: (url, init) => transport.request(Object.fromEntries(Object.entries({ method: 'net.fetch', url,
+      httpMethod: init && (init.httpMethod || init.method), headers: init && init.headers, body: init && init.body,
+      responseType: init && init.responseType }).filter(([, value]) => value !== undefined && value !== null))),
+  },
+  secrets: {
+    get: key => transport.request({ method: 'secrets.get', key }),
+    set: (key, value) => transport.request({ method: 'secrets.set', key, value }),
+    delete: key => transport.request({ method: 'secrets.delete', key }),
   },
 };
 function register(map, id, handler) {

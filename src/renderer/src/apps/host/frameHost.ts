@@ -137,6 +137,18 @@ export function createFrameHost(options: {
     'service.stop': 'service.run',
     'service.status': 'service.run',
     'service.invoke': 'service.run',
+    'service.expose': 'net.listen',
+    // NOT pre-gated here: net.fetch needs net.connect for a private address
+    // and net.origins for a declared public origin, and only main holds the
+    // verified origin list that decides which. Main enforces it before dialing
+    // (capabilityService.requireGrantFor); a renderer-side guess could only be
+    // wrong in one direction or the other.
+    'net.fetch': null,
+    // Tier 0: id-scoped by main from the (extensionId, revision) this broker
+    // fixed before hearing the child. See main/extensions/secrets.ts.
+    'secrets.get': null,
+    'secrets.set': null,
+    'secrets.delete': null,
   }
 
   const perform = async (request: FrameRequest): Promise<unknown> => {
@@ -192,6 +204,11 @@ export function createFrameHost(options: {
       case 'service.stop':
       case 'service.status':
       case 'service.invoke':
+      case 'service.expose':
+      case 'net.fetch':
+      case 'secrets.get':
+      case 'secrets.set':
+      case 'secrets.delete':
         return window.api.extensionsServiceRequest(extensionId, bundleRevision, request)
       default:
         // Exhaustiveness. Without it an unhandled method fell off the end returning

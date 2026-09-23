@@ -21,12 +21,15 @@ export type NetFetchRequest = {
   httpMethod?: string
   headers?: Array<{ name: string; value: string }>
   body?: string
+  /** 'base64' returns the raw bytes base64-encoded (binary bodies); default text. */
+  responseType?: 'text' | 'base64'
 }
 
 export type NetFetchResult = {
   status: number
   contentType: string
   body: string
+  bodyEncoding: 'text' | 'base64'
 }
 
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
@@ -82,13 +85,31 @@ export async function netFetch(request: NetFetchRequest, perform: typeof fetch =
     headers,
     ...(request.body !== undefined ? { body: request.body } : {}),
     signal: AbortSignal.timeout(NET_FETCH_TIMEOUT_MS),
+    // The policy above checked THIS url. Following a 3xx would let a private
+    // address bounce the request (headers included) to any public host the
+    // check never saw, so a redirect is an error, not a hop.
+    redirect: 'error',
   })
+  return boundedFetchResult(response, request.responseType)
+}
+
+/** Shared tail for both brokered fetch paths (private net.connect and declared
+ *  net.origins): one byte cap and one encoding rule, so the two cannot drift. */
+export async function boundedFetchResult(response: Response, responseType: 'text' | 'base64' = 'text'): Promise<NetFetchResult> {
   const contentType = response.headers.get('content-type') ?? 'application/octet-stream'
-  // Read as text with a hard byte cap: this crosses back into a sandboxed
-  // frame, where a 2 GiB body is a memory attack, not data.
+  // Hard byte cap: this crosses back into a sandboxed frame, where a 2 GiB
+  // body is a memory attack, not data. A declared Content-Length over the cap
+  // is refused before reading; the post-read check covers chunked bodies.
+  const declared = Number(response.headers.get('content-length') ?? 0)
+  if (declared > MAX_NET_FETCH_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => {})
+    throw new Error(`net.fetch responses are limited to ${MAX_NET_FETCH_RESPONSE_BYTES} bytes.`)
+  }
   const buffer = Buffer.from(await response.arrayBuffer())
   if (buffer.byteLength > MAX_NET_FETCH_RESPONSE_BYTES) {
     throw new Error(`net.fetch responses are limited to ${MAX_NET_FETCH_RESPONSE_BYTES} bytes.`)
   }
-  return { status: response.status, contentType, body: buffer.toString('utf8') }
+  return responseType === 'base64'
+    ? { status: response.status, contentType, body: buffer.toString('base64'), bodyEncoding: 'base64' }
+    : { status: response.status, contentType, body: buffer.toString('utf8'), bodyEncoding: 'text' }
 }

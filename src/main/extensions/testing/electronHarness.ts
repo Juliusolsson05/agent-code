@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, webContents } from 'electron'
 import { registerExtensionScheme, handleExtensionScheme } from '@main/extensions/scheme.js'
@@ -12,6 +13,7 @@ import { registerExtensionRuntimeIpc } from '../runtimeIpc.js'
 import { registerExtensionInputIpc } from '../nativeInput.js'
 import { ExtensionCapabilityService } from '../capabilityService.js'
 import { ExtensionServiceHost } from '../serviceHost.js'
+import { createExtensionSecretStore } from '../secrets.js'
 
 const root = process.env.AGENT_CODE_EXTENSION_TEST_ROOT
 if (!root) throw new Error('An isolated extension test root is required')
@@ -102,6 +104,9 @@ void (async () => {
     resolveSessionRoot: sessionId => sessionId === 'fixture-session' ? projectRoot : null,
     notify: (extensionId, message) => extensionNotifications.push({ extensionId, message }),
     services: new ExtensionServiceHost({ readyTimeoutMs: 3000, invokeTimeoutMs: 1500 }),
+    // Harness-only codec: a journey must never touch the developer's real OS
+    // keychain. Production wires createSafeStorageCodec (src/main/index.ts).
+    secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, join(tmpdir(), `agent-code-harness-secrets-${process.pid}`)),
   })
   const service = new ExtensionRuntimeService({ preload: join(root!, 'runtime-preload.cjs'), capabilities, onStatus: status => {
     if (status.state === 'starting') runtimeStarts.push(status.extensionId)

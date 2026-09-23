@@ -168,7 +168,8 @@ describe('parseExtensionManifest — contribution namespacing', () => {
 
 describe('parseExtensionManifest — capabilities', () => {
   it('accepts every capability the host actually implements', () => {
-    const parsed = parseExtensionManifest(manifest({ apiVersion: 2, permissions: [...EXTENSION_CAPABILITIES] }))
+    // net.origins is only coherent with its declared list (see below).
+    const parsed = parseExtensionManifest(manifest({ apiVersion: 2, permissions: [...EXTENSION_CAPABILITIES], networkOrigins: ['https://api.example.com'] }))
     expect(parsed.permissions).toEqual([...EXTENSION_CAPABILITIES])
   })
 
@@ -253,5 +254,48 @@ describe('contributes.services', () => {
     ['too many services', { ...v2, contributes: { services: Array.from({ length: 5 }, (_, i) => ({ id: `timer.s${i}`, entry: 'dist/s.js' })) } }, /services/],
   ])('rejects %s before publication', (_label, overrides, pattern) => {
     expect(() => parseExtensionManifest(manifest(overrides))).toThrow(pattern)
+  })
+})
+
+describe('networkOrigins / net.origins (#1150)', () => {
+  const v2 = (overrides: Record<string, unknown>) => manifest({ apiVersion: 2, permissions: ['net.origins'], ...overrides })
+
+  it('accepts exact public https origins and keeps them verbatim for the consent dialog', () => {
+    const parsed = parseExtensionManifest(v2({ networkOrigins: ['https://api.elevenlabs.io', 'https://api.example.com:8443'] }))
+    expect(parsed.networkOrigins).toEqual(['https://api.elevenlabs.io', 'https://api.example.com:8443'])
+  })
+
+  // Each shape is a way for the dialog to under-state what can be reached.
+  it.each([
+    ['a wildcard subdomain', 'https://*.elevenlabs.io'],
+    ['plain http', 'http://api.elevenlabs.io'],
+    ['a path', 'https://api.elevenlabs.io/v1'],
+    ['a trailing slash', 'https://api.elevenlabs.io/'],
+    ['a query', 'https://api.elevenlabs.io?x=1'],
+    ['userinfo', 'https://user:pass@api.elevenlabs.io'],
+    ['an IPv4 literal', 'https://8.8.8.8'],
+    ['an IPv6 literal', 'https://[2001:db8::1]'],
+    ['localhost', 'https://localhost'],
+    ['an mDNS name', 'https://printer.local'],
+    ['a single-label name', 'https://intranet'],
+    ['a non-URL', 'api.elevenlabs.io'],
+    ['upper-case host (not the canonical origin)', 'https://API.elevenlabs.io'],
+  ])('refuses %s', (_label, origin) => {
+    expect(() => parseExtensionManifest(v2({ networkOrigins: [origin] }))).toThrow(ManifestError)
+  })
+
+  it('pairs the list with the permission in both directions', () => {
+    expect(() => parseExtensionManifest(v2({}))).toThrow(/requires a "networkOrigins" list/)
+    expect(() => parseExtensionManifest(manifest({ apiVersion: 2, networkOrigins: ['https://api.example.com'] })))
+      .toThrow(/requires the "net.origins" permission/)
+  })
+
+  it('is v2-only, bounded and duplicate-free', () => {
+    expect(() => parseExtensionManifest(manifest({ permissions: ['net.origins'], networkOrigins: ['https://api.example.com'] })))
+      .toThrow(/API v2/)
+    expect(() => parseExtensionManifest(v2({ networkOrigins: Array.from({ length: 5 }, (_, i) => `https://a${i}.example.com`) })))
+      .toThrow(ManifestError)
+    expect(() => parseExtensionManifest(v2({ networkOrigins: ['https://api.example.com', 'https://api.example.com'] })))
+      .toThrow(/duplicate network origin/)
   })
 })

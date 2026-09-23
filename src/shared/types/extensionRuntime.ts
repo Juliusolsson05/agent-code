@@ -12,6 +12,9 @@ import {
   serviceInvokeRequestSchema,
   serviceExposeRequestSchema,
   netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 } from './extensionServices.js'
 export { isExtensionJson, type ExtensionJson } from './extensionJson.js'
 
@@ -41,6 +44,11 @@ export const runtimeApiRequestSchema = z.discriminatedUnion('method', [
   serviceInvokeRequestSchema,
   serviceExposeRequestSchema,
   netFetchRequestSchema,
+  // Tier 0 per-extension secrets; same shared schema objects as the view
+  // broker so the two transports accept exactly the same keys and values.
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 ])
 export type RuntimeApiRequest = z.infer<typeof runtimeApiRequestSchema>
 
