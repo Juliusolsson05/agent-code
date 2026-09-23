@@ -74,7 +74,7 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
         else requestPocket(pocketId, { type: 'pick' })
       }),
       window.api.onPocketBlockedPopup(({ url }) => {
-        showToast(`The page tried to open a popup (${hostOf(url)}). Use ↗ to continue in your browser.`)
+        showToast(`The page tried to open a popup (${hostOf(url)}). Use Browser controls → Open in default browser to continue.`)
       }),
       // An agent called browser_open. The pocket is attached COLLAPSED and
       // nothing takes focus: the user keeps what they were doing and sees the

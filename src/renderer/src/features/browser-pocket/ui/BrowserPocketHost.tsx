@@ -428,7 +428,9 @@ export function wrapperStyle(placement: Placement, viewport: { width: number; he
       filter: placement.dimmed ? 'brightness(0.6)' : undefined,
     }
   }
-  const size = placement.mode === 'parked' ? placement.size : { width: 1280, height: 800 }
+  // A hidden device viewport must keep its CSS dimensions too. Otherwise a
+  // resize tool reports iPhone while the agent actually reads a desktop page.
+  const size = viewport ?? (placement.mode === 'parked' ? placement.size : { width: 1280, height: 800 })
   const paint = placement.mode === 'parked' && placement.mustPaint
   // Never display:none (guests blank or keep stale sizes, electron#8277) and
   // never visibility:hidden (can permanently blank a macOS guest on Electron
@@ -477,6 +479,7 @@ function handleRequest(
   if (!el) return
   switch (request.type) {
     case 'reload': if (request.hard) el.reloadIgnoringCache(); else el.reload(); return
+    case 'stop': el.stop(); return
     case 'back': if (el.canGoBack()) el.goBack(); return
     case 'forward': if (el.canGoForward()) el.goForward(); return
     case 'devtools': el.openDevTools(); return

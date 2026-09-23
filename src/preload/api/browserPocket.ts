@@ -7,6 +7,8 @@ import type {
   LanePort,
   PocketDrivingEvent,
   PocketFlags,
+  PocketMenuAction,
+  PocketMenuState,
   PocketLocalAction,
   PocketPickResult,
   PortWatchSession,
@@ -16,6 +18,7 @@ import type {
 // themselves get NO preload (main strips it at attach); this bridge belongs to
 // the privileged app renderer only.
 export const browserPocketApi = {
+  showPocketMenu: (state: PocketMenuState): Promise<PocketMenuAction | null> => ipcRenderer.invoke('browser-pocket:menu', state),
   pocketPartition: (p: { pocketId: string; profile: 'lane' | 'project'; projectId?: string }): Promise<string> =>
     ipcRenderer.invoke('browser-pocket:partition', p),
   registerPocketGuest: (p: { pocketId: string; sessionId: string; webContentsId: number }): Promise<{ ok: boolean }> =>

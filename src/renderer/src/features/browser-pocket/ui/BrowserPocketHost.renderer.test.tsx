@@ -271,3 +271,9 @@ describe('wrapperStyle (surviving mutations M8–M10)', () => {
     }
   })
 })
+
+ it('keeps requested device CSS dimensions while parked for agent screenshots', () => {
+  const style = wrapperStyle({ mode: 'parked', size: { width: 1280, height: 800 }, mustPaint: true }, { width: 393, height: 852 })
+  expect(style.width).toBe(393)
+  expect(style.height).toBe(852)
+ })

@@ -60,6 +60,7 @@ export function AgentMcpServersModal() {
   const sessionId = useAppStore(state => state.agentMcpServersSessionId)
   const close = useAppStore(state => state.closeAgentMcpServers)
   const openRootPrompt = useAppStore(state => state.openRootManagementPrompt)
+  const browserEnabled = useAppStore(state => state.settings.browserPocketEnabled)
   const defaults = useAppStore(state => state.settings.defaultBuiltInMcpDomains)
   const snapshot = useUserMcpSnapshot()
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
@@ -190,9 +191,8 @@ export function AgentMcpServersModal() {
                       can drop them for reasons the renderer cannot see), but
                       the observed attach state is still shown so "on" is not
                       mistaken for "attached" (review round 2). */}
-                  {row.key.startsWith('user:') && !row.blocked && on && !row.attached
-                    ? ' · not attached yet — reload'
-                    : ''}
+                  {!row.blocked && on !== row.attached ? ' · needs reload' : row.attached ? ' · attached' : ''}
+                  {row.key === 'browser' && !browserEnabled ? ' · feature off in Experimental' : ''}
                 </span>
               </div>
             )

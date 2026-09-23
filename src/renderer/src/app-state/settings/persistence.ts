@@ -132,6 +132,9 @@ export function coerceSettings(value: unknown): Settings {
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
     // Strict `=== true` for the two risky switches so a malformed or hand-edited
     // settings file can never turn them on; `!== false` for the harmless one.
+    // Already-enabled installs have made their MCP choices. Migration must
+    // not silently re-grant a domain the user removed from a provider.
+    browserPocketDefaultsInitialized: parsed.browserPocketDefaultsInitialized === true || parsed.browserPocketEnabled === true,
     browserPocketEnabled: parsed.browserPocketEnabled === true,
     browserPocketOpenLocalhostLinks: parsed.browserPocketOpenLocalhostLinks !== false,
     browserPocketAllowEvaluate: parsed.browserPocketAllowEvaluate === true,

@@ -16,6 +16,7 @@ import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recor
 // unit test shipped as a no-op because the component undid it on render.
 
 const appState = vi.hoisted(() => ({
+  settings: { browserPocketEnabled: false },
   workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),

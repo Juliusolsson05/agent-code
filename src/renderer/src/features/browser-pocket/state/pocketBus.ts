@@ -9,6 +9,7 @@
 
 export type PocketRequest =
   | { type: 'reload'; hard?: boolean }
+  | { type: 'stop' }
   | { type: 'back' }
   | { type: 'forward' }
   | { type: 'navigate'; url: string }

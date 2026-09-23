@@ -48,3 +48,18 @@ export type PortWatchSession = {
 
 /** A key pressed while a pocket page had focus, replayed into the app's router. */
 export type ForwardedKey = { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
+
+/** Only display state crosses this boundary; main owns the menu template.
+ * Never accept arbitrary menu roles, accelerators or code from a page. */
+export type PocketMenuState = {
+  viewport: string
+  colorScheme: 'system' | 'light' | 'dark'
+  zoom: number
+  profile: 'lane' | 'project'
+  hasPage: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+}
+export type PocketMenuAction = 'back' | 'forward' | 'pick' | 'external' | 'reload' | 'devtools' | 'rotate' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'clear-storage' | 'detach' | 'setup'
+  | `device:${import('./devices.js').DevicePresetId | 'fill'}`
+  | `scheme:${'system' | 'light' | 'dark'}` | `profile:${'lane' | 'project'}`

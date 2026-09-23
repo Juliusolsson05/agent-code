@@ -1,9 +1,11 @@
+import { useAppStore } from '@renderer/app-state/hooks'
+import { browserPocketEnablePatch } from '../setup'
 import type { CommandContext, CommandDef, CommandUnavailable } from '@renderer/features/command-palette/types'
 import { toggle } from '@renderer/features/command-palette/commandState'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { SessionId } from '@renderer/workspace/types'
 
-import { canHavePocket, togglePocket } from '../actions'
+import { attachPocket, canHavePocket, togglePocket } from '../actions'
 import { detachAndForget } from '../ui/detach'
 import { requestPocket, type PocketRequest } from '../state/pocketBus'
 
@@ -41,7 +43,6 @@ export const browserPocketCommands: CommandDef[] = [
     description: '**What it does:** Attaches a browser to the focused agent, or opens and collapses it.\n\n**Use when:** You want to see what this lane is building. The pocket rides in the lane and sits beside the agent in Spotlight.\n\n**Notes:** Each agent\'s pocket has its own cookies.',
     keywords: ['browser', 'preview', 'pocket', 'localhost', 'web', 'page'],
     unavailableReason: ctx => {
-      if (!ctx.flags.browserPocketEnabled) return OFF
       const id = target(ctx)
       if (!id || !canHavePocket(ctx.workspace.state, id)) return { reason: 'Browser pockets attach to agents.', presentation: 'disable' }
       return null
@@ -52,7 +53,13 @@ export const browserPocketCommands: CommandDef[] = [
     },
     run: ctx => {
       const id = target(ctx)
-      if (id) ctx.workspace.updateBrowserPocket(state => togglePocket(state, id))
+      if (id && !ctx.flags.browserPocketEnabled) {
+        const app = useAppStore.getState()
+        app.setSettings(browserPocketEnablePatch(app.settings))
+      }
+      // A saved open pocket is hidden while the feature is disabled. First
+      // use means SHOW it, not toggle that saved state back to collapsed.
+      if (id) ctx.workspace.updateBrowserPocket(state => ctx.flags.browserPocketEnabled ? togglePocket(state, id) : attachPocket(state, id, { view: 'open' }))
     },
   },
   {

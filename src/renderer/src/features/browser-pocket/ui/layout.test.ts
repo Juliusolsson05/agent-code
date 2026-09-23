@@ -1,23 +1,27 @@
 import { describe, expect, it } from 'vitest'
 
-import { fitViewport, pocketLayout } from './layout'
+import { fitViewport, pocketLayout, pocketSplitWidth, MIN_SPLIT_WIDTH } from './layout'
 
 describe('pocketLayout', () => {
   it('collapsed is always the strip, even in Spotlight', () => {
     expect(pocketLayout({ width: 2000, height: 1200 }, 'collapsed', 'spotlight')).toBe('strip')
   })
-  it('Spotlight always splits side by side when open', () => {
-    expect(pocketLayout({ width: 300, height: 300 }, 'open', 'spotlight')).toBe('side')
+  it.each(['lane', 'spotlight'] as const)('opens full-size in narrow %s surfaces, never a dead-end strip', surface => {
+    for (const size of [{ width: 240, height: 350 }, { width: 400, height: 900 }, { width: 0, height: 0 }]) {
+      expect(pocketLayout(size, 'open', surface)).toBe('browser')
+    }
   })
-  it('a lane too small in both directions keeps the strip; unmeasured (0×0) too', () => {
-    expect(pocketLayout({ width: 500, height: 400 }, 'open', 'lane')).toBe('strip')
-    expect(pocketLayout({ width: 0, height: 0 }, 'open', 'lane')).toBe('strip')
+  it('requires room for both panes, including the divider, and never stacks', () => {
+    expect(pocketLayout({ width: MIN_SPLIT_WIDTH - 1, height: 1000 }, 'open', 'lane')).toBe('browser')
+    expect(pocketLayout({ width: MIN_SPLIT_WIDTH, height: 180 }, 'open', 'lane')).toBe('side')
+    expect(pocketLayout({ width: 1400, height: 100 }, 'open', 'spotlight')).toBe('browser')
+    expect(pocketLayout({ width: 700, height: 900 }, 'open', 'lane')).toBe('side')
   })
-  it('wide lanes split side by side, tall ones stack, and a short-but-wide one never stacks into slivers', () => {
-    expect(pocketLayout({ width: 1400, height: 700 }, 'open', 'lane')).toBe('side')
-    expect(pocketLayout({ width: 700, height: 900 }, 'open', 'lane')).toBe('stacked')
-    expect(pocketLayout({ width: 900, height: 300 }, 'open', 'lane')).toBe('side')
-    expect(pocketLayout({ width: 400, height: 900 }, 'open', 'lane')).toBe('stacked')
+  it('preserves both pane minimums even after an extreme drag or resize', () => {
+    expect(pocketSplitWidth(MIN_SPLIT_WIDTH, 0.2)).toBe(320)
+    expect(pocketSplitWidth(MIN_SPLIT_WIDTH, 0.8)).toBe(320)
+    expect(pocketSplitWidth(1000, 0.99)).toBe(716)
+    expect(pocketSplitWidth(1000, 0.01)).toBe(320)
   })
 })
 

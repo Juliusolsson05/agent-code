@@ -15,6 +15,7 @@ import { usePocketLive } from '../state/pocketLiveStore'
  * this box by CSS position (spec §5.3).
  */
 export function PocketSlot(props: {
+  onSize?: (size: { width: number; height: number }) => void
   pocketId: string
   surface: SlotReport['surface']
   laneIndex: number | null
@@ -43,6 +44,7 @@ export function PocketSlot(props: {
       frame = 0
       const r = el.getBoundingClientRect()
       const c = clipEl?.getBoundingClientRect()
+      props.onSize?.({ width: r.width, height: r.height })
       report(props.pocketId, {
         slotKey, surface: props.surface, laneIndex: props.laneIndex, focused: props.focused, visible, dimmed: props.dimmed,
         rect: { x: r.left, y: r.top, width: r.width, height: r.height },
@@ -69,7 +71,7 @@ export function PocketSlot(props: {
       window.removeEventListener('scroll', schedule, true)
       remove(props.pocketId, slotKey)
     }
-  }, [props.pocketId, props.surface, props.laneIndex, props.focused, props.dimmed, visible, slotKey, report, remove])
+  }, [props.pocketId, props.surface, props.laneIndex, props.focused, props.dimmed, visible, slotKey, report, remove, props.onSize])
 
   const role = slotRole(Object.values(slots ?? {}), slotKey)
   return (

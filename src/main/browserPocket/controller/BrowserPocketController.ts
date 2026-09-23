@@ -26,10 +26,10 @@ export type DebuggerLike = {
   attach(protocolVersion?: string): void
   detach(): void
   isAttached(): boolean
-  sendCommand(method: string, params?: object): Promise<any>
-  on(event: 'message', listener: (event: unknown, method: string, params: any) => void): unknown
+  sendCommand(method: string, params?: object, sessionId?: string): Promise<any>
+  on(event: 'message', listener: (event: unknown, method: string, params: any, sessionId?: string) => void): unknown
   on(event: 'detach', listener: (event: unknown, reason: string) => void): unknown
-  removeListener?(event: 'message', listener: (event: unknown, method: string, params: any) => void): unknown
+  removeListener?(event: 'message' | 'detach', listener: (...args: any[]) => void): unknown
 }
 
 /** The slice of Electron.WebContents we use. */
@@ -40,6 +40,7 @@ export type GuestLike = {
   isDevToolsOpened(): boolean
   getURL(): string
   getTitle(): string
+  getUserAgent?(): string
   loadURL(url: string): Promise<void>
   reload(): void
   canGoBack?(): boolean
@@ -57,6 +58,8 @@ export type ImageLike = {
 }
 
 export type ActionCtx = {
+  /** Cancels library retries immediately when the user takes control. */
+  signal: AbortSignal
   cdp: DebuggerLike
   guest: GuestLike
   /** Declare an upcoming CDP mouse event at this point so its echo through
@@ -104,7 +107,7 @@ type Pocket = {
   /** The action currently executing, so a deadline can tell whether it
    * belongs to the running action or to one that never started (A #5), and
    * so only the running action's cleanup ends "driving"/"paint" (A #6). */
-  active: { token: symbol; mutating: boolean } | null
+  active: { token: symbol; mutating: boolean; abort: AbortController } | null
   /** Rejecters for every call still waiting on this pocket; a reset answers
    * them at once instead of leaving them queued behind a stalled action. */
   pending: Set<(error: Error) => void>
@@ -229,6 +232,7 @@ export class BrowserPocketController {
     if (at && (now < p.expectPointerAnyUntil || p.expectedPointers.some(e => Math.abs(e.x - at.x) <= 1 && Math.abs(e.y - at.y) <= 1))) return
     if (!at && now < p.expectKeysUntil) return
     p.epoch++
+    if (p.active?.mutating) p.active.abort.abort(new Aborted())
     if (!p.paused) {
       p.paused = true
       this.deps.emitDriving({ pocketId, state: 'user-paused' })
@@ -247,6 +251,7 @@ export class BrowserPocketController {
     const p = this.pockets.get(pocketId)
     if (!p) return
     p.epoch++
+    if (p.active?.mutating) p.active.abort.abort(new Aborted())
     if (!p.paused) { p.paused = true; this.deps.emitDriving({ pocketId, state: 'user-paused' }) }
     this.armIdleResume(p)
   }
@@ -347,15 +352,20 @@ export class BrowserPocketController {
   }
 
   async run<T>(sessionId: string, action: string, fn: (ctx: ActionCtx) => Promise<T>, opts: { mutating?: boolean; timeoutMs?: number; describe?: string } = {}): Promise<ToolOutcome<T>> {
+    // Discovery is stable, authorization is live. Check again inside the
+    // serialized job: a user can revoke evaluation while it waits in queue.
+    const evaluationGate = () => action === 'evaluate' && !this.allowEvaluate()
+      ? new Gate('disabled', 'JavaScript evaluation is turned off in Settings → Experimental.') : null
     const mutating = opts.mutating === true
     const p = this.bySession(sessionId)
-    const early = p ? this.gate(p, sessionId, mutating) : this.flags.enabled ? new Gate('no_pocket', NO_POCKET_MESSAGE) : new Gate('disabled', DISABLED_MESSAGE)
+    const early = evaluationGate() ?? (p ? this.gate(p, sessionId, mutating) : this.flags.enabled ? new Gate('no_pocket', NO_POCKET_MESSAGE) : new Gate('disabled', DISABLED_MESSAGE))
     if (early || !p) return { ok: false, code: early!.code, message: early!.message }
 
     const timeoutMs = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
     const startEpoch = p.epoch
     const generation = p.generation
     const token = Symbol(action)
+    const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     // Set when this call has already answered the agent "timeout". An action
     // still waiting in the queue (or mid-way) must then never act on the page:
@@ -376,16 +386,17 @@ export class BrowserPocketController {
     }
     const work = p.queue.then(async () => {
       stillCurrent()
-      const blocked = this.gate(p, sessionId, mutating)
+      const blocked = evaluationGate() ?? this.gate(p, sessionId, mutating)
       if (blocked) throw blocked
       if (mutating && p.epoch !== startEpoch) throw new Aborted()
       started = true
-      p.active = { token, mutating }
+      p.active = { token, mutating, abort }
       this.deps.emitPaint?.(p.pocketId, true)
       if (mutating) this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action })
       try {
         this.ensureAttached(p)
         const ctx: ActionCtx = {
+          signal: abort.signal,
           cdp: p.guest.debugger,
           guest: p.guest,
           expectPointer: (x, y) => {
@@ -395,6 +406,9 @@ export class BrowserPocketController {
           },
           expectKeys: () => { p.expectKeysUntil = this.deps.now() + KEY_ECHO_MS },
           checkEpoch: () => {
+            abort.signal.throwIfAborted()
+            const revoked = evaluationGate()
+            if (revoked) throw revoked
             stillCurrent()
             if (mutating && p.epoch !== startEpoch) throw new Aborted()
           },
@@ -415,10 +429,12 @@ export class BrowserPocketController {
       const value = await Promise.race([work, resetSignal, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Timeout()), timeoutMs) })])
       return { ok: true, value }
     } catch (error) {
-      if (error instanceof Aborted) return { ok: false, code: 'user_took_control', message: 'The user interacted with the page; the action was stopped.' }
-      if (error instanceof Gate) return { ok: false, code: error.code, message: error.message }
+      // A non-cooperative CDP operation may still be stuck after takeover.
+      // The deadline MUST reset that queue before mapping cancellation back
+      // to user_took_control; otherwise every later call queues forever.
       if (error instanceof Timeout) {
         cancelled = true
+        abort.abort(error)
         // Only a deadline of the action that is RUNNING resets the pocket.
         // An action that timed out while still queued just gives up: its
         // predecessor has its own deadline, and resetting here detached the
@@ -429,8 +445,11 @@ export class BrowserPocketController {
           // and start a fresh queue.
           this.reset(p, new Gate('timeout', `The page stopped responding during an earlier action, so the pocket was reset. Retry ${action}.`))
         }
-        return { ok: false, code: 'timeout', message: `${action} did not finish within ${timeoutMs} ms.` }
       }
+      if (abort.signal.aborted) error = abort.signal.reason
+      if (error instanceof Aborted) return { ok: false, code: 'user_took_control', message: 'The user interacted with the page; the action was stopped.' }
+      if (error instanceof Gate) return { ok: false, code: error.code, message: error.message }
+      if (error instanceof Timeout) return { ok: false, code: 'timeout', message: `${action} did not finish within ${timeoutMs} ms.` }
       return { ok: false, code: 'failed', message: error instanceof Error ? error.message : String(error) }
     } finally {
       if (timer) clearTimeout(timer)
@@ -512,7 +531,11 @@ export class BrowserPocketController {
     }
     if (!p.listenersInstalled) {
       p.listenersInstalled = true
-      p.guest.debugger.on('message', (_event, method, params) => reduceCdpEvent(p.buffers, method, params, this.deps.now()))
+      p.guest.debugger.on('message', (_event, method, params, sessionId) => {
+        // Playwright has its own flattened debugger session. Console events
+        // also arrive on the root; counting both duplicates every error.
+        if (!sessionId) reduceCdpEvent(p.buffers, method, params, this.deps.now())
+      })
       p.guest.debugger.on('detach', () => { p.attached = false })
     }
     // Buffers need these domains; failures surface on the first real command.
@@ -550,6 +573,7 @@ export class BrowserPocketController {
    * left to fail on its own; its checkEpoch throws from here on.
    */
   private reset(p: Pocket, reason: Gate): void {
+    p.active?.abort.abort(reason)
     this.detach(p)
     this.endActivity(p)
     p.generation++

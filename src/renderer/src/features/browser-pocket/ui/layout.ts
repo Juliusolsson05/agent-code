@@ -1,24 +1,25 @@
-// How an open pocket shares a lane with its agent (spec §4.1/§4.2).
-//
-// A lane can be a tenth of a row. Forcing a split there gives two useless
-// panes — Cursor's most repeated browser complaint was a ~200 px browser
-// panel. Below the threshold the lane keeps the strip; Spotlight always splits.
+// A split is useful only when BOTH panes have room. The old aspect-ratio
+// heuristic stacked short lanes and its strip fallback made Open a no-op.
+// User preference is left/right only: narrow surfaces show the browser at
+// full size, with an explicit return to the still-mounted agent.
+export const MIN_AGENT_WIDTH = 280
+export const MIN_BROWSER_WIDTH = 320
+export const SPLITTER_WIDTH = 4
+export const MIN_SPLIT_WIDTH = MIN_AGENT_WIDTH + MIN_BROWSER_WIDTH + SPLITTER_WIDTH
+export const MIN_SPLIT_HEIGHT = 180
+export type PocketLayout = 'side' | 'browser' | 'strip'
 
-export const MIN_SPLIT_WIDTH = 520
-export const MIN_SPLIT_HEIGHT = 420
-/** Wider than 1.3× its height ⇒ side by side; otherwise stacked. */
-export const SIDE_BY_SIDE_ASPECT = 1.3
-
-export type PocketLayout = 'side' | 'stacked' | 'strip'
-
-export function pocketLayout(size: { width: number; height: number }, view: 'open' | 'collapsed', surface: 'lane' | 'spotlight'): PocketLayout {
+export function pocketLayout(size: { width: number; height: number }, view: 'open' | 'collapsed', _surface: 'lane' | 'spotlight'): PocketLayout {
   if (view === 'collapsed') return 'strip'
-  if (surface === 'spotlight') return 'side'
-  // Before the first measurement (0×0) show the strip rather than flash a split.
-  if (size.width < MIN_SPLIT_WIDTH && size.height < MIN_SPLIT_HEIGHT) return 'strip'
-  if (size.width < MIN_SPLIT_WIDTH) return 'stacked'
-  if (size.height < MIN_SPLIT_HEIGHT) return 'side'
-  return size.width > size.height * SIDE_BY_SIDE_ASPECT ? 'side' : 'stacked'
+  return size.width >= MIN_SPLIT_WIDTH && size.height >= MIN_SPLIT_HEIGHT ? 'side' : 'browser'
+}
+
+/** Use pixels after measurement; percentages otherwise let the divider steal
+ * space from the minimums. Clamp the displayed size without overwriting the
+ * user's preferred fraction when a window temporarily becomes narrower. */
+export function pocketSplitWidth(width: number, fraction = 0.5): number {
+  const available = Math.max(0, width - SPLITTER_WIDTH)
+  return Math.max(MIN_BROWSER_WIDTH, Math.min(available - MIN_AGENT_WIDTH, available * fraction))
 }
 
 /**

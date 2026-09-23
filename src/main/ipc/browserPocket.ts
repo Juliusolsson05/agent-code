@@ -1,9 +1,10 @@
 import { ipcMain, webContents } from 'electron'
 
+import { attachGuestContextMenu, showPocketMenu } from '@main/browserPocket/nativeMenus.js'
 import { attachGuestInput } from '@main/browserPocket/guestPolicies.js'
 import { mayRegisterGuest } from '@main/browserPocket/guestRegistration.js'
 import { clearPocketStorage, configurePocketSession, partitionFor } from '@main/browserPocket/partition.js'
-import type { PocketFlags, PocketPickResult, PortWatchSession } from '@shared/browserPocket/types.js'
+import type { PocketFlags, PocketPickResult, PortWatchSession, PocketMenuState } from '@shared/browserPocket/types.js'
 
 /**
  * What the IPC layer needs from the controller (src/main/browserPocket/
@@ -26,6 +27,7 @@ export type BrowserPocketIpcDeps = {
 }
 
 export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
+  ipcMain.handle('browser-pocket:menu', (event, state: PocketMenuState) => showPocketMenu(event.sender, state))
   ipcMain.handle('browser-pocket:partition', (_event, p: { pocketId: string; profile: 'lane' | 'project'; projectId?: string }) => {
     const partition = partitionFor(p, p.projectId)
     // Configure BEFORE returning: the renderer only sets the <webview>'s
@@ -45,6 +47,7 @@ export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
       guest!.once('destroyed', () => guestsWithPolicies.delete(guest!.id))
       // Navigation/popup security is attached at did-attach-webview by the
       // window guard; this adds only the pocket-aware input handling.
+      attachGuestContextMenu(guest!)
       attachGuestInput(guest!, {
         forwardChord: key => { if (!sender.isDestroyed()) sender.send('browser-pocket:chord', key) },
         localAction: action => { if (!sender.isDestroyed()) sender.send('browser-pocket:local-action', { pocketId: p.pocketId, action }) },
