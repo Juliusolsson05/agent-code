@@ -28,3 +28,6 @@
 [submodule "packages/opencode-terminal-headless"]
 	path = packages/opencode-terminal-headless
 	url = https://github.com/Juliusolsson05/opencode-terminal-headless.git
+[submodule "packages/pi-terminal-headless"]
+	path = packages/pi-terminal-headless
+	url = https://github.com/Juliusolsson05/pi-terminal-headless.git

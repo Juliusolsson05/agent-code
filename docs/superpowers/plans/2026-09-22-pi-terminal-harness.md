@@ -151,6 +151,7 @@ all test runs.
   Design facts found by reading Pi's source during implementation, both now in the code's WHY comments:
   - Pi re-runs every extension factory on /new, /resume, /fork and /reload (`agent-session-runtime.ts`), so the bridge keeps one process-wide link;
   - forking at a user message puts that message's text back into Pi's editor.
+- 2026-09-22 — Task 5: submodule at package `610f0d8`, aliases/paths/include/vitest map, conditions-core target (sync --check clean; the package's copied core was already byte-identical), bridge copied as a raw .ts to `out/main/runtime/pi/bridge.ts` by both the Vite plugin and copy-packaged-resources (asarUnpack already covers `out/main/runtime/**`), `verify-build-output` requires it, app-level `support/upstream-versions.json` pins 0.87.1. `npm run typecheck` and `npm run test:package` green. ARCHITECTURE.md is deferred to Task 13 so it describes the finished integration, not the wiring alone.
 
 ---
 
@@ -325,16 +326,16 @@ bridge file exists), `support/upstream-versions.json` (`pi` entry),
 accTitle/accDescr/scope).
 **Files (package):** `src/PiTerminalHeadless.live.test.ts`.
 
-- [ ] **Step 1:** `git submodule add https://github.com/Juliusolsson05/pi-terminal-headless.git packages/pi-terminal-headless`, checkout the pushed `feat/initial-runtime` SHA.
-- [ ] **Step 2:** Aliases/paths/include as above (copy the
+- [x] **Step 1:** `git submodule add https://github.com/Juliusolsson05/pi-terminal-headless.git packages/pi-terminal-headless`, checkout the pushed `feat/initial-runtime` SHA.
+- [x] **Step 2:** Aliases/paths/include as above (copy the
   `opencode-terminal-headless` lines from commit `0fc879ad`).
-- [ ] **Step 3:** Conditions sync: `node scripts/sync-conditions-core.mjs && node scripts/sync-conditions-core.mjs --check`.
-- [ ] **Step 4:** Bridge resource copy in both the vite plugin and
+- [x] **Step 3:** Conditions sync: `node scripts/sync-conditions-core.mjs && node scripts/sync-conditions-core.mjs --check`.
+- [x] **Step 4:** Bridge resource copy in both the vite plugin and
   `copy-packaged-resources.mjs`; `npm run test:package` proves it lands in
   `out/main/runtime/pi/`.
 - [x] **Step 5:** Package live tier (opt-in env) green against the sandboxed
   real `pi`.
-- [ ] **Step 6:** `npm run typecheck` (app). Commit `build(pi): wire the
+- [x] **Step 6:** `npm run typecheck` (app). Commit `build(pi): wire the
   pi-terminal-headless submodule into the app build`.
 
 ---
