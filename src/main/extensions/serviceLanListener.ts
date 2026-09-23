@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse, type ClientReq
 import { request as upstreamRequest } from 'node:http'
 import type { Socket } from 'node:net'
 
+import { TRANSPORT_ATTESTATION, TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
 import { isPrivateIpLiteral } from './netPolicy.js'
-import { TRANSPORT_ATTESTATION_HEADER } from './serviceTransport.js'
 
 // The net.listen half of host-owned LAN exposure. The service process binds
 // LOOPBACK only; this listener is the single thing that makes it reachable from
@@ -24,13 +24,16 @@ const MAX_LAN_REQUEST_BYTES = 1024 * 1024
  *  let the service apply ITS OWN same-origin/CSRF rule against the forwarded
  *  host below. Everything else — cookies, arbitrary x-*, and above all any
  *  peer-supplied x-forwarded-* or attestation header — is dropped by omission. */
-const FORWARDED_REQUEST_HEADERS = ['accept', 'content-type', 'authorization', 'origin', 'sec-fetch-site'] as const
+const LAN_FORWARDED_HEADERS = ['accept', 'content-type', 'authorization', 'origin', 'sec-fetch-site'] as const
 
-/** Service response headers carried back to the LAN browser. Each one only
- *  RESTRICTS what that browser does with the page, so forwarding can never
- *  widen anything; dropping them (the old behaviour) served the service's page
- *  to LAN browsers without its CSP, nosniff or framing protection. */
-const FORWARDED_RESPONSE_HEADERS = ['content-security-policy', 'x-content-type-options', 'referrer-policy', 'x-frame-options'] as const
+/** Service response headers carried back to the LAN browser. RESPONSE-HEADER
+ *  POLICY: pass the restricting ones, the opposite of the service.transport
+ *  proxy, deliberately. There the page lives in an extension frame whose own
+ *  CSP governs it; here the LAN browser loads the service's page top-level, so
+ *  the service's CSP, nosniff and framing headers are the ONLY protection it
+ *  has. Each one only RESTRICTS what that browser does, so forwarding can never
+ *  widen anything. */
+const LAN_FORWARDED_RESPONSE_HEADERS = ['content-security-policy', 'x-content-type-options', 'referrer-policy', 'x-frame-options'] as const
 
 export type LanListenerHandle = {
   readonly port: number
@@ -91,15 +94,14 @@ function proxy(req: IncomingMessage, res: ServerResponse, targetPort: number): v
   // Header allow-list, undefined-filtered: Node's ClientRequest throws on an
   // undefined header value, and a plain GET carries none of the optional ones.
   const headers: Record<string, string> = {}
-  for (const name of FORWARDED_REQUEST_HEADERS) {
+  for (const name of LAN_FORWARDED_HEADERS) {
     const value = req.headers[name]
     if (typeof value === 'string') headers[name] = value
   }
   // WHY THE LISTENER STAMPS FORWARDING FACTS: it dials the service over
   // loopback, so without them every LAN guest arrives as 127.0.0.1 with Host
-  // 127.0.0.1:<service port>. A service with "host-computer only" rules (the
-  // poker table's loopback-only create) would then admit any guest as local,
-  // and it could not check a guest browser's Origin against the address that
+  // 127.0.0.1:<service port>. A service with loopback-only rules would then
+  // admit any guest as local, and it could not check a guest browser's Origin against the address that
   // browser actually used. These are SET from the socket and request line —
   // the allow-list above never copies a peer's own x-forwarded-* or
   // attestation — so a peer can neither forge nor erase them.
@@ -107,7 +109,7 @@ function proxy(req: IncomingMessage, res: ServerResponse, targetPort: number): v
   // The attestation value `lan` is the DOWNGRADE half of the contract that
   // serviceTransport.ts's `service` value is the other half of: a service must
   // treat a `lan` request as the forwarded remote peer, never as local.
-  headers[TRANSPORT_ATTESTATION_HEADER] = 'lan'
+  headers[TRANSPORT_ATTESTATION_HEADER] = TRANSPORT_ATTESTATION.lan
   // Dual-stack accept reports IPv4 peers as ::ffff:a.b.c.d; services compare
   // plain IPv4, so hand them the address the peer actually has.
   headers['x-forwarded-for'] = peer.replace(/^::ffff:/i, '')
@@ -120,7 +122,7 @@ function proxy(req: IncomingMessage, res: ServerResponse, targetPort: number): v
     { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers: { ...headers, host: `127.0.0.1:${targetPort}` } },
     response => {
       const passed: Record<string, string> = {}
-      for (const name of FORWARDED_RESPONSE_HEADERS) {
+      for (const name of LAN_FORWARDED_RESPONSE_HEADERS) {
         const value = response.headers[name]
         if (typeof value === 'string') passed[name] = value
       }

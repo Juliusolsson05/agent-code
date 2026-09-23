@@ -1,5 +1,8 @@
+import { MAX_NET_FETCH_BODY_BYTES, MAX_NET_FETCH_HEADERS, NET_FETCH_METHODS } from '@shared/types/extensionServices.js'
+// The attestation header is a cross-repo wire contract (host ↔ every service),
+// so its single source is the SDK export services also import.
+import { TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
 import { isPrivateIpLiteral, normalizeIpLiteral } from './netPolicy.js'
-import { TRANSPORT_ATTESTATION_HEADER } from './serviceTransport.js'
 
 // The net.connect capability: a brokered, bounded, outbound HTTP fetch for
 // runtimes and views. The sandbox stays sealed — the CHILD never dials; it asks
@@ -12,7 +15,6 @@ import { TRANSPORT_ATTESTATION_HEADER } from './serviceTransport.js'
 // the consent dialog plus logs must be able to state exactly who was talked to.
 // Public literals are refused pending an explicit future policy decision.
 
-export const MAX_NET_FETCH_BODY_BYTES = 64 * 1024
 export const MAX_NET_FETCH_RESPONSE_BYTES = 256 * 1024
 /** Content-Type is server-controlled text; clamp it so a result's metadata
  *  stays inside the fixed budget the runtime channel allows (below). */
@@ -24,8 +26,8 @@ const MAX_CONTENT_TYPE_CHARACTERS = 256
  *  admits a net.fetch result up to exactly this (#1151 design review), so a
  *  runtime and a view receive the same responses. */
 export const MAX_NET_FETCH_RESULT_CHARACTERS = Math.ceil(MAX_NET_FETCH_RESPONSE_BYTES / 3) * 4 + 1024
+// The SDK documents this value (ExtensionNetApi JSDoc); change both together.
 const NET_FETCH_TIMEOUT_MS = 10_000
-const MAX_HEADERS = 16
 
 export type NetFetchRequest = {
   url: string
@@ -43,7 +45,7 @@ export type NetFetchResult = {
   bodyEncoding: 'text' | 'base64'
 }
 
-const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
+const ALLOWED_METHODS: ReadonlySet<string> = new Set(NET_FETCH_METHODS)
 
 /** Headers only the HOST may set (#1147). The service proxy and LAN listener
  *  stamp these to tell a service who is calling; a service that trusts them on
@@ -51,7 +53,7 @@ const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'
  *  different extension is its own frame (`service`) or a LAN guest of its
  *  choosing (`lan` + forged x-forwarded-for). REFUSED, not silently dropped:
  *  no honest caller sends them, and a silent drop would hide the attempt. */
-export function isHostReservedHeader(name: string): boolean {
+function isHostReservedHeader(name: string): boolean {
   const lower = name.trim().toLowerCase()
   return lower === TRANSPORT_ATTESTATION_HEADER || lower === 'forwarded' || lower.startsWith('x-forwarded-')
 }
@@ -89,14 +91,66 @@ export function buildRequestHeaders(list: ReadonlyArray<{ name: string; value: s
   return headers
 }
 
+/**
+ * The request rules BOTH routes share (verb, body bytes, header count,
+ * host-reserved headers), in one place. They used to be written out in
+ * netFetch.ts and netOrigins.ts separately, with their own ALLOWED_METHODS and
+ * MAX_HEADERS copies, which is how one route can quietly end up admitting what
+ * the other refuses. Only the TARGET rules stay per route (assertFetchableTarget
+ * / assertDeclaredOriginTarget): those differ on purpose.
+ *
+ * The zod transport schema already bounds most of this; this is main's own
+ * gate for callers that reach netFetch/netOriginsFetch directly, and the only
+ * byte-accurate body check (the schema can count UTF-16 units, not bytes).
+ */
+export function assertFetchRequestShape(request: Pick<NetFetchRequest, 'httpMethod' | 'headers' | 'body'>): void {
+  // Host-reserved headers first: a caller trying to forge the attestation
+  // should get THAT refusal, not a header-count complaint.
+  //
+  // The same set on EVERY route, so the authoring.md §6b invariant ("no
+  // net.fetch can carry the transport marker or forwarding facts") holds for
+  // a declared public origin too — a public API never needs them, and a
+  // declared origin could be a relay that forwards them to something that
+  // trusts them.
+  for (const header of request.headers ?? []) {
+    if (isHostReservedHeader(header.name)) {
+      throw new Error(`net.fetch cannot set "${header.name}": that header is reserved for the Agent Code host.`)
+    }
+  }
+  if (!ALLOWED_METHODS.has(request.httpMethod ?? 'GET')) {
+    throw new Error('net.fetch does not support upgrades or tunnels.')
+  }
+  if (request.body !== undefined && Buffer.byteLength(request.body, 'utf8') > MAX_NET_FETCH_BODY_BYTES) {
+    throw new Error(`net.fetch bodies are limited to ${MAX_NET_FETCH_BODY_BYTES} bytes.`)
+  }
+  if ((request.headers?.length ?? 0) > MAX_NET_FETCH_HEADERS) {
+    throw new Error(`net.fetch accepts at most ${MAX_NET_FETCH_HEADERS} headers.`)
+  }
+}
+
 /** Fixed, credential-free copy for a failed dial. The underlying error is
  *  dropped on purpose: its text is implementation-defined and may embed
  *  request details. `target` is the origin the policy already approved. */
 export function transportFailure(error: unknown, target: string): Error {
   const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
-  return new Error(timedOut
-    ? `net.fetch to ${target} timed out.`
-    : `net.fetch to ${target} failed (network error or refused redirect).`)
+  if (timedOut) return new Error(`net.fetch to ${target} timed out.`)
+  // Under redirect:'error' undici throws TypeError('fetch failed') with cause
+  // 'unexpected redirect' (verified on Node 24/25). Recognising it gives the
+  // author the SAME message as a 3xx surfaced as a response (see
+  // boundedFetchResult), so "why did my call fail" has one answer per cause
+  // regardless of which fetch implementation reported it. Only the cause's
+  // fixed library text is inspected, never echoed.
+  const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined
+  if (cause instanceof Error && /redirect/i.test(cause.message)) return redirectRefusal(target)
+  // The fallback still names redirects: another fetch implementation may
+  // report a refused redirect in a shape we do not recognise.
+  return new Error(`net.fetch to ${target} failed (network error or refused redirect).`)
+}
+
+/** THE redirect refusal, shared by both routes and both ways a redirect can
+ *  surface (thrown by fetch, or returned as a 3xx). */
+function redirectRefusal(target: string): Error {
+  return new Error(`net.fetch to ${target} was redirected; redirects are not followed.`)
 }
 
 const RESPONSE_CAP_MESSAGE = `net.fetch responses are limited to ${MAX_NET_FETCH_RESPONSE_BYTES} bytes.`
@@ -118,10 +172,10 @@ export type NetFetchGuards = {
   isHostOwnedLoopbackPort?(port: number): boolean
 }
 
-/** Structural validation beyond the zod transport schema: everything here is
- *  what the policy needs before a socket is opened. Throws user-actionable
- *  errors — these strings surface in the extension's own console. */
-export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest, guards: NetFetchGuards = {}): URL {
+/** The private-address TARGET rules (the request-shape rules are shared; see
+ *  assertFetchRequestShape). Throws user-actionable errors — these strings
+ *  surface in the extension's own console. */
+export function assertFetchableTarget(rawUrl: string, guards: NetFetchGuards = {}): URL {
   let url: URL
   try {
     url = new URL(rawUrl)
@@ -131,9 +185,14 @@ export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest, 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('net.fetch supports http and https URLs only.')
   }
+  // userinfo is NOT excluded by the literal-IP rule below:
+  // `http://user:pw@192.168.1.20/` has a literal host and would be dialed, with
+  // undici turning the userinfo into an Authorization: Basic header nobody
+  // passed as a header (so it also skipped every header rule). Refuse it with
+  // the declared-origin route's exact copy; credentials belong in headers.
+  if (url.username || url.password) throw new Error('net.fetch URLs must not contain credentials.')
   // A literal IP host only. URL normalizes IPv6 to bracketed form; strip it for
-  // the policy check. Port is allowed (any service port); userinfo is refused
-  // by the literal requirement anyway.
+  // the policy check. Port is allowed (any service port).
   const host = url.hostname.replace(/^\[|\]$/g, '')
   if (!isPrivateIpLiteral(host)) {
     throw new Error(
@@ -146,7 +205,8 @@ export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest, 
   // grant-checked) or the LAN listener (stamps who is calling). A brokered
   // fetch straight to 127.0.0.1:<service port> skips both — it is how one
   // extension with net.connect could drive ANOTHER extension's service as if
-  // it were local (e.g. take the Poker host seat by supplying its own Origin).
+  // it were local — for a service with loopback-only rules, by supplying its
+  // own Origin and passing as that service's same-origin local page.
   // Refusing the listener's loopback port too matters: the listener would
   // stamp x-forwarded-for 127.0.0.1, which a service rightly treats as local.
   // This closes the in-app path only; ordinary local processes (and service
@@ -156,28 +216,16 @@ export function assertFetchableTarget(rawUrl: string, request: NetFetchRequest, 
   if (isThisMachine(host) && guards.isHostOwnedLoopbackPort?.(port)) {
     throw new Error('net.fetch cannot reach Agent Code extension services on this machine. Use your own service through service.transport.')
   }
-  for (const header of request.headers ?? []) {
-    if (isHostReservedHeader(header.name)) {
-      throw new Error(`net.fetch cannot set "${header.name}": that header is reserved for the Agent Code host.`)
-    }
-  }
-  const verb = request.httpMethod ?? 'GET'
-  if (!ALLOWED_METHODS.has(verb)) {
-    throw new Error('net.fetch does not support upgrades or tunnels.')
-  }
-  if (request.body !== undefined && Buffer.byteLength(request.body, 'utf8') > MAX_NET_FETCH_BODY_BYTES) {
-    throw new Error(`net.fetch bodies are limited to ${MAX_NET_FETCH_BODY_BYTES} bytes.`)
-  }
-  if ((request.headers?.length ?? 0) > MAX_HEADERS) {
-    throw new Error(`net.fetch accepts at most ${MAX_HEADERS} headers.`)
-  }
   return url
 }
 
 /** Perform one brokered fetch. `perform` is injectable for tests; production
- *  uses the global fetch (Electron main's Chromium net stack). */
+ *  uses the global fetch, which in Electron's main process is Node's undici
+ *  (not Chromium's net.fetch) — transportFailure relies on undici's error
+ *  shape to recognise a refused redirect. */
 export async function netFetch(request: NetFetchRequest, perform: typeof fetch = fetch, guards: NetFetchGuards = {}): Promise<NetFetchResult> {
-  const url = assertFetchableTarget(request.url, request, guards)
+  const url = assertFetchableTarget(request.url, guards)
+  assertFetchRequestShape(request)
   const headers = buildRequestHeaders(request.headers)
   let response: Response
   try {
@@ -198,8 +246,22 @@ export async function netFetch(request: NetFetchRequest, perform: typeof fetch =
 }
 
 /** Shared tail for both brokered fetch paths (private net.connect and declared
- *  net.origins): one byte cap and one encoding rule, so the two cannot drift. */
+ *  net.origins): one redirect rule, one byte cap and one encoding rule, so the
+ *  two cannot drift. */
 export async function boundedFetchResult(response: Response, responseType: 'text' | 'base64' = 'text', target = 'the target'): Promise<NetFetchResult> {
+  // Both routes pass redirect:'error', but some fetch implementations surface
+  // a redirect as an opaque/3xx RESPONSE instead of throwing. Either way it is
+  // a refusal: each route's policy approved THIS url only, and following (or
+  // handing back) a hop would carry the request's headers — often an API key
+  // — toward a destination nobody checked. This check used to exist only on
+  // the declared-origin route, so the private route returned a 3xx as data.
+  //
+  // 304 is exempt: it is a cache answer to the caller's own conditional
+  // headers (If-None-Match), carries no Location and goes nowhere.
+  if (response.status >= 300 && response.status < 400 && response.status !== 304) {
+    await response.body?.cancel().catch(() => {})
+    throw redirectRefusal(target)
+  }
   const contentType = (response.headers.get('content-type') ?? 'application/octet-stream').slice(0, MAX_CONTENT_TYPE_CHARACTERS)
   // Hard byte cap: this crosses back into a sandboxed frame, where a 2 GiB
   // body is a memory attack, not data. A declared Content-Length over the cap

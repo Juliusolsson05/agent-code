@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
+
 // The transport proxy is a trust boundary in its own right: it is the only
 // network-shaped thing a sandboxed frame can reach. These tests pin the three
 // denials that boundary exists for (no grant, no running service, no method
@@ -10,7 +12,6 @@ const {
   clearServiceTransport,
   isServiceTransportPath,
   proxyServiceTransportRequest,
-  TRANSPORT_ATTESTATION_HEADER,
 } = await import('./serviceTransport.js')
 
 type Probe = { url: string; init?: RequestInit }
@@ -98,8 +99,9 @@ describe('service.transport proxy', () => {
     expect(probes).toEqual([])
   })
 
-  // The cross-repo contract (#1147): Agent Code Poker's server/http.ts reads
-  // exactly this header set. A bearer-token service must see the frame's token,
+  // The cross-repo contract (#1147): services read exactly this header set
+  // (the attestation name is the SDK's export). A bearer-token service must
+  // see the frame's token,
   // and must be told — by the host, not the caller — that the request came
   // from its own extension's frame.
   it('forwards accept, content-type and authorization, plus the host attestation — nothing else', async () => {
