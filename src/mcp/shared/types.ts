@@ -14,6 +14,7 @@ export type BuiltInMcpDomain =
   | 'agent_management'
   | 'root_management'
   | 'workflows'
+  | 'browser'
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
@@ -26,6 +27,7 @@ export const BUILT_IN_MCP_DOMAINS = [
   'agent_management',
   'root_management',
   'workflows',
+  'browser',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
@@ -55,6 +57,12 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'agent_transcripts',
   'agent_management',
   'workflows',
+  // The lane browser pocket (#1142). Configurable and not confirmation-gated
+  // because every browser_* tool acts only on the CALLER's own pocket, which in
+  // v1 holds no imported credentials (clean, per-lane cookie jars). When cookie
+  // import from the user's browsers lands, move it into
+  // CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS (spec §8.4).
+  'browser',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 export type ConfigurableBuiltInMcpDomain =
@@ -114,6 +122,8 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
     'agent_transcripts',
     'agent_management',
     'root_management',
+    // Unlike workflows, Claude has no native in-app browser to overlap with.
+    'browser',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],

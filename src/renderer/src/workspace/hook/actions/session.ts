@@ -1431,6 +1431,13 @@ export function useSessionActions(
             ...(prev.sessions[oldId]?.agentViewModeOverride
               ? { agentViewModeOverride: prev.sessions[oldId]!.agentViewModeOverride }
               : {}),
+            // Same class as agentViewModeOverride: user-owned state on the pane.
+            // The pocketId inside it names the live page and its cookie jar,
+            // so dropping it here would reload the page and log the user out
+            // of their dev app on every reload / provider switch / rewind.
+            ...(prev.sessions[oldId]?.browserPocket
+              ? { browserPocket: prev.sessions[oldId]!.browserPocket }
+              : {}),
           }
           return {
             ...prev,

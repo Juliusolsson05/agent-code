@@ -114,6 +114,47 @@ export type SessionSpawnSelection = {
   providerRuntime?: AgentProviderRuntime
 }
 
+/**
+ * The browser pocket attached to an agent session (spec §3,
+ * docs/decomposition/lane-browser-pocket.md Stage 3).
+ *
+ * WHY on the SESSION and not the lane: lanes are index-keyed
+ * (TiledDispatchLayout renders `key={laneIndex}`), spliced by every grid
+ * mutation, and projected down to `{ selectedSessionId }` on persist, so a
+ * lane field would slide to the wrong agent or vanish. Spotlight holds a
+ * session too. SessionMeta already rides autosave, migration, adoption,
+ * project merge and removal; only replaceSession's literal and undo's
+ * carryDurableMeta need to learn this field. Do NOT copy the
+ * `dispatchColorFlags` pattern (a Settings map keyed by session id): it is
+ * never remapped or cleaned and orphans on every reload.
+ */
+export type BrowserPocketConfig = {
+  /**
+   * Minted once, never re-minted. Names the guest and its cookie partition.
+   * Reload, provider switch, rewind and undo all MINT NEW SessionIds
+   * (idRemap.ts), so anything keyed by SessionId would log the user out of
+   * their dev app on every reload.
+   */
+  pocketId: string
+  /** Last committed top-level URL (http/https). Restored lazily on first show. */
+  url?: string
+  /** 'open' = split beside the agent; 'collapsed' = the lane strip only. */
+  view: 'open' | 'collapsed'
+  /** The pocket's share of the split, 0.2–0.8. Absent = half. */
+  split?: number
+  /** Which cookie jar: the pocket's own (default, D1) or the project's. */
+  profile: 'lane' | 'project'
+  /** CSS viewport emulation; absent = fill the slot. */
+  viewport?:
+    | { mode: 'fill' }
+    | { mode: 'preset'; preset: string; landscape?: boolean }
+    | { mode: 'free'; width: number; height: number }
+  /** prefers-color-scheme override; absent = follow the OS. */
+  colorScheme?: 'light' | 'dark'
+  /** Page zoom for this pocket only (the host re-asserts it; guests inherit the app's zoom otherwise). */
+  zoom?: number
+}
+
 export type SessionMeta = {
   /** Opaque TLDR storage key. Keep it across reload/provider handoff, but mint
    * a new one for duplicates, unrelated resumes and rewinds: their old status
@@ -213,6 +254,8 @@ export type SessionMeta = {
    * installed. Absent on every non-extension kind.
    */
   extensionViewId?: string
+  /** Browser pocket (see BrowserPocketConfig). Agent kinds only; absent = none. */
+  browserPocket?: BrowserPocketConfig
   /**
    * Set on a "Linked Agent" — an agent spawned via the Linked Agent
    * command with another agent as its parent. Two consequences:
