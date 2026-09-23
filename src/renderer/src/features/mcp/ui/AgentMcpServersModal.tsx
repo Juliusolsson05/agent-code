@@ -101,7 +101,13 @@ export function AgentMcpServersModal() {
 
   const effective = (row: Row) => current[row.key] ?? row.inherited
   const changed = JSON.stringify(normalize(current)) !== JSON.stringify(normalize(saved))
-  const pendingReload = rows.some(row => !row.blocked && !row.problem && effective(row) !== row.attached)
+  // Built-in rows only. A user server can be requested and still not attach
+  // for launch-time reasons the renderer cannot see (a name in the project's
+  // own .codex/config.toml, a keyring hiccup): counting those would leave Apply
+  // permanently armed, and every Apply would reload the conversation for
+  // nothing and raise the same "wasn't attached" notice again.
+  const pendingReload = rows.some(row =>
+    !row.key.startsWith('user:') && !row.blocked && !row.problem && effective(row) !== row.attached)
 
   const toggle = (row: Row) => {
     const next = !effective(row)
@@ -129,15 +135,19 @@ export function AgentMcpServersModal() {
     // under, not the replacement's. try/catch because a preload without the
     // channel throws synchronously; the reload the user asked for still runs.
     const goalLoopRow = rows.find(row => row.key === 'goal_loop')
-    if (meta.builtInMcpDomains?.includes('goal_loop') && goalLoopRow && !effective(goalLoopRow)) {
-      try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
-    }
+    const stopGoalLoop = Boolean(meta.builtInMcpDomains?.includes('goal_loop') && goalLoopRow && !effective(goalLoopRow))
     if (grantsRoot) {
       // The confirmation dialog owns every root grant (#906). It receives the
-      // rest of the draft so one confirmed reload applies everything.
+      // rest of the draft so one confirmed reload applies everything — and the
+      // goal-loop stop, which must only happen if that reload really runs: a
+      // declined confirmation reloads nothing, so stopping here first would
+      // kill a loop whose tools the agent still has.
       const { [ROOT_MANAGEMENT_DOMAIN]: _root, ...rest } = overrides
-      openRootPrompt(sessionId, rest)
+      openRootPrompt(sessionId, rest, stopGoalLoop)
       return
+    }
+    if (stopGoalLoop) {
+      try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
     }
     void reloadSessionWithBuiltInMcpOverrides(workspace, sessionId, overrides, {
       reloaded: 'Reloaded with updated MCP servers',

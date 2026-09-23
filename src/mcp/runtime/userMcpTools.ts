@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { UserMcpService } from '@main/userMcp/service.js'
 import type { McpSessionScope } from '@mcp/shared/types.js'
 import type { UserMcpMutationResult, UserMcpServerView, UserMcpSnapshot } from '@shared/userMcp/types.js'
+import { providerSupportForEntry } from '@shared/userMcp/validate.js'
 
 /**
  * The `mcp_servers` built-in domain (#1143): lets an agent manage Agent
@@ -76,11 +77,14 @@ export function registerUserMcpTools(
       if (!imported.ok) return { ...toolText({ ok: false, message: imported.error }), isError: true }
       const added: unknown[] = []
       for (const candidate of imported.candidates) {
-        const sse = candidate.entry.type === 'sse'
+        const support = providerSupportForEntry(candidate.entry)
         const result = await service().save({
           name: candidate.name,
           enabled: true,
-          providers: { claude: claude ?? true, codex: sse ? false : (codex ?? true) },
+          providers: {
+            claude: support.claude.ok && (claude ?? true),
+            codex: support.codex.ok && (codex ?? true),
+          },
           entry: candidate.entry,
           inputs: candidate.inputs,
           secrets: candidate.pendingSecrets,

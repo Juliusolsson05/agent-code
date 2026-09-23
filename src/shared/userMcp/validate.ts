@@ -174,6 +174,32 @@ export function validateServer(
   return problems
 }
 
+/**
+ * Environment names Codex itself depends on. A user stdio server's SECRET has
+ * to be placed in Codex's own environment (Codex forwards env to MCP children
+ * only through an allowlist plus `env_vars` pass-through names, and
+ * `env_vars` cannot rename), so a server asking for one of these would
+ * silently change how Codex authenticates, finds binaries, or talks to our own
+ * MCP host. Lives here, not only in the launcher, so Settings and the
+ * per-agent picker show the server as Codex-unsupported instead of it being
+ * dropped at every launch with nothing on screen explaining why.
+ */
+export const CODEX_PROTECTED_ENV = /^(PATH|HOME|SHELL|USER|LOGNAME|TMPDIR|LANG|TERM|CODEX_.*|OPENAI_.*|AGENT_CODE_.*)$/
+
+/** providerSupport plus the rules that depend on the entry, not just its
+ * transport. Every UI surface and launch uses this one. */
+export function providerSupportForEntry(entry: unknown): Record<UserMcpProvider, UserMcpSupport> {
+  const support = providerSupport(transportOf(entry))
+  if (support.codex.ok && isPlainObject(entry) && isStringRecord(entry.env)) {
+    const protectedKey = Object.entries(entry.env)
+      .find(([key, value]) => hasInputReference(value) && CODEX_PROTECTED_ENV.test(key))?.[0]
+    if (protectedKey) {
+      return { ...support, codex: { ok: false, reason: `Codex cannot pass a secret named ${protectedKey}` } }
+    }
+  }
+  return support
+}
+
 function foldName(name: string): string {
   return name.toLowerCase().replace(/-/g, '_')
 }

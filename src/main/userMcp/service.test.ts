@@ -212,3 +212,34 @@ describe('native server discovery', () => {
       .toEqual(new Set(['sentry', 'fs']))
   })
 })
+
+describe('UserMcpService unreadable document (review round 1)', () => {
+  it('refuses writes while the document cannot be read, instead of replacing it with an empty list', async () => {
+    const file = join(dir, 'mcp-servers.json')
+    await writeFile(file, JSON.stringify({ version: 1, servers: [{ id: 'keep-me', name: 'kept', enabled: true, providers: { claude: true, codex: true }, entry: { command: 'x' }, inputs: [] }] }))
+    const { chmod } = await import('node:fs/promises')
+    await chmod(file, 0o000)
+    try {
+      const svc = service()
+      const result = await svc.save(beeper())
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/Nothing was changed/)
+    } finally {
+      await chmod(file, 0o600)
+    }
+    expect(await readFile(file, 'utf8')).toContain('keep-me')
+  })
+
+  it('recovers once the document becomes readable again', async () => {
+    const file = join(dir, 'mcp-servers.json')
+    await writeFile(file, JSON.stringify({ version: 1, servers: [{ id: 'keep-me', name: 'kept', enabled: true, providers: { claude: true, codex: true }, entry: { command: 'x' }, inputs: [] }] }))
+    const { chmod } = await import('node:fs/promises')
+    await chmod(file, 0o000)
+    const svc = service()
+    await svc.initialize()
+    await chmod(file, 0o600)
+    const result = await svc.save(beeper())
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.snapshot.servers.map(server => server.name).sort()).toEqual(['beeper', 'kept'])
+  })
+})

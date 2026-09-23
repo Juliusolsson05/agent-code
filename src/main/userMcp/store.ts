@@ -8,6 +8,13 @@ export type LoadedUserMcpDocument = {
   document: UserMcpDocument
   /** Human-readable notice when the file existed but could not be used. */
   problem?: string
+  /**
+   * The file exists but could not be READ (EACCES, EIO, EMFILE…), as opposed
+   * to read-but-unparseable. Its contents are unknown and still on disk, so a
+   * write would replace them with the empty document: callers must not write
+   * until a later read succeeds.
+   */
+  readFailed?: boolean
 }
 
 /**
@@ -28,6 +35,7 @@ export async function loadUserMcpDocument(file: string): Promise<LoadedUserMcpDo
     return {
       document: { version: 1, servers: [] },
       problem: `Could not read ${file}: ${(error as Error).message}`,
+      readFailed: true,
     }
   }
   try {

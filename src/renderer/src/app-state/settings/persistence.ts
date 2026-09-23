@@ -177,6 +177,13 @@ export function coerceSettings(value: unknown): Settings {
     // copied to every provider by coerceBuiltInMcpDefaults, so an upgrade
     // changes nobody's behavior; no store version bump is needed because this
     // coercion runs on every hydration and no persisted value changed meaning.
+    //
+    // Known, accepted limitation: a pre-#1143 build reads this object as "not
+    // an array", normalizes it to [] and autosaves that, so downgrading and
+    // then upgrading again starts every provider with no built-in defaults.
+    // Writing the map under a new key would avoid it, at the cost of two keys
+    // for one preference in every build from now on; downgrades are rare and
+    // the loss is visible and one grid away from being restored.
     defaultBuiltInMcpDomains: parsed.defaultBuiltInMcpDomains === undefined
       ? uniformBuiltInMcpDefaults(SHIPPED_BUILT_IN_MCP_DOMAINS)
       : coerceBuiltInMcpDefaults(parsed.defaultBuiltInMcpDomains, SHIPPED_BUILT_IN_MCP_DOMAINS),

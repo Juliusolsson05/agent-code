@@ -21,6 +21,7 @@ export function RootManagementConfirmSurface() {
   const sessionId = useAppStore(state => state.rootManagementPromptSessionId)
   const close = useAppStore(state => state.closeRootManagementPrompt)
   const stagedOverrides = useAppStore(state => state.rootManagementPromptOverrides)
+  const stopGoalLoop = useAppStore(state => state.rootManagementPromptStopGoalLoop)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const agentLabel = meta
     ? [meta.title, meta.kind ?? DEFAULT_PROVIDER, cwdBasename(meta.cwd)].filter(Boolean).join(' · ')
@@ -38,12 +39,19 @@ export function RootManagementConfirmSurface() {
         // From "Agent MCP Servers…": apply every staged choice in this one
         // reload, with the grant the user just confirmed (#1143).
         if (stagedOverrides) {
-          void reloadSessionWithBuiltInMcpOverrides(
-            workspace,
-            sessionId,
-            { ...stagedOverrides, [ROOT_MANAGEMENT_DOMAIN]: true },
-            rootManagementReloadLabels(true),
-          )
+          void (async () => {
+            // See AgentMcpServersModal.apply: the loop is stopped here, after
+            // the user confirmed, because only now is the reload certain.
+            if (stopGoalLoop) {
+              try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
+            }
+            await reloadSessionWithBuiltInMcpOverrides(
+              workspace,
+              sessionId,
+              { ...stagedOverrides, [ROOT_MANAGEMENT_DOMAIN]: true },
+              rootManagementReloadLabels(true),
+            )
+          })()
           return
         }
         void reloadSessionWithBuiltInMcpChoice(

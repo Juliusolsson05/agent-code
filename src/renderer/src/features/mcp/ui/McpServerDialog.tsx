@@ -22,7 +22,7 @@ import type {
   UserMcpServerView,
 } from '@shared/userMcp/types'
 import { USER_MCP_PROVIDERS } from '@shared/userMcp/types'
-import { providerSupport, transportOf } from '@shared/userMcp/validate'
+import { providerSupportForEntry, transportOf } from '@shared/userMcp/validate'
 
 const PROVIDER_LABEL: Record<UserMcpProvider, string> = { claude: 'Claude', codex: 'Codex' }
 
@@ -102,7 +102,7 @@ function AddServer({ onDone }: { onDone: () => void }) {
         setFormat(result.format)
         setCandidates(result.candidates)
         setDrafts(result.candidates.map(candidate => {
-          const support = providerSupport(transportOf(candidate.entry))
+          const support = providerSupportForEntry(candidate.entry)
           return {
             include: true,
             name: candidate.name,
@@ -209,7 +209,7 @@ function CandidateCard({
   onChange: (draft: Draft) => void
 }) {
   const transport = transportOf(candidate.entry)
-  const support = providerSupport(transport)
+  const support = providerSupportForEntry(candidate.entry)
   // Problems about the name are re-evaluated by main on save; the name field
   // here is editable precisely so a reserved or duplicate name can be fixed.
   const entryProblems = candidate.problems.filter(problem => !['invalid-name', 'reserved-name', 'duplicate-name'].includes(problem.kind))
@@ -276,7 +276,7 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
   }, [json, server.inputs])
 
   const transport = parsed.entry ? transportOf(parsed.entry) : null
-  const support = providerSupport(transport)
+  const support = providerSupportForEntry(parsed.entry)
 
   const save = async () => {
     if (!parsed.entry) return

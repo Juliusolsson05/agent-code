@@ -115,6 +115,9 @@ export type UiShellState = {
    * SAME reload, so granting root there does not silently discard the rest of
    * the user's staged changes. Null for the plain root command. */
   rootManagementPromptOverrides: BuiltInMcpOverrides | null
+  /** The staged choices also remove Goal Loop's tools: stop the running loop,
+   * but only once the confirmed reload actually runs (#1045 rule). */
+  rootManagementPromptStopGoalLoop: boolean
   debugBundleNotePrompt: {
     bundlePath: string
     sessionId: SessionId

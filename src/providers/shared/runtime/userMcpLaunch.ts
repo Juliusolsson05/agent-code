@@ -2,7 +2,8 @@ import { hasInputReference, substituteInputs } from '@shared/userMcp/inputs.js'
 import type { ResolvedUserMcpServer, UserMcpDroppedServer } from '@shared/userMcp/types.js'
 
 export type { ResolvedUserMcpServer }
-import { isStringArray, isStringRecord, transportOf } from '@shared/userMcp/validate.js'
+// CODEX_PROTECTED_ENV's WHY lives beside its definition in validate.ts.
+import { CODEX_PROTECTED_ENV, isStringArray, isStringRecord, transportOf } from '@shared/userMcp/validate.js'
 
 /**
  * Environment variable that carries one secret-bearing env/header value.
@@ -78,15 +79,6 @@ export function claudeUserMcpEntries(servers: readonly ResolvedUserMcpServer[]):
   }
   return { entries, env, dropped }
 }
-
-/**
- * Environment names Codex itself depends on. A user stdio server's secret has
- * to be placed in Codex's OWN environment (Codex forwards env to MCP children
- * only through an allowlist plus `env_vars` pass-through names, and `env_vars`
- * cannot rename), so a server asking for one of these would silently change how
- * Codex authenticates, finds binaries, or talks to our own MCP host.
- */
-const CODEX_PROTECTED_ENV = /^(PATH|HOME|SHELL|USER|LOGNAME|TMPDIR|LANG|TERM|CODEX_.*|OPENAI_.*|AGENT_CODE_.*)$/
 
 /**
  * Add Codex `-c mcp_servers.<name>.*` overrides for user servers.

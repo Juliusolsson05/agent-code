@@ -25,7 +25,7 @@ import {
 import {
   coerceInputs,
   normalizeEntry,
-  providerSupport,
+  providerSupportForEntry,
   referencedInputIds,
   summarizeEntry,
   transportOf,
@@ -79,6 +79,11 @@ export class UserMcpService {
   // later write would silently discard the earlier change.
   private tail: Promise<unknown> = Promise.resolve()
   private initialized: Promise<void> | null = null
+  // Set while the document on disk could not be read (see
+  // LoadedUserMcpDocument.readFailed). Writing then would atomically replace
+  // every server the user configured with the empty in-memory list, so
+  // mutations are refused until a re-read succeeds.
+  private readFailed = false
 
   constructor(deps: UserMcpServiceDeps) {
     this.file = join(deps.stateDir, 'mcp-servers.json')
@@ -95,6 +100,7 @@ export class UserMcpService {
       const loaded = await loadUserMcpDocument(this.file)
       this.document = loaded.document
       this.storeProblem = loaded.problem
+      this.readFailed = loaded.readFailed === true
     })()
     return this.initialized
   }
@@ -110,7 +116,12 @@ export class UserMcpService {
       this.native.list().catch(() => [] as NativeMcpServer[]),
       this.native.claudeManagedPolicy().catch(() => false),
     ])
-    const servers = await Promise.all(this.document.servers.map(server => this.view(server, claudeManagedPolicy)))
+    // Names already in the user's own Codex config.toml collide at every Codex
+    // launch (see codexNativeServerNames), so the view says so up front.
+    // Project-scope files depend on the agent's cwd and are only caught at
+    // launch, with a notice.
+    const codexNativeNames = new Set(native.filter(entry => entry.provider === 'codex').map(entry => entry.name))
+    const servers = await Promise.all(this.document.servers.map(server => this.view(server, claudeManagedPolicy, codexNativeNames)))
     return {
       servers,
       native,
@@ -256,7 +267,7 @@ export class UserMcpService {
         dropped.push({ name: server.name, reason: problem.message })
         continue
       }
-      const support = providerSupport(transportOf(server.entry))[provider]
+      const support = providerSupportForEntry(server.entry)[provider]
       if (!support.ok) {
         dropped.push({ name: server.name, reason: support.reason })
         continue
@@ -316,6 +327,17 @@ export class UserMcpService {
   ): Promise<UserMcpMutationResult> {
     const run = this.tail.then(async (): Promise<UserMcpMutationResult> => {
       await this.initialize()
+      if (this.readFailed) {
+        // A transient failure (a restore holding the file, EMFILE while many
+        // agents start) usually clears; retry before refusing.
+        const loaded = await loadUserMcpDocument(this.file)
+        if (loaded.readFailed) {
+          return { ok: false, error: `${loaded.problem ?? 'MCP settings could not be read'}. Nothing was changed.` }
+        }
+        this.document = loaded.document
+        this.storeProblem = loaded.problem
+        this.readFailed = false
+      }
       try {
         const outcome = await operation()
         if (!outcome.ok) return outcome
@@ -336,7 +358,11 @@ export class UserMcpService {
     this.storeProblem = undefined
   }
 
-  private async view(server: UserMcpServer, claudeManagedPolicy: boolean): Promise<UserMcpServerView> {
+  private async view(
+    server: UserMcpServer,
+    claudeManagedPolicy: boolean,
+    codexNativeNames: ReadonlySet<string>,
+  ): Promise<UserMcpServerView> {
     const transport = transportOf(server.entry)
     const others = this.document.servers.filter(other => other.id !== server.id)
     const secrets = await this.secrets.state(server.id, server.inputs.map(input => input.id))
@@ -346,16 +372,20 @@ export class UserMcpService {
         problems.push({ kind: 'secret-missing', message: `Secret "${inputId}" is not set` })
       }
     }
-    const support = providerSupport(transport)
+    const support = { ...providerSupportForEntry(server.entry) }
+    if (claudeManagedPolicy) {
+      support.claude = { ok: false, reason: "Your organization's Claude MCP policy only allows its own servers" }
+    }
+    if (support.codex.ok && codexNativeNames.has(server.name)) {
+      support.codex = { ok: false, reason: 'A server with this name is already in your Codex config.toml' }
+    }
     return {
       ...server,
       transport,
       summary: summarizeEntry(server.entry),
       secrets,
       problems,
-      support: claudeManagedPolicy
-        ? { ...support, claude: { ok: false, reason: "Your organization's Claude MCP policy only allows its own servers" } }
-        : support,
+      support,
     }
   }
 }

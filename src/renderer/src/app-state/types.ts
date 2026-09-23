@@ -60,7 +60,7 @@ export type UiShellSlice = UiShellState & {
   closeAgentMcpServers: () => void
   openAgentTitlePrompt: (sessionId: SessionId) => void
   closeAgentTitlePrompt: () => void
-  openRootManagementPrompt: (sessionId: SessionId, stagedOverrides?: BuiltInMcpOverrides) => void
+  openRootManagementPrompt: (sessionId: SessionId, stagedOverrides?: BuiltInMcpOverrides, stopGoalLoop?: boolean) => void
   closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string

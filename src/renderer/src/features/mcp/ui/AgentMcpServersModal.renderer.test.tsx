@@ -156,6 +156,20 @@ describe('Agent MCP Servers picker', () => {
     expect(controlGoalLoop.mock.invocationCallOrder[0]).toBeLessThan(replaceSession.mock.invocationCallOrder[0]!)
   })
 
+  it('does not stop a goal loop before a Root grant is confirmed (review round 1)', () => {
+    // Cancelling the confirmation reloads nothing, so a loop stopped up front
+    // would be dead while the agent still has its tools. The stop is handed
+    // to the confirmation, which runs it only on the reload it performs.
+    const controlGoalLoop = vi.fn(async () => null)
+    Object.assign(window, { api: { ...window.api, controlGoalLoop } })
+    mount('codex', { builtInMcpDomains: ['goal_loop'], builtInMcpOverrides: { goal_loop: true } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Goal Loop for this agent' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Root Management for this agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    expect(controlGoalLoop).not.toHaveBeenCalled()
+    expect(useAppStore.getState().rootManagementPromptStopGoalLoop).toBe(true)
+  })
+
   it('leaves a running goal loop alone when its tools stay on', () => {
     const controlGoalLoop = vi.fn(async () => null)
     Object.assign(window, { api: { ...window.api, controlGoalLoop } })

@@ -29,6 +29,7 @@ export const createUiShellSlice: StateCreator<
   agentTitlePromptSessionId: null,
   rootManagementPromptSessionId: null,
   rootManagementPromptOverrides: null,
+  rootManagementPromptStopGoalLoop: false,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
@@ -157,13 +158,18 @@ export const createUiShellSlice: StateCreator<
   closeAgentTitlePrompt: () =>
     set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
 
-  openRootManagementPrompt: (sessionId, stagedOverrides) =>
+  openRootManagementPrompt: (sessionId, stagedOverrides, stopGoalLoop) =>
     set({
       rootManagementPromptSessionId: sessionId,
       rootManagementPromptOverrides: stagedOverrides ?? null,
+      rootManagementPromptStopGoalLoop: stopGoalLoop === true,
     }, false, 'uiShell/openRootManagementPrompt'),
   closeRootManagementPrompt: () =>
-    set({ rootManagementPromptSessionId: null, rootManagementPromptOverrides: null }, false, 'uiShell/closeRootManagementPrompt'),
+    set({
+      rootManagementPromptSessionId: null,
+      rootManagementPromptOverrides: null,
+      rootManagementPromptStopGoalLoop: false,
+    }, false, 'uiShell/closeRootManagementPrompt'),
 
   openDebugBundleNotePrompt: payload =>
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),
