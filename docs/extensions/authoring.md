@@ -312,6 +312,11 @@ api.ui.close()                       // close your view (the modal or the pane)
 api.ui.showToast(message)            // app-wide toast
 
 api.theme.tokens()                   // resolved --theme-* values
+
+// API v2 only — credentials, encrypted by the OS keychain in the host (§5a)
+api.secrets.get(key)                 // string | null
+api.secrets.set(key, value)
+api.secrets.delete(key)
 ```
 
 ### Tier 1 — requires a permission (see §6)
@@ -404,6 +409,30 @@ const minutes = (await api.storage.get('timer.defaultMinutes')) ?? 30
 - Corrupt, unreadable or oversized saved files produce an error and are preserved.
   They are never treated as empty and overwritten by the next mutation.
 
+### 5a. Secrets (API v2, no permission)
+
+`api.secrets` is for credentials the user gives your extension — an API key,
+a token. It is **not** a second `api.storage`:
+
+- **Encrypted by the OS.** The host encrypts each value with Electron
+  `safeStorage` (macOS Keychain, Windows DPAPI, Linux libsecret/kwallet) and
+  writes one 0600 blob per key. If the OS cannot encrypt (for example a Linux
+  session with no keyring), `set` **rejects** instead of storing plaintext;
+  tell the user their key was not saved.
+- **Your namespace only.** Scoped by your extension id, which the host takes
+  from your frame origin / runtime, never from an argument. That is also why
+  there is no permission: you can only read back what you stored.
+- **Limits.** Keys are 1–64 characters of `[a-zA-Z0-9._-]`; values are strings
+  of 1–4096 characters; at most 32 keys per extension.
+- **Unreadable reads as `null`.** After a keychain reset (or a copied profile)
+  the blob cannot be decrypted; `get` returns `null` and you ask again.
+- **Deleted on uninstall.** Unlike `api.storage`, secrets do not survive an
+  uninstall: a later install of the same id from another source must not
+  inherit someone's key.
+- **Never logged.** The host never logs values, and its error messages never
+  include them. Keep it that way in your own code: do not put a secret into
+  `ui.showToast`, a thrown `Error`, or `api.storage`.
+
 ---
 
 ## 6. Permissions
@@ -412,7 +441,7 @@ Declare what you need in `permissions`. The user approves them in a blocking
 dialog at install time, and the grant is bound to the exact bytes installed — if
 you ship new code, the user is asked again.
 
-**Ten permissions are currently implemented:**
+**Eleven permissions are currently implemented:**
 
 | Permission | Grants |
 |---|---|
@@ -426,6 +455,7 @@ you ship new code, the user is asked again.
 | `service.transport` | Fetch your own running service through the host proxy (see §6b) |
 | `net.listen` | `api.services.expose(id, true)` — host-owned LAN exposure of a running service (see §6c) |
 | `net.connect` | API v2 `api.net.fetch(url, init)` — brokered outbound fetch to private addresses (see §6d) |
+| `net.origins` | API v2 `api.net.fetch(url, init)` to the exact HTTPS origins you list in `networkOrigins` (see §6e) |
 
 Anything else fails the install with a message naming what this build supports.
 Transcript, git and prompt-sending capabilities **do
@@ -517,9 +547,67 @@ updated/removed. Exposure can never outlive the thing it exposes.
 `api.net.fetch(url, init)` asks the host to fetch for you. The sandbox never
 opens a socket. v1 policy is deliberately narrow: **literal private/loopback IP
 hosts only** (`http://192.168.1.42:5192/...`) — no DNS names (they resolve
-anywhere), no public addresses. Bodies are capped at 64 KiB, text responses at
-256 KiB, and the whole call times out at 10s. Public-internet egress would be a
-separate future policy decision with its own consent copy.
+anywhere), no public addresses. Bodies are capped at 64 KiB, responses at
+256 KiB, and the whole call times out at 10s. Redirects are refused: a private
+address cannot bounce your request to a host the policy never checked.
+
+```ts
+const result = await api.net.fetch('http://192.168.1.42:5192/api/state', {
+  httpMethod: 'POST',                               // GET | HEAD | POST | PUT | DELETE | PATCH
+  headers: [{ name: 'content-type', value: 'application/json' }],
+  body: JSON.stringify({ hello: 1 }),               // string, ≤ 64 KiB
+  responseType: 'text',                             // or 'base64' for binary bodies
+})
+// { status, contentType, body, bodyEncoding: 'text' | 'base64' }
+```
+
+The verb field is **`httpMethod`** (the transport already uses `method`).
+Hosts before #1150 read `init.method` instead, so an SDK-typed POST went out as
+a GET; current hosts accept both. `bodyEncoding` echoes what the host did —
+check it if you asked for `'base64'`, because an older host ignores the field
+and returns text.
+
+### 6e. Declared public origins (`net.origins`)
+
+To call one specific public web API, list its **exact origins** and request
+`net.origins`:
+
+```json
+{
+  "apiVersion": 2,
+  "permissions": ["net.origins"],
+  "networkOrigins": ["https://api.elevenlabs.io"]
+}
+```
+
+- The consent dialog shows every origin. The list is bound to your bundle hash
+  like every grant, so a new list in an update is asked about again.
+- Each entry must be exactly `https://<dns-name>` (optionally `:port`): no
+  wildcards, paths, trailing slash, query, credentials, IP literals,
+  `localhost` or `.local` names. HTTPS is required for the credentials these
+  calls carry, and because a certificate is what stops a declared name from
+  being re-pointed (DNS rebinding) at a device on the user's network. Local
+  addresses belong to `net.connect`.
+- `networkOrigins` without `net.origins` (or the reverse) fails the install.
+  At most 4 origins.
+- `api.net.fetch` routes by target: a private literal needs `net.connect`; a URL
+  whose origin is **exactly** a declared one (same scheme, host and port) needs
+  `net.origins`; anything else is refused with a message naming your list.
+- Redirects are refused (a declared API must not forward your key elsewhere),
+  responses are capped at 256 KiB, and the call times out after 15 s. Use
+  `responseType: 'base64'` for audio or images.
+- The host never logs request headers or bodies, and its errors never echo
+  them. Combine with `api.secrets` so a user's key never sits in `api.storage`:
+
+```ts
+const key = await api.secrets.get('elevenlabs.apiKey')
+const audio = await api.net.fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+  httpMethod: 'POST',
+  headers: [{ name: 'xi-api-key', value: key! }, { name: 'content-type', value: 'application/json' }],
+  body: JSON.stringify({ text: 'Hello' }),
+  responseType: 'base64',
+})
+```
 
 ---
 
@@ -643,7 +731,8 @@ Recorded so you know these are decisions, not oversights:
 
 - **No background execution.** Activation events do not fire; your code runs while
   a view of yours is open (§1).
-- **No network.** The frame's CSP permits only your own origin (§0).
+- **No network.** The frame's CSP permits only your own origin (§0). API v2
+  reaches the network only through the brokered `api.net.fetch` (§6d, §6e).
 - **No filesystem, transcript, git or prompt access.** The scoped filesystem APIs
   belongs to v2; v1 remains frozen (§6).
 - **No marketplace.** The repo name is the trust decision.
