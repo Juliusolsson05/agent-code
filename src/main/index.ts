@@ -9,6 +9,11 @@ import { mainProbe } from '@main/performance/MainProbe.js'
 import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
+import { BrowserPocketController, type GuestLike } from '@main/browserPocket/controller/BrowserPocketController.js'
+import { LanePortWatcher } from '@main/browserPocket/LanePortWatcher.js'
+import { PORT_SCAN_SUPPORTED, listListeners, listProcesses, probe as probePort } from '@main/browserPocket/lanePortsIo.js'
+import { registerBrowserPocketIpc } from '@main/ipc/browserPocket.js'
+import type { LanePort } from '@shared/browserPocket/types.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
 import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
 import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
@@ -1195,7 +1200,66 @@ async function startApp(): Promise<void> {
   const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
   await goalLoopService.start()
   registerGoalLoopIpc(goalLoopService)
+  // Lane browser pocket (#1142). One controller for the app: it owns live CDP
+  // sessions and per-pocket queues that must outlive the per-request MCP
+  // server, exactly like workflowService below.
+  const lanePortCache = new Map<string, LanePort[]>()
+  // `manager` is assigned above but typed nullable (module-level let); after
+  // shutdown starts it may be cleared, and a late scan must just see no pid.
+  const pidOf = (sessionId: string): number | null => manager?.getProcessTelemetryTargets([sessionId])[0]?.pid ?? null
+  const lanePortWatcher = new LanePortWatcher({
+    listProcesses,
+    // Linux/Windows output is unrecorded (decomposition U1): report nothing
+    // rather than guess, so no chip ever points at the wrong lane.
+    listListeners: pids => (PORT_SCAN_SUPPORTED ? listListeners(pids) : Promise.resolve([])),
+    listTmuxPanes: () => (tmuxRegistry && tmuxAvailable ? tmuxRegistry.listPanePids() : Promise.resolve([])),
+    agentPid: pidOf,
+    terminalPid: pidOf,
+    probe: probePort,
+    broadcast: bySession => {
+      lanePortCache.clear()
+      for (const [id, ports] of Object.entries(bySession)) lanePortCache.set(id, ports)
+      broadcastToWindows('browser-pocket:ports', { bySession })
+    },
+    now: () => Date.now(),
+    setTimer: (fn, ms) => {
+      // unref: a pending scan must never keep the app alive at quit.
+      const timer = setTimeout(fn, ms)
+      timer.unref?.()
+      return () => clearTimeout(timer)
+    },
+  })
+  const browserPockets = new BrowserPocketController({
+    now: () => Date.now(),
+    emitDriving: event => broadcastToWindows('browser-pocket:driving', event),
+    // The renderer owns SessionMeta; main can only ask. Every window gets it,
+    // and only the window holding that session acts on it.
+    requestOpen: (sessionId, url) => broadcastToWindows('browser-pocket:open-request', { sessionId, ...(url ? { url } : {}) }),
+    requestViewport: (sessionId, viewport) => broadcastToWindows('browser-pocket:set-viewport', { sessionId, viewport }),
+    setWatchedSessions: sessions => lanePortWatcher.setSessions(sessions),
+    lanePorts: sessionId => lanePortCache.get(sessionId) ?? [],
+  })
+  registerBrowserPocketIpc({
+    // Electron's WebContents satisfies GuestLike structurally except for the
+    // overloaded EventEmitter signatures; the controller only uses the slice
+    // GuestLike names.
+    register: (pocketId, sessionId, guest) => browserPockets.register(pocketId, sessionId, guest as unknown as GuestLike),
+    unregister: pocketId => browserPockets.unregister(pocketId),
+    noteHumanInput: (pocketId, at) => browserPockets.noteHumanInput(pocketId, at),
+    takeOver: pocketId => browserPockets.takeOver(pocketId),
+    resume: pocketId => browserPockets.resume(pocketId),
+    setFlags: flags => {
+      browserPockets.setFlags(flags)
+      if (!flags.enabled) lanePortWatcher.setSessions([])
+    },
+    thumbnail: pocketId => browserPockets.thumbnail(pocketId),
+    pick: pocketId => browserPockets.pick(pocketId),
+    cancelPick: pocketId => browserPockets.cancelPick(pocketId),
+    applyEmulation: (pocketId, emulation) => browserPockets.applyEmulation(pocketId, emulation),
+    setWatchedSessions: sessions => browserPockets.setWatchedSessions(browserPockets.isEnabled() ? sessions : []),
+  })
   builtInMcpHost.setDependencies({
+    browserPockets,
     tldrStore,
     goalStore,
     tldrEnforcement,

@@ -6,7 +6,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import type { ForwardedKey } from '@shared/browserPocket/types'
 
-import { attachPocket } from '../actions'
+import { attachPocket, setPocketViewport } from '../actions'
 import { requestPocket, setOpenInPocketHandler } from '../state/pocketBus'
 import { usePocketLiveStore } from '../state/pocketLiveStore'
 import { useLanePortsStore } from '../state/lanePortsStore'
@@ -56,6 +56,11 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
         if (before && url && before.url !== url) requestPocket(before.pocketId, { type: 'navigate', url })
       }),
       window.api.onPocketPorts(({ bySession }) => useLanePortsStore.getState().replace(bySession)),
+      // browser_resize: the pocket's viewport is renderer-owned config, so the
+      // user's device menu and the agent's tool write the same field.
+      window.api.onPocketViewportRequest(({ sessionId, viewport }) => {
+        workspaceRef.current.updateBrowserPocket(s => setPocketViewport(s, sessionId as SessionId, viewport))
+      }),
       // Driving state only; the host turns "an agent is driving" into
       // "keep this guest painting" itself (placement is host-private).
       window.api.onPocketDriving(event => {

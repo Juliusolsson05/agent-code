@@ -60,5 +60,5 @@ it('rings are bounded and keep the newest entries', () => {
   for (let i = 0; i < RING_SIZE + 25; i++) reduceCdpEvent(b, 'Log.entryAdded', { entry: { source: 'javascript', level: 'error', text: `e${i}` } }, i)
   expect(b.console).toHaveLength(RING_SIZE)
   expect(b.console[0]!.text).toBe('e25')
-  expect(entriesSince(b.console, RING_SIZE + 20).map(e => e.text)).toEqual(['e220', 'e221', 'e222', 'e223', 'e224'])
+  expect(entriesSince(b.console, b.seq - 5).map(e => e.text)).toEqual(['e220', 'e221', 'e222', 'e223', 'e224'])
 })

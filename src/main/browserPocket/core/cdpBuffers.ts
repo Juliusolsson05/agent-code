@@ -11,14 +11,20 @@
 // - Network.loadingFailed carries NO url, only a requestId, so the URL is
 //   joined from the earlier Network.requestWillBeSent.
 
-export type ConsoleEntry = { level: 'error' | 'warning' | 'log' | 'info' | 'debug'; text: string; url?: string; at: number }
-export type NetworkEntry = { url: string; method?: string; status: number | null; error?: string; resourceType?: string; at: number }
+export type ConsoleEntry = { level: 'error' | 'warning' | 'log' | 'info' | 'debug'; text: string; url?: string; at: number; seq: number }
+export type NetworkEntry = { url: string; method?: string; status: number | null; error?: string; resourceType?: string; at: number; seq: number }
 
 export type CdpBuffers = {
   console: ConsoleEntry[]
   network: NetworkEntry[]
   /** requestId → { url, method }, bounded like the rings. */
   requests: Map<string, { url: string; method?: string }>
+  /**
+   * Monotonic entry counter shared by both rings. "Since your last snapshot"
+   * is a sequence cursor, not a timestamp: several CDP events land in the same
+   * millisecond, so a time cursor either repeats them or drops them.
+   */
+  seq: number
 }
 
 // 200 per ring: T3 Code's bound, large enough for a noisy dev page's startup
@@ -27,7 +33,7 @@ export const RING_SIZE = 200
 const REQUEST_INDEX_SIZE = 1000
 
 export function emptyBuffers(): CdpBuffers {
-  return { console: [], network: [], requests: new Map() }
+  return { console: [], network: [], requests: new Map(), seq: 0 }
 }
 
 export function reduceCdpEvent(buffers: CdpBuffers, method: string, params: any, at: number): void {
@@ -44,7 +50,7 @@ export function reduceCdpEvent(buffers: CdpBuffers, method: string, params: any,
       // agent on every snapshot is pure noise, and it is not the page's request.
       if (params.type === 'Other' && /\/favicon\.ico(\?|$)/.test(params.response?.url ?? '')) return
       if (typeof status === 'number' && status >= 400) {
-        push(buffers.network, { url: params.response.url, method: buffers.requests.get(params.requestId)?.method, status, resourceType: params.type, at })
+        push(buffers, buffers.network, { url: params.response.url, method: buffers.requests.get(params.requestId)?.method, status, resourceType: params.type, at })
       }
       return
     }
@@ -53,12 +59,12 @@ export function reduceCdpEvent(buffers: CdpBuffers, method: string, params: any,
       // worth reporting to an agent.
       if (params.canceled) return
       const req = buffers.requests.get(params.requestId)
-      push(buffers.network, { url: req?.url ?? '(unknown url)', method: req?.method, status: null, error: params.errorText, resourceType: params.type, at })
+      push(buffers, buffers.network, { url: req?.url ?? '(unknown url)', method: req?.method, status: null, error: params.errorText, resourceType: params.type, at })
       return
     }
     case 'Runtime.consoleAPICalled': {
       const level = normaliseLevel(params.type)
-      push(buffers.console, { level, text: (params.args ?? []).map(renderArg).join(' '), url: params.stackTrace?.callFrames?.[0]?.url, at })
+      push(buffers, buffers.console, { level, text: (params.args ?? []).map(renderArg).join(' '), url: params.stackTrace?.callFrames?.[0]?.url, at })
       return
     }
     case 'Runtime.exceptionThrown': {
@@ -66,25 +72,25 @@ export function reduceCdpEvent(buffers: CdpBuffers, method: string, params: any,
       // `description` carries "Error: message\n    at …"; `text` alone is only
       // "Uncaught" / "Uncaught (in promise)" (recorded).
       const description = d.exception?.description ?? d.exception?.value
-      push(buffers.console, { level: 'error', text: description ? `${d.text}: ${firstLine(String(description))}` : String(d.text ?? 'Uncaught exception'), url: d.url, at })
+      push(buffers, buffers.console, { level: 'error', text: description ? `${d.text}: ${firstLine(String(description))}` : String(d.text ?? 'Uncaught exception'), url: d.url, at })
       return
     }
     case 'Log.entryAdded': {
       const e = params.entry ?? {}
       if (e.source === 'network') return // duplicate of the network ring (see header)
-      push(buffers.console, { level: normaliseLevel(e.level), text: String(e.text ?? ''), url: e.url, at })
+      push(buffers, buffers.console, { level: normaliseLevel(e.level), text: String(e.text ?? ''), url: e.url, at })
       return
     }
   }
 }
 
-/** Entries at or after `since` (ms). Used for "since your last snapshot". */
-export function entriesSince<T extends { at: number }>(ring: T[], since: number | undefined): T[] {
-  return since === undefined ? ring.slice() : ring.filter(e => e.at >= since)
+/** Entries newer than the sequence cursor `afterSeq` (all when undefined). */
+export function entriesSince<T extends { seq: number }>(ring: T[], afterSeq: number | undefined): T[] {
+  return afterSeq === undefined ? ring.slice() : ring.filter(e => e.seq > afterSeq)
 }
 
-function push<T>(ring: T[], entry: T): void {
-  ring.push(entry)
+function push<T extends { seq: number }>(buffers: CdpBuffers, ring: T[], entry: Omit<T, 'seq'>): void {
+  ring.push({ ...entry, seq: ++buffers.seq } as T)
   if (ring.length > RING_SIZE) ring.splice(0, ring.length - RING_SIZE)
 }
 
