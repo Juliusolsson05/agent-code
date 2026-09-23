@@ -179,6 +179,20 @@ all test runs.
     - Codex carries function-call arguments as JSON text, and they are now parsed into Pi's object arguments (found by the cross-provider round trip).
   - No lockfile resync was needed: the parser's package.json and dependencies are unchanged, and the lock's embedded tree only records those.
   - Live gate: `PI_PARSER_LIVE=1 PI_BINARY=<scratch>/pi-install/node_modules/.bin/pi npx vitest run --config vitest.live.config.ts` in the parser.
+- 2026-09-22 — Task 11: app `e53cca03` (plus pointer bump `5ed887a2`); package `77e1739`/`0887e32`, parser `a2324da`.
+  - `providerSwitch/piTranscript.ts` backs the transcript engine's Pi adapter:
+    - read: the stable-file guard, an unterminated tail refused, header identity checked (pi's findById matches HEADERS, not names), and no file = empty document;
+    - write: the header cwd must be pi's real process cwd, and a `.pending` name is linked into place.
+  - Capabilities: rewind/duplicate true, every provider ↔ Pi.
+  - Duplicate allows the empty-source case for Pi (a live-proven header+marker file opens).
+  - compactBeforeSwitch treats Pi like Claude.
+  - Findings, both fixed in the package:
+    - `pi.sendUserMessage` never runs built-in commands, so a delivered `/compact` would have reached the model as text. The bridge now calls `ctx.compact()`, proven live: a compaction row lands, and no `/compact` user message is written;
+    - pi encodes `process.cwd()` (the real path), so a symlinked project cwd resolved to the wrong session dir everywhere. `resolvePiSessionDir` now realpaths.
+  - Deviations:
+    - the Rewind COMMAND stays hidden on Pi panes (no composer; #896), pinned by a command-gate test;
+    - a live `/tree` move with no summary is read as the last-row branch until the next row lands (documented in piTranscript.ts);
+    - a FAILED Pi compaction writes nothing, so the opt-in compact-first path times out instead of failing fast (the same honest limit as Codex/OpenCode).
 
 ---
 
@@ -585,11 +599,11 @@ doesn't exist yet), `featureCapabilities.ts` (`transcriptDuplicate: true`,
 for terminal panes, `switchTargets` all four; add `'pi'` to the other four's
 `switchTargets`), `providerFeatures.test.ts`.
 
-- [ ] **Step 1:** Failing tests: switch Pi→Claude/Codex/OpenCode/Grok and each →
+- [x] **Step 1:** Failing tests: switch Pi→Claude/Codex/OpenCode/Grok and each →
   Pi over fixtures; duplicate Pi; source-empty for an unwritten fresh session;
   full directed graph test.
-- [ ] **Step 2:** Confirm they fail. **Step 3:** Implement. **Step 4:** Green.
-- [ ] **Step 5:** Commit `feat(pi): switch and duplicate Pi sessions`.
+- [x] **Step 2:** Confirm they fail. **Step 3:** Implement. **Step 4:** Green.
+- [x] **Step 5:** Commit `feat(pi): switch and duplicate Pi sessions`.
 
 ---
 
