@@ -24,6 +24,7 @@ vi.mock('@main/storage/paths.js', () => ({
   EXTENSIONS_DIR: join(stateRoot, 'extensions'),
   EXTENSIONS_LOCKFILE: ledgerPath,
   EXTENSION_STATE_DIR: join(stateRoot, 'extension-state'),
+  EXTENSION_SECRETS_DIR: join(stateRoot, 'extension-secrets'),
 }))
 
 const {
@@ -233,5 +234,38 @@ describe('a set-aside row keeps its bundle through the sweep (#959)', () => {
       { raw: {}, id: 'timer', reason: 'x' },
       { raw: {}, id: null, reason: 'unreadable' },
     ])).toEqual(new Set(['timer']))
+  })
+})
+
+describe('stored secrets follow the installation, on every removal path (#1151 review)', () => {
+  // Real files: a secret is one blob under <state>/extension-secrets/<id>/.
+  const secretDir = (id: string) => join(stateRoot, 'extension-secrets', id)
+  async function plantSecret(id: string): Promise<void> {
+    await mkdir(secretDir(id), { recursive: true })
+    await writeFile(join(secretDir(id), 'deadbeef.bin'), 'ciphertext', 'utf8')
+  }
+  const exists = (path: string) => readFile(join(path, 'deadbeef.bin')).then(() => true, () => false)
+
+  it('uninstall deletes the id\'s secrets', async () => {
+    await seed([validRow('timer')])
+    await plantSecret('timer')
+    await removeExtension('timer')
+    expect(await exists(secretDir('timer'))).toBe(false)
+  })
+
+  it('clearing a set-aside row with no working install deletes its orphaned secrets', async () => {
+    // The gap the review found: remove-quarantined used to leave them on disk
+    // for the next install of the same id (possibly another source) to read.
+    await seed([validRow('timer'), futureApiRow('from-the-future')])
+    await plantSecret('from-the-future')
+    await removeQuarantinedExtension('from-the-future')
+    expect(await exists(secretDir('from-the-future'))).toBe(false)
+  })
+
+  it('clearing a set-aside row keeps the secrets of a working install with the same id', async () => {
+    await seed([validRow('timer'), futureApiRow('timer')])
+    await plantSecret('timer')
+    await removeQuarantinedExtension('timer')
+    expect(await exists(secretDir('timer'))).toBe(true)
   })
 })

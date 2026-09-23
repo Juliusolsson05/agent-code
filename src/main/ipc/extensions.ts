@@ -11,7 +11,6 @@ import { installExtension, installExtensionFromPath } from '@main/extensions/ins
 import type { ConsentPrompt } from '@main/extensions/install.js'
 import { listInstalledExtensions, listQuarantinedExtensions, onExtensionPublication, removeExtension, removeQuarantinedExtension } from '@main/extensions/ledger.js'
 import { installedExtensionCapabilities } from '@main/extensions/grants.js'
-import { removeExtensionSecrets } from '@main/extensions/secrets.js'
 import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type {
   ExtensionCapability,
@@ -345,15 +344,10 @@ export function registerExtensionsIpc(): void {
   )
 
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
+    // removeExtension deletes the id's secrets before the ledger commit, and
+    // finalizeInstall clears stale ones on any first install (#1151 review):
+    // one owner for the credential lifecycle, shared by both removal paths.
     await removeExtension(id)
-    // Unlike saved state (kept on purpose, see removeExtension), credentials do
-    // not outlive the installation: a later install with this id from another
-    // source must not inherit them. The ledger row is already gone, so this is
-    // cleanup — a failure is reported without any secret-derived detail and
-    // does not turn a completed uninstall into a failed one.
-    await removeExtensionSecrets(id).catch(() => {
-      console.warn(`[extensions] could not delete stored secrets for ${id}`)
-    })
   })
 
   // Clearing a SET-ASIDE row is a different operation from uninstalling an

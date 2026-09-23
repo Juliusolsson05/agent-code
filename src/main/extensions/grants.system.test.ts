@@ -14,6 +14,7 @@ vi.mock('@main/storage/paths.js', () => ({
   EXTENSIONS_DIR: join(stateRoot, 'extensions'),
   EXTENSIONS_LOCKFILE: join(stateRoot, 'extensions.json'),
   EXTENSION_STATE_DIR: join(stateRoot, 'extension-state'),
+  EXTENSION_SECRETS_DIR: join(stateRoot, 'extension-secrets'),
 }))
 
 const { grantedCapabilities, recordGrant, revokeGrant } = await import(

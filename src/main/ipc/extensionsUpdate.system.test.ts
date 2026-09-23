@@ -35,6 +35,7 @@ vi.mock('@main/storage/paths.js', () => ({
   EXTENSIONS_DIR: join(stateRoot, 'extensions'),
   EXTENSIONS_LOCKFILE: join(stateRoot, 'extensions.json'),
   EXTENSION_STATE_DIR: join(stateRoot, 'extension-state'),
+  EXTENSION_SECRETS_DIR: join(stateRoot, 'extension-secrets'),
 }))
 
 // Every registered handler, keyed by channel — the fake ipcMain is a registry,
