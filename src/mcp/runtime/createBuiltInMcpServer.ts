@@ -240,7 +240,7 @@ function builtInInstructions(
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
-    ...(scope.domains.includes('browser') && dependencies.browserPockets?.isEnabled() ? [BROWSER_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('browser') && dependencies.browserPockets ? [BROWSER_INSTRUCTIONS] : []),
     ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]

@@ -8,6 +8,16 @@ import { BrowserPocketController, type GuestLike, type ImageLike } from '@main/b
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 
+// MCP serialization and scope checks use a page-engine seam. The production
+// adapter is exercised against actual Chromium in playwrightActions.system.
+vi.mock('@main/browserPocket/controller/playwrightPage.js', () => ({
+  withPocketPage: async (ctx: { guest: GuestLike }, action: (page: unknown) => unknown) => action({
+    ariaSnapshot: async () => '- button "Sign in" [ref=e1]',
+    url: () => ctx.guest.getURL(), title: async () => ctx.guest.getTitle(),
+    screenshot: async () => Buffer.from('jpeg'),
+  }),
+}))
+
 // The MCP surface over the REAL controller, whose guest answers with recorded
 // Chrome responses. What is pinned: which tools exist when, that every tool
 // targets the caller's own pocket, and that refusals reach the agent as tool
@@ -25,7 +35,7 @@ function guest(): GuestLike & { sent: string[] } {
     id: 1, sent,
     debugger: {
       attach: () => { attached = true }, detach: () => { attached = false }, isAttached: () => attached,
-      sendCommand: async (method: string) => { sent.push(method); return method === 'Accessibility.getFullAXTree' ? { nodes: axForm.nodes } : {} },
+      sendCommand: async (method: string) => { sent.push(method); return method === 'Accessibility.getFullAXTree' ? { nodes: axForm.nodes } : method === 'Page.getFrameTree' ? { frameTree: { frame: { id: 'main' } } } : method === 'Page.createIsolatedWorld' ? { executionContextId: 1 } : method === 'Runtime.evaluate' ? { result: { value: 2 } } : method === 'Page.getLayoutMetrics' ? { cssVisualViewport: { clientWidth: 1280, clientHeight: 800 } } : {} },
       on: () => {},
     },
     isDestroyed: () => false, isDevToolsOpened: () => false,
@@ -56,10 +66,10 @@ async function connect(controller: BrowserPocketController, domains: BuiltInMcpD
   return { client, close: async () => { await client.close(); await server.close() } }
 }
 
-const BASE_TOOLS = ['browser_status', 'browser_lane_ports', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait_for', 'browser_console', 'browser_network', 'browser_resize', 'browser_set_appearance']
+const BASE_TOOLS = ['browser_status', 'browser_lane_ports', 'browser_open', 'browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait_for', 'browser_console', 'browser_network', 'browser_resize', 'browser_set_appearance', 'browser_evaluate']
 
 describe('tool availability', () => {
-  it('registers the browser tools, without evaluate by default, and teaches them in instructions', async () => {
+  it('registers a stable browser catalog and teaches it in instructions', async () => {
     const { controller } = setup()
     const { client, close } = await connect(controller)
     const names = (await client.listTools()).tools.map(t => t.name)
@@ -77,15 +87,46 @@ describe('tool availability', () => {
     expect(names).toContain('browser_evaluate')
   })
 
-  it('while the feature is off, only browser_status remains and it answers "disabled" (never an empty tool list)', async () => {
+  it('discovers once while disabled, enables without reconnecting, and gates every buffered read after disabling', async () => {
     const { controller } = setup({ enabled: false })
     const { client, close } = await connect(controller)
     const names = (await client.listTools()).tools.map(t => t.name)
-    const res = await client.callTool({ name: 'browser_status', arguments: {} })
+    expect(names.sort()).toEqual([...BASE_TOOLS].sort())
+    expect(client.getInstructions()).toContain('browser pocket')
+    const g = guest()
+    controller.register('p1', 'session-1', g)
+    const call = (name: string) => client.callTool({ name, arguments: {} })
+    expect((await call('browser_status')).isError).toBe(true)
+    controller.setFlags({ enabled: true, allowEvaluate: false })
+    expect((await call('browser_status')).isError).not.toBe(true)
+    expect((await call('browser_lane_ports')).isError).not.toBe(true)
+    controller.setFlags({ enabled: false, allowEvaluate: false })
+    for (const name of ['browser_status', 'browser_console', 'browser_network', 'browser_lane_ports']) {
+      const result = await call(name)
+      expect(result.isError, name).toBe(true)
+      expect(JSON.stringify(result.content)).toContain('disabled')
+      expect(JSON.stringify(result.content)).not.toContain('5173')
+    }
+    expect(g.sent).not.toContain('Runtime.evaluate')
     await close()
-    expect(names).toEqual(['browser_status'])
-    expect(res.isError).toBe(true)
-    expect(JSON.stringify(res.content)).toContain('disabled')
+  })
+
+  it('evaluation is discoverable but gated at call time, including revocation', async () => {
+    const { controller } = setup()
+    const { client, close } = await connect(controller)
+    const g = guest()
+    controller.register('p1', 'session-1', g)
+    const call = () => client.callTool({ name: 'browser_evaluate', arguments: { expression: '1 + 1' } })
+    expect((await call()).isError).toBe(true)
+    expect(g.sent).not.toContain('Runtime.evaluate')
+    controller.setFlags({ enabled: true, allowEvaluate: true })
+    await call()
+    expect(g.sent).toContain('Runtime.evaluate')
+    g.sent.length = 0
+    controller.setFlags({ enabled: true, allowEvaluate: false })
+    expect((await call()).isError).toBe(true)
+    expect(g.sent).not.toContain('Runtime.evaluate')
+    await close()
   })
 
   it('has no browser tools when the agent was not granted the domain', async () => {
@@ -120,7 +161,7 @@ describe('behaviour through the protocol', () => {
     expect(JSON.stringify(b.content)).not.toContain('5173')
   })
 
-  it('browser_snapshot returns the recorded page as text with refs and a console section', async () => {
+  it('browser_snapshot serializes page text with refs and a console section', async () => {
     const { controller } = setup()
     controller.register('p1', 'session-1', guest())
     const { client, close } = await connect(controller)
@@ -133,7 +174,7 @@ describe('behaviour through the protocol', () => {
     expect(res.content).toHaveLength(1) // text only, never an image
   })
 
-  it('browser_screenshot returns a downscaled JPEG image', async () => {
+  it('browser_screenshot returns the page engine image as JPEG content', async () => {
     const { controller } = setup()
     controller.register('p1', 'session-1', guest())
     const { client, close } = await connect(controller)

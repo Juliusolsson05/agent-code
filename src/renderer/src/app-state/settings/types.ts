@@ -511,6 +511,7 @@ export type Settings = {
   /** Experimental master switch for the lane browser pocket (#1142). Off ⇒
    *  no guests, no port scans, no commands, and main registers no browser_*
    *  tools even for agents whose MCP domains include `browser`. */
+  browserPocketDefaultsInitialized: boolean
   browserPocketEnabled: boolean
   /** Route loopback links clicked in an agent's output into that agent's
    *  pocket instead of the system browser (⌘-click still goes external). */
@@ -712,6 +713,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationMouseButton: 'Middle',
   paletteMouseChord: 'Middle+Right',
   aggressiveDebugPersistence: false,
+  browserPocketDefaultsInitialized: false,
   browserPocketEnabled: false,
   browserPocketOpenLocalhostLinks: true,
   browserPocketAllowEvaluate: false,

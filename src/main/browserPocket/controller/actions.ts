@@ -1,157 +1,118 @@
-import { formatAxTree, type AXNode, type AxSnapshot } from '../core/axSnapshot.js'
-import { clickPointFromQuads } from '../core/geometry.js'
-
 import type { ActionCtx } from './BrowserPocketController.js'
+import { withPocketPage } from './playwrightPage.js'
 
-// CDP page actions for the `browser_*` tools. Each takes the controller's
-// ActionCtx, so the queue, deadline and control epoch always apply.
-
-export async function snapshot(ctx: ActionCtx, opts: { maxChars?: number } = {}): Promise<{ url: string; title: string } & AxSnapshot> {
-  const { nodes } = await ctx.cdp.sendCommand('Accessibility.getFullAXTree') as { nodes: AXNode[] }
-  return { url: ctx.guest.getURL(), title: ctx.guest.getTitle(), ...formatAxTree(nodes, opts) }
+/** Browser interaction belongs to Playwright. Our old quad-centre clicks
+ * could hit an overlay; handwritten keyboard maps and main-frame AX walks
+ * missed normal browser behavior. The scoped transport supplies ownership
+ * and cancellation while the maintained library supplies browser semantics. */
+export async function snapshot(ctx: ActionCtx, opts: { maxChars?: number } = {}): Promise<{ url: string; title: string; text: string; truncated: boolean }> {
+  return withPocketPage(ctx, async page => {
+    const text = await page.ariaSnapshot({ mode: 'ai', signal: ctx.signal })
+    const limit = opts.maxChars ?? 20_000
+    const truncated = text.length > limit
+    const clipped = truncated ? text.slice(0, limit).split('\n').slice(0, -1).join('\n') + '\n… (truncated)' : text
+    return { url: page.url(), title: await page.title(), text: clipped, truncated }
+  })
 }
 
-async function pointFor(ctx: ActionCtx, backendNodeId: number): Promise<{ x: number; y: number }> {
-  await ctx.cdp.sendCommand('DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => {})
-  const { quads } = await ctx.cdp.sendCommand('DOM.getContentQuads', { backendNodeId }) as { quads?: number[][] }
-  const point = clickPointFromQuads(quads)
-  // Never click the viewport origin for an element with no box (hidden,
-  // display:none, detached): that would hit whatever sits top-left.
-  if (!point) throw new Error('That element has no visible box (hidden or removed). Take a new browser_snapshot.')
-  return point
+// Library-issued refs may include a frame prefix. Never let a tool argument
+// turn into an arbitrary selector expression (or silently target the body).
+export function validRef(ref: string): boolean { return /^(?:f\d+)?e\d+$/.test(ref) }
+function selector(ref: string): string {
+  if (!validRef(ref)) throw new Error('Use an element ref from a fresh browser_snapshot.')
+  return `aria-ref=${ref}`
 }
 
-/**
- * Trusted mouse input through CDP, not `element.click()`: real input respects
- * overlays and user-gesture rules (popups, file pickers, focus), which a
- * synthetic click skips.
- */
+export async function clickNode(ctx: ActionCtx, ref: string): Promise<void> {
+  return withPocketPage(ctx, page => page.locator(selector(ref)).click({ signal: ctx.signal }))
+}
 export async function clickAt(ctx: ActionCtx, x: number, y: number): Promise<void> {
-  ctx.pointer(x, y)
-  ctx.expectPointer(x, y)
-  await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
-  ctx.checkEpoch()
-  await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
-  await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+  return withPocketPage(ctx, page => page.mouse.click(x, y))
 }
-
-export async function clickNode(ctx: ActionCtx, backendNodeId: number): Promise<void> {
-  const { x, y } = await pointFor(ctx, backendNodeId)
-  await clickAt(ctx, x, y)
+export async function typeInto(ctx: ActionCtx, ref: string, text: string, opts: { clear?: boolean; submit?: boolean }): Promise<void> {
+  return withPocketPage(ctx, async page => {
+    await ctx.cdp.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+    const field = page.locator(selector(ref))
+    if (opts.clear) await field.fill(text, { signal: ctx.signal })
+    else await field.pressSequentially(text, { signal: ctx.signal })
+    if (opts.submit) await field.press('Enter', { signal: ctx.signal })
+  })
 }
-
-/**
- * Keyboard input goes to THIS guest via focus emulation. Calling
- * webContents.focus() instead is what made T3 Code's agent steal the user's
- * chat focus (#10980/#11577) — and for a <webview> it does nothing anyway.
- */
-async function emulateFocus(ctx: ActionCtx): Promise<void> {
-  await ctx.cdp.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {})
+export async function pressKey(ctx: ActionCtx, key: string, modifiers: Array<'Alt' | 'Ctrl' | 'Meta' | 'Shift'>): Promise<void> {
+  return withPocketPage(ctx, async page => {
+    await ctx.cdp.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+    await page.keyboard.press([...modifiers.map(m => m === 'Ctrl' ? 'Control' : m), key].join('+'))
+  })
 }
-
-export async function typeInto(ctx: ActionCtx, backendNodeId: number, text: string, opts: { clear?: boolean; submit?: boolean }): Promise<void> {
-  await emulateFocus(ctx)
-  await ctx.cdp.sendCommand('DOM.focus', { backendNodeId })
-  ctx.checkEpoch()
-  ctx.expectKeys()
-  // The epoch is re-checked before EVERY step that changes the page: a user
-  // who takes over after the select-all must not have their field wiped and
-  // overwritten by the agent (review round 2, A #3). A key that went down is
-  // always released (tapKey) so a stop never leaves a modifier stuck.
-  if (opts.clear) {
-    // Select-all + delete through real key events, so frameworks that listen
-    // for input/keydown (React controlled inputs) see the change.
-    const selectAll = process.platform === 'darwin' ? 4 : 2
-    await tapKey(ctx, { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAll })
-    ctx.checkEpoch()
-    await tapKey(ctx, { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
-  }
-  if (text) {
-    ctx.checkEpoch()
-    await ctx.cdp.sendCommand('Input.insertText', { text })
-  }
-  if (opts.submit) await pressKey(ctx, 'Enter', [])
-}
-
-async function tapKey(ctx: ActionCtx, key: { key: string; code: string; windowsVirtualKeyCode: number; modifiers?: number }): Promise<void> {
-  await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...key })
-  await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
-}
-
-const MODIFIER_BITS = { Alt: 1, Ctrl: 2, Meta: 4, Shift: 8 } as const
-const KEY_CODES: Record<string, { code: string; vk: number; text?: string }> = {
-  Enter: { code: 'Enter', vk: 13, text: '\r' }, Tab: { code: 'Tab', vk: 9 }, Escape: { code: 'Escape', vk: 27 },
-  Backspace: { code: 'Backspace', vk: 8 }, Delete: { code: 'Delete', vk: 46 }, Space: { code: 'Space', vk: 32, text: ' ' },
-  ArrowUp: { code: 'ArrowUp', vk: 38 }, ArrowDown: { code: 'ArrowDown', vk: 40 }, ArrowLeft: { code: 'ArrowLeft', vk: 37 }, ArrowRight: { code: 'ArrowRight', vk: 39 },
-  Home: { code: 'Home', vk: 36 }, End: { code: 'End', vk: 35 }, PageUp: { code: 'PageUp', vk: 33 }, PageDown: { code: 'PageDown', vk: 34 },
-}
-
-export async function pressKey(ctx: ActionCtx, key: string, modifiers: Array<keyof typeof MODIFIER_BITS>): Promise<void> {
-  await emulateFocus(ctx)
-  ctx.checkEpoch()
-  ctx.expectKeys()
-  const bits = modifiers.reduce((acc, m) => acc | MODIFIER_BITS[m], 0)
-  const known = KEY_CODES[key]
-  const single = key.length === 1 ? { code: /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : '', vk: key.toUpperCase().charCodeAt(0), text: key } : undefined
-  const info = known ?? single
-  if (!info) throw new Error(`Unknown key "${key}". Use a single character or one of: ${Object.keys(KEY_CODES).join(', ')}.`)
-  // Text is only produced without Cmd/Ctrl/Alt (a Cmd+A must not type "a").
-  const text = bits & (MODIFIER_BITS.Meta | MODIFIER_BITS.Ctrl | MODIFIER_BITS.Alt) ? undefined : info.text
-  await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code: info.code, windowsVirtualKeyCode: info.vk, modifiers: bits, ...(text ? { text } : {}) })
-  await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key, code: info.code, windowsVirtualKeyCode: info.vk, modifiers: bits })
-}
-
-export async function scroll(ctx: ActionCtx, deltaX: number, deltaY: number, backendNodeId?: number): Promise<void> {
-  const at = backendNodeId !== undefined ? await pointFor(ctx, backendNodeId) : await viewportCentre(ctx)
-  ctx.checkEpoch()
-  ctx.expectPointer(at.x, at.y)
-  await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', x: at.x, y: at.y, deltaX, deltaY })
-}
-
-async function viewportCentre(ctx: ActionCtx): Promise<{ x: number; y: number }> {
-  const metrics = await ctx.cdp.sendCommand('Page.getLayoutMetrics').catch(() => null) as { cssVisualViewport?: { clientWidth: number; clientHeight: number } } | null
-  const v = metrics?.cssVisualViewport
-  return v ? { x: v.clientWidth / 2, y: v.clientHeight / 2 } : { x: 200, y: 200 }
-}
-
-export async function waitFor(ctx: ActionCtx, cond: { text?: string; urlIncludes?: string; gone?: string }, timeoutMs: number): Promise<void> {
-  const until = Date.now() + timeoutMs
-  const expression = [
-    cond.text ? `document.body?.innerText.includes(${JSON.stringify(cond.text)})` : 'true',
-    cond.gone ? `!document.body?.innerText.includes(${JSON.stringify(cond.gone)})` : 'true',
-  ].join(' && ')
-  for (;;) {
-    const urlOk = !cond.urlIncludes || ctx.guest.getURL().includes(cond.urlIncludes)
-    const { result } = await ctx.cdp.sendCommand('Runtime.evaluate', { expression, returnByValue: true }).catch(() => ({ result: { value: false } })) as { result: { value?: unknown } }
-    if (urlOk && result.value === true) return
-    if (Date.now() >= until) throw new Error('The condition was not met in time.')
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-}
-
-/**
- * JPEG, at most 1280 px wide: full-resolution PNGs in tool results broke T3
- * Code sessions (#11295). capturePage with a per-attempt deadline and retries,
- * because a cold guest can fail with UnknownVizError or never settle.
- */
-export async function screenshot(ctx: ActionCtx, maxWidth = 1280): Promise<{ jpegBase64: string; width: number; height: number }> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const image = await Promise.race([
-        ctx.guest.capturePage(undefined, { stayHidden: true }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('capture timed out')), 1000)),
-      ])
-      if (image.isEmpty()) throw new Error('empty capture')
-      const scaled = image.getSize().width > maxWidth ? image.resize({ width: maxWidth }) : image
-      const size = scaled.getSize()
-      return { jpegBase64: scaled.toJPEG(80).toString('base64'), ...size }
-    } catch (error) {
-      lastError = error
-      await new Promise(resolve => setTimeout(resolve, 120))
+export async function scroll(ctx: ActionCtx, deltaX: number, deltaY: number, ref?: string): Promise<void> {
+  return withPocketPage(ctx, async page => {
+    if (ref) await page.locator(selector(ref)).hover({ signal: ctx.signal })
+    else {
+      // A wheel uses Playwright's last pointer position, which could still be
+      // over a sidebar from an earlier targeted action (or start at 0,0 under
+      // a fixed header). Ref-less scrolling consistently targets the viewport
+      // centre; Chromium still decides which scroll container receives it.
+      const { cssVisualViewport } = await ctx.cdp.sendCommand('Page.getLayoutMetrics')
+      await page.mouse.move(cssVisualViewport.clientWidth / 2, cssVisualViewport.clientHeight / 2)
     }
-  }
-  throw new Error(`Screenshot failed (${lastError instanceof Error ? lastError.message : 'unknown'}); the page may not be rendering.`)
+    await page.mouse.wheel(deltaX, deltaY)
+  })
+}
+export async function waitFor(ctx: ActionCtx, cond: { text?: string; urlIncludes?: string; gone?: string }, timeoutMs: number): Promise<void> {
+  return withPocketPage(ctx, async page => {
+    // Independent promises latch past states: text on the old page and a
+    // later matching URL could satisfy a wait without ever coexisting. One
+    // locator checks both DOM conditions together, then the current URL is
+    // rechecked after it resolves. A redirect while waiting retries against
+    // the same deadline, never granting each condition a fresh timeout.
+    let document = page.locator('html')
+    if (cond.text) document = document.filter({ has: page.getByText(cond.text).filter({ visible: true }) })
+    if (cond.gone) document = document.filter({ hasNot: page.getByText(cond.gone).filter({ visible: true }) })
+    const deadline = performance.now() + timeoutMs
+    const options = () => {
+      const timeout = deadline - performance.now()
+      if (timeout <= 0) throw new Error('Browser wait conditions did not hold together before the timeout.')
+      return { timeout, signal: ctx.signal }
+    }
+    do {
+      if (cond.urlIncludes) await page.waitForURL(url => url.href.includes(cond.urlIncludes!), { ...options(), waitUntil: 'domcontentloaded' })
+      // Fixed-position apps can have a zero-height html box despite visible
+      // content. Only the descendant text filters should require visibility.
+      await document.waitFor({ ...options(), state: 'attached' })
+      ctx.checkEpoch()
+    } while (cond.urlIncludes && !page.url().includes(cond.urlIncludes))
+  })
+}
+
+/** Native navigation history remains Chromium's. Playwright observes actual
+ * navigation completion and errors instead of sleeping for 300ms and claiming
+ * success even when loadURL rejected. Opening the same page preserves forms. */
+export async function navigate(ctx: ActionCtx, target: string | 'back' | 'forward' | 'reload'): Promise<string> {
+  return withPocketPage(ctx, async page => {
+    const options = { waitUntil: 'domcontentloaded' as const, signal: ctx.signal }
+    if (target === 'back') await page.goBack(options)
+    else if (target === 'forward') await page.goForward(options)
+    else if (target === 'reload') await page.reload(options)
+    else if (page.url() !== target) await page.goto(target, options)
+    else await page.waitForLoadState('domcontentloaded', { signal: ctx.signal })
+    return page.url()
+  })
+}
+
+export async function screenshot(ctx: ActionCtx, maxWidth = 1280): Promise<{ jpegBase64: string; width: number; height: number }> {
+  return withPocketPage(ctx, async page => {
+    const jpeg = await page.screenshot({ type: 'jpeg', quality: 80, scale: 'css', timeout: 5000, signal: ctx.signal })
+    const metrics = await ctx.cdp.sendCommand('Page.getLayoutMetrics')
+    const viewport = metrics.cssVisualViewport
+    const width = Math.round(viewport.clientWidth)
+    const height = Math.round(viewport.clientHeight)
+    if (width <= maxWidth) return { jpegBase64: jpeg.toString('base64'), width, height }
+    // NativeImage is only a codec here. Page capture is owned by Playwright,
+    // avoiding Electron capturePage's dependency on the visible compositor.
+    const { nativeImage } = await import('electron')
+    const small = nativeImage.createFromBuffer(jpeg).resize({ width: maxWidth })
+    return { jpegBase64: small.toJPEG(80).toString('base64'), ...small.getSize() }
+  })
 }
 
 /**

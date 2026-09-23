@@ -2,16 +2,18 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { BrowserPocketController, TAKEOVER_IDLE_RESUME_MS, type ControllerDeps, type GuestLike, type ImageLike } from './BrowserPocketController'
-import { clickNode, snapshot, typeInto } from './actions'
+import { evaluateIsolated } from './actions'
+import { BrowserPocketController, TAKEOVER_IDLE_RESUME_MS, type ActionCtx, type ControllerDeps, type GuestLike, type ImageLike } from './BrowserPocketController'
+// This suite tests queue/lifecycle behavior independently of the page engine.
+// Real actionability, refs and frames are covered by playwrightActions.system.
+const readProbe = (ctx: ActionCtx) => ctx.cdp.sendCommand('Accessibility.getFullAXTree')
 
 // The fake debugger answers with RECORDED Chrome responses (Stage-1
-// fixtures): the real accessibility tree and real content quads of the form
-// page, and it replays the real event stream of the broken page. Only the
+// fixtures): the real accessibility tree of the form page, and the recorded
+// console/network event stream of the broken page. Only the
 // wiring (which command returns which recording) is written here.
 const FIX = join(__dirname, '..', '__fixtures__')
 const axForm = JSON.parse(readFileSync(join(FIX, 'axtree.form.json'), 'utf8'))
-const geometry = new Map((JSON.parse(readFileSync(join(FIX, 'dom-geometry.form.json'), 'utf8')).geometry as Array<{ backendNodeId: number; quads: unknown; box: { model: { content: number[] } } }>).map(g => [g.backendNodeId, g]))
 const errorEvents = readFileSync(join(FIX, 'cdp-events.errors.jsonl'), 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l) as { method: string; params: unknown })
 
 const EMPTY_IMAGE: ImageLike = { isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }), resize: () => EMPTY_IMAGE, toJPEG: () => Buffer.from('') }
@@ -28,7 +30,6 @@ function fakeGuest(opts: { hang?: string } = {}) {
       sent.push({ method, params })
       if (method === opts.hang) return new Promise(() => {})
       if (method === 'Accessibility.getFullAXTree') return { nodes: axForm.nodes }
-      if (method === 'DOM.getContentQuads') return geometry.get(params.backendNodeId)?.quads ?? { quads: [] }
       return {}
     }),
     on: (event: string, listener: (...a: any[]) => void) => { (listeners[event] ??= []).push(listener) },
@@ -72,7 +73,7 @@ describe('targeting and gates', () => {
     const { c } = controller()
     const a = fakeGuest(); const b = fakeGuest()
     c.register('pa', 'sa', a.guest); c.register('pb', 'sb', b.guest)
-    await c.run('sa', 'snapshot', ctx => snapshot(ctx))
+    await c.run('sa', 'snapshot', ctx => readProbe(ctx))
     expect(a.sent.some(s => s.method === 'Accessibility.getFullAXTree')).toBe(true)
     expect(b.sent).toEqual([])
   })
@@ -88,41 +89,6 @@ describe('targeting and gates', () => {
 })
 
 describe('agent actions on recorded Chrome responses', () => {
-  it('snapshot → click by ref lands a trusted click inside the recorded button box', async () => {
-    const { c } = controller()
-    const g = fakeGuest()
-    c.register('p1', 's1', g.guest)
-    const snap = await c.run('s1', 'snapshot', ctx => snapshot(ctx))
-    expect(snap.ok).toBe(true)
-    const ref = /- button "Sign in" \[ref=(e\d+)\]/.exec((snap as { value: { text: string } }).value.text)![1]!
-    const backendId = (snap as { value: { refs: Map<string, number> } }).value.refs.get(ref)!
-    const out = await c.run('s1', 'click', ctx => clickNode(ctx, backendId), { mutating: true })
-    expect(out).toEqual({ ok: true, value: undefined })
-    const press = g.sent.find(s => s.method === 'Input.dispatchMouseEvent' && s.params.type === 'mousePressed')!.params
-    const box = geometry.get(backendId)!.box.model.content
-    expect(press.x).toBeGreaterThan(Math.min(box[0]!, box[4]!)); expect(press.x).toBeLessThan(Math.max(box[0]!, box[4]!))
-    expect(press.y).toBeGreaterThan(Math.min(box[1]!, box[5]!)); expect(press.y).toBeLessThan(Math.max(box[1]!, box[5]!))
-  })
-
-  it('typing uses focus emulation on the guest, never a host focus call', async () => {
-    const { c } = controller()
-    const g = fakeGuest()
-    c.register('p1', 's1', g.guest)
-    await c.run('s1', 'type', ctx => typeInto(ctx, 22, 'me@example.com', { clear: true }), { mutating: true })
-    const methods = g.sent.map(s => s.method)
-    expect(methods).toContain('Emulation.setFocusEmulationEnabled')
-    expect(methods.indexOf('Emulation.setFocusEmulationEnabled')).toBeLessThan(methods.indexOf('Input.insertText'))
-  })
-
-  it('an element with no layout box fails with an explanation instead of clicking 0,0', async () => {
-    const { c } = controller()
-    const g = fakeGuest()
-    c.register('p1', 's1', g.guest)
-    const out = await c.run('s1', 'click', ctx => clickNode(ctx, 999_999), { mutating: true })
-    expect(out).toMatchObject({ ok: false, code: 'failed' })
-    expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
-  })
-
   it('replayed console/network stream is reported once, and "since last snapshot" only shows what is new', async () => {
     const { c, advance } = controller()
     const g = fakeGuest()
@@ -145,7 +111,7 @@ describe('deadlines never poison other work (T3 #12273)', () => {
     const hung = fakeGuest({ hang: 'Accessibility.getFullAXTree' })
     const other = fakeGuest()
     c.register('p1', 's1', hung.guest); c.register('p2', 's2', other.guest)
-    const out = await c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 30 })
+    const out = await c.run('s1', 'snapshot', ctx => readProbe(ctx), { timeoutMs: 30 })
     expect(out).toMatchObject({ ok: false, code: 'timeout' })
     expect(hung.dbg.detach).toHaveBeenCalled()
     expect(other.dbg.detach).not.toHaveBeenCalled()
@@ -235,7 +201,7 @@ describe('review round fixes (review A)', () => {
     const g = fakeGuest({ hang: 'Accessibility.getFullAXTree' })
     c.register('p1', 's1', g.guest)
     // A hung read holds the queue; the click behind it times out first.
-    const slow = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 80 })
+    const slow = c.run('s1', 'snapshot', ctx => readProbe(ctx), { timeoutMs: 80 })
     const click = c.run('s1', 'click', async ctx => { ctx.checkEpoch(); await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: 1, y: 1 }) }, { mutating: true, timeoutMs: 20 })
     expect(await click).toMatchObject({ ok: false, code: 'timeout' })
     await slow
@@ -294,7 +260,7 @@ describe('review round fixes (review A)', () => {
     const g = fakeGuest({ hang: 'Accessibility.getFullAXTree' })
     c.register('p1', 's1', g.guest)
     await c.applyEmulation('p1', { colorScheme: 'dark' })
-    await c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 20 })
+    await c.run('s1', 'snapshot', ctx => readProbe(ctx), { timeoutMs: 20 })
     g.sent.length = 0
     await c.run('s1', 'status', async () => 1)
     expect(g.sent).toContainEqual({ method: 'Emulation.setEmulatedMedia', params: { features: [{ name: 'prefers-color-scheme', value: 'dark' }] } })
@@ -304,7 +270,7 @@ describe('review round fixes (review A)', () => {
     vi.useFakeTimers()
     const { c } = controller()
     c.register('p1', 's1', fakeGuest({ hang: 'Accessibility.getFullAXTree' }).guest)
-    const out = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 600_000 })
+    const out = c.run('s1', 'snapshot', ctx => readProbe(ctx), { timeoutMs: 600_000 })
     await vi.advanceTimersByTimeAsync(15_001)
     expect(await out).toMatchObject({ ok: false, code: 'timeout' })
   })
@@ -391,25 +357,6 @@ describe('review round 2 (review A)', () => {
     expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
   })
 
-  it('#3 a takeover after select-all stops the clear and the typing', async () => {
-    const { c } = controller()
-    const g = fakeGuest()
-    c.register('p1', 's1', g.guest)
-    const send = g.dbg.sendCommand.getMockImplementation()!
-    g.dbg.sendCommand.mockImplementation(async (method: string, params?: any) => {
-      const out = await send(method, params)
-      // The user clicks the page right after the agent's select-all.
-      if (method === 'Input.dispatchKeyEvent' && params.type === 'keyUp' && params.key === 'a') c.takeOver('p1')
-      return out
-    })
-    const out = await c.run('s1', 'type', ctx => typeInto(ctx, 22, 'agent text', { clear: true }), { mutating: true })
-    expect(out).toMatchObject({ ok: false, code: 'user_took_control' })
-    const keys = g.sent.filter(s => s.method === 'Input.dispatchKeyEvent').map(s => `${s.params.type}:${s.params.key}`)
-    // The select-all key that went down was released; nothing after it ran.
-    expect(keys).toEqual(['keyDown:a', 'keyUp:a'])
-    expect(g.sent.some(s => s.method === 'Input.insertText')).toBe(false)
-  })
-
   it('#4 cancelling a pick that is still queued never arms the overlay', async () => {
     const { c } = controller()
     const g = fakeGuest()
@@ -442,7 +389,7 @@ describe('review round 2 (review A)', () => {
     c.register('p1', 's1', g.guest)
     const hold = holdQueue(c, 's1')
     await tick()
-    const queued = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 20 })
+    const queued = c.run('s1', 'snapshot', ctx => readProbe(ctx), { timeoutMs: 20 })
     expect(await queued).toMatchObject({ ok: false, code: 'timeout' })
     // The running action keeps its debugger and completes normally.
     expect(g.dbg.detach).not.toHaveBeenCalled()
@@ -455,7 +402,7 @@ describe('review round 2 (review A)', () => {
     const g = fakeGuest()
     c.register('p1', 's1', g.guest)
     const stalled = holdQueue(c, 's1', 40)
-    const behind = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 5_000 })
+    const behind = c.run('s1', 'snapshot', ctx => readProbe(ctx), { timeoutMs: 5_000 })
     expect(await stalled.done).toMatchObject({ ok: false, code: 'timeout' })
     expect(await behind).toMatchObject({ ok: false, code: 'timeout' })
     expect(g.dbg.detach).toHaveBeenCalled()
@@ -477,4 +424,54 @@ describe('review round 2 (review A)', () => {
     ])
     expect(events).toEqual(['paint', 'drive', 'undrive', 'unpaint', 'paint', 'drive', 'undrive', 'unpaint'])
   })
+})
+
+it('revoking evaluation while it is queued prevents any expression from running', async () => {
+  const { c } = controller()
+  c.setFlags({ enabled: true, allowEvaluate: true })
+  c.register('p1', 's1', fakeGuest().guest)
+  let release!: () => void
+  const blocker = c.run('s1', 'snapshot', () => new Promise<void>(resolve => { release = resolve }))
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+  const evaluate = vi.fn(async () => 42)
+  const pending = c.run('s1', 'evaluate', evaluate, { mutating: true })
+  c.setFlags({ enabled: true, allowEvaluate: false })
+  release()
+  await blocker
+  expect(await pending).toMatchObject({ ok: false, code: 'disabled' })
+  expect(evaluate).not.toHaveBeenCalled()
+})
+
+it('revoking evaluation during isolated-world setup prevents expression dispatch', async () => {
+  const { c } = controller()
+  c.setFlags({ enabled: true, allowEvaluate: true })
+  const g = fakeGuest()
+  c.register('p1', 's1', g.guest)
+  g.dbg.sendCommand.mockImplementation(async (method: string) => {
+    if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'f1' } } }
+    if (method === 'Page.createIsolatedWorld') {
+      c.setFlags({ enabled: true, allowEvaluate: false })
+      return { executionContextId: 42 }
+    }
+    return {}
+  })
+  expect(await c.run('s1', 'evaluate', ctx => evaluateIsolated(ctx, 'document.body.remove()'), { mutating: true })).toMatchObject({ ok: false, code: 'disabled' })
+  expect(g.dbg.sendCommand.mock.calls.some(([method]) => method === 'Runtime.evaluate')).toBe(false)
+})
+
+it('a deadline unsticks a non-cooperative action after takeover', async () => {
+  vi.useFakeTimers()
+  const { c } = controller()
+  const g = fakeGuest()
+  c.register('p1', 's1', g.guest)
+  let started = false
+  const pending = c.run('s1', 'press', async () => { started = true; await new Promise(() => {}) }, { mutating: true, timeoutMs: 20 })
+  await Promise.resolve()
+  expect(started).toBe(true)
+  c.takeOver('p1')
+  await vi.advanceTimersByTimeAsync(25)
+  expect(await pending).toMatchObject({ ok: false, code: 'user_took_control' })
+  c.resume('p1')
+  expect(await c.run('s1', 'snapshot', async () => 'working', { timeoutMs: 50 })).toMatchObject({ ok: true, value: 'working' })
+  expect(g.dbg.detach).toHaveBeenCalled()
 })

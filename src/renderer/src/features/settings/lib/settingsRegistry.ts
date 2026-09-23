@@ -15,8 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import type { ExtensionListEntry } from '@shared/types/extensions'
-import { providerSupportsBuiltInMcpDomain, type BuiltInMcpDefaults } from '@mcp/shared/types'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { browserPocketEnablePatch } from '@renderer/features/browser-pocket/setup'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 
@@ -811,24 +810,16 @@ export function getSettingsRegistry(
       category: 'experimental',
       title: 'Browser Pocket',
       description:
-        'Attach a browser to an agent (⌘⇧B). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. Turning this on also enables the Browser Pocket MCP for new and reloaded agents.',
+        'Attach a browser to an agent (⌘⇧B). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. First enable adds browser tools for new agents. Existing agents show setup in their pocket; attaching tools requires one reload. Agents with tools already attached need no reload.',
       keywords: ['browser', 'preview', 'pocket', 'localhost', 'dev server', 'webview', 'spotlight'],
       metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
       control: {
         type: 'toggle',
         getValue: settings => settings.browserPocketEnabled,
         onToggle: (ctx, value) => {
-          // Turning the feature on is the moment the user decides agents
-          // should have a browser, so the MCP default follows once, for every
-          // provider that supports the domain. Turning it off does not touch
-          // the MCP grid: with the master switch off main registers no
-          // browser_* tools anyway, and the user's per-provider choice should
-          // be waiting when they turn the feature back on.
-          // Defaults are per provider since the MCP servers grid (#1143), so
-          // this edits each provider's list rather than one shared list.
-          ctx.onChange(value
-            ? { browserPocketEnabled: true, defaultBuiltInMcpDomains: withBrowserMcpDefault(ctx.settings.defaultBuiltInMcpDomains) }
-            : { browserPocketEnabled: false })
+          // Seed defaults on first enable only. Subsequent feature toggles
+          // gate execution, not authorization; provider opt-outs must survive.
+          ctx.onChange(value ? browserPocketEnablePatch(ctx.settings) : { browserPocketEnabled: false })
         },
       },
     },
@@ -1189,14 +1180,4 @@ export function matchesSettingQuery(definition: SettingDefinition, query: string
     .toLowerCase()
 
   return haystack.includes(normalized)
-}
-
-/** Add the browser domain to every provider's default list that supports it. */
-export function withBrowserMcpDefault(defaults: BuiltInMcpDefaults): BuiltInMcpDefaults {
-  const next = { ...defaults }
-  for (const kind of Object.keys(next) as AgentProviderKind[]) {
-    const domains = next[kind]
-    if (!domains.includes('browser') && providerSupportsBuiltInMcpDomain(kind, 'browser')) next[kind] = [...domains, 'browser']
-  }
-  return next
 }

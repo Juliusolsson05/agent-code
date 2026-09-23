@@ -7,6 +7,7 @@ export type WebviewElement = HTMLElement & {
   getWebContentsId(): number
   getURL(): string
   loadURL(url: string): Promise<void>
+  stop(): void
   reload(): void
   reloadIgnoringCache(): void
   canGoBack(): boolean

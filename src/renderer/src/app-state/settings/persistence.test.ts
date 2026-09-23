@@ -207,3 +207,10 @@ describe('coerceSettings public-release defaults (#973)', () => {
     expect(cleared.paletteMouseChord).toBe('')
   })
 })
+
+ it('preserves browser setup initialization and migrates already-enabled installs without re-seeding defaults', () => {
+  expect(coerceSettings({}).browserPocketDefaultsInitialized).toBe(false)
+  expect(coerceSettings({ browserPocketEnabled: true }).browserPocketDefaultsInitialized).toBe(true)
+  const saved = coerceSettings({ browserPocketEnabled: false, browserPocketDefaultsInitialized: true })
+  expect(coerceSettings(JSON.parse(JSON.stringify(saved))).browserPocketDefaultsInitialized).toBe(true)
+ })

@@ -81,3 +81,18 @@ describe('agent names setting', () => {
     expect(onChange).toHaveBeenLastCalledWith({ agentNamesEnabled: false })
   })
 })
+
+ it('seeds browser tools once and preserves a later provider opt-out through feature toggles', async () => {
+  const setting = getSettingsRegistry().find(s => s.id === 'browser-pocket')!
+  if (setting.control.type !== 'toggle') throw new Error('Expected toggle')
+  let settings = { ...DEFAULT_SETTINGS }
+  const onChange = (patch: Partial<typeof settings>) => { settings = { ...settings, ...patch } }
+  const ctx = () => ({ settings, onChange } as unknown as SettingActionContext)
+  await setting.control.onToggle(ctx(), true)
+  expect(settings.browserPocketDefaultsInitialized).toBe(true)
+  expect(settings.defaultBuiltInMcpDomains.codex).toContain('browser')
+  settings = { ...settings, defaultBuiltInMcpDomains: { ...settings.defaultBuiltInMcpDomains, codex: [] } }
+  await setting.control.onToggle(ctx(), false)
+  await setting.control.onToggle(ctx(), true)
+  expect(settings.defaultBuiltInMcpDomains.codex).toEqual([])
+ })
