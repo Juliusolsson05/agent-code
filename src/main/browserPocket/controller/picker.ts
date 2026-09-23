@@ -89,7 +89,10 @@ export function buildSelector(path: Array<{ tag: string; id?: string; testId?: s
 
 /** Minimal CSS.escape for identifiers (Node has no CSS global). */
 export function cssIdent(value: string): string {
-  return value.replace(/^(\d)/, '\\3$1 ').replace(/([^\w-])/g, '\\$1')
+  // Escape punctuation FIRST, then a leading digit: doing it the other way
+  // round escaped the separator space the digit escape needs ("\\31\\ st").
+  const escaped = value.replace(/([^\w-])/g, '\\$1')
+  return /^\d/.test(escaped) ? `\\3${escaped[0]} ${escaped.slice(1)}` : escaped
 }
 
 // Runs in the page against the picked node. Kept as a string so it is shipped
