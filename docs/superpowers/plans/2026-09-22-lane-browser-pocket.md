@@ -2,7 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status:** DRAFT, written together with the spec at the user's request
+> **Status (2026-09-22): IMPLEMENTED via the staged decomposition**
+> (`docs/decomposition/lane-browser-pocket.md`, which took precedence where
+> they differed — see its §0 for every deviation, e.g. the `browser` MCP
+> domain row instead of a `browserPocketAgentControl` setting, macOS-only port
+> scanning, and rules forced by the recorded fixtures). The task text below is
+> kept as the original plan.
+>
+> Original status: DRAFT, written together with the spec at the user's request
 > (2026-09-22). The spec has **not** been approved yet; do not start Task 1
 > until the user has reviewed both and answered the open decisions in spec
 > §11. If a decision lands differently from the recommendation, the tasks

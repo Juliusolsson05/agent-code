@@ -18,6 +18,58 @@ auto-resume; D8 no PTY output parsing; D9 popups needing `window.opener`
 denied with "Open in system browser"; D10 picker → clipboard for
 terminal-surface agents.
 
+## 0. Implementation status (2026-09-22)
+
+Stages 0–9 are implemented on `feat/lane-browser-pocket`, one commit per
+stage. Stage 10 (the user runs the app) is outstanding: every item below
+marked **needs app** is unverified until then.
+
+Where the build departed from this document or the plan, and why:
+
+- **Recordings changed six rules** (all pinned by tests on the recordings,
+  listed in `src/main/browserPocket/__fixtures__/README.md`):
+  - tmux panes descend from a daemonized server, so terminal roots come from
+    `list-panes`;
+  - an agent root's own listeners do not count (OpenCode serves its UI), but
+    a tmux pane root's do (a pane can *be* the server);
+  - a 5xx response is never a page (every `mitmdump` proxy answers 502
+    text/html);
+  - an agent's own automation browser is never a dev server;
+  - Chrome's favicon 404 and network-sourced log entries are not reported
+    twice;
+  - iframe contents are announced as "not included".
+- **"Since last snapshot" uses a sequence cursor, not a timestamp.** Several
+  CDP events land in the same millisecond, so a time cursor either repeats
+  events or drops them. A controller test caught this.
+- **Agent control is the ordinary `browser` MCP domain.** It has its own
+  Settings → Agents row, which reuses per-agent overrides and reload
+  semantics. This replaces the plan's separate `browserPocketAgentControl`
+  boolean. Turning the feature on enables that row once.
+- **With the feature off, `browser_status` remains** and answers `disabled`.
+  An agent whose only granted domain is `browser` would otherwise get an empty
+  tools/list ("Method not found").
+- **Guests have no preload and keep `contextIsolation` on.** The picker is
+  Chromium's own inspect overlay over CDP. The picker's selector and
+  `browser_evaluate` run in isolated worlds.
+- **Device viewports size the page element (`fitViewport`).** There is no CDP
+  device-metrics override, so the user and the agent always see the same
+  breakpoints. `browser_resize` asks the renderer to change it.
+- **Key forwarding uses the shared keybinding grammar** (`@shared/keybindings`,
+  physical codes), so Option chords work. A round-trip test covers every
+  forwarded chord.
+- **Only a session that has a pocket gets the `PocketedLeaf` wrapper.** Lanes
+  without one render exactly as before.
+- **Port detection is macOS-only (U1).** Linux and Windows report no ports.
+
+Still unknown and **needs app**:
+
+- U4: parked guests keep compositing on macOS.
+- U5: the debugger coexists with DevTools.
+- U6/U6b: CDP input echo through `input-event` and `before-input-event`.
+- U7: real placement traces. Enable with
+  `localStorage['agentCode.pocketTrace']='1'`.
+- Codex's process-tree shape.
+
 ---
 
 ## 1. A and D
