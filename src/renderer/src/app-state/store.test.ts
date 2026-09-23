@@ -1,3 +1,4 @@
+import { uniformBuiltInMcpDefaults } from '@mcp/shared/types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -79,7 +80,7 @@ describe('useAppStore prompt template migration', () => {
     // list. An install that explicitly cleared the domains persists `[]`,
     // which coerceSettings honours as a real choice.
     expect(useAppStore.getState().settings.defaultBuiltInMcpDomains)
-      .toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
+      .toEqual(uniformBuiltInMcpDefaults(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows']))
   })
 })
 

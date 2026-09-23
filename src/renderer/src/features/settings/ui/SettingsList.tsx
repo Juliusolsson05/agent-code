@@ -1,4 +1,5 @@
 import { useAppStore } from '@renderer/app-state/hooks'
+import { McpServersRow } from '@renderer/features/mcp/ui/McpServersRow'
 import { ExternalControlRow } from './ExternalControlRow'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -120,6 +121,21 @@ function SettingRow({
 }) {
   const context = { ...actionContext, settings }
   const control = definition.control
+
+  // The MCP grid (#1143) is a table with one column per provider; squeezing it
+  // into the 420px control column would truncate every server name, so it is
+  // the one row that renders full width under its description.
+  if (control.type === 'mcp-servers') {
+    return (
+      <div className="border-b border-panel-border px-4 py-4 last:border-b-0">
+        <div className="text-[12px] text-ink">{definition.title}</div>
+        <div className="mt-1 text-[11px] leading-5 text-muted">{definition.description}</div>
+        <div className="mt-3">
+          <McpServersRow settings={settings} onChange={actionContext.onChange} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="border-b border-panel-border px-4 py-4 last:border-b-0">

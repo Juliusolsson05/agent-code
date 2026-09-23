@@ -894,6 +894,17 @@ Tokens are omitted from durable workspace metadata. Launch configuration avoids 
 
 Sources: [HTTP host](src/mcp/runtime/BuiltInMcpHttpHost.ts), [tool registrar](src/mcp/runtime/createBuiltInMcpServer.ts), [launch configuration](src/providers/shared/runtime/builtInMcpLaunch.ts).
 
+**User MCP servers (#1143).** Users can also attach their own MCP servers to Claude and Codex agents.
+
+- **Storage.** Main owns them in `mcp-servers.json`, stored in the de facto `mcpServers` entry shape. Secret values live in separate `safeStorage` blobs, and entries refer to them as `${input:id}`.
+- **Launch.** The renderer sends only a pane's explicit per-agent choices, as `user:<id>` keys in the same override map as built-in domains. At launch, main applies the per-provider defaults, secret readiness, transport support, Codex name collisions and Claude's enterprise MCP policy. It passes the result to the providers.
+- **Claude.** User entries are added to the same private config file as the built-in server. Secrets are `${VAR}` references expanded from the process environment.
+- **Codex.** User servers become `--config mcp_servers.<name>.*` overrides. Header values go through `env_http_headers`, and stdio secrets through `env_vars`.
+- **Failure handling.** A requested server that cannot attach is reported (`user-mcp-unavailable`) and never fails the launch. The attached ids are an observed backend fact (`userMcpServerIds`), like `builtInMcpDomains`.
+- **Config files.** Provider config files are never written. The user-scope servers each CLI loads itself are only read, to list them and to detect collisions.
+
+Sources: [service](src/main/userMcp/service.ts), [translators](src/providers/shared/runtime/userMcpLaunch.ts), [model and import](src/shared/userMcp), [design](docs/superpowers/specs/2026-09-22-user-mcp-servers-design.md).
+
 #### 5.6.2 Domains and scope
 
 | Domain | Tools/responsibility | Scope notes |

@@ -93,6 +93,9 @@ async function fixture(grantServiceRun = false): Promise<{
           serviceCalls.push({ extensionId, revision, serviceId, name: 'expose' })
           return lan ? { serviceId, lan: true, port: 45678 } : { serviceId, lan: false }
         },
+        // No host-owned ports in this fake; net.fetch's refusal of them is
+        // pinned in netFetch.test.ts and wired end to end by serviceHost.
+        isHostOwnedLoopbackPort: () => false,
       },
     }),
   }

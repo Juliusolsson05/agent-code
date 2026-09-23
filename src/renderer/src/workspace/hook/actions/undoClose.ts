@@ -69,7 +69,7 @@ type PublishLineage = (lineage: UndoLineage) => void
  * has not landed in this snapshot; production `spawn` writes SessionMeta into
  * workspace state itself, so in the app it is normally present.
  */
-function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
+export function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
   // Extension panes skip spawn entirely: all of their metadata is durable UI
   // identity, including the view ID. The process-specific allowlist below is
   // for real backends whose new connection identity must win after respawn.
@@ -97,6 +97,8 @@ function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta)
     // other line here.
     ...carriedRelationships(closed),
     ...(closed.agentViewModeOverride ? { agentViewModeOverride: closed.agentViewModeOverride } : {}),
+    // Same pocketId ⇒ same cookie partition: an undone agent comes back logged in.
+    ...(closed.browserPocket ? { browserPocket: closed.browserPocket } : {}),
     // Pool membership (#992). `spawn` writes an UN-FILED row — no project, no
     // position — so without these the restored session would be unowned
     // metadata that no index lists and the next autosave drops. `joinedAt` is

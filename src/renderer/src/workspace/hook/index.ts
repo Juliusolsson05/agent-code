@@ -1,8 +1,9 @@
+import type { WorkspaceState } from '@renderer/workspace/types'
 import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 
@@ -84,7 +85,7 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
+  defaultBuiltInMcpDomains: BuiltInMcpDefaultsInput = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
@@ -999,6 +1000,12 @@ export function useWorkspace(
     // threw "is not a function" at runtime (vite strips types, so the build
     // never caught the missing member). Exposing it here is the whole fix.
     updateRuntime,
+    // Browser pocket config writes (#1142). Takes one of the pure transforms in
+    // features/browser-pocket/actions.ts rather than exposing a general
+    // setState: those transforms are the only code allowed to change
+    // SessionMeta.browserPocket, and they return the SAME object for no-ops,
+    // which setWorkspaceState turns into "no store notification, no autosave".
+    updateBrowserPocket: (transform: (state: WorkspaceState) => WorkspaceState) => setState(transform),
     // actions
     newTab: tabActions.newTab,
     // Close Tab runs through the pane close executor, beside closeSession, so

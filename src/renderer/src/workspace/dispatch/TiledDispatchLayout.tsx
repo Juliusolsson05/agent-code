@@ -1,3 +1,4 @@
+import { LanePortChip } from '@renderer/features/browser-pocket/ui/LanePortChip'
 import { Fragment, useCallback, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -438,6 +439,9 @@ function GridRowView({
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),
                     resolved.paneLabel,
+                    // The dim overlay below cannot cover a pocket page (it lives
+                    // in the host layer), so the page dims itself from this.
+                    { surface: 'lane', laneIndex, focused, dimmed: !focused },
                   )
                 ) : (
                   <div className="flex h-full min-h-0 flex-col">
@@ -492,6 +496,7 @@ function GridRowView({
                   )}
                   </div>
                 )}
+                {resolved && <LanePortChip sessionId={resolved.sessionId} workspace={workspace} />}
                 {!focused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
                 )}

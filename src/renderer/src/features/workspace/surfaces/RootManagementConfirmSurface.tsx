@@ -6,8 +6,10 @@ import {
   rootManagementReloadLabels,
 } from '@renderer/features/workspace/lib/rootManagement'
 import { RootManagementConfirmDialog } from '@renderer/features/workspace/ui/RootManagementConfirmDialog'
+import { stopGoalLoopFor } from '@renderer/features/mcp/ui/AgentMcpServersModal'
 import {
   reloadSessionWithBuiltInMcpChoice,
+  reloadSessionWithBuiltInMcpOverrides,
 } from '@renderer/workspace/builtInMcpReload'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 
@@ -19,6 +21,8 @@ export function RootManagementConfirmSurface() {
   const workspace = useWorkspaceContext()
   const sessionId = useAppStore(state => state.rootManagementPromptSessionId)
   const close = useAppStore(state => state.closeRootManagementPrompt)
+  const stagedOverrides = useAppStore(state => state.rootManagementPromptOverrides)
+  const stopGoalLoop = useAppStore(state => state.rootManagementPromptStopGoalLoop)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const agentLabel = meta
     ? [meta.title, meta.kind ?? DEFAULT_PROVIDER, cwdBasename(meta.cwd)].filter(Boolean).join(' · ')
@@ -33,6 +37,21 @@ export function RootManagementConfirmSurface() {
       onConfirm={() => {
         if (!sessionId || !meta) return
         close()
+        // From "Agent MCP Servers…": apply every staged choice in this one
+        // reload, with the grant the user just confirmed (#1143).
+        if (stagedOverrides) {
+          // The goal-loop stop (from the staged picker) runs inside the
+          // reload, after its checks, so a declined reload cannot leave a
+          // loop dead while the agent keeps its tools.
+          void reloadSessionWithBuiltInMcpOverrides(
+            workspace,
+            sessionId,
+            { ...stagedOverrides, [ROOT_MANAGEMENT_DOMAIN]: true },
+            rootManagementReloadLabels(true),
+            stopGoalLoop ? stopGoalLoopFor(sessionId) : undefined,
+          )
+          return
+        }
         void reloadSessionWithBuiltInMcpChoice(
           workspace,
           sessionId,

@@ -76,6 +76,8 @@ export type ExtensionServiceInvoker = {
   status(extensionId: string, revision: string, serviceId: string): Promise<ExtensionServiceStatus>
   invoke(extensionId: string, revision: string, serviceId: string, name: string, params?: ExtensionJson): Promise<ExtensionJson | undefined>
   expose(extensionId: string, revision: string, serviceId: string, lan: boolean): Promise<ExtensionServiceExposure>
+  /** net.fetch refuses loopback targets on these ports (netFetch.ts). */
+  isHostOwnedLoopbackPort(port: number): boolean
 }
 
 export type ExtensionCapabilityServiceOptions = {
@@ -263,7 +265,7 @@ export class ExtensionCapabilityService {
         // each path then re-validates its own target before dialing.
         return netFetchRoute(request.url, networkOrigins) === 'net.origins'
           ? netOriginsFetch(fetchRequest, networkOrigins, this.options.fetch)
-          : netFetch(fetchRequest, this.options.fetch)
+          : netFetch(fetchRequest, this.options.fetch, { isHostOwnedLoopbackPort: port => this.options.services.isHostOwnedLoopbackPort(port) })
       }
       case 'secrets.get':
         return this.options.secrets.get(extensionId, request.key)

@@ -284,6 +284,8 @@ function OpenCommandPalette({
   const openAgentAnalytics = useAppStore(state => state.openAgentAnalytics)
   const openApp = useAppStore(state => state.openApp)
   const openKeyVault = useAppStore(state => state.openKeyVault)
+  const openMcpServerDialogState = useAppStore(state => state.openMcpServerDialog)
+  const openAgentMcpServers = useAppStore(state => state.openAgentMcpServers)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -334,6 +336,7 @@ function OpenCommandPalette({
   const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const browserPocketEnabled = settings.browserPocketEnabled
   const commandPaletteOpenFlag = useAppStore(state => state.commandPaletteOpen)
   const usageModalOpen = useAppStore(state => state.usageModalOpen)
   const agentAnalyticsOpen = useAppStore(state => state.agentAnalyticsOpen)
@@ -547,6 +550,8 @@ function OpenCommandPalette({
         openUsageModal,
         openAgentAnalytics,
         openKeyVault,
+        openMcpServerDialog: () => openMcpServerDialogState({ mode: 'add' }),
+        openAgentMcpServers,
         toggleGitBar,
         toggleWorktreesBar,
         toggleDebugPanel,
@@ -592,6 +597,7 @@ function OpenCommandPalette({
         usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
+        browserPocketEnabled,
         commandPaletteOpen: commandPaletteOpenFlag,
         paletteMode: mode,
         usageModalOpen,
@@ -665,6 +671,8 @@ function OpenCommandPalette({
       openAgentAnalytics,
       openApp,
       openKeyVault,
+      openMcpServerDialogState,
+      openAgentMcpServers,
       toggleGitBar,
       toggleWorktreesBar,
       toggleDebugPanel,
@@ -702,6 +710,7 @@ function OpenCommandPalette({
       usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
+      browserPocketEnabled,
       commandPaletteOpenFlag,
       mode,
       usageModalOpen,
