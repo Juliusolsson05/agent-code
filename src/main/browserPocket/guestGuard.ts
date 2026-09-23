@@ -68,6 +68,19 @@ export function installGuestGuard(window: BrowserWindow, deps: { onBlockedPopup:
       return
     }
     hardenGuestPreferences(webPreferences)
+    // The session Electron actually creates comes from `webPreferences`,
+    // NOT from `params.partition`. Electron 43's guest-view-manager merges
+    // the tag's `webpreferences="partition=…"` string over the `partition`
+    // attribute, so `partition="persist:ac-pocket-x"` plus
+    // `webpreferences="partition=persist:anything"` passed the check above
+    // and then ran in an unconfigured session that grants every permission
+    // (review round 2, A #1). Pin the effective partition to the one we
+    // validated and configured, and drop any session object for the same
+    // reason. Everything below (handlers, registration's partition check)
+    // assumes these two are the same string.
+    const effective = webPreferences as Record<string, unknown>
+    effective.partition = params.partition
+    delete effective.session
     // Install the partition's permission / certificate / download handlers
     // HERE, not only when the renderer asks for a partition name over IPC.
     // A session with no handler GRANTS every permission (Electron's default),

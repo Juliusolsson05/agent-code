@@ -18,9 +18,13 @@ import { BrowserPocketHost, wrapperStyle } from './BrowserPocketHost'
 const log: string[] = []
 let original = useAppStore.getState()
 
-function installApi() {
+function installApi(opts: { registerDelayMs?: number } = {}) {
   const calls = {
-    register: vi.fn(async (p: { pocketId: string; sessionId: string }) => { log.push(`register:${p.sessionId}`); return { ok: true } }),
+    register: vi.fn(async (p: { pocketId: string; sessionId: string }) => {
+      log.push(`register:${p.sessionId}`)
+      if (opts.registerDelayMs) await new Promise(r => setTimeout(r, opts.registerDelayMs))
+      return { ok: true }
+    }),
     // Resolves a tick LATER and records how many guests still exist at that
     // moment: the element may only leave the DOM after main has answered, so
     // a fire-and-forget unregister would log guests=0 here.
@@ -51,12 +55,13 @@ function workspace(sessionId: string, pocket: Record<string, unknown> | null) {
     state: { sessions: { [sessionId]: { cwd: '/w', kind: 'claude', projectId: 'proj', ...(pocket ? { browserPocket: pocket } : {}) } }, stage: { lanes: [] } },
     runtimes: {},
     updateBrowserPocket: (t: (s: WorkspaceState) => WorkspaceState) => { updates.push(t) },
+    setTiledFocusedLane: vi.fn(),
   } as unknown as Workspace
   return { ws, updates }
 }
 
-function showSlot(visible = true) {
-  act(() => usePlacementStore.getState().report('p1', { slotKey: 'lane:0', surface: 'lane', laneIndex: 0, focused: true, visible, dimmed: false, rect: { x: 0, y: 0, width: 800, height: 600 }, clip: null }))
+function showSlot(visible = true, lane = { index: 0, focused: true }) {
+  act(() => usePlacementStore.getState().report('p1', { slotKey: `lane:${lane.index}`, surface: 'lane', laneIndex: lane.index, focused: lane.focused, visible, dimmed: !lane.focused, rect: { x: 0, y: 0, width: 800, height: 600 }, clip: null }))
 }
 
 function guest(url = 'http://localhost:3000/'): HTMLElement & { url: string } {
@@ -167,6 +172,80 @@ describe('guest lifecycle', () => {
     await flush()
     expect(log).toEqual(['register:s1', 'unregister(guests=1)'])
     expect(document.querySelectorAll('webview')).toHaveLength(0)
+  })
+})
+
+describe('review round 2 (review B)', () => {
+  it('#1 an agent opening a collapsed pocket with no slot gets a guest, and it registers', async () => {
+    installApi()
+    const { ws } = workspace('s1', { pocketId: 'p1', view: 'collapsed', profile: 'lane' })
+    renderHost(ws)
+    await flush()
+    // Collapsed, no url, no slot: nothing to show and nothing is created.
+    expect(document.querySelectorAll('webview')).toHaveLength(0)
+    act(() => usePocketLiveStore.getState().patch('p1', { agentOpening: true }))
+    await flush()
+    await flush()
+    act(() => { guest().dispatchEvent(new Event('dom-ready')) })
+    await flush()
+    expect(log).toEqual(['register:s1'])
+    expect(usePocketLiveStore.getState().live.p1?.agentOpening).toBe(false)
+  })
+
+  it('#2 turning the feature off unregisters every guest BEFORE it leaves the DOM', async () => {
+    installApi()
+    const { ws } = workspace('s1', POCKET)
+    renderHost(ws)
+    showSlot()
+    await flush()
+    act(() => { guest().dispatchEvent(new Event('dom-ready')) })
+    await flush()
+    act(() => useAppStore.setState({ settings: { ...useAppStore.getState().settings, browserPocketEnabled: false } }))
+    await flush()
+    await flush()
+    expect(log).toEqual(['register:s1', 'unregister(guests=1)'])
+    expect(document.querySelectorAll('webview')).toHaveLength(0)
+  })
+
+  it('#3 a session closing while a sleep teardown is in flight waits for the SAME unregister', async () => {
+    installApi()
+    const { ws } = workspace('s1', POCKET)
+    const view = renderHost(ws)
+    showSlot()
+    await flush()
+    act(() => { guest().dispatchEvent(new Event('dom-ready')) })
+    await flush()
+    showSlot(false)
+    // Sleep starts a teardown (unregister takes a few ms)…
+    act(() => usePocketLiveStore.getState().patch('p1', { asleep: true }))
+    // …and the session closes before main answers.
+    view.rerender(<GlobalToastProvider><BrowserPocketHost workspace={workspace('s1', null).ws} /></GlobalToastProvider>)
+    await flush()
+    await flush()
+    expect(log).toEqual(['register:s1', 'unregister(guests=1)'])
+    expect(document.querySelectorAll('webview')).toHaveLength(0)
+  })
+
+  it('#4 a session remap while the first registration is in flight re-registers the new id', async () => {
+    installApi({ registerDelayMs: 5 })
+    const view = renderHost(workspace('old', POCKET).ws)
+    showSlot()
+    await flush()
+    act(() => { guest().dispatchEvent(new Event('dom-ready')) })
+    view.rerender(<GlobalToastProvider><BrowserPocketHost workspace={workspace('new', POCKET).ws} /></GlobalToastProvider>)
+    await flush()
+    await flush()
+    expect(log).toEqual(['register:old', 'register:new'])
+  })
+
+  it('#5 focusing another lane\'s page moves lane focus to that lane', async () => {
+    installApi()
+    const { ws } = workspace('s1', POCKET)
+    renderHost(ws)
+    showSlot(true, { index: 2, focused: false })
+    await flush()
+    act(() => { guest().dispatchEvent(new FocusEvent('focusin', { bubbles: true })) })
+    expect(ws.setTiledFocusedLane).toHaveBeenCalledWith(2)
   })
 })
 

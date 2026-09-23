@@ -54,17 +54,28 @@ export async function typeInto(ctx: ActionCtx, backendNodeId: number, text: stri
   await ctx.cdp.sendCommand('DOM.focus', { backendNodeId })
   ctx.checkEpoch()
   ctx.expectKeys()
+  // The epoch is re-checked before EVERY step that changes the page: a user
+  // who takes over after the select-all must not have their field wiped and
+  // overwritten by the agent (review round 2, A #3). A key that went down is
+  // always released (tapKey) so a stop never leaves a modifier stuck.
   if (opts.clear) {
     // Select-all + delete through real key events, so frameworks that listen
     // for input/keydown (React controlled inputs) see the change.
     const selectAll = process.platform === 'darwin' ? 4 : 2
-    await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAll })
-    await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAll })
-    await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
-    await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+    await tapKey(ctx, { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAll })
+    ctx.checkEpoch()
+    await tapKey(ctx, { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
   }
-  if (text) await ctx.cdp.sendCommand('Input.insertText', { text })
+  if (text) {
+    ctx.checkEpoch()
+    await ctx.cdp.sendCommand('Input.insertText', { text })
+  }
   if (opts.submit) await pressKey(ctx, 'Enter', [])
+}
+
+async function tapKey(ctx: ActionCtx, key: { key: string; code: string; windowsVirtualKeyCode: number; modifiers?: number }): Promise<void> {
+  await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...key })
+  await ctx.cdp.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
 const MODIFIER_BITS = { Alt: 1, Ctrl: 2, Meta: 4, Shift: 8 } as const

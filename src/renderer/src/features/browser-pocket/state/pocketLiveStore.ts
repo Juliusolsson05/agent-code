@@ -32,6 +32,14 @@ export type PocketLive = {
   /** Increments each time the address bar should take focus. */
   focusAddressTick: number
   picking: boolean
+  /**
+   * An agent called browser_open and main is waiting for this pocket's guest
+   * to register. A collapsed pocket has no slot and no paint lease, so
+   * without this the placement stayed `absent`, no guest was ever created and
+   * the tool always timed out (review round 2, B #1). Cleared when the guest
+   * registers, or by the bridge's safety timer.
+   */
+  agentOpening: boolean
 }
 
 const EMPTY: PocketLive = {
@@ -39,6 +47,7 @@ const EMPTY: PocketLive = {
   crashes: [], generation: 0, crashedOut: false, asleep: false, hasGuest: false,
   driving: null, drivingAction: null, drivingPoint: null, drivingAt: 0,
   thumbnail: null, unseenErrors: 0, focusAddressTick: 0, picking: false,
+  agentOpening: false,
 }
 
 type Store = {

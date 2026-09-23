@@ -78,6 +78,21 @@ describe('the window guard configures the session at ATTACH, without any IPC', (
     expect(guest.listenerCount('will-navigate')).toBe(1)
   })
 
+  it('a webpreferences partition override cannot move the guest out of the validated partition', () => {
+    // Electron merges the tag's `webpreferences="partition=…"` into the
+    // prefs it hands us; the session is created from THOSE prefs.
+    const contents = new EventEmitter()
+    installGuestGuard({ webContents: contents } as never, { onBlockedPopup: () => {} })
+    const P = `${POCKET_PARTITION_PREFIX}declared`
+    const prefs: Record<string, unknown> = { partition: 'persist:unprotected', session: {} }
+    const event = { preventDefault: vi.fn() }
+    contents.emit('will-attach-webview', event, prefs, { partition: P, src: 'http://localhost:3000/', webpreferences: 'partition=persist:unprotected' })
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(prefs.partition).toBe(P)
+    expect(prefs.session).toBeUndefined()
+    expect(sessions.get(P)?.permissionRequest).toBeTruthy()
+  })
+
   it('a refused attach configures nothing', () => {
     const contents = new EventEmitter()
     installGuestGuard({ webContents: contents } as never, { onBlockedPopup: () => {} })

@@ -64,9 +64,41 @@ export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
   ipcMain.handle('browser-pocket:pick', (_event, p: { pocketId: string }) => deps.pick(p.pocketId))
   ipcMain.handle('browser-pocket:cancel-pick', (_event, p: { pocketId: string }) => deps.cancelPick(p.pocketId))
   ipcMain.handle('browser-pocket:emulation', (_event, p: { pocketId: string; emulation: Parameters<BrowserPocketIpcDeps['applyEmulation']>[1] }) => deps.applyEmulation(p.pocketId, p.emulation))
-  ipcMain.handle('browser-pocket:set-watch', (_event, p: { sessions: PortWatchSession[] }) => deps.setWatchedSessions(Array.isArray(p.sessions) ? p.sessions : []))
+  // One watcher serves the whole app, but every window submits the plan for
+  // ITS OWN workspace. Replacing the watcher's plan with whichever window
+  // spoke last meant an empty second window cleared the first window's port
+  // chips, and because unchanged plans are not resubmitted nothing ever
+  // repaired it (review round 2, A #7). Keep one plan per window, scan their
+  // union, and drop a window's plan when it closes.
+  const plansBySender = new Map<number, PortWatchSession[]>()
+  const applyPlans = () => deps.setWatchedSessions(mergeWatchPlans(plansBySender.values()))
+  ipcMain.handle('browser-pocket:set-watch', (event, p: { sessions: PortWatchSession[] }) => {
+    const sender = event.sender
+    if (!plansBySender.has(sender.id)) {
+      const id = sender.id
+      sender.once('destroyed', () => { plansBySender.delete(id); applyPlans() })
+    }
+    plansBySender.set(sender.id, Array.isArray(p.sessions) ? p.sessions : [])
+    applyPlans()
+  })
   ipcMain.handle('browser-pocket:clear-storage', (_event, p: { pocketId: string; profile: 'lane' | 'project'; projectId?: string }) =>
     clearPocketStorage(partitionFor(p, p.projectId)))
 }
 
 const guestsWithPolicies = new Set<number>()
+
+/** Union of every window's watch plan. A session can only be shown in one
+ * window at a time, but a stale plan from a window mid-handoff may still list
+ * it; the first entry wins so one session is never scanned twice. */
+export function mergeWatchPlans(plans: Iterable<PortWatchSession[]>): PortWatchSession[] {
+  const seen = new Set<string>()
+  const merged: PortWatchSession[] = []
+  for (const plan of plans) {
+    for (const session of plan) {
+      if (seen.has(session.sessionId)) continue
+      seen.add(session.sessionId)
+      merged.push(session)
+    }
+  }
+  return merged
+}

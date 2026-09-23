@@ -61,9 +61,12 @@ export function BrowserPocketHost({ workspace }: { workspace: Workspace }) {
   const retiring: HostedEntry[] = []
   for (const [id, entry] of Object.entries(rendered.current)) {
     if (live[id]) { retired.current.delete(id); continue }
-    // With the feature off, main has already detached every debugger
-    // (controller.setFlags), so nothing needs to wait.
-    if (enabled && !retired.current.has(id)) retiring.push(entry)
+    // Turning the feature OFF retires every guest the same way. It used to
+    // drop them at once on the assumption that main had already detached
+    // every debugger, but the flags IPC is sent from a passive effect AFTER
+    // this render, so the guests left the DOM with the debugger still
+    // attached (review round 2, B #2).
+    if (!retired.current.has(id)) retiring.push(entry)
   }
   rendered.current = { ...Object.fromEntries(retiring.map(e => [e.pocket.pocketId, e])), ...live }
   const onRetired = useCallback((pocketId: string) => {
@@ -73,11 +76,6 @@ export function BrowserPocketHost({ workspace }: { workspace: Workspace }) {
     forgetLive(pocketId)
     bump(n => n + 1)
   }, [forgetPlacement, forgetLive])
-  useEffect(() => {
-    if (enabled) return
-    for (const id of Object.keys(rendered.current)) if (!live[id]) { forgetPlacement(id); forgetLive(id) }
-  })
-
   // Main announces every agent tool call (reads too) on this channel so a
   // hidden page is kept composited while an agent reads or screenshots it:
   // a non-composited guest's snapshot hangs or comes back empty (review B #5).
@@ -136,7 +134,13 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
   const registered = useRef(false)
   const guestSeq = useRef(0)
   const src = useRef('about:blank')
-  const tearing = useRef(false)
+  // Every guest transition runs on this chain, one after another. A guard
+  // that simply RETURNED while a teardown was in flight made a second caller
+  // (the session closing while a sleep teardown awaited main) believe the
+  // guest was already gone, so the host dropped it before main had
+  // unregistered it (review round 2, B #3).
+  const transitions = useRef<Promise<void>>(Promise.resolve())
+  const elementRef = useRef<WebviewElement | null>(null)
   // Read by page-event handlers attached once per guest. A ref, not a
   // dependency: after a reload the pocket's SessionId changes while the page
   // (and its listeners) must stay, and URL saves must follow the NEW id
@@ -148,30 +152,30 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
 
   // Any agent tool call, the picker, or a painting lease needs a composited
   // page even when nothing shows it.
-  const needsPaint = mustPaint || live.driving === 'agent' || live.picking
+  const needsPaint = mustPaint || live.driving === 'agent' || live.picking || live.agentOpening
   const placement: Placement = onRetired
     ? { mode: 'parked', size: lastSize ?? { width: 1280, height: 800 }, mustPaint: false }
     : resolvePlacement({ slots: Object.values(slots ?? {}), alive: guestKey !== null && !live.asleep, mustPaint: needsPaint, lastSize })
   usePlacementTrace(pocket.pocketId, slots, placement)
   const wantsGuest = !onRetired && placement.mode !== 'absent' && !live.crashedOut && !live.asleep && (Boolean(pocket.url) || needsPaint)
 
-  const teardown = useCallback(async (next: 'none' | 'remount') => {
-    if (tearing.current) return
-    tearing.current = true
-    try {
+  const teardown = useCallback((next: 'none' | 'remount', nextPartition?: string): Promise<void> => {
+    const run = async () => {
       if (registered.current) {
         registered.current = false
         await window.api.unregisterPocketGuest({ pocketId: pocket.pocketId }).catch(() => {})
       }
+      if (nextPartition) setPartition(nextPartition)
       if (next === 'remount') {
         src.current = startUrl(pocketRef.current.url)
         setGuestKey(`g${++guestSeq.current}`)
       } else {
         setGuestKey(null)
       }
-    } finally {
-      tearing.current = false
     }
+    const done = transitions.current.then(run, run)
+    transitions.current = done.catch(() => {})
+    return done
   }, [pocket.pocketId])
 
   // Create, sleep, wake.
@@ -217,17 +221,15 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
         const changed = partition !== null && name !== partition
         lastPartitionKey.current = partitionKey
         if (changed && guestKey !== null) {
-          // Unregister the old guest BEFORE the new partition remounts it.
-          if (registered.current) { registered.current = false; await window.api.unregisterPocketGuest({ pocketId: pocket.pocketId }).catch(() => {}) }
-          src.current = startUrl(pocketRef.current.url)
-          setPartition(name)
-          setGuestKey(`g${++guestSeq.current}`)
+          // Unregister the old guest BEFORE the new partition remounts it,
+          // on the same transition chain as every other teardown.
+          await teardown('remount', name)
         } else {
           setPartition(name)
         }
       })
     return () => { cancelled = true }
-  }, [wantsGuest, guestKey, partitionKey, partition, pocket.pocketId, pocket.profile, projectId])
+  }, [wantsGuest, guestKey, partitionKey, partition, pocket.pocketId, pocket.profile, projectId, teardown])
 
   // Keep main's pocket → session mapping current across SessionId remaps.
   useEffect(() => {
@@ -267,15 +269,27 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
   // Page events, attached to EACH new guest element (a callback ref sets
   // `element`, so a remount re-runs this — the missing re-attach was review
   // B #1). Handlers read the session through sessionRef.
+  elementRef.current = element
   useEffect(() => {
     const el = element
     if (!el) return
     const pocketId = pocket.pocketId
     const register = () => {
-      void window.api.registerPocketGuest({ pocketId, sessionId: sessionRef.current, webContentsId: el.getWebContentsId() }).then(r => {
+      const sent = sessionRef.current
+      void window.api.registerPocketGuest({ pocketId, sessionId: sent, webContentsId: el.getWebContentsId() }).then(r => {
+        // A reply for a guest that has since been replaced says nothing
+        // about the current one.
+        if (elementRef.current !== el) return
         registered.current = r.ok
+        if (!r.ok) return
+        patchLive(pocketId, { agentOpening: false })
+        // The session was remapped while this registration was in flight.
+        // The remap effect skipped it (not registered yet) and will not run
+        // again, so main would keep the predecessor's id and the successor's
+        // tools would find no pocket (review round 2, B #4).
+        if (sessionRef.current !== sent) void window.api.registerPocketGuest({ pocketId, sessionId: sessionRef.current, webContentsId: el.getWebContentsId() })
         const p = pocketRef.current
-        if (r.ok) void window.api.applyPocketEmulation({ pocketId, emulation: { colorScheme: p.colorScheme ?? null, zoom: p.zoom ?? 1 } })
+        void window.api.applyPocketEmulation({ pocketId, emulation: { colorScheme: p.colorScheme ?? null, zoom: p.zoom ?? 1 } })
       })
     }
     const onNav = () => {
@@ -331,8 +345,18 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
   const viewport = pocket.viewport && pocket.viewport.mode !== 'fill' ? viewportSize(pocket.viewport) : null
   const style = wrapperStyle(placement, viewport)
   const fit = placement.mode === 'shown' ? fitViewport(placement.rect, viewport) : null
+  // The guest lives in this app-root layer, outside the lane whose
+  // onMouseDownCapture moves lane focus, so clicking another lane's page left
+  // commands (⌘⇧B, Spotlight) acting on the previous lane (review round 2,
+  // B #5). A guest only takes DOM focus from a real click: agent input uses
+  // CDP focus emulation and never focuses the element.
+  const onFocus = () => {
+    if (placement.mode !== 'shown') return
+    const slot = slots?.[placement.slotKey]
+    if (slot?.surface === 'lane' && !slot.focused && slot.laneIndex !== null) workspace.setTiledFocusedLane(slot.laneIndex)
+  }
   return (
-    <div data-pocket-guest style={style} aria-hidden={placement.mode !== 'shown'}>
+    <div data-pocket-guest style={style} aria-hidden={placement.mode !== 'shown'} onFocus={onFocus}>
       <webview
         key={guestKey}
         ref={setElementRef(setElement)}

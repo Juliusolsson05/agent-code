@@ -93,6 +93,21 @@ type Pocket = {
   emulation: { colorScheme?: 'light' | 'dark' | null }
   buffers: CdpBuffers
   pickAbort: (() => void) | null
+  /**
+   * Bumped by every reset (an active action timed out, the feature was turned
+   * off, the guest was unregistered or replaced). Work queued under an older
+   * generation never touches the page: the gates in run() used to be checked
+   * only at ENQUEUE, so a mutation queued behind a slow read still ran after
+   * the pocket was disabled or unregistered (review round 2, A #2).
+   */
+  generation: number
+  /** The action currently executing, so a deadline can tell whether it
+   * belongs to the running action or to one that never started (A #5), and
+   * so only the running action's cleanup ends "driving"/"paint" (A #6). */
+  active: { token: symbol; mutating: boolean } | null
+  /** Rejecters for every call still waiting on this pocket; a reset answers
+   * them at once instead of leaving them queued behind a stalled action. */
+  pending: Set<(error: Error) => void>
 }
 
 export const DEFAULT_TIMEOUT_MS = 10_000
@@ -105,6 +120,15 @@ const KEY_ECHO_MS = 500
 
 class Aborted extends Error {}
 class Timeout extends Error {}
+/** A gate that failed when the action was about to run (or was reset). */
+class Gate extends Error {
+  constructor(readonly code: ToolErrorCode, message: string) { super(message) }
+}
+
+const DISABLED_MESSAGE = 'Browser Pocket is turned off in Settings → Experimental.'
+const NO_POCKET_MESSAGE = 'You have no browser pocket open. Call browser_open first.'
+const PAUSED_MESSAGE = 'The user took control of the browser. Stop browser actions until they hand it back.'
+const DEVTOOLS_MESSAGE = 'DevTools is open on this pocket; the agent cannot act on the page until it is closed.'
 
 export type ControllerDeps = {
   now(): number
@@ -139,8 +163,8 @@ export class BrowserPocketController {
   setFlags(flags: PocketFlags): void {
     this.flags = flags
     // Off means off: no debugger stays attached to a page the user can no
-    // longer see controlled (review A #9).
-    if (!flags.enabled) for (const p of this.pockets.values()) this.detach(p)
+    // longer see controlled (review A #9), and nothing already queued runs.
+    if (!flags.enabled) for (const p of this.pockets.values()) this.reset(p, new Gate('disabled', DISABLED_MESSAGE))
   }
 
   isEnabled(): boolean {
@@ -165,13 +189,14 @@ export class BrowserPocketController {
       existing.sessionId = sessionId
     } else {
       if (existing) {
-        this.detach(existing)
+        this.reset(existing, new Gate('no_pocket', NO_POCKET_MESSAGE))
         if (existing.resumeTimer) clearTimeout(existing.resumeTimer)
       }
       this.pockets.set(pocketId, {
         pocketId, sessionId, guest, attached: false, listenersInstalled: false, queue: Promise.resolve(),
         epoch: 0, paused: false, resumeTimer: null, expectedPointers: [], expectPointerAnyUntil: 0, expectKeysUntil: 0,
         picking: false, emulation: {}, buffers: emptyBuffers(), pickAbort: null,
+        generation: 0, active: null, pending: new Set(),
       })
       guest.once('destroyed', () => {
         const current = this.pockets.get(pocketId)
@@ -187,7 +212,7 @@ export class BrowserPocketController {
     if (!p) return
     // Detach BEFORE the renderer drops the <webview>: destroying a guest with
     // an attached debugger is a main-process use-after-free (electron#53819).
-    this.detach(p)
+    this.reset(p, new Gate('no_pocket', NO_POCKET_MESSAGE))
     this.forget(p)
   }
 
@@ -322,14 +347,15 @@ export class BrowserPocketController {
   }
 
   async run<T>(sessionId: string, action: string, fn: (ctx: ActionCtx) => Promise<T>, opts: { mutating?: boolean; timeoutMs?: number; describe?: string } = {}): Promise<ToolOutcome<T>> {
-    if (!this.flags.enabled) return { ok: false, code: 'disabled', message: 'Browser Pocket is turned off in Settings → Experimental.' }
+    const mutating = opts.mutating === true
     const p = this.bySession(sessionId)
-    if (!p) return { ok: false, code: 'no_pocket', message: 'You have no browser pocket open. Call browser_open first.' }
-    if (opts.mutating && p.paused) return { ok: false, code: 'paused_by_user', message: 'The user took control of the browser. Stop browser actions until they hand it back.' }
-    if (opts.mutating && p.guest.isDevToolsOpened()) return { ok: false, code: 'devtools_open', message: 'DevTools is open on this pocket; the agent cannot act on the page until it is closed.' }
+    const early = p ? this.gate(p, sessionId, mutating) : this.flags.enabled ? new Gate('no_pocket', NO_POCKET_MESSAGE) : new Gate('disabled', DISABLED_MESSAGE)
+    if (early || !p) return { ok: false, code: early!.code, message: early!.message }
 
     const timeoutMs = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
     const startEpoch = p.epoch
+    const generation = p.generation
+    const token = Symbol(action)
     let timer: ReturnType<typeof setTimeout> | undefined
     // Set when this call has already answered the agent "timeout". An action
     // still waiting in the queue (or mid-way) must then never act on the page:
@@ -337,50 +363,78 @@ export class BrowserPocketController {
     // submit, and the late "driving" signal pins the pocket as agent-driven
     // (review A #2).
     let cancelled = false
+    let started = false
+    let rejectReset!: (error: Error) => void
+    const resetSignal = new Promise<never>((_, reject) => { rejectReset = reject })
+    resetSignal.catch(() => {})
+    p.pending.add(rejectReset)
+    // Every check that must hold while this action touches the page. Called
+    // when the action starts (the enqueue-time gates are stale by then) and
+    // between each mutating step via ctx.checkEpoch.
+    const stillCurrent = () => {
+      if (cancelled || p.generation !== generation || (started && p.active?.token !== token)) throw new Timeout()
+    }
     const work = p.queue.then(async () => {
-      if (cancelled) throw new Timeout()
+      stillCurrent()
+      const blocked = this.gate(p, sessionId, mutating)
+      if (blocked) throw blocked
+      if (mutating && p.epoch !== startEpoch) throw new Aborted()
+      started = true
+      p.active = { token, mutating }
       this.deps.emitPaint?.(p.pocketId, true)
-      if (opts.mutating) this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action })
-      this.ensureAttached(p)
-      const ctx: ActionCtx = {
-        cdp: p.guest.debugger,
-        guest: p.guest,
-        expectPointer: (x, y) => {
-          const now = this.deps.now()
-          p.expectedPointers.push({ x, y, until: now + POINTER_ECHO_MS })
-          p.expectPointerAnyUntil = now + POINTER_ANY_ECHO_MS
-        },
-        expectKeys: () => { p.expectKeysUntil = this.deps.now() + KEY_ECHO_MS },
-        checkEpoch: () => {
-          if (cancelled) throw new Timeout()
-          if (opts.mutating && p.epoch !== startEpoch) throw new Aborted()
-        },
-        pointer: (x, y) => this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action, point: { x, y } }),
+      if (mutating) this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action })
+      try {
+        this.ensureAttached(p)
+        const ctx: ActionCtx = {
+          cdp: p.guest.debugger,
+          guest: p.guest,
+          expectPointer: (x, y) => {
+            const now = this.deps.now()
+            p.expectedPointers.push({ x, y, until: now + POINTER_ECHO_MS })
+            p.expectPointerAnyUntil = now + POINTER_ANY_ECHO_MS
+          },
+          expectKeys: () => { p.expectKeysUntil = this.deps.now() + KEY_ECHO_MS },
+          checkEpoch: () => {
+            stillCurrent()
+            if (mutating && p.epoch !== startEpoch) throw new Aborted()
+          },
+          pointer: (x, y) => this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action, point: { x, y } }),
+        }
+        return await fn(ctx)
+      } finally {
+        // Cleanup runs INSIDE the serialized job, and only while this action
+        // is still the active one. Emitting it after the race (outside the
+        // queue) produced "A on → B on → A off" with B still running, so the
+        // renderer dropped B's paint lease and driving indicator (A #6).
+        if (p.active?.token === token) this.endActivity(p)
       }
-      if (opts.mutating) ctx.checkEpoch()
-      return await fn(ctx)
     })
     // The queue must survive a failed or timed-out action.
     p.queue = work.catch(() => undefined)
     try {
-      const value = await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Timeout()), timeoutMs) })])
+      const value = await Promise.race([work, resetSignal, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Timeout()), timeoutMs) })])
       return { ok: true, value }
     } catch (error) {
       if (error instanceof Aborted) return { ok: false, code: 'user_took_control', message: 'The user interacted with the page; the action was stopped.' }
+      if (error instanceof Gate) return { ok: false, code: error.code, message: error.message }
       if (error instanceof Timeout) {
         cancelled = true
-        // Reset ONLY this pocket: detach its debugger (re-attached lazily on
-        // the next call) and start a fresh queue so the stalled promise
-        // cannot block the next action.
-        this.detach(p)
-        p.queue = Promise.resolve()
+        // Only a deadline of the action that is RUNNING resets the pocket.
+        // An action that timed out while still queued just gives up: its
+        // predecessor has its own deadline, and resetting here detached the
+        // debugger under whatever action started next (A #5).
+        if (started && p.active?.token === token) {
+          // Reset ONLY this pocket: detach its debugger (re-attached lazily
+          // on the next call), answer everything queued behind the stall,
+          // and start a fresh queue.
+          this.reset(p, new Gate('timeout', `The page stopped responding during an earlier action, so the pocket was reset. Retry ${action}.`))
+        }
         return { ok: false, code: 'timeout', message: `${action} did not finish within ${timeoutMs} ms.` }
       }
       return { ok: false, code: 'failed', message: error instanceof Error ? error.message : String(error) }
     } finally {
       if (timer) clearTimeout(timer)
-      if (opts.mutating && !p.paused) this.deps.emitDriving({ pocketId: p.pocketId, state: null })
-      this.deps.emitPaint?.(p.pocketId, false)
+      p.pending.delete(rejectReset)
     }
   }
 
@@ -391,10 +445,10 @@ export class BrowserPocketController {
    * user saw another size (#3712/#8469). Main only relays the request.
    */
   async resizeViewport(sessionId: string, viewport: PocketViewportRequest): Promise<ToolOutcome<void>> {
-    if (!this.flags.enabled) return { ok: false, code: 'disabled', message: 'Browser Pocket is turned off in Settings → Experimental.' }
+    if (!this.flags.enabled) return { ok: false, code: 'disabled', message: DISABLED_MESSAGE }
     const p = this.bySession(sessionId)
-    if (!p) return { ok: false, code: 'no_pocket', message: 'You have no browser pocket open. Call browser_open first.' }
-    if (p.paused) return { ok: false, code: 'paused_by_user', message: 'The user took control of the browser. Stop browser actions until they hand it back.' }
+    if (!p) return { ok: false, code: 'no_pocket', message: NO_POCKET_MESSAGE }
+    if (p.paused) return { ok: false, code: 'paused_by_user', message: PAUSED_MESSAGE }
     this.deps.requestViewport(sessionId, viewport)
     // Give the renderer a frame to resize and the page a moment to reflow
     // before the agent's next snapshot.
@@ -409,17 +463,28 @@ export class BrowserPocketController {
     if (!p || !this.flags.enabled) return null
     // A second pick replaces the first instead of leaving it hanging for 60 s.
     p.pickAbort?.()
+    // The cancel handle exists from the FIRST moment, before the import and
+    // while the pick still waits in the queue. It used to be installed only
+    // once the overlay was armed, so cancelling a pick queued behind an agent
+    // action did nothing and the overlay armed later anyway (review round 2,
+    // A #4). `aborted` is checked again right before the overlay arms.
+    let aborted = false
+    let armedAbort: (() => void) | null = null
+    const abort = () => { aborted = true; armedAbort?.() }
+    p.pickAbort = abort
     const { pickElement } = await import('./picker.js')
     // Through the queue, so an agent's CDP click can never land while the
     // inspect overlay is armed (the overlay would take it as the pick), and
     // with `picking` set so the user's pick click does not pause the agent
     // (review A #4).
     const job = p.queue.then(async () => {
+      if (aborted) return null
       p.picking = true
       try {
-        return await pickElement(p, () => this.ensureAttached(p), abort => { p.pickAbort = abort })
+        return await pickElement(p, () => this.ensureAttached(p), fn => { armedAbort = fn }, () => aborted)
       } finally {
         p.picking = false
+        if (p.pickAbort === abort) p.pickAbort = null
       }
     })
     p.queue = job.catch(() => undefined)
@@ -454,6 +519,43 @@ export class BrowserPocketController {
     for (const method of ['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable', 'DOM.enable', 'Accessibility.enable']) {
       void p.guest.debugger.sendCommand(method).catch(() => {})
     }
+  }
+
+  /** The gates every action must pass, checked at enqueue AND again when the
+   * action actually starts. */
+  private gate(p: Pocket, sessionId: string, mutating: boolean): Gate | null {
+    if (!this.flags.enabled) return new Gate('disabled', DISABLED_MESSAGE)
+    // Still registered, still the same guest, still owned by the caller: an
+    // unregister, a replaced guest or a session remap all land between
+    // enqueue and execution.
+    if (this.pockets.get(p.pocketId) !== p || p.guest.isDestroyed() || p.sessionId !== sessionId) return new Gate('no_pocket', NO_POCKET_MESSAGE)
+    if (mutating && p.paused) return new Gate('paused_by_user', PAUSED_MESSAGE)
+    if (mutating && p.guest.isDevToolsOpened()) return new Gate('devtools_open', DEVTOOLS_MESSAGE)
+    return null
+  }
+
+  /** End the running action's "driving" and "paint" signals. */
+  private endActivity(p: Pocket): void {
+    const active = p.active
+    if (!active) return
+    p.active = null
+    if (active.mutating && !p.paused) this.deps.emitDriving({ pocketId: p.pocketId, state: null })
+    this.deps.emitPaint?.(p.pocketId, false)
+  }
+
+  /**
+   * Invalidate everything in flight on this pocket: detach the debugger, bump
+   * the generation so queued work never runs, answer every waiting caller
+   * with `reason`, and start a fresh queue. The stalled action (if any) is
+   * left to fail on its own; its checkEpoch throws from here on.
+   */
+  private reset(p: Pocket, reason: Gate): void {
+    this.detach(p)
+    this.endActivity(p)
+    p.generation++
+    for (const reject of p.pending) reject(reason)
+    p.pending.clear()
+    p.queue = Promise.resolve()
   }
 
   private detach(p: Pocket): void {

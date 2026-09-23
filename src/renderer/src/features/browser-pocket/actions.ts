@@ -13,7 +13,7 @@ import type { BrowserPocketConfig, SessionId, WorkspaceState } from '@renderer/w
 // Every transform returns the SAME object when nothing changes, so a no-op
 // never triggers an autosave or a React render.
 
-const defaultMint = () => crypto.randomUUID()
+export const defaultMint = () => crypto.randomUUID()
 
 export const MIN_SPLIT = 0.2
 export const MAX_SPLIT = 0.8

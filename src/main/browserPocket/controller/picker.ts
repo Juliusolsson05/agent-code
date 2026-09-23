@@ -16,10 +16,14 @@ export async function pickElement(
   p: PocketInternals,
   ensureAttached: () => void,
   registerAbort: (abort: (() => void) | null) => void,
+  isAborted: () => boolean = () => false,
 ): Promise<PocketPickResult | null> {
   ensureAttached()
   const cdp = p.guest.debugger
   await cdp.sendCommand('Overlay.enable')
+  // A cancel that arrived while the pick waited in the queue or while
+  // Overlay.enable was in flight: never arm the overlay (review round 2, A #4).
+  if (isAborted()) return null
   await cdp.sendCommand('Overlay.setInspectMode', {
     mode: 'searchForNode',
     highlightConfig: { showInfo: true, contentColor: { r: 111, g: 168, b: 220, a: 0.35 }, borderColor: { r: 111, g: 168, b: 220, a: 0.9 } },
@@ -44,6 +48,9 @@ export async function pickElement(
     registerAbort(() => done(null))
     const timer = setTimeout(() => done(null), 60_000)
     cdp.on('message', onMessage)
+    // Cancelled while setInspectMode was in flight, before the abort above
+    // was registered: settle now (the overlay is turned off below).
+    if (isAborted()) done(null)
   })
   await cdp.sendCommand('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} }).catch(() => {})
   if (!backendNodeId) return null

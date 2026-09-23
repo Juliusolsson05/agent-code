@@ -6,7 +6,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import type { ForwardedKey } from '@shared/browserPocket/types'
 
-import { attachPocket, setPocketViewport } from '../actions'
+import { attachPocket, defaultMint, setPocketViewport } from '../actions'
 import { requestPocket, setOpenInPocketHandler } from '../state/pocketBus'
 import { usePocketLiveStore } from '../state/pocketLiveStore'
 import { useLanePortsStore } from '../state/lanePortsStore'
@@ -52,7 +52,17 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
       window.api.onPocketOpenRequest(({ sessionId, url }) => {
         const ws = workspaceRef.current
         const before = ws.state.sessions[sessionId]?.browserPocket
-        ws.updateBrowserPocket(s => attachPocket(s, sessionId as SessionId, before ? (url ? { url } : undefined) : { view: 'collapsed', ...(url ? { url } : {}) }))
+        // Mint the id HERE so the pocket can be marked as wanted before the
+        // workspace update lands: main only asks when it has no registered
+        // guest (none yet, or the pocket is asleep), and a collapsed pocket
+        // with no slot would otherwise never get one (review round 2, B #1).
+        const pocketId = before?.pocketId ?? defaultMint()
+        ws.updateBrowserPocket(s => attachPocket(s, sessionId as SessionId, before ? (url ? { url } : undefined) : { view: 'collapsed', ...(url ? { url } : {}) }, () => pocketId))
+        const live = usePocketLiveStore.getState()
+        live.patch(pocketId, { agentOpening: true, asleep: false })
+        // main gives up after 8 s; stop holding a painting guest for a tool
+        // call that is already over.
+        setTimeout(() => usePocketLiveStore.getState().patch(pocketId, { agentOpening: false }), 10_000)
         if (before && url && before.url !== url) requestPocket(before.pocketId, { type: 'navigate', url })
       }),
       window.api.onPocketPorts(({ bySession }) => useLanePortsStore.getState().replace(bySession)),

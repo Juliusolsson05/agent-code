@@ -241,10 +241,8 @@ describe('review round fixes (review A)', () => {
     await slow
     await new Promise(r => setTimeout(r, 50))
     expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
-    // …and it never re-announces itself as driving after the "done" signal.
-    const lastAgent = driving.map((e, i) => ((e as { state: unknown }).state === 'agent' ? i : -1)).filter(i => i >= 0).pop() ?? -1
-    const lastNull = driving.map((e, i) => ((e as { state: unknown }).state === null ? i : -1)).filter(i => i >= 0).pop() ?? -1
-    expect(lastNull).toBeGreaterThan(lastAgent)
+    // …and it never announces itself as driving: it never started.
+    expect(driving.filter(e => (e as { state: unknown }).state === 'agent')).toEqual([])
   })
 
   it('#3 browser_open on an existing pocket never asks the renderer to navigate', async () => {
@@ -266,7 +264,9 @@ describe('review round fixes (review A)', () => {
     const g = fakeGuest()
     c.register('p1', 's1', g.guest)
     const picking = c.pick('p1')
-    await new Promise(r => setTimeout(r, 10))
+    // Wait for the overlay to arm (the picker module is imported lazily, so a
+    // fixed sleep raced it under load), then the user clicks to pick.
+    await vi.waitFor(() => expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(true))
     c.noteHumanInput('p1', { x: 3, y: 3 })
     c.cancelPick('p1')
     await picking
@@ -337,5 +337,144 @@ describe('review round fixes (review A)', () => {
     c.markSnapshot('old')
     c.register('p1', 'new', g.guest)
     expect(c.consoleSince('new', { sinceLastSnapshot: true })).toEqual([])
+  })
+})
+
+/** An action that holds the pocket's queue until released. */
+function holdQueue(c: BrowserPocketController, sessionId: string, timeoutMs = 2_000) {
+  let release!: () => void
+  const held = new Promise<void>(r => { release = r })
+  const done = c.run(sessionId, 'hold', async () => { await held; return 'held' }, { timeoutMs })
+  return { release, done }
+}
+const tick = (ms = 5) => new Promise(r => setTimeout(r, ms))
+
+describe('review round 2 (review A)', () => {
+  it('#2 a mutation queued before the feature is turned off never runs', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const click = c.run('s1', 'click', async ctx => { await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed' }) }, { mutating: true })
+    await tick()
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    hold.release()
+    expect(await click).toMatchObject({ ok: false, code: 'disabled' })
+    await tick()
+    expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
+  })
+
+  it('#2 a mutation queued before unregister never runs', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const click = c.run('s1', 'click', async ctx => { await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed' }) }, { mutating: true })
+    await tick()
+    await c.unregister('p1')
+    hold.release()
+    expect(await click).toMatchObject({ ok: false, code: 'no_pocket' })
+    await tick()
+    expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
+  })
+
+  it('#2 work queued by the old session never runs after a remap', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 'old', g.guest)
+    const hold = holdQueue(c, 'old')
+    const click = c.run('old', 'click', async ctx => { await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed' }) }, { mutating: true })
+    await tick()
+    c.register('p1', 'new', g.guest)
+    hold.release()
+    expect(await click).toMatchObject({ ok: false, code: 'no_pocket' })
+    expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
+  })
+
+  it('#3 a takeover after select-all stops the clear and the typing', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const send = g.dbg.sendCommand.getMockImplementation()!
+    g.dbg.sendCommand.mockImplementation(async (method: string, params?: any) => {
+      const out = await send(method, params)
+      // The user clicks the page right after the agent's select-all.
+      if (method === 'Input.dispatchKeyEvent' && params.type === 'keyUp' && params.key === 'a') c.takeOver('p1')
+      return out
+    })
+    const out = await c.run('s1', 'type', ctx => typeInto(ctx, 22, 'agent text', { clear: true }), { mutating: true })
+    expect(out).toMatchObject({ ok: false, code: 'user_took_control' })
+    const keys = g.sent.filter(s => s.method === 'Input.dispatchKeyEvent').map(s => `${s.params.type}:${s.params.key}`)
+    // The select-all key that went down was released; nothing after it ran.
+    expect(keys).toEqual(['keyDown:a', 'keyUp:a'])
+    expect(g.sent.some(s => s.method === 'Input.insertText')).toBe(false)
+  })
+
+  it('#4 cancelling a pick that is still queued never arms the overlay', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.cancelPick('p1')
+    hold.release()
+    expect(await picking).toBeNull()
+    expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
+  })
+
+  it('#4 a cancel that lands while the overlay is being enabled never arms it', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const send = g.dbg.sendCommand.getMockImplementation()!
+    g.dbg.sendCommand.mockImplementation(async (method: string, params?: any) => {
+      if (method === 'Overlay.enable') c.cancelPick('p1')
+      return send(method, params)
+    })
+    expect(await c.pick('p1')).toBeNull()
+    expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
+  })
+
+  it('#5 an action that times out while QUEUED does not reset the pocket under the running one', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    await tick()
+    const queued = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 20 })
+    expect(await queued).toMatchObject({ ok: false, code: 'timeout' })
+    // The running action keeps its debugger and completes normally.
+    expect(g.dbg.detach).not.toHaveBeenCalled()
+    hold.release()
+    expect(await hold.done).toEqual({ ok: true, value: 'held' })
+  })
+
+  it('#5 a running action\'s deadline answers everything queued behind it at once', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const stalled = holdQueue(c, 's1', 40)
+    const behind = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 5_000 })
+    expect(await stalled.done).toMatchObject({ ok: false, code: 'timeout' })
+    expect(await behind).toMatchObject({ ok: false, code: 'timeout' })
+    expect(g.dbg.detach).toHaveBeenCalled()
+    // The pocket works again right away.
+    expect(await c.run('s1', 'x', async () => 1)).toEqual({ ok: true, value: 1 })
+  })
+
+  it('#6 paint and driving signals of queued actions never overlap', async () => {
+    const events: string[] = []
+    const { c } = controller({
+      emitPaint: (_id, on) => events.push(on ? 'paint' : 'unpaint'),
+      emitDriving: e => events.push(e.state === 'agent' ? 'drive' : e.state === null ? 'undrive' : String(e.state)),
+    })
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    await Promise.all([
+      c.run('s1', 'a', async () => { await tick() }, { mutating: true }),
+      c.run('s1', 'b', async () => { await tick() }, { mutating: true }),
+    ])
+    expect(events).toEqual(['paint', 'drive', 'undrive', 'unpaint', 'paint', 'drive', 'undrive', 'unpaint'])
   })
 })
