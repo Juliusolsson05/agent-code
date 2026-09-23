@@ -32,8 +32,23 @@ vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: () => ({ createSession, deliverPrompt }),
 }))
 
+// Mutable so the cli-not-found case can make lookup fail. The resolver and
+// setup-state writes are mocked too, because a failed cached lookup triggers a
+// late PATH re-resolve that would otherwise probe the developer's real
+// machine, where the CLI may well be installed.
+const toolchain = vi.hoisted(() => ({ path: '/usr/bin/true' }))
+
 vi.mock('@main/setup/toolchain.js', () => ({
-  getToolPath: () => '/usr/bin/true',
+  getToolPath: () => toolchain.path,
+  refreshToolchainFromState: vi.fn(async () => {}),
+}))
+
+vi.mock('@main/setup/binaryResolver.js', () => ({
+  resolveToolPath: vi.fn(async () => null),
+}))
+
+vi.mock('@main/setup/setupState.js', () => ({
+  updateToolPaths: vi.fn(async () => {}),
 }))
 
 vi.mock('@main/performance/PerformanceService.js', () => ({
@@ -76,6 +91,70 @@ describe('SessionManager lifecycle journal', () => {
     createSession.mockReset()
     createSession.mockImplementation(() => new FakeAgentSession())
     deliverPrompt.mockReset()
+    toolchain.path = '/usr/bin/true'
+  })
+
+  describe('recover.failed cause (#1133)', () => {
+    // `code: 'start-failed'` alone made two workspace-wide outages readable
+    // only by lining up `seq` numbers against a neighbouring reconcile error.
+    // Each case pins one closed-enum cause from TYPED evidence, and checks that
+    // the exception text never reaches the stream. On origin/main there is no
+    // `cause` key at all.
+    it('classifies a deleted workspace folder as missing-workspace', async () => {
+      const { assertWorkspaceDirectoryExists, MissingWorkspaceDirectoryError } = await import('@main/workspaceDirectory.js')
+      vi.mocked(assertWorkspaceDirectoryExists).mockRejectedValueOnce(
+        new MissingWorkspaceDirectoryError('/tmp/deleted-worktree'),
+      )
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+
+      await manager.recover({ sessionId: 'gone', kind: 'claude', cwd: '/tmp/deleted-worktree' })
+
+      expect(spy.find('recover.failed')?.data).toMatchObject({ code: 'start-failed', cause: 'missing-workspace' })
+    })
+
+    it('classifies an unresolvable provider CLI as cli-not-found', async () => {
+      toolchain.path = ''
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+
+      const result = await manager.recover({ sessionId: 'no-cli', kind: 'codex', cwd: '/tmp/project' })
+
+      expect(result).toMatchObject({ ok: false, code: 'start-failed' })
+      expect(createSession).not.toHaveBeenCalled()
+      expect(spy.find('recover.failed')?.data).toMatchObject({ cause: 'cli-not-found' })
+    })
+
+    it('classifies a provider whose start() throws as provider-launch, without its message', async () => {
+      createSession.mockImplementation(() => {
+        const session = new FakeAgentSession()
+        session.start.mockRejectedValueOnce(new Error('spawn failed: TOKEN=secret-value'))
+        return session
+      })
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+
+      await manager.recover({ sessionId: 'crashy', kind: 'claude', cwd: '/tmp/project' })
+
+      const failed = spy.find('recover.failed')
+      expect(failed?.data).toMatchObject({ code: 'start-failed', cause: 'provider-launch' })
+      expect(JSON.stringify(failed)).not.toContain('secret-value')
+    })
+
+    it('falls back to unknown for a failure no boundary classified', async () => {
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      // No built-in MCP host, but MCP domains requested: the spawn throws before
+      // the provider exists, and no typed boundary owns that error.
+      const manager = new SessionManager(null, null, spy.journal as never)
+
+      await manager.recover({ sessionId: 'no-host', kind: 'claude', cwd: '/tmp/project', builtInMcpDomains: ['tldr'] })
+
+      expect(spy.find('recover.failed')?.data).toMatchObject({ cause: 'unknown' })
+    })
   })
 
   it('records the full cold-start ladder in order', async () => {

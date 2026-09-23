@@ -560,6 +560,34 @@ describe('product-owned Goal skill', () => {
   })
 })
 
+describe('pre-spawn preparation (#1133)', () => {
+  // The launcher used to chain audit → TLDR → Goal and let the first throw end
+  // the chain, which was harmless only while any throw aborted the spawn.
+  // Agents now launch regardless, so a broken TLDR skill must not also cost
+  // the agent its Goal skill. On origin/main `prepareForAgentSpawn` does not
+  // exist; the old chain skipped Goal.
+  it('reports a TLDR failure and still prepares the Goal skill', async () => {
+    const { service, targets } = await harness()
+    const file = customPath(targets[0]!, 'agent-code-tldr')
+    await writeFileWithParents(file, 'User owned instructions')
+
+    const failures = await service.prepareForAgentSpawn(['tldr', 'goal'])
+
+    expect(failures).toEqual([
+      { skill: 'tldr', error: expect.objectContaining({ message: expect.stringContaining('TLDR skill deployment failed') }) },
+    ])
+    expect(await readFile(file, 'utf8')).toBe('User owned instructions')
+    const snapshot = await service.getCustomSkillsSnapshot()
+    expect(snapshot.skills.find(skill => skill.managedBy === 'goal')?.health).toBe('active')
+  })
+
+  it('touches only the product skills the launching agent asked for', async () => {
+    const { service } = await harness()
+    await expect(service.prepareForAgentSpawn(undefined)).resolves.toEqual([])
+    expect((await service.getCustomSkillsSnapshot()).skills).toEqual([])
+  })
+})
+
 describe('product skills with an unsupported registered provider', () => {
   // Regression for #1014: grok (registered, personalAgentSkills.supported:false)
   // must not stop the TLDR product skill from deploying — pre-spawn reconcile
