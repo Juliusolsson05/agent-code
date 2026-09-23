@@ -31,4 +31,22 @@ describe('forwarded chords', () => {
   it('pocket-local chords never overlap forwarded ones', () => {
     for (const set of Object.values(POCKET_LOCAL_CHORDS)) for (const c of set) expect(POCKET_FORWARDED_CHORDS.has(c)).toBe(false)
   })
+  // Review round 3, C #1: every other test in this file DERIVES its cases from
+  // the sets, so deleting a chord from either one shipped green. A dropped
+  // forward is worse than a dead chord: before-input-event then reports the
+  // keystroke as human input, so ⌘⇧B inside a focused page would PAUSE the
+  // agent instead of toggling the pocket, and only the PR's manual QA (#1149
+  // item 5) would notice. These memberships are the product promise; a
+  // trimming refactor must fail here, not in the field.
+  it('forwards the chords the control reference promises while a page has focus (⌥S, ⌘⇧B, ⌘⇧P)', () => {
+    for (const chord of ['Alt+S', 'Cmd+Shift+B', 'Cmd+Shift+P']) {
+      expect(POCKET_FORWARDED_CHORDS.has(chord), chord).toBe(true)
+    }
+  })
+  it('keeps the browser\'s own chords page-local (⌘R, ⌘⇧R, ⌘L, ⌘⇧S)', () => {
+    expect(POCKET_LOCAL_CHORDS.reload.has('Cmd+R')).toBe(true)
+    expect(POCKET_LOCAL_CHORDS.hardReload.has('Cmd+Shift+R')).toBe(true)
+    expect(POCKET_LOCAL_CHORDS.focusAddress.has('Cmd+L')).toBe(true)
+    expect(POCKET_LOCAL_CHORDS.pick.has('Cmd+Shift+S')).toBe(true)
+  })
 })

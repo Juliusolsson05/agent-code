@@ -13,6 +13,19 @@ import { useLanePortsStore } from '../state/lanePortsStore'
 import { usePortWatchFeed } from './usePortWatchFeed'
 
 /**
+ * pocketIds minted by an open-request whose workspace update has not rendered
+ * yet, keyed by session. WHY: two `browser_open` calls can arrive in one tick
+ * (parallel tool calls), and both handlers read the LAST-RENDERED workspace
+ * snapshot, so both see no pocket and each mints its own id — the workspace
+ * keeps only the first (attachPocket never re-mints), leaving the second as
+ * an orphan pocketLiveStore entry nothing ever forgets (review round 3,
+ * C #2). Sharing the pending id makes the loser a no-op on the same pocket.
+ * Entries clear once the pocket is visible in state, or with the same 10 s
+ * window as agentOpening so the map can never grow unbounded.
+ */
+const pendingPocketMint = new Map<string, string>()
+
+/**
  * Every renderer ↔ main channel of the pocket, mounted once by the host.
  * Kept in one hook so the host component is about placing guests, not about
  * plumbing.
@@ -24,9 +37,26 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
   workspaceRef.current = workspace
 
   // Main registers browser_* tools and accepts guests only while enabled.
+  // Read through a ref by the focus listener below (whose registration must
+  // not churn on every settings change), always at the CURRENT values.
+  const flagsRef = useRef({ enabled, allowEvaluate })
+  flagsRef.current = { enabled, allowEvaluate }
   useEffect(() => {
     void window.api.setPocketFlags({ enabled, allowEvaluate })
   }, [enabled, allowEvaluate])
+
+  // Settings live in each window's localStorage with no cross-window sync,
+  // and set-flags is app-wide last-writer-wins — so a toggle in window B left
+  // window A's UI (switch, palette commands, mounted guests) claiming the
+  // feature is on while main answered every browser_* tool "disabled" (review
+  // round 3, C #3). The invariant that survives stale windows: the flags
+  // follow the FOCUSED window. Whichever window the user is looking at, its
+  // settings are what main enforces by the time they can click anything.
+  useEffect(() => {
+    const send = () => void window.api.setPocketFlags(flagsRef.current)
+    window.addEventListener('focus', send)
+    return () => window.removeEventListener('focus', send)
+  }, [])
 
   useEffect(() => {
     // Turning the feature off unsubscribes below before main's final "no
@@ -56,7 +86,16 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
         // workspace update lands: main only asks when it has no registered
         // guest (none yet, or the pocket is asleep), and a collapsed pocket
         // with no slot would otherwise never get one (review round 2, B #1).
-        const pocketId = before?.pocketId ?? defaultMint()
+        // A concurrent request that already minted for this session reuses
+        // its id rather than racing a second pocket into existence (see
+        // pendingPocketMint above).
+        const pocketId = before?.pocketId ?? pendingPocketMint.get(sessionId) ?? defaultMint()
+        if (before) {
+          pendingPocketMint.delete(sessionId)
+        } else if (!pendingPocketMint.has(sessionId)) {
+          pendingPocketMint.set(sessionId, pocketId)
+          setTimeout(() => pendingPocketMint.delete(sessionId), 10_000)
+        }
         ws.updateBrowserPocket(s => attachPocket(s, sessionId as SessionId, before ? (url ? { url } : undefined) : { view: 'collapsed', ...(url ? { url } : {}) }, () => pocketId))
         const live = usePocketLiveStore.getState()
         live.patch(pocketId, { agentOpening: true, asleep: false })
