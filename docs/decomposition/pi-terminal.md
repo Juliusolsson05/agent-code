@@ -1,7 +1,9 @@
 # Pi Terminal — stage decomposition (spec)
 
-Status: APPROVED 2026-09-22 (all decisions at their defaults). Implementation
-not started; progress is tracked in the plan's checkboxes and Execution notes.
+Status: APPROVED 2026-09-22 (all decisions at their defaults). IMPLEMENTED
+2026-09-22 across all stages, in three PRs (package, parser, app); none are
+merged. The deviations and the known gaps are recorded in the plan's
+Execution notes and in ARCHITECTURE.md §5.3.5.
 
 Plan: `docs/superpowers/plans/2026-09-22-pi-terminal-harness.md` (the Agent Code
 side and the order across repositories). The package-side tasks move into the
