@@ -115,24 +115,36 @@ export function addOpencodeBuiltInMcpLaunchConfig(
  */
 export async function createPrivateClaudeMcpConfig(
   servers: readonly BuiltInMcpServerConfig[],
+  // User MCP servers (#1143) share this one file rather than a second
+  // `--mcp-config`: the flag is variadic and swallows positional arguments that
+  // follow it, so one occurrence kept last is the only placement that cannot
+  // eat `--resume`. Their secret values are already `${VAR}` references (see
+  // userMcpLaunch.ts), so nothing here can put a credential on disk that the
+  // built-in path would not.
+  userEntries: Readonly<Record<string, Record<string, unknown>>> = {},
 ): Promise<PrivateMcpConfig | null> {
-  if (servers.length === 0) return null
+  if (servers.length === 0 && Object.keys(userEntries).length === 0) return null
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-mcp-'))
   const path = join(directory, 'mcp.json')
   const document = {
-    mcpServers: Object.fromEntries(servers.map(server => [
-      server.name,
-      {
-        type: 'http',
-        url: server.url,
-        headers: {
-          ...server.headers,
-          ...(server.bearerToken === undefined
-            ? {}
-            : { Authorization: `Bearer ${server.bearerToken}` }),
+    mcpServers: Object.fromEntries([
+      // User entries first so a built-in entry can never be shadowed. Reserved
+      // names are rejected upstream; this ordering is the second fence.
+      ...Object.entries(userEntries),
+      ...servers.map(server => [
+        server.name,
+        {
+          type: 'http',
+          url: server.url,
+          headers: {
+            ...server.headers,
+            ...(server.bearerToken === undefined
+              ? {}
+              : { Authorization: `Bearer ${server.bearerToken}` }),
+          },
         },
-      },
-    ])),
+      ]),
+    ]),
   }
   try {
     await writeFile(path, `${JSON.stringify(document)}\n`, { encoding: 'utf8', mode: 0o600 })
