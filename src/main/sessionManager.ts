@@ -4392,7 +4392,58 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     prompt: string,
     record?: (event: string, data?: Record<string, unknown>) => void,
+    options?: {
+      /**
+       * This waiter REPLACES whatever orchestration prompt is already waiting
+       * for the session (#1134), instead of being refused as a second waiter.
+       *
+       * Only `orchestration_send_prompt` passes it, and only right after its
+       * own direct attempt — which already cancelled any earlier waiter via
+       * `deliverPromptToAgent`'s `supersedesPendingPrompt` — came back "not
+       * ready yet". Cancellation is a flag plus a wake; the cancelled
+       * waiter's entry leaves the map only when its loop unwinds, which is a
+       * few microtasks later. A provider that answers "blocked" synchronously
+       * (Claude's trust dialog does) can finish the direct attempt inside that
+       * window, and without this flag the new waiter would be REFUSED as a
+       * duplicate — after the MCP reply had already promised the parent
+       * `promptPending: true`. That is the silent loss #854's review was about.
+       *
+       * Replacing is safe because both ends are keyed by identity: the old
+       * waiter's teardown deletes only its own entry (see the `finally`), and
+       * a cancelled waiter never writes — its flag is checked synchronously
+       * between the gate answering `ready` and the delivery starting. A waiter
+       * already DELIVERING is not in the map at all, so it cannot be replaced
+       * here; it holds the in-flight reservation instead. The caller's direct
+       * attempt is then refused with `stage: 'reservation'`, and the MCP
+       * layer's `isNotReadyYet` rejects every stage but `before-write` — so
+       * that refusal is reported to the parent as a failure and this arm is
+       * never reached. That exclusion is what keeps a second copy from
+       * queueing behind a delivery in progress; the orchestration pending
+       * tests pin it with a real manager.
+       *
+       * create_agent does not pass it: its waiter is armed for a session that
+       * did not exist a moment earlier, so there is nothing to replace, and a
+       * refusal there would be a genuine double-arm worth surfacing.
+       */
+      supersedesPendingPrompt?: boolean
+    },
   ): Promise<PromptDeliveryResult> {
+    if (options?.supersedesPendingPrompt) {
+      // Reported, like the direct-delivery supersede (#1134 review): a waiter
+      // can arm between send_prompt's direct attempt and this arm — the
+      // direct attempt spans provider awaits, and create_agent arms from its
+      // own handler — and replacing it here without a word would leave a
+      // parent believing a prompt is pending that will never arrive. The
+      // caller ORs this into its reply's `supersededPendingPrompt`. Emitted
+      // synchronously, before this function's first await, so the caller
+      // knows by the time the call returns its promise.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-newer-prompt')) {
+        record?.('pending-superseded')
+      }
+      // Drop the entry now instead of waiting for the cancelled loop to
+      // unwind; its `finally` deletes by identity, so it will not touch ours.
+      this.pendingPromptDeliveries.delete(sessionId)
+    }
     if (this.pendingPromptDeliveries.has(sessionId)) {
       // Two waiters would both fire when the gate opens, and the child would
       // receive its brief twice.
@@ -4420,7 +4471,11 @@ export class SessionManager extends EventEmitter {
     let wakeCurrent: (() => void) | null = null
     const pending = {
       cancel: (reason: string) => {
-        cancelledFor = reason
+        // First reason wins (#1134). send_prompt cancels the same waiter
+        // twice — once from its direct attempt, once when arming its own
+        // waiter with `supersedesPendingPrompt` — and the journal should name
+        // the cause that actually ended the wait, not the last one to ask.
+        cancelledFor ??= reason
         wakeCurrent?.()
       },
     }
@@ -4610,7 +4665,18 @@ export class SessionManager extends EventEmitter {
     // releases its own slot first, so this only fires for a genuinely
     // different caller.
     if (options?.supersedesPendingPrompt) {
-      this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')
+      // Recorded only when a waiter was REALLY cancelled (#1134). The
+      // orchestration send path turns this into `supersededPendingPrompt` in
+      // its reply: once send_prompt can itself leave a prompt waiting, a
+      // parent that sends a DIFFERENT follow-up while an earlier one waits has
+      // to be told the earlier one will not arrive — otherwise "latest wins"
+      // is a silent loss. Threaded through the existing `record` hook rather
+      // than a new return field because `PromptDeliveryResult` is the shared
+      // provider contract and this is a fact about the manager, not about the
+      // provider's delivery.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')) {
+        record?.('pending-superseded')
+      }
     }
     const entry = this.sessions.get(sessionId)
     // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript

@@ -70,6 +70,10 @@ async function createAgentWithDelivery(delivery: PromptDeliveryResult): Promise<
         // straight through: these cases are about bootstrap-delivery failure
         // handling, and deduplication has its own suite.
         createAgentCallOnce: async (_key: string, run: () => Promise<unknown>) => await run(),
+        // A waiting prompt is recorded on the bridge so `wait_agents` sees the
+        // child as working (#1134 review). These cases only read the reply.
+        notePromptPending: vi.fn(() => 1),
+        notePromptPendingSettled: vi.fn(),
       } as never,
       sessionManager: {
         deliverPromptToAgent: vi.fn(async () => delivery),
