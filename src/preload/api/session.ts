@@ -19,7 +19,7 @@ import type {
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionInputReadinessEvent,
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
@@ -90,7 +90,7 @@ export const sessionApi = {
   // Workspace teardown knows the persisted kind/cwd and should use that
   // ownership proof. The legacy id-only primitive remains for trusted main
   // integrations that already hold a live manager reference.
-  killOwnedSession: (options: SessionOwnershipOptions): Promise<boolean> =>
+  killOwnedSession: (options: SessionKillOptions): Promise<boolean> =>
     ipcRenderer.invoke('session:kill-owned', options),
 
   getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>

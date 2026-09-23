@@ -33,6 +33,7 @@ import type {
   AgentInputReadiness,
   SessionBackendSnapshot,
   SessionInputReadiness,
+  SessionKillOptions,
   SessionOwnershipOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
@@ -81,6 +82,8 @@ import {
   type CodexTranscriptObservationEventName,
   type SessionLifecycleCorrelationIds,
   type SessionLifecycleData,
+  isKillCaller,
+  type KillCaller,
 } from '@shared/lifecycle/events.js'
 import type {
   SessionSpawnOptions,
@@ -346,6 +349,8 @@ type CodexReplacementHandoff = {
   predecessorRecovery: RecoveryClaim | null
   proof: CodexReplacementProof
   restoreOptions: SessionSpawnOptions
+  /** Tag for the predecessor's kill.request; see SessionSpawnOptions.predecessorKillCaller. */
+  predecessorKillCaller: KillCaller
   stopPromise: Promise<void> | null
   compensationRequired: boolean
 }
@@ -473,6 +478,21 @@ type InputWriteOrigin =
   | 'renderer'
 
 const TERMINAL_BUFFER_CAP = 256 * 1024
+
+/**
+ * The single place a kill caller from outside this class is trusted.
+ *
+ * WHY 'unknown' rather than dropping the field: a kill whose caller we cannot
+ * name must be a visible gap in the journal, not an event that silently lacks
+ * a key (#1135). WHY re-validate at all when TypeScript already types it: the
+ * value normally crossed IPC from a renderer, and a stale or hostile renderer
+ * is not bound by our types. The journal's payload allowlist would record any
+ * string, so a free-form value here would reintroduce the drift the closed
+ * union exists to prevent.
+ */
+function normalizeKillCaller(caller: unknown): KillCaller {
+  return isKillCaller(caller) ? caller : 'unknown'
+}
 
 function resolveProviderRuntime(
   kind: SessionKind,
@@ -1297,7 +1317,11 @@ export class SessionManager extends EventEmitter {
           // rollout. Rehydrate still owns predecessorId durably, so reclamation
           // must retire that hidden owner without reclassifying the event as a
           // user close (which would suppress the stable-ID recovery below).
-          await this.killInternal(reservation.successorSessionId, reservation)
+          await this.killInternal(
+            reservation.successorSessionId,
+            this.internalKillCaller('replacement.reclaim'),
+            reservation,
+          )
         }
         if (
           reservation.cancelled ||
@@ -1396,7 +1420,12 @@ export class SessionManager extends EventEmitter {
           // names the exact rollout owner, so retire it even though restoration
           // is now forbidden; otherwise a timed-out reclaim would leave the
           // successor alive and unreachable from the renderer that gave up.
-          await this.killInternal(redirect.successorSessionId, null, redirect)
+          await this.killInternal(
+            redirect.successorSessionId,
+            this.internalKillCaller('replacement.reclaim'),
+            null,
+            redirect,
+          )
           return this.replacementRecoveryCancelled(options.sessionId)
         }
         // A later replacement may already be active for this target. Public
@@ -1406,7 +1435,12 @@ export class SessionManager extends EventEmitter {
         const nestedReplacement = this.codexReplacements.getReservationByPredecessor(
           redirect.successorSessionId,
         )
-        await this.killInternal(redirect.successorSessionId, null, redirect)
+        await this.killInternal(
+          redirect.successorSessionId,
+          this.internalKillCaller('replacement.reclaim'),
+          null,
+          redirect,
+        )
         // stop() can return before a provider start generation finishes its
         // second late-materialization stop. Joining the nested transaction keeps
         // the stale predecessor from racing that still-physical rollout owner
@@ -1937,6 +1971,7 @@ export class SessionManager extends EventEmitter {
         // manufacturing a second cause.
         await this.killInternal(
           options.sessionId,
+          this.internalKillCaller('recovery.late-materialization'),
           this.findCodexReplacementReservation(options.sessionId),
         )
         this.lifecycle.session('recover.cancelled', options.sessionId, {
@@ -2337,6 +2372,13 @@ export class SessionManager extends EventEmitter {
         // is what authorizes this value; copying null would create a fresh
         // session and abandon the pane's transcript after a failed reload.
         restoreOptions,
+        // Normalized here, not with normalizeKillCaller: an absent tag on
+        // THIS path is not an unknown kill — main knows it is a handoff — so
+        // the fallback is the specific main-side tag, and only an explicit
+        // renderer value overrides it.
+        predecessorKillCaller: isKillCaller(options.predecessorKillCaller)
+          ? options.predecessorKillCaller
+          : 'replacement.handoff',
         stopPromise: null,
         compensationRequired: false,
       }
@@ -2386,6 +2428,7 @@ export class SessionManager extends EventEmitter {
       if (currentEntry === handoff.predecessorEntry) {
         const stopped = await this.killOwnedInternal(
           handoff.predecessorOwnership,
+          handoff.predecessorKillCaller,
           handoff.reservation,
         )
         if (stopped) handoff.compensationRequired = true
@@ -4818,12 +4861,35 @@ export class SessionManager extends EventEmitter {
    * Kill a session and remove it from the registry. Returns true if
    * the session existed and was killed.
    */
-  async kill(sessionId: string): Promise<boolean> {
-    return await this.killInternal(sessionId)
+  async kill(sessionId: string, caller?: KillCaller): Promise<boolean> {
+    return await this.killInternal(sessionId, normalizeKillCaller(caller))
   }
 
+  /**
+   * The tag for a kill main issues on its own behalf.
+   *
+   * WHY shutdown overrides the specific tag (#1135 review): killAll sets
+   * `shuttingDown` and cancels every reservation, redirect, reclaim and
+   * recovery claim before it awaits anything. The continuations those
+   * cancellations wake (a reclaim retiring its successor, a recovery cleaning
+   * up a provider that materialized late) then issue their own kills. Those
+   * kills happen BECAUSE the app is quitting; tagging them as reclaim or
+   * recovery would make a quit during a restart herd look like a small
+   * recovery storm — the exact misreading this field exists to prevent.
+   */
+  private internalKillCaller(caller: KillCaller): KillCaller {
+    return this.shuttingDown ? 'app.shutdown' : caller
+  }
+
+  // WHY `caller` is a REQUIRED positional here while the public entry points
+  // take it optionally: the public surface is reached from IPC and from
+  // integrations that may not know who they are, and those land as an explicit
+  // 'unknown'. Every call INSIDE this class does know — it is a shutdown, a
+  // replacement, a recovery cleanup — so the compiler makes each one say so
+  // (the same forcing function that found 13 wake sites instead of nine).
   private async killInternal(
     sessionId: string,
+    caller: KillCaller,
     authorizedReplacement: CodexReplacementReservationRecord | null = null,
     authorizedRedirect: CodexReplacementRedirect | null = null,
   ): Promise<boolean> {
@@ -4932,9 +4998,15 @@ export class SessionManager extends EventEmitter {
     // `cause` separates the three shapes: killing a live entry, cancelling an
     // in-flight recovery, and a no-op kill against an id main does not hold
     // (which usually means the caller is operating on a stale id).
+    //
+    // `caller` answers the other half, "who asked" (#1135). Without it, 185
+    // `live-entry` kills in the journal triage could not be split into quit,
+    // Close Old Agents and genuine recovery replacement, and ~30 ordinary
+    // shutdowns were misread as recovery storms.
     this.lifecycle.session('kill.request', sessionId, {
       cause: entry ? 'live-entry' : recovery ? 'recovery-claim' : 'no-owner',
       kind: entry?.kind ?? recovery?.kind ?? null,
+      caller,
     })
 
     // WHY registry visibility is severed now but the spawn-generation fence is
@@ -4977,7 +5049,10 @@ export class SessionManager extends EventEmitter {
       // registered under its new random ID; otherwise a cancelled replacement
       // can keep a provider alive with no renderer owner. Passing the reservation
       // prevents this internal cascade from being mistaken for a second cause.
-      await this.killInternal(replacement.successorSessionId, replacement)
+      // The cascade inherits the parent's caller: the hidden successor dies
+      // BECAUSE of this request, so tagging it with anything else would make
+      // one close look like two unrelated kills in the journal.
+      await this.killInternal(replacement.successorSessionId, caller, replacement)
     }
     if (
       cancelsReplacement &&
@@ -5022,12 +5097,18 @@ export class SessionManager extends EventEmitter {
       || this.codexReplacements.findRedirects(sessionId).length > 0
   }
 
-  async killOwned(options: SessionOwnershipOptions): Promise<boolean> {
-    return await this.killOwnedInternal(options)
+  /**
+   * `options.caller` normally arrives from the renderer over
+   * `session:kill-owned`, so it is untrusted input: anything outside
+   * KILL_CALLERS (or absent) is journaled as 'unknown'.
+   */
+  async killOwned(options: SessionKillOptions): Promise<boolean> {
+    return await this.killOwnedInternal(options, normalizeKillCaller(options.caller))
   }
 
   private async killOwnedInternal(
     options: SessionOwnershipOptions,
+    caller: KillCaller,
     authorizedReplacement: CodexReplacementReservationRecord | null = null,
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
@@ -5111,7 +5192,7 @@ export class SessionManager extends EventEmitter {
           teardownIds.add(redirect.successorSessionId)
         }
       }
-      await Promise.all([...teardownIds].map(id => this.killInternal(id)))
+      await Promise.all([...teardownIds].map(id => this.killInternal(id, caller)))
       // The redirect itself is main-owned teardown work even when the first
       // reclaim continuation already removed the target registry row before
       // this close reached it. Report the cancellation as handled so renderer
@@ -5137,7 +5218,7 @@ export class SessionManager extends EventEmitter {
         return false
       }
     }
-    return await this.killInternal(options.sessionId, authorizedReplacement)
+    return await this.killInternal(options.sessionId, caller, authorizedReplacement)
   }
 
   private async cancelRecoveryClaim(
@@ -5222,7 +5303,11 @@ export class SessionManager extends EventEmitter {
         // entire bug is that start may be the hung operation. Authorization
         // prevents this internal timeout teardown from becoming close intent.
         teardown.push(
-          this.killInternal(reservation.successorSessionId, reservation),
+          this.killInternal(
+            reservation.successorSessionId,
+            this.internalKillCaller('recovery.deadline'),
+            reservation,
+          ),
         )
       }
     }
@@ -5545,7 +5630,7 @@ export class SessionManager extends EventEmitter {
         ...reclaimIds,
       ]),
     ]
-    await Promise.all(ids.map(id => this.kill(id)))
+    await Promise.all(ids.map(id => this.killInternal(id, 'app.shutdown')))
     // Registry removal precedes provider stop, so the id snapshot above cannot
     // prove teardown is finished. Join the exact reclaim generations captured
     // before the first await; each rechecks cancellation after its current

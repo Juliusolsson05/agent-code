@@ -769,6 +769,7 @@ export function useWorkspace(
                 ? `Agent “${caller}” is asking to close this agent.`
                 : 'An agent is asking to close this agent.',
             },
+            killCaller: 'agent-management.close-agent',
           })
           // The comment above says "declining rejects the tool call" — it did
           // not. The gate RESOLVES false rather than throwing, so the success

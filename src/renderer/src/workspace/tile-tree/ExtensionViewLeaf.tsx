@@ -61,7 +61,7 @@ export function ExtensionViewLeaf({ sessionId, workspace, onFocusRequest, focuse
             extensionId,
             showToast,
             // Closing the extension's own view closes the pane it lives in.
-            closeSurface: () => workspace.closeSession(sessionId),
+            closeSurface: () => workspace.closeSession(sessionId, { killCaller: 'close.extension-surface' }),
           })
         : null,
     [extensionId, showToast, workspace, sessionId],
