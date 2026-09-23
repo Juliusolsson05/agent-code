@@ -49,7 +49,7 @@ export const browserPocketCommands: CommandDef[] = [
     },
     getState: ctx => {
       const id = target(ctx)
-      return toggle(Boolean(id && ctx.workspace.state.sessions[id]?.browserPocket?.view === 'open'))
+      return toggle(Boolean(ctx.flags.browserPocketEnabled && id && ctx.workspace.state.sessions[id]?.browserPocket?.view === 'open'))
     },
     run: ctx => {
       const id = target(ctx)

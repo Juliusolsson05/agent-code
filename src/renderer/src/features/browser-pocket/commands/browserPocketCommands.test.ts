@@ -41,6 +41,7 @@ it.each([undefined, { pocketId: 'saved', view: 'open', profile: 'lane' }])('firs
   } } as never
   const command = browserPocketCommands.find(c => c.id === 'toggle-browser-pocket')!
   expect(command.unavailableReason?.(ctx)).toBeNull()
+  expect(command.getState?.(ctx)).toMatchObject({ value: 'off' })
   command.run(ctx)
   expect(setSettings).toHaveBeenCalledWith(expect.objectContaining({ browserPocketEnabled: true, browserPocketDefaultsInitialized: true, defaultBuiltInMcpDomains: expect.objectContaining({ codex: expect.arrayContaining(['browser']) }) }))
   expect(state.sessions.s1).toMatchObject({ browserPocket: { view: 'open' } })
