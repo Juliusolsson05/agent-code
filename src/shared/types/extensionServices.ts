@@ -89,7 +89,25 @@ export const netFetchRequestSchema = z.object({
   httpMethod: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH']).optional(),
   headers: z.array(netHeader).max(16).optional(),
   body: z.string().max(64 * 1024).optional(),
+  // 'base64' exists for binary bodies (audio, images). The transports are
+  // JSON; decoding arbitrary bytes as UTF-8 replaces invalid sequences with
+  // U+FFFD, which silently corrupts the payload instead of failing.
+  responseType: z.enum(['text', 'base64']).optional(),
 }).strict()
+
+// --- Secrets (Tier 0, per-extension, OS-encrypted) ---------------------------
+// The namespace is the extension id the authenticated transport fixed, never
+// a field here. Values are bounded so one extension cannot turn the keychain-
+// backed store into bulk storage; api.storage exists for data.
+const secretKey = z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/, 'secret keys are 1-64 characters of [a-zA-Z0-9._-]')
+
+export const secretsGetRequestSchema = z.object({ method: z.literal('secrets.get'), key: secretKey }).strict()
+export const secretsSetRequestSchema = z.object({
+  method: z.literal('secrets.set'),
+  key: secretKey,
+  value: z.string().min(1).max(4096),
+}).strict()
+export const secretsDeleteRequestSchema = z.object({ method: z.literal('secrets.delete'), key: secretKey }).strict()
 
 export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   extensionFileReadRequestSchema,
@@ -101,6 +119,9 @@ export const extensionServiceRequestSchema = z.discriminatedUnion('method', [
   serviceInvokeRequestSchema,
   serviceExposeRequestSchema,
   netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 ])
 
 export type ExtensionServiceRequest = z.infer<typeof extensionServiceRequestSchema>
@@ -128,14 +149,17 @@ export type ExtensionTextFileWrite = {
   version: string
 }
 
-/** Result of net.fetch: text-bounded v1 (JSON/HTML bodies), one content type. */
+/** Result of net.fetch. `bodyEncoding` echoes what the host actually did, so a
+ *  caller that asked for base64 can tell a host that honoured it from an older
+ *  one that ignored the field and returned text. */
 export type ExtensionNetFetchResult = {
   status: number
   contentType: string
   body: string
+  bodyEncoding: 'text' | 'base64'
 }
 
-export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | ExtensionServiceHandle | ExtensionServiceStatus | ExtensionServiceExposure | ExtensionNetFetchResult | void
+export type ExtensionServiceResult = ExtensionTextFile | ExtensionTextFileWrite | ExtensionServiceHandle | ExtensionServiceStatus | ExtensionServiceExposure | ExtensionNetFetchResult | string | null | void
 
 /** Runtime status of one declared service, as returned by start/status. */
 export type ExtensionServiceHandle = {

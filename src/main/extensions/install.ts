@@ -22,6 +22,7 @@ import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { BUNDLE_MAX_BYTES, BUNDLE_MAX_DEPTH, BUNDLE_MAX_ENTRIES } from './bundleLimits.js'
 import { githubApiHeaders, resolveGitHubCliToken } from './githubCli.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
+import { removeExtensionSecrets } from '@main/extensions/secrets.js'
 import { discardExtensionBundle, extensionBundleDirectory, preservedBundleExtensionIds, readLedger, readLedgerContents, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
 import type { ExtensionManifest, InstalledExtension } from '@shared/types/extensions.js'
 
@@ -662,6 +663,16 @@ async function finalizeInstall(
           `Remove it before installing another extension with the same id.`,
       )
     }
+    // ── A FIRST INSTALL OF AN ID STARTS WITH NO SECRETS (#1151 review) ──
+    // Secrets are deleted on uninstall, but a delete can be lost: the process
+    // can die between the ledger commit and the secret cleanup, and a
+    // quarantined row can be cleared while its secrets sit on disk. Rather than
+    // chase every removal path, the invariant is enforced where it matters:
+    // whenever there is no runnable row for this id, whatever secrets exist
+    // belong to an installation that is gone, never to this newcomer (which may
+    // be a different source). Updates/reloads have `previous` and keep theirs.
+    // Done before the commit: a crash here costs a first install nothing.
+    if (!previous) await removeExtensionSecrets(manifest.id)
     const finalDir = extensionBundleDirectory(record)
     await mkdir(join(finalDir, '..'), { recursive: true })
     // Immutable generations make the ledger rename the ONLY commit point.

@@ -69,6 +69,7 @@ import {
 } from '@main/extensions/scheme.js'
 import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
 import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
+import { createExtensionSecretStore } from '@main/extensions/secrets.js'
 import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
 import { ExtensionServiceHost } from '@main/extensions/serviceHost.js'
 import { autoUpdater } from 'electron-updater'
@@ -768,6 +769,9 @@ async function startApp(): Promise<void> {
       broadcastToWindows('extensions:notification', { extensionId, message })
     },
     services: extensionServiceHost,
+    // api.secrets rides the same safeStorage codec as the Key Vault: one OS
+    // keychain item for the app, one encrypted blob per extension secret.
+    secrets: createExtensionSecretStore(createSafeStorageCodec()),
   })
   // The scheme handler is registered on every extension session long before
   // this composition runs; the proxy module is its late-bound lookup. Wiring

@@ -263,9 +263,21 @@ const api = {
   // network at all — this call crosses through the host, which enforces the
   // private-address policy before any socket opens.
   net: {
+    // The public SDK type (NetFetchInit) names the verb \`httpMethod\`; this
+    // bootstrap used to read \`init.method\`, so every SDK author's POST went
+    // out as a GET (#1150). \`method\` stays accepted for anyone who matched
+    // the old bootstrap instead of the type.
     fetch: (url, init) => request('net.fetch', {
-      url, httpMethod: init && init.method, headers: init && init.headers, body: init && init.body,
+      url, httpMethod: init && (init.httpMethod || init.method), headers: init && init.headers, body: init && init.body,
+      responseType: init && init.responseType,
     }),
+  },
+  // Tier 0 per-extension secrets, encrypted by the OS in main. Namespaced by
+  // this frame's origin (the broker fixes the id), never by an argument.
+  secrets: {
+    get: (key) => request('secrets.get', { key }),
+    set: (key, value) => request('secrets.set', { key, value }),
+    delete: (key) => request('secrets.delete', { key }),
   },
 };
 

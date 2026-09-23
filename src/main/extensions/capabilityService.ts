@@ -22,8 +22,10 @@ import type {
   ExtensionTextFileWrite,
 } from '@shared/types/extensionServices.js'
 import type { ExtensionJson } from '@shared/types/extensionRuntime.js'
-import { installedExtensionCapabilities } from './grants.js'
+import { installedExtensionGrant } from './grants.js'
 import { netFetch } from './netFetch.js'
+import { netFetchRoute, netOriginsFetch, undeclaredTargetMessage } from './netOrigins.js'
+import type { ExtensionSecretStore } from './secrets.js'
 import { onExtensionPublication } from './ledger.js'
 
 // The runtime transport permits 128 KiB of string data per message. Leave room
@@ -36,7 +38,13 @@ const MAX_PENDING_PER_EXTENSION = 16
 // A service method cannot compile until its permission is named here. Keeping
 // this as data beside the main implementation avoids a new mutation accidentally
 // inheriting the read grant just because both methods live under api.files.
-const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCapability> = {
+//
+// `null` is Tier 0 (no grant: the call only touches the caller's own id-scoped
+// namespace). 'by-target' exists for exactly one method: net.fetch needs
+// net.connect for a private address and net.origins for a declared public
+// origin, so the capability is a function of the URL (requiredFor below) —
+// still decided here, before perform, never inside an arm.
+const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCapability | null | 'by-target'> = {
   'fs.readText': 'fs.read',
   'fs.writeText': 'fs.write',
   'notifications.show': 'notifications.show',
@@ -53,8 +61,13 @@ const REQUIRED_CAPABILITY: Record<ExtensionServiceRequest['method'], ExtensionCa
   // the host can genuinely gate the second one (the listener lives here).
   'service.expose': 'net.listen',
   // Brokered outbound fetch. The child's sandbox never opens a socket; main
-  // owns the dial and the private-address policy.
-  'net.fetch': 'net.connect',
+  // owns the dial, the private-address policy and the declared-origin list.
+  'net.fetch': 'by-target',
+  // Tier 0: the namespace is this extension's own id, fixed by the transport.
+  // See secrets.ts for why a permission would protect nothing here.
+  'secrets.get': null,
+  'secrets.set': null,
+  'secrets.delete': null,
 }
 
 export type ExtensionServiceInvoker = {
@@ -74,9 +87,14 @@ export type ExtensionCapabilityServiceOptions = {
   notify(extensionId: string, message: string): void
   /** Lifecycle + RPC owner for `service.run` (ExtensionServiceHost). */
   services: ExtensionServiceInvoker
+  /** OS-encrypted per-extension secret store (api.secrets). */
+  secrets: ExtensionSecretStore
+  /** Test seam for both brokered fetch paths; production uses global fetch. */
+  fetch?: typeof fetch
 }
 
-type GrantCheck = { value: Promise<ReadonlySet<ExtensionCapability>> }
+type ResolvedGrant = { capabilities: ReadonlySet<ExtensionCapability>; networkOrigins: readonly string[] }
+type GrantCheck = { value: Promise<ResolvedGrant> }
 
 /**
  * Main-owned implementation of permissioned extension services.
@@ -113,7 +131,7 @@ export class ExtensionCapabilityService {
     }
     this.pending.set(authority, count + 1)
     try {
-      const check = await this.requireCapability(extensionId, revision, REQUIRED_CAPABILITY[request.method])
+      const check = await this.requireGrantFor(extensionId, revision, request)
       const result = await this.perform(extensionId, revision, request, authority, check)
       // Do not return user data to a runtime/frame whose generation was revoked
       // while filesystem I/O was pending. The caller transport independently
@@ -143,18 +161,35 @@ export class ExtensionCapabilityService {
    */
   async hasCapability(extensionId: string, revision: string, capability: ExtensionCapability): Promise<boolean> {
     try {
-      await this.requireCapability(extensionId, revision, capability)
-      return true
+      const check = await this.currentGrant(extensionId, revision)
+      return (await check.value).capabilities.has(capability)
     } catch {
       return false
     }
   }
 
-  private async requireCapability(
-    extensionId: string,
-    revision: string,
-    capability: ExtensionCapability,
-  ): Promise<GrantCheck> {
+  /** Resolve the capability this exact request needs and enforce it. */
+  private async requireGrantFor(extensionId: string, revision: string, request: ExtensionServiceRequest): Promise<GrantCheck> {
+    const check = await this.currentGrant(extensionId, revision)
+    const granted = await check.value
+    const needed = REQUIRED_CAPABILITY[request.method]
+    let capability: ExtensionCapability | null
+    if (needed === 'by-target') {
+      if (request.method !== 'net.fetch') throw new Error('Unroutable extension request.')
+      // Routing uses the VERIFIED origin list from the grant, not anything in
+      // the request, so a URL cannot talk its way onto the net.origins path.
+      capability = netFetchRoute(request.url, granted.networkOrigins)
+      if (!capability) throw new Error(undeclaredTargetMessage(request.url, granted.networkOrigins))
+    } else {
+      capability = needed
+    }
+    if (capability && !granted.capabilities.has(capability)) {
+      throw new Error(`capability "${capability}" is not granted to ${extensionId}`)
+    }
+    return check
+  }
+
+  private async currentGrant(extensionId: string, revision: string): Promise<GrantCheck> {
     const key = `${extensionId}\u0000${revision}`
     let check = this.grants.get(key)
     if (!check) {
@@ -162,16 +197,18 @@ export class ExtensionCapabilityService {
       // verification across concurrent reads. Rehashing a 32 MiB bundle for every
       // 4 KiB project file would itself be an extension-controlled disk DoS.
       check = {
-        value: installedExtensionCapabilities(extensionId, revision).then(value => new Set(value)),
+        // Capabilities and declared origins come from ONE verified snapshot and
+        // share this per-generation entry, so publication revokes both at once.
+        value: installedExtensionGrant(extensionId, revision).then(grant => ({
+          capabilities: new Set(grant.capabilities),
+          networkOrigins: grant.networkOrigins,
+        })),
       }
       this.grants.set(key, check)
     }
-    const granted = await check.value
+    await check.value
     if (this.grants.get(key) !== check) {
       throw new Error('This extension installation is no longer active.')
-    }
-    if (!granted.has(capability)) {
-      throw new Error(`capability "${capability}" is not granted to ${extensionId}`)
     }
     return check
   }
@@ -215,13 +252,29 @@ export class ExtensionCapabilityService {
         return this.options.services.status(extensionId, revision, request.serviceId)
       case 'service.expose':
         return this.options.services.expose(extensionId, revision, request.serviceId, request.lan)
-      case 'net.fetch':
-        return netFetch({
+      case 'net.fetch': {
+        const fetchRequest = {
           url: request.url,
           httpMethod: request.httpMethod,
           headers: request.headers,
           body: request.body,
-        }, fetch, { isHostOwnedLoopbackPort: port => this.options.services.isHostOwnedLoopbackPort(port) })
+          responseType: request.responseType,
+        }
+        const { networkOrigins } = await check.value
+        // Same routing as requireGrantFor (which already enforced the grant);
+        // each path then re-validates its own target before dialing.
+        return netFetchRoute(request.url, networkOrigins) === 'net.origins'
+          ? netOriginsFetch(fetchRequest, networkOrigins, this.options.fetch)
+          : netFetch(fetchRequest, this.options.fetch, { isHostOwnedLoopbackPort: port => this.options.services.isHostOwnedLoopbackPort(port) })
+      }
+      case 'secrets.get':
+        return this.options.secrets.get(extensionId, request.key)
+      case 'secrets.set':
+        await this.options.secrets.set(extensionId, request.key, request.value)
+        return undefined
+      case 'secrets.delete':
+        await this.options.secrets.delete(extensionId, request.key)
+        return undefined
       case 'service.invoke': {
         // A service RPC's value is author-defined bounded JSON, not one of the
         // host-shaped results this union describes. Both transports surface

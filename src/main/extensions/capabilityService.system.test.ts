@@ -6,13 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { serializeEditorFileMutation } from '@main/editorFileIO.js'
 
 const authority = vi.hoisted(() => ({
-  capabilities: vi.fn<() => Promise<string[]>>(),
+  capabilities: vi.fn<(...args: unknown[]) => Promise<string[]>>(),
+  networkOrigins: [] as string[],
   publish: undefined as undefined | ((rows: Array<{ manifest: { id: string }; installation: { id: string; bundleSha256: string }; sha256: string; version?: string }>) => void),
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 vi.mock('./grants.js', () => ({
-  installedExtensionCapabilities: authority.capabilities,
+  installedExtensionGrant: async (...args: unknown[]) => ({ capabilities: await authority.capabilities(...args), networkOrigins: authority.networkOrigins }),
 }))
 vi.mock('./ledger.js', () => ({
   onExtensionPublication: (listener: typeof authority.publish) => {
@@ -27,6 +28,23 @@ const {
   MAX_EXTENSION_TEXT_WRITE_BYTES,
 } = await import('./capabilityService.js')
 const roots: string[] = []
+
+// In-memory stand-in for the OS-encrypted store: the store's own file and
+// encryption rules are covered by secrets.system.test.ts; here only the
+// broker's namespacing (which id reaches the store) is under test.
+function memorySecrets() {
+  const values = new Map<string, string>()
+  return {
+    get: async (extensionId: string, key: string) => values.get(`${extensionId}/${key}`) ?? null,
+    set: async (extensionId: string, key: string, value: string) => { values.set(`${extensionId}/${key}`, value) },
+    delete: async (extensionId: string, key: string) => { values.delete(`${extensionId}/${key}`) },
+  }
+}
+const fetchCalls: string[] = []
+const recordedFetch: typeof fetch = async input => {
+  fetchCalls.push(String(input))
+  return new Response(new Uint8Array([0xff, 0xf3, 0x44, 0xc4]), { status: 200, headers: { 'content-type': 'audio/mpeg' } })
+}
 
 type ServiceCall = { extensionId: string; revision: string; serviceId: string; name?: string; params?: unknown }
 
@@ -55,6 +73,8 @@ async function fixture(grantServiceRun = false): Promise<{
       // A recording fake: the ExtensionServiceHost lifecycle itself is covered
       // by serviceHost tests; here we verify the BROKER side — grant gate,
       // id/revision propagation, and revocation race handling.
+      secrets: memorySecrets(),
+      fetch: recordedFetch,
       services: {
         start: async (extensionId, revision, serviceId) => {
           serviceCalls.push({ extensionId, revision, serviceId, name: 'start' })
@@ -83,6 +103,8 @@ async function fixture(grantServiceRun = false): Promise<{
 
 afterEach(async () => {
   authority.capabilities.mockReset()
+  authority.networkOrigins = []
+  fetchCalls.length = 0
   authority.publish = undefined
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -135,7 +157,7 @@ describe('permissioned extension services', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!original || !('text' in original)) throw new Error('Expected a file read')
+      if (!original || typeof original !== 'object' || !('text' in original)) throw new Error('Expected a file read')
       const written = await service.invoke('writer', 'generation-one', {
         method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
         text: 'updated by extension\n', expectedVersion: original.version,
@@ -169,7 +191,7 @@ describe('permissioned extension services', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!original || !('text' in original)) throw new Error('Expected a file read')
+      if (!original || typeof original !== 'object' || !('text' in original)) throw new Error('Expected a file read')
       const results = await Promise.allSettled(['first', 'second'].map(text => service.invoke(
         'writer', 'generation-one', {
           method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
@@ -198,7 +220,7 @@ describe('permissioned extension services', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!original || !('text' in original)) throw new Error('Expected a file read')
+      if (!original || typeof original !== 'object' || !('text' in original)) throw new Error('Expected a file read')
       const write = service.invoke('writer', 'generation-one', {
         method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
         text: 'retired write', expectedVersion: original.version,
@@ -338,5 +360,63 @@ describe('service.run capability', () => {
         { extensionId: 'timer', revision: 'generation-one', serviceId: 'timer.worker', name: 'start' },
       ])
     } finally { granted.service.dispose() }
+  })
+})
+
+describe('net.fetch routing between net.connect and net.origins (#1150)', () => {
+  const tts = 'https://api.elevenlabs.io/v1/text-to-speech/voice?output_format=mp3_22050_32'
+
+  it('reaches a declared origin only with net.origins, and only that origin', async () => {
+    const { service } = await fixture()
+    try {
+      // net.connect alone is the private-address grant; it must not become a
+      // public-internet grant just because the URL is well-formed.
+      authority.capabilities.mockResolvedValue(['net.connect'])
+      authority.networkOrigins = []
+      await expect(service.invoke('poker', 'generation-one', { method: 'net.fetch', url: tts }))
+        .rejects.toThrow(/networkOrigins/)
+      expect(fetchCalls).toEqual([])
+    } finally { service.dispose() }
+
+    const declared = await fixture()
+    try {
+      authority.capabilities.mockResolvedValue(['net.origins'])
+      authority.networkOrigins = ['https://api.elevenlabs.io']
+      await expect(declared.service.invoke('poker', 'generation-one', {
+        method: 'net.fetch', url: tts, httpMethod: 'POST', body: '{}', responseType: 'base64',
+        headers: [{ name: 'xi-api-key', value: 'sk_test_value' }],
+      })).resolves.toEqual({ status: 200, contentType: 'audio/mpeg', body: '//NExA==', bodyEncoding: 'base64' })
+      // A sibling subdomain and a different port are different origins.
+      for (const url of ['https://evil.api.elevenlabs.io/x', 'https://api.elevenlabs.io:8443/x', 'http://api.elevenlabs.io/x']) {
+        await expect(declared.service.invoke('poker', 'generation-one', { method: 'net.fetch', url })).rejects.toThrow(/neither/)
+      }
+      expect(fetchCalls).toEqual([tts])
+    } finally { declared.service.dispose() }
+  })
+
+  it('keeps private addresses on net.connect even when origins are declared', async () => {
+    const { service } = await fixture()
+    try {
+      authority.capabilities.mockResolvedValue(['net.origins'])
+      authority.networkOrigins = ['https://api.elevenlabs.io']
+      await expect(service.invoke('poker', 'generation-one', { method: 'net.fetch', url: 'http://192.168.1.20:5192/api/state' }))
+        .rejects.toThrow('capability "net.connect" is not granted')
+      expect(fetchCalls).toEqual([])
+    } finally { service.dispose() }
+  })
+})
+
+describe('secrets (Tier 0, #1150)', () => {
+  it('needs no grant and is namespaced by the authenticated extension id', async () => {
+    const { service } = await fixture()
+    try {
+      authority.capabilities.mockResolvedValue([])
+      await service.invoke('poker', 'generation-one', { method: 'secrets.set', key: 'elevenlabs.apiKey', value: 'sk_poker' })
+      await expect(service.invoke('poker', 'generation-one', { method: 'secrets.get', key: 'elevenlabs.apiKey' })).resolves.toBe('sk_poker')
+      // Another extension asking for the same key name gets its OWN namespace.
+      await expect(service.invoke('timer', 'generation-one', { method: 'secrets.get', key: 'elevenlabs.apiKey' })).resolves.toBeNull()
+      await service.invoke('poker', 'generation-one', { method: 'secrets.delete', key: 'elevenlabs.apiKey' })
+      await expect(service.invoke('poker', 'generation-one', { method: 'secrets.get', key: 'elevenlabs.apiKey' })).resolves.toBeNull()
+    } finally { service.dispose() }
   })
 })

@@ -6,6 +6,7 @@ import {
   type ExtensionJson, type RuntimeInvocation, type RuntimeStatus, type RuntimeChange, type RuntimeViewSnapshot,
 } from '@shared/types/extensionRuntime.js'
 import { onExtensionPublication, readLedger, withLedgerLock } from './ledger.js'
+import { assertRuntimeApiResult } from './runtimeResultLimit.js'
 import { extensionStorageDelete, extensionStorageGet, extensionStorageKeys, extensionStorageSet } from './storage.js'
 import { EXTENSION_SCHEME, handleExtensionScheme } from './scheme.js'
 import { RUNTIME_DOCUMENT } from './runtimeDocument.js'
@@ -370,6 +371,9 @@ export class ExtensionRuntimeService {
         case 'service.invoke':
         case 'service.expose':
         case 'net.fetch':
+        case 'secrets.get':
+        case 'secrets.set':
+        case 'secrets.delete':
           result = await this.options.capabilities.invoke(id, runtime.revision, request)
           break
         case 'views.publish': {
@@ -387,7 +391,8 @@ export class ExtensionRuntimeService {
         }
       }
       if (!this.active(runtime)) throw new Error('Extension runtime ended during the request.')
-      if (result !== undefined && !isExtensionJson(result)) throw new Error('Extension API result exceeds the JSON limits.')
+      // net.fetch gets a broker-derived larger bound; see runtimeResultLimit.ts.
+      assertRuntimeApiResult(request.method, result)
       return result
     } finally { runtime.apiInFlight -= 1 }
   }

@@ -144,6 +144,14 @@ export type ExtensionCapability =
   // DNS names, no public egress. Widening is a future policy decision with its
   // own consent copy, never a silent change.
   | 'net.connect'
+  // Tier 2 — brokered HTTPS fetch to the EXACT public origins the manifest
+  // lists in `networkOrigins` (#1150). The consent dialog names every origin,
+  // and the list is bound to the bundle hash like every other grant, so the
+  // extension's code cannot add a destination at runtime. This is the
+  // "explicit future policy decision" the net.connect note above anticipated:
+  // widening happens by NAMING servers, never by relaxing the private-address
+  // rule for arbitrary hosts.
+  | 'net.origins'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -156,6 +164,7 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'service.transport',
   'net.listen',
   'net.connect',
+  'net.origins',
 ]
 
 /**
@@ -198,6 +207,11 @@ export type ExtensionManifest = {
   /** Capabilities beyond Tier 0 this extension requests. The user grants (or
    *  declines) them at install; absent/empty means Tier 0 only. */
   permissions?: ExtensionCapability[]
+  /** Exact public HTTPS origins (`https://api.example.com`) that `net.fetch`
+   *  may reach under the `net.origins` capability. Present if and only if
+   *  `net.origins` is requested; validated entry by entry at install
+   *  (manifest.ts) and shown verbatim in the consent dialog. */
+  networkOrigins?: string[]
 }
 
 /** One row in the install ledger (`extensions.json`). */
