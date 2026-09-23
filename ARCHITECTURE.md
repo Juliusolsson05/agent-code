@@ -251,7 +251,7 @@ The application submodules this document covers are:
 | [codex-headless](https://github.com/Juliusolsson05/codex-headless/tree/5bfeaca988a7d83be3d1010b03bb6d0eca653edf) | `5bfeaca9` | Codex PTY observation: rollout attribution and tail, Responses proxy, prompt-input evidence, resume preparation ([5.3.3](#533-codex-headless)) |
 | [opencode-headless](https://github.com/Juliusolsson05/opencode-headless/tree/4f2ef5de7c80ad7a6199dc09869ea3b728752f0e) | `4f2ef5de` | Structured OpenCode: server spawn or attach, HTTP client, SSE dispatcher, committed message assembly ([5.3.4](#534-opencode-headless-and-opencode-terminal-headless)) |
 | [opencode-terminal-headless](https://github.com/Juliusolsson05/opencode-terminal-headless/tree/e85b3f53be39912fb295c45907b1fb6abd6e4a26) | `e85b3f53` | OpenCode TUI companion: read-only database reader, TUI server events, turn sequencing, conditions ([5.3.4](#534-opencode-headless-and-opencode-terminal-headless)) |
-| [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/6327a7cd8cda5f8efb3af8c34fa3e87077eae32f) | `6327a7cd` | Pi TUI companion: session-tree reader, bridge extension (live events, prompts, MCP tool proxy), turn sequencing, conditions ([5.3.5](#535-pi-terminal-headless)) |
+| [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/05e1d7735f188fcfd6db6a95969aea30143c3f14) | `05e1d773` | Pi TUI companion: session-tree reader, bridge extension (live events, prompts, MCP tool proxy), turn sequencing, conditions ([5.3.5](#535-pi-terminal-headless)) |
 | [agent-transcript-parser](https://github.com/Juliusolsson05/agent-transcript-parser/tree/9c99db00f9cf0097c87271d04fd3e3ebf9f1e894) | `9c99db00` | Neutral conversation model for provider switch, duplicate and rewind; provisional ghost records ([5.3.6](#536-agent-transcript-parser)) |
 | [agent-voice-dictation](https://github.com/Juliusolsson05/agent-voice-dictation/tree/3c6f962843532da2a7ddf2cc80f38cacd3196bb1) | `3c6f9628` | Speech transport and composer integration primitives |
 | [workflow-mcp](https://github.com/Juliusolsson05/workflow-mcp/tree/b4b98f8d13f59bae0c999c927533f451b491496a) | `b4b98f8d` | Durable workflow service, store, scheduler, worker protocol and providers |
@@ -680,7 +680,7 @@ Sources: [OpenCode runtime adapters](src/providers/opencode/runtime), [terminal 
 
 #### 5.3.5 pi-terminal-headless
 
-Pi (`@earendil-works/pi-coding-agent`) is a TUI with no server and no MCP client. What it does have is an extension API, so Agent Code observes and drives it from inside: every Pi pane loads one bridge extension. [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/6327a7cd8cda5f8efb3af8c34fa3e87077eae32f/src) owns that extension, the durable reader and the sequencing. Agent Code spawns the PTY. The package never spawns or kills.
+Pi (`@earendil-works/pi-coding-agent`) is a TUI with no server and no MCP client. What it does have is an extension API, so Agent Code observes and drives it from inside: every Pi pane loads one bridge extension. [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/05e1d7735f188fcfd6db6a95969aea30143c3f14/src) owns that extension, the durable reader and the sequencing. Agent Code spawns the PTY. The package never spawns or kills.
 
 | Concern | Owner and rule |
 | --- | --- |

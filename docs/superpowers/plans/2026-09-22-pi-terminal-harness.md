@@ -207,6 +207,40 @@ all test runs.
     - package: 5 system tests, plus a live test in the real pi (the model's request declares the tool and carries the instructions, and the call runs and is written as a toolResult);
     - app: the real BuiltInMcpHttpHost with real tools through the real bridge, including revocation, plus a PiSession env test.
   - NOT done: TLDR turn hooks (`tldrHooks`) are not wired for Pi. That is the same state as OpenCode/Grok, and it is a follow-up.
+- 2026-09-22 — Task 13.
+  - Gates (Node 24): app typecheck, contract, conditions-core, keybindings, `npm test` (762 files / 5769 passed / 1 skipped) and `test:package` green. Package `npm run check` green (CI also on Node 22.12). Parser `npm run check` green (CI also on Node 20.19).
+  - origin/main (#1131/#1137/#1139) was merged in. The only conflict was additive (forwarder.test.ts), and main's incoming changes are provider-neutral.
+  - ARCHITECTURE.md gained Pi's column and §5.3.5, and the spec is marked implemented.
+  - PRs: pi-terminal-headless#1, agent-transcript-parser#36, agent-code#1140.
+- 2026-09-22 — Review round (one, per convention).
+  - Reviewers:
+    - Codex children never became ready (a startup dialog, most likely); two Claude children hit the account's weekly limit.
+    - Final roster: Claude + OpenCode on the package, OpenCode + Grok on the parser and on the app.
+  - Fixed, each with a test:
+    - package:
+      - MCP clients now survive /reload (jiti `moduleCache:false` re-evaluates the file);
+      - refused prompts get an immediate `rejected`, and started is settled at `before_agent_start`;
+      - stale-ctx requests are answered;
+      - colliding tool names;
+      - the in-place v1→v3 rewrite, which keeps the same inode while the file GROWS;
+      - a `/tree` move to root (null leaf);
+      - an inert bridge still scrubs MCP env;
+      - no text fallback for `/compact`.
+    - parser:
+      - v1 `firstKeptEntryIndex`;
+      - edits never apply to summarized rows;
+      - Pi targets re-emit system, model and thinking rows and aborted/error replies;
+      - branch summaries and custom messages are user-role, as `convertToLlm` sends them (Claude dropped developer).
+    - app:
+      - phone history via the native id;
+      - main's transcript file and resume id follow in-TUI switches;
+      - a refused Pi prompt is retry-same-session;
+      - control `agents.rewind` has a terminal gate;
+      - a sticky `liveChannelWarning` for a missing bridge;
+      - inherited MCP env is scrubbed;
+      - the catalog's tail scan finds a late `/name`.
+  - Declined: the attach-seed race. The reader attaches only when Agent Code spawns its own pi, and it reads at once, before that pi can finish a turn.
+  - Documented, not changed: an abort moves queued follow-ups back to Pi's editor (interactive pi's own `ctx.abort`).
 
 ---
 
@@ -644,20 +678,20 @@ as others), `piSession.ts` wiring, MCP policy tests.
 
 ### Task 13: Verification and PRs
 
-- [ ] **Step 1:** Package gate `npm run check` (Node 24 and 22.19 if available).
-- [ ] **Step 2:** Parser gate `npm run check`.
-- [ ] **Step 3:** App gates, Node 24, once: `rm -rf .tsc-out && npm run typecheck`,
+- [x] **Step 1:** Package gate `npm run check` (Node 24 and 22.19 if available).
+- [x] **Step 2:** Parser gate `npm run check`.
+- [x] **Step 3:** App gates, Node 24, once: `rm -rf .tsc-out && npm run typecheck`,
   `npm run test:contract`, `npm run conditions-core:check`,
   `npm run check:keybindings`, `npm test`, `npm run test:package`. Known local
   env failures (imageAttachment, store timeouts, hotkeyBinding) are compared
   against origin/main, not ignored blindly.
-- [ ] **Step 4:** `git fetch && git merge origin/main` if main moved; semantic
+- [x] **Step 4:** `git fetch && git merge origin/main` if main moved; semantic
   (not just textual) conflict review; stage every modified file; re-run tsc.
-- [ ] **Step 5:** Diff review: `git diff origin/main...HEAD --stat`, read every
+- [x] **Step 5:** Diff review: `git diff origin/main...HEAD --stat`, read every
   hunk for unrelated changes.
-- [ ] **Step 6:** Update the spec's Status line and this plan's checkboxes and
+- [x] **Step 6:** Update the spec's Status line and this plan's checkboxes and
   Execution notes.
-- [ ] **Step 7:** Open PRs: package PR → parser PR → app PR
+- [x] **Step 7:** Open PRs: package PR → parser PR → app PR
   (`feat(pi): add Pi as a terminal-only agent provider with transcript support`,
   `Fixes #<issue>`, links to the two component PRs, verification section,
   known limitations incl. anything left faux-only).
