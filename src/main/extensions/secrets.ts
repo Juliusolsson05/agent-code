@@ -4,6 +4,8 @@ import { join } from 'node:path'
 
 import { EXTENSION_SECRETS_DIR } from '@main/storage/paths.js'
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
+import { isValidExtensionId } from '@shared/types/extensionId.js'
+import { MAX_SECRET_VALUE_LENGTH, SECRET_KEY_PATTERN } from '@shared/types/extensionServices.js'
 
 // api.secrets (#1150): per-extension credentials encrypted with Electron
 // safeStorage (OS keychain on macOS, DPAPI on Windows, libsecret/kwallet on
@@ -33,9 +35,9 @@ import type { SecretCodec } from '@main/keyVault/vaultStore.js'
 //   insensitive, so "Token" and "token" would silently share one file.
 
 export const MAX_SECRET_KEYS_PER_EXTENSION = 32
-export const MAX_SECRET_VALUE_LENGTH = 4096
-const SECRET_KEY = /^[a-zA-Z0-9._-]{1,64}$/
-const EXTENSION_ID = /^[a-z][a-z0-9-]{0,63}$/
+// The key grammar and value cap are the transport schema's own exports, and
+// the id check is the shared isValidExtensionId: this store re-enforces them
+// at the filesystem edge but must never disagree with what the schema admits.
 
 export type ExtensionSecretStore = {
   get(extensionId: string, key: string): Promise<string | null>
@@ -47,12 +49,12 @@ function directoryFor(root: string, extensionId: string): string {
   // Same rule as storage.ts/manifest.ts: the id becomes a directory name, so it
   // is validated, never sanitized. The transport already fixed it; this is the
   // second line before a recursive filesystem operation.
-  if (!EXTENSION_ID.test(extensionId)) throw new Error('Invalid extension id.')
+  if (!isValidExtensionId(extensionId)) throw new Error('Invalid extension id.')
   return join(root, extensionId)
 }
 
 function fileFor(root: string, extensionId: string, key: string): string {
-  if (typeof key !== 'string' || !SECRET_KEY.test(key)) throw new Error('Secret keys are 1-64 characters of [a-zA-Z0-9._-].')
+  if (typeof key !== 'string' || !SECRET_KEY_PATTERN.test(key)) throw new Error('Secret keys are 1-64 characters of [a-zA-Z0-9._-].')
   return join(directoryFor(root, extensionId), `${Buffer.from(key, 'utf8').toString('hex')}.bin`)
 }
 
