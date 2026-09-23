@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { nextCrashDelay, pocketsToSleep } from './lifecycle'
+import { usePlacementStore } from './placementStore'
 import { DEFAULT_PARKED_SIZE, intersect, pickWinningSlot, resolvePlacement, slotRole, type SlotReport } from './resolvePlacement'
 
 // PROVISIONAL FIXTURES (decomposition Stage 4). These sequences are derived
@@ -30,7 +31,19 @@ describe('real mount sequences', () => {
   })
 
   it('Spotlight reports before the hidden stage updates (one frame of both visible): Spotlight still wins', () => {
-    expect(pickWinningSlot([lane(1, { focused: true }), spot()])?.slotKey).toBe('spotlight')
+    // Lane 0 on purpose: with lane 1, Spotlight (laneIndex null → 0) also won
+    // on the index tie-break, so equal ranks survived mutation (review B M1).
+    expect(pickWinningSlot([lane(0, { focused: true }), spot()])?.slotKey).toBe('spotlight')
+    expect(pickWinningSlot([spot(), lane(0, { focused: true })])?.slotKey).toBe('spotlight')
+  })
+
+  it('forget drops every slot, lease and size of a detached pocket', () => {
+    usePlacementStore.getState().report('gone', lane(0))
+    const release = usePlacementStore.getState().acquirePaint('gone')
+    usePlacementStore.getState().forget('gone')
+    const s = usePlacementStore.getState()
+    expect([s.slots.gone, s.paintLeases.gone, s.lastSize.gone]).toEqual([undefined, undefined, undefined])
+    release()
   })
 
   it('Settings / Reader / Global Editor hide every slot: the guest is parked, not destroyed', () => {

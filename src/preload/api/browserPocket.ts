@@ -41,6 +41,7 @@ export const browserPocketApi = {
   onPocketOpenRequest: (cb: (p: { sessionId: string; url?: string }) => void): Unsub => subscribe('browser-pocket:open-request', cb),
   onPocketPorts: (cb: (p: { bySession: Record<string, LanePort[]> }) => void): Unsub => subscribe('browser-pocket:ports', cb),
   onPocketDriving: (cb: (p: PocketDrivingEvent) => void): Unsub => subscribe('browser-pocket:driving', cb),
+  onPocketPaint: (cb: (p: { pocketId: string; on: boolean }) => void): Unsub => subscribe('browser-pocket:paint', cb),
   onPocketViewportRequest: (cb: (p: { sessionId: string; viewport: { mode: 'fill' } | { mode: 'preset'; preset: string } | { mode: 'free'; width: number; height: number } }) => void): Unsub =>
     subscribe('browser-pocket:set-viewport', cb),
 }

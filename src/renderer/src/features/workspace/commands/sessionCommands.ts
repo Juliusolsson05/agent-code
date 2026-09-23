@@ -783,8 +783,10 @@ export const sessionCommands: CommandDef[] = [
     title: 'Browser Pocket MCP',
     description: '**What it does:** Reloads the focused agent with browser_* tools on or off.\n\n**Use when:** You want this agent to open, read and click its own browser pocket.\n\n**Notes:** The tools only ever act on this agent\'s own pocket. Needs Browser Pocket on in Settings → Experimental.',
     keywords: ['browser', 'pocket', 'preview', 'mcp', 'playwright', 'web'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'browser')
+    // Hidden while Browser Pocket is off: enabling the domain then would reload
+    // the agent into tools that only answer "disabled" (review B #12).
+    when: ({ workspace, flags }) => {
+      return flags.browserPocketEnabled === true && targetSupportsBuiltInMcpDomain(workspace, 'browser')
     },
     getState: ctx => builtInMcpDomainState(ctx, 'browser'),
     run: async ({ workspace, ui }) => {

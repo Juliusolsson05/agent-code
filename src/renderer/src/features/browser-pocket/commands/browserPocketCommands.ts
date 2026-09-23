@@ -3,7 +3,8 @@ import { toggle } from '@renderer/features/command-palette/commandState'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { SessionId } from '@renderer/workspace/types'
 
-import { canHavePocket, detachPocket, togglePocket } from '../actions'
+import { canHavePocket, togglePocket } from '../actions'
+import { detachAndForget } from '../ui/detach'
 import { requestPocket, type PocketRequest } from '../state/pocketBus'
 
 // Browser Pocket commands (#1142). Every target resolves through
@@ -109,12 +110,12 @@ export const browserPocketCommands: CommandDef[] = [
     category: 'navigate',
     surface: 'app',
     title: 'Detach Browser Pocket',
-    description: 'Removes the browser from the focused agent. Its cookies stay on disk until you clear them.',
+    description: 'Removes the browser from the focused agent and deletes its own cookies and storage (a jar shared with the project is kept).',
     keywords: ['browser', 'pocket', 'close', 'remove'],
     unavailableReason: whenPocket,
     run: ctx => {
       const id = target(ctx)
-      if (id) ctx.workspace.updateBrowserPocket(state => detachPocket(state, id))
+      if (id) detachAndForget(ctx.workspace, id)
     },
   },
 ]

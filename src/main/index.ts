@@ -1232,6 +1232,7 @@ async function startApp(): Promise<void> {
   const browserPockets = new BrowserPocketController({
     now: () => Date.now(),
     emitDriving: event => broadcastToWindows('browser-pocket:driving', event),
+    emitPaint: (pocketId, on) => broadcastToWindows('browser-pocket:paint', { pocketId, on }),
     // The renderer owns SessionMeta; main can only ask. Every window gets it,
     // and only the window holding that session acts on it.
     requestOpen: (sessionId, url) => broadcastToWindows('browser-pocket:open-request', { sessionId, ...(url ? { url } : {}) }),

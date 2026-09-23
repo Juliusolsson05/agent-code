@@ -58,10 +58,10 @@ export function renderWorkspaceLeaf(
     onFocusRequest={onFocusRequest}
     surfacePaneLabel={surfacePaneLabel}
   />
-  // Only a session that HAS a pocket gets the wrapper: a lane without one
-  // renders exactly as before (no extra store reads, no ResizeObserver per
-  // lane across a 16-lane grid).
-  if (!pocketPlacement || !workspace.state.sessions[sessionId]?.browserPocket) return leaf
+  // EVERY lane and Spotlight leaf is wrapped, pocket or not: attaching a
+  // pocket must not change the element type above the agent, or React
+  // remounts the agent view (terminal attach, feed) — review B #4.
+  if (!pocketPlacement) return leaf
   return <PocketedLeaf sessionId={sessionId} workspace={workspace} placement={pocketPlacement}>{leaf}</PocketedLeaf>
 }
 

@@ -5,7 +5,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 
-import { detachPocket, setPocketView } from '../actions'
+import { setPocketView } from '../actions'
+import { detachAndForget } from './detach'
 import { requestPocket } from '../state/pocketBus'
 import { usePocketLive } from '../state/pocketLiveStore'
 import { useLanePorts } from '../state/lanePortsStore'
@@ -68,7 +69,7 @@ export function PocketChrome({ sessionId, workspace, compact = false }: { sessio
       <button type="button" className={BTN} aria-label="Open in browser" title="Open in your browser" disabled={!pocket.url} onClick={() => requestPocket(pocket.pocketId, { type: 'open-external' })}>↗</button>
       <PocketMenu sessionId={sessionId} workspace={workspace} buttonClass={BTN} />
       <button type="button" className={BTN} aria-label="Collapse browser pocket" title="Collapse to the lane strip" onClick={() => workspace.updateBrowserPocket(s => setPocketView(s, sessionId, 'collapsed'))}>▁</button>
-      <button type="button" className={BTN} aria-label="Detach browser pocket" title="Detach browser pocket" onClick={() => workspace.updateBrowserPocket(s => detachPocket(s, sessionId))}>✕</button>
+      <button type="button" className={BTN} aria-label="Detach browser pocket" title="Detach browser pocket" onClick={() => detachAndForget(workspace, sessionId)}>✕</button>
       {/* 2 px progress bar along the bottom edge while loading. */}
       {live.loading && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-accent" />}
       {agentDriving && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}

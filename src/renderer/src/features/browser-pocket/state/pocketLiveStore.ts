@@ -20,6 +20,8 @@ export type PocketLive = {
   crashedOut: boolean
   /** Slept by the sleep policy; recreated on next visibility. */
   asleep: boolean
+  /** A guest (renderer process) exists; only these count for the sleep cap. */
+  hasGuest: boolean
   driving: PocketDrivingEvent['state']
   drivingAction: string | null
   drivingPoint: { x: number; y: number } | null
@@ -34,7 +36,7 @@ export type PocketLive = {
 
 const EMPTY: PocketLive = {
   title: '', loading: false, canGoBack: false, canGoForward: false, failed: null,
-  crashes: [], generation: 0, crashedOut: false, asleep: false,
+  crashes: [], generation: 0, crashedOut: false, asleep: false, hasGuest: false,
   driving: null, drivingAction: null, drivingPoint: null, drivingAt: 0,
   thumbnail: null, unseenErrors: 0, focusAddressTick: 0, picking: false,
 }

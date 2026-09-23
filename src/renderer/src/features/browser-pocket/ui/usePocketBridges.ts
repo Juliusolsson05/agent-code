@@ -79,6 +79,9 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
   useEffect(() => {
     if (!enabled || !localhostLinks) { setOpenInPocketHandler(null); return }
     setOpenInPocketHandler((sessionId, url) => {
+      // The Reader hides the lanes: a pocket opened now would be invisible and
+      // the click would look like a no-op (review B #10). Let it go external.
+      if (useAppStore.getState().workspaceReaderMode) return false
       const ws = workspaceRef.current
       const before = ws.state.sessions[sessionId]?.browserPocket
       const next = attachPocket(ws.state, sessionId as SessionId, { url, view: 'open' })

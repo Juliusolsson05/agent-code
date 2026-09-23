@@ -113,6 +113,13 @@ export type ControllerDeps = {
   requestOpen(sessionId: string, url?: string): void
   setWatchedSessions(sessions: PortWatchSession[]): void
   lanePorts(sessionId: string): LanePort[]
+  /**
+   * Keep the pocket's page composited while ANY agent action runs, reads
+   * included: a hidden, non-composited guest's snapshot or screenshot hangs or
+   * comes back empty. Mutating actions also announce "driving"; this covers
+   * browser_snapshot / screenshot / wait_for too (review B #5).
+   */
+  emitPaint?(pocketId: string, on: boolean): void
   /** Ask the renderer to change the pocket's viewport (it owns SessionMeta). */
   requestViewport(sessionId: string, viewport: PocketViewportRequest): void
 }
@@ -332,6 +339,7 @@ export class BrowserPocketController {
     let cancelled = false
     const work = p.queue.then(async () => {
       if (cancelled) throw new Timeout()
+      this.deps.emitPaint?.(p.pocketId, true)
       if (opts.mutating) this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action })
       this.ensureAttached(p)
       const ctx: ActionCtx = {
@@ -372,6 +380,7 @@ export class BrowserPocketController {
     } finally {
       if (timer) clearTimeout(timer)
       if (opts.mutating && !p.paused) this.deps.emitDriving({ pocketId: p.pocketId, state: null })
+      this.deps.emitPaint?.(p.pocketId, false)
     }
   }
 

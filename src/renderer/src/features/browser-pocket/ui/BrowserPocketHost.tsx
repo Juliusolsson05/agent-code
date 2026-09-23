@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { viewportSize } from '@shared/browserPocket/devices'
 import { isAllowedTopLevelUrl } from '@shared/browserPocket/url'
@@ -41,33 +41,87 @@ export function BrowserPocketHost({ workspace }: { workspace: Workspace }) {
       .map(([sessionId, meta]) => ({ sessionId: sessionId as SessionId, pocket: meta.browserPocket!, projectId: meta.projectId as string | undefined }))
   }, [workspace.state.sessions, enabled])
 
-  // Runtime entries for pockets that were detached or whose session closed.
+  // A pocket that disappears (detach, session closed) is NOT unmounted at
+  // once: it stays mounted, parked, as "retiring" until main has detached its
+  // debugger. Destroying a <webview> with an attached debugger is a
+  // main-process use-after-free (electron#53819), and an unmount cannot wait
+  // for an IPC round trip (review B #1).
+  //
+  // Derived DURING render and rendered in the SAME keyed list as live pockets:
+  // an effect would add it one render too late (the guest already unmounted),
+  // and a separate list would give it a new component instance (React keys
+  // are only unique within one array) — both destroyed the guest before
+  // unregistering. The first version did exactly that; the host test caught it.
+  const [, bump] = useState(0)
+  const rendered = useRef<Record<string, HostedEntry>>({})
+  const retired = useRef(new Set<string>())
   const forgetPlacement = usePlacementStore(s => s.forget)
   const forgetLive = usePocketLiveStore(s => s.forget)
-  const known = useRef(new Set<string>())
+  const live = Object.fromEntries(pockets.map(p => [p.pocket.pocketId, p]))
+  const retiring: HostedEntry[] = []
+  for (const [id, entry] of Object.entries(rendered.current)) {
+    if (live[id]) { retired.current.delete(id); continue }
+    // With the feature off, main has already detached every debugger
+    // (controller.setFlags), so nothing needs to wait.
+    if (enabled && !retired.current.has(id)) retiring.push(entry)
+  }
+  rendered.current = { ...Object.fromEntries(retiring.map(e => [e.pocket.pocketId, e])), ...live }
+  const onRetired = useCallback((pocketId: string) => {
+    retired.current.add(pocketId)
+    delete rendered.current[pocketId]
+    forgetPlacement(pocketId)
+    forgetLive(pocketId)
+    bump(n => n + 1)
+  }, [forgetPlacement, forgetLive])
   useEffect(() => {
-    const alive = new Set(pockets.map(p => p.pocket.pocketId))
-    for (const id of known.current) if (!alive.has(id)) { forgetPlacement(id); forgetLive(id) }
-    known.current = alive
-  }, [pockets, forgetPlacement, forgetLive])
+    if (enabled) return
+    for (const id of Object.keys(rendered.current)) if (!live[id]) { forgetPlacement(id); forgetLive(id) }
+  })
+
+  // Main announces every agent tool call (reads too) on this channel so a
+  // hidden page is kept composited while an agent reads or screenshots it:
+  // a non-composited guest's snapshot hangs or comes back empty (review B #5).
+  useEffect(() => {
+    if (!enabled) return
+    const leases = new Map<string, () => void>()
+    const off = window.api.onPocketPaint(({ pocketId, on }) => {
+      if (on && !leases.has(pocketId)) leases.set(pocketId, usePlacementStore.getState().acquirePaint(pocketId))
+      if (!on) { leases.get(pocketId)?.(); leases.delete(pocketId) }
+    })
+    return () => { off(); for (const release of leases.values()) release() }
+  }, [enabled])
 
   useSleepPolicy(pockets.map(p => p.pocket.pocketId))
 
   return (
     <>
-      {/* A <webview> swallows pointer events; during a split/lane drag the
+      {/* A <webview> swallows pointer events; during any split/lane drag the
           pointer crosses pages, so guests go inert (Orca's fix). */}
       <style>{'.pocket-dragging [data-pocket-guest]{pointer-events:none!important}'}</style>
-      {pockets.map(p => <HostedPocket key={p.pocket.pocketId} {...p} workspace={workspace} />)}
+      {[...pockets.map(p => ({ entry: p, retiring: false })), ...retiring.map(entry => ({ entry, retiring: true }))].map(({ entry, retiring: isRetiring }) => (
+        <HostedPocket key={entry.pocket.pocketId} {...entry} workspace={workspace} onRetired={isRetiring ? onRetired : undefined} />
+      ))}
     </>
   )
 }
 
-const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, workspace }: {
-  sessionId: SessionId
-  pocket: BrowserPocketConfig
-  projectId: string | undefined
+type HostedEntry = { sessionId: SessionId; pocket: BrowserPocketConfig; projectId: string | undefined }
+
+/**
+ * One pocket's guest, with an explicit lifecycle (review B #1–#3):
+ *
+ *   none ──create──▶ live(key) ──teardown──▶ none | live(newKey)
+ *
+ * `guestKey` IS the guest: a new key is a new <webview>. Every transition that
+ * destroys a guest (sleep, crash remount, Retry/Reload, profile switch,
+ * detach/close) goes through `teardown`, which awaits main unregistering it —
+ * detaching the debugger — BEFORE the element leaves the DOM. Each new guest
+ * starts at the pocket's CURRENT url, never the first one it ever had.
+ */
+const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, workspace, onRetired }: HostedEntry & {
   workspace: Workspace
+  /** Set while retiring: tear the guest down, then report back. */
+  onRetired?: (pocketId: string) => void
 }) {
   const slots = usePlacementStore(s => s.slots[pocket.pocketId])
   const mustPaint = usePlacementStore(s => (s.paintLeases[pocket.pocketId] ?? 0) > 0)
@@ -77,65 +131,121 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
   const patchLive = usePocketLiveStore(s => s.patch)
   const { showToast } = useGlobalToast()
   const [partition, setPartition] = useState<string | null>(null)
-  const [created, setCreated] = useState(false)
-  const element = useRef<WebviewElement | null>(null)
+  const [guestKey, setGuestKey] = useState<string | null>(null)
+  const [element, setElement] = useState<WebviewElement | null>(null)
   const registered = useRef(false)
-  // `src` is read ONCE per guest: React re-setting the attribute on every
-  // render would navigate the page. Later navigations go through loadURL.
-  const initialSrc = useRef<string>('about:blank')
+  const guestSeq = useRef(0)
+  const src = useRef('about:blank')
+  const tearing = useRef(false)
+  // Read by page-event handlers attached once per guest. A ref, not a
+  // dependency: after a reload the pocket's SessionId changes while the page
+  // (and its listeners) must stay, and URL saves must follow the NEW id
+  // (review B #2).
+  const sessionRef = useRef(sessionId)
+  sessionRef.current = sessionId
+  const pocketRef = useRef(pocket)
+  pocketRef.current = pocket
 
-  // An agent action needs a painting page even when nothing shows it: CDP
-  // snapshots and screenshots of a non-composited guest hang or come back
-  // empty (T3 Code UnknownVizError). The picker needs the same.
+  // Any agent tool call, the picker, or a painting lease needs a composited
+  // page even when nothing shows it.
   const needsPaint = mustPaint || live.driving === 'agent' || live.picking
-  const placement: Placement = resolvePlacement({
-    slots: Object.values(slots ?? {}),
-    alive: created && !live.asleep,
-    mustPaint: needsPaint,
-    lastSize,
-  })
+  const placement: Placement = onRetired
+    ? { mode: 'parked', size: lastSize ?? { width: 1280, height: 800 }, mustPaint: false }
+    : resolvePlacement({ slots: Object.values(slots ?? {}), alive: guestKey !== null && !live.asleep, mustPaint: needsPaint, lastSize })
   usePlacementTrace(pocket.pocketId, slots, placement)
-  const wantsGuest = placement.mode !== 'absent' && !live.crashedOut && (Boolean(pocket.url) || needsPaint)
+  const wantsGuest = !onRetired && placement.mode !== 'absent' && !live.crashedOut && !live.asleep && (Boolean(pocket.url) || needsPaint)
 
-  // Lazy creation: a restored pocket creates no guest (and no renderer
-  // process) until it is shown or an agent needs it.
-  useEffect(() => {
-    if (wantsGuest && !created) { initialSrc.current = pocket.url && isAllowedTopLevelUrl(pocket.url) ? pocket.url : 'about:blank'; setCreated(true) }
-    if (!wantsGuest && live.asleep && created) setCreated(false)
-    // Wake a slept pocket the moment a slot shows it, not on the next tick of
-    // the sleep timer.
-    if (live.asleep && placement.mode === 'shown') patchLive(pocket.pocketId, { asleep: false })
-  }, [wantsGuest, created, live.asleep, pocket.url, placement.mode, pocket.pocketId, patchLive])
+  const teardown = useCallback(async (next: 'none' | 'remount') => {
+    if (tearing.current) return
+    tearing.current = true
+    try {
+      if (registered.current) {
+        registered.current = false
+        await window.api.unregisterPocketGuest({ pocketId: pocket.pocketId }).catch(() => {})
+      }
+      if (next === 'remount') {
+        src.current = startUrl(pocketRef.current.url)
+        setGuestKey(`g${++guestSeq.current}`)
+      } else {
+        setGuestKey(null)
+      }
+    } finally {
+      tearing.current = false
+    }
+  }, [pocket.pocketId])
 
-  // The partition is fixed at attach time, so a profile switch needs a new
-  // guest: fetching a new name here remounts it (the key below includes it).
+  // Create, sleep, wake.
   useEffect(() => {
-    if (!created) return
+    patchLive(pocket.pocketId, { hasGuest: guestKey !== null })
+    if (onRetired) return
+    if (live.asleep && placement.mode === 'shown') { patchLive(pocket.pocketId, { asleep: false }); return }
+    if (wantsGuest && guestKey === null && partition) {
+      src.current = startUrl(pocket.url)
+      setGuestKey(`g${++guestSeq.current}`)
+    } else if (live.asleep && guestKey !== null) {
+      void teardown('none')
+    }
+  }, [wantsGuest, guestKey, partition, live.asleep, placement.mode, pocket.url, pocket.pocketId, onRetired, patchLive, teardown])
+
+  // Retiring (detached or closed): unregister, then let the host drop us.
+  useEffect(() => {
+    if (!onRetired) return
+    let done = false
+    void teardown('none').then(() => { if (!done) onRetired(pocket.pocketId) })
+    return () => { done = true }
+  }, [onRetired, teardown, pocket.pocketId])
+
+  // Remount requests (crash back-off, Retry, Reload) arrive as a generation bump.
+  const generation = useRef(live.generation)
+  useEffect(() => {
+    if (live.generation === generation.current) return
+    generation.current = live.generation
+    if (guestKey !== null) void teardown('remount')
+  }, [live.generation, guestKey, teardown])
+
+  // The partition is fixed at attach time. Fetch it before the first guest;
+  // a profile change needs a new guest in the new partition.
+  const partitionKey = `${pocket.profile}:${projectId ?? ''}`
+  const lastPartitionKey = useRef<string | null>(null)
+  useEffect(() => {
+    if (!wantsGuest && guestKey === null) return
+    if (lastPartitionKey.current === partitionKey && partition) return
     let cancelled = false
     void window.api.pocketPartition({ pocketId: pocket.pocketId, profile: pocket.profile, ...(projectId ? { projectId } : {}) })
-      .then(p => { if (!cancelled) setPartition(p) })
+      .then(async name => {
+        if (cancelled) return
+        const changed = partition !== null && name !== partition
+        lastPartitionKey.current = partitionKey
+        if (changed && guestKey !== null) {
+          // Unregister the old guest BEFORE the new partition remounts it.
+          if (registered.current) { registered.current = false; await window.api.unregisterPocketGuest({ pocketId: pocket.pocketId }).catch(() => {}) }
+          src.current = startUrl(pocketRef.current.url)
+          setPartition(name)
+          setGuestKey(`g${++guestSeq.current}`)
+        } else {
+          setPartition(name)
+        }
+      })
     return () => { cancelled = true }
-  }, [created, pocket.pocketId, pocket.profile, projectId])
+  }, [wantsGuest, guestKey, partitionKey, partition, pocket.pocketId, pocket.profile, projectId])
 
-  // Keep main's pocket → session mapping current across SessionId remaps
-  // (reload / provider switch keep the pocketId and change the session).
+  // Keep main's pocket → session mapping current across SessionId remaps.
   useEffect(() => {
-    const el = element.current
-    if (el && registered.current) void window.api.registerPocketGuest({ pocketId: pocket.pocketId, sessionId, webContentsId: el.getWebContentsId() })
-  }, [sessionId, pocket.pocketId])
+    if (element && registered.current) void window.api.registerPocketGuest({ pocketId: pocket.pocketId, sessionId, webContentsId: element.getWebContentsId() })
+  }, [sessionId, pocket.pocketId, element])
 
   // Colour scheme and zoom are page emulation, applied by main over CDP /
-  // setZoomFactor; the device viewport is applied here by sizing the element.
+  // setZoomFactor; the device viewport is applied by sizing the element.
   useEffect(() => {
     if (!registered.current) return
     void window.api.applyPocketEmulation({ pocketId: pocket.pocketId, emulation: { colorScheme: pocket.colorScheme ?? null, zoom: pocket.zoom ?? 1 } })
-  }, [pocket.pocketId, pocket.colorScheme, pocket.zoom, live.generation])
+  }, [pocket.pocketId, pocket.colorScheme, pocket.zoom])
 
   // Bus: commands, chrome row, main's page-local chords.
   useEffect(() => onPocketRequest((pocketId, request) => {
     if (pocketId !== pocket.pocketId) return
-    handleRequest(request, element.current, pocket, sessionId, workspace, patchLive, showToast)
-  }), [pocket, sessionId, workspace, patchLive, showToast])
+    handleRequest(request, element, pocketRef.current, sessionRef.current, workspace, patchLive, showToast)
+  }), [pocket.pocketId, element, workspace, patchLive, showToast])
 
   const shown = placement.mode === 'shown'
   useEffect(() => {
@@ -154,43 +264,45 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
     wasShown.current = shown
   }, [shown, pocket.pocketId, patchLive])
 
-  // Attach page events once per guest.
+  // Page events, attached to EACH new guest element (a callback ref sets
+  // `element`, so a remount re-runs this — the missing re-attach was review
+  // B #1). Handlers read the session through sessionRef.
   useEffect(() => {
-    const el = element.current
-    if (!el || !partition) return
-    registered.current = false
+    const el = element
+    if (!el) return
+    const pocketId = pocket.pocketId
     const register = () => {
-      void window.api.registerPocketGuest({ pocketId: pocket.pocketId, sessionId, webContentsId: el.getWebContentsId() }).then(r => {
+      void window.api.registerPocketGuest({ pocketId, sessionId: sessionRef.current, webContentsId: el.getWebContentsId() }).then(r => {
         registered.current = r.ok
-        if (r.ok) void window.api.applyPocketEmulation({ pocketId: pocket.pocketId, emulation: { colorScheme: pocket.colorScheme ?? null, zoom: pocket.zoom ?? 1 } })
+        const p = pocketRef.current
+        if (r.ok) void window.api.applyPocketEmulation({ pocketId, emulation: { colorScheme: p.colorScheme ?? null, zoom: p.zoom ?? 1 } })
       })
     }
     const onNav = () => {
-      patchLive(pocket.pocketId, { canGoBack: el.canGoBack(), canGoForward: el.canGoForward() })
+      patchLive(pocketId, { canGoBack: el.canGoBack(), canGoForward: el.canGoForward() })
       const url = el.getURL()
-      if (url && isAllowedTopLevelUrl(url)) workspace.updateBrowserPocket(s => setPocketUrl(s, sessionId, url))
+      if (url && isAllowedTopLevelUrl(url)) workspace.updateBrowserPocket(s => setPocketUrl(s, sessionRef.current, url))
     }
-    const onCommit = (e: Event) => { if ((e as unknown as { isMainFrame?: boolean }).isMainFrame !== false) patchLive(pocket.pocketId, { failed: null }); onNav() }
-    const onStart = () => patchLive(pocket.pocketId, { loading: true })
-    const onStop = () => patchLive(pocket.pocketId, { loading: false })
-    const onTitle = (e: Event) => patchLive(pocket.pocketId, { title: (e as unknown as { title: string }).title })
+    const onCommit = (e: Event) => { if ((e as unknown as { isMainFrame?: boolean }).isMainFrame !== false) patchLive(pocketId, { failed: null }); onNav() }
+    const onStart = () => patchLive(pocketId, { loading: true })
+    const onStop = () => patchLive(pocketId, { loading: false })
+    const onTitle = (e: Event) => patchLive(pocketId, { title: (e as unknown as { title: string }).title })
     const onFail = (e: Event) => {
       const f = e as unknown as { errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean }
       // -3 is ERR_ABORTED: a navigation superseded by another, not a failure.
-      if (f.isMainFrame && f.errorCode !== -3) patchLive(pocket.pocketId, { failed: { code: String(f.errorCode), description: f.errorDescription, url: f.validatedURL }, loading: false })
+      if (f.isMainFrame && f.errorCode !== -3) patchLive(pocketId, { failed: { code: String(f.errorCode), description: f.errorDescription, url: f.validatedURL }, loading: false })
     }
     const onConsole = (e: Event) => {
       const c = e as unknown as { level: number | string }
-      if (c.level === 3 || c.level === 'error') patchLive(pocket.pocketId, prev => ({ unseenErrors: prev.unseenErrors + 1 }))
+      if (c.level === 3 || c.level === 'error') patchLive(pocketId, prev => ({ unseenErrors: prev.unseenErrors + 1 }))
     }
     const onGone = () => {
-      registered.current = false
       const now = Date.now()
-      const crashes = [...usePocketLiveStore.getState().live[pocket.pocketId]?.crashes ?? [], now].filter(t => now - t < 30_000)
+      const crashes = [...usePocketLiveStore.getState().live[pocketId]?.crashes ?? [], now].filter(t => now - t < 30_000)
       const delay = nextCrashDelay(crashes.slice(0, -1), now)
-      patchLive(pocket.pocketId, { crashes, loading: false })
-      if (delay === null) { patchLive(pocket.pocketId, { crashedOut: true }); return }
-      setTimeout(() => patchLive(pocket.pocketId, prev => ({ generation: prev.generation + 1 })), delay)
+      patchLive(pocketId, { crashes, loading: false })
+      if (delay === null) { patchLive(pocketId, { crashedOut: true }); return }
+      setTimeout(() => patchLive(pocketId, prev => ({ generation: prev.generation + 1 })), delay)
     }
     el.addEventListener('dom-ready', register, { once: true })
     el.addEventListener('did-navigate', onCommit)
@@ -211,18 +323,10 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
       el.removeEventListener('did-fail-load', onFail)
       el.removeEventListener('console-message', onConsole)
       el.removeEventListener('render-process-gone', onGone)
-      // Main detaches the debugger BEFORE the guest is destroyed
-      // (electron#53819: destroying a webview with an attached debugger is a
-      // main-process use-after-free).
-      registered.current = false
-      void window.api.unregisterPocketGuest({ pocketId: pocket.pocketId })
     }
-    // sessionId deliberately excluded: a remap re-registers (effect above)
-    // instead of tearing the page's listeners down.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partition, live.generation, pocket.pocketId])
+  }, [element, pocket.pocketId, patchLive, workspace])
 
-  if (!created || !partition) return null
+  if (guestKey === null || !partition) return null
 
   const viewport = pocket.viewport && pocket.viewport.mode !== 'fill' ? viewportSize(pocket.viewport) : null
   const style = wrapperStyle(placement, viewport)
@@ -230,10 +334,10 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
   return (
     <div data-pocket-guest style={style} aria-hidden={placement.mode !== 'shown'}>
       <webview
-        key={`${partition}#${live.generation}`}
-        ref={el => { element.current = el as unknown as WebviewElement | null }}
+        key={guestKey}
+        ref={setElementRef(setElement)}
         partition={partition}
-        src={initialSrc.current}
+        src={src.current}
         style={fit && viewport
           ? { position: 'absolute', left: fit.offsetX, top: fit.offsetY, width: fit.width, height: fit.height, transform: `scale(${fit.scale})`, transformOrigin: '0 0', display: 'flex' }
           : { width: '100%', height: '100%', display: 'flex' }}
@@ -242,6 +346,19 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
     </div>
   )
 })
+
+/** The url a NEW guest starts at: the pocket's current one (review B #3). */
+function startUrl(url: string | undefined): string {
+  return url && isAllowedTopLevelUrl(url) ? url : 'about:blank'
+}
+
+const refCache = new WeakMap<object, (el: unknown) => void>()
+/** A stable callback ref per setter, so React does not call it on every render. */
+function setElementRef(set: (el: WebviewElement | null) => void): (el: unknown) => void {
+  let ref = refCache.get(set)
+  if (!ref) { ref = el => set(el as WebviewElement | null); refCache.set(set, ref) }
+  return ref
+}
 
 /** Failure, crash and agent-cursor overlays drawn ABOVE the page. */
 function GuestOverlays({ pocketId, url }: { pocketId: string; url?: string }) {
@@ -272,7 +389,7 @@ function GuestOverlays({ pocketId, url }: { pocketId: string; url?: string }) {
   )
 }
 
-function wrapperStyle(placement: Placement, viewport: { width: number; height: number } | null): React.CSSProperties {
+export function wrapperStyle(placement: Placement, viewport: { width: number; height: number } | null): React.CSSProperties {
   if (placement.mode === 'shown') {
     const { rect } = placement
     const c = intersect(rect, placement.clip)
@@ -324,6 +441,12 @@ function handleRequest(
       if (el) void el.loadURL(request.url).catch(() => {})
       return
     case 'pick':
+      // ◎ / ⌘⇧S / the command while a pick is running CANCELS it; starting a
+      // second pick ran two on one debugger and inserted two chips (review B #6).
+      if (usePocketLiveStore.getState().live[pocket.pocketId]?.picking) {
+        void window.api.cancelPocketPick({ pocketId: pocket.pocketId })
+        return
+      }
       void import('./pick').then(m => m.pickIntoComposer(pocket.pocketId, sessionId, workspace, patchLive, showToast))
       return
   }
@@ -343,17 +466,15 @@ function useSleepPolicy(pocketIds: string[]): void {
       const placement = usePlacementStore.getState()
       const liveStore = usePocketLiveStore.getState()
       const now = Date.now()
-      const input = pocketIds.filter(id => !liveStore.live[id]?.asleep).map(id => ({
+      // Only pockets that HAVE a guest count toward the live cap: a restored
+      // pocket never shown has no renderer process to save (review B #5).
+      const input = pocketIds.filter(id => liveStore.live[id]?.hasGuest && !liveStore.live[id]?.asleep).map(id => ({
         pocketId: id,
         lastVisibleAt: placement.lastVisibleAt[id] ?? now,
         visible: Object.values(placement.slots[id] ?? {}).some(s => s.visible && (s.rect?.width ?? 0) > 0),
         agentLease: (placement.paintLeases[id] ?? 0) > 0 || (liveStore.live[id]?.driving != null && now - (liveStore.live[id]?.drivingAt ?? 0) < 30_000),
       }))
       for (const id of pocketsToSleep(input, now)) liveStore.patch(id, { asleep: true })
-      // Wake anything that became visible again.
-      for (const id of pocketIds) {
-        if (liveStore.live[id]?.asleep && Object.values(placement.slots[id] ?? {}).some(s => s.visible)) liveStore.patch(id, { asleep: false })
-      }
     }, 5_000)
     return () => clearInterval(timer)
   }, [pocketIds.join('|')])

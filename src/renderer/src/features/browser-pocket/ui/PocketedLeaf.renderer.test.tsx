@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -46,4 +47,18 @@ describe('PocketedLeaf', () => {
     expect(screen.queryByTestId('pocket-slot')).toBeNull()
     expect(screen.queryByTestId('pocket-strip')).toBeNull()
   })
+})
+
+it('attaching and detaching a pocket never remounts the agent view (review B #4)', () => {
+  // The terminal attach and feed live in the leaf; a remount tears them down.
+  let mounts = 0
+  function Agent() {
+    const [id] = useState(() => { mounts++; return mounts })
+    return <div>agent #{id}</div>
+  }
+  const placement = { surface: 'lane' as const, laneIndex: 0, focused: true, dimmed: false }
+  const view = render(<PocketedLeaf sessionId={'s1' as never} workspace={ws()} placement={placement}><Agent /></PocketedLeaf>)
+  view.rerender(<PocketedLeaf sessionId={'s1' as never} workspace={ws({ pocketId: 'p1', view: 'open', profile: 'lane' })} placement={placement}><Agent /></PocketedLeaf>)
+  view.rerender(<PocketedLeaf sessionId={'s1' as never} workspace={ws()} placement={placement}><Agent /></PocketedLeaf>)
+  expect(mounts).toBe(1)
 })

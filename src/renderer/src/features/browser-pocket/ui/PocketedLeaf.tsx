@@ -2,13 +2,13 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { SessionId } from '@renderer/workspace/types'
+import type { BrowserPocketConfig, SessionId } from '@renderer/workspace/types'
 
 import { attachPocket, setPocketSplit } from '../actions'
 import { requestPocket } from '../state/pocketBus'
 import { useLanePorts } from '../state/lanePortsStore'
 import { useSpotlightPocketMode } from '../state/spotlightPocketMode'
-import { pocketLayout } from './layout'
+import { pocketLayout, type PocketLayout } from './layout'
 import { PocketChrome } from './PocketChrome'
 import { PocketDrivingStatus } from './PocketDrivingStatus'
 import { PocketEmptyState } from './PocketEmptyState'
@@ -19,18 +19,21 @@ export type PocketPlacement = { surface: 'lane' | 'spotlight'; laneIndex: number
 
 /**
  * The ONE place a pocket joins an agent's view. Lanes and Spotlight both draw
- * a session through renderWorkspaceLeaf, which wraps its output in this — so
+ * a session through renderWorkspaceLeaf, which wraps EVERY leaf in this — so
  * "show the browser together with the agent in Spotlight" needs no
  * Spotlight-specific data (spec §5.4).
  *
- * The agent leaf stays mounted in every layout (strip, split, browser-only):
- * unmounting it would tear down its terminal attach and feed.
+ * WHY every leaf, pocket or not: the agent leaf must sit at the SAME element
+ * position whether a pocket exists or not. Wrapping only pocket-bearing leaves
+ * switched the element type when ⌘⇧B attached a pocket (or an agent's
+ * browser_open did, mid-run), which remounted the whole agent view and tore
+ * down its terminal attach and feed (review B #4). This wrapper reads no app
+ * settings — only the attachment below does, and only when a pocket exists —
+ * so lanes without a pocket pay one div and one ResizeObserver.
  */
 export function PocketedLeaf(props: { sessionId: SessionId; workspace: Workspace; placement: PocketPlacement; children: ReactNode }) {
-  const enabled = useAppStore(s => s.settings.browserPocketEnabled)
   const pocket = props.workspace.state.sessions[props.sessionId]?.browserPocket
-  const ports = useLanePorts(props.sessionId)
-  const browserOnly = useSpotlightPocketMode(s => s.browserOnly) && props.placement.surface === 'spotlight'
+  const browserOnly = useSpotlightPocketMode(s => s.browserOnly) && props.placement.surface === 'spotlight' && pocket?.view === 'open'
   const box = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
 
@@ -47,49 +50,60 @@ export function PocketedLeaf(props: { sessionId: SessionId; workspace: Workspace
     return () => ro.disconnect()
   }, [])
 
-  const hasPocket = enabled && pocket !== undefined
-  const layout = hasPocket ? pocketLayout(size, pocket.view, props.placement.surface) : null
-  const split = pocket?.split ?? 0.5
-  const side = layout === 'side'
+  const layout = pocket ? pocketLayout(size, pocket.view, props.placement.surface) : null
 
   return (
     // data-pocket-clip: the guest is fixed-position in the host layer and
     // cannot inherit this lane's overflow:hidden, so its slot reports this box
     // as the clip rectangle.
-    <div ref={box} data-pocket-clip className={`flex h-full min-h-0 min-w-0 ${side ? 'flex-row' : 'flex-col'}`}>
-      <div
-        className="min-h-0 min-w-0 overflow-hidden"
-        style={layout === 'side' || layout === 'stacked'
-          ? browserOnly ? { flex: '0 0 44px' } : { flexBasis: 0, flexGrow: 1 - split }
-          : { flex: '1 1 0%' }}
-      >
+    <div ref={box} data-pocket-clip className={`flex h-full min-h-0 min-w-0 ${layout === 'side' ? 'flex-row' : 'flex-col'}`}>
+      {/* The agent always fills whatever the pocket column leaves. */}
+      <div className="min-h-0 min-w-0 overflow-hidden" style={browserOnly ? { flex: '0 0 44px' } : { flex: '1 1 0%' }}>
         {props.children}
       </div>
-      {hasPocket && layout === 'strip' && <PocketStrip sessionId={props.sessionId} workspace={props.workspace} />}
-      {hasPocket && (layout === 'side' || layout === 'stacked') && (
-        <>
-          {!browserOnly && <SplitHandle side={side} container={box} onFraction={f => props.workspace.updateBrowserPocket(s => setPocketSplit(s, props.sessionId, f))} />}
-          <div className="flex min-h-0 min-w-0 flex-col border-border" style={browserOnly ? { flex: '1 1 0%' } : { flexBasis: 0, flexGrow: split }}>
-            <PocketChrome sessionId={props.sessionId} workspace={props.workspace} compact={props.placement.surface === 'lane'} />
-            <div className="min-h-0 flex-1">
-              <PocketSlot
-                pocketId={pocket.pocketId}
-                {...props.placement}
-                mirrorLabel={shownIn => (shownIn.surface === 'spotlight' ? 'Shown in Spotlight' : `Shown in lane ${(shownIn.laneIndex ?? 0) + 1}`)}
-              >
-                {!pocket.url && (
-                  <PocketEmptyState ports={ports} onOpen={url => {
-                    props.workspace.updateBrowserPocket(s => attachPocket(s, props.sessionId, { url }))
-                    requestPocket(pocket.pocketId, { type: 'navigate', url })
-                  }} />
-                )}
-              </PocketSlot>
-            </div>
-            <PocketDrivingStatus pocketId={pocket.pocketId} />
-          </div>
-        </>
-      )}
+      {pocket && layout && <PocketAttachment {...props} pocket={pocket} layout={layout} browserOnly={browserOnly} box={box} />}
     </div>
+  )
+}
+
+function PocketAttachment(props: {
+  sessionId: SessionId
+  workspace: Workspace
+  placement: PocketPlacement
+  pocket: BrowserPocketConfig
+  layout: PocketLayout
+  browserOnly: boolean
+  box: React.RefObject<HTMLDivElement | null>
+}) {
+  const enabled = useAppStore(s => s.settings.browserPocketEnabled)
+  const ports = useLanePorts(props.sessionId)
+  if (!enabled) return null
+  const { pocket, layout, browserOnly } = props
+  if (layout === 'strip') return <PocketStrip sessionId={props.sessionId} workspace={props.workspace} />
+  const side = layout === 'side'
+  const split = pocket.split ?? 0.5
+  return (
+    <>
+      {!browserOnly && <SplitHandle side={side} container={props.box} onFraction={f => props.workspace.updateBrowserPocket(s => setPocketSplit(s, props.sessionId, f))} />}
+      <div className="flex min-h-0 min-w-0 flex-col border-border" style={browserOnly ? { flex: '1 1 0%' } : { flex: `0 0 ${split * 100}%` }}>
+        <PocketChrome sessionId={props.sessionId} workspace={props.workspace} compact={props.placement.surface === 'lane'} />
+        <div className="min-h-0 flex-1">
+          <PocketSlot
+            pocketId={pocket.pocketId}
+            {...props.placement}
+            mirrorLabel={shownIn => (shownIn.surface === 'spotlight' ? 'Shown in Spotlight' : `Shown in lane ${(shownIn.laneIndex ?? 0) + 1}`)}
+          >
+            {!pocket.url && (
+              <PocketEmptyState ports={ports} onOpen={url => {
+                props.workspace.updateBrowserPocket(s => attachPocket(s, props.sessionId, { url }))
+                requestPocket(pocket.pocketId, { type: 'navigate', url })
+              }} />
+            )}
+          </PocketSlot>
+        </div>
+        <PocketDrivingStatus pocketId={pocket.pocketId} />
+      </div>
+    </>
   )
 }
 

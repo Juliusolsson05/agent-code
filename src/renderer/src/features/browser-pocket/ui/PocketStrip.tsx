@@ -3,9 +3,10 @@ import { useState } from 'react'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 
-import { attachPocket, detachPocket, setPocketView } from '../actions'
+import { attachPocket, setPocketView } from '../actions'
+import { detachAndForget } from './detach'
 import { requestPocket } from '../state/pocketBus'
-import { usePocketLive } from '../state/pocketLiveStore'
+import { usePocketLive, usePocketLiveStore } from '../state/pocketLiveStore'
 import { useLanePorts } from '../state/lanePortsStore'
 
 /**
@@ -19,6 +20,7 @@ export function PocketStrip({ sessionId, workspace }: { sessionId: SessionId; wo
   const live = usePocketLive(pocket?.pocketId)
   const ports = useLanePorts(sessionId)
   const [hover, setHover] = useState(false)
+  const patchLive = usePocketLiveStore(s => s.patch)
   if (!pocket) return null
   const open = () => workspace.updateBrowserPocket(s => setPocketView(s, sessionId, 'open'))
   const primary = ports.find(p => p.kind === 'html') ?? ports[0]
@@ -26,7 +28,10 @@ export function PocketStrip({ sessionId, workspace }: { sessionId: SessionId; wo
     <div
       data-testid="pocket-strip"
       className="relative flex h-[22px] flex-shrink-0 items-center gap-2 border-t border-border bg-surface px-2 text-[11px]"
-      onMouseEnter={() => { setHover(true); if (pocket.url) void window.api.pocketThumbnail({ pocketId: pocket.pocketId }).catch(() => null) }}
+      onMouseEnter={() => {
+        setHover(true)
+        if (pocket.url) void window.api.pocketThumbnail({ pocketId: pocket.pocketId }).then(t => { if (t) patchLive(pocket.pocketId, { thumbnail: t }) }).catch(() => null)
+      }}
       onMouseLeave={() => setHover(false)}
     >
       <button type="button" className="text-ink-dim hover:text-ink" aria-label="Open browser pocket" title="Open browser pocket (⌘⇧B)" onClick={open}>◧</button>
@@ -53,7 +58,7 @@ export function PocketStrip({ sessionId, workspace }: { sessionId: SessionId; wo
       {live.loading && <span className="animate-spin text-ink-dim">⟳</span>}
       {(live.failed || live.crashedOut) && <span className="text-danger" title={live.failed?.description ?? 'The page crashed'}>!</span>}
       {live.unseenErrors > 0 && <span className="text-warning" title="Console errors since you last opened the pocket">{live.unseenErrors} err</span>}
-      <button type="button" className="text-muted hover:text-ink" aria-label="Detach browser pocket" title="Detach browser pocket" onClick={() => workspace.updateBrowserPocket(s => detachPocket(s, sessionId))}>✕</button>
+      <button type="button" className="text-muted hover:text-ink" aria-label="Detach browser pocket" title="Detach browser pocket" onClick={() => detachAndForget(workspace, sessionId)}>✕</button>
       {hover && live.thumbnail && (
         <img src={live.thumbnail} alt="" className="rounded-control pointer-events-none absolute bottom-[24px] left-2 z-40 w-[320px] border border-border-hi shadow-[0_8px_24px_rgba(0,0,0,0.35)]" />
       )}
