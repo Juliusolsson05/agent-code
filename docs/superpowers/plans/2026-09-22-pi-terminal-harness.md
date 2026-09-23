@@ -166,6 +166,10 @@ all test runs.
   - Added the `provider-session-changed` AgentSession event, carried through SessionManager, the forwarder (it flushes old rows first; test pinned), preload and the SessionFeed contract. The phone gets an explicit no-op with a WHY: it owns no durable pane identity and follows through the history reset.
   - The renderer rebinds via `applyProviderSessionSwitch` under the new source `provider-follow`, and resets the burst gate's expectation.
   - The step-2 "confirm red" was not observed before implementation; the replay sweep did catch real ordering (identity before reset) and exit behaviour.
+- 2026-09-22 — Task 8: history source (`loadPiHistoryChunk`: active-branch pages, entry-id markers, "no file yet" = empty ready history), mapper, `AgentTranscriptReader` Pi case (header auto-detect, active branch via readPiBranch with page yields, errored/aborted replies never `final` and diagnostic-first, `!bash` as a shell command), MCP tool descriptions, and the subagents guard (Task 6).
+  - Tests: history over the recorded /tree file, mapper over every recorded row plus the v1 shape, 5 reader system tests, and a renderer pane test (a kind-only restored Pi pane loads the branch; View Prompts / Copy Last Response read it; the surface stays the TUI in every mode; Rewind is not offered).
+  - One expectation I wrote was wrong and was corrected, not the code: `inspect`'s first timestamp includes Pi's `model_change` row, as for every other provider's metadata rows.
+  - A new Pi-specific pane harness beyond this was not needed. The adapter sweep (Task 7) already runs the real package + adapter over every recording, and the renderer test drives the real loader.
 
 ---
 
@@ -498,16 +502,16 @@ mirror how `mitmAddon.py` is located).
 - `src/renderer/src/rendering/model/ownership.ts` Pi suppression policy (from
   Task 6) re-checked against mapper output.
 
-- [ ] **Step 1:** Failing tests: history loader over a fixture file with an
+- [x] **Step 1:** Failing tests: history loader over a fixture file with an
   abandoned branch (abandoned rows never returned, paging by entry id, `hasMore`
   correct); mapper over Stage 0 fixtures; `AgentTranscriptReader.pi.system.test.ts`
   (read/search/inspect, auto-detect); renderer test (Pi pane loads history, stays
   terminal, Reader/View Prompts/Copy Last Response available, Rewind hidden) —
   reuse the `hook/ipc/testing/opencodeTerminalPane.tsx` harness shape.
-- [ ] **Step 2:** Confirm they fail.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Green; typecheck.
-- [ ] **Step 5:** Commits `feat(pi): load Pi history from the active branch`,
+- [x] **Step 2:** Confirm they fail.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Green; typecheck.
+- [x] **Step 5:** Commits `feat(pi): load Pi history from the active branch`,
   `feat(mcp): read Pi sessions through the agent transcript tools`.
 
 ---
