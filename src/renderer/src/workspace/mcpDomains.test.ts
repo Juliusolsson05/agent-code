@@ -102,7 +102,7 @@ describe('user MCP server choices in the override map (#1143)', () => {
   })
 
   it('resolves built-in domains from the per-provider Settings map', () => {
-    const defaults = { claude: ['tldr' as const], codex: ['workflows' as const], opencode: [], grok: [] }
+    const defaults = { claude: ['tldr' as const], codex: ['workflows' as const], opencode: [], grok: [], pi: [] }
     expect(resolveSessionBuiltInMcpDomains({ provider: 'claude', sessionOverrides: {}, defaultDomains: defaults }))
       .toEqual(['tldr'])
     expect(resolveSessionBuiltInMcpDomains({ provider: 'codex', sessionOverrides: {}, defaultDomains: defaults }))

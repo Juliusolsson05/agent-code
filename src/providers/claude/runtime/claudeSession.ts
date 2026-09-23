@@ -84,6 +84,10 @@ export type ClaudeSessionEvents = {
   // generation boundary. This provider never emits it today; it exists so the
   // shared event map can carry providers whose transcripts rewrite in place.
   'history-boundary': [{ type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
+  // Declared for AgentSession contract parity (Pi, decision D4): an in-TUI
+  // session switch the runtime follows. This provider never emits it — a
+  // Claude/Codex pane changes session only through a respawn.
+  'provider-session-changed': [{ providerSessionId: string; transcriptFile: string | null; reason: string }]
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
   'pty-data': [string]

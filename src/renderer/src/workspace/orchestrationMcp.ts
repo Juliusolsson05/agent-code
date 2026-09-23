@@ -568,10 +568,17 @@ export function terminalProviderFailure(
 const SEMANTIC_FAILURE_SOURCE: Partial<Record<SessionKind, string>> = {
   opencode: 'opencode-sse',
   codex: 'proxy',
+  // Pi: the bridge reports a reply pi ended with stopReason 'error' as an
+  // api_error (recorded: pi-terminal-headless testing/fixtures/live/error.json).
+  pi: 'pi-bridge',
 }
 
-/** errorType names that are not the provider giving up (see above). */
-const NON_TERMINAL_ERROR_TYPES = new Set(['MessageAbortedError', 'instance', 'part_overflow'])
+/**
+ * errorType names that are not the provider giving up (see above). Pi's
+ * 'aborted' is an Esc or an abort request — the user stopping a turn, which
+ * is not a failed agent.
+ */
+const NON_TERMINAL_ERROR_TYPES = new Set(['MessageAbortedError', 'instance', 'part_overflow', 'aborted'])
 
 function claudeEntryText(entry: Record<string, unknown>): string {
   const message = entry.message as { content?: unknown } | undefined

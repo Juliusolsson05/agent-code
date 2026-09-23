@@ -25,7 +25,8 @@ import { RETIRED_BUILT_IN_COMMAND_IDS } from '@renderer/app-state/settings/persi
 // 16 retirements took it to 118, Clear Lane (stage 4) to 119 and the lane keyboard
 // grammar (stage 5) to 123. (#992 was written against 130 and read 119 at the end;
 // merging main added Goal Loop's two commands and the two generated Grok splits.)
-// 124 with Open Setup (#995). 132 with the seven Browser Pocket commands (#1142), 133 with Browser Pocket MCP.
+// 124 with Open Setup (#995). 132 with the seven Browser Pocket commands (#1142), 133 with Browser Pocket MCP; 128 as
+// merged with the two generated Pi splits (#1132).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -72,6 +73,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'opencode-horizontal',
   'grok-vertical',
   'grok-horizontal',
+  'pi-vertical',
+  'pi-horizontal',
   'undo-close',
   'toggle-tail',
   'toggle-tail-all',
@@ -252,12 +255,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 126 governed commands in registration order', () => {
+  it('contains exactly the 128 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 126 commands', () => {
+  it('has exactly 128 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -283,11 +286,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // with Goal Loop MCP (#1006) → 125 with Open Setup (#995) → 119 with the MCP
     // servers interface (#1143): −9 per-capability MCP commands, +3 MCP
     // commands → 126 with the seven Browser Pocket commands (#1142; its
-    // per-agent MCP toggle is a row in the #1143 grid, not a command).
+    // per-agent MCP toggle is a row in the #1143 grid, not a command) → 128
+    // with the two generated Pi splits `pi-vertical` / `pi-horizontal` (#1132).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(126)
+    expect(builtInCommandCatalog).toHaveLength(128)
   })
 
   it('reports no structural defects', () => {
@@ -321,7 +325,7 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 126 total - 6 generated = 120 literal `id:` fields across the command
+    // 128 total - 8 generated = 120 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
@@ -329,7 +333,7 @@ describe('generated per-provider split commands', () => {
     // Goal Loop, #1001, Goal Loop MCP, #1006, and Open Setup, #995), then
     // down by six with the MCP servers interface (#1143: −9 toggles, +3),
     // then up by the seven Browser Pocket commands (#1142).
-    // Grok (#844) grew only the GENERATED term, 4 → 6.
+    // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
     expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(120)
   })
 
@@ -440,7 +444,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 30 retirements + 54 additions = 126, checked against the
+    // 102 baseline - 30 retirements + 56 additions = 128, checked against the
     // real catalog rather than trusted as prose. (5 governance retirements +
     // 16 unified-layout retirements + 9 MCP retirements (#1143), all recorded
     // in RETIRED_COMMAND_IDS.)
@@ -479,9 +483,10 @@ describe('governance targets', () => {
     // (#1142): `toggle-browser-pocket`, `reload-browser-pocket`,
     // `focus-browser-pocket-address`, `pick-browser-pocket-element`,
     // `open-browser-pocket-external`, `open-browser-pocket-devtools` and
-    // `detach-browser-pocket`.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 54).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(126)
+    // `detach-browser-pocket`. Then `pi-vertical` and `pi-horizontal` (#1132,
+    // generated from AGENT_PROVIDER_KINDS like Grok's).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 56).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(128)
   })
 })
 

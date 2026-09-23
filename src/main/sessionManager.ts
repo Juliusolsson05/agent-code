@@ -58,9 +58,11 @@ import type {
 import {
   DEFAULT_PROVIDER,
   isAgentProviderRuntime,
+  effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
   isSessionKind,
+  isTerminalOnlyProviderKind,
 } from '@shared/types/providerKind.js'
 import type {
   AgentProviderKind,
@@ -197,6 +199,9 @@ type ManagerEvents = {
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
   'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
+  /** The provider session this pane runs changed without a respawn (Pi /new,
+   *  /resume, /fork). See AgentSessionEvents['provider-session-changed']. */
+  'provider-session-changed': [{ sessionId: string; providerSessionId: string; transcriptFile: string | null; reason: string }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'terminal-foreground': [TerminalForegroundEvent]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
@@ -520,6 +525,16 @@ function resolveProviderRuntime(
   kind: SessionKind,
   requested: unknown,
 ): AgentProviderRuntime | undefined {
+  // A terminal-only provider (Pi) runs its TUI whatever the caller asked for
+  // — including nothing, which is what most spawn paths send. Normalizing
+  // HERE, at every main entry point (spawn, recover, cancel, adopt), is what
+  // keeps the stored runtime and every ownership comparison consistent: a
+  // recovery request without a runtime must match a pane stored as
+  // 'terminal', not look like a different backend.
+  if (isTerminalOnlyProviderKind(kind)) {
+    if (requested !== undefined && requested !== 'terminal') throw new Error('Unsupported agent provider runtime')
+    return 'terminal'
+  }
   if (requested === undefined) return undefined
   if (!isAgentProviderRuntime(requested) || !isAgentProviderKind(kind)) {
     throw new Error('Unsupported agent provider runtime')
@@ -1186,7 +1201,10 @@ export class SessionManager extends EventEmitter {
     if (!ownership) return false
     return (
       (ownership.kind ?? DEFAULT_PROVIDER) === (options.kind ?? DEFAULT_PROVIDER) &&
-      (ownership.providerRuntime ?? null) === (options.providerRuntime ?? null) &&
+      // Effective, not raw: a terminal-only provider's stored runtime is
+      // 'terminal' while a request may omit it (see resolveProviderRuntime).
+      (effectiveProviderRuntime(ownership.kind ?? DEFAULT_PROVIDER, ownership.providerRuntime) ?? null) ===
+        (effectiveProviderRuntime(options.kind ?? DEFAULT_PROVIDER, options.providerRuntime) ?? null) &&
       path.resolve(ownership.cwd) === path.resolve(options.cwd)
     )
   }
@@ -3161,6 +3179,26 @@ export class SessionManager extends EventEmitter {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('history-boundary', { sessionId, ...boundary })
+      })
+      session.on('provider-session-changed', change => {
+        if (!ownsEntry()) return
+        // The pane now runs a different provider session (Pi /new, /resume,
+        // /fork). Backend snapshots read session.getProviderSessionId() live,
+        // but main's two transcript caches must move with it NOW:
+        //   - lastTranscriptFile: Pi writes nothing for a /new session until
+        //     its first reply, so "the next committed row will update it"
+        //     leaves the phone, Agent Management and every other resolver
+        //     describing the conversation the user just LEFT for a whole
+        //     turn. A null file means the new session has none yet.
+        //   - spawnInfo.resumeSessionId: resolveTranscriptFile's fallback
+        //     re-derives from it, and would find the old file again.
+        // The renderer owns the durable pane identity (workspace.json), so
+        // the fact is also forwarded there.
+        if (change.transcriptFile) this.lastTranscriptFile.set(sessionId, change.transcriptFile)
+        else this.lastTranscriptFile.delete(sessionId)
+        const info = this.spawnInfo.get(sessionId)
+        if (info) this.spawnInfo.set(sessionId, { ...info, resumeSessionId: change.providerSessionId })
+        this.emit('provider-session-changed', { sessionId, ...change })
       })
       session.on('jsonl-entry', (
         entry: AgentTranscriptEntry,

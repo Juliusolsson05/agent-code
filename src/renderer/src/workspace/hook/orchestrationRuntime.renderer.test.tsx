@@ -100,6 +100,16 @@ describe('renderer orchestration runtime creation', () => {
     expect(resolved).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'read', ok: true, output: expect.objectContaining({ agent: expect.objectContaining({ sessionId: 'child', ...ownership }) }) }))
   })
 
+  // Astra review finding 3: MCP create_agent may name only the kind. Pi has
+  // one runtime, so `{ kind: 'pi' }` must create a terminal Pi child instead
+  // of being refused because the raw request carried no runtime.
+  it('creates a Pi child from a kind-only request as the terminal runtime', async () => {
+    renderHook(() => useWorkspace())
+    await dispatch({ requestId: 'pi', type: 'create-agent', parentSessionId: 'parent', kind: 'pi', cwd: '/repo/child' })
+    expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'pi', ok: true }))
+    expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'pi', providerRuntime: 'terminal', cwd: '/repo/child' }))
+  })
+
   it('refuses unsupported Claude terminal before spawn even without the main bridge', async () => {
     renderHook(() => useWorkspace())
     await dispatch({ requestId: 'unsupported', type: 'create-agent', parentSessionId: 'parent', kind: 'claude', providerRuntime: 'terminal' })

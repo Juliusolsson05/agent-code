@@ -133,6 +133,14 @@ export function wireSessionForwarder(
   manager.on('transcript-diagnostic', payload =>
     sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
   )
+  manager.on('provider-session-changed', payload => {
+    // An ordering fact like history-boundary: rows of the OLD session still
+    // buffered must land before the identity moves, so both windows flush
+    // first and the change crosses directly.
+    semanticEvents.flush(payload.sessionId)
+    flushJsonl(payload.sessionId)
+    sendToSessionWindow(payload.sessionId, 'session:provider-session-changed', payload)
+  })
   manager.on('terminal-data', payload =>
     sendToSessionWindow(payload.sessionId, 'session:terminal-data', payload),
   )

@@ -20,10 +20,12 @@ describe('USAGE_SOURCES registry', () => {
   it('every agent provider kind is a valid enablement key for usage composition', () => {
     // claude/codex/grok map 1:1; opencode maps through the usage-source
     // selection. A new provider kind without a usage story must still
-    // compose (it simply has no source id until one is registered).
+    // compose (it simply has no source id until one is registered) — Pi is
+    // that case today: enabled, and simply contributing no source.
     for (const kind of AGENT_PROVIDER_KINDS) {
-      expect(['claude', 'codex', 'grok', 'opencode'].includes(kind)).toBe(true)
+      expect(['claude', 'codex', 'grok', 'opencode', 'pi'].includes(kind)).toBe(true)
     }
+    expect(listActiveUsageSourceIds({ enabledKinds: new Set<AgentProviderKind>(['pi']), opencodeUsageSource: 'none' })).toEqual([])
   })
 })
 

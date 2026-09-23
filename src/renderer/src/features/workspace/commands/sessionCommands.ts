@@ -1,5 +1,5 @@
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { panel, status, toggle, value } from '@renderer/features/command-palette/commandState'
@@ -156,7 +156,9 @@ export const sessionCommands: CommandDef[] = [
       // lift.
       return (
         getProviderFeatures(kind).transcriptRewind &&
-        meta?.providerRuntime !== 'terminal' &&
+        // Effective: a terminal-only provider (Pi) has no composer to receive
+        // the rewound draft even when its metadata carries no runtime.
+        effectiveProviderRuntime(kind, meta?.providerRuntime) !== 'terminal' &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -560,7 +562,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
-    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'reconnect'],
+    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'reconnect'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -669,7 +671,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
-    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode'],
+    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -816,8 +818,8 @@ export const sessionCommands: CommandDef[] = [
 
     surface: 'session',
     title: 'Switch Provider',
-    description: '**What it does:** Opens a destination picker for continuing the focused agent with Claude, Codex, OpenCode, or OpenCode Terminal.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
-    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'translate'],
+    description: '**What it does:** Opens a destination picker for continuing the focused agent with another provider: Claude, Codex, OpenCode, OpenCode Terminal, Grok or Pi.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
+    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'grok', 'pi', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null

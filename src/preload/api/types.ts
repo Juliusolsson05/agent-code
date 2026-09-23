@@ -72,6 +72,7 @@ export type {
   SessionExitEvent,
   ResolveConditionResult,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@shared/sessionFeed/types.js'
 
 export type DevDebugConfig = {

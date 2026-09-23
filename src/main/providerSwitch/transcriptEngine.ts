@@ -31,6 +31,7 @@ import {
   resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
   projectGrokNativeResume,
+  projectPiNativeResume,
 } from 'agent-transcript-parser'
 import type {
   ConversationContent,
@@ -66,6 +67,13 @@ import {
   writeProjectedGrokSession,
 } from './grokTranscript.js'
 import { listAllGrokSessions, parseGrokSummary, resolveGrokTranscriptPath } from 'grok-code-headless'
+import { piProcessCwd, resolvePiAgentDir } from 'pi-terminal-headless'
+import {
+  loadPiSnapshot,
+  loadPiSnapshotAt,
+  locatePiTranscript,
+  writeProjectedPiSession,
+} from './piTranscript.js'
 
 export interface TranscriptProjectionContext {
   cwd: string
@@ -488,6 +496,67 @@ const grokAdapter: HostTranscriptAdapter = {
   },
 }
 
+// Pi's target profile only sizes the imported conversation. Pi runs whatever
+// model its own settings choose at launch (Agent Code passes no --model, and
+// the projected file carries no model_change row), so the model named here is
+// informational: settings.json's defaultProvider/defaultModel when readable.
+// Pi fronts every provider's models and records no context window Agent Code
+// can read, so the budget is the same conservative 128k floor OpenCode and
+// Grok use. An unknown window must fail BEFORE the source pane is retired, not
+// after.
+async function resolvePiTargetProfile(): Promise<TranscriptTargetProfile> {
+  const settings = await readFile(join(resolvePiAgentDir({ env: process.env }), 'settings.json'), 'utf8')
+    .then(value => JSON.parse(value) as unknown)
+    .catch(() => null)
+  const model = isRecord(settings) && typeof settings.defaultModel === 'string' && settings.defaultModel ? settings.defaultModel : 'default'
+  const provider = isRecord(settings) && typeof settings.defaultProvider === 'string' && settings.defaultProvider ? settings.defaultProvider : undefined
+  return {
+    model,
+    ...(provider ? { modelProvider: provider } : {}),
+    budgetCharacters: budgetCharactersForContextTokens(128_000),
+  }
+}
+
+const piAdapter: HostTranscriptAdapter = {
+  provider: 'pi',
+  async read(cwd, providerSessionId) {
+    return (await loadPiSnapshot(cwd, providerSessionId)).conversation
+  },
+  async locate(cwd, providerSessionId) {
+    // Only the compaction wait locates, and it only runs against a live
+    // session with history. A missing file there is a real failure.
+    const path = await locatePiTranscript(cwd, providerSessionId)
+    if (!path) throw new Error(`Pi session ${providerSessionId} has no transcript file yet.`)
+    return path
+  },
+  async readAt(path) {
+    return (await loadPiSnapshotAt(path)).conversation
+  },
+  async listPrompts(cwd, providerSessionId) {
+    return promptsFromSnapshot(await loadPiSnapshot(cwd, providerSessionId), plainDraft)
+  },
+  // Pi user rows carry text and base64 images, and the decoder hands both over
+  // in the neutral carriers plainDraft already reads.
+  draft: plainDraft,
+  targetProfile: resolvePiTargetProfile,
+  async projectNativeResume(conversation, context) {
+    // The header cwd must be the cwd pi itself will report (process.cwd(),
+    // the real path): pi compares the two when sessions of several projects
+    // share a custom session dir.
+    return projectPiNativeResume(conversation, {
+      cwd: await piProcessCwd(context.cwd),
+      targetSessionId: context.targetSessionId,
+      now: context.now,
+    })
+  },
+  write: (cwd, publication) => writeProjectedPiSession(cwd, publication),
+  sessionId({ values }) {
+    const header = values[0]
+    if (header?.type !== 'session' || typeof header.id !== 'string') throw new Error('Projected Pi session has no header id.')
+    return header.id
+  },
+}
+
 // WHY a registry rather than source/target pair branches: each provider owns
 // one decoder, one native projector, and its storage policy. Switching composes
 // any installed source and target adapters through ConversationDocument, so a
@@ -498,6 +567,7 @@ const transcriptAdapters = new Map<string, HostTranscriptAdapter>([
   [codexAdapter.provider, codexAdapter],
   [opencodeAdapter.provider, opencodeAdapter],
   [grokAdapter.provider, grokAdapter],
+  [piAdapter.provider, piAdapter],
 ])
 
 export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTranscriptAdapter {
@@ -673,9 +743,9 @@ function promptsFromSnapshot(
 }
 
 function ipcPromptAddress(address: PromptAddress): RewindPromptAddress {
-  // Grok joins the rewind boundary in Stage 6: its addresses are the plain
-  // (provider, line, sessionId) shape the boundary already serializes.
-  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode' && address.provider !== 'grok') {
+  // Grok joined the rewind boundary in Stage 6, and Pi joins it with the same
+  // plain (provider, line, sessionId) shape the boundary already serializes.
+  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode' && address.provider !== 'grok' && address.provider !== 'pi') {
     throw new Error(`Provider "${address.provider}" cannot cross the Agent Code rewind IPC boundary.`)
   }
   return {

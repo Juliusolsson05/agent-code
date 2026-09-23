@@ -1,6 +1,6 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import { isAgentProviderKind } from '@shared/types/providerKind'
+import { effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
@@ -70,8 +70,10 @@ export function getEffectiveAgentSurface(args: {
   // off-pane surfaces may display them (Reader Mode's overlay projects them);
   // what they still may not do is mount the rendered leaf: the TUI owns the
   // pane, so no global/per-pane mode may put Agent Code's feed there. This
-  // pin is what makes loading its history safe.
-  if (args.providerRuntime === 'terminal') return 'terminal'
+  // pin is what makes loading its history safe. EFFECTIVE runtime: a
+  // terminal-only provider (Pi) is pinned whatever its metadata stored —
+  // many spawn paths pass only a kind (providerKind.ts TERMINAL_ONLY_…).
+  if (effectiveProviderRuntime(kind, args.providerRuntime) === 'terminal') return 'terminal'
   const mode = normalizeAgentViewModeForKind(kind, requestedMode)
 
   // WHY this selector ignores leases in hard Terminal mode:
@@ -154,7 +156,7 @@ export function commandAllowedByRenderedViewPolicy(args: {
   const policy = args.policy ?? { kind: 'none' }
   if (policy.kind === 'none') return true
   if (!isAgentKind(args.kind)) return true
-  if (args.providerRuntime === 'terminal') return false
+  if (effectiveProviderRuntime(args.kind, args.providerRuntime) === 'terminal') return false
   const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode

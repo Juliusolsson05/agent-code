@@ -3,6 +3,7 @@ import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import {
   AGENT_PROVIDER_KINDS,
   isAgentProviderKind,
+  isTerminalOnlyProviderKind,
   type AgentProviderKind,
   type AgentProviderRuntime,
 } from '@shared/types/providerKind'
@@ -37,6 +38,10 @@ export const AGENT_PROVIDER_CHOICES: readonly AgentProviderChoice[] =
       kind,
       label: capabilities.shortLabel,
       description: capabilities.spawnDescription,
+      // A terminal-only provider's one choice IS the terminal runtime. Stated
+      // on the choice so every consumer sees the truth; the read-time
+      // resolution (effectiveProviderRuntime) still covers callers that drop it.
+      ...(isTerminalOnlyProviderKind(kind) ? { providerRuntime: 'terminal' as const } : {}),
     }
     if (kind !== 'opencode') return [structured]
     return [

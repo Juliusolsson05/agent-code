@@ -1,6 +1,8 @@
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import { OPENCODE_IDENTITY } from '@providers/opencode/renderer/identity'
+import { GROK_IDENTITY } from '@providers/grok/renderer/identity'
+import { PI_IDENTITY } from '@providers/pi/renderer/identity'
 
 // Provider badge vocabulary for the v2 phone chrome: the SAME identity
 // descriptors every desktop surface uses (glyph + shortLabel). The v1 list
@@ -22,6 +24,11 @@ export function providerBadge(kind: string): ProviderBadge {
       return CODEX_IDENTITY
     case 'opencode':
       return OPENCODE_IDENTITY
+    // Grok was missing and wore the generic `agent` badge on the phone.
+    case 'grok':
+      return GROK_IDENTITY
+    case 'pi':
+      return PI_IDENTITY
     default:
       return FALLBACK
   }

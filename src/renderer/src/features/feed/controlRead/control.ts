@@ -2,7 +2,7 @@ import { ControlError, agentReadInput, agentReadOutput, defineCapability, transc
   type AgentReadInput, type AgentReadOutput } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { emptyRuntime, type RuntimeRenderInput } from '@renderer/session-runtime/state'
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities, providerDurableEntryKind } from '@providers/registry.renderer.capabilities'
 import { createConversationProjection, type ProjectedMessage } from './projectConversation'
@@ -91,8 +91,8 @@ export function createAgentReadControl() {
       status: { process: runtime.processStatus, activity: runtime.sessionStatus, transcript: runtime.transcriptStatus,
         inputReady: runtime.inputReady, exited: runtime.exited, conditions: Object.keys(runtime.conditions?.conditions ?? {}),
         queuedCount: runtime.queuedMessages.length, draftPresent: Boolean(runtime.draftInput || runtime.draftImages.length) },
-      availability: meta.providerRuntime === 'terminal' ? 'native_terminal' : 'available',
-      ...(meta.providerRuntime === 'terminal' ? { reason: 'Native terminal live output is available through computer use; this read contains durable history only.' } : {}),
+      availability: effectiveProviderRuntime(meta.kind, meta.providerRuntime) === 'terminal' ? 'native_terminal' : 'available',
+      ...(effectiveProviderRuntime(meta.kind, meta.providerRuntime) === 'terminal' ? { reason: 'Native terminal live output is available through computer use; this read contains durable history only.' } : {}),
     }
     // Status polling deliberately does not touch transcript storage, mapper,
     // ledger, cursor caches or agent wake. It stays cheap on a busy workspace.

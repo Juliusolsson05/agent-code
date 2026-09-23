@@ -573,7 +573,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Read Agent Transcript File',
       description:
-        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents).',
+        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude, Codex or Pi transcript JSONL path (a Pi session file is read as its active branch), or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents).',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -607,7 +607,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Search Agent Transcript File',
       description:
-        'Searches one agent transcript and returns bounded normalized matches with optional surrounding context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
+        'Searches one agent transcript and returns bounded normalized matches with optional surrounding context. `path` is a Claude, Codex or Pi transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -639,7 +639,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Inspect Agent Transcript File',
       description:
-        'Inspects one agent transcript and returns provider, timestamp, and item-count metadata without dumping content. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
+        'Inspects one agent transcript and returns provider, timestamp, and item-count metadata without dumping content. `path` is a Claude, Codex or Pi transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),

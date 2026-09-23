@@ -115,6 +115,50 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(runtimes[sessionId]?.conditions).toMatchObject({ ts: 2_000 })
   })
 
+  it('a Pi pane whose bridge never connected keeps its warning past new rows, never reports its transcript broken, and clears when the bridge connects', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'pi-no-bridge' as SessionId
+    let workspaceState = { sessions: { [sessionId]: { cwd: '/repo', kind: 'pi' } } } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: emptyRuntime() }
+    let refsForTest!: WorkspaceRefs
+    const commitRuntimes = (
+      updater: Record<SessionId, SessionRuntime> | ((current: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ): void => {
+      runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+      refsForTest.latestRuntimesRef.current = runtimes
+    }
+    Object.defineProperty(window, 'api', { configurable: true, value: { gitWorktrees: vi.fn(async () => ({ ok: false })) } })
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(workspaceState)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForTest = refs.current
+      }
+      useIpcSubscriptions(fake, refs.current, updater => {
+        workspaceState = typeof updater === 'function' ? updater(workspaceState) : updater
+        refs.current!.stateRef.current = workspaceState
+        refs.current!.latestStateRef.current = workspaceState
+      }, commitRuntimes, (id, patch) => commitRuntimes(current => ({ ...current, [id]: { ...current[id]!, ...patch } })), () => {})
+      return <div />
+    }
+    render(<Harness />)
+
+    const warning = 'Pi is running, but Agent Code cannot see its status or deliver prompts (provider_bridge_unreachable)'
+    act(() => { fake.emitJsonlError({ sessionId, message: warning }) })
+    expect(runtimes[sessionId]).toMatchObject({ liveChannelWarning: warning })
+    expect(runtimes[sessionId]?.transcriptStatus).not.toBe('error')
+    // The durable tail keeps working without the bridge; a row must not
+    // erase a warning that is still true.
+    act(() => {
+      fake.emitJsonlEntries({ sessionId, entries: [{ entry: { type: 'message', id: 'r1', parentId: null, line: 1, message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } } as never, file: '/s/pi.jsonl' }] })
+    })
+    expect(runtimes[sessionId]?.liveChannelWarning).toBe(warning)
+    // A late bridge connection (e.g. after /reload) retracts it.
+    act(() => { fake.emitTranscriptDiagnostic({ sessionId, diagnostic: { kind: 'pi-terminal-live-state', connected: true } } as never) })
+    expect(runtimes[sessionId]?.liveChannelWarning).toBeNull()
+  })
+
   it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {
     const fake = createFakeSessionFeed()
     const sessionId = 'fresh-codex-identity-and-queue' as SessionId

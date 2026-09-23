@@ -12,6 +12,9 @@ const requiredOutputs = [
   'out/preload/index.mjs',
   'out/renderer/index.html',
   'out/remote-client/index.html',
+  // Pi panes hand this path to `pi -e`; without it every Pi pane degrades to
+  // a plain TUI with no status or transcript, which no other check would catch.
+  'out/main/runtime/pi/bridge.ts',
 ]
 
 const missing = []

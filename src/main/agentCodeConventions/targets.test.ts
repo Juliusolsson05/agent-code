@@ -22,7 +22,9 @@ describe('Agent Code conventions provider targets', () => {
       skillsDirectory: join(claudeConfig, 'skills'),
     })
     expect(result.targets.find(target => target.id === 'agents-standard-personal-skills')).toMatchObject({
-      providers: ['codex', 'opencode'],
+      // Pi reads ~/.agents/skills too (verified in Stage 0), so it shares
+      // this physical target rather than adding a write.
+      providers: ['codex', 'opencode', 'pi'],
       skillsDirectory: join(homeDirectory, '.agents', 'skills'),
     })
   })

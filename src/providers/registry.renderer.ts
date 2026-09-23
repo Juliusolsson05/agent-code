@@ -49,11 +49,20 @@ const grokRenderer: RendererProviderConfig = {
   TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
 }
 
+// Pi is terminal-only: the pane is always pi's own TUI (resolved at read time
+// by effectiveProviderRuntime, which every display gate goes through), so the
+// shared TileLeaf mounts AgentTerminalLeaf for it and never the feed.
+const piRenderer: RendererProviderConfig = {
+  ...getRendererProviderCapabilities('pi'),
+  TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
+}
+
 const rendererProviders: Record<AgentProviderKind, RendererProviderConfig> = {
   claude: claudeRenderer,
   codex: codexRenderer,
   opencode: opencodeRenderer,
   grok: grokRenderer,
+  pi: piRenderer,
 }
 
 export function getRendererProvider(id: string): RendererProviderConfig {

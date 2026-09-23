@@ -234,6 +234,11 @@ export type SessionMeta = {
     | 'proxy-header'
     | 'resume-request'
     | 'runtime-start'
+    // The runtime watched the user switch sessions inside a native TUI it
+    // follows (Pi /new, /resume, /fork) — a durable identity, stated apart
+    // from 'jsonl-entry' so a later reader can tell a deliberate follow from
+    // an id first captured from a transcript row.
+    | 'provider-follow'
   /**
    * For tmux-backed terminals (P1): the registry-managed tmux
    * session name. Captured from the spawn IPC response and passed

@@ -5,7 +5,7 @@ import {
   providerSwitchChoices,
 } from '@renderer/workspace/providerChoices'
 
-function keys(source: 'claude' | 'codex' | 'opencode'): string[] {
+function keys(source: 'claude' | 'codex' | 'opencode' | 'pi'): string[] {
   return providerSwitchChoices(source).map(
     choice => `${choice.kind}:${choice.providerRuntime ?? 'structured'}`,
   )
@@ -19,15 +19,29 @@ describe('provider switch choices', () => {
       'OpenCode',
       'OpenCode Terminal',
       'Grok',
+      'Pi',
     ])
+    // Pi's single choice carries the terminal runtime (it has no other).
+    expect(AGENT_PROVIDER_CHOICES.find(choice => choice.kind === 'pi')?.providerRuntime).toBe('terminal')
+    // Pi is a destination as its terminal runtime: the switch replaces the
+    // pane with pi's TUI, never a rendered feed.
     expect(keys('claude')).toEqual([
       'codex:structured',
       'opencode:structured',
       'opencode:terminal',
       'grok:structured',
+      'pi:terminal',
     ])
     expect(keys('codex')).toEqual([
       'claude:structured',
+      'opencode:structured',
+      'opencode:terminal',
+      'grok:structured',
+      'pi:terminal',
+    ])
+    expect(keys('pi')).toEqual([
+      'claude:structured',
+      'codex:structured',
       'opencode:structured',
       'opencode:terminal',
       'grok:structured',
@@ -35,6 +49,6 @@ describe('provider switch choices', () => {
   })
 
   it('omits both OpenCode runtimes when OpenCode is already the source provider', () => {
-    expect(keys('opencode')).toEqual(['claude:structured', 'codex:structured', 'grok:structured'])
+    expect(keys('opencode')).toEqual(['claude:structured', 'codex:structured', 'grok:structured', 'pi:terminal'])
   })
 })

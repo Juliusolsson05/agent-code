@@ -15,6 +15,7 @@ import type {
   SessionSubAgentsEvent,
   Unsub,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@shared/sessionFeed/types'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
@@ -46,6 +47,7 @@ export interface FakeSessionFeed extends SessionFeed {
   emitJsonlError(e: SessionJsonlErrorEvent): void
   emitTranscriptDiagnostic(e: SessionTranscriptDiagnosticEvent): void
   emitHistoryBoundary(e: SessionHistoryBoundaryEvent): void
+  emitProviderSessionChanged(e: SessionProviderSessionChangedEvent): void
   emitSemantic(e: SessionSemanticEvent): void
   emitConditions(e: SessionConditionsEvent): void
   emitProcessState(e: SessionProcessStateEvent): void
@@ -66,6 +68,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     jsonlError: new Set<(e: SessionJsonlErrorEvent) => void>(),
     transcriptDiagnostic: new Set<(e: SessionTranscriptDiagnosticEvent) => void>(),
     historyBoundary: new Set<(e: SessionHistoryBoundaryEvent) => void>(),
+    providerSessionChanged: new Set<(e: SessionProviderSessionChangedEvent) => void>(),
     semantic: new Set<(e: SessionSemanticEvent) => void>(),
     conditions: new Set<(e: SessionConditionsEvent) => void>(),
     processState: new Set<(e: SessionProcessStateEvent) => void>(),
@@ -100,6 +103,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     onSessionJsonlError: cb => subscribe(listeners.jsonlError, cb),
     onSessionTranscriptDiagnostic: cb => subscribe(listeners.transcriptDiagnostic, cb),
     onSessionHistoryBoundary: cb => subscribe(listeners.historyBoundary, cb),
+    onSessionProviderSessionChanged: cb => subscribe(listeners.providerSessionChanged, cb),
     onSessionSemanticEvent: cb => subscribe(listeners.semantic, cb),
     onSessionConditions: cb => subscribe(listeners.conditions, cb),
     onSessionProcessState: cb => subscribe(listeners.processState, cb),
@@ -126,6 +130,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     emitJsonlError: e => emit(listeners.jsonlError, e),
     emitTranscriptDiagnostic: e => emit(listeners.transcriptDiagnostic, e),
     emitHistoryBoundary: e => emit(listeners.historyBoundary, e),
+    emitProviderSessionChanged: e => emit(listeners.providerSessionChanged, e),
     emitSemantic: e => emit(listeners.semantic, e),
     emitConditions: e => emit(listeners.conditions, e),
     emitProcessState: e => emit(listeners.processState, e),

@@ -348,7 +348,7 @@ describe('capability gates', () => {
     capabilityOverride.current = null
   })
 
-  function contextWithAgent(): CommandContext {
+  function contextWithAgent(kind = 'claude'): CommandContext {
     return {
       workspace: {
         state: {
@@ -357,7 +357,7 @@ describe('capability gates', () => {
           sessions: {
             agent: {
               cwd: '/projects/app',
-              kind: 'claude',
+              kind,
               providerSessionId: 'provider-abc',
               projectId: 'tab',
               joinedAt: 0,
@@ -383,9 +383,9 @@ describe('capability gates', () => {
     'switch-provider',
   ] as const
 
-  function availableUnder(features: Record<string, unknown>): string[] {
+  function availableUnder(features: Record<string, unknown> | null, kind?: string): string[] {
     capabilityOverride.current = features
-    const ctx = contextWithAgent()
+    const ctx = contextWithAgent(kind)
     return GATED.filter(id => {
       const command = sessionCommands.find(candidate => candidate.id === id)
       if (!command) throw new Error(`command ${id} is missing`)
@@ -402,6 +402,16 @@ describe('capability gates', () => {
     ['switchTargets', ['codex'], ['switch-provider']],
   ])('%s enables exactly %s', (capability, value, expected) => {
     expect(availableUnder({ [capability as string]: value })).toEqual(expected)
+  })
+
+  it('a Pi pane gets every transcript operation except Rewind, which has no composer to land in', () => {
+    // Real capabilities, and a pane restored kind-only (no providerRuntime),
+    // which is the shape the catalog, split chords and switches produce. Pi
+    // DECLARES transcriptRewind (its adapter really rewinds). The command is
+    // what stays hidden, by the effective terminal runtime, because rewind
+    // hands the prompt back as a composer draft and pi's TUI owns its own
+    // input (#896).
+    expect(availableUnder(null, 'pi')).toEqual(['view-prompts', 'reload-agent', 'copy-resume-command', 'duplicate-agent', 'switch-provider'])
   })
 
   it('offers nothing to a provider that declares nothing', () => {

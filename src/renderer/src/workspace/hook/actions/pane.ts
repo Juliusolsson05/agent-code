@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
@@ -1311,8 +1311,16 @@ export function usePaneActions(
       // requested a TUI. Main separately validates the actual factory.
       // #1102: enablement also gates orchestration children — a disabled
       // provider must not come back through the MCP create_agent door.
-      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
-        throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
+      //
+      // WHY the EFFECTIVE runtime, not the raw request: a terminal-only
+      // provider (Pi) has exactly one runtime, so a caller that names only
+      // `{ kind: 'pi' }` asked for it. Comparing the raw, absent runtime with
+      // the choice's 'terminal' refused every kind-only Pi create even though
+      // main would have normalized it (Astra review, finding 3). OpenCode is
+      // untouched: its absent runtime still means the structured one.
+      const providerRuntime = effectiveProviderRuntime(params.kind, params.providerRuntime)
+      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && choice.providerRuntime === providerRuntime)) {
+        throw new Error(`${params.kind} does not support the requested ${providerRuntime ?? 'structured'} runtime`)
       }
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
@@ -1371,7 +1379,7 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
-        ...(params.providerRuntime ? { providerRuntime: params.providerRuntime } : {}),
+        ...(providerRuntime ? { providerRuntime } : {}),
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })

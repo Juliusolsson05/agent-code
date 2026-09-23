@@ -4,7 +4,8 @@ import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
+import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 
 import { useWorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -172,8 +173,10 @@ export function useWorkspace(
       showToast('Choose OpenCode Terminal when creating the agent to use the native TUI')
       return false
     }
-    if (meta.providerRuntime === 'terminal' && override === 'agent') {
-      showToast('OpenCode Terminal sessions always use the native TUI')
+    if (effectiveProviderRuntime(kind, meta.providerRuntime) === 'terminal' && override === 'agent') {
+      // Effective runtime: Pi panes are terminal-only whatever their metadata
+      // stored, and the toast names the pane's own provider.
+      showToast(`${providerChoiceLabel(kind, 'terminal')} sessions always use the native TUI`)
       return false
     }
 

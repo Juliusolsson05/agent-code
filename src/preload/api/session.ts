@@ -35,6 +35,7 @@ import type {
   TranscriptPathResult,
   Unsub,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@preload/api/types.js'
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
@@ -302,6 +303,11 @@ export const sessionApi = {
    *  renderer/session-runtime/historyBoundary.ts. */
   onSessionHistoryBoundary: (cb: (e: SessionHistoryBoundaryEvent) => void): Unsub =>
     subscribe('session:history-boundary', cb),
+
+  /** The pane's provider session changed without a respawn (Pi /new, /resume,
+   *  /fork). Arrives before the history reset and rows of the new session. */
+  onSessionProviderSessionChanged: (cb: (e: SessionProviderSessionChangedEvent) => void): Unsub =>
+    subscribe('session:provider-session-changed', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),
