@@ -115,6 +115,8 @@ export type SessionRoot = { pid: number; countsOwnListeners: boolean }
  *   (MCP host, one 200 text/html) and the per-session `mitmdump` proxies are
  *   Electron's children, siblings of the agent — neither belongs to any lane.
  * - Root listeners follow `SessionRoot.countsOwnListeners` (above).
+ * - Browser processes are the agent's own automation, not dev servers
+ *   (isBrowserProcess, below).
  * - The same pid+port on several fds (IPv4 + IPv6) is one entry.
  * - Two sessions whose trees share a process both see its ports; the UI says
  *   so rather than guessing an owner.
@@ -130,7 +132,7 @@ export function attributePorts(input: {
     const silentRoots = new Set(roots.filter(r => !r.countsOwnListeners).map(r => r.pid))
     const seen = new Set<string>()
     for (const l of input.listeners) {
-      if (!tree.has(l.pid) || silentRoots.has(l.pid)) continue
+      if (!tree.has(l.pid) || silentRoots.has(l.pid) || isBrowserProcess(l.command)) continue
       const key = `${l.pid}:${l.port}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -139,6 +141,18 @@ export function attributePorts(input: {
     out[sessionId]?.sort((a, b) => a.port - b.port)
   }
   return out
+}
+
+/**
+ * A browser process listening inside an agent's tree is that agent's own
+ * automation (Playwright / chrome-devtools MCP / Puppeteer), and its port is a
+ * remote-debugging endpoint — never the app under development. Recorded: a
+ * headless "Google Chrome" under `claude → zsh → node` answering 200 text/html
+ * on :9393, which would otherwise be offered as the lane's dev server.
+ * Matched on lsof's command name; absent (a `-F pn` scan) means unknown, kept.
+ */
+export function isBrowserProcess(command: string | undefined): boolean {
+  return command !== undefined && /chrom|msedge|brave|firefox|headless_shell|webkit/i.test(command)
 }
 
 /**

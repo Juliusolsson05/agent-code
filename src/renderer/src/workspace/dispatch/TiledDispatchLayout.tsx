@@ -1,3 +1,4 @@
+import { LanePortChip } from '@renderer/features/browser-pocket/ui/LanePortChip'
 import { Fragment, useCallback, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -495,6 +496,7 @@ function GridRowView({
                   )}
                   </div>
                 )}
+                {resolved && <LanePortChip sessionId={resolved.sessionId} workspace={workspace} />}
                 {!focused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
                 )}

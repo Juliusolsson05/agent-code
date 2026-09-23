@@ -44,3 +44,7 @@ None of these were in the plan. Each one changed a rule in `core/lanePorts.ts`:
    whose parent is the tmux server.
 6. **Electron main itself listens on several ports**, including the MCP host
    and one `200 text/html`. Attribution must never walk up to ancestors.
+7. **An agent's own automation browser listens inside its tree.** A headless
+   "Google Chrome" under `claude → zsh → node` answered `200 text/html` on
+   :9393 (its remote-debugging endpoint). Listeners held by browser processes
+   are never offered as dev servers (`isBrowserProcess`).

@@ -28,3 +28,21 @@ export function onPocketRequest(listener: Listener): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }
 }
+
+/**
+ * "Open this URL in session X's pocket", for surfaces that know a session but
+ * not the workspace (a localhost link in an agent's feed). The host's bridge
+ * installs the one handler while the feature and the localhost-links setting
+ * are on; with no handler the caller falls back to the system browser, which
+ * is exactly today's behaviour.
+ */
+type OpenHandler = (sessionId: string, url: string) => boolean
+let openHandler: OpenHandler | null = null
+
+export function openInPocket(sessionId: string, url: string): boolean {
+  return openHandler ? openHandler(sessionId, url) : false
+}
+
+export function setOpenInPocketHandler(handler: OpenHandler | null): void {
+  openHandler = handler
+}

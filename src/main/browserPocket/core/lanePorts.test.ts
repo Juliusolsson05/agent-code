@@ -92,6 +92,16 @@ describe('attribution on recorded trees', () => {
     expect(all.some(p => electronPorts.includes(p.port))).toBe(false)
   })
 
+  it('never offers an agent\'s own automation browser as a dev server', () => {
+    // Recorded: a headless Chrome under claude → zsh → node, listening on a
+    // remote-debugging port that answers 200 text/html.
+    const chrome = listeners.find(l => l.command === 'Google Chrome')!
+    let owner = chrome.pid
+    while (ps.find(r => r.pid === owner)?.comm !== 'claude') owner = parentOf.get(owner)!
+    const out = attributePorts({ listeners, parentOf, roots: { a: [agent(owner)] } })
+    expect(out.a?.map(p => p.port) ?? []).not.toContain(chrome.port)
+  })
+
   it('dedupes a process that binds the same port on several fds', () => {
     const doubled = [...listeners, ...listeners]
     const pane = [...panes.entries()].find(([name]) => name.startsWith('acpocket-rec-'))![1]

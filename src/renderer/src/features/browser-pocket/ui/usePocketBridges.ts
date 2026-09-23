@@ -7,7 +7,7 @@ import type { SessionId } from '@renderer/workspace/types'
 import type { ForwardedKey } from '@shared/browserPocket/types'
 
 import { attachPocket } from '../actions'
-import { requestPocket } from '../state/pocketBus'
+import { requestPocket, setOpenInPocketHandler } from '../state/pocketBus'
 import { usePocketLiveStore } from '../state/pocketLiveStore'
 import { useLanePortsStore } from '../state/lanePortsStore'
 import { usePortWatchFeed } from './usePortWatchFeed'
@@ -29,7 +29,9 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
   }, [enabled, allowEvaluate])
 
   useEffect(() => {
-    if (!enabled) return
+    // Turning the feature off unsubscribes below before main's final "no
+    // ports" broadcast can arrive, so clear the chips here.
+    if (!enabled) { useLanePortsStore.getState().replace({}); return }
     const offs = [
       // App chords pressed while a page had focus (main caught them on the
       // guest). Re-dispatched to the ONE keybinding router, which listens on
@@ -67,6 +69,21 @@ export function usePocketBridges(workspace: Workspace, enabled: boolean): void {
     ]
     return () => { for (const off of offs) off() }
   }, [enabled, showToast])
+
+  const localhostLinks = useAppStore(s => s.settings.browserPocketOpenLocalhostLinks)
+  useEffect(() => {
+    if (!enabled || !localhostLinks) { setOpenInPocketHandler(null); return }
+    setOpenInPocketHandler((sessionId, url) => {
+      const ws = workspaceRef.current
+      const before = ws.state.sessions[sessionId]?.browserPocket
+      const next = attachPocket(ws.state, sessionId as SessionId, { url, view: 'open' })
+      if (next === ws.state && !before) return false // not an agent: let the link go external
+      ws.updateBrowserPocket(s => attachPocket(s, sessionId as SessionId, { url, view: 'open' }))
+      if (before) requestPocket(before.pocketId, { type: 'navigate', url })
+      return true
+    })
+    return () => setOpenInPocketHandler(null)
+  }, [enabled, localhostLinks])
 
   usePortWatchFeed(workspace, enabled)
 }
