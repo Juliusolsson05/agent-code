@@ -60,7 +60,9 @@ export async function reloadSessionWithBuiltInMcpOverrides(
     return undefined
   }
   try {
-    await beforeReplace?.()
+    // Awaited only when present: `await undefined` still yields a tick, which
+    // moved every plain capability reload one microtask later than before.
+    if (beforeReplace) await beforeReplace()
     const newSessionId = await workspace.replaceSession(meta.cwd, {
       kind,
       targetSessionId: sessionId,
