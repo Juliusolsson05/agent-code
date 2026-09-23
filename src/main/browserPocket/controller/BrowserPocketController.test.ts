@@ -460,13 +460,16 @@ it('revoking evaluation during isolated-world setup prevents expression dispatch
 })
 
 it('a deadline unsticks a non-cooperative action after takeover', async () => {
+  vi.useFakeTimers()
   const { c } = controller()
   const g = fakeGuest()
   c.register('p1', 's1', g.guest)
   let started = false
   const pending = c.run('s1', 'press', async () => { started = true; await new Promise(() => {}) }, { mutating: true, timeoutMs: 20 })
-  await vi.waitFor(() => expect(started).toBe(true), { interval: 1 })
+  await Promise.resolve()
+  expect(started).toBe(true)
   c.takeOver('p1')
+  await vi.advanceTimersByTimeAsync(25)
   expect(await pending).toMatchObject({ ok: false, code: 'user_took_control' })
   c.resume('p1')
   expect(await c.run('s1', 'snapshot', async () => 'working', { timeoutMs: 50 })).toMatchObject({ ok: true, value: 'working' })
