@@ -171,6 +171,14 @@ all test runs.
   - One expectation I wrote was wrong and was corrected, not the code: `inspect`'s first timestamp includes Pi's `model_change` row, as for every other provider's metadata rows.
   - A new Pi-specific pane harness beyond this was not needed. The adapter sweep (Task 7) already runs the real package + adapter over every recording, and the renderer test drives the real loader.
 - 2026-09-22 — Task 9: `PiConversationSource` (bounded head scan per file for header cwd / first prompts / `/name`; family scoping on the HEADER cwd because the per-cwd dir name is lossy; fork parent from the header's parent file name; prompts from the full active branch) registered in the catalog; package helper `listAllPiSessionFiles` / `resolvePiSessionsRoot` (package `27921ba`). Copy Resume Command verified: `buildProviderResumeCommand` prefixes `cd <cwd> &&`, so `pi --session-id <id>` is exactly the Stage 0-recorded relaunch. No new agent-status copy: the bridge fault's own message is what the status panel shows. The phone badge and attention map were done in Task 6.
+- 2026-09-22 — Task 10: parser `feat/pi-codec` at `28b12db` (pushed); 233 parser tests + typecheck + packed build green, plus a 2-test opt-in live gate against the installed pi 0.87.1.
+  - Decoder: active branch, with an explicit `leafId` for live /tree moves. v1/v2 are normalized. The latest compaction is placed BEFORE its kept rows, and older compactions in the kept range are opaque. `context_edit` applies only from context rows, as in Pi. Aborted and errored replies are opaque.
+  - Projector: linear v3 chain with deterministic 8-hex ids and an `agent-code.import` custom marker row. Verbatim Pi rows keep their native model identity. Foreign replies carry `agent-code-import` identity with zero usage, so Pi's own transformMessages takes the cross-model path. Compactions keep nothing before them (`firstKeptEntryId = id`, Pi's own convention). `fileName` states Pi's `<ts>_<id>.jsonl` rule.
+  - Findings, both fixed in the parser commits:
+    - the source checkout (main) is newer than 0.87.1, and the shipped summary wrappers have `:\n\n<summary>`. Only the installed-CLI live test caught it, so the codec is now pinned to the shipped dist, not a source commit;
+    - Codex carries function-call arguments as JSON text, and they are now parsed into Pi's object arguments (found by the cross-provider round trip).
+  - No lockfile resync was needed: the parser's package.json and dependencies are unchanged, and the lock's embedded tree only records those.
+  - Live gate: `PI_PARSER_LIVE=1 PI_BINARY=<scratch>/pi-install/node_modules/.bin/pi npx vitest run --config vitest.live.config.ts` in the parser.
 
 ---
 
@@ -548,19 +556,19 @@ session switched), remote-client badge.
 (add `pi`), `packageSurface.test.ts`, `fixtures/evidence/pi/…` (redacted,
 manifest per case), `docs/plans/pi-codec.md`.
 
-- [ ] **Step 1:** Plan doc in the parser repo (copy `docs/plans/grok-codec.md` structure).
-- [ ] **Step 2:** Failing decoder tests over Stage 0 rows: branching (abandoned
+- [x] **Step 1:** Plan doc in the parser repo (copy `docs/plans/grok-codec.md` structure).
+- [x] **Step 2:** Failing decoder tests over Stage 0 rows: branching (abandoned
   rows excluded, physical `source.line`), compaction placed before kept entries,
   `branch_summary`/`custom_message` as developer context, abort/error, bash
   execution, images, v1 rows.
-- [ ] **Step 3:** Decoder. **Step 4:** Failing projector tests (valid v3 file,
+- [x] **Step 3:** Decoder. **Step 4:** Failing projector tests (valid v3 file,
   linear chain, originator marker, decode∘project identity on the portable
   subset). **Step 5:** Projector.
-- [ ] **Step 6:** Isolated native-load probe: a projected file resumes in the
+- [x] **Step 6:** Isolated native-load probe: a projected file resumes in the
   sandboxed real `pi` (`--session-id`), and a faux reply is appended without
   re-running tools.
-- [ ] **Step 7:** Parser `npm run check`; push; open nothing yet (Task 13).
-- [ ] **Step 8:** App: bump the parser submodule pointer to the pushed commit;
+- [x] **Step 7:** Parser `npm run check`; push; open nothing yet (Task 13).
+- [x] **Step 8:** App: bump the parser submodule pointer to the pushed commit;
   `package-lock.json` resync (it is a `file:` dep — memory: submodule bumps need
   a lockfile resync or `npm ci` fails in CI).
 
