@@ -1,5 +1,5 @@
 import { isPrivateIpLiteral } from './netPolicy.js'
-import { boundedFetchResult, isHostReservedHeader, MAX_NET_FETCH_BODY_BYTES, type NetFetchRequest, type NetFetchResult } from './netFetch.js'
+import { boundedFetchResult, buildRequestHeaders, isHostReservedHeader, MAX_NET_FETCH_BODY_BYTES, transportFailure, type NetFetchRequest, type NetFetchResult } from './netFetch.js'
 
 // The net.origins capability (#1150): a brokered HTTPS fetch to one of the
 // EXACT public origins the manifest declared in `networkOrigins` and the user
@@ -79,16 +79,9 @@ export async function netOriginsFetch(
   perform: typeof fetch = fetch,
 ): Promise<NetFetchResult> {
   const url = assertDeclaredOriginTarget(request, declaredOrigins)
-  const headers = new Headers()
-  for (const header of request.headers ?? []) {
-    try {
-      headers.set(header.name.toLowerCase(), header.value)
-    } catch {
-      // Headers throws with the offending VALUE in its message on some
-      // runtimes. Replace it: an invalid header is usually a mis-pasted key.
-      throw new Error(`net.fetch header "${header.name}" is not a valid HTTP header.`)
-    }
-  }
+  // Shared with the private route so both give the same credential-safe
+  // refusal for a mis-pasted key (see buildRequestHeaders).
+  const headers = buildRequestHeaders(request.headers)
   let response: Response
   try {
     response = await perform(url.toString(), {
@@ -111,17 +104,14 @@ export async function netOriginsFetch(
       // handling here; netOrigins.test.ts asserts the built init stays clean.
     })
   } catch (error) {
-    // Network/abort/redirect failures. Undici's messages can embed the URL but
-    // never headers; still, return fixed copy — the renderer shows this text.
-    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
-    throw new Error(timedOut
-      ? `net.fetch to ${url.origin} timed out.`
-      : `net.fetch to ${url.origin} failed (network error or refused redirect).`)
+    // Network/abort/redirect failures: fixed copy, same helper as the private
+    // route — the renderer shows this text.
+    throw transportFailure(error, url.origin)
   }
   if (response.status >= 300 && response.status < 400) {
     // Some fetch implementations surface an opaque redirect instead of
     // throwing under redirect:'error'. Same decision either way.
     throw new Error(`net.fetch to ${url.origin} was redirected; redirects are not followed.`)
   }
-  return boundedFetchResult(response, request.responseType)
+  return boundedFetchResult(response, request.responseType, url.origin)
 }
