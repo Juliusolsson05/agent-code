@@ -8,6 +8,7 @@ import {
 import { RootManagementConfirmDialog } from '@renderer/features/workspace/ui/RootManagementConfirmDialog'
 import {
   reloadSessionWithBuiltInMcpChoice,
+  reloadSessionWithBuiltInMcpOverrides,
 } from '@renderer/workspace/builtInMcpReload'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 
@@ -19,6 +20,7 @@ export function RootManagementConfirmSurface() {
   const workspace = useWorkspaceContext()
   const sessionId = useAppStore(state => state.rootManagementPromptSessionId)
   const close = useAppStore(state => state.closeRootManagementPrompt)
+  const stagedOverrides = useAppStore(state => state.rootManagementPromptOverrides)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const agentLabel = meta
     ? [meta.title, meta.kind ?? DEFAULT_PROVIDER, cwdBasename(meta.cwd)].filter(Boolean).join(' · ')
@@ -33,6 +35,17 @@ export function RootManagementConfirmSurface() {
       onConfirm={() => {
         if (!sessionId || !meta) return
         close()
+        // From "Agent MCP Servers…": apply every staged choice in this one
+        // reload, with the grant the user just confirmed (#1143).
+        if (stagedOverrides) {
+          void reloadSessionWithBuiltInMcpOverrides(
+            workspace,
+            sessionId,
+            { ...stagedOverrides, [ROOT_MANAGEMENT_DOMAIN]: true },
+            rootManagementReloadLabels(true),
+          )
+          return
+        }
         void reloadSessionWithBuiltInMcpChoice(
           workspace,
           sessionId,

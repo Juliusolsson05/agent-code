@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -33,6 +33,10 @@ import { SettingsSearch } from '@renderer/features/settings/ui/SettingsSearch'
 import { SettingsSidebar } from '@renderer/features/settings/ui/SettingsSidebar'
 import { useAppStore } from '@renderer/app-state/store'
 
+function validCategory(value: string | null): SettingCategoryId | 'all' {
+  return SETTING_CATEGORIES.find(category => category.id === value)?.id ?? 'all'
+}
+
 type Props = {
   onClose: () => void
   workspace: Workspace
@@ -43,7 +47,16 @@ type Props = {
 
 export function SettingsPage({ onClose, workspace, settings, onChange, onReset }: Props) {
   const [query, setQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState<SettingCategoryId | 'all'>('all')
+  // A deep link (openSettingsPage('mcp')) picks the starting category. Read
+  // once at mount AND followed while open, so "MCP Servers" invoked with
+  // Settings already showing another category still lands on MCP.
+  const requestedCategory = useAppStore(state => state.settingsPageCategory)
+  const [selectedCategory, setSelectedCategory] = useState<SettingCategoryId | 'all'>(
+    () => validCategory(requestedCategory),
+  )
+  useEffect(() => {
+    if (requestedCategory) setSelectedCategory(validCategory(requestedCategory))
+  }, [requestedCategory])
   // null           → editor closed
   // { id: null }   → creating, seeded from the currently applied appearance
   // { id: '...' }  → editing that saved theme

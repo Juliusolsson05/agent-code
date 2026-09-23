@@ -5,6 +5,7 @@ import {
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   isBuiltInThemeMode,
+  SHIPPED_BUILT_IN_MCP_DOMAINS,
   USAGE_HEADER_LEVELS,
 } from '@renderer/app-state/settings/types'
 import {
@@ -32,7 +33,7 @@ import { coerceCommandKeybindingOverrides } from '@renderer/features/command-key
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceMouseButtonBinding, coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
-import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
+import { coerceBuiltInMcpDefaults, uniformBuiltInMcpDefaults } from '@mcp/shared/types'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -171,11 +172,14 @@ export function coerceSettings(value: unknown): Settings {
     // which is why the absent branch cannot go through the normalizer —
     // normalize treats an empty array as "no preference" and would flatten
     // the shipped default to nothing.
+    //
+    // #1143: the value became a per-provider map. A pre-#1143 flat list is
+    // copied to every provider by coerceBuiltInMcpDefaults, so an upgrade
+    // changes nobody's behavior; no store version bump is needed because this
+    // coercion runs on every hydration and no persisted value changed meaning.
     defaultBuiltInMcpDomains: parsed.defaultBuiltInMcpDomains === undefined
-      ? [...DEFAULT_SETTINGS.defaultBuiltInMcpDomains]
-      : normalizeConfigurableBuiltInMcpDomains(
-        parsed.defaultBuiltInMcpDomains,
-      ),
+      ? uniformBuiltInMcpDefaults(SHIPPED_BUILT_IN_MCP_DOMAINS)
+      : coerceBuiltInMcpDefaults(parsed.defaultBuiltInMcpDomains, SHIPPED_BUILT_IN_MCP_DOMAINS),
     // Same membership-check pattern as accent/mode: garbage / typo / a
     // removed font id from a future migration falls back to the default
     // rather than crashing applyTheme with an undefined family string.
@@ -358,6 +362,18 @@ export const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
   'attach-detached-to-grid',
   'attach-all-detached-for-tab',
   'detach-to-dispatch',
+  // Retired by the MCP servers interface (#1143): one staged "Agent MCP
+  // Servers…" picker replaced the per-capability toggles and the reset
+  // command. Listed for the same stale-override reason as the block above.
+  'use-global-mcp-settings',
+  'enable-ai-workspace-mcp',
+  'enable-orchestration-mcp',
+  'enable-agent-transcripts-mcp',
+  'enable-agent-management-mcp',
+  'enable-tldr-mcp',
+  'enable-goal-mcp',
+  'enable-goal-loop-mcp',
+  'enable-workflow-mcp',
 ])
 
 /**

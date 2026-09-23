@@ -23,8 +23,12 @@ export const createUiShellSlice: StateCreator<
   mergeProjectTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
+  settingsPageCategory: null,
+  mcpServerDialog: null,
+  agentMcpServersSessionId: null,
   agentTitlePromptSessionId: null,
   rootManagementPromptSessionId: null,
+  rootManagementPromptOverrides: null,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
@@ -135,20 +139,31 @@ export const createUiShellSlice: StateCreator<
   closePinAgents: () =>
     set({ pinAgentsOpen: false }, false, 'uiShell/closePinAgents'),
 
-  openSettingsPage: () =>
-    set({ settingsPageOpen: true }, false, 'uiShell/openSettingsPage'),
+  openSettingsPage: category =>
+    set({ settingsPageOpen: true, settingsPageCategory: category ?? null }, false, 'uiShell/openSettingsPage'),
   closeSettingsPage: () =>
-    set({ settingsPageOpen: false }, false, 'uiShell/closeSettingsPage'),
+    set({ settingsPageOpen: false, settingsPageCategory: null }, false, 'uiShell/closeSettingsPage'),
+  openMcpServerDialog: target =>
+    set({ mcpServerDialog: target }, false, 'uiShell/openMcpServerDialog'),
+  closeMcpServerDialog: () =>
+    set({ mcpServerDialog: null }, false, 'uiShell/closeMcpServerDialog'),
+  openAgentMcpServers: sessionId =>
+    set({ agentMcpServersSessionId: sessionId }, false, 'uiShell/openAgentMcpServers'),
+  closeAgentMcpServers: () =>
+    set({ agentMcpServersSessionId: null }, false, 'uiShell/closeAgentMcpServers'),
 
   openAgentTitlePrompt: sessionId =>
     set({ agentTitlePromptSessionId: sessionId }, false, 'uiShell/openAgentTitlePrompt'),
   closeAgentTitlePrompt: () =>
     set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
 
-  openRootManagementPrompt: sessionId =>
-    set({ rootManagementPromptSessionId: sessionId }, false, 'uiShell/openRootManagementPrompt'),
+  openRootManagementPrompt: (sessionId, stagedOverrides) =>
+    set({
+      rootManagementPromptSessionId: sessionId,
+      rootManagementPromptOverrides: stagedOverrides ?? null,
+    }, false, 'uiShell/openRootManagementPrompt'),
   closeRootManagementPrompt: () =>
-    set({ rootManagementPromptSessionId: null }, false, 'uiShell/closeRootManagementPrompt'),
+    set({ rootManagementPromptSessionId: null, rootManagementPromptOverrides: null }, false, 'uiShell/closeRootManagementPrompt'),
 
   openDebugBundleNotePrompt: payload =>
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),

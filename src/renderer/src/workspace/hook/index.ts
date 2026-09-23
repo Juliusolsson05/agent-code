@@ -2,7 +2,7 @@ import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 
@@ -79,7 +79,7 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
+  defaultBuiltInMcpDomains: BuiltInMcpDefaultsInput = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()

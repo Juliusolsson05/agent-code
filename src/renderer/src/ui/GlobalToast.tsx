@@ -30,6 +30,12 @@ import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
 
 const MANAGED_SKILLS_WARNING_REPEAT_MS = 60_000
 
+function userMcpUnavailableMessage(servers: readonly { name: string; reason: string }[]): string {
+  const [first] = servers
+  if (servers.length === 1 && first) return `MCP server ${first.name} wasn't attached: ${first.reason}. See Settings → MCP.`
+  return `${servers.length} MCP servers weren't attached (${servers.map(server => server.name).join(', ')}). See Settings → MCP.`
+}
+
 type GlobalToastContextValue = {
   showToast: (message: string, durationMs?: number) => void
 }
@@ -94,6 +100,21 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
     if (last && last.key === key && now - last.at < MANAGED_SKILLS_WARNING_REPEAT_MS) return
     lastSkillsWarningRef.current = { key, at: now }
     showToast(managedSkillsUnavailableMessage(event.skills), 10_000)
+  }), [showToast])
+
+  // #1143: a user MCP server an agent asked for was left out of its launch.
+  // Global toast for the managed-skills reasons above (main may launch before
+  // any window claims the pane; a restore fires this per pane). Same repeat
+  // window, keyed by the server+reason set, so one broken server does not
+  // re-raise the same toast for every restored agent.
+  const lastUserMcpWarningRef = useRef<{ key: string; at: number } | null>(null)
+  useEffect(() => window.api.onUserMcpUnavailable?.(event => {
+    const key = event.servers.map(server => `${server.name}:${server.reason}`).sort().join('|')
+    const now = Date.now()
+    const last = lastUserMcpWarningRef.current
+    if (last && last.key === key && now - last.at < MANAGED_SKILLS_WARNING_REPEAT_MS) return
+    lastUserMcpWarningRef.current = { key, at: now }
+    showToast(userMcpUnavailableMessage(event.servers), 10_000)
   }), [showToast])
 
   const dismiss = useCallback(() => {

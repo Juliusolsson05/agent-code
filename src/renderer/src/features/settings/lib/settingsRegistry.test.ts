@@ -2,98 +2,37 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 import { CONFIGURABLE_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types'
+import { BUILT_IN_MCP_SERVERS } from '@renderer/features/mcp/lib/builtInServers'
 import {
   getSettingsRegistry,
+  matchesSettingQuery,
   settingMetadata,
   type SettingActionContext,
   type SettingDefinition,
 } from '@renderer/features/settings/lib/settingsRegistry'
 
-type ToggleSetting = Extract<SettingDefinition, { control: { type: 'toggle' } }>
-
-function defaultMcpToggle(id: string): ToggleSetting {
-  const setting = getSettingsRegistry().find(candidate => candidate.id === id)
-  if (!setting || setting.control.type !== 'toggle') {
-    throw new Error(`Missing MCP toggle setting: ${id}`)
-  }
-  return setting as ToggleSetting
-}
-
-describe('built-in MCP default settings', () => {
-  it('exposes all configurable product domains without a persistent ping setting', () => {
-    const ids = getSettingsRegistry().map(setting => setting.id)
-    expect(ids).toEqual(expect.arrayContaining([
-      'default-orchestration-mcp',
-      'default-ai-workspace-mcp',
-      'default-agent-transcripts-mcp',
-      'default-agent-management-mcp',
-      'default-workflow-mcp',
-    ]))
-    expect(ids).not.toContain('default-ping-mcp')
+describe('MCP settings (#1143)', () => {
+  it('replaces the per-domain default toggles with one MCP grid in the MCP category', () => {
+    const registry = getSettingsRegistry()
+    expect(registry.filter(setting => /^default-.*-mcp$/.test(setting.id))).toEqual([])
+    const grid = registry.find(setting => setting.id === 'mcp-servers')
+    expect(grid?.category).toBe('mcp')
+    expect(grid?.control.type).toBe('mcp-servers')
+    expect(registry.find(setting => setting.id === 'external-control')?.category).toBe('mcp')
   })
 
-  it('gives every configurable domain exactly one default toggle that reads that domain', () => {
-    // Derived from the domain list rather than hand-listed ids, so a new
-    // capability (Goal, #936) cannot ship without its row, and a row copied
-    // from a sibling cannot keep reading the sibling's domain.
-    const toggles = getSettingsRegistry().filter((setting): setting is ToggleSetting =>
-      /^default-.*-mcp$/.test(setting.id) && setting.control.type === 'toggle')
-    for (const domain of CONFIGURABLE_BUILT_IN_MCP_DOMAINS) {
-      const reading = toggles.filter(setting => setting.control.getValue({ ...DEFAULT_SETTINGS, defaultBuiltInMcpDomains: [domain] }))
-      expect(reading.map(setting => setting.id), domain).toHaveLength(1)
+  it('still finds the grid by the name of every built-in capability it replaced', () => {
+    // Users who learned "search Settings for orchestration" must still land on
+    // the place that default now lives.
+    const grid = getSettingsRegistry().find(setting => setting.id === 'mcp-servers')!
+    for (const word of ['tldr', 'goal', 'orchestration', 'ai workspace', 'transcripts', 'agent management', 'workflow', 'beeper']) {
+      expect(matchesSettingQuery(grid, word), word).toBe(true)
     }
   })
 
-  it('adds and removes one domain without disturbing sibling defaults', async () => {
-    const setting = defaultMcpToggle('default-workflow-mcp')
-    const onChange = vi.fn()
-    const enabledSettings = {
-      ...DEFAULT_SETTINGS,
-      defaultBuiltInMcpDomains: ['orchestration' as const],
-    }
-    const context = {
-      settings: enabledSettings,
-      onChange,
-    } as unknown as SettingActionContext
-
-    await setting.control.onToggle(context, true)
-    expect(onChange).toHaveBeenLastCalledWith({
-      defaultBuiltInMcpDomains: ['orchestration', 'workflows'],
-    })
-
-    await setting.control.onToggle({
-      ...context,
-      settings: {
-        ...enabledSettings,
-        defaultBuiltInMcpDomains: ['orchestration', 'workflows'],
-      },
-    }, false)
-    expect(onChange).toHaveBeenLastCalledWith({
-      defaultBuiltInMcpDomains: ['orchestration'],
-    })
-  })
-
-  it('documents Workflow MCP for Codex and OpenCode because Claude is native', () => {
-    const setting = defaultMcpToggle('default-workflow-mcp')
-    expect(setting.description).toContain('Codex and OpenCode')
-    expect(setting.description).toContain('Claude uses its native workflow feature')
-  })
-
-  it('toggles the Agent Management default without disturbing sibling domains', async () => {
-    const setting = defaultMcpToggle('default-agent-management-mcp')
-    const onChange = vi.fn()
-    const context = {
-      settings: {
-        ...DEFAULT_SETTINGS,
-        defaultBuiltInMcpDomains: ['orchestration' as const],
-      },
-      onChange,
-    } as unknown as SettingActionContext
-
-    await setting.control.onToggle(context, true)
-    expect(onChange).toHaveBeenCalledWith({
-      defaultBuiltInMcpDomains: ['orchestration', 'agent_management'],
-    })
+  it('lists every configurable built-in domain exactly once in the grid', () => {
+    const domains = BUILT_IN_MCP_SERVERS.map(server => server.domain)
+    expect([...domains].sort()).toEqual([...CONFIGURABLE_BUILT_IN_MCP_DOMAINS].sort())
   })
 })
 

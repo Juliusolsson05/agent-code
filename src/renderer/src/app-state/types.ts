@@ -6,6 +6,7 @@ import type {
   UiShellState,
 } from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
+import type { BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { ExtensionListEntry } from '@shared/types/extensions'
@@ -51,11 +52,15 @@ export type UiShellSlice = UiShellState & {
   closeMergeProjectTabs: () => void
   openPinAgents: () => void
   closePinAgents: () => void
-  openSettingsPage: () => void
+  openSettingsPage: (category?: string) => void
   closeSettingsPage: () => void
+  openMcpServerDialog: (target: { mode: 'add' } | { mode: 'edit'; serverId: string }) => void
+  closeMcpServerDialog: () => void
+  openAgentMcpServers: (sessionId: SessionId) => void
+  closeAgentMcpServers: () => void
   openAgentTitlePrompt: (sessionId: SessionId) => void
   closeAgentTitlePrompt: () => void
-  openRootManagementPrompt: (sessionId: SessionId) => void
+  openRootManagementPrompt: (sessionId: SessionId, stagedOverrides?: BuiltInMcpOverrides) => void
   closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
     bundlePath: string
