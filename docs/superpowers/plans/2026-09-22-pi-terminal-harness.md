@@ -193,6 +193,20 @@ all test runs.
     - the Rewind COMMAND stays hidden on Pi panes (no composer; #896), pinned by a command-gate test;
     - a live `/tree` move with no summary is read as the last-row branch until the next row lands (documented in piTranscript.ts);
     - a FAILED Pi compaction writes nothing, so the opt-in compact-first path times out instead of failing fast (the same honest limit as Codex/OpenCode).
+- 2026-09-22 — Task 12: app `bd0bde8e`; package `6327a7c`.
+  - The MCP client lives INSIDE `bridge/extension.ts`, not in a separate `mcpProxy.ts`, because the bridge ships as one jiti-loaded file (rule 3).
+  - It is a minimal Streamable-HTTP JSON-RPC client over `fetch`, speaking the host's actual shape: stateless, SSE replies, 202 notifications, and the negotiated `mcp-protocol-version` echoed.
+  - Tools are named `mcp__<server>__<tool>` and use the MCP `inputSchema` as plain JSON Schema: pi-ai validation takes the non-TypeBox path, so no `Type.Unsafe` was needed, and `$schema` is dropped.
+  - Server instructions go into their own `systemPromptOptions.sections` entry (composes with other extensions).
+  - The first prompt awaits discovery (bounded to 10 s).
+  - A rebuilt runtime re-registers without rediscovering.
+  - An `mcp_status` bridge event reports per-server tool counts or errors.
+  - Env: `AGENT_CODE_PI_MCP_SERVERS` names the `AGENT_CODE_MCP_i_j` variables, all scrubbed on read.
+  - Finding: pi 0.87.1 hands providers a TRANSCRIPT context, where prompt sections and tool declarations are `system` messages, not `systemPrompt`/`tools`. The live test's faux probe reads them there.
+  - Evidence:
+    - package: 5 system tests, plus a live test in the real pi (the model's request declares the tool and carries the instructions, and the call runs and is written as a toolResult);
+    - app: the real BuiltInMcpHttpHost with real tools through the real bridge, including revocation, plus a PiSession env test.
+  - NOT done: TLDR turn hooks (`tldrHooks`) are not wired for Pi. That is the same state as OpenCode/Grok, and it is a follow-up.
 
 ---
 
@@ -618,12 +632,12 @@ bearer env var names, never argv), tests with a local fake MCP server.
 (`addPiBuiltInMcpLaunchConfig`), `src/mcp/shared/types.ts` (`pi:` same domains
 as others), `piSession.ts` wiring, MCP policy tests.
 
-- [ ] **Step 1:** Failing tests (package: proxy registers tools matching the
+- [x] **Step 1:** Failing tests (package: proxy registers tools matching the
   fake server's list and forwards calls with the bearer; app: launch config
   contains no bearer in args).
-- [ ] **Step 2:** Confirm fail. **Step 3:** Implement. **Step 4:** Live-tier
+- [x] **Step 2:** Confirm fail. **Step 3:** Implement. **Step 4:** Live-tier
   test with faux provider calling `mcp__agent_code__tldr_update`.
-- [ ] **Step 5:** Commits `feat(bridge): expose Agent Code MCP tools inside Pi`,
+- [x] **Step 5:** Commits `feat(bridge): expose Agent Code MCP tools inside Pi`,
   `feat(pi): give Pi agents the built-in MCP servers`.
 
 ---
