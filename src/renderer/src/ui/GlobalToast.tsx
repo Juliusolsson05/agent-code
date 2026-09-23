@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -26,6 +27,8 @@ import { useAppStore } from '@renderer/app-state/hooks'
 // toast is by definition the topmost transient layer, and every existing caller
 // is unaffected by it moving up, whereas lowering the dialog would break the
 // modal stacking the entire surface registry depends on.
+
+const MANAGED_SKILLS_WARNING_REPEAT_MS = 60_000
 
 type GlobalToastContextValue = {
   showToast: (message: string, durationMs?: number) => void
@@ -59,6 +62,38 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
       .find(entry => entry.manifest.id === event.extensionId)?.manifest.name
       ?? event.extensionId
     showToast(`${name}: ${event.message}`, 6000)
+  }), [showToast])
+
+  // #1133: a TLDR/Goal skill could not be prepared and agents were launched
+  // without it. WHY the global toast and not a pane toast or condition:
+  // - The fault is machine-wide skill health, not something one pane did.
+  // - Restoring a workspace fires this once per pane. The single slot collapses
+  //   fifteen identical warnings into one, where pane toasts would put the
+  //   same banner in every pane.
+  // - Provider conditions are interactive TUI states with actions. This has
+  //   nothing to answer.
+  // 10 s and click-to-dismiss follow the warning-grade precedent above: long
+  // enough to read the Settings path, and dismissable so it never reads as
+  // stuck. The lasting record is the skill's health in Settings, which this
+  // text points to.
+  //
+  // WHY a 60 s repeat window per skill set: main warns on EVERY launch while
+  // the skill stays broken (each new pane, orchestration child and wake). The
+  // single slot only collapses one restore burst. Without the window, a
+  // broken skill re-raised the same 10 s toast all day, pushed out extension
+  // notifications that share the slot, and brought back a toast the user had
+  // just dismissed mid-burst. The key is the skill SET, so a newly failing
+  // skill (TLDR, then TLDR+Goal) still shows at once. Main's journal keeps
+  // every occurrence, so nothing diagnostic is lost here. Per window, because
+  // every window gets the broadcast and each has its own user-visible slot.
+  const lastSkillsWarningRef = useRef<{ key: string; at: number } | null>(null)
+  useEffect(() => window.api.onManagedSkillsUnavailable?.(event => {
+    const key = [...event.skills].sort().join(',')
+    const now = Date.now()
+    const last = lastSkillsWarningRef.current
+    if (last && last.key === key && now - last.at < MANAGED_SKILLS_WARNING_REPEAT_MS) return
+    lastSkillsWarningRef.current = { key, at: now }
+    showToast(managedSkillsUnavailableMessage(event.skills), 10_000)
   }), [showToast])
 
   const dismiss = useCallback(() => {

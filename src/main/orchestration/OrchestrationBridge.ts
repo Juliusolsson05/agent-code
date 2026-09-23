@@ -116,6 +116,26 @@ type PromptDeliveryMetadata = {
   createdAt: number
   lastPromptSubmittedAt?: number
   promptSubmissionCount: number
+  /**
+   * An orchestration prompt is WAITING for this child's composer (#1134):
+   * armed by `create_agent`/`send_prompt` for a child that was not ready yet,
+   * not landed and not given up on.
+   *
+   * WHY main has to know: `lastPromptSubmittedAt` is written only when a
+   * prompt LANDS, and it is what turns a `completed` child back into
+   * `prompt_sent`. Without this, a follow-up waiting on an already-completed
+   * child — a parked child that is still warming after its wake, a composer
+   * holding a human draft, a Codex child between the end of its turn and the
+   * waiter's next re-arm — read as `completed`, and `wait_agents` returned
+   * `done` at once with the PREVIOUS turn's output, which the parent took as
+   * the answer to the prompt it had just been told was pending.
+   *
+   * `token` identifies WHICH waiter set it. Waiters replace each other (the
+   * newest orchestration prompt wins), and the replaced one settles after
+   * the new one armed; clearing by session id alone would wipe the new
+   * waiter's pending state with the old one's failure.
+   */
+  pendingPrompt?: { token: number; since: number }
 }
 
 type ClosedAgentRecord = {
@@ -167,6 +187,8 @@ export class OrchestrationBridge {
   private readonly rendererQueue: QueuedRendererRequest[] = []
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
+  /** Monotonic source for `PromptDeliveryMetadata.pendingPrompt.token`. */
+  private pendingPromptTokens = 0
   /**
    * Whole `orchestration_create_agent` TOOL CALLS that are still running,
    * keyed by the call's arguments (#952).
@@ -449,6 +471,41 @@ export class OrchestrationBridge {
     }
     this.promptDeliveries.delete(sessionId)
     this.promptDeliveries.set(sessionId, next)
+    this.invalidateStatusCacheForSession(sessionId)
+  }
+
+  /**
+   * Record that an orchestration prompt is now waiting for this child's
+   * composer (#1134). Returns the token `notePromptPendingSettled` needs. See
+   * `PromptDeliveryMetadata.pendingPrompt` for why this exists.
+   */
+  notePromptPending(sessionId: string): number {
+    this.pruneCoordinationMetadata()
+    const now = Date.now()
+    const token = ++this.pendingPromptTokens
+    const current = this.promptDeliveries.get(sessionId) ?? {
+      createdAt: now,
+      promptSubmissionCount: 0,
+    }
+    this.promptDeliveries.delete(sessionId)
+    this.promptDeliveries.set(sessionId, { ...current, pendingPrompt: { token, since: now } })
+    this.invalidateStatusCacheForSession(sessionId)
+    return token
+  }
+
+  /**
+   * The waiter that `token` names has settled — landed, failed, or been
+   * replaced. Clears the pending state only if no newer waiter owns it.
+   *
+   * Callers settle BEFORE `notePromptSubmitted` on landing so there is no
+   * instant in which the child is neither pending nor submitted (both happen
+   * in the same synchronous tick, but the order still states the intent).
+   */
+  notePromptPendingSettled(sessionId: string, token: number): void {
+    const current = this.promptDeliveries.get(sessionId)
+    if (!current?.pendingPrompt || current.pendingPrompt.token !== token) return
+    const { pendingPrompt: _settled, ...rest } = current
+    this.promptDeliveries.set(sessionId, rest)
     this.invalidateStatusCacheForSession(sessionId)
   }
 
@@ -942,6 +999,19 @@ export class OrchestrationBridge {
     // STAGE 2 of 2: renderer state says what the child appears to be doing,
     // while main alone knows when orchestration submitted a prompt. Keep this
     // overlay paired with lifecycleStateForRuntime in orchestrationMcp.ts.
+    // A prompt WAITING for the composer is a prompt the parent was told is
+    // on its way (#1134), so the child is not done — whatever the renderer
+    // derives from its last visible assistant row. Checked first because the
+    // submission count may be 0 (a bootstrap that has not landed) and the
+    // previous turn's `completed` is exactly the stale state to override.
+    // `failed` is overridden too, for the #1018 reason below: a failed child
+    // the parent has prompted again is waiting on that prompt. Only `closed`
+    // is left alone — a closed child has nothing to wait for, and the
+    // waiter's own failure path settles the pending state for a session that
+    // went away.
+    if (delivery.pendingPrompt && agent.lifecycleState !== 'closed') {
+      return 'prompt_sent'
+    }
     if (delivery.promptSubmissionCount === 0) return agent.lifecycleState
     if (agent.lifecycleState === 'created' || agent.lifecycleState === 'waiting') {
       return 'prompt_sent'
@@ -1092,7 +1162,12 @@ export class OrchestrationBridge {
     // about recent children. Leaving those maps unbounded in a long-running
     // desktop app would retain old outputs indefinitely.
     for (const [sessionId, delivery] of this.promptDeliveries) {
-      const latest = delivery.lastPromptSubmittedAt ?? delivery.createdAt
+      // A pending prompt keeps the record alive as long as the prompt is
+      // recent — the same TTL, measured from when it started waiting.
+      const latest = Math.max(
+        delivery.lastPromptSubmittedAt ?? delivery.createdAt,
+        delivery.pendingPrompt?.since ?? 0,
+      )
       if (now - latest > ORCHESTRATION_METADATA_TTL_MS) {
         this.promptDeliveries.delete(sessionId)
         this.parentSessionByChildSession.delete(sessionId)
