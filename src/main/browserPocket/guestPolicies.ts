@@ -55,16 +55,27 @@ export function forwardedKeyFromInput(input: InputLike): ForwardedKey {
   return { key: input.key, code: input.code, meta: input.meta, ctrl: input.control, alt: input.alt, shift: input.shift }
 }
 
-export type GuestPolicyDeps = {
+export type GuestInputDeps = {
   forwardChord: (key: ForwardedKey) => void
   localAction: (action: keyof typeof POCKET_LOCAL_CHORDS) => void
   /** A trusted key or mouse-down from the human (spec §6.5 takeover). */
   onHumanInput: (at?: { x: number; y: number }) => void
-  /** A popup the pocket will not open itself (D9): offer the system browser. */
-  onBlockedPopup: (url: string) => void
+  /**
+   * True while the controller is dispatching the agent's own CDP keys.
+   * Whether CDP key events pass through before-input-event is unverified
+   * (decomposition U6); if they do, an agent's browser_press of ⌘W must reach
+   * the PAGE, never be forwarded to the app as "close tab" (review A #5).
+   */
+  agentTyping: () => boolean
 }
 
-export function attachGuestPolicies(guest: Electron.WebContents, deps: GuestPolicyDeps): void {
+/**
+ * Navigation, popup and scheme rules. Attached at ATTACH time
+ * (did-attach-webview, see guestGuard.installGuestGuard) — not when the
+ * renderer registers the guest over IPC — so a <webview> created by any
+ * renderer script is guarded even if it never registers (review A #1).
+ */
+export function attachGuestSecurity(guest: Electron.WebContents, deps: { onBlockedPopup: (url: string) => void }): void {
   // _blank links and window.open to the web load in the same pocket: one page
   // per pocket (D3). A popup that NEEDS window.opener (OAuth) would break that
   // way, so non-navigational dispositions are refused with an offer to open
@@ -85,8 +96,14 @@ export function attachGuestPolicies(guest: Electron.WebContents, deps: GuestPoli
   guest.on('will-frame-navigate', details => {
     if (details.isMainFrame && !isAllowedTopLevelUrl(details.url) && details.url !== 'about:blank') details.preventDefault()
   })
+}
 
+/** Keys and pointer: chord forwarding, page-local chords, takeover reports.
+ * Attached on registration, because it needs to know which pocket it is. */
+export function attachGuestInput(guest: Electron.WebContents, deps: GuestInputDeps): void {
   guest.on('before-input-event', (event, input) => {
+    // The agent's own CDP keys (if they echo here at all) go to the page.
+    if (deps.agentTyping()) return
     const chord = chordFromInput(input)
     if (chord) {
       for (const [action, chords] of Object.entries(POCKET_LOCAL_CHORDS) as Array<[keyof typeof POCKET_LOCAL_CHORDS, Set<string>]>) {
@@ -94,11 +111,8 @@ export function attachGuestPolicies(guest: Electron.WebContents, deps: GuestPoli
       }
       if (POCKET_FORWARDED_CHORDS.has(chord)) { event.preventDefault(); deps.forwardChord(forwardedKeyFromInput(input)); return }
     }
-    // A keystroke here MAY be the user taking control (spec §6.5) — or may be
-    // the agent's own CDP Input.dispatchKeyEvent echoing through: whether CDP
-    // input passes before-input-event on 43.7.x is unverified (decomposition
-    // U6). So this only REPORTS; the controller decides, filtering out input
-    // it is dispatching itself.
+    // A keystroke here MAY be the user taking control (spec §6.5). This only
+    // REPORTS; the controller decides, filtering input it dispatched itself.
     if (input.type === 'keyDown') deps.onHumanInput()
   })
   guest.on('input-event', (_event, input) => {

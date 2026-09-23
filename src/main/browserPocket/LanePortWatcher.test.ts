@@ -115,3 +115,50 @@ describe('scheduling and cost', () => {
     expect(h.broadcast).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('review A #8 / surviving mutations', () => {
+  it('a server that went away and came back on the same pid:port is probed again', async () => {
+    const h = harness({ a: ancestorClaude(4173) })
+    h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    await h.watcher.scan()
+    const listen = h.listListeners.getMockImplementation()!
+    h.listListeners.mockImplementation(async () => [])
+    await h.watcher.scan()
+    h.listListeners.mockImplementation(listen)
+    await h.watcher.scan()
+    expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173, 4173])
+  })
+
+  it('backs off with the cost of a scan: 20 × the last scan time, never below the floor', async () => {
+    const timers: number[] = []
+    let t = 0
+    const watcher = new LanePortWatcher({
+      listProcesses: async () => { t += 400; return parentOf },
+      listListeners: async () => [], listTmuxPanes: async () => [], probe: async () => ({ status: null, contentType: null }),
+      agentPid: () => ancestorClaude(4173), terminalPid: () => null, broadcast: () => {},
+      now: () => t, setTimer: (_fn, ms) => { timers.push(ms); return () => {} },
+    })
+    watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    await watcher.scan()
+    expect(timers.at(-1)).toBe(20 * 400)
+  })
+
+  it('a scan that started before the feature was turned off does not broadcast its stale ports', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    const broadcast = vi.fn()
+    const watcher = new LanePortWatcher({
+      listProcesses: async () => { await gate; return parentOf },
+      listListeners: async pids => listeners.filter(l => pids.includes(l.pid)), listTmuxPanes: async () => [],
+      probe: async port => probes.get(port) ?? { status: null, contentType: null },
+      agentPid: () => ancestorClaude(4173), terminalPid: () => null, broadcast,
+      now: () => 0, setTimer: () => () => {},
+    })
+    watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    const scanning = watcher.scan()
+    watcher.setSessions([])
+    release()
+    await scanning
+    expect(broadcast.mock.calls.map(c => c[0])).toEqual([{}])
+  })
+})

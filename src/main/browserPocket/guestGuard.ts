@@ -2,12 +2,11 @@ import type { BrowserWindow } from 'electron'
 
 import { isAllowedTopLevelUrl } from '@shared/browserPocket/url.js'
 
-/**
- * Every pocket partition starts with this. `persist:` is part of the prefix on
- * purpose: an in-memory partition would lose the dev app's login every time a
- * hidden guest is put to sleep and recreated (placement/lifecycle.ts).
- */
-export const POCKET_PARTITION_PREFIX = 'persist:ac-pocket-'
+import { attachGuestSecurity } from './guestPolicies.js'
+import { configurePocketSession } from './partition.js'
+import { POCKET_PARTITION_PREFIX } from './partitionName.js'
+
+export { POCKET_PARTITION_PREFIX }
 
 export type GuestAttachDecision = { allow: true } | { allow: false; reason: string }
 
@@ -60,7 +59,7 @@ export function hardenGuestPreferences(prefs: Electron.WebPreferences): void {
   prefs.webviewTag = false
 }
 
-export function installGuestGuard(window: BrowserWindow): void {
+export function installGuestGuard(window: BrowserWindow, deps: { onBlockedPopup: (url: string) => void }): void {
   window.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     const decision = decideGuestAttach({ src: params.src, partition: params.partition })
     if (!decision.allow) {
@@ -69,5 +68,16 @@ export function installGuestGuard(window: BrowserWindow): void {
       return
     }
     hardenGuestPreferences(webPreferences)
+    // Install the partition's permission / certificate / download handlers
+    // HERE, not only when the renderer asks for a partition name over IPC.
+    // A session with no handler GRANTS every permission (Electron's default),
+    // so a <webview> created straight from renderer script with a valid
+    // pocket partition would otherwise get microphone, camera, location and
+    // silent downloads (review A #1). Idempotent per partition.
+    configurePocketSession(params.partition!)
+  })
+  // Navigation / popup rules at attach time for the same reason.
+  window.webContents.on('did-attach-webview', (_event, guest) => {
+    attachGuestSecurity(guest, deps)
   })
 }

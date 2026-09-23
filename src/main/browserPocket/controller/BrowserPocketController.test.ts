@@ -228,3 +228,114 @@ describe('lifecycle', () => {
     expect(driving).toEqual([{ pocketId: 'p1', state: 'agent', action: 'clicked "Sign in"' }, { pocketId: 'p1', state: null }])
   })
 })
+
+describe('review round fixes (review A)', () => {
+  it('#2 an action that timed out while queued never touches the page afterwards', async () => {
+    const { c, driving } = controller()
+    const g = fakeGuest({ hang: 'Accessibility.getFullAXTree' })
+    c.register('p1', 's1', g.guest)
+    // A hung read holds the queue; the click behind it times out first.
+    const slow = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 80 })
+    const click = c.run('s1', 'click', async ctx => { ctx.checkEpoch(); await ctx.cdp.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: 1, y: 1 }) }, { mutating: true, timeoutMs: 20 })
+    expect(await click).toMatchObject({ ok: false, code: 'timeout' })
+    await slow
+    await new Promise(r => setTimeout(r, 50))
+    expect(g.sent.some(s => s.method === 'Input.dispatchMouseEvent')).toBe(false)
+    // …and it never re-announces itself as driving after the "done" signal.
+    const lastAgent = driving.map((e, i) => ((e as { state: unknown }).state === 'agent' ? i : -1)).filter(i => i >= 0).pop() ?? -1
+    const lastNull = driving.map((e, i) => ((e as { state: unknown }).state === null ? i : -1)).filter(i => i >= 0).pop() ?? -1
+    expect(lastNull).toBeGreaterThan(lastAgent)
+  })
+
+  it('#3 browser_open on an existing pocket never asks the renderer to navigate', async () => {
+    const { c, requestOpen } = controller()
+    c.register('p1', 's1', fakeGuest().guest)
+    expect(await c.openPocketFor('s1', 'http://localhost:5173/')).toBe('already')
+    expect(requestOpen).not.toHaveBeenCalled()
+  })
+
+  it('#3 browser_open is refused while the feature is off', async () => {
+    const { c, requestOpen } = controller()
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    expect(await c.openPocketFor('s1', undefined, 10)).toBe('disabled')
+    expect(requestOpen).not.toHaveBeenCalled()
+  })
+
+  it('#4 the user\'s click while picking is not "taking control"', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const picking = c.pick('p1')
+    await new Promise(r => setTimeout(r, 10))
+    c.noteHumanInput('p1', { x: 3, y: 3 })
+    c.cancelPick('p1')
+    await picking
+    expect(await c.run('s1', 'click', async () => 1, { mutating: true })).toEqual({ ok: true, value: 1 })
+  })
+
+  it('#5 agentTyping is true only while the agent\'s own keys are in flight', async () => {
+    const { c, advance } = controller()
+    c.register('p1', 's1', fakeGuest().guest)
+    expect(c.agentTyping('p1')).toBe(false)
+    await c.run('s1', 'press', async ctx => { ctx.expectKeys(); expect(c.agentTyping('p1')).toBe(true) }, { mutating: true })
+    advance(1000)
+    expect(c.agentTyping('p1')).toBe(false)
+  })
+
+  it('#7 the echo of the agent\'s click is ignored even when reported in other coordinates', async () => {
+    const { c } = controller()
+    c.register('p1', 's1', fakeGuest().guest)
+    const out = await c.run('s1', 'click', async ctx => { ctx.expectPointer(100, 40); c.noteHumanInput('p1', { x: 150, y: 60 }); ctx.checkEpoch(); return 'ok' }, { mutating: true })
+    expect(out).toEqual({ ok: true, value: 'ok' })
+  })
+
+  it('#6 the colour scheme is re-applied after a timeout reset re-attaches the debugger', async () => {
+    const { c } = controller()
+    const g = fakeGuest({ hang: 'Accessibility.getFullAXTree' })
+    c.register('p1', 's1', g.guest)
+    await c.applyEmulation('p1', { colorScheme: 'dark' })
+    await c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 20 })
+    g.sent.length = 0
+    await c.run('s1', 'status', async () => 1)
+    expect(g.sent).toContainEqual({ method: 'Emulation.setEmulatedMedia', params: { features: [{ name: 'prefers-color-scheme', value: 'dark' }] } })
+  })
+
+  it('caps any requested deadline at 15 s', async () => {
+    vi.useFakeTimers()
+    const { c } = controller()
+    c.register('p1', 's1', fakeGuest({ hang: 'Accessibility.getFullAXTree' }).guest)
+    const out = c.run('s1', 'snapshot', ctx => snapshot(ctx), { timeoutMs: 600_000 })
+    await vi.advanceTimersByTimeAsync(15_001)
+    expect(await out).toMatchObject({ ok: false, code: 'timeout' })
+  })
+
+  it('a destroyed guest is not the session\'s pocket any more', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    ;(g.guest as { isDestroyed: () => boolean }).isDestroyed = () => true
+    expect(await c.run('s1', 'x', async () => 1)).toMatchObject({ code: 'no_pocket' })
+  })
+
+  it('#9 an abandoned browser_open leaves no waiter behind, and turning the feature off detaches', async () => {
+    const { c } = controller()
+    expect(await c.openPocketFor('s1', undefined, 10)).toBe('timeout')
+    expect((c as unknown as { registrationWaiters: Map<string, unknown> }).registrationWaiters.size).toBe(0)
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    await c.run('s1', 'x', async () => 1)
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    expect(g.dbg.detach).toHaveBeenCalled()
+  })
+
+  it('#9 an id remap carries the "since last snapshot" cursor, so old errors are not repeated', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 'old', g.guest)
+    await c.run('old', 'x', async () => 1)
+    for (const e of errorEvents) g.emit(e.method, e.params)
+    c.markSnapshot('old')
+    c.register('p1', 'new', g.guest)
+    expect(c.consoleSince('new', { sinceLastSnapshot: true })).toEqual([])
+  })
+})

@@ -37,7 +37,7 @@ export const browserPocketApi = {
 
   onPocketChord: (cb: (key: ForwardedKey) => void): Unsub => subscribe('browser-pocket:chord', cb),
   onPocketLocalAction: (cb: (p: { pocketId: string; action: PocketLocalAction }) => void): Unsub => subscribe('browser-pocket:local-action', cb),
-  onPocketBlockedPopup: (cb: (p: { pocketId: string; url: string }) => void): Unsub => subscribe('browser-pocket:blocked-popup', cb),
+  onPocketBlockedPopup: (cb: (p: { pocketId?: string; url: string }) => void): Unsub => subscribe('browser-pocket:blocked-popup', cb),
   onPocketOpenRequest: (cb: (p: { sessionId: string; url?: string }) => void): Unsub => subscribe('browser-pocket:open-request', cb),
   onPocketPorts: (cb: (p: { bySession: Record<string, LanePort[]> }) => void): Unsub => subscribe('browser-pocket:ports', cb),
   onPocketDriving: (cb: (p: PocketDrivingEvent) => void): Unsub => subscribe('browser-pocket:driving', cb),

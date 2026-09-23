@@ -45,11 +45,17 @@ export class LanePortWatcher {
   private probeCache = new Map<string, ProbeResult>()
   private lastBroadcast = ''
   private stopped = false
+  /** Bumped by every setSessions. A scan that started under an older plan
+   * must not broadcast: after the feature is turned off it would refill the
+   * port cache with stale ports, and a new plan should get its own answer
+   * immediately rather than one back-off later (review A #8). */
+  private planGeneration = 0
 
   constructor(private readonly deps: LanePortWatcherDeps) {}
 
   setSessions(sessions: PortWatchSession[]): void {
     this.sessions = sessions
+    this.planGeneration++
     this.cancel?.()
     this.cancel = null
     if (sessions.length === 0) {
@@ -78,6 +84,7 @@ export class LanePortWatcher {
   private async runScan(): Promise<void> {
     if (this.stopped || this.sessions.length === 0) return
     const started = this.deps.now()
+    const generation = this.planGeneration
     try {
       const [parentOf, panes] = await Promise.all([this.deps.listProcesses(), this.hasTmux() ? this.deps.listTmuxPanes() : Promise.resolve([])])
       const panesByName = new Map<string, number[]>()
@@ -125,12 +132,14 @@ export class LanePortWatcher {
       // a restarted server's old answer to a reused port.
       const live = new Set(listeners.map(l => `${l.pid}:${l.port}`))
       for (const key of this.probeCache.keys()) if (!live.has(key)) this.probeCache.delete(key)
-      this.emit(out)
+      if (generation === this.planGeneration) this.emit(out)
     } catch (error) {
       console.warn('[browser-pocket] port scan failed:', error instanceof Error ? error.message : error)
     } finally {
       this.lastScanMs = this.deps.now() - started
-      if (!this.stopped && this.sessions.length) this.schedule(Math.max(SCAN_FLOOR_MS, 20 * this.lastScanMs))
+      // A plan that changed during this scan is answered right away.
+      const stale = generation !== this.planGeneration
+      if (!this.stopped && this.sessions.length) this.schedule(stale ? 0 : Math.max(SCAN_FLOOR_MS, 20 * this.lastScanMs))
     }
   }
 

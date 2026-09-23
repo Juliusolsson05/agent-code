@@ -1,6 +1,6 @@
 import { ipcMain, webContents } from 'electron'
 
-import { attachGuestPolicies } from '@main/browserPocket/guestPolicies.js'
+import { attachGuestInput } from '@main/browserPocket/guestPolicies.js'
 import { mayRegisterGuest } from '@main/browserPocket/guestRegistration.js'
 import { clearPocketStorage, configurePocketSession, partitionFor } from '@main/browserPocket/partition.js'
 import type { PocketFlags, PocketPickResult, PortWatchSession } from '@shared/browserPocket/types.js'
@@ -14,6 +14,7 @@ export type BrowserPocketIpcDeps = {
   register(pocketId: string, sessionId: string, guest: Electron.WebContents): void
   unregister(pocketId: string): Promise<void>
   noteHumanInput(pocketId: string, at?: { x: number; y: number }): void
+  agentTyping(pocketId: string): boolean
   takeOver(pocketId: string): void
   resume(pocketId: string): void
   setFlags(flags: PocketFlags): void
@@ -42,11 +43,13 @@ export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
     if (!guestsWithPolicies.has(guest!.id)) {
       guestsWithPolicies.add(guest!.id)
       guest!.once('destroyed', () => guestsWithPolicies.delete(guest!.id))
-      attachGuestPolicies(guest!, {
+      // Navigation/popup security is attached at did-attach-webview by the
+      // window guard; this adds only the pocket-aware input handling.
+      attachGuestInput(guest!, {
         forwardChord: key => { if (!sender.isDestroyed()) sender.send('browser-pocket:chord', key) },
         localAction: action => { if (!sender.isDestroyed()) sender.send('browser-pocket:local-action', { pocketId: p.pocketId, action }) },
         onHumanInput: at => deps.noteHumanInput(p.pocketId, at),
-        onBlockedPopup: url => { if (!sender.isDestroyed()) sender.send('browser-pocket:blocked-popup', { pocketId: p.pocketId, url }) },
+        agentTyping: () => deps.agentTyping(p.pocketId),
       })
     }
     deps.register(p.pocketId, p.sessionId, guest!)

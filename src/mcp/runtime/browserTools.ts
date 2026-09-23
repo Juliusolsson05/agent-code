@@ -80,7 +80,8 @@ export function registerBrowserTools(server: McpServer, scope: McpSessionScope, 
     const target = p !== undefined ? normalisePocketUrl(String(p)) : url ? normalisePocketUrl(url) : null
     if (target && !target.ok) return failure('bad_url', `Refused URL (${target.reason}). Only http and https pages can be opened.`)
     const state = await port.openPocketFor(sid, target?.url)
-    if (state === 'timeout') return failure('failed', 'The pocket did not open in time. Is Browser Pocket enabled and the app window open?')
+    if (state === 'disabled') return failure('disabled', 'Browser Pocket is turned off in Settings → Experimental.')
+    if (state === 'timeout') return failure('failed', 'The pocket did not open in time. Is the app window open?')
     if (target?.url && state === 'already') {
       // Navigate the existing guest ourselves so the call returns after the load.
       const nav = await port.run(sid, 'open', async ctx => {
@@ -198,7 +199,10 @@ export function registerBrowserTools(server: McpServer, scope: McpSessionScope, 
     inputSchema: { text: z.string().optional(), gone: z.string().optional(), urlIncludes: z.string().optional(), timeoutMs: z.number().int().min(100).max(15_000).optional() },
     annotations: READ,
   }, async a => {
-    const ms = a.timeoutMs ?? 10_000
+    // The action's own deadline must fall inside the controller's 15 s cap,
+    // or a long wait always ends as "timeout" + a debugger reset instead of
+    // "condition not met" (review A #6).
+    const ms = Math.min(a.timeoutMs ?? 10_000, 14_000)
     return done(await port.run(sid, 'wait_for', ctx => waitFor(ctx, a, ms), { timeoutMs: ms + 500 }), () => text({ ok: true }))
   })
 

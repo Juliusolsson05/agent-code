@@ -153,6 +153,15 @@ describe('behaviour through the protocol', () => {
     expect(res.isError).toBeFalsy()
   })
 
+  it('browser_open refuses a non-web URL without asking the app for a pocket', async () => {
+    const { controller, requestOpen } = setup()
+    const { client, close } = await connect(controller)
+    const res = await client.callTool({ name: 'browser_open', arguments: { url: 'javascript:alert(1)' } })
+    await close()
+    expect(res.isError).toBe(true)
+    expect(requestOpen).not.toHaveBeenCalled()
+  })
+
   it('refuses non-web URLs and bad refs before touching the page', async () => {
     const { controller } = setup()
     const g = guest()

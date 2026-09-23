@@ -1246,6 +1246,7 @@ async function startApp(): Promise<void> {
     register: (pocketId, sessionId, guest) => browserPockets.register(pocketId, sessionId, guest as unknown as GuestLike),
     unregister: pocketId => browserPockets.unregister(pocketId),
     noteHumanInput: (pocketId, at) => browserPockets.noteHumanInput(pocketId, at),
+    agentTyping: pocketId => browserPockets.agentTyping(pocketId),
     takeOver: pocketId => browserPockets.takeOver(pocketId),
     resume: pocketId => browserPockets.resume(pocketId),
     setFlags: flags => {

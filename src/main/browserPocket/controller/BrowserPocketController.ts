@@ -81,7 +81,16 @@ type Pocket = {
   paused: boolean
   resumeTimer: ReturnType<typeof setTimeout> | null
   expectedPointers: Array<{ x: number; y: number; until: number }>
+  /** Any mouse report before this is our own echo, whatever its coordinates:
+   * input-event may report widget pixels while we dispatch CSS pixels, which
+   * differ under pocket zoom or a scaled device viewport (review A #7). */
+  expectPointerAnyUntil: number
   expectKeysUntil: number
+  /** A user pick is in progress: its click is not "taking control" (review A #4). */
+  picking: boolean
+  /** Page emulation to re-apply after a debugger re-attach, which clears it
+   * (review A #6: a timeout reset silently dropped the colour scheme). */
+  emulation: { colorScheme?: 'light' | 'dark' | null }
   buffers: CdpBuffers
   pickAbort: (() => void) | null
 }
@@ -91,6 +100,7 @@ export const MAX_TIMEOUT_MS = 15_000
 /** D7: a takeover hands control back after this long without human input. */
 export const TAKEOVER_IDLE_RESUME_MS = 60_000
 const POINTER_ECHO_MS = 1000
+const POINTER_ANY_ECHO_MS = 300
 const KEY_ECHO_MS = 500
 
 class Aborted extends Error {}
@@ -121,6 +131,9 @@ export class BrowserPocketController {
 
   setFlags(flags: PocketFlags): void {
     this.flags = flags
+    // Off means off: no debugger stays attached to a page the user can no
+    // longer see controlled (review A #9).
+    if (!flags.enabled) for (const p of this.pockets.values()) this.detach(p)
   }
 
   isEnabled(): boolean {
@@ -134,13 +147,24 @@ export class BrowserPocketController {
   register(pocketId: string, sessionId: string, guest: GuestLike): void {
     const existing = this.pockets.get(pocketId)
     if (existing && existing.guest === guest) {
-      existing.sessionId = sessionId // an id remap (reload / provider switch)
+      // An id remap (reload / provider switch). Carry the "since last
+      // snapshot" cursor, or the first snapshot after a reload repeats every
+      // old console error (review A #9).
+      if (existing.sessionId !== sessionId) {
+        const cursor = this.snapshotCursor.get(existing.sessionId)
+        this.snapshotCursor.delete(existing.sessionId)
+        if (cursor !== undefined) this.snapshotCursor.set(sessionId, cursor)
+      }
+      existing.sessionId = sessionId
     } else {
-      if (existing) this.detach(existing)
+      if (existing) {
+        this.detach(existing)
+        if (existing.resumeTimer) clearTimeout(existing.resumeTimer)
+      }
       this.pockets.set(pocketId, {
         pocketId, sessionId, guest, attached: false, listenersInstalled: false, queue: Promise.resolve(),
-        epoch: 0, paused: false, resumeTimer: null, expectedPointers: [], expectKeysUntil: 0,
-        buffers: emptyBuffers(), pickAbort: null,
+        epoch: 0, paused: false, resumeTimer: null, expectedPointers: [], expectPointerAnyUntil: 0, expectKeysUntil: 0,
+        picking: false, emulation: {}, buffers: emptyBuffers(), pickAbort: null,
       })
       guest.once('destroyed', () => {
         const current = this.pockets.get(pocketId)
@@ -168,8 +192,9 @@ export class BrowserPocketController {
     // guest's before-input-event/input-event is unverified on 43.7.x
     // (decomposition U6b), so every report is filtered against what we are
     // dispatching ourselves.
+    if (p.picking) return
     p.expectedPointers = p.expectedPointers.filter(e => e.until > now)
-    if (at && p.expectedPointers.some(e => Math.abs(e.x - at.x) <= 1 && Math.abs(e.y - at.y) <= 1)) return
+    if (at && (now < p.expectPointerAnyUntil || p.expectedPointers.some(e => Math.abs(e.x - at.x) <= 1 && Math.abs(e.y - at.y) <= 1))) return
     if (!at && now < p.expectKeysUntil) return
     p.epoch++
     if (!p.paused) {
@@ -177,6 +202,13 @@ export class BrowserPocketController {
       this.deps.emitDriving({ pocketId, state: 'user-paused' })
     }
     this.armIdleResume(p)
+  }
+
+  /** Main's key forwarding asks this before treating a guest key as an app
+   * chord: the agent's own CDP keys must reach the page (review A #5). */
+  agentTyping(pocketId: string): boolean {
+    const p = this.pockets.get(pocketId)
+    return p !== undefined && this.deps.now() < p.expectKeysUntil
   }
 
   takeOver(pocketId: string): void {
@@ -220,6 +252,8 @@ export class BrowserPocketController {
     // guest viewport 1.44× and every resize time out).
     if (typeof emulation.zoom === 'number') p.guest.setZoomFactor?.(emulation.zoom)
     if (emulation.colorScheme !== undefined) {
+      p.emulation.colorScheme = emulation.colorScheme
+      if (!this.flags.enabled) return
       try {
         this.ensureAttached(p)
         await p.guest.debugger.sendCommand('Emulation.setEmulatedMedia', { features: emulation.colorScheme ? [{ name: 'prefers-color-scheme', value: emulation.colorScheme }] : [] })
@@ -243,16 +277,23 @@ export class BrowserPocketController {
    * owns SessionMeta, so main can only ASK for a pocket (collapsed — never
    * a popped panel) and wait for the guest to register.
    */
-  async openPocketFor(sessionId: string, url: string | undefined, waitMs = 8000): Promise<'opened' | 'already' | 'timeout'> {
-    if (this.pocketIdFor(sessionId)) {
-      if (url) this.deps.requestOpen(sessionId, url)
-      return 'already'
-    }
-    const registered = new Promise<void>(resolve => {
-      this.registrationWaiters.set(sessionId, [...(this.registrationWaiters.get(sessionId) ?? []), resolve])
-    })
+  async openPocketFor(sessionId: string, url: string | undefined, waitMs = 8000): Promise<'opened' | 'already' | 'timeout' | 'disabled'> {
+    if (!this.flags.enabled) return 'disabled'
+    // An existing pocket is NOT navigated here: the caller navigates through
+    // run(), which honours the user's takeover and the queue. Sending the URL
+    // to the renderer as well navigated the page while the user had control
+    // and raced the tool's own load (review A #3).
+    if (this.pocketIdFor(sessionId)) return 'already'
+    let resolveWaiter!: () => void
+    const registered = new Promise<void>(resolve => { resolveWaiter = resolve })
+    this.registrationWaiters.set(sessionId, [...(this.registrationWaiters.get(sessionId) ?? []), resolveWaiter])
     this.deps.requestOpen(sessionId, url)
     const ok = await Promise.race([registered.then(() => true), sleep(waitMs).then(() => false)])
+    if (!ok) {
+      // Drop our waiter so abandoned opens do not accumulate (review A #9).
+      const rest = (this.registrationWaiters.get(sessionId) ?? []).filter(w => w !== resolveWaiter)
+      if (rest.length) this.registrationWaiters.set(sessionId, rest); else this.registrationWaiters.delete(sessionId)
+    }
     return ok ? 'opened' : 'timeout'
   }
 
@@ -283,15 +324,29 @@ export class BrowserPocketController {
     const timeoutMs = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
     const startEpoch = p.epoch
     let timer: ReturnType<typeof setTimeout> | undefined
+    // Set when this call has already answered the agent "timeout". An action
+    // still waiting in the queue (or mid-way) must then never act on the page:
+    // otherwise the agent retries and the page gets a double click or double
+    // submit, and the late "driving" signal pins the pocket as agent-driven
+    // (review A #2).
+    let cancelled = false
     const work = p.queue.then(async () => {
+      if (cancelled) throw new Timeout()
       if (opts.mutating) this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action })
       this.ensureAttached(p)
       const ctx: ActionCtx = {
         cdp: p.guest.debugger,
         guest: p.guest,
-        expectPointer: (x, y) => { p.expectedPointers.push({ x, y, until: this.deps.now() + POINTER_ECHO_MS }) },
+        expectPointer: (x, y) => {
+          const now = this.deps.now()
+          p.expectedPointers.push({ x, y, until: now + POINTER_ECHO_MS })
+          p.expectPointerAnyUntil = now + POINTER_ANY_ECHO_MS
+        },
         expectKeys: () => { p.expectKeysUntil = this.deps.now() + KEY_ECHO_MS },
-        checkEpoch: () => { if (opts.mutating && p.epoch !== startEpoch) throw new Aborted() },
+        checkEpoch: () => {
+          if (cancelled) throw new Timeout()
+          if (opts.mutating && p.epoch !== startEpoch) throw new Aborted()
+        },
         pointer: (x, y) => this.deps.emitDriving({ pocketId: p.pocketId, state: 'agent', action: opts.describe ?? action, point: { x, y } }),
       }
       if (opts.mutating) ctx.checkEpoch()
@@ -305,6 +360,7 @@ export class BrowserPocketController {
     } catch (error) {
       if (error instanceof Aborted) return { ok: false, code: 'user_took_control', message: 'The user interacted with the page; the action was stopped.' }
       if (error instanceof Timeout) {
+        cancelled = true
         // Reset ONLY this pocket: detach its debugger (re-attached lazily on
         // the next call) and start a fresh queue so the stalled promise
         // cannot block the next action.
@@ -341,9 +397,24 @@ export class BrowserPocketController {
 
   async pick(pocketId: string): Promise<PocketPickResult | null> {
     const p = this.pockets.get(pocketId)
-    if (!p) return null
+    if (!p || !this.flags.enabled) return null
+    // A second pick replaces the first instead of leaving it hanging for 60 s.
+    p.pickAbort?.()
     const { pickElement } = await import('./picker.js')
-    return pickElement(p, () => this.ensureAttached(p), abort => { p.pickAbort = abort })
+    // Through the queue, so an agent's CDP click can never land while the
+    // inspect overlay is armed (the overlay would take it as the pick), and
+    // with `picking` set so the user's pick click does not pause the agent
+    // (review A #4).
+    const job = p.queue.then(async () => {
+      p.picking = true
+      try {
+        return await pickElement(p, () => this.ensureAttached(p), abort => { p.pickAbort = abort })
+      } finally {
+        p.picking = false
+      }
+    })
+    p.queue = job.catch(() => undefined)
+    return job.catch(() => null)
   }
 
   cancelPick(pocketId: string): void {
@@ -361,6 +432,10 @@ export class BrowserPocketController {
     if (p.attached && p.guest.debugger.isAttached()) return
     if (!p.guest.debugger.isAttached()) p.guest.debugger.attach('1.3')
     p.attached = true
+    // A fresh attach has no emulation; restore what the user chose.
+    if (p.emulation.colorScheme) {
+      void p.guest.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: p.emulation.colorScheme }] }).catch(() => {})
+    }
     if (!p.listenersInstalled) {
       p.listenersInstalled = true
       p.guest.debugger.on('message', (_event, method, params) => reduceCdpEvent(p.buffers, method, params, this.deps.now()))

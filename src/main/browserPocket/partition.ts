@@ -2,7 +2,7 @@ import { session } from 'electron'
 
 import { isLoopbackHost } from '@shared/browserPocket/url.js'
 
-import { POCKET_PARTITION_PREFIX } from './guestGuard.js'
+import { POCKET_PARTITION_PREFIX } from './partitionName.js'
 
 const safe = (id: string) => id.replace(/[^A-Za-z0-9-]/g, '_').slice(0, 80)
 

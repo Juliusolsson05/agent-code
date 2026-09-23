@@ -299,7 +299,11 @@ export function buildAppWindow(options: {
     return { action: 'deny' }
   })
 
-  installGuestGuard(window)
+  installGuestGuard(window, {
+    // A page asked for a real popup (OAuth needs window.opener, D9): the
+    // renderer offers "open in your browser" instead.
+    onBlockedPopup: url => { if (!window.isDestroyed()) window.webContents.send('browser-pocket:blocked-popup', { url }) },
+  })
 
   window.webContents.on('will-navigate', event => {
     // WHY this blocks even after renderer markdown links call preventDefault:
