@@ -143,6 +143,8 @@ import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
 import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
+import { UserMcpService } from '@main/userMcp/service.js'
+import { sweepStalePrivateMcpConfigs } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { UpdateService } from '@main/updates/UpdateService.js'
@@ -1031,6 +1033,16 @@ async function startApp(): Promise<void> {
   const agentCodeConventionsService = new AgentCodeManagedSkillsService()
   await agentCodeConventionsService.initialize()
   assertStartupOpen()
+  // User MCP servers (#1143). Loaded before the manager so the first restored
+  // agent already launches with them; initialize() never throws (a corrupt
+  // document is moved aside and reported in Settings instead).
+  const userMcpService = new UserMcpService({ stateDir: STATE_DIR, codec: createSafeStorageCodec() })
+  await userMcpService.initialize()
+  // Private MCP config files now carry user secrets; a crash must not leave
+  // them in the temp dir. Before any agent can launch, so nothing live is hit.
+  void sweepStalePrivateMcpConfigs().then(removed => {
+    if (removed > 0) appRunJournal?.record({ area: 'mcp.user', name: 'private_config.swept', data: { removed } })
+  })
   manager = new SessionManager(
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
@@ -1047,6 +1059,7 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  manager.setUserMcpResolver(params => userMcpService.resolveForLaunch(params))
   // Adapters seal streams a sleep severed (#963); the manager fans each
   // suspension out to the live agent runtimes.
   systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
@@ -1284,6 +1297,14 @@ async function startApp(): Promise<void> {
     },
     sessionManager: manager,
     appRunJournal,
+    // #1143: the mcp_servers domain edits the same document Settings → MCP
+    // does, through the same service. Every agent-made change is broadcast so
+    // the user always learns that their MCP configuration changed.
+    userMcpService,
+    onUserMcpChangedByAgent: event => {
+      appRunJournal?.record({ area: 'mcp.user', name: 'user_mcp.agent_change', ids: { sessionId: event.sessionId }, data: { message: event.message } })
+      broadcastToWindows('user-mcp:agent-change', { message: event.message })
+    },
     workflowService: activeWorkflowService,
     workflowBridge: activeWorkflowBridge,
     // Root Agent Code Management (#906): the SAME operator catalog the external
@@ -1481,6 +1502,7 @@ async function startApp(): Promise<void> {
   const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
+    userMcpService,
     remoteController,
     lspManager,
     ghostJournals,

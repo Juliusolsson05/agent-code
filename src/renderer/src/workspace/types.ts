@@ -327,6 +327,10 @@ export type SessionMeta = {
   /** Durable per-domain choices. {} inherits every global preference; missing
    * maps belong to legacy snapshots and migrate via sessionMcpOverrides. */
   builtInMcpOverrides?: BuiltInMcpOverrides
+  /** User MCP server ids (#1143) the last known provider process was launched
+   * with, as reported by main. Observed, like `builtInMcpDomains`; the choices
+   * behind it live in `builtInMcpOverrides` under `user:<id>` keys. */
+  userMcpServerIds?: string[]
   /**
    * Project membership (#992). THE ownership fact: a session belongs to the
    * workspace because it names a live project. It replaces all three ways a

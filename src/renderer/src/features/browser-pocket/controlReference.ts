@@ -24,8 +24,7 @@ export const controlReference = [
       "pick-browser-pocket-element",
       "open-browser-pocket-external",
       "open-browser-pocket-devtools",
-      "detach-browser-pocket",
-      "enable-browser-mcp"
+      "detach-browser-pocket"
     ]
   }
 ] satisfies FeatureReference[]

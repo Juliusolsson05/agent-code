@@ -71,6 +71,7 @@ function rendererDescriptor(): ManagedAgentRendererDescriptor {
   return {
     agent: {
       sessionId: 'agent-1',
+      displayLabel: 'A2',
       kind: 'claude' as const,
       cwd: '/tmp/project',
       project: { tabId: 'tab-1', title: 'Project', index: 0 },

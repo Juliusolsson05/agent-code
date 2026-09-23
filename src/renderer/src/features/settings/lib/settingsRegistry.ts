@@ -15,7 +15,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import type { ExtensionListEntry } from '@shared/types/extensions'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import { providerSupportsBuiltInMcpDomain, type BuiltInMcpDefaults } from '@mcp/shared/types'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 
@@ -288,6 +289,21 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // One grid for built-in AND user MCP servers (#1143). Marker row: the
+      // user servers live in main's document and the built-in defaults in
+      // renderer Settings, so the row owns both reads/writes itself rather than
+      // pretending to be one scalar setting.
+      control: {
+        type: 'mcp-servers'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Custom skills are a collection in main-owned state plus generated
       // provider files. A marker row keeps the list and its deployment health
       // out of the ordinary scalar renderer Settings store.
@@ -359,29 +375,6 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
       'Streaming Flux path. Paste your Deepgram API key below — get $200 in free credits from console.deepgram.com.',
   },
 ]
-
-function updateDefaultBuiltInMcpDomain(
-  ctx: SettingActionContext,
-  domain: ConfigurableBuiltInMcpDomain,
-  enabled: boolean,
-): void {
-  // WHY every built-in MCP row is 'Next session' rather than 'Reloads live
-  // agents': the capability list is fixed when a provider process launches, so
-  // honoring this edit means replacing that process. Doing it on a Settings
-  // toggle would kill work in flight across the whole fleet, so the edit is
-  // recorded and each agent picks it up the next time it starts — which now
-  // includes an ordinary reload of an existing agent (#904), not just creation.
-  const current = ctx.settings.defaultBuiltInMcpDomains
-  // WHY each row rewrites one shared ordered set instead of storing four
-  // booleans: the session launch contract already speaks domain arrays, and a
-  // single persisted list makes adding a future domain a one-field migration.
-  // Filtering before append also makes the helper safe against a same-value UI
-  // event without allowing duplicates into the in-memory store.
-  const next = enabled
-    ? [...current.filter(candidate => candidate !== domain), domain]
-    : current.filter(candidate => candidate !== domain)
-  ctx.onChange({ defaultBuiltInMcpDomains: next })
-}
 
 /**
  * `SettingDefinition`s for every contributed extension setting. Reads manifests
@@ -685,7 +678,7 @@ export function getSettingsRegistry(
       control: { type: 'agent-code-conventions' },
     },
     {
-      id: 'external-control', category: 'agents', title: 'External operator MCP',
+      id: 'external-control', category: 'mcp', title: 'External operator MCP',
       description: 'Let an external assistant discover commands, read agents and operate all Agent Code windows alongside computer use. Disabled by default and excluded from agents launched here.',
       keywords: ['mcp', 'external', 'operator', 'codex', 'chatgpt', 'automation', 'windows', 'control'],
       metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
@@ -716,130 +709,24 @@ export function getSettingsRegistry(
       control: { type: 'agent-code-installed-skills' },
     },
     {
-      id: 'default-tldr-mcp',
-      category: 'agents',
-      title: 'TLDR MCP',
+      id: 'mcp-servers',
+      category: 'mcp',
+      title: 'MCP servers',
       description:
-        'Keep concise agent summaries with the managed reporting skill. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'tldr', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
-      },
-    },
-    {
-      id: 'default-browser-mcp',
-      category: 'agents',
-      title: 'Browser Pocket MCP',
-      description:
-        'Give agents browser_* tools that act on their own browser pocket only (Settings → Experimental → Browser Pocket must be on). Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence.',
-      keywords: ['mcp', 'browser', 'pocket', 'playwright', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('browser'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'browser', value),
-      },
-    },
-    {
-      id: 'default-goal-mcp',
-      category: 'agents',
-      title: 'Goal MCP',
-      description:
-        'Let agents record their goal — what their work is for — with the managed goal skill, and hold Cmd+G to see it. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'goal', 'purpose', 'objective', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal', value),
-      },
-    },
-    {
-      id: 'default-goal-loop-mcp',
-      category: 'agents',
-      title: 'Goal Loop MCP',
-      description:
-        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and an overlay on the Goal Loop chord (Cmd+Shift+G by default; it yields to the editor, which owns that chord as Find Previous). Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'goal', 'loop', 'persistence', 'autonomous', 'default', 'reload', 'existing agents'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal_loop'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal_loop', value),
-      },
-    },
-    {
-      id: 'default-orchestration-mcp',
-      category: 'agents',
-      title: 'Orchestration MCP',
-      description:
-        'Let agents create and coordinate child agents. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'orchestration', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('orchestration'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'orchestration', value),
-      },
-    },
-    {
-      id: 'default-ai-workspace-mcp',
-      category: 'agents',
-      title: 'AI Workspace MCP',
-      description:
-        'Let agents curate review workspaces across worktrees. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'ai workspace', 'review', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('ai_workspace'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'ai_workspace', value),
-      },
-    },
-    {
-      id: 'default-agent-transcripts-mcp',
-      category: 'agents',
-      title: 'Agent Transcripts MCP',
-      description:
-        'Give agents bounded transcript file tools. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'transcript', 'transcripts', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_transcripts'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'agent_transcripts', value),
-      },
-    },
-    {
-      id: 'default-agent-management-mcp',
-      category: 'agents',
-      title: 'Agent Management MCP',
-      description:
-        'Let agents inspect project agents and send follow-ups; closing agents still requires explicit user authorization. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'agent management', 'agents', 'project', 'cleanup', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_management'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'agent_management', value),
-      },
-    },
-    {
-      id: 'default-workflow-mcp',
-      category: 'agents',
-      title: 'Workflow MCP',
-      description:
-        'Give Codex and OpenCode workflow tools. Claude uses its native workflow feature. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'workflow', 'workflows', 'codex', 'default', 'reload', 'existing agents', 'claude native'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('workflows'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'workflows', value),
-      },
+        'Every MCP server your agents can use: Agent Code\'s own and yours. A checked provider column means new agents of that provider get the server; existing agents pick changes up on their next reload. Per-agent choices (Agent MCP Servers…) take precedence.',
+      // Carries the vocabulary of the eight per-domain rows this grid replaced
+      // (#1143), so searching "tldr" or "orchestration" still finds the place
+      // those defaults now live.
+      keywords: [
+        'mcp', 'server', 'servers', 'tools', 'add', 'install', 'custom', 'beeper', 'stdio', 'http', 'sse',
+        'secret', 'token', 'oauth', 'claude', 'codex', 'default', 'reload', 'existing agents',
+        'tldr', 'summary', 'goal', 'loop', 'orchestration', 'ai workspace', 'review',
+        'transcript', 'transcripts', 'agent management', 'workflow', 'workflows',
+        // #1142: the Browser Pocket MCP lives in this grid too.
+        'browser', 'pocket',
+      ],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
+      control: { type: 'mcp-servers' },
     },
     {
       id: 'command-keybindings',
@@ -931,15 +818,17 @@ export function getSettingsRegistry(
         type: 'toggle',
         getValue: settings => settings.browserPocketEnabled,
         onToggle: (ctx, value) => {
-          ctx.onChange({ browserPocketEnabled: value })
           // Turning the feature on is the moment the user decides agents
-          // should have a browser, so the MCP default follows once. Turning
-          // it off does not touch the MCP row: with the master switch off
-          // main registers no browser_* tools anyway, and the user's MCP
-          // choice should be waiting when they turn the feature back on.
-          if (value && !ctx.settings.defaultBuiltInMcpDomains.includes('browser')) {
-            updateDefaultBuiltInMcpDomain(ctx, 'browser', true)
-          }
+          // should have a browser, so the MCP default follows once, for every
+          // provider that supports the domain. Turning it off does not touch
+          // the MCP grid: with the master switch off main registers no
+          // browser_* tools anyway, and the user's per-provider choice should
+          // be waiting when they turn the feature back on.
+          // Defaults are per provider since the MCP servers grid (#1143), so
+          // this edits each provider's list rather than one shared list.
+          ctx.onChange(value
+            ? { browserPocketEnabled: true, defaultBuiltInMcpDomains: withBrowserMcpDefault(ctx.settings.defaultBuiltInMcpDomains) }
+            : { browserPocketEnabled: false })
         },
       },
     },
@@ -1300,4 +1189,14 @@ export function matchesSettingQuery(definition: SettingDefinition, query: string
     .toLowerCase()
 
   return haystack.includes(normalized)
+}
+
+/** Add the browser domain to every provider's default list that supports it. */
+export function withBrowserMcpDefault(defaults: BuiltInMcpDefaults): BuiltInMcpDefaults {
+  const next = { ...defaults }
+  for (const kind of Object.keys(next) as AgentProviderKind[]) {
+    const domains = next[kind]
+    if (!domains.includes('browser') && providerSupportsBuiltInMcpDomain(kind, 'browser')) next[kind] = [...domains, 'browser']
+  }
+  return next
 }

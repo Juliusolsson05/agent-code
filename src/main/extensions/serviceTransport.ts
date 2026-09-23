@@ -28,6 +28,15 @@ export type ServiceTransportOptions = {
   fetch?: typeof fetch
 }
 
+/** Host-set marker naming which host path delivered a request to a service:
+ *  `service` = the owning extension's frame via this proxy, `lan` = a LAN peer
+ *  via the net.listen listener. Exported because it is a cross-repo contract
+ *  (Agent Code Poker's server/http.ts reads it); renaming it breaks services. */
+export const TRANSPORT_ATTESTATION_HEADER = 'x-agent-code-transport'
+
+/** Caller headers that survive the proxy. Everything else is dropped. */
+const FORWARDED_REQUEST_HEADERS = ['accept', 'content-type', 'authorization'] as const
+
 const MAX_PROXIED_BODY_BYTES = 1024 * 1024
 const PROXIED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
 
@@ -117,11 +126,34 @@ export async function proxyServiceTransportRequest(
     })
   }
 
+  // WHY AN ALLOW-LIST THAT NOW INCLUDES AUTHORIZATION: a service that issues
+  // bearer tokens (Agent Code Poker's LAN host does) answered 401 to every
+  // authenticated route when only accept/content-type passed (#1147). The token
+  // is the frame's own, sent to its own service — forwarding it widens nothing.
+  // Cookies and arbitrary headers still stay behind: the frame's origin is an
+  // extension scheme, and nothing it could carry there means anything upstream.
   const headers = new Headers()
-  for (const name of ['accept', 'content-type']) {
+  for (const name of FORWARDED_REQUEST_HEADERS) {
     const value = request.headers.get(name)
     if (value !== null) headers.set(name, value)
   }
+  // The host's attestation, always SET here and never copied from the caller
+  // (the allow-list above cannot carry it through). It tells the service
+  // "this request came from your owning extension's own frame; grant and
+  // endpoint checks already passed" — i.e. same-principal, so the service can
+  // treat it like its own same-origin page.
+  //
+  // WHY A CUSTOM HEADER AND NOT A SYNTHETIC ORIGIN: the dial below goes through
+  // Electron net.fetch on Chromium's network stack, where Origin is a
+  // restricted request header — whether a set value survives (or Chromium adds
+  // its own) is not something the source proves, and the service would then
+  // 403 every POST. A custom header is delivered verbatim. It is also the
+  // classic CSRF-proof signal: a browser page cannot attach it cross-origin
+  // without a CORS preflight, which a service that never answers OPTIONS with
+  // CORS headers refuses. Services must therefore only trust it on a loopback
+  // socket and must never grant CORS — see the LAN listener, which sets
+  // `lan` instead, for the downgrade half of this contract.
+  headers.set(TRANSPORT_ATTESTATION_HEADER, 'service')
 
   try {
     // Loopback by construction: the endpoint came from the service host's

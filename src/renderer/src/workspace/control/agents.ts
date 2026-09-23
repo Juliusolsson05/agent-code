@@ -29,7 +29,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   // a parked session is an ordinary row in its project's index.)
   const requireSession = (sessionId: string) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
-    if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window')
+    // WHY the refusal explains id churn (#1145): the recorded case was a root
+    // management agent anchoring on ITS OWN pre-reload id — enabling this
+    // capability reloads the agent under a new launch-local id, and the model
+    // reused the old one from its own earlier tool output. The bare sentence
+    // read as "your own agent does not exist", which it had no way to act on.
+    if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window. Session IDs change when an agent reloads (including your own); re-read current IDs with agents.search or app.observe instead of reusing one from earlier output')
     return current
   }
   const requireReady = () => {

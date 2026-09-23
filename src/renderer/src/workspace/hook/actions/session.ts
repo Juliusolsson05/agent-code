@@ -17,6 +17,7 @@ import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntry
 import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
+import { userMcpOverridesFrom } from '@shared/userMcp/types'
 import {
   clearTiledLaneSessions,
   remapTiledLanes,
@@ -400,6 +401,7 @@ export function useSessionActions(
       let sessionId: SessionId
       let tmuxName: string | undefined
       let startedProviderSessionId: string | undefined
+      let startedUserMcpServerIds: string[] | undefined
       // What this spawn reserved, if anything. `replaceSession` owns the
       // release for every path AFTER spawn resolves, but it never sees an id
       // when spawn THROWS — and by then the successor may already be
@@ -428,10 +430,14 @@ export function useSessionActions(
             useProxy,
             recoverTmuxName: opts?.recoverTmuxName,
             builtInMcpDomains,
+            // Only the pane's explicit choices cross; main applies Settings,
+            // secrets and support itself (#1143, spec Revision 2 §4).
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
           sessionId = result.sessionId
           tmuxName = result.tmuxName
           startedProviderSessionId = result.providerSessionId
+          startedUserMcpServerIds = result.userMcpServerIds
           // WHY the reservation happens HERE, before this function's own commit:
           //
           // The gap the reconciler exploits opens the moment the successor's
@@ -503,6 +509,7 @@ export function useSessionActions(
           ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
             ? { builtInMcpDomains, builtInMcpOverrides }
             : {}),
+          ...(isAgentProviderKind(kind) ? { userMcpServerIds: startedUserMcpServerIds ?? [] } : {}),
         }
         setState(prev => ({
           ...prev,
@@ -773,6 +780,7 @@ export function useSessionActions(
             cwd: meta.cwd,
             resumeSessionId,
             builtInMcpDomains,
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
@@ -1045,6 +1053,11 @@ export function useSessionActions(
           providerRuntime: recoverySnapshot?.providerRuntime ?? meta.providerRuntime,
           ...(recoveredBuiltInMcpDomains !== undefined
             ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
+            : {}),
+          // Same rule as the built-in domains above: an adopted backend keeps
+          // the servers it was launched with, and only main knows which.
+          ...(recoverySnapshot?.userMcpServerIds !== undefined
+            ? { userMcpServerIds: recoverySnapshot.userMcpServerIds }
             : {}),
           ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
         }
@@ -1590,7 +1603,7 @@ export function useSessionActions(
               : undefined
           const resumeSessionId = resumableProviderSessionId(meta)
           const restoredMeta = withoutProvisionalProviderSession(meta)
-          const { sessionId: newId } = await window.api.spawnSession({
+          const { sessionId: newId, userMcpServerIds } = await window.api.spawnSession({
             tldrIdentity: tldrIdentityForSession(oldId, meta),
             kind,
             providerRuntime: meta.providerRuntime,
@@ -1599,6 +1612,7 @@ export function useSessionActions(
             dangerousMode,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             builtInMcpDomains,
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = {
@@ -1613,6 +1627,7 @@ export function useSessionActions(
             ...restoredMeta,
             tldrIdentity: tldrIdentityForSession(oldId, meta),
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
+            ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
           }
         } catch {
           failedIds.add(oldId)
