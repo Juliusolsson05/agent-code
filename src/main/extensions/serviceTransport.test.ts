@@ -112,7 +112,10 @@ describe('service.transport proxy', () => {
     })
     await proxyServiceTransportRequest('timer', 'gen-1', '__service/timer.host/x', probe)
     const forwarded = probes[0]!.init!.headers as Headers
-    expect(Object.fromEntries(forwarded.entries())).toEqual({
+    // forEach, not entries(): the main project's lib has no DOM.Iterable.
+    const all: Record<string, string> = {}
+    forwarded.forEach((value, name) => { all[name] = value })
+    expect(all).toEqual({
       accept: 'application/json',
       'content-type': 'text/plain',
       authorization: 'Bearer abc',
