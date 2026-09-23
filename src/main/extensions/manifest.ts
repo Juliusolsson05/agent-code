@@ -410,6 +410,12 @@ export function invalidNetworkOrigin(entry: string): string | null {
   if (url.username || url.password) return 'must not contain credentials'
   if (url.origin !== entry) return `must be exactly an origin such as "${url.origin}" (no path, query, fragment or trailing slash)`
   const host = url.hostname.toLowerCase()
+  // A trailing dot is the fully-qualified form of the SAME name, and WHATWG
+  // URL keeps it as written: `https://localhost.` passed every suffix check
+  // below while resolving to loopback, and `https://api.example.com.` would be
+  // a second spelling the broker's exact-origin match treats as a different
+  // origin from the one the user read. One spelling per name (#1151 review).
+  if (host.endsWith('.')) return 'must not end with "." (write the name without the trailing dot)'
   if (host.startsWith('[') || /^\d+(\.\d+){3}$/.test(host)) return 'must be a DNS name, not an IP address (use net.connect for local-network addresses)'
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || !host.includes('.')) {
     return 'must be a public DNS name, not a local one (use net.connect for local-network addresses)'

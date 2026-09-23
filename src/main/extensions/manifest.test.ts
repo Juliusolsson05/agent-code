@@ -280,8 +280,15 @@ describe('networkOrigins / net.origins (#1150)', () => {
     ['a single-label name', 'https://intranet'],
     ['a non-URL', 'api.elevenlabs.io'],
     ['upper-case host (not the canonical origin)', 'https://API.elevenlabs.io'],
+    // WHATWG keeps a trailing dot as written, so each of these used to pass
+    // the suffix checks (the first two resolve to this machine / the LAN).
+    ['a trailing-dot localhost', 'https://localhost.'],
+    ['a trailing-dot mDNS name', 'https://foo.local.'],
+    ['a trailing-dot public name', 'https://api.example.com.'],
   ])('refuses %s', (_label, origin) => {
     expect(() => parseExtensionManifest(v2({ networkOrigins: [origin] }))).toThrow(ManifestError)
+    // Pin that the URL parser really kept the dot (the case the check exists for).
+    if (origin.endsWith('.')) expect(new URL(origin).origin).toBe(origin)
   })
 
   it('pairs the list with the permission in both directions', () => {
