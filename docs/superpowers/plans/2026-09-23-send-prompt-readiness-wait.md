@@ -86,13 +86,13 @@ same context fields as create_agent's `create_agent_bootstrap_pending`.
 ## Tasks
 
 - [x] Plan (this file) — first commit.
-- [ ] `SessionManager.deliverPromptWhenReady` gains
+- [x] `SessionManager.deliverPromptWhenReady` gains
       `options.supersedesPendingPrompt`; `deliverPromptToAgent` records
       `pending-superseded` when its supersede actually cancelled a waiter.
-- [ ] Factor the create_agent pending branch into a shared helper.
-- [ ] send_prompt uses the helper; pending reply; bootstrap mark on landing;
+- [x] Factor the create_agent pending branch into a shared helper.
+- [x] send_prompt uses the helper; pending reply; bootstrap mark on landing;
       `send_prompt_pending` incident; `supersededPendingPrompt` in replies.
-- [ ] Tests (MCP-level with the faked manager, mirroring
+- [x] Tests (MCP-level with the faked manager, mirroring
       `orchestrationBootstrapPending.system.test.ts`; plus a real
       `SessionManager` driven through the MCP tool for the no-duplicate cases;
       plus the manager-level supersede-on-arm case):
@@ -104,5 +104,19 @@ same context fields as create_agent's `create_agent_bootstrap_pending`.
     written;
   - OpenCode/Grok (no gate) → today's failure reply, no waiter;
   - later failure → `send_prompt_pending` incident.
-- [ ] Verify once: `npx tsc -b` + targeted vitest (Node 24).
-- [ ] PR (do not merge).
+- [x] Verify once: `npx tsc -b` + targeted vitest (Node 24).
+- [x] Tool description of `orchestration_send_prompt` states the pending
+      contract and "a newer prompt replaces a waiting one".
+- [x] PR (do not merge).
+
+## Verification notes
+
+- The 7 new MCP-level cases and 2 manager cases fail with the source changes
+  stashed (origin/main behaviour); the no-gate and absorption cases are
+  controls and pass on both.
+- The real-SessionManager duplicate tests do NOT reproduce the "cancelled
+  waiter has not unwound yet" race end to end: in practice the old waiter
+  unwinds in fewer microtasks than the direct attempt takes. That race is
+  pinned at the manager level instead (`deliverPromptWhenReady` with
+  `supersedesPendingPrompt` after a cancel with no timer run in between), and
+  the MCP level asserts the flag reaches the arm.

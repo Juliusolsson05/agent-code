@@ -378,4 +378,73 @@ describe('a bootstrap prompt waits for a child that is not ready YET (#854)', ()
       vi.useRealTimers()
     }
   })
+
+  it('lets a newer orchestration prompt REPLACE a cancelled waiter that has not unwound yet (#1134)', async () => {
+    // send_prompt cancels any waiting prompt from its direct attempt, and only
+    // then — if the child is still not ready — arms its own waiter. The
+    // cancelled waiter leaves the map when its loop unwinds, a few microtasks
+    // later, and a gate that answers `blocked` synchronously (Claude's trust
+    // dialog) can finish the direct attempt inside that window. Refusing the
+    // new waiter there would break the `promptPending: true` the MCP reply had
+    // already promised. So the arm itself can supersede.
+    vi.useFakeTimers()
+    try {
+      const session = gatedSession()
+      const manager = managerWith(session)
+
+      const first = manager.deliverPromptWhenReady('child', 'prompt A')
+      await vi.advanceTimersByTimeAsync(10)
+      // Cancelled, but still in the map: no timer has run since.
+      expect(manager.cancelPendingPromptDelivery('child', 'superseded-by-direct-delivery')).toBe(true)
+
+      const second = manager.deliverPromptWhenReady('child', 'prompt B', undefined, { supersedesPendingPrompt: true })
+
+      session.open()
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      await expect(first).resolves.toMatchObject({ ok: false })
+      // The FIRST reason is the one reported: the direct delivery is what
+      // ended A's wait, not the arm that followed it.
+      const settledFirst = await first
+      expect(settledFirst.ok === false && settledFirst.message).toContain('superseded-by-direct-delivery')
+      await expect(second).resolves.toMatchObject({ ok: true })
+      expect(session.write.mock.calls.map(([data]) => data)).toEqual(['prompt B', '\r'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a supersede only when a waiter was really cancelled (#1134)', async () => {
+    // send_prompt turns this record into `supersededPendingPrompt` in its
+    // reply. A false positive tells the parent a prompt was dropped that
+    // never existed; a false negative hides a real replacement.
+    vi.useFakeTimers()
+    try {
+      const session = gatedSession()
+      const manager = managerWith(session)
+      session.open()
+      const events: string[] = []
+
+      await manager.deliverPromptToAgent(
+        'child', 'nothing was waiting', undefined, event => { events.push(event) }, undefined,
+        { supersedesPendingPrompt: true },
+      )
+      expect(events).not.toContain('pending-superseded')
+
+      session.close()
+      const waiting = manager.deliverPromptWhenReady('child', 'the brief')
+      await vi.advanceTimersByTimeAsync(10)
+      session.open()
+      events.length = 0
+      await manager.deliverPromptToAgent(
+        'child', 'the brief, by hand', undefined, event => { events.push(event) }, undefined,
+        { supersedesPendingPrompt: true },
+      )
+      expect(events).toContain('pending-superseded')
+      await vi.advanceTimersByTimeAsync(10)
+      await expect(waiting).resolves.toMatchObject({ ok: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

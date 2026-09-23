@@ -30,6 +30,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const renderer = {
   requests: [] as Array<Record<string, unknown>>,
   children: 0,
+  // What `read-agent` reports for `orchestrationBootstrapPromptDelivered`.
+  // send_prompt wraps the prompt in the handoff exactly when this is not
+  // true, and marks it only for a wrapped prompt (#1134).
+  bootstrapDelivered: false,
 }
 
 vi.mock('@main/window/windowRegistry.js', () => ({
@@ -83,6 +87,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
               cwd: '/tmp/project',
               orchestrationParentId: 'parent-1',
               orchestrationRootId: 'parent-1',
+              ...(renderer.bootstrapDelivered ? { orchestrationBootstrapPromptDelivered: true } : {}),
             },
             messages: [],
           },
@@ -198,6 +203,7 @@ const closed = () => renderer.requests.filter(request => request.type === 'close
 beforeEach(() => {
   renderer.requests = []
   renderer.children = 0
+  renderer.bootstrapDelivered = false
   bridge = new OrchestrationBridge()
 })
 afterEach(() => { vi.restoreAllMocks() })
@@ -340,5 +346,294 @@ describe('a hand-sent prompt replaces the waiting brief, and nothing else does (
 
     const sent = sessions.deliverPromptToAgent.mock.calls.at(-1)
     expect(sent?.[5]).toMatchObject({ supersedesPendingPrompt: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #1134. `orchestration_send_prompt` had no such wait: it delivered once and,
+// for a child that was not ready yet, replied `prompt_delivery_failed` with
+// `disposition: retry-same-session`. The incident journals from 2026-08-30 to
+// 2026-09-22 make that the largest single failure group — 36
+// `send_prompt / before-write / not-ready / retry-same-session` — and the
+// parent's retry lands in the same window, which is #854's orphaned-draft
+// risk all over again.
+// ---------------------------------------------------------------------------
+
+async function connect(
+  sessionManager: unknown,
+  journal?: { recordIncident: ReturnType<typeof vi.fn> },
+) {
+  const server = createBuiltInMcpServer(
+    { sessionId: 'parent-1', cwd: '/tmp/project', domains: ['orchestration'] },
+    {
+      orchestrationBridge: bridge as never,
+      sessionManager: sessionManager as never,
+      ...(journal ? { appRunJournal: journal as never } : {}),
+    },
+  )
+  const client = new Client({ name: 'send-prompt-pending-test', version: '0.0.0' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await server.connect(serverTransport)
+  await client.connect(clientTransport)
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await client.callTool({ name, arguments: args })
+    return JSON.parse(((result.content as Array<{ text: string }>)[0]!).text) as Record<string, unknown>
+  }
+  return {
+    call,
+    send: (prompt: string, sessionId = 'child-1') =>
+      call('orchestration_send_prompt', { sessionId, prompt }),
+    close: async () => {
+      await client.close()
+      await server.close()
+    },
+  }
+}
+
+describe('send_prompt to a child that is not ready YET keeps its prompt (#1134)', () => {
+  it.each([
+    { name: 'a composer that has not painted', immediate: NOT_READY_YET.warming },
+    { name: 'a first-launch trust dialog', immediate: NOT_READY_YET.trustDialog },
+  ])('replies pending and delivers it once the child is ready: $name', async ({ immediate }) => {
+    const sessions = manager(immediate)
+    const mcp = await connect(sessions)
+    try {
+      const result = await mcp.send('look at the failing test')
+
+      // Not an error: nothing failed, the prompt is early.
+      expect(result).toMatchObject({
+        ok: true, sessionId: 'child-1', promptSubmitted: false, promptPending: true,
+      })
+      expect(result.promptPendingReason).toBe(immediate.message)
+      // The retry is exactly what orphans a half-written draft.
+      expect(String(result.message)).toMatch(/do not send it again/i)
+      // The SAME text the direct attempt used waits — the handoff wrapper
+      // included, since this child never got its bootstrap.
+      expect(sessions.deliverPromptWhenReady).toHaveBeenCalledTimes(1)
+      const [waitedFor, waitedPrompt, , waitOptions] = sessions.deliverPromptWhenReady.mock.calls[0]!
+      expect(waitedFor).toBe('child-1')
+      expect(waitedPrompt).toBe(sessions.deliverPromptToAgent.mock.calls[0]![1])
+      expect(String(waitedPrompt)).toContain('look at the failing test')
+      // It replaces whatever else was waiting instead of being refused by it.
+      expect(waitOptions).toMatchObject({ supersedesPendingPrompt: true })
+      // Nothing claims the bootstrap landed before it did.
+      expect(marked()).toEqual([])
+
+      // The composer paints.
+      sessions.releasePending!()
+      await vi.waitFor(() => expect(marked()).toHaveLength(1))
+      expect(marked()[0]).toMatchObject({ sessionId: 'child-1' })
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('does not mark a bootstrap for a follow-up to a child that already has one', async () => {
+    // Only a WRAPPED prompt is the bootstrap. The mark is keyed off what this
+    // call actually sent, not off "a send_prompt landed".
+    renderer.bootstrapDelivered = true
+    const sessions = manager(NOT_READY_YET.warming)
+    const mcp = await connect(sessions)
+    try {
+      const result = await mcp.send('and now the docs')
+      expect(result.promptPending).toBe(true)
+      // Sent raw: no handoff wrapper around a follow-up.
+      expect(sessions.deliverPromptWhenReady.mock.calls[0]![1]).toBe('and now the docs')
+
+      sessions.releasePending!()
+      await sessions.deliverPromptWhenReady.mock.results[0]!.value
+      await new Promise(resolve => setTimeout(resolve, 10))
+      expect(marked()).toEqual([])
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('journals a pending prompt that never lands as send_prompt_pending', async () => {
+    // The parent was told "pending, do not resend". If that promise is then
+    // broken — the child closed, the session went terminal, a newer prompt
+    // replaced it — the journal is the only place it can be counted.
+    const journal = { recordIncident: vi.fn() }
+    const sessions = manager(NOT_READY_YET.trustDialog, {
+      ok: false, message: 'Prompt for session child-1 was not delivered (session-ended)',
+      stage: 'before-write', code: 'not-ready', retrySafe: false,
+      disposition: 'session-unusable', promptWritten: false, enterWritten: false,
+    })
+    const mcp = await connect(sessions, journal)
+    try {
+      await mcp.send('look at the failing test')
+      expect(journal.recordIncident).not.toHaveBeenCalled()
+
+      sessions.releasePending!()
+      await vi.waitFor(() => expect(journal.recordIncident).toHaveBeenCalledTimes(1))
+      expect(journal.recordIncident.mock.calls[0]![0]).toMatchObject({
+        kind: 'orchestration.prompt_delivery_failed',
+        reason: 'send_prompt_pending',
+        context: { sessionId: 'child-1', message: expect.stringContaining('session-ended') },
+      })
+      expect(marked()).toEqual([])
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('keeps the failure reply for a provider with no readiness gate (OpenCode, Grok)', async () => {
+    // #854 review: they report not-readiness as an ordinary failure and have
+    // nothing to subscribe to. "Pending, do not resend" there is a silent
+    // loss; the failure is a retry the parent can act on.
+    const journal = { recordIncident: vi.fn() }
+    const sessions = manager(NOT_READY_YET.warming, { ok: true }, false)
+    const mcp = await connect(sessions, journal)
+    try {
+      const result = await mcp.send('look at the failing test')
+
+      expect(result).toMatchObject({
+        ok: false, error: 'prompt_delivery_failed',
+        retrySafe: true, disposition: 'retry-same-session', promptSubmission: 'not-submitted',
+      })
+      expect(result.promptPending).toBeUndefined()
+      expect(sessions.deliverPromptWhenReady).not.toHaveBeenCalled()
+      expect(journal.recordIncident.mock.calls[0]![0]).toMatchObject({ reason: 'send_prompt' })
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('still fails loudly when the attempt actually happened', async () => {
+    // Bytes were written. Waiting and re-delivering would be a second copy.
+    const sessions = manager(ABSORPTION_FAILED)
+    const mcp = await connect(sessions)
+    try {
+      const result = await mcp.send('look at the failing test')
+
+      expect(result).toMatchObject({ ok: false, error: 'prompt_delivery_failed', promptSubmission: 'uncertain' })
+      expect(sessions.deliverPromptWhenReady).not.toHaveBeenCalled()
+    } finally {
+      await mcp.close()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The duplicate cases, against the REAL SessionManager. A faked manager would
+// only prove the handler passes a flag; "the child receives one prompt" is a
+// property of the manager's waiter map, its cancellation and the handler's
+// ordering together, so all three are real here. The seam is the session's
+// readiness gate, which the test opens.
+// ---------------------------------------------------------------------------
+
+const { SessionManager } = await import('@main/sessionManager.js')
+
+function gatedClaudeChild() {
+  let screen = '❯'
+  let open = false
+  return {
+    write: vi.fn((data: string) => { if (data !== '\r') screen = `❯ ${data}` }),
+    open: () => { open = true },
+    isExited: () => false,
+    snapshotScreen: () => screen,
+    awaitReadyForPrompt: vi.fn(async () => (open
+      ? { kind: 'ready' as const, waitedMs: 1 }
+      : { kind: 'timeout' as const, waitedMs: 2_000, lastState: { kind: 'warming' as const, reason: 'composer-unpainted' as const } })),
+    armPromptAcceptance: () => ({
+      promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+      cancel: vi.fn(),
+    }),
+  }
+}
+
+function realManagerWith(child: ReturnType<typeof gatedClaudeChild>) {
+  const sessions = new SessionManager()
+  ;(sessions as unknown as { sessions: Map<string, unknown> }).sessions.set('child-1', {
+    kind: 'claude', session: child,
+  })
+  return sessions
+}
+
+/** Every prompt body the child's composer ever received, Enter excluded. */
+const written = (child: ReturnType<typeof gatedClaudeChild>) =>
+  child.write.mock.calls.map(([data]) => data).filter(data => data !== '\r')
+
+describe('one child, one prompt: a pending send_prompt never duplicates (#1134)', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('replaces a create_agent brief that is still waiting, and only the send arrives', async () => {
+    const child = gatedClaudeChild()
+    const sessions = realManagerWith(child)
+    const journal = { recordIncident: vi.fn() }
+    const mcp = await connect(sessions, journal)
+    try {
+      const created = await mcp.call('orchestration_create_agent', { kind: 'claude', prompt: 'THE ORIGINAL BRIEF' })
+      expect(created).toMatchObject({ ok: true, promptPending: true })
+      await vi.advanceTimersByTimeAsync(10)
+
+      const sent = await mcp.send('THE HAND-SENT BRIEF')
+      expect(sent).toMatchObject({ ok: true, promptPending: true, supersededPendingPrompt: true })
+
+      // The composer paints. Long past every waiter's re-arm, so a surviving
+      // create_agent waiter would find the gate open and write its copy.
+      child.open()
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(written(child)).toHaveLength(1)
+      expect(written(child)[0]).toContain('THE HAND-SENT BRIEF')
+      expect(written(child)[0]).not.toContain('THE ORIGINAL BRIEF')
+      // The hand-sent prompt was the bootstrap (wrapped), so it is marked.
+      expect(marked()).toHaveLength(1)
+      // The replaced brief is journaled against create_agent, not lost
+      // silently; the send that replaced it is not an incident.
+      const reasons = journal.recordIncident.mock.calls.map(([incident]) => incident.reason)
+      expect(reasons).toEqual(['create_agent_bootstrap_pending'])
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('lets a second send_prompt replace the first while it waits, and only the second arrives', async () => {
+    const child = gatedClaudeChild()
+    const sessions = realManagerWith(child)
+    const mcp = await connect(sessions)
+    try {
+      const first = await mcp.send('FIRST FOLLOW-UP')
+      expect(first).toMatchObject({ ok: true, promptPending: true })
+      expect(first.supersededPendingPrompt).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(10)
+
+      const second = await mcp.send('SECOND FOLLOW-UP')
+      // The parent is TOLD the first will not arrive — latest wins, loudly.
+      expect(second).toMatchObject({ ok: true, promptPending: true, supersededPendingPrompt: true })
+
+      child.open()
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(written(child)).toHaveLength(1)
+      expect(written(child)[0]).toContain('SECOND FOLLOW-UP')
+    } finally {
+      await mcp.close()
+    }
+  })
+
+  it('does not leave a waiter behind when the send is delivered directly', async () => {
+    // The control: a child that IS ready takes the prompt now, and the brief
+    // create_agent left waiting must not follow it in.
+    const child = gatedClaudeChild()
+    const sessions = realManagerWith(child)
+    const mcp = await connect(sessions)
+    try {
+      await mcp.call('orchestration_create_agent', { kind: 'claude', prompt: 'THE ORIGINAL BRIEF' })
+      await vi.advanceTimersByTimeAsync(10)
+      child.open()
+
+      const sent = await mcp.send('THE HAND-SENT BRIEF')
+      expect(sent).toMatchObject({ ok: true, supersededPendingPrompt: true })
+      expect(sent.promptPending).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(written(child)).toHaveLength(1)
+      expect(written(child)[0]).toContain('THE HAND-SENT BRIEF')
+    } finally {
+      await mcp.close()
+    }
   })
 })
