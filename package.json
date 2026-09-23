@@ -137,7 +137,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^4.1.7",
-    "electron": "^43.1.0",
+    "electron": "^43.7.4",
     "electron-builder": "^26.16.1",
     "electron-updater": "^6.6.2",
     "electron-vite": "^5.0.0",

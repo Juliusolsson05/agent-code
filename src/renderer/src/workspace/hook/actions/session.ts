@@ -18,6 +18,7 @@ import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntry
 import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
+import { userMcpOverridesFrom } from '@shared/userMcp/types'
 import {
   clearTiledLaneSessions,
   remapTiledLanes,
@@ -59,7 +60,7 @@ import {
   pickOwnedSessions,
 } from '@renderer/workspace/sessionOwnership'
 import { reportLifecycle, reportWake } from '@renderer/lifecycle/report'
-import type { WakeCaller } from '@shared/lifecycle/events'
+import type { KillCaller, WakeCaller } from '@shared/lifecycle/events'
 
 // -----------------------------------------------------------------------------
 // Session lifecycle actions.
@@ -98,7 +99,11 @@ export type SessionActions = {
     caller: WakeCaller,
     options?: SessionWakeOptions,
   ) => Promise<SessionWakeResult>
-  killSession: (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => Promise<void>
+  killSession: (
+    sessionId: SessionId,
+    caller: KillCaller,
+    capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
+  ) => Promise<void>
   replaceSession: (
     cwd: string,
     opts?: {
@@ -136,6 +141,11 @@ export type SessionWakeOptions = {
 export async function killSessionBackendIfOwned(
   refs: WorkspaceRefs,
   sessionId: SessionId,
+  // WHY required, mirroring ensureSessionLive's WakeCaller: main journals
+  // `kill.request` with this tag (#1135), and an untagged kill is exactly the
+  // gap that made quit, Close Old Agents and recovery replacement
+  // indistinguishable. Making every renderer site name itself is the point.
+  caller: KillCaller,
   capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
 ): Promise<boolean> {
   // Spawn cleanup may run before React refreshes stateRef. Its caller already
@@ -152,6 +162,7 @@ export async function killSessionBackendIfOwned(
     kind: meta.kind,
     providerRuntime: meta.providerRuntime,
     cwd: meta.cwd,
+    caller,
   })
 }
 
@@ -358,6 +369,7 @@ export function useSessionActions(
       opts?: {
         resumeSessionId?: string
         predecessorSessionId?: SessionId
+        predecessorKillCaller?: KillCaller
         kind?: SessionKind
         providerRuntime?: AgentProviderRuntime
         dangerousMode?: boolean
@@ -390,6 +402,7 @@ export function useSessionActions(
       let sessionId: SessionId
       let tmuxName: string | undefined
       let startedProviderSessionId: string | undefined
+      let startedUserMcpServerIds: string[] | undefined
       // What this spawn reserved, if anything. `replaceSession` owns the
       // release for every path AFTER spawn resolves, but it never sees an id
       // when spawn THROWS — and by then the successor may already be
@@ -407,16 +420,25 @@ export function useSessionActions(
             cwd,
             resumeSessionId: opts?.resumeSessionId,
             ...(opts?.predecessorSessionId
-              ? { predecessorSessionId: opts.predecessorSessionId }
+              ? {
+                  predecessorSessionId: opts.predecessorSessionId,
+                  ...(opts.predecessorKillCaller
+                    ? { predecessorKillCaller: opts.predecessorKillCaller }
+                    : {}),
+                }
               : {}),
             dangerousMode,
             useProxy,
             recoverTmuxName: opts?.recoverTmuxName,
             builtInMcpDomains,
+            // Only the pane's explicit choices cross; main applies Settings,
+            // secrets and support itself (#1143, spec Revision 2 §4).
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
           sessionId = result.sessionId
           tmuxName = result.tmuxName
           startedProviderSessionId = result.providerSessionId
+          startedUserMcpServerIds = result.userMcpServerIds
           // WHY the reservation happens HERE, before this function's own commit:
           //
           // The gap the reconciler exploits opens the moment the successor's
@@ -488,6 +510,7 @@ export function useSessionActions(
           ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
             ? { builtInMcpDomains, builtInMcpOverrides }
             : {}),
+          ...(isAgentProviderKind(kind) ? { userMcpServerIds: startedUserMcpServerIds ?? [] } : {}),
         }
         setState(prev => ({
           ...prev,
@@ -758,6 +781,7 @@ export function useSessionActions(
             cwd: meta.cwd,
             resumeSessionId,
             builtInMcpDomains,
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
@@ -968,7 +992,7 @@ export function useSessionActions(
             // it does mean #548's self-heal no longer covers this class, and
             // nothing has replaced it.
             if (readyError && recoveryDisposition === 'spawned') {
-              void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
+              void killSessionBackendIfOwned(refs, sessionId, 'wake.spawn-failed').catch(() => undefined)
             }
           }
         }
@@ -1032,6 +1056,11 @@ export function useSessionActions(
           providerRuntime: recoverySnapshot?.providerRuntime ?? meta.providerRuntime,
           ...(recoveredBuiltInMcpDomains !== undefined
             ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
+            : {}),
+          // Same rule as the built-in domains above: an adopted backend keeps
+          // the servers it was launched with, and only main knows which.
+          ...(recoverySnapshot?.userMcpServerIds !== undefined
+            ? { userMcpServerIds: recoverySnapshot.userMcpServerIds }
             : {}),
           ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
         }
@@ -1136,8 +1165,12 @@ export function useSessionActions(
   )
 
   const killSession = useCallback(
-    async (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => {
-      await killSessionBackendIfOwned(refs, sessionId, capturedOwner)
+    async (
+      sessionId: SessionId,
+      caller: KillCaller,
+      capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
+    ) => {
+      await killSessionBackendIfOwned(refs, sessionId, caller, capturedOwner)
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[sessionId]
@@ -1295,6 +1328,10 @@ export function useSessionActions(
         // same-rollout handoff; Claude, OpenCode, fresh Codex, and different-
         // transcript swaps retain the rollback-friendly ordering here.
         predecessorSessionId: oldId,
+        // The same tag the renderer's own predecessor kill below uses, so a
+        // replaceSession journals 'replace.predecessor' whether main (Codex
+        // same-rollout handoff) or the renderer (every other swap) does it.
+        predecessorKillCaller: 'replace.predecessor',
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
       })
       // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
@@ -1312,11 +1349,11 @@ export function useSessionActions(
         let sourceOwned = false
         setState(prev => { sourceOwned = canCommit(prev); return prev })
         if (!sourceOwned) {
-          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          await killSession(newId, 'replace.orphaned-successor', { cwd, kind: nextKind, providerRuntime })
           return
         }
         if (!mainHandledPredecessor) {
-          await killSessionBackendIfOwned(refs, oldId, oldMeta)
+          await killSessionBackendIfOwned(refs, oldId, 'replace.predecessor', oldMeta)
         }
         // Swap the sessionId everywhere it is referenced: the pool row, the
         // lanes, the pins and other rows' relationship pointers.
@@ -1410,6 +1447,13 @@ export function useSessionActions(
             ...(prev.sessions[oldId]?.agentViewModeOverride
               ? { agentViewModeOverride: prev.sessions[oldId]!.agentViewModeOverride }
               : {}),
+            // Same class as agentViewModeOverride: user-owned state on the pane.
+            // The pocketId inside it names the live page and its cookie jar,
+            // so dropping it here would reload the page and log the user out
+            // of their dev app on every reload / provider switch / rewind.
+            ...(prev.sessions[oldId]?.browserPocket
+              ? { browserPocket: prev.sessions[oldId]!.browserPocket }
+              : {}),
           }
           return {
             ...prev,
@@ -1440,7 +1484,7 @@ export function useSessionActions(
           }
         })
         if (!committed) {
-          await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+          await killSession(newId, 'replace.orphaned-successor', { cwd, kind: nextKind, providerRuntime })
           return
         }
         setRuntimes(prev => {
@@ -1539,7 +1583,7 @@ export function useSessionActions(
 
       for (const [oldId, meta] of agentEntries) {
         try {
-          await killSessionBackendIfOwned(refs, oldId)
+          await killSessionBackendIfOwned(refs, oldId, 'reload.agent-sessions')
         } catch {
           // Kill failures still fall through to respawn — the old
           // process may already be gone.
@@ -1562,7 +1606,7 @@ export function useSessionActions(
               : undefined
           const resumeSessionId = resumableProviderSessionId(meta)
           const restoredMeta = withoutProvisionalProviderSession(meta)
-          const { sessionId: newId } = await window.api.spawnSession({
+          const { sessionId: newId, userMcpServerIds } = await window.api.spawnSession({
             tldrIdentity: tldrIdentityForSession(oldId, meta),
             kind,
             providerRuntime: meta.providerRuntime,
@@ -1571,6 +1615,7 @@ export function useSessionActions(
             dangerousMode,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             builtInMcpDomains,
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = {
@@ -1585,6 +1630,7 @@ export function useSessionActions(
             ...restoredMeta,
             tldrIdentity: tldrIdentityForSession(oldId, meta),
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
+            ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
           }
         } catch {
           failedIds.add(oldId)

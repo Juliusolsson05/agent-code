@@ -29,6 +29,7 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
+import type { KillCaller } from '@shared/lifecycle/events'
 import type { ClosedTab, SingleClosedEntry, UndoCloseStack } from '@renderer/lib/undoClose'
 import { resolveDispatchSpawnTarget } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { fileSessionInProject, workspaceWithoutSessions } from '@renderer/workspace/pool'
@@ -215,6 +216,20 @@ export type CloseSessionOptions = {
    * feature was dead. The renderer CAN ask, at the exact line that mutates.
    */
   requireConfirmation?: { headline: string }
+  /**
+   * Who is closing, journaled by main on every `kill.request` this close
+   * issues — the named session AND each approved linked child (#1135).
+   *
+   * WHY on the options rather than a separate argument: a close is one
+   * approved operation, and the children it ends die because of that same
+   * request, so they must carry the same tag. It rides the CloseOperation to
+   * the kill boundary for exactly that reason.
+   *
+   * WHY optional, defaulting to 'unknown' rather than guessing "user close":
+   * a close path that forgot to say who it is must appear in the journal as a
+   * gap to fix, not be mislabelled as a human gesture.
+   */
+  killCaller?: KillCaller
 }
 
 /**
@@ -324,6 +339,8 @@ type CloseOperation = {
    *  position — because by the removing commit the earlier members are gone. */
   approvalTabs: ReadonlyMap<TabId, { tab: Tab; tabIndex: number }>
   admit?: CloseSessionOptions['onlyIf']
+  /** Tag for every kill this operation issues; see CloseSessionOptions.killCaller. */
+  killCaller: KillCaller
   visited: Set<SessionId>
   pending: Set<SessionId>
   /** What actually committed, in commit order: the only input to the
@@ -345,6 +362,7 @@ function beginCloseOperation(
   rootId: SessionId | null,
   approvedTargets: readonly CloseTargetSnapshot[],
   admit: CloseSessionOptions['onlyIf'],
+  killCaller: KillCaller,
 ): CloseOperation {
   const approved = new Map<SessionId, ApprovedCloseTarget>()
   const approvalTabs = new Map<TabId, { tab: Tab; tabIndex: number }>()
@@ -363,6 +381,7 @@ function beginCloseOperation(
     approved,
     approvalTabs,
     admit,
+    killCaller,
     visited: new Set(),
     pending: new Set(approved.keys()),
     commits: [],
@@ -1018,9 +1037,10 @@ export function usePaneActions(
           kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           cwd,
+          caller: 'spawn.unplaced',
         })
           .catch(() => undefined)
-        await sessionActions.killSession(sessionId)
+        await sessionActions.killSession(sessionId, 'spawn.unplaced')
         return
       }
       closeNewAgentPlacement()
@@ -1168,7 +1188,7 @@ export function usePaneActions(
       // If the owning project disappeared during spawn, retire only this new
       // process instead of leaving an unowned live session behind.
       if (!placed) {
-        await sessionActions.killSession(sessionId, { cwd, kind, providerRuntime })
+        await sessionActions.killSession(sessionId, 'spawn.unplaced', { cwd, kind, providerRuntime })
         return null
       }
       if (placement?.selectCreated !== false) closeNewAgentPlacement()
@@ -1476,7 +1496,7 @@ export function usePaneActions(
       // judge the same workspace. Its boolean is deliberately not a refusal:
       // main rejecting an ownership-conflict pane still lets the renderer drop
       // that stale pane (paneRecoveryOwnership tests), as it always has.
-      await killSessionBackendIfOwned(refs, targetId)
+      await killSessionBackendIfOwned(refs, targetId, operation.killCaller)
 
       setRuntimes(prev => {
         const next = { ...prev }
@@ -1567,7 +1587,7 @@ export function usePaneActions(
   // A missing Dispatch target closes NOTHING — see resolveFocusedCloseTarget.
   const closeFocused = useCallback(async () => {
     const targetId = resolveFocusedCloseTarget(refs.stateRef.current)
-    if (targetId) await closeSessionRef.current?.(targetId)
+    if (targetId) await closeSessionRef.current?.(targetId, { killCaller: 'close.focused' })
   }, [refs.stateRef])
 
   // Mirrors closeFocused but operates on a caller-specified session
@@ -1655,7 +1675,13 @@ export function usePaneActions(
 
       // Built synchronously after approval, so the recorded project and meta of
       // every approved session describe the workspace the user approved.
-      const operation = beginCloseOperation(refs.stateRef.current, targetId, approved, options?.onlyIf)
+      const operation = beginCloseOperation(
+        refs.stateRef.current,
+        targetId,
+        approved,
+        options?.onlyIf,
+        options?.killCaller ?? 'unknown',
+      )
       // The named session itself. A thrown kill is recorded like any member's
       // and rethrown only AFTER the operation is recorded and reported, so bulk
       // cleanup's `failed` bucket and orchestration's catch keep working while
@@ -1743,7 +1769,13 @@ export function usePaneActions(
       const approvalState = refs.stateRef.current
       const tab = approvalState.tabs.find(candidate => candidate.id === tabId)
       if (!tab || gate.targets.length === 0) return
-      const operation = beginCloseOperation(approvalState, null, withShownLiveness(gate.targets, shown), undefined)
+      const operation = beginCloseOperation(
+        approvalState,
+        null,
+        withShownLiveness(gate.targets, shown),
+        undefined,
+        'close.tab',
+      )
       // Deepest linked descendants first, so a child always closes before the
       // parent that would otherwise be kept open for it. The project itself
       // leaves with whichever commit takes its last session; if a member

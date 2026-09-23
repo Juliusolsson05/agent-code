@@ -61,6 +61,55 @@ describe('brokered net.fetch', () => {
     expect(JSON.parse(result.body)).toEqual({ url: '/api/state?code=1', method: 'POST', body: '{"hello":1}', accept: 'application/json' })
   })
 
+  // #1147 review blocker: services trust x-agent-code-transport and
+  // x-forwarded-* on a loopback socket because only the host sets them. A
+  // net.connect extension that could send them would pose as another
+  // extension's own frame (`service`) or as any LAN guest (`lan` + forged
+  // peer), e.g. to take the Poker host seat.
+  it.each([
+    ['the service attestation', 'x-agent-code-transport', 'service'],
+    ['the lan attestation', 'X-Agent-Code-Transport', 'lan'],
+    ['a forged forwarded peer', 'x-forwarded-for', '127.0.0.1'],
+    ['a forged forwarded host', 'X-Forwarded-Host', '192.168.1.42:61234'],
+    ['the RFC 7239 form', 'Forwarded', 'for=127.0.0.1'],
+  ])('refuses a caller who supplies %s, before any socket opens', async (_label, name, value) => {
+    let dialed = false
+    const perform = (async () => { dialed = true; return new Response('{}') }) as typeof fetch
+    await expect(netFetch({ url: 'http://192.168.1.42:5192/api/create', httpMethod: 'POST', headers: [{ name, value }] }, perform))
+      .rejects.toThrow(/reserved for the Agent Code host/)
+    expect(dialed).toBe(false)
+  })
+
+  // Even without forged headers, a direct loopback fetch to a service port
+  // skips the proxy and listener entirely: another extension could supply its
+  // own Origin and look like the service's same-origin local page.
+  it.each([
+    ['127.0.0.1', 'http://127.0.0.1:5192/api/create'],
+    ['another 127/8 address', 'http://127.4.5.6:5192/api/create'],
+    ['IPv6 loopback', 'http://[::1]:5192/api/create'],
+  ])('refuses a host-owned service or listener port on %s', async (_label, url) => {
+    let dialed = false
+    const perform = (async () => { dialed = true; return new Response('{}') }) as typeof fetch
+    await expect(netFetch({ url }, perform, { isHostOwnedLoopbackPort: port => port === 5192 }))
+      .rejects.toThrow(/cannot reach Agent Code extension services/)
+    expect(dialed).toBe(false)
+  })
+
+  it('the IPv4-mapped loopback form never gets as far as the port check', () => {
+    // URL() rewrites [::ffff:127.0.0.1] to [::ffff:7f00:1], which the address
+    // policy already refuses, so this spelling is not a way around the port rule.
+    expect(() => assertFetchableTarget('http://[::ffff:127.0.0.1]:5192/', {} as NetFetchRequest)).toThrow(/private local-network/)
+  })
+
+  it('still reaches other loopback ports and the same port on a LAN address', async () => {
+    const port = await loopbackUpstream()
+    const guards = { isHostOwnedLoopbackPort: (candidate: number) => candidate === port + 1 }
+    expect((await netFetch({ url: `http://127.0.0.1:${port}/ok` }, fetch, guards)).status).toBe(200)
+    // A LAN-address target is a friend's host (or this machine's listener,
+    // which stamps the caller) — not a way around the proxy.
+    expect(() => assertFetchableTarget(`http://192.168.1.42:${port + 1}/`, {} as NetFetchRequest, guards)).not.toThrow()
+  })
+
   it('caps the response before it crosses back into a sandboxed frame', async () => {
     const port = await loopbackUpstream()
     await expect(netFetch({ url: `http://127.0.0.1:${port}/big` })).rejects.toThrow(/responses are limited/)

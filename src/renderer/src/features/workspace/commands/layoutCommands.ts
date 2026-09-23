@@ -235,7 +235,7 @@ export const layoutCommands: CommandDef[] = [
       // undo entry. So the lane is removed only when its agent is really gone.
       // A root close that promoted a Dispatch row into the grid still resolves
       // true; the survivor keeps its own lane, untouched here.
-      const closed = await workspace.closeSession(sessionId)
+      const closed = await workspace.closeSession(sessionId, { killCaller: 'close.lane' })
       if (closed) workspace.removeTiledLane(laneIndex)
     },
   },

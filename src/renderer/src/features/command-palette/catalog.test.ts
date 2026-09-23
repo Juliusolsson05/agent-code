@@ -25,7 +25,8 @@ import { RETIRED_BUILT_IN_COMMAND_IDS } from '@renderer/app-state/settings/persi
 // 16 retirements took it to 118, Clear Lane (stage 4) to 119 and the lane keyboard
 // grammar (stage 5) to 123. (#992 was written against 130 and read 119 at the end;
 // merging main added Goal Loop's two commands and the two generated Grok splits.)
-// 124 with Open Setup (#995), 127 with the two generated Pi splits (#1132).
+// 124 with Open Setup (#995). 132 with the seven Browser Pocket commands (#1142), 133 with Browser Pocket MCP; 128 as
+// merged with the two generated Pi splits (#1132).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -114,8 +115,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (33)
-  'use-global-mcp-settings',
+  // sessionCommands (24): the nine per-capability MCP commands were retired
+  // into Agent MCP Servers… (#1143)
   'view-prompts',
   'rewind-to-prompt',
   'remove-cybersecurity-block',
@@ -128,15 +129,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'switch-agents-provider',
   'search-conversation-prompts',
   'enable-built-in-mcp-ping',
-  'enable-ai-workspace-mcp',
-  'enable-orchestration-mcp',
-  'enable-agent-transcripts-mcp',
-  'enable-agent-management-mcp',
   'enable-root-agent-code-management',
-  'enable-tldr-mcp',
-  'enable-goal-mcp',
-  'enable-goal-loop-mcp',
-  'enable-workflow-mcp',
   'reload-agent',
   'soft-reload-agent',
   'set-agent-view-mode',
@@ -154,12 +147,24 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-html-debug-panel',
   'clear-agent-composer',
   'toggle-dev-debug-panel',
+  // mcpCommands (3), registered right after the session commands (#1143)
+  'mcp-servers',
+  'add-mcp-server',
+  'agent-mcp-servers',
   // agentTitleCommands (1)
   'agent.title.set',
   // dispatchColorFlagCommands (1)
   'dispatch.color-flag.set',
   // spotlight / TLDR / reader / tile-tabs (6) + goal loop (2)
   'toggle-spotlight',
+  // browserPocketCommands (7, #1142)
+  'toggle-browser-pocket',
+  'reload-browser-pocket',
+  'focus-browser-pocket-address',
+  'pick-browser-pocket-element',
+  'open-browser-pocket-external',
+  'open-browser-pocket-devtools',
+  'detach-browser-pocket',
   'tldr-preview',
   'goal-preview',
   'view-tldr-history',
@@ -225,6 +230,17 @@ const RETIRED_COMMAND_IDS: readonly string[] = [
   'usage.toggle-header',
   'usage.cycle-header-level',
   'dangerous-agents',
+  // #1143: replaced by the staged Agent MCP Servers… picker, which carries
+  // the same choices through one reload instead of one reload per toggle.
+  'use-global-mcp-settings',
+  'enable-ai-workspace-mcp',
+  'enable-orchestration-mcp',
+  'enable-agent-transcripts-mcp',
+  'enable-agent-management-mcp',
+  'enable-tldr-mcp',
+  'enable-goal-mcp',
+  'enable-goal-loop-mcp',
+  'enable-workflow-mcp',
 ]
 
 /** The exact six-member Navigation Commands group (plan decision 6). Closed by
@@ -239,12 +255,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 127 governed commands in registration order', () => {
+  it('contains exactly the 128 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 127 commands', () => {
+  it('has exactly 128 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -267,12 +283,15 @@ describe('built-in command catalog — baseline characterization', () => {
     // −attach×2, −detach → 115 with Clear Lane (#992 stage 4) → 119 with the
     // lane keyboard grammar (#992 stage 5) → 123 once main's Goal Loop preview
     // and stop (#1001) and the two generated Grok splits (#844) merged in → 124
-    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995) → 127 with the two
-    // generated Pi splits `pi-vertical` / `pi-horizontal` (#1132).
+    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995) → 119 with the MCP
+    // servers interface (#1143): −9 per-capability MCP commands, +3 MCP
+    // commands → 126 with the seven Browser Pocket commands (#1142; its
+    // per-agent MCP toggle is a row in the #1143 grid, not a command) → 128
+    // with the two generated Pi splits `pi-vertical` / `pi-horizontal` (#1132).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(127)
+    expect(builtInCommandCatalog).toHaveLength(128)
   })
 
   it('reports no structural defects', () => {
@@ -306,15 +325,16 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 125 total - 6 generated = 119 literal `id:` fields across the command
+    // 128 total - 8 generated = 120 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
     // count test above (through the lane keyboard grammar, #992 stage 5, and
-    // Goal Loop, #1001, Goal Loop MCP, #1006, and Open Setup, #995). Grok
-    // (#844) grew only the
-    // GENERATED term, 4 → 6.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(119)
+    // Goal Loop, #1001, Goal Loop MCP, #1006, and Open Setup, #995), then
+    // down by six with the MCP servers interface (#1143: −9 toggles, +3),
+    // then up by the seven Browser Pocket commands (#1142).
+    // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(120)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -424,9 +444,10 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 21 retirements + 46 additions = 127, checked against the
+    // 102 baseline - 30 retirements + 56 additions = 128, checked against the
     // real catalog rather than trusted as prose. (5 governance retirements +
-    // 16 unified-layout retirements, all recorded in RETIRED_COMMAND_IDS.)
+    // 16 unified-layout retirements + 9 MCP retirements (#1143), all recorded
+    // in RETIRED_COMMAND_IDS.)
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
     // value is the pre-governance baseline — so growing the catalog means
@@ -454,11 +475,18 @@ describe('governance targets', () => {
     // `agent-analytics.open` (#964), `goal-loop-preview` and `goal-loop-stop`
     // (#1001), `grok-vertical` and `grok-horizontal` (#844, generated from
     // AGENT_PROVIDER_KINDS), `clear-focused-lane` (#992 stage 4), and the four
-    // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006),
-    // `open-setup` (#995), and `pi-vertical` / `pi-horizontal` (#1132,
+    // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006)
+    // and `open-setup` (#995), and `mcp-servers`, `add-mcp-server` and
+    // `agent-mcp-servers` (#1143). The nine commands #1143 retired are counted
+    // in RETIRED_COMMAND_IDS, which is why the additions they had once been
+    // counted as stay in this total. Then the seven Browser Pocket commands
+    // (#1142): `toggle-browser-pocket`, `reload-browser-pocket`,
+    // `focus-browser-pocket-address`, `pick-browser-pocket-element`,
+    // `open-browser-pocket-external`, `open-browser-pocket-devtools` and
+    // `detach-browser-pocket`. Then `pi-vertical` and `pi-horizontal` (#1132,
     // generated from AGENT_PROVIDER_KINDS like Grok's).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 46).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(127)
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 56).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(128)
   })
 })
 

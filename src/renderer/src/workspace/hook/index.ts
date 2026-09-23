@@ -1,8 +1,9 @@
+import type { WorkspaceState } from '@renderer/workspace/types'
 import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
@@ -52,9 +53,14 @@ import {
   additionalCloseImpact,
   assertManagedTarget,
   listManagedAgentDescriptors,
+  ManagedAgentTargetError,
   readManagedAgentOutput,
   readManagedAgentOutputs,
+  resolveManagedTarget,
 } from '@renderer/workspace/agentManagementMcp'
+import type { ManagedAgentNames } from '@renderer/workspace/agentManagementMcp'
+import { sessionDisplayLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { hydrateTranscriptWithoutWaking as hydrateManagedTranscript } from '@renderer/workspace/hook/actions/hydrateTranscript'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
@@ -80,7 +86,7 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
+  defaultBuiltInMcpDomains: BuiltInMcpDefaultsInput = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
@@ -522,6 +528,20 @@ export function useWorkspace(
       error: unknown,
       sessionId?: string,
     ): Promise<void> => {
+      // A target refusal carries a message written for the calling model
+      // (which labels the project shows, why a name did not resolve), so it
+      // is forwarded verbatim instead of being flattened to a bare code.
+      if (error instanceof ManagedAgentTargetError) {
+        await window.api.resolveAgentManagementRequest({
+          requestId,
+          ok: false,
+          type,
+          code: error.code,
+          message: error.message,
+          ...(sessionId ? { sessionId } : {}),
+        })
+        return
+      }
       const candidate = error instanceof Error ? error.message : 'request_failed'
       const knownCodes = new Set([
         'caller_not_found',
@@ -562,13 +582,43 @@ export function useWorkspace(
         },
       })
 
+    // Read beside whichever workspace snapshot the caller is about to use, so
+    // a name is resolved and published from the same moment as the labels.
+    const agentNames = (): ManagedAgentNames => {
+      const store = useAppStore.getState()
+      return {
+        enabled: store.settings.agentNamesEnabled === true,
+        names: store.workspaceAgentNames ?? {},
+      }
+    }
+    // The single place a request's target becomes a session id (#1145). See
+    // resolveManagedTarget for why a label is resolved here, now, against the
+    // live state — and never re-resolved after an await.
+    const resolveTarget = (
+      callerSessionId: string,
+      target: Parameters<typeof resolveManagedTarget>[0]['target'],
+    ): string => resolveManagedTarget({
+      state: refs.stateRef.current,
+      callerSessionId,
+      target,
+      agentNames: agentNames(),
+    })
+    const currentLabel = (sessionId: string): string | null => {
+      const state = refs.stateRef.current
+      return sessionDisplayLabel(state, sessionId, buildVisibleDispatchRows(state))
+    }
+
     const off = window.api.onAgentManagementRequest(async request => {
+      // Filled as soon as a target resolves, so a later refusal names the
+      // session it was about rather than echoing an unresolved label.
+      let resolvedSessionId: string | undefined
       try {
         if (request.type === 'list-agents') {
           const listed = listManagedAgentDescriptors({
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
             callerSessionId: request.callerSessionId,
+            agentNames: agentNames(),
           })
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
@@ -581,23 +631,26 @@ export function useWorkspace(
         }
 
         if (request.type === 'read-agent') {
+          const sessionId = resolveTarget(request.callerSessionId, request.target)
+          resolvedSessionId = sessionId
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
             allowSelf: true,
           })
-          const unavailable = await hydrateTranscriptWithoutWaking(request.sessionId)
+          const unavailable = await hydrateTranscriptWithoutWaking(sessionId)
           if (unavailable) throw new Error('transcript_unavailable')
           const current = useAppStore.getState()
           const output = readManagedAgentOutput({
             state: current.workspaceState,
             runtimes: current.workspaceRuntimes,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
             maxMessages: request.maxMessages,
             maxCharsPerMessage: request.maxCharsPerMessage,
             maxCharsPerAgent: request.maxCharsPerAgent,
+            agentNames: agentNames(),
           })
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
@@ -614,10 +667,21 @@ export function useWorkspace(
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
             callerSessionId: request.callerSessionId,
+            agentNames: agentNames(),
           })
           const listedIds = new Set(listed.agents.map(item => item.agent.sessionId))
-          let targetIds = request.sessionIds
-            ? [...new Set(request.sessionIds)]
+          // Labels and names resolve through the same resolver as the single
+          // tools, then join the explicit id list: it is still "an explicit
+          // subset" (strict about departures below), however it was named.
+          const explicit = request.sessionIds || request.labels || request.names
+            ? [
+                ...(request.sessionIds ?? []),
+                ...(request.labels ?? []).map(label => resolveTarget(request.callerSessionId, { label })),
+                ...(request.names ?? []).map(name => resolveTarget(request.callerSessionId, { name })),
+              ]
+            : undefined
+          let targetIds = explicit
+            ? [...new Set(explicit)]
             : listed.agents
                 .filter(item => request.includeCaller === true || !item.agent.isCaller)
                 .map(item => item.agent.sessionId)
@@ -639,7 +703,7 @@ export function useWorkspace(
               .map(item => [item.sessionId, item] as const),
           )
           const current = useAppStore.getState()
-          if (!request.sessionIds) {
+          if (!explicit) {
             const originalIds = new Set(targetIds)
             const fresh = listManagedAgentDescriptors({
               state: current.workspaceState,
@@ -666,6 +730,7 @@ export function useWorkspace(
             maxCharsPerMessage: request.maxCharsPerMessage,
             maxCharsPerAgent: request.maxCharsPerAgent,
             maxTotalChars: request.maxTotalChars,
+            agentNames: agentNames(),
           })
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
@@ -682,26 +747,38 @@ export function useWorkspace(
         }
 
         if (request.type === 'send-prompt') {
+          const sessionId = resolveTarget(request.callerSessionId, request.target)
+          resolvedSessionId = sessionId
+          // The label the user saw when this was asked, captured BEFORE the
+          // wake: waking can reorder nothing today, but the echo must describe
+          // the agent as it was addressed, not whatever it shows afterwards.
+          const displayLabel = currentLabel(sessionId)
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
           })
           // Sending is the one operation that intentionally wakes a parked
           // target. Re-authorize after the await because the user can move or
           // close a pane while the provider is starting.
-          await ensureSessionLiveRef.current(request.sessionId, 'orchestration.send-prompt')
+          //
+          // WHY the re-check uses the RESOLVED id, never the label again: if an
+          // earlier row closed during the wake, "B28" now names a different
+          // agent. The request was about the agent that showed B28 when it was
+          // made; re-resolving would deliver to its neighbour.
+          await ensureSessionLiveRef.current(sessionId, 'orchestration.send-prompt')
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
           })
-          const delivery = await window.api.deliverPrompt(request.sessionId, request.prompt)
+          const delivery = await window.api.deliverPrompt(sessionId, request.prompt)
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
             ok: true,
             type: 'send-prompt',
-            sessionId: request.sessionId,
+            sessionId,
+            displayLabel,
             delivery,
           })
           return
@@ -719,10 +796,13 @@ export function useWorkspace(
         // additionalCloseImpact therefore reports linked descendants only. The
         // model-facing tool adds the separate requirement that the current
         // user explicitly requested closure.
+        const closeTargetId = resolveTarget(request.callerSessionId, request.target)
+        resolvedSessionId = closeTargetId
+        const closeTargetLabel = currentLabel(closeTargetId)
         const affected = additionalCloseImpact({
           state: refs.stateRef.current,
           callerSessionId: request.callerSessionId,
-          sessionId: request.sessionId,
+          sessionId: closeTargetId,
         })
         if (affected.length > 0) {
           await window.api.resolveAgentManagementRequest({
@@ -731,7 +811,7 @@ export function useWorkspace(
             type: 'close-agent',
             code: 'close_would_affect_additional_sessions',
             message: 'Closing this target would also affect additional project sessions.',
-            sessionId: request.sessionId,
+            sessionId: closeTargetId,
             additionalAffectedSessionIds: affected,
           })
           return
@@ -740,7 +820,7 @@ export function useWorkspace(
         const placement = assertManagedTarget({
           state: current,
           callerSessionId: request.callerSessionId,
-          sessionId: request.sessionId,
+          sessionId: closeTargetId,
         })
         // A 'buried' placement used to branch to Kill Buried here. Buried
         // records become ordinary pool rows when an old file is migrated
@@ -766,12 +846,13 @@ export function useWorkspace(
           // idle target does not slip through the human-ergonomics exemption
           // the policy grants ⌘W. Declining rejects the tool call.
           const caller = current.sessions[request.callerSessionId]?.title
-          const closed = await closeOrchestrationSessionRef.current(request.sessionId, {
+          const closed = await closeOrchestrationSessionRef.current(closeTargetId, {
             requireConfirmation: {
               headline: caller
                 ? `Agent “${caller}” is asking to close this agent.`
                 : 'An agent is asking to close this agent.',
             },
+            killCaller: 'agent-management.close-agent',
           })
           // The comment above says "declining rejects the tool call" — it did
           // not. The gate RESOLVES false rather than throwing, so the success
@@ -793,14 +874,15 @@ export function useWorkspace(
           requestId: request.requestId,
           ok: true,
           type: 'close-agent',
-          closedSessionId: request.sessionId,
+          closedSessionId: closeTargetId,
+          displayLabel: closeTargetLabel,
         })
       } catch (error) {
         await resolveFailure(
           request.requestId,
           request.type,
           error,
-          'sessionId' in request ? request.sessionId : undefined,
+          resolvedSessionId,
         )
       }
     })
@@ -921,6 +1003,12 @@ export function useWorkspace(
     // threw "is not a function" at runtime (vite strips types, so the build
     // never caught the missing member). Exposing it here is the whole fix.
     updateRuntime,
+    // Browser pocket config writes (#1142). Takes one of the pure transforms in
+    // features/browser-pocket/actions.ts rather than exposing a general
+    // setState: those transforms are the only code allowed to change
+    // SessionMeta.browserPocket, and they return the SAME object for no-ops,
+    // which setWorkspaceState turns into "no store notification, no autosave".
+    updateBrowserPocket: (transform: (state: WorkspaceState) => WorkspaceState) => setState(transform),
     // actions
     newTab: tabActions.newTab,
     // Close Tab runs through the pane close executor, beside closeSession, so

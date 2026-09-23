@@ -107,12 +107,13 @@ describe('tier classification', () => {
       // attach-detached commands) were retired by the unified stage (#1013)
       // before this landed, so these nine are the survivors.
       //
-      // The operative rule is the owner's pick, not a class-wide claim about
-      // MCP toggles: `enable-orchestration-mcp` and `enable-workflow-mcp` were
-      // NOT in it and stay advanced (pinned four lines below).
+      // The per-capability MCP toggles in that pick were retired into the
+      // single Agent MCP Servers… picker (#1143), which inherits their default
+      // tier; the Settings shortcut and Add MCP Server… are default for the
+      // same reason.
       'toggle-tail-all', 'set-agent-view-mode', 'soft-reload-agent', 'switch-agents-provider',
-      'remove-cybersecurity-block', 'enable-agent-transcripts-mcp', 'enable-agent-management-mcp',
-      'enable-ai-workspace-mcp', 'enable-root-agent-code-management',
+      'remove-cybersecurity-block', 'enable-root-agent-code-management',
+      'agent-mcp-servers', 'mcp-servers', 'add-mcp-server',
     ]) {
       expect(byId(id).pickerVisibility ?? 'default').toBe('default')
     }
@@ -121,10 +122,12 @@ describe('tier classification', () => {
   it('marks niche supported operations advanced rather than hiding them entirely', () => {
     // `advanced` is not `debug`: these are supported operations a power user
     // wants, just not ones that should crowd a fuzzy search.
-    // These three used to be remove-cybersecurity-block, soft-reload-agent and
-    // switch-agents-provider, which B9 promoted (see above). The ones below
-    // were NOT in the owner's pick and stay advanced.
-    for (const id of ['undo-rewind', 'enable-orchestration-mcp', 'enable-workflow-mcp', 'toggle-tail-working']) {
+    // These used to include remove-cybersecurity-block, soft-reload-agent and
+    // switch-agents-provider, which B9 promoted (see above), and the
+    // Orchestration and Workflow MCP toggles, which #1143 retired into Agent
+    // MCP Servers…. The ones below were NOT in the owner's pick and stay
+    // advanced.
+    for (const id of ['undo-rewind', 'toggle-tail-working']) {
       expect(byId(id).pickerVisibility).toBe('advanced')
     }
   })

@@ -33,6 +33,7 @@ import type {
   AgentInputReadiness,
   SessionBackendSnapshot,
   SessionInputReadiness,
+  SessionKillOptions,
   SessionOwnershipOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
@@ -70,6 +71,24 @@ import type {
 } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import {
+  normalizeUserMcpOverrides,
+  type ResolvedUserMcpServer,
+  type UserMcpDroppedServer,
+} from '@shared/userMcp/types.js'
+
+/** Structural so SessionManager does not depend on the service class; see
+ * UserMcpService.resolveForLaunch for the rules it applies. */
+export type UserMcpResolver = (params: {
+  provider: string
+  overrides: Readonly<Record<string, boolean>>
+  cwd: string
+}) => Promise<{
+  servers: ResolvedUserMcpServer[]
+  attachedIds: string[]
+  dropped: UserMcpDroppedServer[]
+  codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+}>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type { PromptGateState } from '@shared/types/session.js'
@@ -83,6 +102,8 @@ import {
   type CodexTranscriptObservationEventName,
   type SessionLifecycleCorrelationIds,
   type SessionLifecycleData,
+  isKillCaller,
+  type KillCaller,
 } from '@shared/lifecycle/events.js'
 import type {
   SessionSpawnOptions,
@@ -220,6 +241,10 @@ type ManagerEvents = {
    *  reconcile could not prepare, and it is being started without them (#1133).
    *  Carries domain names only, never the error: see the pre-spawn gate. */
   'managed-skills-unavailable': [{ sessionId: string; skills: ReportingDomain[] }]
+  // #1143. A user MCP server the agent asked for could not be attached to this
+  // launch (missing secret, unsupported transport, name collision…). The
+  // launch itself proceeded without it.
+  'user-mcp-unavailable': [{ sessionId: string; servers: UserMcpDroppedServer[] }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
@@ -351,6 +376,8 @@ type CodexReplacementHandoff = {
   predecessorRecovery: RecoveryClaim | null
   proof: CodexReplacementProof
   restoreOptions: SessionSpawnOptions
+  /** Tag for the predecessor's kill.request; see SessionSpawnOptions.predecessorKillCaller. */
+  predecessorKillCaller: KillCaller
   stopPromise: Promise<void> | null
   compensationRequired: boolean
 }
@@ -478,6 +505,21 @@ type InputWriteOrigin =
   | 'renderer'
 
 const TERMINAL_BUFFER_CAP = 256 * 1024
+
+/**
+ * The single place a kill caller from outside this class is trusted.
+ *
+ * WHY 'unknown' rather than dropping the field: a kill whose caller we cannot
+ * name must be a visible gap in the journal, not an event that silently lacks
+ * a key (#1135). WHY re-validate at all when TypeScript already types it: the
+ * value normally crossed IPC from a renderer, and a stale or hostile renderer
+ * is not bound by our types. The journal's payload allowlist would record any
+ * string, so a free-form value here would reintroduce the drift the closed
+ * union exists to prevent.
+ */
+function normalizeKillCaller(caller: unknown): KillCaller {
+  return isKillCaller(caller) ? caller : 'unknown'
+}
 
 function resolveProviderRuntime(
   kind: SessionKind,
@@ -713,6 +755,25 @@ export class SessionManager extends EventEmitter {
     // `?.` guard. See SessionLifecycleJournal for why nothing may READ these.
     this.lifecycle = new SessionLifecycleJournal(journal)
   }
+
+  /**
+   * User MCP servers (#1143). A setter rather than another positional
+   * constructor argument because the service is optional (tests and the
+   * headless harnesses construct managers without one) and the constructor's
+   * positional list is already long enough that one more slot invites
+   * argument-order bugs at every call site.
+   */
+  setUserMcpResolver(resolver: UserMcpResolver | null): void {
+    this.userMcpResolver = resolver
+  }
+
+  private userMcpResolver: UserMcpResolver | null = null
+  // What each live agent was actually launched with, and the per-agent
+  // choices it was launched from. The first feeds the backend snapshot the
+  // same way builtInMcpHost.sessionDomains does; the second lets a same-rollout
+  // Codex restore relaunch with the predecessor's exact choices.
+  private readonly userMcpAttached = new Map<string, string[]>()
+  private readonly userMcpOverridesBySession = new Map<string, Record<string, boolean>>()
 
   private readonly lifecycle: SessionLifecycleJournal
 
@@ -1030,6 +1091,12 @@ export class SessionManager extends EventEmitter {
       this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
+      // Once the backend is gone its user-MCP launch facts must not outlive it
+      // and be reported for a successor. Unconditional (review round 2):
+      // `revokeAgentMcp` is about the built-in host bearer and is false when a
+      // launch had no built-in domains, which leaked these entries.
+      this.userMcpAttached.delete(sessionId)
+      this.userMcpOverridesBySession.delete(sessionId)
     }
     forgetFeedDebugSession(sessionId)
     return true
@@ -1315,7 +1382,11 @@ export class SessionManager extends EventEmitter {
           // rollout. Rehydrate still owns predecessorId durably, so reclamation
           // must retire that hidden owner without reclassifying the event as a
           // user close (which would suppress the stable-ID recovery below).
-          await this.killInternal(reservation.successorSessionId, reservation)
+          await this.killInternal(
+            reservation.successorSessionId,
+            this.internalKillCaller('replacement.reclaim'),
+            reservation,
+          )
         }
         if (
           reservation.cancelled ||
@@ -1414,7 +1485,12 @@ export class SessionManager extends EventEmitter {
           // names the exact rollout owner, so retire it even though restoration
           // is now forbidden; otherwise a timed-out reclaim would leave the
           // successor alive and unreachable from the renderer that gave up.
-          await this.killInternal(redirect.successorSessionId, null, redirect)
+          await this.killInternal(
+            redirect.successorSessionId,
+            this.internalKillCaller('replacement.reclaim'),
+            null,
+            redirect,
+          )
           return this.replacementRecoveryCancelled(options.sessionId)
         }
         // A later replacement may already be active for this target. Public
@@ -1424,7 +1500,12 @@ export class SessionManager extends EventEmitter {
         const nestedReplacement = this.codexReplacements.getReservationByPredecessor(
           redirect.successorSessionId,
         )
-        await this.killInternal(redirect.successorSessionId, null, redirect)
+        await this.killInternal(
+          redirect.successorSessionId,
+          this.internalKillCaller('replacement.reclaim'),
+          null,
+          redirect,
+        )
         // stop() can return before a provider start generation finishes its
         // second late-materialization stop. Joining the nested transaction keeps
         // the stale predecessor from racing that still-physical rollout owner
@@ -1955,6 +2036,7 @@ export class SessionManager extends EventEmitter {
         // manufacturing a second cause.
         await this.killInternal(
           options.sessionId,
+          this.internalKillCaller('recovery.late-materialization'),
           this.findCodexReplacementReservation(options.sessionId),
         )
         this.lifecycle.session('recover.cancelled', options.sessionId, {
@@ -2333,6 +2415,7 @@ export class SessionManager extends EventEmitter {
         dangerousMode: predecessorInfo.dangerousMode,
         useProxy: predecessorInfo.useProxy,
         builtInMcpDomains: effectiveDomains,
+        userMcpOverrides: this.userMcpOverridesBySession.get(predecessorSessionId) ?? {},
         tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(predecessorSessionId),
       }
       reservation.restoreOptions = restoreOptions
@@ -2355,6 +2438,13 @@ export class SessionManager extends EventEmitter {
         // is what authorizes this value; copying null would create a fresh
         // session and abandon the pane's transcript after a failed reload.
         restoreOptions,
+        // Normalized here, not with normalizeKillCaller: an absent tag on
+        // THIS path is not an unknown kill — main knows it is a handoff — so
+        // the fallback is the specific main-side tag, and only an explicit
+        // renderer value overrides it.
+        predecessorKillCaller: isKillCaller(options.predecessorKillCaller)
+          ? options.predecessorKillCaller
+          : 'replacement.handoff',
         stopPromise: null,
         compensationRequired: false,
       }
@@ -2404,6 +2494,7 @@ export class SessionManager extends EventEmitter {
       if (currentEntry === handoff.predecessorEntry) {
         const stopped = await this.killOwnedInternal(
           handoff.predecessorOwnership,
+          handoff.predecessorKillCaller,
           handoff.reservation,
         )
         if (stopped) handoff.compensationRequired = true
@@ -2696,6 +2787,56 @@ export class SessionManager extends EventEmitter {
    * The toast would also have claimed "agents started" off a launch that did
    * not happen.
    */
+  /**
+   * Decide which user MCP servers this launch gets (#1143).
+   *
+   * Never throws: a broken MCP document, an unreadable keyring or a bad server
+   * must cost the user that server, not the agent. Every server the agent
+   * asked for but did not get is reported through `user-mcp-unavailable`, so
+   * the absence is visible instead of looking like an attached server whose
+   * tools never appear.
+   */
+  private async resolveUserMcpServers(
+    sessionId: string,
+    kind: SessionKind,
+    options: SessionSpawnOptions,
+  ): Promise<{
+    servers: ResolvedUserMcpServer[]
+    codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+  }> {
+    if (!this.userMcpResolver || !isAgentProviderKind(kind)) return { servers: [] }
+    const overrides = normalizeUserMcpOverrides(options.userMcpOverrides)
+    this.userMcpOverridesBySession.set(sessionId, overrides)
+    try {
+      const resolution = await this.userMcpResolver({ provider: kind, overrides, cwd: options.cwd })
+      this.userMcpAttached.set(sessionId, resolution.attachedIds)
+      if (resolution.dropped.length > 0) {
+        this.journal?.record({
+          area: 'mcp.user',
+          name: 'user_mcp.unavailable',
+          severity: 'warn',
+          ids: { sessionId },
+          // Names and reasons only; reasons are fixed strings built by the
+          // service and never contain a secret value.
+          data: { servers: resolution.dropped.map(server => `${server.name}: ${server.reason}`) },
+        })
+        this.emit('user-mcp-unavailable', { sessionId, servers: resolution.dropped })
+      }
+      return {
+        servers: resolution.servers,
+        ...(resolution.codexShellPolicy ? { codexShellPolicy: resolution.codexShellPolicy } : {}),
+      }
+    } catch (error) {
+      this.userMcpAttached.set(sessionId, [])
+      this.journal?.recordError('user_mcp.resolve_failed', error, undefined, { sessionId })
+      this.emit('user-mcp-unavailable', {
+        sessionId,
+        servers: [{ name: 'MCP servers', reason: 'Your MCP server settings could not be read' }],
+      })
+      return { servers: [] }
+    }
+  }
+
   private reportSkillsUnavailable(sessionId: string, unavailable: readonly ReportingDomain[]): void {
     if (unavailable.length === 0) return
     // Pairs with the `.error` rows (same ids.sessionId): "this session is
@@ -2861,6 +3002,8 @@ export class SessionManager extends EventEmitter {
         })
         mcpRegistered = true
       }
+      const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
+        await this.resolveUserMcpServers(sessionId, kind, options)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
         const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
@@ -2918,6 +3061,8 @@ export class SessionManager extends EventEmitter {
         // `openai_base_url`.
         useProxy: options.useProxy,
         builtInMcpServers,
+        userMcpServers,
+        ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex
@@ -3277,6 +3422,7 @@ export class SessionManager extends EventEmitter {
       return {
         sessionId,
         ...(providerSessionId ? { providerSessionId } : {}),
+        userMcpServerIds: this.userMcpAttached.get(sessionId) ?? [],
       }
     }
 
@@ -4856,12 +5002,35 @@ export class SessionManager extends EventEmitter {
    * Kill a session and remove it from the registry. Returns true if
    * the session existed and was killed.
    */
-  async kill(sessionId: string): Promise<boolean> {
-    return await this.killInternal(sessionId)
+  async kill(sessionId: string, caller?: KillCaller): Promise<boolean> {
+    return await this.killInternal(sessionId, normalizeKillCaller(caller))
   }
 
+  /**
+   * The tag for a kill main issues on its own behalf.
+   *
+   * WHY shutdown overrides the specific tag (#1135 review): killAll sets
+   * `shuttingDown` and cancels every reservation, redirect, reclaim and
+   * recovery claim before it awaits anything. The continuations those
+   * cancellations wake (a reclaim retiring its successor, a recovery cleaning
+   * up a provider that materialized late) then issue their own kills. Those
+   * kills happen BECAUSE the app is quitting; tagging them as reclaim or
+   * recovery would make a quit during a restart herd look like a small
+   * recovery storm — the exact misreading this field exists to prevent.
+   */
+  private internalKillCaller(caller: KillCaller): KillCaller {
+    return this.shuttingDown ? 'app.shutdown' : caller
+  }
+
+  // WHY `caller` is a REQUIRED positional here while the public entry points
+  // take it optionally: the public surface is reached from IPC and from
+  // integrations that may not know who they are, and those land as an explicit
+  // 'unknown'. Every call INSIDE this class does know — it is a shutdown, a
+  // replacement, a recovery cleanup — so the compiler makes each one say so
+  // (the same forcing function that found 13 wake sites instead of nine).
   private async killInternal(
     sessionId: string,
+    caller: KillCaller,
     authorizedReplacement: CodexReplacementReservationRecord | null = null,
     authorizedRedirect: CodexReplacementRedirect | null = null,
   ): Promise<boolean> {
@@ -4970,9 +5139,15 @@ export class SessionManager extends EventEmitter {
     // `cause` separates the three shapes: killing a live entry, cancelling an
     // in-flight recovery, and a no-op kill against an id main does not hold
     // (which usually means the caller is operating on a stale id).
+    //
+    // `caller` answers the other half, "who asked" (#1135). Without it, 185
+    // `live-entry` kills in the journal triage could not be split into quit,
+    // Close Old Agents and genuine recovery replacement, and ~30 ordinary
+    // shutdowns were misread as recovery storms.
     this.lifecycle.session('kill.request', sessionId, {
       cause: entry ? 'live-entry' : recovery ? 'recovery-claim' : 'no-owner',
       kind: entry?.kind ?? recovery?.kind ?? null,
+      caller,
     })
 
     // WHY registry visibility is severed now but the spawn-generation fence is
@@ -5015,7 +5190,10 @@ export class SessionManager extends EventEmitter {
       // registered under its new random ID; otherwise a cancelled replacement
       // can keep a provider alive with no renderer owner. Passing the reservation
       // prevents this internal cascade from being mistaken for a second cause.
-      await this.killInternal(replacement.successorSessionId, replacement)
+      // The cascade inherits the parent's caller: the hidden successor dies
+      // BECAUSE of this request, so tagging it with anything else would make
+      // one close look like two unrelated kills in the journal.
+      await this.killInternal(replacement.successorSessionId, caller, replacement)
     }
     if (
       cancelsReplacement &&
@@ -5060,12 +5238,18 @@ export class SessionManager extends EventEmitter {
       || this.codexReplacements.findRedirects(sessionId).length > 0
   }
 
-  async killOwned(options: SessionOwnershipOptions): Promise<boolean> {
-    return await this.killOwnedInternal(options)
+  /**
+   * `options.caller` normally arrives from the renderer over
+   * `session:kill-owned`, so it is untrusted input: anything outside
+   * KILL_CALLERS (or absent) is journaled as 'unknown'.
+   */
+  async killOwned(options: SessionKillOptions): Promise<boolean> {
+    return await this.killOwnedInternal(options, normalizeKillCaller(options.caller))
   }
 
   private async killOwnedInternal(
     options: SessionOwnershipOptions,
+    caller: KillCaller,
     authorizedReplacement: CodexReplacementReservationRecord | null = null,
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
@@ -5149,7 +5333,7 @@ export class SessionManager extends EventEmitter {
           teardownIds.add(redirect.successorSessionId)
         }
       }
-      await Promise.all([...teardownIds].map(id => this.killInternal(id)))
+      await Promise.all([...teardownIds].map(id => this.killInternal(id, caller)))
       // The redirect itself is main-owned teardown work even when the first
       // reclaim continuation already removed the target registry row before
       // this close reached it. Report the cancellation as handled so renderer
@@ -5175,7 +5359,7 @@ export class SessionManager extends EventEmitter {
         return false
       }
     }
-    return await this.killInternal(options.sessionId, authorizedReplacement)
+    return await this.killInternal(options.sessionId, caller, authorizedReplacement)
   }
 
   private async cancelRecoveryClaim(
@@ -5260,7 +5444,11 @@ export class SessionManager extends EventEmitter {
         // entire bug is that start may be the hung operation. Authorization
         // prevents this internal timeout teardown from becoming close intent.
         teardown.push(
-          this.killInternal(reservation.successorSessionId, reservation),
+          this.killInternal(
+            reservation.successorSessionId,
+            this.internalKillCaller('recovery.deadline'),
+            reservation,
+          ),
         )
       }
     }
@@ -5412,6 +5600,7 @@ export class SessionManager extends EventEmitter {
         ? {
             builtInMcpDomains:
               this.builtInMcpHost?.sessionDomains?.(sessionId) ?? [],
+            userMcpServerIds: this.userMcpAttached.get(sessionId) ?? [],
             tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(sessionId),
           }
         : {}),
@@ -5583,7 +5772,7 @@ export class SessionManager extends EventEmitter {
         ...reclaimIds,
       ]),
     ]
-    await Promise.all(ids.map(id => this.kill(id)))
+    await Promise.all(ids.map(id => this.killInternal(id, 'app.shutdown')))
     // Registry removal precedes provider stop, so the id snapshot above cannot
     // prove teardown is finished. Join the exact reclaim generations captured
     // before the first await; each rechecks cancellation after its current

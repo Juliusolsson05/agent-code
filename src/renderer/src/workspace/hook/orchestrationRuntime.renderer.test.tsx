@@ -77,6 +77,7 @@ describe('renderer orchestration runtime creation', () => {
     expect(spawnSession).toHaveBeenCalledExactlyOnceWith({
       kind: 'opencode', providerRuntime: terminal ? 'terminal' : undefined, cwd: '/repo/child', resumeSessionId: undefined,
       dangerousMode: false, useProxy: false, recoverTmuxName: undefined, builtInMcpDomains: ['orchestration'],
+      userMcpOverrides: {},
     })
     const ownership = {
       orchestrationParentId: 'parent', orchestrationRootId: 'root', orchestrationRunId: 'run-review', orchestrationRole: 'reviewer',

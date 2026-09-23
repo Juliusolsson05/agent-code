@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -168,24 +168,40 @@ export function addPiBuiltInMcpLaunchConfig(
  */
 export async function createPrivateClaudeMcpConfig(
   servers: readonly BuiltInMcpServerConfig[],
+  // User MCP servers (#1143) share this one file rather than a second
+  // `--mcp-config`: the flag is variadic and swallows positional arguments that
+  // follow it, so one occurrence kept last is the only placement that cannot
+  // eat `--resume`. NOTE: user entries carry RESOLVED secret values (see
+  // claudeUserMcpEntries for why the file beats Claude's environment). Never
+  // log or copy this document; the file is removed once Claude is ready
+  // (ClaudeSession.forgetPrivateMcpConfigContents), on stop and rollback, and
+  // by the startup sweep after a crash.
+  userEntries: Readonly<Record<string, Record<string, unknown>>> = {},
 ): Promise<PrivateMcpConfig | null> {
-  if (servers.length === 0) return null
-  const directory = await mkdtemp(join(tmpdir(), 'agent-code-mcp-'))
+  if (servers.length === 0 && Object.keys(userEntries).length === 0) return null
+  // The pid in the prefix lets sweepStalePrivateMcpConfigs tell a crashed
+  // run's leftovers from a live instance's files.
+  const directory = await mkdtemp(join(tmpdir(), `${PRIVATE_MCP_CONFIG_PREFIX}${process.pid}-`))
   const path = join(directory, 'mcp.json')
   const document = {
-    mcpServers: Object.fromEntries(servers.map(server => [
-      server.name,
-      {
-        type: 'http',
-        url: server.url,
-        headers: {
-          ...server.headers,
-          ...(server.bearerToken === undefined
-            ? {}
-            : { Authorization: `Bearer ${server.bearerToken}` }),
+    mcpServers: Object.fromEntries([
+      // User entries first so a built-in entry can never be shadowed. Reserved
+      // names are rejected upstream; this ordering is the second fence.
+      ...Object.entries(userEntries),
+      ...servers.map(server => [
+        server.name,
+        {
+          type: 'http',
+          url: server.url,
+          headers: {
+            ...server.headers,
+            ...(server.bearerToken === undefined
+              ? {}
+              : { Authorization: `Bearer ${server.bearerToken}` }),
+          },
         },
-      },
-    ])),
+      ]),
+    ]),
   }
   try {
     await writeFile(path, `${JSON.stringify(document)}\n`, { encoding: 'utf8', mode: 0o600 })
@@ -198,6 +214,48 @@ export async function createPrivateClaudeMcpConfig(
     async dispose() {
       await rm(directory, { recursive: true, force: true })
     },
+  }
+}
+
+const PRIVATE_MCP_CONFIG_PREFIX = 'agent-code-mcp-'
+
+/**
+ * Remove private MCP config directories left behind by a run that crashed.
+ *
+ * WHY this became necessary (#1143 review round 1): the file used to hold only
+ * a per-session built-in bearer, worthless once that run ended. It now also
+ * holds user MCP secrets, which are long-lived, so a crash must not leave them
+ * on disk. Only directories whose owning pid is no longer alive are removed,
+ * so a second Agent Code instance (dev beside packaged) keeps its live files.
+ * Directories from before the pid prefix have no pid and are removed too:
+ * nothing can still be using a file from a build that no longer runs.
+ */
+export async function sweepStalePrivateMcpConfigs(dir = tmpdir()): Promise<number> {
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const name of names) {
+    if (!name.startsWith(PRIVATE_MCP_CONFIG_PREFIX)) continue
+    const pid = Number(/^agent-code-mcp-(\d+)-/.exec(name)?.[1])
+    if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && isAlive(pid)) continue
+    if (pid === process.pid) continue
+    await rm(join(dir, name), { recursive: true, force: true }).catch(() => {})
+    removed++
+  }
+  return removed
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: the process exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 

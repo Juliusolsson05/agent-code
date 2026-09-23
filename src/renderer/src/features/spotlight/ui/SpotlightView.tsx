@@ -1,7 +1,12 @@
+import { useEffect } from 'react'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { setPocketView } from '@renderer/features/browser-pocket/actions'
+import { useSpotlightPocketMode } from '@renderer/features/browser-pocket/state/spotlightPocketMode'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { SessionId } from '@renderer/workspace/types'
 
 type Props = {
   workspace: Workspace
@@ -13,6 +18,7 @@ type Props = {
 }
 
 export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWorktreeBadges }: Props) {
+  const browserPocketEnabled = useAppStore(state => state.settings.browserPocketEnabled)
   const spotlight = workspace.spotlight
   if (!spotlight) return null
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
@@ -56,9 +62,13 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
                 }`}
               >
                 {label}
+                {meta?.browserPocket && browserPocketEnabled ? <span className="ml-1 opacity-70" title="Has a browser pocket">◧</span> : null}
               </button>
             )
           })}
+          {browserPocketEnabled && workspace.state.sessions[focusedSessionId]?.browserPocket ? (
+            <SpotlightPocketModes sessionId={focusedSessionId} workspace={workspace} />
+          ) : null}
         </div>
       </div>
       <div className="flex-1 min-h-0 min-w-0">
@@ -70,6 +80,11 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
           agentViewMode,
           showStatusMode,
           showWorktreeBadges,
+          undefined,
+          undefined,
+          // Spotlight shows the agent WITH its browser pocket (#1142): the
+          // same PocketedLeaf the lane uses, always split side by side here.
+          { surface: 'spotlight', laneIndex: null, focused: true, dimmed: false },
         )}
       </div>
     </div>
@@ -79,4 +94,37 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
 function shortLabel(value: string): string {
   const parts = value.split('/').filter(Boolean)
   return parts[parts.length - 1] ?? value
+}
+
+/**
+ * Split | Browser | Agent (spec §4.3). "Agent" is the pocket's own collapsed
+ * view, so it persists with the session; "Browser" (agent shrinks to a rail)
+ * is a momentary viewing choice and resets when Spotlight closes.
+ */
+function SpotlightPocketModes({ sessionId, workspace }: { sessionId: SessionId; workspace: Props['workspace'] }) {
+  const browserOnly = useSpotlightPocketMode(s => s.browserOnly)
+  const setBrowserOnly = useSpotlightPocketMode(s => s.set)
+  useEffect(() => () => setBrowserOnly(false), [setBrowserOnly])
+  const view = workspace.state.sessions[sessionId]?.browserPocket?.view
+  const mode = view === 'collapsed' ? 'agent' : browserOnly ? 'browser' : 'split'
+  const choose = (next: 'split' | 'browser' | 'agent') => {
+    setBrowserOnly(next === 'browser')
+    workspace.updateBrowserPocket(s => setPocketView(s, sessionId, next === 'agent' ? 'collapsed' : 'open'))
+  }
+  return (
+    <div className="ml-auto flex flex-shrink-0 items-center rounded-control border border-border text-[10px]" role="radiogroup" aria-label="Spotlight layout">
+      {(['split', 'browser', 'agent'] as const).map(option => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={mode === option}
+          onClick={() => choose(option)}
+          className={`px-2 py-0.5 capitalize ${mode === option ? 'bg-accent text-accent-fg' : 'text-ink-dim hover:text-ink'}`}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  )
 }

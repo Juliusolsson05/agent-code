@@ -36,6 +36,8 @@ import { controlReference as performanceReference } from '@renderer/features/per
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 import { controlReference as goalLoopReference } from '@renderer/features/goal-loop/controlReference'
 import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
+import { controlReference as browserPocketReference } from '@renderer/features/browser-pocket/controlReference'
+import { controlReference as mcpReference } from '@renderer/features/mcp/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -74,6 +76,8 @@ export const featureReferences = [
   ...tldrReference,
   ...goalLoopReference,
   ...agentAnalyticsReference,
+  ...browserPocketReference,
+  ...mcpReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -96,7 +100,9 @@ export const referenceOwnership = {
   "workflows": "workflows",
   "usage": "usage",
   "providers": "providers",
+  "mcp": "mcp",
   "agent-analytics": "agent-analytics",
+  "browser-pocket": "browser-pocket",
   "usage-limit": "usage",
   "rendered-content": "rendered-content",
   "dispatch-pin": "pins",

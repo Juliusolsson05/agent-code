@@ -212,7 +212,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     // The old TUI is stopped under its own runtime flavour (a structured
     // OpenCode close must not be able to kill it), and the new one resumes
     // the same OpenCode session on the terminal runtime.
-    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION_ID, kind: 'opencode', providerRuntime: 'terminal', cwd: PANE_CWD })
+    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION_ID, kind: 'opencode', providerRuntime: 'terminal', cwd: PANE_CWD, caller: 'reload.agent-sessions' })
     expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       kind: 'opencode', providerRuntime: 'terminal', cwd: PANE_CWD, resumeSessionId: fixture.meta.sessionID, dangerousMode: false,
     }))

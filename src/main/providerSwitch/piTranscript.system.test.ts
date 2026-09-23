@@ -79,13 +79,20 @@ describe('Pi host transcript adapter', () => {
     await expect(switchProvider({ sourceKind: 'pi', targetKind: 'grok', sourceProviderSessionId: 'fresh-session', cwd })).resolves.toEqual({ kind: 'source-empty', targetKind: 'grok' })
   })
 
-  it('refuses a half-written tail and a file whose header names another session', async () => {
+  it('refuses a half-written tail, and never reads a file whose header names another session as this one', async () => {
     const tool = await placeRecorded('tool')
     const text = await readFile(tool.file, 'utf8')
     await writeFile(tool.file, text + '{"type":"message","id":"x"')
     await expect(loadPiSnapshot(cwd, tool.id)).rejects.toThrow(/unterminated/)
+    // The header is pi's identity (SessionManager.findById reads headers), and
+    // since the package's lookup mirrors that (Astra review, finding 6) a file
+    // NAMED for this id whose header names another session is simply not this
+    // session: pi would not resume it, so it is an empty conversation — and,
+    // the point of the check, none of the other session's rows leak into it.
+    // (It used to be found by name and then refused by loadPiSnapshot's own
+    // header check, which still guards a file reached any other way.)
     await writeFile(tool.file, text.replace(tool.id, '00000000-0000-4000-8000-00000000dead'))
-    await expect(loadPiSnapshot(cwd, tool.id)).rejects.toThrow(/header/)
+    await expect(loadPiSnapshot(cwd, tool.id)).resolves.toMatchObject({ conversation: { sourceSessionIds: [tool.id], entries: [] }, prompts: [] })
   })
 
   it('publishes a projected session pi can find by id; never clobbers, never a partial name', async () => {

@@ -1,0 +1,420 @@
+{
+ "provenance": {
+  "recordedBy": "scripts/browser-pocket/record-fixtures.mts",
+  "what": "CDP recording of spa",
+  "recordedAt": "2026-09-23T02:15:51.108Z",
+  "platform": "darwin-arm64",
+  "chrome": "Chrome/153.0.8010.53",
+  "url": "/spa"
+ },
+ "geometry": [
+  {
+   "backendNodeId": 6,
+   "quads": {
+    "quads": [
+     [
+      8,
+      113.875,
+      83.28125,
+      113.875,
+      83.28125,
+      134.875,
+      8,
+      134.875
+     ]
+    ]
+   },
+   "box": {
+    "model": {
+     "content": [
+      16,
+      116.875,
+      75.28125,
+      116.875,
+      75.28125,
+      131.875,
+      16,
+      131.875
+     ],
+     "padding": [
+      10,
+      115.875,
+      81.28125,
+      115.875,
+      81.28125,
+      132.875,
+      10,
+      132.875
+     ],
+     "border": [
+      8,
+      113.875,
+      83.28125,
+      113.875,
+      83.28125,
+      134.875,
+      8,
+      134.875
+     ],
+     "margin": [
+      8,
+      113.875,
+      83.28125,
+      113.875,
+      83.28125,
+      134.875,
+      8,
+      134.875
+     ],
+     "width": 75,
+     "height": 21
+    }
+   },
+   "node": {
+    "node": {
+     "nodeId": 0,
+     "backendNodeId": 6,
+     "nodeType": 1,
+     "nodeName": "BUTTON",
+     "localName": "button",
+     "nodeValue": "",
+     "childNodeCount": 1,
+     "attributes": [
+      "id",
+      "inc"
+     ]
+    }
+   }
+  },
+  {
+   "backendNodeId": 7,
+   "quads": {
+    "quads": [
+     [
+      83.28125,
+      113.875,
+      151.15625,
+      113.875,
+      151.15625,
+      134.875,
+      83.28125,
+      134.875
+     ]
+    ]
+   },
+   "box": {
+    "model": {
+     "content": [
+      91.28125,
+      116.875,
+      143.15625,
+      116.875,
+      143.15625,
+      131.875,
+      91.28125,
+      131.875
+     ],
+     "padding": [
+      85.28125,
+      115.875,
+      149.15625,
+      115.875,
+      149.15625,
+      132.875,
+      85.28125,
+      132.875
+     ],
+     "border": [
+      83.28125,
+      113.875,
+      151.15625,
+      113.875,
+      151.15625,
+      134.875,
+      83.28125,
+      134.875
+     ],
+     "margin": [
+      83.28125,
+      113.875,
+      151.15625,
+      113.875,
+      151.15625,
+      134.875,
+      83.28125,
+      134.875
+     ],
+     "width": 68,
+     "height": 21
+    }
+   },
+   "node": {
+    "node": {
+     "nodeId": 0,
+     "backendNodeId": 7,
+     "nodeType": 1,
+     "nodeName": "BUTTON",
+     "localName": "button",
+     "nodeValue": "",
+     "childNodeCount": 1,
+     "attributes": [
+      "disabled",
+      ""
+     ]
+    }
+   }
+  },
+  {
+   "backendNodeId": 11,
+   "quads": {
+    "quads": [
+     [
+      8,
+      155.875,
+      161,
+      155.875,
+      161,
+      176.875,
+      8,
+      176.875
+     ]
+    ]
+   },
+   "box": {
+    "model": {
+     "content": [
+      12,
+      158.875,
+      157,
+      158.875,
+      157,
+      173.875,
+      12,
+      173.875
+     ],
+     "padding": [
+      10,
+      157.875,
+      159,
+      157.875,
+      159,
+      174.875,
+      10,
+      174.875
+     ],
+     "border": [
+      8,
+      155.875,
+      161,
+      155.875,
+      161,
+      176.875,
+      8,
+      176.875
+     ],
+     "margin": [
+      8,
+      155.875,
+      161,
+      155.875,
+      161,
+      176.875,
+      8,
+      176.875
+     ],
+     "width": 153,
+     "height": 21
+    }
+   },
+   "node": {
+    "node": {
+     "nodeId": 0,
+     "backendNodeId": 11,
+     "nodeType": 1,
+     "nodeName": "INPUT",
+     "localName": "input",
+     "nodeValue": "",
+     "childNodeCount": 0,
+     "attributes": [
+      "role",
+      "searchbox",
+      "aria-label",
+      "Search"
+     ],
+     "shadowRoots": [
+      {
+       "nodeId": 0,
+       "backendNodeId": 26,
+       "nodeType": 11,
+       "nodeName": "#document-fragment",
+       "localName": "",
+       "nodeValue": "",
+       "childNodeCount": 1,
+       "shadowRootType": "user-agent"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "backendNodeId": 9,
+   "quads": {
+    "quads": [
+     [
+      8,
+      134.875,
+      49.203125,
+      134.875,
+      49.203125,
+      155.875,
+      8,
+      155.875
+     ]
+    ]
+   },
+   "box": {
+    "model": {
+     "content": [
+      16,
+      137.875,
+      41.203125,
+      137.875,
+      41.203125,
+      152.875,
+      16,
+      152.875
+     ],
+     "padding": [
+      10,
+      136.875,
+      47.203125,
+      136.875,
+      47.203125,
+      153.875,
+      10,
+      153.875
+     ],
+     "border": [
+      8,
+      134.875,
+      49.203125,
+      134.875,
+      49.203125,
+      155.875,
+      8,
+      155.875
+     ],
+     "margin": [
+      8,
+      134.875,
+      49.203125,
+      134.875,
+      49.203125,
+      155.875,
+      8,
+      155.875
+     ],
+     "width": 41,
+     "height": 21
+    }
+   },
+   "node": {
+    "node": {
+     "nodeId": 0,
+     "backendNodeId": 9,
+     "nodeType": 1,
+     "nodeName": "BUTTON",
+     "localName": "button",
+     "nodeValue": "",
+     "childNodeCount": 1,
+     "attributes": [
+      "role",
+      "tab",
+      "aria-selected",
+      "true"
+     ]
+    }
+   }
+  },
+  {
+   "backendNodeId": 10,
+   "quads": {
+    "quads": [
+     [
+      49.203125,
+      134.875,
+      89.65625,
+      134.875,
+      89.65625,
+      155.875,
+      49.203125,
+      155.875
+     ]
+    ]
+   },
+   "box": {
+    "model": {
+     "content": [
+      57.203125,
+      137.875,
+      81.65625,
+      137.875,
+      81.65625,
+      152.875,
+      57.203125,
+      152.875
+     ],
+     "padding": [
+      51.203125,
+      136.875,
+      87.65625,
+      136.875,
+      87.65625,
+      153.875,
+      51.203125,
+      153.875
+     ],
+     "border": [
+      49.203125,
+      134.875,
+      89.65625,
+      134.875,
+      89.65625,
+      155.875,
+      49.203125,
+      155.875
+     ],
+     "margin": [
+      49.203125,
+      134.875,
+      89.65625,
+      134.875,
+      89.65625,
+      155.875,
+      49.203125,
+      155.875
+     ],
+     "width": 40,
+     "height": 21
+    }
+   },
+   "node": {
+    "node": {
+     "nodeId": 0,
+     "backendNodeId": 10,
+     "nodeType": 1,
+     "nodeName": "BUTTON",
+     "localName": "button",
+     "nodeValue": "",
+     "childNodeCount": 1,
+     "attributes": [
+      "role",
+      "tab",
+      "aria-selected",
+      "false"
+     ]
+    }
+   }
+  }
+ ]
+}

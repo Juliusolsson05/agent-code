@@ -14,6 +14,7 @@ import { ExtensionViewLeaf } from '@renderer/workspace/tile-tree/ExtensionViewLe
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
+import { PocketedLeaf, type PocketPlacement } from '@renderer/features/browser-pocket/ui/PocketedLeaf'
 
 // The workspace leaf renderer.
 //
@@ -40,8 +41,13 @@ export function renderWorkspaceLeaf(
   showWorktreeBadges: boolean,
   onFocusRequest?: () => void,
   surfacePaneLabel?: string,
+  // Where this leaf is drawn, for the browser pocket (#1142). Lanes and
+  // Spotlight both pass one; since both draw through THIS function, the pocket
+  // follows an agent into Spotlight with no Spotlight-specific data. Absent
+  // (other callers) ⇒ no pocket UI.
+  pocketPlacement?: PocketPlacement,
 ) {
-  return <WorkspaceLeaf
+  const leaf = <WorkspaceLeaf
     sessionId={sessionId}
     focusedSessionId={focusedSessionId}
     workspace={workspace}
@@ -52,6 +58,11 @@ export function renderWorkspaceLeaf(
     onFocusRequest={onFocusRequest}
     surfacePaneLabel={surfacePaneLabel}
   />
+  // EVERY lane and Spotlight leaf is wrapped, pocket or not: attaching a
+  // pocket must not change the element type above the agent, or React
+  // remounts the agent view (terminal attach, feed) — review B #4.
+  if (!pocketPlacement) return leaf
+  return <PocketedLeaf sessionId={sessionId} workspace={workspace} placement={pocketPlacement}>{leaf}</PocketedLeaf>
 }
 
 // The subscription belongs below the recursive layout and above provider/view

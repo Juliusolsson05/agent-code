@@ -25,9 +25,10 @@ import type {
   OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
+import { BROWSER_INSTRUCTIONS, registerBrowserTools } from '@mcp/runtime/browserTools.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
-import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
+import { BUILT_IN_MCP_DOMAINS, PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
@@ -38,8 +39,9 @@ import {
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
+import { MCP_SERVERS_INSTRUCTIONS, registerUserMcpTools } from '@mcp/runtime/userMcpTools.js'
 
-export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
+export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request. When the user names an agent by the label shown beside it (such as B28) or by its spoken agent name, pass that as \`label\` or \`name\` exactly as the user said it instead of translating it to a sessionId yourself: it is resolved against what the user sees at the moment of the call. Labels are screen positions that renumber when earlier agents close, move or are pinned, so never reuse a label or sessionId remembered from earlier in the conversation, and repeat the returned displayLabel to the user so they can confirm which agent you reached. Session IDs also change when an agent reloads.`
 
 /**
  * Instructions for a session whose user enabled Root Agent Code Management.
@@ -52,7 +54,7 @@ export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agen
  * and focus) because reorganizing the workspace is the feature's purpose.
  */
 export function rootManagementInstructions(sessionId: string): string {
-  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
+  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities. Act on session and tab IDs: when the user names an agent by its visible label (such as B28) or its spoken name, resolve it with ac_agents_search (label or name, scoped to the window) and act on the sessionId it returns. Labels are screen positions that renumber when earlier agents close, move or are pinned. Session IDs change whenever an agent reloads, including the reload that enabled this capability, so re-read IDs instead of reusing ones from earlier in the conversation. Your own Agent Code session ID is ${sessionId}: never close, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
 }
 
 export function createBuiltInMcpServer(
@@ -186,8 +188,17 @@ export function createBuiltInMcpServer(
     registerAiWorkspaceTools(server, scope, dependencies)
   }
 
+  if (scope.domains.includes('mcp_servers')) {
+    registerUserMcpTools(server, scope, dependencies)
+  }
+
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
+  }
+
+  if (scope.domains.includes('browser')) {
+    // Registers nothing while Browser Pocket is off; see registerBrowserTools.
+    registerBrowserTools(server, scope, dependencies.browserPockets)
   }
 
   if (scope.domains.includes('workflows')) {
@@ -229,6 +240,8 @@ function builtInInstructions(
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('browser') && dependencies.browserPockets?.isEnabled() ? [BROWSER_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]
       : []),
@@ -283,6 +296,55 @@ function registerGoalLoopTools(
   })
 }
 
+/**
+ * How a model names ONE Agent Management target (#1145).
+ *
+ * WHY three optional fields rather than one polymorphic string: a UUID, "B28"
+ * and "Apollo" can't collide today, but a single field would make every
+ * handler sniff the shape, and a name that happened to look like a label would
+ * silently change meaning. Separate fields keep the caller's intent explicit
+ * and the resolver's branches honest.
+ *
+ * WHY "exactly one" is enforced in the handler (targetFromArgs), not in zod:
+ * the SDK publishes a raw shape as the tool's JSON Schema; a `.refine` turns
+ * it into an effects schema whose properties are not advertised, and the model
+ * would lose the very field descriptions that tell it labels are accepted.
+ *
+ * The label regex is the one `ac_agents_search` uses, so both surfaces accept
+ * the same strings. Pinned `★N` labels are outside it on both — target a
+ * pinned agent by sessionId or name.
+ */
+const MANAGED_TARGET_FIELDS = {
+  sessionId: z.string().min(1).optional()
+    .describe('Agent Code session ID from agent_management_list_agents. Give exactly one of sessionId, label or name.'),
+  label: z.string().trim().regex(/^[A-Za-z]+[1-9]\d*$/).optional()
+    .describe('The label shown beside the agent right now, e.g. B28 (case-insensitive). Resolved against the live screen at call time; labels renumber when earlier agents close, so pass what the user just said rather than one remembered from earlier.'),
+  name: z.string().trim().min(1).max(120).optional()
+    .describe('Exact spoken agent name, e.g. "Apollo" (case-insensitive, never a substring). Only resolves while the Agent names setting is on.'),
+}
+
+function targetFromArgs(args: {
+  sessionId?: string
+  label?: string
+  name?: string
+}): { sessionId?: string; label?: string; name?: string } {
+  const target = {
+    ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
+    ...(args.label !== undefined ? { label: args.label } : {}),
+    ...(args.name !== undefined ? { name: args.name } : {}),
+  }
+  if (Object.keys(target).length !== 1) {
+    // Refused before the bridge: an ambiguous request must not reach the
+    // renderer, where the send path may already wake the agent.
+    const error = new Error(
+      'Name the target with exactly one of sessionId, label or name.',
+    ) as Error & { code: string }
+    error.code = 'invalid_target'
+    throw error
+  }
+  return target
+}
+
 function registerAgentManagementTools(
   server: McpServer,
   scope: McpSessionScope,
@@ -323,7 +385,7 @@ function registerAgentManagementTools(
     {
       title: 'List Project Agents',
       description:
-        'Lists every Agent Code agent in the caller\'s exact project, including the ones that are not in a lane. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
+        'Lists every Agent Code agent in the caller\'s exact project, including the ones that are not in a lane. Each agent carries displayLabel (the label the user sees beside it, e.g. B28, or null) and agentName when Agent names is on. Labels are screen positions, not identities: to act on one, pass it as `label` to the other tools. Also returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -341,9 +403,9 @@ function registerAgentManagementTools(
     {
       title: 'Read Project Agent',
       description:
-        'Reads bounded visible user/assistant transcript output for one agent in the caller\'s project. It may hydrate durable history but never wakes a parked agent.',
+        'Reads bounded visible user/assistant transcript output for one agent in the caller\'s project, named by sessionId, visible label or spoken name. It may hydrate durable history but never wakes a parked agent.',
       inputSchema: {
-        sessionId: z.string(),
+        ...MANAGED_TARGET_FIELDS,
         maxMessages: z.number().int().min(1).max(100).optional(),
         maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
         maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
@@ -357,7 +419,7 @@ function registerAgentManagementTools(
     async args => response(async () => ({
       output: await bridge!.readAgent({
         callerSessionId: scope.sessionId,
-        sessionId: args.sessionId,
+        target: targetFromArgs(args),
         maxMessages: args.maxMessages,
         maxCharsPerMessage: args.maxCharsPerMessage,
         maxCharsPerAgent: args.maxCharsPerAgent,
@@ -373,6 +435,10 @@ function registerAgentManagementTools(
         'Bulk-reads bounded transcript output and inventory facts for selected agents, or all agents in the caller\'s project. Intended for questions such as “read all agents and tell me what looks safe to clean up.” This only recommends; it never closes or wakes agents.',
       inputSchema: {
         sessionIds: z.array(z.string()).max(200).optional(),
+        labels: z.array(MANAGED_TARGET_FIELDS.label.unwrap()).max(200).optional()
+          .describe('Visible labels (e.g. B28), resolved against the live screen at call time. Combined with sessionIds and names; any given list makes this an explicit selection.'),
+        names: z.array(MANAGED_TARGET_FIELDS.name.unwrap()).max(200).optional()
+          .describe('Exact spoken agent names; only resolve while Agent names is on.'),
         includeCaller: z.boolean().optional(),
         maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
         maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
@@ -388,6 +454,8 @@ function registerAgentManagementTools(
     async args => response(async () => await bridge!.readAgents({
       callerSessionId: scope.sessionId,
       sessionIds: args.sessionIds,
+      labels: args.labels,
+      names: args.names,
       includeCaller: args.includeCaller,
       maxMessagesPerAgent: args.maxMessagesPerAgent,
       maxCharsPerMessage: args.maxCharsPerMessage,
@@ -401,9 +469,9 @@ function registerAgentManagementTools(
     {
       title: 'Send Prompt To Project Agent',
       description:
-        'Sends a prompt to one other agent in the caller\'s project. This may wake a parked target; it cannot target the caller itself.',
+        'Sends a prompt to one other agent in the caller\'s project, named by sessionId, visible label (e.g. B28) or spoken name. Returns the resolved sessionId and displayLabel so you can tell the user which agent received it. This may wake a parked target; it cannot target the caller itself.',
       inputSchema: {
-        sessionId: z.string(),
+        ...MANAGED_TARGET_FIELDS,
         prompt: z.string().trim().min(1).max(500_000),
       },
       annotations: {
@@ -413,9 +481,9 @@ function registerAgentManagementTools(
       },
     },
     async args => response(async () => {
-      const delivery = await bridge!.sendPrompt({
+      const { sessionId, displayLabel, delivery } = await bridge!.sendPrompt({
         callerSessionId: scope.sessionId,
-        sessionId: args.sessionId,
+        target: targetFromArgs(args),
         prompt: args.prompt,
       })
       if (!delivery.ok) {
@@ -429,7 +497,8 @@ function registerAgentManagementTools(
         }
         error.code = 'prompt_delivery_failed'
         error.details = {
-          sessionId: args.sessionId,
+          sessionId,
+          displayLabel,
           retrySafe: delivery.retrySafe,
           stage: delivery.stage,
           code: delivery.code,
@@ -440,7 +509,7 @@ function registerAgentManagementTools(
         }
         throw error
       }
-      return { sessionId: args.sessionId, delivery }
+      return { sessionId, displayLabel, delivery }
     }),
   )
 
@@ -449,9 +518,9 @@ function registerAgentManagementTools(
     {
       title: 'Close Project Agent',
       description:
-        'Destructive. Call only when the current user explicitly asks to close this specific agent. Never infer close permission from task completion, inactivity, a request to assess what looks safe to clean up, an error, or permission to list/read/prompt agents. Closes exactly one other Agent Code agent in the caller\'s project and refuses self-close or any multi-session cascade.',
+        'Destructive. Call only when the current user explicitly asks to close this specific agent. Never infer close permission from task completion, inactivity, a request to assess what looks safe to clean up, an error, or permission to list/read/prompt agents. Closes exactly one other Agent Code agent in the caller\'s project, named by sessionId, visible label or spoken name, and refuses self-close or any multi-session cascade.',
       inputSchema: {
-        sessionId: z.string(),
+        ...MANAGED_TARGET_FIELDS,
       },
       annotations: {
         readOnlyHint: false,
@@ -461,7 +530,7 @@ function registerAgentManagementTools(
     },
     async args => response(async () => await bridge!.closeAgent({
       callerSessionId: scope.sessionId,
-      sessionId: args.sessionId,
+      target: targetFromArgs(args),
     })),
   )
 }
@@ -881,7 +950,20 @@ function orchestrationCreateAgentCallKey(
         ].join(' '),
       inputSchema: ORCHESTRATION_CREATE_AGENT_INPUT,
     },
-    async args => {
+    async requested => {
+      // Review round 2 (#1143): a child may not be handed a privileged domain
+      // its parent does not hold itself. Orchestration is on by default, so
+      // without this any ordinary agent — or a prompt injection reaching one —
+      // could spawn a child with mcp_servers (and install a server every
+      // future agent runs) or root_management (skipping its confirmation
+      // dialog). Clamped here, at the one place a model-chosen list enters.
+      const args = {
+        ...requested,
+        ...(requested.builtInMcpDomains
+          ? { builtInMcpDomains: requested.builtInMcpDomains.filter(domain =>
+              !PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has(domain) || scope.domains.includes(domain)) }
+          : {}),
+      }
       const bridge = dependencies.orchestrationBridge
       const manager = dependencies.sessionManager
       if (!bridge || !manager) {

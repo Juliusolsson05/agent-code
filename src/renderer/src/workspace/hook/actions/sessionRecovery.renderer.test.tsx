@@ -30,10 +30,13 @@ describe('useSessionActions recovery retry', () => {
     const killOwnedSession = vi.fn(async () => true)
     Object.defineProperty(window, 'api', { configurable: true, value: { killOwnedSession } })
     const refs = { stateRef: ref({ sessions: {} }) } as unknown as WorkspaceRefs
-    expect(await killSessionBackendIfOwned(refs, 'just-spawned')).toBe(false)
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned', 'spawn.unplaced')).toBe(false)
     expect(killOwnedSession).not.toHaveBeenCalled()
-    expect(await killSessionBackendIfOwned(refs, 'just-spawned', { cwd: '/captured/project', kind: 'codex' })).toBe(true)
-    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: 'just-spawned', cwd: '/captured/project', kind: 'codex', providerRuntime: undefined })
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned', 'spawn.unplaced', { cwd: '/captured/project', kind: 'codex' })).toBe(true)
+    // The caller rides the ownership request to main, which journals it on
+    // kill.request (#1135); dropping it here would make every renderer kill
+    // journal as 'unknown'.
+    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: 'just-spawned', cwd: '/captured/project', kind: 'codex', providerRuntime: undefined, caller: 'spawn.unplaced' })
   })
 
   it('seeds fresh sessions from Settings while an explicit empty list wins', async () => {

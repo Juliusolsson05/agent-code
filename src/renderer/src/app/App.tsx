@@ -22,6 +22,7 @@ import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
 import { MainSurface } from '@renderer/app/shell/MainSurface'
 import { AgentTerminalOwnershipProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+import { BrowserPocketHost } from '@renderer/features/browser-pocket/ui/BrowserPocketHost'
 import { RestoreBanner } from '@renderer/app/shell/RestoreBanner'
 import { ConfigureDictationCard } from '@renderer/features/voice-dictation/ConfigureDictationCard'
 import { DictationGuideModal } from '@renderer/features/voice-dictation/DictationGuideModal'
@@ -30,6 +31,7 @@ import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { CliUpdateBanner } from '@renderer/features/cli-updates/CliUpdateBanner'
 import { useCliUpdateSync } from '@renderer/features/cli-updates/store'
 import { useProviderEnablementSync } from '@renderer/features/providers/store'
+import { useUserMcpSync } from '@renderer/features/mcp/store'
 
 // App — the composition root, and ONLY that (issue #494).
 //
@@ -85,6 +87,8 @@ export default function App() {
   // Provider enablement mirror: initial fetch + push subscription, same
   // mount-once contract as useCliUpdateSync above (#1102).
   useProviderEnablementSync()
+  // User MCP servers mirror (#1143): same mount-once contract.
+  useUserMcpSync()
   // Captures feed text selections for "Reply to Selection". Mounted here
   // for the same reason as the sync hooks above: `selectionchange` only
   // fires on `document`, so one listener serves every pane and Reader
@@ -135,6 +139,12 @@ export default function App() {
             <SidePanels />
           </div>
         </AgentTerminalOwnershipProvider>
+        {/* Browser pocket guests (#1142). Mounted ONCE, here, outside
+            RetainedWorkspaceSurface: a <webview> that is ever detached from
+            the DOM is destroyed, so no layout change or takeover may own it.
+            Each guest is its own fixed element at z-index 20 — above the lanes
+            it overlays, below every z-50 overlay and modal after this line. */}
+        <BrowserPocketHost workspace={workspace} />
         {/* Mount order here IS the z-order contract: overlays and modals
             are fixed-position siblings and mostly share z-50, so DOM
             order is the paint-order tiebreaker. Overlays render first

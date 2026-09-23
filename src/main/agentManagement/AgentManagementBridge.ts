@@ -19,6 +19,7 @@ import type {
   ManagedAgentRecord,
   ManagedAgentRendererDescriptor,
   ManagedAgentRendererOutput,
+  ManagedAgentTarget,
   ManagedAgentTranscriptOutput,
 } from '@mcp/shared/agentManagementTypes.js'
 
@@ -102,7 +103,7 @@ export class AgentManagementBridge {
 
   async readAgent(params: {
     callerSessionId: string
-    sessionId: string
+    target: ManagedAgentTarget
     maxMessages?: number
     maxCharsPerMessage?: number
     maxCharsPerAgent?: number
@@ -123,7 +124,7 @@ export class AgentManagementBridge {
       throw new AgentManagementBridgeError(
         'transcript_unavailable',
         'No readable transcript evidence is currently available for the target.',
-        { sessionId: params.sessionId },
+        { sessionId: output.agent.sessionId },
       )
     }
     return output
@@ -132,6 +133,8 @@ export class AgentManagementBridge {
   async readAgents(params: {
     callerSessionId: string
     sessionIds?: string[]
+    labels?: string[]
+    names?: string[]
     includeCaller?: boolean
     maxMessagesPerAgent?: number
     maxCharsPerMessage?: number
@@ -192,9 +195,12 @@ export class AgentManagementBridge {
 
   async sendPrompt(params: {
     callerSessionId: string
-    sessionId: string
+    target: ManagedAgentTarget
     prompt: string
-  }): Promise<Extract<AgentManagementRendererResponse, { ok: true; type: 'send-prompt' }>['delivery']> {
+  }): Promise<Pick<
+    Extract<AgentManagementRendererResponse, { ok: true; type: 'send-prompt' }>,
+    'sessionId' | 'displayLabel' | 'delivery'
+  >> {
     let response: AgentManagementRendererResponse
     try {
       response = await this.request({
@@ -226,13 +232,19 @@ export class AgentManagementBridge {
         },
       })
     }
-    return response.delivery
+    // The resolved identity travels back with the delivery (#1145): a caller
+    // that addressed "B28" must be able to tell the user which agent that was.
+    return {
+      sessionId: response.sessionId,
+      displayLabel: response.displayLabel,
+      delivery: response.delivery,
+    }
   }
 
   async closeAgent(params: {
     callerSessionId: string
-    sessionId: string
-  }): Promise<{ closedSessionId: string }> {
+    target: ManagedAgentTarget
+  }): Promise<{ closedSessionId: string; displayLabel: string | null }> {
     // AUTHORIZATION LIVES IN THE RENDERER, at the line that mutates.
     //
     // The rule used to be prose in this tool's description — several sentences
@@ -260,7 +272,7 @@ export class AgentManagementBridge {
       ...params,
     })
     this.assertOk(response, 'close-agent')
-    return { closedSessionId: response.closedSessionId }
+    return { closedSessionId: response.closedSessionId, displayLabel: response.displayLabel }
   }
 
   resolve(response: AgentManagementRendererResponse): void {
@@ -398,7 +410,7 @@ export class AgentManagementBridge {
         'prompt_delivery_uncertain',
         'Prompt delivery timed out after dispatch. The outcome is unknown; do not retry automatically.',
         {
-          sessionId: request.sessionId,
+          ...targetDetails(request.target),
           retrySafe: false,
           disposition: 'outcome-unknown',
           promptSubmission: 'uncertain',
@@ -408,7 +420,7 @@ export class AgentManagementBridge {
     return new AgentManagementBridgeError(
       'renderer_unresponsive',
       `Agent-management renderer request timed out: ${request.type}`,
-      'sessionId' in request ? { sessionId: request.sessionId } : {},
+      'target' in request ? targetDetails(request.target) : {},
     )
   }
 
@@ -418,9 +430,9 @@ export class AgentManagementBridge {
     return new AgentManagementBridgeError(
       'renderer_unresponsive',
       'Agent Management is waiting for a timed-out renderer operation to finish; this request was not dispatched.',
-      'sessionId' in request
+      'target' in request
         ? {
-            sessionId: request.sessionId,
+            ...targetDetails(request.target),
             ...(request.type === 'send-prompt'
               ? {
                   retrySafe: true,
@@ -602,4 +614,16 @@ export class AgentManagementBridge {
   ): string {
     return `${descriptor.agent.kind}\u0000${descriptor.agent.cwd}\u0000${providerSessionId}`
   }
+}
+
+/**
+ * What a main-side failure can say about the target (#1145).
+ *
+ * WHY only a sessionId is ever reported: main never resolves labels or names
+ * (only the renderer has the row stream), so when a request dies in transit
+ * the one identity main can vouch for is an id the caller passed itself.
+ * Echoing an unresolved "B28" as `sessionId` would be a fabricated identity.
+ */
+function targetDetails(target: ManagedAgentTarget): { sessionId?: string } {
+  return target.sessionId ? { sessionId: target.sessionId } : {}
 }
