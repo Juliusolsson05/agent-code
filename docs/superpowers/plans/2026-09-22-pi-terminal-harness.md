@@ -141,6 +141,16 @@ all test runs.
 - 2026-09-22 — Task 1: filed #1132 (no duplicates found). Commit footers use `Refs #1132`; the app PR will say `Fixes #1132`.
 - 2026-09-22 — Task 2: created public repo Juliusolsson05/pi-terminal-headless (MIT); scaffold on `feat/initial-runtime` at `f14951b`. The submodule is added in this worktree (`.gitmodules` + gitlink staged by `git submodule add`) but is deliberately left out of app commits until Task 5 wires the aliases. Deviations: CI floor is Node 22.12.0 (the app's floor, since the package runs in Agent Code's process), not Pi's 22.19; `passWithNoTests` is temporary at the root vitest config and is removed by the first Stage 0 test.
 - 2026-09-22 — Task 3 (Stage 0) at package `cdb644e`: 18 scenarios recorded on Pi 0.87.1 with a sandboxed faux model and @xterm/headless as the terminal; 69 corpus tests. Decision 8 resolved as faux-only: `~/.pi/agent` holds only an empty `auth.json` created by the research run, no login. The stop-and-ask triggers did NOT fire: H3 and H5 hold in refined forms that keep the pipeline — the doorbell is `turn_end`/`agent_settled` (at `message_end` the row is not yet on disk), and the bridge must always pass `deliverAs: 'followUp'` because a busy prompt without it is accepted and silently lost. Also H6: a `/tree` move without a summary writes nothing, so the live leaf comes from `session_tree`. Spec §4, §5.3, §5.4, §6 and §8 were updated in the same app commit. Tooling notes: the probe needs a Node-ABI node-pty (the app's copy is Electron-ABI; `chmod +x` its prebuilt `spawn-helper`), and the sandbox must be outside the repo, or Pi loads Agent Code's AGENTS.md and a trust prompt from ancestor dirs.
+- 2026-09-22 — Task 4 (Stages 1–3) and the Task 5 live tier, package commits `ff6e56b` (transcript), `22e3c81` (bridge) and `610f0d8` (runtime); 171 deterministic tests plus 5 live tests against real pi 0.87.1. The "confirm it fails" steps were not observed red before implementation, because tests and code were written together. Each suite was, however, run against recorded evidence and caught real defects: the fork-at-user-message editor concatenation, and a stop()-during-start() hang in BridgeServer.listen. Deviations from the plan's interface sketch:
+  - the root-class events are `entry` / `history` / `semantic` / `activity` / `conditions` / `transcript-error` / `live-state` / `session-switched` / `exit` (`history` replaces a separate reset event);
+  - `iteratePiEntries` became `readPiBranch`, a whole-branch cold read, because the branch can only be resolved with the whole tree in hand;
+  - `listPiSessions` became `listPiSessionFiles` + `summarizePiSession`;
+  - `getTranscriptFile()` can return null until a fresh session's file exists;
+  - `preparePiTerminalLaunch` also returns `existingFile` and refuses identity flags in `extraArgs`.
+
+  Design facts found by reading Pi's source during implementation, both now in the code's WHY comments:
+  - Pi re-runs every extension factory on /new, /resume, /fork and /reload (`agent-session-runtime.ts`), so the bridge keeps one process-wide link;
+  - forking at a user message puts that message's text back into Pi's editor.
 
 ---
 
@@ -285,18 +295,18 @@ export function resolvePiSessionFile(o: { env; homeDirectory; cwd: string; sessi
 export function resolvePiSessionDir(o: { env; homeDirectory; cwd: string }): Promise<string>
 ```
 
-- [ ] **Step 1 (Stage 1):** failing tests from fixtures → `transcript/` →
+- [x] **Step 1 (Stage 1):** failing tests from fixtures → `transcript/` →
   green. Includes abandoned-branch, `/tree` reset, missing-then-created file,
   partial line, v1 tolerance.
-- [ ] **Step 2 (Stage 2):** failing projector tests from recorded bridge streams
+- [x] **Step 2 (Stage 2):** failing projector tests from recorded bridge streams
   → `live/` + `bridge/` → green. Bridge rules §6 each have a test (e.g. host
   socket closed mid-run → extension logs, `pi` keeps running — live tier).
-- [ ] **Step 3 (Stage 3):** failing sequencer tests for every §5.4 rule over
+- [x] **Step 3 (Stage 3):** failing sequencer tests for every §5.4 rule over
   recorded interleavings → `reconcile/` → root class → green; root-class system
   tests with `FakePty` + replay rig (fake bridge peer + file writer).
-- [ ] **Step 4:** `npm run check` in the package; coverage floors set from the
+- [x] **Step 4:** `npm run check` in the package; coverage floors set from the
   achieved numbers (not lowered later).
-- [ ] **Step 5:** Commits per stage (`feat(transcript): …`, `feat(bridge): …`,
+- [x] **Step 5:** Commits per stage (`feat(transcript): …`, `feat(bridge): …`,
   `feat(terminal): …`); push.
 
 ---
@@ -322,7 +332,7 @@ accTitle/accDescr/scope).
 - [ ] **Step 4:** Bridge resource copy in both the vite plugin and
   `copy-packaged-resources.mjs`; `npm run test:package` proves it lands in
   `out/main/runtime/pi/`.
-- [ ] **Step 5:** Package live tier (opt-in env) green against the sandboxed
+- [x] **Step 5:** Package live tier (opt-in env) green against the sandboxed
   real `pi`.
 - [ ] **Step 6:** `npm run typecheck` (app). Commit `build(pi): wire the
   pi-terminal-headless submodule into the app build`.
