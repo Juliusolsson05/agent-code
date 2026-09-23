@@ -25,7 +25,7 @@ import { RETIRED_BUILT_IN_COMMAND_IDS } from '@renderer/app-state/settings/persi
 // 16 retirements took it to 118, Clear Lane (stage 4) to 119 and the lane keyboard
 // grammar (stage 5) to 123. (#992 was written against 130 and read 119 at the end;
 // merging main added Goal Loop's two commands and the two generated Grok splits.)
-// 124 with Open Setup (#995).
+// 124 with Open Setup (#995). 132 with the seven Browser Pocket commands (#1142).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -158,6 +158,14 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'dispatch.color-flag.set',
   // spotlight / TLDR / reader / tile-tabs (6) + goal loop (2)
   'toggle-spotlight',
+  // browserPocketCommands (7, #1142)
+  'toggle-browser-pocket',
+  'reload-browser-pocket',
+  'focus-browser-pocket-address',
+  'pick-browser-pocket-element',
+  'open-browser-pocket-external',
+  'open-browser-pocket-devtools',
+  'detach-browser-pocket',
   'tldr-preview',
   'goal-preview',
   'view-tldr-history',
@@ -237,12 +245,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 125 governed commands in registration order', () => {
+  it('contains exactly the 132 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 125 commands', () => {
+  it('has exactly 132 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -265,11 +273,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // −attach×2, −detach → 115 with Clear Lane (#992 stage 4) → 119 with the
     // lane keyboard grammar (#992 stage 5) → 123 once main's Goal Loop preview
     // and stop (#1001) and the two generated Grok splits (#844) merged in → 124
-    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995).
+    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995) → 132 with the
+    // seven Browser Pocket commands (#1142).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(125)
+    expect(builtInCommandCatalog).toHaveLength(132)
   })
 
   it('reports no structural defects', () => {
@@ -303,15 +312,16 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 125 total - 6 generated = 119 literal `id:` fields across the command
+    // 132 total - 6 generated = 126 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
     // count test above (through the lane keyboard grammar, #992 stage 5, and
-    // Goal Loop, #1001, Goal Loop MCP, #1006, and Open Setup, #995). Grok
+    // Goal Loop, #1001, Goal Loop MCP, #1006, Open Setup, #995, and the seven
+    // Browser Pocket commands, #1142). Grok
     // (#844) grew only the
     // GENERATED term, 4 → 6.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(119)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(126)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -421,7 +431,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 21 retirements + 44 additions = 125, checked against the
+    // 102 baseline - 21 retirements + 51 additions = 132, checked against the
     // real catalog rather than trusted as prose. (5 governance retirements +
     // 16 unified-layout retirements, all recorded in RETIRED_COMMAND_IDS.)
     //
@@ -452,9 +462,13 @@ describe('governance targets', () => {
     // (#1001), `grok-vertical` and `grok-horizontal` (#844, generated from
     // AGENT_PROVIDER_KINDS), `clear-focused-lane` (#992 stage 4), and the four
     // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006)
-    // and `open-setup` (#995).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 44).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(125)
+    // and `open-setup` (#995), and the seven Browser Pocket commands (#1142):
+    // `toggle-browser-pocket`, `reload-browser-pocket`,
+    // `focus-browser-pocket-address`, `pick-browser-pocket-element`,
+    // `open-browser-pocket-external`, `open-browser-pocket-devtools`,
+    // `detach-browser-pocket`.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 51).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(132)
   })
 })
 

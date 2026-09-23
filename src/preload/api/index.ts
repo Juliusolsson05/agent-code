@@ -25,6 +25,7 @@ import { agentManagementApi } from '@preload/api/agentManagement.js'
 import { aiWorkspaceApi } from '@preload/api/aiWorkspace.js'
 import { renderedContentApi } from '@preload/api/renderedContent.js'
 import { caffeinateApi } from '@preload/api/caffeinate.js'
+import { browserPocketApi } from '@preload/api/browserPocket.js'
 import { keyVaultApi } from '@preload/api/keyVault.js'
 import { menuApi } from '@preload/api/menu.js'
 import { incidentApi } from '@preload/api/incident.js'
@@ -92,6 +93,7 @@ export const api = {
   ...aiWorkspaceApi,
   ...renderedContentApi,
   ...caffeinateApi,
+  ...browserPocketApi,
   ...keyVaultApi,
   ...menuApi,
   ...incidentApi,

@@ -346,6 +346,11 @@ Stage 8 asserts no file under `src/renderer` imports `controller/`.
   same space as our `Input.dispatchMouseEvent` (needed for the
   expected-input filter). Stage 10; until then the filter also accepts a
   100 ms "we just dispatched" window.
+- **U6b** Whether CDP `Input.dispatchKeyEvent` / `dispatchMouseEvent` echo
+  through the guest's `before-input-event` / `input-event`. Unverified, so
+  the controller filters every reported input against what it is itself
+  dispatching (keys by time window, mouse by point) instead of trusting the
+  event source. Stage 10.
 - **U7** How the React tree actually mounts/unmounts slots across
   Spotlight toggles (Stage 4's replay fixtures) — recorded in Stage 10.
 - **U8** Whether the app's CSP or `backgroundThrottling:false` on the host

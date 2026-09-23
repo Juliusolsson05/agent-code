@@ -334,6 +334,7 @@ function OpenCommandPalette({
   const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const browserPocketEnabled = settings.browserPocketEnabled
   const commandPaletteOpenFlag = useAppStore(state => state.commandPaletteOpen)
   const usageModalOpen = useAppStore(state => state.usageModalOpen)
   const agentAnalyticsOpen = useAppStore(state => state.agentAnalyticsOpen)
@@ -592,6 +593,7 @@ function OpenCommandPalette({
         usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
+        browserPocketEnabled,
         commandPaletteOpen: commandPaletteOpenFlag,
         paletteMode: mode,
         usageModalOpen,
@@ -702,6 +704,7 @@ function OpenCommandPalette({
       usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
+      browserPocketEnabled,
       commandPaletteOpenFlag,
       mode,
       usageModalOpen,
