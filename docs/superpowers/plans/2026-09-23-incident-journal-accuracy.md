@@ -50,7 +50,7 @@ thing. This plan fixes both at the point where the journal row is written.
   Orchestration Agents, orchestration close_agent / close_run, Agent
   Management close_agent, operator `agents.close`, focused close (keyboard /
   Dispatch row), lane close command, Agent Activity modal, extension surface
-  close, spawn-unplaced cleanup, undo-close rollback, wake readiness-timeout,
+  close, spawn-unplaced cleanup, undo-close rollback, wake spawn-failed,
   replacement successor / predecessor, agent reload.
 - `SessionKillOptions` (ownership tuple + optional caller) is a NEW type, not
   a field on `SessionOwnershipOptions`: that tuple is persisted on Codex
@@ -65,6 +65,25 @@ thing. This plan fixes both at the point where the journal row is written.
   `closeSession` arguments now also assert the caller for that path.
 - Test: `sessionManager.lifecycle.test.ts` — caller passed through `kill`,
   `killOwned`, `killAll` (`app.shutdown`), `unknown` when omitted or invalid.
+
+## Review round (PR #1136)
+
+- The Codex same-rollout handoff kills the predecessor in MAIN, and the
+  renderer skips its own `replace.predecessor` kill. So a user's Codex
+  reload journaled `replacement.handoff`, which the vocabulary called a
+  recovery storm. Fix: `SessionSpawnOptions.predecessorKillCaller` rides
+  the spawn (replaceSession sends `replace.predecessor`). Main validates it
+  and falls back to `replacement.handoff` for spawners that omit it.
+  `replacement.reclaim` is the only recovery-side replacement tag.
+- Main-internal kills (reclaim, late materialization, deadline) journal
+  `app.shutdown` while `shuttingDown`. They only run because killAll
+  cancelled their transaction.
+- `wake.ready-timeout` was renamed to `wake.spawn-failed`. Since #772 the
+  kill fires only for a spawned backend that died or failed before ready,
+  never on a timeout.
+- Tests now drive real entry points: closeFocused, and Close Old / Close
+  Idle end to end through the shared bulk loop to the IPC caller. The Codex
+  handoff test covers the sent tag, an omitted tag and an invalid tag.
 
 ## Verification
 

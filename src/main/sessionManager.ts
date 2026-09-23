@@ -343,6 +343,8 @@ type CodexReplacementHandoff = {
   predecessorRecovery: RecoveryClaim | null
   proof: CodexReplacementProof
   restoreOptions: SessionSpawnOptions
+  /** Tag for the predecessor's kill.request; see SessionSpawnOptions.predecessorKillCaller. */
+  predecessorKillCaller: KillCaller
   stopPromise: Promise<void> | null
   compensationRequired: boolean
 }
@@ -1258,7 +1260,7 @@ export class SessionManager extends EventEmitter {
           // user close (which would suppress the stable-ID recovery below).
           await this.killInternal(
             reservation.successorSessionId,
-            'replacement.reclaim',
+            this.internalKillCaller('replacement.reclaim'),
             reservation,
           )
         }
@@ -1361,7 +1363,7 @@ export class SessionManager extends EventEmitter {
           // successor alive and unreachable from the renderer that gave up.
           await this.killInternal(
             redirect.successorSessionId,
-            'replacement.reclaim',
+            this.internalKillCaller('replacement.reclaim'),
             null,
             redirect,
           )
@@ -1376,7 +1378,7 @@ export class SessionManager extends EventEmitter {
         )
         await this.killInternal(
           redirect.successorSessionId,
-          'replacement.reclaim',
+          this.internalKillCaller('replacement.reclaim'),
           null,
           redirect,
         )
@@ -1910,7 +1912,7 @@ export class SessionManager extends EventEmitter {
         // manufacturing a second cause.
         await this.killInternal(
           options.sessionId,
-          'recovery.late-materialization',
+          this.internalKillCaller('recovery.late-materialization'),
           this.findCodexReplacementReservation(options.sessionId),
         )
         this.lifecycle.session('recover.cancelled', options.sessionId, {
@@ -2304,6 +2306,13 @@ export class SessionManager extends EventEmitter {
         // is what authorizes this value; copying null would create a fresh
         // session and abandon the pane's transcript after a failed reload.
         restoreOptions,
+        // Normalized here, not with normalizeKillCaller: an absent tag on
+        // THIS path is not an unknown kill — main knows it is a handoff — so
+        // the fallback is the specific main-side tag, and only an explicit
+        // renderer value overrides it.
+        predecessorKillCaller: isKillCaller(options.predecessorKillCaller)
+          ? options.predecessorKillCaller
+          : 'replacement.handoff',
         stopPromise: null,
         compensationRequired: false,
       }
@@ -2353,7 +2362,7 @@ export class SessionManager extends EventEmitter {
       if (currentEntry === handoff.predecessorEntry) {
         const stopped = await this.killOwnedInternal(
           handoff.predecessorOwnership,
-          'replacement.handoff',
+          handoff.predecessorKillCaller,
           handoff.reservation,
         )
         if (stopped) handoff.compensationRequired = true
@@ -4615,6 +4624,22 @@ export class SessionManager extends EventEmitter {
     return await this.killInternal(sessionId, normalizeKillCaller(caller))
   }
 
+  /**
+   * The tag for a kill main issues on its own behalf.
+   *
+   * WHY shutdown overrides the specific tag (#1135 review): killAll sets
+   * `shuttingDown` and cancels every reservation, redirect, reclaim and
+   * recovery claim before it awaits anything. The continuations those
+   * cancellations wake (a reclaim retiring its successor, a recovery cleaning
+   * up a provider that materialized late) then issue their own kills. Those
+   * kills happen BECAUSE the app is quitting; tagging them as reclaim or
+   * recovery would make a quit during a restart herd look like a small
+   * recovery storm — the exact misreading this field exists to prevent.
+   */
+  private internalKillCaller(caller: KillCaller): KillCaller {
+    return this.shuttingDown ? 'app.shutdown' : caller
+  }
+
   // WHY `caller` is a REQUIRED positional here while the public entry points
   // take it optionally: the public surface is reached from IPC and from
   // integrations that may not know who they are, and those land as an explicit
@@ -5039,7 +5064,7 @@ export class SessionManager extends EventEmitter {
         teardown.push(
           this.killInternal(
             reservation.successorSessionId,
-            'recovery.deadline',
+            this.internalKillCaller('recovery.deadline'),
             reservation,
           ),
         )

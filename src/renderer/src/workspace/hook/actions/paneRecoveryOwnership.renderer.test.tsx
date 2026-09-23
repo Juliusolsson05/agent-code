@@ -163,7 +163,10 @@ describe('pane recovery ownership', () => {
     ))
 
     await act(async () => {
-      await result.current.closeSession(sessionId, { killCaller: 'close.focused' })
+      // Driven through closeFocused (the keyboard / Dispatch-row entry) rather
+      // than closeSession with a hand-passed tag, so the assertion below proves
+      // the real entry point names itself (#1135 review).
+      await result.current.closeFocused()
     })
 
     // Renderer cleanup is still allowed, but the destructive request carries

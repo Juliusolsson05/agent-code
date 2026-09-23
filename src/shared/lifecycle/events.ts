@@ -564,13 +564,23 @@ export type WakeCaller = (typeof WAKE_CALLERS)[number]
 export const KILL_CALLERS = [
   'unknown',
   // ── main-owned ─────────────────────────────────────────────────────────
-  // SessionManager.killAll during app quit. Most `live-entry` kills in any
-  // run that ends in `app.shutdown.clean` should carry this.
+  // SessionManager.killAll during app quit, AND any main-internal kill below
+  // (reclaim, late materialization, deadline) that runs after quit began —
+  // those only happen because killAll cancelled their transaction. Most
+  // `live-entry` kills in any run that ends in `app.shutdown.clean` should
+  // carry this.
   'app.shutdown',
-  // Codex same-rollout replacement retiring the side that lost: the reclaim
-  // path stopping a hidden successor, and the handoff stopping the
-  // predecessor. A storm here IS a recovery storm.
+  // A Codex replacement being RECLAIMED: a renderer reloaded (or gave up)
+  // before making the successor's id durable, so rehydrate retires the hidden
+  // successor and restores the predecessor. This is the recovery-side signal;
+  // a storm here is a recovery storm.
   'replacement.reclaim',
+  // The same-rollout Codex handoff stopping its predecessor when the spawn did
+  // NOT say who asked. NOT a recovery signal: the handoff is the routine path
+  // for a user-initiated swap (reload / resume / rewind / MCP reload of N
+  // Codex agents). The renderer names that swap via `predecessorKillCaller`,
+  // so those journal as `replace.predecessor`; this tag only remains for a
+  // spawn from an older or foreign caller that omitted it.
   'replacement.handoff',
   // Recovery's own cleanup of a provider that materialized after its claim
   // was cancelled.
@@ -600,10 +610,15 @@ export const KILL_CALLERS = [
   'spawn.unplaced',
   // Undo Close restored a session and then had to retire it.
   'undo-close.rollback',
-  // A freshly spawned backend never became input-ready within the wake wait.
-  'wake.ready-timeout',
-  // replaceSession (reload / provider switch / resume / rewind): retiring the
-  // predecessor, or a successor whose source pane disappeared mid-swap.
+  // A wake that SPAWNED a backend which then died or failed before becoming
+  // input-ready (observed exit, failed start, or failed recovery). Never a
+  // timeout: since #772 a wake that merely times out on a live backend keeps
+  // it, so reading this as "slow boot" would send triage the wrong way.
+  'wake.spawn-failed',
+  // replaceSession (reload / provider switch / resume / rewind / built-in MCP
+  // reload): retiring the predecessor — by the renderer for most swaps, or by
+  // main during a same-rollout Codex handoff, which carries this tag across
+  // the spawn — or a successor whose source pane disappeared mid-swap.
   'replace.predecessor',
   'replace.orphaned-successor',
   // Dangerous-mode toggle reloading every running agent.

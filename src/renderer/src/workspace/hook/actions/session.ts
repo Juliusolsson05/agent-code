@@ -367,6 +367,7 @@ export function useSessionActions(
       opts?: {
         resumeSessionId?: string
         predecessorSessionId?: SessionId
+        predecessorKillCaller?: KillCaller
         kind?: SessionKind
         providerRuntime?: AgentProviderRuntime
         dangerousMode?: boolean
@@ -416,7 +417,12 @@ export function useSessionActions(
             cwd,
             resumeSessionId: opts?.resumeSessionId,
             ...(opts?.predecessorSessionId
-              ? { predecessorSessionId: opts.predecessorSessionId }
+              ? {
+                  predecessorSessionId: opts.predecessorSessionId,
+                  ...(opts.predecessorKillCaller
+                    ? { predecessorKillCaller: opts.predecessorKillCaller }
+                    : {}),
+                }
               : {}),
             dangerousMode,
             useProxy,
@@ -975,7 +981,7 @@ export function useSessionActions(
             // it does mean #548's self-heal no longer covers this class, and
             // nothing has replaced it.
             if (readyError && recoveryDisposition === 'spawned') {
-              void killSessionBackendIfOwned(refs, sessionId, 'wake.ready-timeout').catch(() => undefined)
+              void killSessionBackendIfOwned(refs, sessionId, 'wake.spawn-failed').catch(() => undefined)
             }
           }
         }
@@ -1306,6 +1312,10 @@ export function useSessionActions(
         // same-rollout handoff; Claude, OpenCode, fresh Codex, and different-
         // transcript swaps retain the rollback-friendly ordering here.
         predecessorSessionId: oldId,
+        // The same tag the renderer's own predecessor kill below uses, so a
+        // replaceSession journals 'replace.predecessor' whether main (Codex
+        // same-rollout handoff) or the renderer (every other swap) does it.
+        predecessorKillCaller: 'replace.predecessor',
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
       })
       // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
