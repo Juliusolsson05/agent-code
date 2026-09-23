@@ -17,6 +17,8 @@ import {
   createPrivateClaudeMcpConfig,
   type PrivateMcpConfig,
 } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { claudeUserMcpEntries } from '@providers/shared/runtime/userMcpLaunch.js'
+import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import type {
   AgentInputReadiness,
   PromptAcceptanceOutcome,
@@ -62,6 +64,8 @@ export type ClaudeSessionOptions = {
    *  mitmproxy while letting opted-in users get the richer stream. */
   useProxy?: boolean
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  /** Already filtered and secret-resolved by main (#1143). */
+  userMcpServers?: ResolvedUserMcpServer[]
 }
 
 export type ScreenSnapshot = {
@@ -212,6 +216,7 @@ export class ClaudeSession extends EventEmitter {
   private readonly useProxy: boolean
   private readonly shellSessionId: string | null
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
+  private readonly userMcpServers: ResolvedUserMcpServer[]
   private privateMcpConfig: PrivateMcpConfig | null = null
 
   constructor(options: ClaudeSessionOptions = {}) {
@@ -231,6 +236,7 @@ export class ClaudeSession extends EventEmitter {
     this.useProxy = options.useProxy === true
     this.shellSessionId = options.shellSessionId ?? null
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.userMcpServers = options.userMcpServers ?? []
 
     const env: Record<string, string | undefined> = {}
     for (const [k, v] of Object.entries(process.env)) {
@@ -1197,7 +1203,12 @@ export class ClaudeSession extends EventEmitter {
     const tldrHooks = tldrHookServer(this.builtInMcpServers)
     if (tldrHooks) env[CLAUDE_TLDR_HOOK_TOKEN_ENV] = tldrHooks.bearerToken
     excludeExternalControlFromClaude(args, tldrHooks ? claudeTldrHookSettings(tldrHooks.tldrHooks.baseUrl) : {})
-    this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers)
+    // User servers' secret values go into this launch's environment only;
+    // the file carries `${AGENT_CODE_USER_MCP_…}` references (#1143). Main has
+    // already dropped anything the translator would refuse.
+    const userMcp = claudeUserMcpEntries(this.userMcpServers)
+    Object.assign(env, userMcp.env)
+    this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers, userMcp.entries)
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }
 

@@ -54,7 +54,7 @@ export function transportOf(entry: unknown): UserMcpTransport | null {
 export function normalizeEntry(entry: UserMcpServerEntry): UserMcpServerEntry {
   const transport = transportOf(entry)
   if ((transport === 'http' || transport === 'sse') && entry.type === undefined) {
-    return { ...entry, type: transport } as UserMcpServerEntry
+    return { ...entry, type: transport } as unknown as UserMcpServerEntry
   }
   return entry
 }

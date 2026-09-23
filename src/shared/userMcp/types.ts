@@ -116,12 +116,13 @@ export type NativeMcpServer = {
   source: string
   transport: UserMcpTransport | null
   summary: string
-  /** The raw entry, translated to the `mcpServers` shape for Copy in. Secret
-   * values are NOT included — Copy in creates empty secret inputs instead,
-   * so this snapshot never carries a token across IPC. */
+  /** The entry translated to the `mcpServers` shape for Copy in, or null when
+   * it cannot be expressed there. Every env/header VALUE is replaced by an
+   * `${input:…}` reference: native configs routinely hold plaintext tokens,
+   * and this snapshot crosses IPC to the renderer, so the values never leave
+   * main. Copy in therefore creates the server with those secrets unset. */
   entry: UserMcpServerEntry | null
-  /** Env/header keys whose values were withheld from `entry`. */
-  withheldSecretKeys: string[]
+  inputs: UserMcpInput[]
 }
 
 export type UserMcpSnapshot = {
@@ -163,6 +164,20 @@ export type UserMcpImportCandidate = {
 export type UserMcpImportResult =
   | { ok: true; candidates: UserMcpImportCandidate[]; format: 'mcpServers' | 'vscode' | 'map' | 'entry' }
   | { ok: false; error: string }
+
+/**
+ * Launch material for one user MCP server, produced by main's UserMcpService
+ * right before spawn. `secrets` holds decrypted values and exists only for the
+ * duration of one launch; it is never persisted, logged, or sent to the
+ * renderer. Lives here (not beside the translators) because SessionOptions in
+ * shared/types/session.ts carries it to the provider sessions.
+ */
+export type ResolvedUserMcpServer = {
+  id: string
+  name: string
+  entry: UserMcpServerEntry
+  secrets: Record<string, string>
+}
 
 /** Why a server was not attached to one launch. */
 export type UserMcpDroppedServer = { name: string; reason: string }

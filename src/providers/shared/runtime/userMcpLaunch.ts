@@ -1,19 +1,8 @@
 import { hasInputReference, substituteInputs } from '@shared/userMcp/inputs.js'
-import type { UserMcpDroppedServer, UserMcpServerEntry } from '@shared/userMcp/types.js'
-import { isStringArray, isStringRecord, transportOf } from '@shared/userMcp/validate.js'
+import type { ResolvedUserMcpServer, UserMcpDroppedServer } from '@shared/userMcp/types.js'
 
-/**
- * Launch material for one user MCP server (#1143), produced by main's
- * UserMcpService right before spawn. `secrets` holds decrypted values and
- * exists only for the duration of one launch; it is never persisted, logged,
- * or sent to the renderer.
- */
-export type ResolvedUserMcpServer = {
-  id: string
-  name: string
-  entry: UserMcpServerEntry
-  secrets: Record<string, string>
-}
+export type { ResolvedUserMcpServer }
+import { isStringArray, isStringRecord, transportOf } from '@shared/userMcp/validate.js'
 
 /**
  * Environment variable that carries one secret-bearing env/header value.

@@ -2,6 +2,8 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { LspManager } from '@main/lspManager.js'
+import { USER_MCP_UNAVAILABLE_CHANNEL } from '@main/ipc/userMcp.js'
+import type { UserMcpUnavailableEvent } from '@shared/userMcp/types.js'
 import {
   MANAGED_SKILLS_UNAVAILABLE_CHANNEL,
   type ManagedSkillsUnavailableEvent,
@@ -192,6 +194,14 @@ export function wireSessionForwarder(
   manager.on('managed-skills-unavailable', ({ skills }) => {
     const event: ManagedSkillsUnavailableEvent = { skills }
     broadcastToWindows(MANAGED_SKILLS_UNAVAILABLE_CHANNEL, event)
+  })
+  // #1143. Broadcast for the same routing reason as managed skills above: the
+  // launch can be main-initiated (orchestration child, restore) before any
+  // window has claimed the id. Only server names and fixed reason strings
+  // cross; nothing here can carry a secret value.
+  manager.on('user-mcp-unavailable', ({ servers }) => {
+    const event: UserMcpUnavailableEvent = { servers }
+    broadcastToWindows(USER_MCP_UNAVAILABLE_CHANNEL, event)
   })
     // Diagnostics are keyed by file, not by session: two windows can have the
   // same file open in their editors and both need them.

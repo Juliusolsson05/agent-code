@@ -138,6 +138,7 @@ import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
 import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
+import { UserMcpService } from '@main/userMcp/service.js'
 import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { UpdateService } from '@main/updates/UpdateService.js'
@@ -1026,6 +1027,11 @@ async function startApp(): Promise<void> {
   const agentCodeConventionsService = new AgentCodeManagedSkillsService()
   await agentCodeConventionsService.initialize()
   assertStartupOpen()
+  // User MCP servers (#1143). Loaded before the manager so the first restored
+  // agent already launches with them; initialize() never throws (a corrupt
+  // document is moved aside and reported in Settings instead).
+  const userMcpService = new UserMcpService({ stateDir: STATE_DIR, codec: createSafeStorageCodec() })
+  await userMcpService.initialize()
   manager = new SessionManager(
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
@@ -1042,6 +1048,7 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  manager.setUserMcpResolver(params => userMcpService.resolveForLaunch(params))
   // Adapters seal streams a sleep severed (#963); the manager fans each
   // suspension out to the live agent runtimes.
   systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
@@ -1415,6 +1422,7 @@ async function startApp(): Promise<void> {
   const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
+    userMcpService,
     remoteController,
     lspManager,
     ghostJournals,
