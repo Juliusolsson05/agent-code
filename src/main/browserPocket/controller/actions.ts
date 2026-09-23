@@ -76,7 +76,9 @@ export async function waitFor(ctx: ActionCtx, cond: { text?: string; urlIncludes
     }
     do {
       if (cond.urlIncludes) await page.waitForURL(url => url.href.includes(cond.urlIncludes!), { ...options(), waitUntil: 'domcontentloaded' })
-      await document.waitFor({ ...options(), state: 'visible' })
+      // Fixed-position apps can have a zero-height html box despite visible
+      // content. Only the descendant text filters should require visibility.
+      await document.waitFor({ ...options(), state: 'attached' })
       ctx.checkEpoch()
     } while (cond.urlIncludes && !page.url().includes(cond.urlIncludes))
   })

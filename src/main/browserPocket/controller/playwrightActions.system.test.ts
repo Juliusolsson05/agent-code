@@ -90,7 +90,7 @@ describe.skipIf(!chromiumExecutable)('embedded browser actions against real Chro
   })
 
   it('targets the viewport centre after scrolling a sidebar by ref', async () => {
-    await fixture.page.setContent(`<style>body{margin:0}aside{position:fixed;left:0;top:0;width:180px;height:600px;overflow:auto}main{position:fixed;left:200px;top:0;right:0;height:600px;overflow:auto}section{height:2400px}</style><aside aria-label="Sidebar"><section>Sidebar content</section></aside><main><section>Main content</section></main>`)
+    await fixture.page.setContent(`<!doctype html><style>body{margin:0}aside{position:fixed;left:0;top:0;width:180px;height:600px;overflow:auto}main{position:fixed;left:200px;top:0;right:0;height:600px;overflow:auto}section{height:2400px}</style><aside aria-label="Sidebar"><section>Sidebar content</section></aside><main><section>Main content</section></main>`)
     const result = await controller.run('agent', 'snapshot', snapshot)
     if (!result.ok) throw new Error(result.message)
     const ref = /complementary "Sidebar"[^\n]*\[ref=([^\]]+)\]/.exec(result.value.text)?.[1]
@@ -99,6 +99,8 @@ describe.skipIf(!chromiumExecutable)('embedded browser actions against real Chro
     await vi.waitFor(async () => expect(await fixture.page.locator('aside').evaluate(el => el.scrollTop)).toBeGreaterThan(0))
     expect(await controller.run('agent', 'scroll', ctx => scroll(ctx, 0, 200), { mutating: true })).toMatchObject({ ok: true })
     await vi.waitFor(async () => expect(await fixture.page.locator('main').evaluate(el => el.scrollTop)).toBeGreaterThan(0))
+    expect(await fixture.page.locator('html').evaluate(el => el.getBoundingClientRect().height)).toBe(0)
+    expect(await controller.run('agent', 'wait', ctx => waitFor(ctx, { text: 'Main content', gone: 'Loading' }, 700))).toMatchObject({ ok: true })
   })
 
   it('does not combine text from the previous page with a later matching URL', async () => {
