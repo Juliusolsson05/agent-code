@@ -1123,8 +1123,8 @@ export const sessionCommands: CommandDef[] = [
 
     surface: 'session',
     title: 'Switch Provider',
-    description: '**What it does:** Opens a destination picker for continuing the focused agent with Claude, Codex, OpenCode, or OpenCode Terminal.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
-    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'translate'],
+    description: '**What it does:** Opens a destination picker for continuing the focused agent with another provider: Claude, Codex, OpenCode, OpenCode Terminal, Grok or Pi.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
+    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'grok', 'pi', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null

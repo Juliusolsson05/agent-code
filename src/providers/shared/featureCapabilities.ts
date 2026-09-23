@@ -109,7 +109,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['codex', 'opencode', 'grok'],
+    switchTargets: ['codex', 'opencode', 'grok', 'pi'],
     verifiedExternalResumeCommand: true,
   },
   // Mirrors Claude, with explicit edges to both other adapters.
@@ -118,7 +118,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['claude', 'opencode', 'grok'],
+    switchTargets: ['claude', 'opencode', 'grok', 'pi'],
     verifiedExternalResumeCommand: true,
   },
   // Grok: the transcript-engine adapter (grokTranscript's read/publish plus
@@ -130,7 +130,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['claude', 'codex', 'opencode'],
+    switchTargets: ['claude', 'codex', 'opencode', 'pi'],
     verifiedExternalResumeCommand: true,
   },
   // OpenCode's supported CLI export/import boundary backs prompt extraction,
@@ -145,7 +145,7 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     // works — it was only hidden because the guard read the flag for the
     // unrelated shell-command feature.
     inAppResume: true,
-    switchTargets: ['claude', 'codex', 'grok'],
+    switchTargets: ['claude', 'codex', 'grok', 'pi'],
     verifiedExternalResumeCommand: true,
   },
   // Pi (terminal-only): prompts come from its session rows (the Pi mapper),
@@ -153,14 +153,20 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
   // session — the same command Copy Resume Command hands out behind the
   // helper's `cd <cwd> &&` (verified: pi-terminal-headless Stage 0 `resume`
   // recording, a relaunch by id in the project cwd reopened and appended).
-  // Rewind, Duplicate and switching need a transcript-engine adapter and a
-  // parser codec — declared here only once those exist.
+  //
+  // Rewind, Duplicate and switching in both directions are backed by the
+  // transcript engine's Pi adapter (providerSwitch/piTranscript.ts) and the
+  // parser's Pi codec, whose projected files the installed pi 0.87.1 opens
+  // (the parser's live gate). transcriptRewind is TRUE as a backend fact.
+  // The Rewind command itself stays hidden on Pi panes by the same
+  // effective-terminal-runtime rule as OpenCode Terminal, because a TUI has
+  // no Agent Code composer to receive the rewound draft (#896).
   pi: {
-    transcriptRewind: false,
-    transcriptDuplicate: false,
+    transcriptRewind: true,
+    transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: [],
+    switchTargets: ['claude', 'codex', 'opencode', 'grok'],
     verifiedExternalResumeCommand: true,
   },
 }

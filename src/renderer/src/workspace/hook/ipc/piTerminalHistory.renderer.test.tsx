@@ -105,10 +105,11 @@ describe('a Pi pane after a reload', () => {
     for (const policy of feedPolicies) {
       expect(commandAllowedByRenderedViewPolicy({ policy, kind: 'pi', mode: 'agent', runtime })).toBe(false)
     }
-    // Reader Mode / View Prompts / Copy Last Response are offered; Rewind is not.
+    // Reader Mode / View Prompts / Copy Last Response are offered. (That the
+    // Rewind COMMAND stays hidden on this pane is pinned by the session
+    // commands' capability-gate test.)
     expect(sessionHasTranscript(pane.meta)).toBe(true)
     expect(getProviderFeatures('pi').promptHistoryExtraction).toBe(true)
-    expect(getProviderFeatures('pi').transcriptRewind).toBe(false)
   })
 
   it('a fresh session pi has not written yet loads as an empty, ready conversation — not an error', async () => {
