@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind.js'
 import { dirname, isAbsolute } from 'path'
 import { mkdir, unlink } from 'fs/promises'
 
@@ -19,7 +20,6 @@ import {
   type AgentCodeInstalledSkillRecord,
 } from '@shared/types/agentCodeConventions.js'
 import {
-  AGENT_CODE_INSTALLED_SKILL_MAX_COUNT,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILES,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
@@ -72,8 +72,32 @@ function isPendingOperation(value: unknown): value is AgentCodeConventionsPendin
     && (value.skillId === undefined || typeof value.skillId === 'string')
 }
 
+/**
+ * Optional per-skill provider choice (#1161). Validated only when present:
+ * absence is the pre-#1161 meaning ("every provider"), so older documents
+ * stay valid without migration. An empty or unknown list is unsafe — it would
+ * silently turn an enabled skill into one no agent receives.
+ */
+function isOptionalProviderList(value: unknown): boolean {
+  return value === undefined
+    || (Array.isArray(value)
+      && value.length > 0
+      && value.length <= AGENT_PROVIDER_KINDS.length
+      && value.every(isAgentProviderKind)
+      && new Set(value).size === value.length)
+}
+
+function isOptionalPendingReview(value: unknown): boolean {
+  return value === undefined
+    || (isRecord(value)
+      && value.by === 'agent'
+      && typeof value.sessionId === 'string' && value.sessionId.length > 0 && value.sessionId.length <= 256
+      && typeof value.requestedAt === 'string' && value.requestedAt.length <= 64)
+}
+
 function isCustomSkill(value: unknown): value is AgentCodeCustomSkillRecord {
   return isRecord(value)
+    && isOptionalProviderList(value.providers)
     && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 256
     && typeof value.name === 'string'
     && value.name.length <= 64
@@ -156,6 +180,10 @@ function hasCanonicalInstalledSourceUrls(value: Record<string, unknown>): boolea
 
 function isInstalledSkill(value: unknown): value is AgentCodeInstalledSkillRecord {
   return isRecord(value)
+    && isOptionalProviderList(value.providers)
+    && isOptionalPendingReview(value.pendingReview)
+    // A proposal is never enabled: only the user's enable clears the marker.
+    && !(value.pendingReview !== undefined && value.enabled === true)
     && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 256
     && typeof value.name === 'string'
     && value.name.length <= 64
@@ -295,7 +323,10 @@ function parseDocument(value: unknown): AgentCodeConventionsDocument | null {
   const names = Object.values(value.customSkills).map(entry =>
     (entry as AgentCodeCustomSkillRecord).name)
   if (new Set(names).size !== names.length) return null
-  if (Object.keys(value.installedSkills).length > AGENT_CODE_INSTALLED_SKILL_MAX_COUNT) return null
+  // WHY no installed-skill count check here (#1161): the former `> 25 → null`
+  // sent a perfectly valid document into Recovery required — the user's whole
+  // managed-skill state became read-only because they had installed a 26th
+  // skill with another build. Size is bounded by the 16 MiB read above.
   if (!Object.entries(value.installedSkills).every(([key, entry]) =>
     isInstalledSkill(entry) && entry.id === key)) return null
   const installedNames = Object.values(value.installedSkills).map(entry =>

@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { AgentCodeInstalledSkillFileRecord } from '@shared/types/agentCodeConventions.js'
-import type { AgentCodeInstalledSkillCandidate } from '@shared/types/agentCodeInstalledSkills.js'
 import type { StagedInstalledSkillCandidate } from './githubSkillSource.js'
 import { InstalledSkillMaterializer } from './installedSkillMaterializer.js'
 import {
@@ -42,7 +41,7 @@ function staged(files: Array<{ path: string; content: Buffer | string; executabl
     })
     .sort((left, right) => left.path === right.path ? 0 : left.path < right.path ? -1 : 1)
   const snapshotDigest = installedSkillManifestDigest(manifest)
-  const candidate: AgentCodeInstalledSkillCandidate = {
+  const candidate: StagedInstalledSkillCandidate['candidate'] = {
     candidateId: snapshotDigest.slice(0, 32),
     name: 'review-code',
     description: 'Review code.',

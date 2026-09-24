@@ -31,11 +31,15 @@ afterEach(async () => {
     rm(directory, { recursive: true, force: true })))
 })
 
-function target(id: string, skillsDirectory: string): AgentCodeConventionsTarget {
+function target(
+  id: string,
+  skillsDirectory: string,
+  providers: AgentProviderKind[] = ['codex'],
+): AgentCodeConventionsTarget {
   const skillDirectory = join(skillsDirectory, 'agent-code-conventions')
   return {
     id,
-    providers: ['codex'],
+    providers,
     providerNames: ['Codex'],
     skillsDirectory,
     skillDirectory,
@@ -43,11 +47,17 @@ function target(id: string, skillsDirectory: string): AgentCodeConventionsTarget
   }
 }
 
-async function harness(options: { unsupportedProviders?: AgentProviderKind[] } = {}) {
+async function harness(options: {
+  unsupportedProviders?: AgentProviderKind[]
+  /** Give the two roots the real registry's distinct provider sets. */
+  realProviders?: boolean
+} = {}) {
   const root = await temporaryDirectory()
   const targets = [
-    target('agents-standard', join(root, '.agents', 'skills')),
-    target('claude-personal', join(root, '.claude', 'skills')),
+    target('agents-standard', join(root, '.agents', 'skills'),
+      options.realProviders ? ['codex', 'opencode', 'pi'] : ['codex']),
+    target('claude-personal', join(root, '.claude', 'skills'),
+      options.realProviders ? ['claude', 'opencode'] : ['codex']),
   ]
   const resolved: ResolvedAgentCodeConventionsTargets = {
     targets,
@@ -130,6 +140,35 @@ describe('Agent Code custom skill management', () => {
     expect(locations.paths).toContain(customPath(newTarget, 'moving-skill'))
     expect(locations.paths).not.toContain(customPath(oldTarget, 'moving-skill'))
     expect(await readFile(customPath(oldTarget, 'moving-skill'), 'utf8')).toContain('# Moving')
+  })
+
+  // #1161: per-skill provider columns for skills written in Agent Code.
+  it('writes a custom skill only to the roots its chosen providers read, and moves it on change', async () => {
+    const { targets, service } = await harness({ realProviders: true })
+    const created = await service.createCustomSkill({
+      expectedRevision: 0, name: 'inspect-code', description: 'Inspect code',
+      markdown: 'Instructions', enabled: true,
+    })
+    if (!created.ok) throw new Error('create failed')
+    const skillId = created.snapshot.skills.find(skill => skill.name === 'inspect-code')!.id
+    const codexOnly = await service.setCustomSkillProviders({
+      expectedRevision: created.snapshot.revision, skillId, providers: ['codex'],
+    })
+    expect(codexOnly).toMatchObject({ ok: true })
+    await expect(stat(customPath(targets[0]!, 'inspect-code'))).resolves.toMatchObject({})
+    await expect(stat(customPath(targets[1]!, 'inspect-code'))).rejects.toMatchObject({ code: 'ENOENT' })
+    if (!codexOnly.ok) throw new Error('change failed')
+    expect(codexOnly.snapshot.skills.find(skill => skill.id === skillId)).toMatchObject({
+      providers: ['codex'],
+      health: 'active',
+    })
+
+    const claudeOnly = await service.setCustomSkillProviders({
+      expectedRevision: codexOnly.snapshot.revision, skillId, providers: ['claude'],
+    })
+    expect(claudeOnly).toMatchObject({ ok: true })
+    await expect(stat(customPath(targets[1]!, 'inspect-code'))).resolves.toMatchObject({})
+    await expect(stat(customPath(targets[0]!, 'inspect-code'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('keeps drafts app-owned and independently materializes multiple enabled skills', async () => {

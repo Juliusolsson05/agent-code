@@ -15,6 +15,7 @@ import type {
   CreateAgentCodeCustomSkillRequest,
   DeleteAgentCodeCustomSkillRequest,
   SetAgentCodeCustomSkillEnabledRequest,
+  SetAgentCodeCustomSkillProvidersRequest,
   UpdateAgentCodeCustomSkillRequest,
 } from '@shared/types/agentCodeCustomSkills.js'
 
@@ -35,6 +36,10 @@ export const agentCodeCustomSkillsApi = {
     request: SetAgentCodeCustomSkillEnabledRequest,
   ): Promise<AgentCodeCustomSkillsMutationResult> =>
     ipcRenderer.invoke('agent-code-custom-skills:set-enabled', request),
+  setAgentCodeCustomSkillProviders: (
+    request: SetAgentCodeCustomSkillProvidersRequest,
+  ): Promise<AgentCodeCustomSkillsMutationResult> =>
+    ipcRenderer.invoke('agent-code-custom-skills:set-providers', request),
   deleteAgentCodeCustomSkill: (
     request: DeleteAgentCodeCustomSkillRequest,
   ): Promise<AgentCodeCustomSkillsMutationResult> =>

@@ -9,7 +9,11 @@ export const AGENT_CODE_CUSTOM_SKILL_MANAGED_MARKER = '<!-- agent-code-managed-s
 export const AGENT_CODE_CUSTOM_SKILL_MAX_NAME_LENGTH = 64
 export const AGENT_CODE_CUSTOM_SKILL_MAX_DESCRIPTION_LENGTH = 1_024
 export const AGENT_CODE_CUSTOM_SKILL_MAX_BYTES = 32 * 1024
-export const AGENT_CODE_CUSTOM_SKILL_MAX_COUNT = 50
+// WHY there is no custom-skill count cap (#1161): no provider or the Agent
+// Skills spec limits how many skills exist. The real constraint is each
+// agent's context budget for the name+description listing, which the CLIs
+// handle by shortening descriptions, never by refusing a skill. The former
+// cap of 50 was invented here; Settings → Skills shows the budget instead.
 
 export type AgentCodeCustomSkill = {
   managedBy?: 'tldr' | 'goal'
@@ -18,6 +22,8 @@ export type AgentCodeCustomSkill = {
   description: string
   markdown: string
   enabled: boolean
+  /** Providers whose agents get it (#1161); absent means every provider. */
+  providers?: AgentProviderKind[]
   createdAt: string
   updatedAt: string
   health: AgentCodeConventionsHealth
@@ -51,6 +57,13 @@ export type SetAgentCodeCustomSkillEnabledRequest = {
   expectedRevision: number
   skillId: string
   enabled: boolean
+}
+
+export type SetAgentCodeCustomSkillProvidersRequest = {
+  expectedRevision: number
+  skillId: string
+  /** null restores "every supporting provider". */
+  providers: AgentProviderKind[] | null
 }
 
 export type DeleteAgentCodeCustomSkillRequest = {

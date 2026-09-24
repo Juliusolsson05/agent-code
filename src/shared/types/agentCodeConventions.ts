@@ -154,6 +154,18 @@ export type AgentCodeCustomSkillRecord = {
   description: string
   markdown: string
   enabled: boolean
+  /**
+   * Providers whose agents get this skill (#1161). Absent means every provider
+   * that supports personal skills — the pre-#1161 behaviour, so existing
+   * documents need no migration, and a downgraded build (whose validators
+   * ignore unknown keys) simply deploys everywhere, which is safe.
+   *
+   * WHY providers and not target ids: this is the user's intent ("Codex
+   * only"). Targets are physical roots shared by several providers (OpenCode
+   * reads both), so the target set is derived from this at every reconcile
+   * and follows `CLAUDE_CONFIG_DIR` moves without a rewrite.
+   */
+  providers?: AgentProviderKind[]
   createdAt: string
   updatedAt: string
 }
@@ -186,6 +198,25 @@ export type AgentCodeInstalledSkillRecord = {
   snapshotDigest: string
   files: AgentCodeInstalledSkillFileRecord[]
   warnings: string[]
+  /**
+   * Providers whose agents get this skill (#1161). Absent means every provider
+   * that supports personal skills — the pre-#1161 behaviour, so existing
+   * documents need no migration, and a downgraded build (whose validators
+   * ignore unknown keys) simply deploys everywhere, which is safe.
+   *
+   * WHY providers and not target ids: this is the user's intent ("Codex
+   * only"). Targets are physical roots shared by several providers (OpenCode
+   * reads both), so the target set is derived from this at every reconcile
+   * and follows `CLAUDE_CONFIG_DIR` moves without a rewrite.
+   */
+  providers?: AgentProviderKind[]
+  /**
+   * Set when an agent proposed this skill through the `skills` MCP domain
+   * (#1161). Such a record is always saved disabled; only the user enabling
+   * it in Settings clears this. Mirrors the MCP servers rule (#1143): an
+   * agent proposes, the user approves.
+   */
+  pendingReview?: { by: 'agent'; sessionId: string; requestedAt: string }
   createdAt: string
   updatedAt: string
 }
