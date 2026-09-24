@@ -104,6 +104,13 @@ describe.skipIf(!LIVE)('PiSession inside the real pi', () => {
     // The faux model's documented default reply (scripts/probe/faux.ts).
     expect(entries.map(messageText)).toEqual(expect.arrayContaining([hello, `Reply to a ${hello.length}-character prompt.`]))
 
+    // 1b. One of pi's own TUI commands, through the real bridge in the real
+    //     pi: refused as do-not-retry, and never a turn or a user message
+    //     (a real model once answered a host-sent "/new" as a question).
+    await expect(deliver('/new')).resolves.toMatchObject({ ok: false, code: 'missing-capability', disposition: 'do-not-retry', promptWritten: false })
+    expect(turnsDone()).toBe(1)
+    expect(entries.map(messageText)).not.toContain('/new')
+
     // 2. A second ordinary turn, then /compact: pi's own compaction, never a
     //    user message. (Before any [call:] prompt on purpose: pi asks the model
     //    to SUMMARIZE the conversation, and the faux model would answer a
