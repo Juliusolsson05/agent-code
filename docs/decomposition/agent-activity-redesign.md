@@ -261,3 +261,37 @@ Stage 1 produces everything later stages assert against: the control-MCP fleet
 reading (committed), plus a runtime capture of the same window. No stage may
 introduce a hand-written fleet; a single-row unit fixture is allowed only for a
 pure formatting helper.
+
+## Owner decisions (2026-09-24) and what this branch builds
+
+Issue: #1170. The three OWNER CALLs above are answered:
+
+1. **Full screen.** It is built as a full-viewport Radix `Dialog`, not as a
+   fourth `MainSurface` takeover beside Settings/Reader/Spotlight. WHY: a
+   takeover hides the workspace, and every hidden-workspace rule
+   (`useKeybinds`' picker gate and Escape, `useRenderedLeaseHygiene`, the
+   control observation's `settingsOpen`) names each takeover by hand — a
+   fourth one is four more edits that can each be forgotten. The Dialog
+   primitive already carries the interaction-owner marker, the focus trap,
+   Escape and focus restore, and the workspace underneath stays laid out, so
+   no terminal is resized. "Full screen" is what the user sees; the mechanism
+   is the one every modal already uses.
+2. **Close Old Agents and Close Idle Orchestration Agents stay** as they are.
+   They are one-shot commands. Unknown 2 is closed as "no"; Stage 6 does not
+   fold them in.
+3. **Untitled rows are named by their Goal, then the folder.** The row says
+   which one it is showing (`title` / `goal` / `folder`), so a folder name is
+   never mistaken for a name somebody chose. TLDR is the row's second line,
+   not its name: it describes where the work IS and changes every turn, which
+   is exactly what a name must not do.
+
+Unknowns 3–5, decided here as defaults (reversible, no owner call needed):
+a blocked goal loop and one paused at its cap are "needs you"; idle rows do
+not read their last answer (an entry scan per row, for a line TLDR already
+gives); pinned agents carry a marker rather than their own section, because
+sections are the attention buckets and a pinned agent can be in any of them.
+Unknown 6 (the phone) is out of scope.
+
+Stages built on this branch: 2 (row model), 2b (fleet note reader), 3 (the
+view), 4 (row and bulk close through `closeGrantedSessions`), 5 (keyboard).
+Stage 6 shrinks to "the old modal is deleted".
