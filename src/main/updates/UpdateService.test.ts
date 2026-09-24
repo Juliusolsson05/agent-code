@@ -14,6 +14,9 @@ type Recorded = { event: string; listener: (value?: unknown) => void }
 class FakeUpdater implements AutoUpdaterLike {
   autoInstallOnAppQuit = true // deliberately wrong; the service must force it off
   allowDowngrade = true
+  // electron-updater sets this true itself for a prerelease-versioned app
+  // (a preview build); the service must force it off.
+  allowPrerelease = true
   forceDevUpdateConfig = false
   checked = 0
   downloaded = 0
@@ -79,6 +82,15 @@ describe('UpdateService invariants', () => {
   it('never lets the updater auto-install on quit, even if constructed that way', () => {
     const { updater } = fixture()
     expect(updater.autoInstallOnAppQuit).toBe(false)
+  })
+
+  it('a preview build is only ever offered stable releases, never another preview', () => {
+    // A preview reports `0.1.4-preview.<date>`, for which electron-updater
+    // switches allowPrerelease on by itself; left on, it looks for a
+    // preview-channel feed file that previews never publish.
+    const { updater } = fixture({ app: { isPackaged: true, version: '0.1.4-preview.20260924' } })
+    expect(updater.allowPrerelease).toBe(false)
+    expect(updater.allowDowngrade).toBe(false)
   })
 
   it('is a silent no-op in unpackaged (dev) builds — one log line, no checks', () => {
