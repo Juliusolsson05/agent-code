@@ -11,6 +11,9 @@ vi.mock('electron', () => ({
       harness.handlers.set(channel, handler)
     },
   },
+  ipcRenderer: {
+    invoke: (channel: string, ...args: unknown[]) => harness.handlers.get(channel)!({}, ...args),
+  },
 }))
 
 vi.mock('@main/window/windowRegistry.js', () => ({
@@ -23,6 +26,16 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 }))
 
 const { registerSessionIpc } = await import('./session.js')
+const { sessionApi } = await import('@preload/api/session.js')
+
+it('transports generated-task draft protection from preload through main without granting waiter replacement', async () => {
+  const deliverPromptToAgent = vi.fn(async () => ({ ok: false, message: 'Native draft occupied' }))
+  registerSessionIpc({ deliverPromptToAgent } as never, {} as never)
+  // Real preload -> registered handler composition catches a dropped option
+  // at either IPC end. The internal supersede option must not cross with it.
+  await sessionApi.deliverPrompt('s1', 'Restart the server', undefined, undefined, { requireEmptyNativeComposer: true, supersedesPendingPrompt: true } as never)
+  expect(deliverPromptToAgent).toHaveBeenCalledExactlyOnceWith('s1', 'Restart the server', undefined, undefined, undefined, { requireEmptyNativeComposer: true })
+})
 
 describe('recovered renderer screen seed', () => {
   it.each([

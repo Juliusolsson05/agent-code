@@ -459,7 +459,14 @@ export type MainProviderConfig = {
   deliverPrompt: (io: PromptDeliveryIo) => Promise<PromptDeliveryResult>
 }
 
-export type PromptDeliveryIo = {
+export type PromptDeliveryOptions = {
+  /** App-generated tasks must not submit an unrelated native terminal draft.
+   * Providers must refuse when their transport cannot preserve it or establish
+   * that the active composer is empty. This is stricter than legacy delivery. */
+  requireEmptyNativeComposer?: boolean
+}
+
+export type PromptDeliveryIo = PromptDeliveryOptions & {
   session: AgentSession
   /** Write raw bytes to the session PTY. Returns false when the
    *  session is gone — callers already treat that as delivery

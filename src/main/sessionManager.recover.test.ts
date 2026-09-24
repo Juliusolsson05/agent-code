@@ -581,6 +581,26 @@ describe('SessionManager recover', () => {
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps generated-task native draft protection across the provider boundary', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const { deliverCodexPrompt } = await import('@providers/codex/runtime/promptDelivery')
+    const session = new FakeAgentSession()
+    Object.assign(session, {
+      awaitReadyForPrompt: async () => ({ kind: 'ready', waitedMs: 0 }),
+      snapshotScreen: () => '› unfinished draft\n\n  gpt-5.6-sol high · /tmp/project',
+    })
+    createSession.mockReturnValue(session)
+    deliverPrompt.mockImplementation(deliverCodexPrompt)
+    const manager = new SessionManager()
+    try {
+      await manager.recover({ sessionId: 'generated-task', kind: 'codex', cwd: '/tmp/project' })
+      await expect(manager.deliverPromptToAgent('generated-task', 'Restart the server', undefined, undefined, undefined, { requireEmptyNativeComposer: true })).resolves.toMatchObject({ ok: false, disposition: 'retry-after-resolve', promptWritten: false, enterWritten: false })
+      expect(session.write).not.toHaveBeenCalled()
+    } finally {
+      await manager.killAll()
+    }
+  })
+
   it('lets kill cancel a blocked recovery and leaves no backend behind', async () => {
     const { SessionManager } = await import('./sessionManager')
     const startGate = deferred<void>()

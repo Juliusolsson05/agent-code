@@ -527,6 +527,9 @@ export const WAKE_CALLERS = [
   'orchestration.read-agent',
   'orchestration.send-prompt',
   'control.send-prompt',
+  // Human clicked the local browser failure's restart request. Separate from
+  // generic delivery so wake diagnostics identify the initiating UI action.
+  'browser-pocket.restart-request',
   // Programmatic text delivery (#830: prompt templates / API key vault
   // inserting into a PTY surface). Same family as the MCP-driven callers
   // above — not a direct human gesture, but always downstream of one

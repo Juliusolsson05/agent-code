@@ -4827,6 +4827,10 @@ export class SessionManager extends EventEmitter {
        * else, and the brief still has to arrive.
        */
       supersedesPendingPrompt?: boolean
+      /** Stricter provider-owned admission for generated tasks such as browser
+       * recovery. Never infer native draft safety in the renderer or overwrite
+       * a draft to make this request fit. */
+      requireEmptyNativeComposer?: boolean
     },
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
@@ -4928,6 +4932,7 @@ export class SessionManager extends EventEmitter {
         prompt,
         imagePaths,
         record,
+        ...(options?.requireEmptyNativeComposer ? { requireEmptyNativeComposer: true } : {}),
       })
       finishDelivery(delivery.ok ? 'success' : 'error')
       // Instrumentation must never change a delivery outcome. `acceptance` is

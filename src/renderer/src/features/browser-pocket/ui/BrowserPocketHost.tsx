@@ -13,6 +13,8 @@ import { usePlacementStore } from '../placement/placementStore'
 import { intersect, resolvePlacement, type Placement } from '../placement/resolvePlacement'
 import { onPocketRequest, type PocketRequest } from '../state/pocketBus'
 import { usePocketLive, usePocketLiveStore } from '../state/pocketLiveStore'
+import { useRecoveryStore } from '../recovery/recoveryStore'
+import { PocketLoadFailure } from './PocketLoadFailure'
 import { fitViewport } from './layout'
 import { usePocketBridges } from './usePocketBridges'
 import type { WebviewElement } from './webviewElement'
@@ -149,6 +151,15 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
   sessionRef.current = sessionId
   const pocketRef = useRef(pocket)
   pocketRef.current = pocket
+  const workspaceRef = useRef(workspace)
+  workspaceRef.current = workspace
+  const getWorkspace = useCallback(() => workspaceRef.current, [])
+
+  // Receipt state survives guest remounts and lane/Spotlight changes, but not
+  // a retired pocket or agent replacement. Clearing invalidates any async
+  // wake/send token too; its late result cannot resurrect the removed UI.
+  useEffect(() => () => useRecoveryStore.getState().clear(pocket.pocketId), [pocket.pocketId, sessionId])
+  useEffect(() => { if (onRetired) useRecoveryStore.getState().clear(pocket.pocketId) }, [onRetired, pocket.pocketId])
 
   // Any agent tool call, the picker, or a painting lease needs a composited
   // page even when nothing shows it.
@@ -293,18 +304,38 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
       })
     }
     const onNav = () => {
+      if (elementRef.current !== el) return
       patchLive(pocketId, { canGoBack: el.canGoBack(), canGoForward: el.canGoForward() })
       const url = el.getURL()
       if (url && isAllowedTopLevelUrl(url)) workspace.updateBrowserPocket(s => setPocketUrl(s, sessionRef.current, url))
     }
-    const onCommit = (e: Event) => { if ((e as unknown as { isMainFrame?: boolean }).isMainFrame !== false) patchLive(pocketId, { failed: null }); onNav() }
+    const onCommit = (e: Event) => {
+      if (elementRef.current !== el) return
+      const nav = e as unknown as { isMainFrame: boolean; httpResponseCode: number }
+      // <webview>'s did-navigate carries ONLY url, unlike WebContents' event.
+      // Response evidence belongs to did-frame-navigate. The error document
+      // reports -1; neither it nor a successful iframe ends our failed episode.
+      if (nav.isMainFrame && nav.httpResponseCode >= 100) {
+        patchLive(pocketId, { failed: null })
+        useRecoveryStore.getState().clear(pocketId)
+      }
+    }
+    const onNavigationStart = (e: Event) => {
+      if (elementRef.current !== el) return
+      const nav = e as unknown as { isMainFrame: boolean; url: string }
+      if (nav.isMainFrame) useRecoveryStore.getState().navigating(pocketId, nav.url)
+    }
     const onStart = () => patchLive(pocketId, { loading: true })
     const onStop = () => patchLive(pocketId, { loading: false })
     const onTitle = (e: Event) => patchLive(pocketId, { title: (e as unknown as { title: string }).title })
     const onFail = (e: Event) => {
+      if (elementRef.current !== el) return
       const f = e as unknown as { errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean }
       // -3 is ERR_ABORTED: a navigation superseded by another, not a failure.
-      if (f.isMainFrame && f.errorCode !== -3) patchLive(pocketId, { failed: { code: String(f.errorCode), description: f.errorDescription, url: f.validatedURL }, loading: false })
+      if (f.isMainFrame && f.errorCode !== -3) {
+        useRecoveryStore.getState().navigating(pocketId, f.validatedURL)
+        patchLive(pocketId, { failed: { code: String(f.errorCode), description: f.errorDescription, url: f.validatedURL }, loading: false })
+      }
     }
     const onConsole = (e: Event) => {
       const c = e as unknown as { level: number | string }
@@ -319,7 +350,9 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
       setTimeout(() => patchLive(pocketId, prev => ({ generation: prev.generation + 1 })), delay)
     }
     el.addEventListener('dom-ready', register, { once: true })
-    el.addEventListener('did-navigate', onCommit)
+    el.addEventListener('did-navigate', onNav)
+    el.addEventListener('did-frame-navigate', onCommit)
+    el.addEventListener('did-start-navigation', onNavigationStart)
     el.addEventListener('did-navigate-in-page', onNav)
     el.addEventListener('did-start-loading', onStart)
     el.addEventListener('did-stop-loading', onStop)
@@ -329,7 +362,9 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
     el.addEventListener('render-process-gone', onGone)
     return () => {
       el.removeEventListener('dom-ready', register)
-      el.removeEventListener('did-navigate', onCommit)
+      el.removeEventListener('did-navigate', onNav)
+      el.removeEventListener('did-frame-navigate', onCommit)
+      el.removeEventListener('did-start-navigation', onNavigationStart)
       el.removeEventListener('did-navigate-in-page', onNav)
       el.removeEventListener('did-start-loading', onStart)
       el.removeEventListener('did-stop-loading', onStop)
@@ -366,7 +401,7 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
           ? { position: 'absolute', left: fit.offsetX, top: fit.offsetY, width: fit.width, height: fit.height, transform: `scale(${fit.scale})`, transformOrigin: '0 0', display: 'flex' }
           : { width: '100%', height: '100%', display: 'flex' }}
       />
-      {placement.mode === 'shown' && <GuestOverlays pocketId={pocket.pocketId} url={pocket.url} />}
+      {placement.mode === 'shown' && <GuestOverlays pocketId={pocket.pocketId} sessionId={sessionId} getWorkspace={getWorkspace} />}
     </div>
   )
 })
@@ -385,7 +420,7 @@ function setElementRef(set: (el: WebviewElement | null) => void): (el: unknown) 
 }
 
 /** Failure, crash and agent-cursor overlays drawn ABOVE the page. */
-function GuestOverlays({ pocketId, url }: { pocketId: string; url?: string }) {
+function GuestOverlays({ pocketId, sessionId, getWorkspace }: { pocketId: string; sessionId: SessionId; getWorkspace: () => Workspace }) {
   const live = usePocketLive(pocketId)
   const patchLive = usePocketLiveStore(s => s.patch)
   const cursorFresh = live.driving === 'agent' && live.drivingPoint && Date.now() - live.drivingAt < 2500
@@ -396,13 +431,7 @@ function GuestOverlays({ pocketId, url }: { pocketId: string; url?: string }) {
         <div className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-accent bg-accent/30"
           style={{ left: live.drivingPoint!.x, top: live.drivingPoint!.y }} />
       )}
-      {live.failed && !live.loading && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas p-6 text-center text-[12px] text-ink-dim">
-          <div className="text-[14px] text-ink">Can't reach {hostOf(live.failed.url || url)}</div>
-          <div className="font-code text-muted">{live.failed.description}</div>
-          <button type="button" className="rounded-control border border-border px-2 py-1 hover:border-border-hi hover:text-ink" onClick={() => patchLive(pocketId, { failed: null, generation: live.generation + 1 })}>Retry</button>
-        </div>
-      )}
+      <PocketLoadFailure pocketId={pocketId} sessionId={sessionId} getWorkspace={getWorkspace} />
       {live.crashedOut && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas p-6 text-center text-[12px] text-ink-dim">
           <div className="text-[14px] text-ink">This page crashed repeatedly</div>
@@ -460,6 +489,7 @@ function handleRequest(
       return
     case 'navigate':
       if (!isAllowedTopLevelUrl(request.url)) return
+      useRecoveryStore.getState().navigating(pocket.pocketId, request.url)
       workspace.updateBrowserPocket(s => setPocketUrl(s, sessionId, request.url))
       patchLive(pocket.pocketId, { failed: null })
       // No guest yet (first URL of an empty pocket): the url write above makes
@@ -505,10 +535,6 @@ function useSleepPolicy(pocketIds: string[]): void {
     }, 5_000)
     return () => clearInterval(timer)
   }, [pocketIds.join('|')])
-}
-
-function hostOf(url: string | undefined): string {
-  try { return url ? new URL(url).host : 'the page' } catch { return url ?? 'the page' }
 }
 
 /**
