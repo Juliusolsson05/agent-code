@@ -33,7 +33,11 @@ const PRODUCT_SKILLS: readonly ProductSkill[] = [
 const productSkillById = (id: string) => PRODUCT_SKILLS.find(skill => skill.id === id)
 const productSkillByName = (name: string) => PRODUCT_SKILLS.find(skill => skill.name === name)
 import { randomUUID } from 'crypto'
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import {
+  AGENT_PROVIDER_KINDS,
+  isAgentProviderKind,
+  type AgentProviderKind,
+} from '@shared/types/providerKind.js'
 import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
 import { isAbsolute, relative, resolve, sep } from 'path'
@@ -61,8 +65,10 @@ import {
   GitHubSkillSource,
   GitHubSkillSourceError,
   type GitHubSkillDiscoveryPayload,
+  type ReviewedInstalledSkillCandidate,
   type StagedInstalledSkillCandidate,
 } from './githubSkillSource.js'
+import { parseSkillInstallInput } from '@shared/skills/installSource.js'
 import { InstalledSkillPackageStore } from './installedSkillPackageStore.js'
 import { InstalledSkillMaterializer } from './installedSkillMaterializer.js'
 import {
@@ -87,6 +93,7 @@ import {
 } from './ownershipPolicy.js'
 import {
   resolveAgentCodeConventionsTargets,
+  selectTargetsForProviders,
   targetsForSkillName,
   type AgentCodeConventionsTarget,
   type ResolvedAgentCodeConventionsTargets,
@@ -108,7 +115,6 @@ import {
   type SaveAgentCodeConventionsRequest,
 } from '@shared/types/agentCodeConventions.js'
 import {
-  AGENT_CODE_CUSTOM_SKILL_MAX_COUNT,
   type AgentCodeCustomSkill,
   type AgentCodeCustomSkillDraft,
   type AgentCodeCustomSkillPreviewResult,
@@ -117,13 +123,15 @@ import {
   type CreateAgentCodeCustomSkillRequest,
   type DeleteAgentCodeCustomSkillRequest,
   type SetAgentCodeCustomSkillEnabledRequest,
+  type SetAgentCodeCustomSkillProvidersRequest,
   type UpdateAgentCodeCustomSkillRequest,
 } from '@shared/types/agentCodeCustomSkills.js'
 import {
   AGENT_CODE_INSTALLED_SKILL_DISCOVERY_TTL_MS,
-  AGENT_CODE_INSTALLED_SKILL_MAX_COUNT,
+  AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_STAGED_DISCOVERIES,
-  type AgentCodeInstalledSkillCandidate,
+  AGENT_CODE_PENDING_PROPOSAL_MAX_BYTES,
+  type AgentCodeInstalledSkillSelection,
   type AgentCodeInstalledSkillDiscovery,
   type AgentCodeInstalledSkillDiscoveryResult,
   type AgentCodeInstalledSkillFileChanges,
@@ -134,6 +142,7 @@ import {
   type DeleteAgentCodeInstalledSkillRequest,
   type InstallAgentCodeGitHubSkillsRequest,
   type SetAgentCodeInstalledSkillEnabledRequest,
+  type SetAgentCodeInstalledSkillProvidersRequest,
 } from '@shared/types/agentCodeInstalledSkills.js'
 import type { AgentCodeCustomSkillRecord } from '@shared/types/agentCodeConventions.js'
 
@@ -147,9 +156,8 @@ type ServiceOptions = {
   resolveTargets?: () => Promise<ResolvedAgentCodeConventionsTargets>
   now?: () => Date
   operationId?: () => string
-  githubSkillSource?: Pick<GitHubSkillSource, 'discover'>
+  githubSkillSource?: Pick<GitHubSkillSource, 'discover' | 'acquire'>
   installedSkillSnapshotRoot?: string
-  installedSkillSnapshotMaxBytes?: number
   pathSafety?: SkillPathSafety
 }
 
@@ -178,7 +186,8 @@ type InstalledPreflightTarget = {
 
 type StagedInstalledDiscovery = {
   discovery: AgentCodeInstalledSkillDiscovery
-  candidates: Map<string, StagedInstalledSkillCandidate>
+  /** Tree-level reviews; bytes are acquired only when one is installed. */
+  candidates: Map<string, ReviewedInstalledSkillCandidate>
   expiresAtMs: number
 }
 
@@ -210,7 +219,7 @@ export class AgentCodeManagedSkillsService {
   private readonly resolveTargetsImpl: () => Promise<ResolvedAgentCodeConventionsTargets>
   private readonly now: () => Date
   private readonly operationId: () => string
-  private readonly githubSkillSource: Pick<GitHubSkillSource, 'discover'>
+  private readonly githubSkillSource: Pick<GitHubSkillSource, 'discover' | 'acquire'>
   private readonly installedSkillPackageStore: InstalledSkillPackageStore
   private readonly installedSkillMaterializer: InstalledSkillMaterializer
   private readonly stagedInstalledDiscoveries = new Map<string, StagedInstalledDiscovery>()
@@ -228,7 +237,6 @@ export class AgentCodeManagedSkillsService {
     this.githubSkillSource = options.githubSkillSource ?? new GitHubSkillSource()
     this.installedSkillPackageStore = new InstalledSkillPackageStore(
       options.installedSkillSnapshotRoot ?? AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR,
-      options.installedSkillSnapshotMaxBytes,
     )
     this.installedSkillMaterializer = new InstalledSkillMaterializer(
       this.pathSafety,
@@ -250,6 +258,17 @@ export class AgentCodeManagedSkillsService {
           this.rehomeMovedMaterializations()
           this.enterRecoveryForUnsafeOwnership()
           if (!this.recovery) await this.reconcileLocked()
+        }
+        if (!this.recovery) {
+          // WHY a startup sweep (#1161): builds before this one retained every
+          // unreferenced snapshot forever, and a crash between quarantine and
+          // the last rmdir leaves a `.trash-*` directory. Running after
+          // reconciliation means the journal has already settled which
+          // digests it still needs. Best effort: a snapshot that fails its
+          // content proof stays where it is and never blocks startup.
+          await this.installedSkillPackageStore
+            .sweepUnreferenced(this.referencedInstalledSnapshotDigests())
+            .catch(() => undefined)
         }
       } catch (error) {
         // This setting is a convenience feature loaded before the first window
@@ -294,6 +313,29 @@ export class AgentCodeManagedSkillsService {
       // status list during an awaited provider write.
       await this.ensureInitializedLocked()
       return this.snapshot()
+    })
+  }
+
+  /**
+   * The current personal skill roots, for the read-only "Also found on this
+   * machine" scan (#1161). Observational like getInstalledSkillLocations: it
+   * never initializes, reconciles or repairs, and a service in recovery
+   * reports no roots rather than guessing.
+   */
+  getPersonalSkillRoots(): Promise<Array<{
+    id: string
+    providers: AgentProviderKind[]
+    skillsDirectory: string
+    displayPath: string
+  }>> {
+    return this.serialize(async () => {
+      if (!this.initialized || this.recovery) return []
+      return this.targets.targets.map(target => ({
+        id: target.id,
+        providers: [...target.providers],
+        skillsDirectory: target.skillsDirectory,
+        displayPath: this.displayPath(target.skillsDirectory),
+      }))
     })
   }
 
@@ -379,10 +421,38 @@ export class AgentCodeManagedSkillsService {
     return previewAgentCodeCustomSkill(draft)
   }
 
-  async discoverGitHubSkills(inputUrl: string): Promise<AgentCodeInstalledSkillDiscoveryResult> {
+  /**
+   * Discovers skills from anything the user pastes: an `npx skills add …`
+   * command, `owner/repo[@skill]`, a GitHub or skills.sh URL (#1161).
+   *
+   * WHY main re-parses the raw text: the renderer parses the same text for its
+   * live preview, but main is the authority. Accepting a renderer-parsed
+   * object would let a stale or compromised renderer approve a different
+   * source than the one shown.
+   */
+  async discoverGitHubSkills(input: string): Promise<AgentCodeInstalledSkillDiscoveryResult> {
+    const parsed = parseSkillInstallInput(input)
+    if (!parsed.ok) return { ok: false, code: 'validation', message: parsed.message }
+    const value = parsed.value
     try {
-      const payload = await this.githubSkillSource.discover(inputUrl)
-      return { ok: true, discovery: this.stageInstalledDiscovery(payload) }
+      const payload = await this.githubSkillSource.discover({
+        source: value.source,
+        fullDepth: value.fullDepth,
+        skills: value.listOnly ? null : value.skills,
+      })
+      return {
+        ok: true,
+        discovery: this.stageInstalledDiscovery(
+          { ...payload, notices: [...value.notices, ...payload.notices] },
+          {
+            display: value.display,
+            skills: value.skills,
+            providers: value.providers,
+            fullDepth: value.fullDepth,
+            listOnly: value.listOnly,
+          },
+        ),
+      }
     } catch (error) {
       return installedDiscoveryError(error)
     }
@@ -400,34 +470,82 @@ export class AgentCodeManagedSkillsService {
     })
   }
 
-  installGitHubSkills(
+  /**
+   * Installs reviewed candidates.
+   *
+   * WHY the package bytes are acquired BEFORE entering the mutation queue
+   * (#1161): discovery is lazy now, so installing downloads each selected
+   * package. Holding the single-writer queue across that network I/O would
+   * freeze every other skills operation — including pre-session
+   * reconciliation for agents being launched — for as long as GitHub takes.
+   * Acquisition only produces inert, blob-verified bytes; the serialized part
+   * below still revalidates the revision and staged review before anything
+   * becomes durable.
+   *
+   * `options.pendingReview` is the agent path (the `skills` MCP domain): the
+   * record is saved disabled and marked for the user's review, and nothing is
+   * written to provider roots.
+   */
+  async installGitHubSkills(
     request: InstallAgentCodeGitHubSkillsRequest,
+    options: { pendingReview?: AgentCodeInstalledSkillRecord['pendingReview'] } = {},
   ): Promise<AgentCodeInstalledSkillsMutationResult> {
+    const staged = this.getStagedInstalledDiscovery(request.discoveryId)
+    if (!staged) {
+      return { ok: false, code: 'expired', message: 'That skill review expired. Find the skills again.' }
+    }
+    const candidateIds = [...new Set(request.candidateIds)]
+    if (candidateIds.length === 0 || candidateIds.length !== request.candidateIds.length) {
+      return { ok: false, code: 'validation', message: 'Choose one or more unique reviewed skills.' }
+    }
+    const reviewed = candidateIds.map(id => staged.candidates.get(id))
+    if (reviewed.some(candidate => !candidate)) {
+      return { ok: false, code: 'validation', message: 'The selected skill was not part of that review.' }
+    }
+    const providers = normalizeSkillProviders(request.providers)
+    if (providers === 'invalid') {
+      return { ok: false, code: 'validation', message: 'Choose at least one provider for these skills.' }
+    }
+    // Both limits are decided from the reviewed tree sizes BEFORE anything is
+    // downloaded (review round 1): the acquisitions below are buffered in
+    // memory until the mutation stores them.
+    const requestedBytes = (reviewed as ReviewedInstalledSkillCandidate[])
+      .reduce((total, candidate) => total + candidate.candidate.totalBytes, 0)
+    if (requestedBytes > AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES) {
+      return {
+        ok: false,
+        code: 'validation',
+        message: `These skills total ${Math.ceil(requestedBytes / (1024 * 1024))} MiB. Install at most ${AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES / (1024 * 1024)} MiB at a time; select fewer and install the rest next.`,
+      }
+    }
+    if (options.pendingReview) {
+      const waiting = Object.values(this.document.installedSkills)
+        .filter(skill => skill.pendingReview && !skill.enabled)
+        .reduce((total, skill) => total + skill.files.reduce((sum, file) => sum + file.bytes, 0), 0)
+      if (waiting + requestedBytes > AGENT_CODE_PENDING_PROPOSAL_MAX_BYTES) {
+        return {
+          ok: false,
+          code: 'validation',
+          message: 'Too many proposed skills are already waiting for the user\'s review. Ask the user to review them in Settings → Skills first.',
+        }
+      }
+    }
+    const selected: StagedInstalledSkillCandidate[] = []
+    try {
+      for (const candidate of reviewed as ReviewedInstalledSkillCandidate[]) {
+        selected.push(await this.githubSkillSource.acquire(candidate))
+      }
+    } catch (error) {
+      return installedAcquisitionError(error)
+    }
+
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
       const unavailable = this.installedMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
-      const staged = this.getStagedInstalledDiscovery(request.discoveryId)
-      if (!staged) {
-        return { ok: false, code: 'expired', message: 'That GitHub skill review expired. Discover it again.' }
+      if (!this.stagedInstalledDiscoveries.has(request.discoveryId)) {
+        return { ok: false, code: 'expired', message: 'That skill review expired. Find the skills again.' }
       }
-      const candidateIds = [...new Set(request.candidateIds)]
-      if (candidateIds.length === 0 || candidateIds.length !== request.candidateIds.length) {
-        return { ok: false, code: 'validation', message: 'Choose one or more unique reviewed skills.' }
-      }
-      const candidates = candidateIds.map(id => staged.candidates.get(id))
-      if (candidates.some(candidate => !candidate)) {
-        return { ok: false, code: 'validation', message: 'The selected skill was not part of that review.' }
-      }
-      if (Object.keys(this.document.installedSkills).length + candidates.length
-        > AGENT_CODE_INSTALLED_SKILL_MAX_COUNT) {
-        return {
-          ok: false,
-          code: 'validation',
-          message: `Agent Code manages at most ${AGENT_CODE_INSTALLED_SKILL_MAX_COUNT} installed skills.`,
-        }
-      }
-      const selected = candidates as StagedInstalledSkillCandidate[]
       const selectedNames = selected.map(value => value.candidate.name)
       if (new Set(selectedNames).size !== selectedNames.length) {
         return { ok: false, code: 'validation', message: 'The review contains duplicate skill names.' }
@@ -441,7 +559,8 @@ export class AgentCodeManagedSkillsService {
           message: `A managed skill already uses the name ${collision}.`,
         }
       }
-      const prepared = await this.prepareInstalledMutation(true)
+      const enabled = !options.pendingReview
+      const prepared = await this.prepareInstalledMutation(enabled)
       if (!prepared.ok) return prepared.result
 
       const timestamp = this.now().toISOString()
@@ -451,29 +570,36 @@ export class AgentCodeManagedSkillsService {
           id: this.operationId(),
           name: candidate.candidate.name,
           description: candidate.candidate.description,
-          enabled: true,
+          enabled,
           source: candidate.candidate.source,
           snapshotDigest: candidate.snapshotDigest,
           files: candidate.candidate.files,
           warnings: candidate.candidate.warnings,
+          ...(providers ? { providers } : {}),
+          ...(options.pendingReview ? { pendingReview: options.pendingReview } : {}),
           createdAt: timestamp,
           updatedAt: timestamp,
         } satisfies AgentCodeInstalledSkillRecord,
       }))
       const preflights = new Map<string, InstalledPreflightTarget[]>()
-      for (const { record } of records) {
-        const preflight = await this.preflightInstalledTargets(record)
-        preflights.set(record.id, preflight)
-        const conflicts = preflight.filter(item => !item.writable)
-        if (conflicts.length > 0) {
-          const targets = preflight.map(item => this.installedPreflightStatus(item))
-          this.installedTargetStatuses.set(record.id, targets)
-          return {
-            ok: false,
-            code: 'target-conflict',
-            message: `A personal skill named ${record.name} already exists outside Agent Code.`,
-            snapshot: this.installedSnapshot(),
-            targets,
+      // A proposal waiting for review writes nothing to provider roots, so it
+      // has no destinations to preflight; a collision surfaces when the user
+      // enables it, through the normal enable path.
+      if (enabled) {
+        for (const { record } of records) {
+          const preflight = await this.preflightInstalledTargets(record)
+          preflights.set(record.id, preflight)
+          const conflicts = preflight.filter(item => !item.writable)
+          if (conflicts.length > 0) {
+            const targets = preflight.map(item => this.installedPreflightStatus(item))
+            this.installedTargetStatuses.set(record.id, targets)
+            return {
+              ok: false,
+              code: 'target-conflict',
+              message: `A personal skill named ${record.name} already exists outside Agent Code.`,
+              snapshot: this.installedSnapshot(),
+              targets,
+            }
           }
         }
       }
@@ -494,7 +620,7 @@ export class AgentCodeManagedSkillsService {
       next.revision += 1
       for (const { record } of records) {
         next.installedSkills[record.id] = record
-        for (const item of preflights.get(record.id)!) {
+        for (const item of preflights.get(record.id) ?? []) {
           next.installedPendingOperations[item.key] = this.pendingInstalledSync(record, item)
         }
       }
@@ -508,7 +634,13 @@ export class AgentCodeManagedSkillsService {
       }
       this.document = next
       this.stagedInstalledDiscoveries.delete(request.discoveryId)
-      for (const { record } of records) await this.applyInstalledOperationsLocked(record)
+      for (const { record } of records) {
+        if (enabled) await this.applyInstalledOperationsLocked(record)
+        else this.installedTargetStatuses.set(
+          record.id,
+          this.installedTargets(record).targets.map(target => this.installedStatus(target, 'not-installed')),
+        )
+      }
       await this.persistInstalledBestEffort()
       return { ok: true, snapshot: this.installedSnapshot() }
     })
@@ -549,8 +681,11 @@ export class AgentCodeManagedSkillsService {
       }
       const next = structuredClone(this.document)
       next.revision += 1
+      // The user switching a skill on IS the review of an agent's proposal
+      // (#1161), so the pending-review marker ends here and nowhere else.
+      const { pendingReview: _reviewed, ...reviewed } = skill
       next.installedSkills[skill.id] = {
-        ...skill,
+        ...reviewed,
         enabled: true,
         updatedAt: this.now().toISOString(),
       }
@@ -569,6 +704,83 @@ export class AgentCodeManagedSkillsService {
     })
   }
 
+  /**
+   * Changes which providers' agents get an installed skill (#1161).
+   *
+   * One durable write carries the new choice plus the journal: syncs for newly
+   * selected roots and deletes for deselected ones. New roots are preflighted
+   * first, so a collision with an external folder changes nothing.
+   */
+  setInstalledSkillProviders(
+    request: SetAgentCodeInstalledSkillProvidersRequest,
+  ): Promise<AgentCodeInstalledSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      const unavailable = this.installedMutationUnavailable(request.expectedRevision)
+      if (unavailable) return unavailable
+      const skill = this.document.installedSkills[request.skillId]
+      if (!skill) return this.installedNotFound()
+      const providers = normalizeSkillProviders(request.providers)
+      if (providers === 'invalid') {
+        return { ok: false, code: 'validation', message: 'Choose at least one provider, or turn the skill off.' }
+      }
+      const { providers: _previous, ...rest } = skill
+      const updated: AgentCodeInstalledSkillRecord = {
+        ...rest,
+        ...(providers ? { providers } : {}),
+        updatedAt: this.now().toISOString(),
+      }
+      if (JSON.stringify(skill.providers ?? null) === JSON.stringify(providers)) {
+        return { ok: true, snapshot: this.installedSnapshot() }
+      }
+      const prepared = await this.prepareInstalledMutation(skill.enabled)
+      if (!prepared.ok) return prepared.result
+      const next = structuredClone(this.document)
+      next.revision += 1
+      next.installedSkills[skill.id] = updated
+      if (skill.enabled) {
+        try {
+          await this.installedSkillPackageStore.verify(skill.snapshotDigest, skill.files)
+        } catch (error) {
+          return this.installedIoError(error)
+        }
+        const preflight = await this.preflightInstalledTargets(updated)
+        if (preflight.some(item => !item.writable)) {
+          const targets = preflight.map(item => this.installedPreflightStatus(item))
+          this.installedTargetStatuses.set(skill.id, targets)
+          return {
+            ok: false,
+            code: 'target-conflict',
+            message: 'A personal skill with this name already exists outside Agent Code in a newly chosen folder.',
+            snapshot: this.installedSnapshot(),
+            targets,
+          }
+        }
+        for (const item of preflight) {
+          if (item.existing?.snapshotDigest === skill.snapshotDigest) continue
+          next.installedPendingOperations[item.key] = this.pendingInstalledSync(updated, item)
+        }
+      }
+      try {
+        await writeAgentCodeConventionsState(this.stateFilePath, next)
+      } catch (error) {
+        return this.installedIoError(error)
+      }
+      this.document = next
+      if (updated.enabled) {
+        // Deletes for deselected roots are journaled by reconciliation, which
+        // persists them before touching a provider file.
+        await this.reconcileInstalledSkillLocked(updated)
+      } else {
+        this.installedTargetStatuses.set(
+          updated.id,
+          this.installedTargets(updated).targets.map(target => this.installedStatus(target, 'not-installed')),
+        )
+      }
+      return { ok: true, snapshot: this.installedSnapshot() }
+    })
+  }
+
   async checkInstalledSkillForUpdates(
     skillId: string,
   ): Promise<AgentCodeInstalledSkillUpdateResult> {
@@ -580,48 +792,88 @@ export class AgentCodeManagedSkillsService {
     })
     if (!current) return { ok: false, code: 'not-found', message: 'Installed skill not found.' }
     try {
-      const payload = await this.githubSkillSource.discover(current.source.skillUrl)
-      const candidate = payload.candidates.find(value =>
+      // The same repository, ref and exact path; SKILL.md at that path
+      // short-circuits discovery, so a rename upstream is never followed.
+      const payload = await this.githubSkillSource.discover({
+        source: {
+          owner: current.source.owner,
+          repository: current.source.repository,
+          ref: current.source.requestedRef,
+          ...(current.source.path ? { subpath: current.source.path } : {}),
+        },
+        // Named, so a `metadata.internal` skill is still found (review round
+        // 1): browsing hides internal skills, which made every update check
+        // for one report "no longer exists upstream".
+        skills: [current.name],
+      })
+      const reviewed = payload.candidates.find(value =>
         value.candidate.name === current.name
         && value.candidate.source.path === current.source.path
         && value.candidate.source.requestedRef === current.source.requestedRef
         && value.candidate.source.requestedRefType === current.source.requestedRefType)
-      if (!candidate) {
+      if (!reviewed) {
         return {
           ok: false,
           code: 'not-found',
           message: 'The exact skill path no longer exists upstream. Agent Code did not follow a rename.',
         }
       }
-      if (candidate.snapshotDigest === current.snapshotDigest
-        && candidate.candidate.source.resolvedCommit === current.source.resolvedCommit) {
+      if (reviewed.candidate.source.resolvedCommit === current.source.resolvedCommit) {
         return { ok: true, kind: 'up-to-date' }
       }
-      const discovery = this.stageInstalledDiscovery({ ...payload, candidates: [candidate] })
+      // WHY the package is acquired here and then dropped: the file review
+      // needs sha256 to say which files CHANGED, and the tree alone cannot
+      // give that for our stored manifest. Only the reviewed candidate (tree
+      // metadata) is staged; apply re-acquires the same blob ids, so an
+      // update check over many skills never holds their bytes in memory.
+      const acquired = await this.githubSkillSource.acquire(reviewed)
+      if (acquired.snapshotDigest === current.snapshotDigest) {
+        return { ok: true, kind: 'up-to-date' }
+      }
+      const discovery = this.stageInstalledDiscovery(
+        { ...payload, candidates: [reviewed], missingSkills: [] },
+        {
+          display: `${current.source.owner}/${current.source.repository}`,
+          skills: [current.name],
+          providers: null,
+          fullDepth: false,
+          listOnly: false,
+        },
+      )
       return {
         ok: true,
         kind: 'update-available',
         discovery,
-        candidate: candidate.candidate,
-        changes: installedFileChanges(current.files, candidate.candidate.files),
+        candidate: acquired.candidate,
+        changes: installedFileChanges(current.files, acquired.candidate.files),
       }
     } catch (error) {
       return installedDiscoveryError(error)
     }
   }
 
-  applyInstalledSkillUpdate(
+  async applyInstalledSkillUpdate(
     request: ApplyAgentCodeInstalledSkillUpdateRequest,
   ): Promise<AgentCodeInstalledSkillsMutationResult> {
+    const staged = this.getStagedInstalledDiscovery(request.discoveryId)
+    const reviewed = staged?.candidates.get(request.candidateId)
+    if (!reviewed) {
+      return { ok: false, code: 'expired', message: 'That reviewed update expired. Check again.' }
+    }
+    let candidate: StagedInstalledSkillCandidate
+    try {
+      // Outside the mutation queue for the same reason as install.
+      candidate = await this.githubSkillSource.acquire(reviewed)
+    } catch (error) {
+      return installedAcquisitionError(error)
+    }
     return this.serialize(async () => {
       await this.ensureInitializedLocked()
       const unavailable = this.installedMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
       const skill = this.document.installedSkills[request.skillId]
       if (!skill) return this.installedNotFound()
-      const staged = this.getStagedInstalledDiscovery(request.discoveryId)
-      const candidate = staged?.candidates.get(request.candidateId)
-      if (!candidate) {
+      if (!this.stagedInstalledDiscoveries.has(request.discoveryId)) {
         return { ok: false, code: 'expired', message: 'That reviewed update expired. Check again.' }
       }
       if (candidate.candidate.name !== skill.name
@@ -768,8 +1020,7 @@ export class AgentCodeManagedSkillsService {
       }
       this.document = next
       this.installedTargetStatuses.delete(skill.id)
-      const referenced = new Set(Object.values(next.installedSkills).map(value => value.snapshotDigest))
-      await this.installedSkillPackageStore.removeIfUnreferenced(removedDigest, referenced).catch(() => undefined)
+      await this.removeUnreferencedInstalledSnapshots([removedDigest])
       return { ok: true, snapshot: this.installedSnapshot() }
     })
   }
@@ -901,13 +1152,6 @@ export class AgentCodeManagedSkillsService {
       await this.ensureInitializedLocked()
       const unavailable = this.customMutationUnavailable(request.expectedRevision)
       if (unavailable) return unavailable
-      if (Object.keys(this.document.customSkills).length >= AGENT_CODE_CUSTOM_SKILL_MAX_COUNT) {
-        return {
-          ok: false,
-          code: 'validation',
-          message: `Agent Code manages at most ${AGENT_CODE_CUSTOM_SKILL_MAX_COUNT} custom skills.`,
-        }
-      }
       const reserved = productSkillByName(request.name.trim())
       if (reserved) {
         return { ok: false, code: 'validation', message: `That name is reserved for ${reserved.label} MCP.` }
@@ -1078,6 +1322,74 @@ export class AgentCodeManagedSkillsService {
         description: skill.description,
         markdown: skill.markdown,
       })
+    })
+  }
+
+  /**
+   * Changes which providers' agents get a custom skill (#1161). Newly chosen
+   * roots are preflighted so a collision changes nothing; reconciliation then
+   * writes new roots and removes deselected ones through the journal.
+   */
+  setCustomSkillProviders(
+    request: SetAgentCodeCustomSkillProvidersRequest,
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      const product = productSkillById(request.skillId)
+      if (product) {
+        return { ok: false, code: 'validation', message: `This skill is managed by ${product.label} MCP and follows it on every provider.` }
+      }
+      const unavailable = this.customMutationUnavailable(request.expectedRevision)
+      if (unavailable) return unavailable
+      const skill = this.document.customSkills[request.skillId]
+      if (!skill) return this.customNotFound()
+      const providers = normalizeSkillProviders(request.providers)
+      if (providers === 'invalid') {
+        return { ok: false, code: 'validation', message: 'Choose at least one provider, or turn the skill off.' }
+      }
+      if (JSON.stringify(skill.providers ?? null) === JSON.stringify(providers)) {
+        return { ok: true, snapshot: this.customSnapshot() }
+      }
+      const { providers: _previous, ...rest } = skill
+      const updated: AgentCodeCustomSkillRecord = {
+        ...rest,
+        ...(providers ? { providers } : {}),
+        updatedAt: this.now().toISOString(),
+      }
+      if (skill.enabled) {
+        const prepared = await this.prepareCustomMutation(true)
+        if (!prepared.ok) return prepared.result
+        const normalized = normalizeAgentCodeCustomSkill(updated, { requireContent: true })
+        if (!normalized.ok) return { ok: false, code: 'validation', message: normalized.message }
+        const desiredHash = sha256Text(renderAgentCodeCustomSkill(normalized.value))
+        const preflight = await this.preflightCustomTargets(updated)
+        if (preflight.some(item => !this.canWriteCustomPreflight(item))) {
+          const statuses = preflight.map(item => this.customPreflightStatus(item, desiredHash))
+          this.customTargetStatuses.set(skill.id, statuses)
+          return {
+            ok: false,
+            code: 'target-conflict',
+            message: 'A personal skill with this name already exists outside Agent Code in a newly chosen folder.',
+            snapshot: this.customSnapshot(),
+            targets: statuses,
+          }
+        }
+      }
+      const next = structuredClone(this.document)
+      next.revision += 1
+      next.customSkills[skill.id] = updated
+      try {
+        await writeAgentCodeConventionsState(this.stateFilePath, next)
+      } catch (error) {
+        return this.customIoError(error)
+      }
+      this.document = next
+      if (updated.enabled) await this.reconcileCustomEnabledLocked(updated)
+      else this.customTargetStatuses.set(
+        updated.id,
+        this.customTargets(updated).targets.map(target => this.customStatus(target, 'not-installed')),
+      )
+      return { ok: true, snapshot: this.customSnapshot() }
     })
   }
 
@@ -1378,6 +1690,7 @@ export class AgentCodeManagedSkillsService {
 
   private stageInstalledDiscovery(
     payload: GitHubSkillDiscoveryPayload,
+    selection: AgentCodeInstalledSkillSelection,
   ): AgentCodeInstalledSkillDiscovery {
     this.pruneStagedInstalledDiscoveries()
     while (this.stagedInstalledDiscoveries.size >= AGENT_CODE_INSTALLED_SKILL_MAX_STAGED_DISCOVERIES) {
@@ -1396,6 +1709,8 @@ export class AgentCodeManagedSkillsService {
       expiresAt: new Date(expiresAtMs).toISOString(),
       candidates: payload.candidates.map(value => value.candidate),
       notices: payload.notices,
+      missingSkills: payload.missingSkills,
+      selection,
     }
     this.stagedInstalledDiscoveries.set(discoveryId, {
       discovery,
@@ -1475,7 +1790,7 @@ export class AgentCodeManagedSkillsService {
     skill: AgentCodeInstalledSkillRecord,
   ): Promise<InstalledPreflightTarget[]> {
     const result: InstalledPreflightTarget[] = []
-    for (const target of this.installedTargets(skill).targets) {
+    for (const target of this.selectedInstalledTargets(skill)) {
       const key = installedArtifactKey(skill.id, target.id)
       const existing = this.document.installedMaterializations[key]
       const inspected = await this.installedSkillMaterializer.preflight(target, existing)
@@ -1594,8 +1909,8 @@ export class AgentCodeManagedSkillsService {
         return
       }
       const blocked: AgentCodeConventionsTargetStatus[] = []
-      let journalChanged = false
-      for (const target of targets.targets) {
+      let journalChanged = this.journalDeselectedInstalledTargets(skill)
+      for (const target of this.selectedInstalledTargets(skill)) {
         const key = installedArtifactKey(skill.id, target.id)
         if (this.document.installedPendingOperations[key]) continue
         const existing = this.document.installedMaterializations[key]
@@ -1720,8 +2035,47 @@ export class AgentCodeManagedSkillsService {
         .some(operation => operation.skillId === skillId)
   }
 
+  /** Every current provider root, named for this skill — selected or not. */
   private installedTargets(skill: AgentCodeInstalledSkillRecord): ResolvedAgentCodeConventionsTargets {
     return targetsForSkillName(this.targets, skill.name)
+  }
+
+  /**
+   * The roots this skill should exist in: those shared with at least one of
+   * the providers the user chose (#1161).
+   *
+   * WHY overlap and not "exactly these providers": roots are physical and
+   * shared (OpenCode reads the Claude root and `~/.agents/skills`), so a
+   * provider choice can only ever select roots. Choosing Codex selects
+   * `~/.agents/skills`, which OpenCode and Pi also read — the grid shows that
+   * honestly instead of promising an isolation the filesystem cannot give.
+   */
+  private selectedInstalledTargets(skill: AgentCodeInstalledSkillRecord): AgentCodeConventionsTarget[] {
+    return selectTargetsForProviders(this.installedTargets(skill).targets, skill.providers)
+  }
+
+  /**
+   * Journals deletes for current roots this enabled skill no longer selects.
+   *
+   * WHY this lives in reconciliation rather than in a "disable, change,
+   * re-enable" dance: a deselected root is an ordinary delete for the
+   * existing journal — write-ahead, fingerprint-checked, retried on the next
+   * audit — so a provider change is one durable intent. Leaving the old copy
+   * alone would make a current target look like a stale deployment forever.
+   */
+  private journalDeselectedInstalledTargets(skill: AgentCodeInstalledSkillRecord): boolean {
+    const selected = new Set(this.selectedInstalledTargets(skill).map(target => target.id))
+    let changed = false
+    for (const target of this.installedTargets(skill).targets) {
+      if (selected.has(target.id)) continue
+      const key = installedArtifactKey(skill.id, target.id)
+      if (this.document.installedPendingOperations[key]?.kind === 'delete') continue
+      const operation = this.installedDeleteOperation(skill, key)
+      if (!operation) continue
+      this.document.installedPendingOperations[key] = operation
+      changed = true
+    }
+    return changed
   }
 
   private async persistInstalledBestEffort(): Promise<void> {
@@ -1742,10 +2096,30 @@ export class AgentCodeManagedSkillsService {
     }
   }
 
+  /**
+   * Every snapshot digest the journal can still need.
+   *
+   * WHY materializations and pending operations count, not only records: a
+   * pending sync after a crash must still be able to read its desired
+   * snapshot, and removal verification compares provider files against the
+   * PREVIOUS manifest's bytes. Deleting either would turn crash recovery into
+   * "unverifiable, leave as conflict". Being generous here costs only disk.
+   */
+  private referencedInstalledSnapshotDigests(): Set<string> {
+    const referenced = new Set<string>()
+    for (const skill of Object.values(this.document.installedSkills)) referenced.add(skill.snapshotDigest)
+    for (const record of Object.values(this.document.installedMaterializations)) {
+      referenced.add(record.snapshotDigest)
+    }
+    for (const operation of Object.values(this.document.installedPendingOperations)) {
+      if (operation.previousSnapshotDigest) referenced.add(operation.previousSnapshotDigest)
+      if (operation.desiredSnapshotDigest) referenced.add(operation.desiredSnapshotDigest)
+    }
+    return referenced
+  }
+
   private async removeUnreferencedInstalledSnapshots(digests: string[]): Promise<void> {
-    const referenced = new Set(
-      Object.values(this.document.installedSkills).map(skill => skill.snapshotDigest),
-    )
+    const referenced = this.referencedInstalledSnapshotDigests()
     await Promise.all([...new Set(digests)].map(digest =>
       this.installedSkillPackageStore.removeIfUnreferenced(digest, referenced).catch(() => undefined)))
   }
@@ -1794,7 +2168,11 @@ export class AgentCodeManagedSkillsService {
     // when the truth is "we could not look".
     if (deployable.some(status => status.state === 'error')) return 'degraded'
     if (this.targets.targets.length === 0) return 'unsupported'
-    if (deployable.length === 0 || deployable.some(status => status.state !== 'installed')) {
+    // A root the user deselected (#1161) is correctly empty; only the chosen
+    // roots decide whether the skill is fully deployed.
+    const selected = new Set(this.selectedInstalledTargets(skill).map(target => target.id))
+    const expected = deployable.filter(status => selected.has(status.id))
+    if (expected.length === 0 || expected.some(status => status.state !== 'installed')) {
       return 'degraded'
     }
     return 'active'
@@ -2232,8 +2610,12 @@ export class AgentCodeManagedSkillsService {
     const rendered = renderAgentCodeCustomSkill(normalized.value)
     const desiredHash = sha256Text(rendered)
     const statuses: AgentCodeConventionsTargetStatus[] = []
+    const selected = selectTargetsForProviders(targets.targets, skill.providers)
+    const deselectedIds = new Set(targets.targets
+      .filter(target => !selected.includes(target))
+      .map(target => target.id))
 
-    for (const target of targets.targets) {
+    for (const target of selected) {
       const key = customArtifactKey(skill.id, target.id)
       const journalCollision = this.journalWriteCollisions.get(key)
       if (journalCollision) {
@@ -2305,7 +2687,10 @@ export class AgentCodeManagedSkillsService {
     }
 
     for (const [key, record] of this.customMaterializations(this.document, skill.id)) {
-      if (!this.customOwnershipPolicy.isRetiredKey(key)) continue
+      // A root the user deselected (#1161) is removed through the same
+      // journaled delete as a retired one: write-ahead, then hash-verified.
+      const deselected = record.targetId !== undefined && deselectedIds.has(record.targetId)
+      if (!this.customOwnershipPolicy.isRetiredKey(key) && !deselected) continue
       if (this.document.pendingOperations[key]?.kind !== 'delete') {
         this.document.pendingOperations[key] = {
           operationId: this.operationId(),
@@ -2320,6 +2705,11 @@ export class AgentCodeManagedSkillsService {
       }
       const removed = await this.removeCustomMaterialization(skill, key, record)
       if (removed.state !== 'not-installed') statuses.push(removed)
+    }
+    for (const target of targets.targets) {
+      if (deselectedIds.has(target.id) && !statuses.some(status => status.id === target.id)) {
+        statuses.push(this.customStatus(target, 'not-installed'))
+      }
     }
     this.customTargetStatuses.set(skill.id, statuses)
     await this.persistBestEffort(statuses)
@@ -2356,7 +2746,7 @@ export class AgentCodeManagedSkillsService {
     skill: AgentCodeCustomSkillRecord,
   ): Promise<CustomPreflightTarget[]> {
     const result: CustomPreflightTarget[] = []
-    for (const target of this.customTargets(skill).targets) {
+    for (const target of selectTargetsForProviders(this.customTargets(skill).targets, skill.providers)) {
       const key = customArtifactKey(skill.id, target.id)
       result.push({
         target,
@@ -3113,7 +3503,12 @@ export class AgentCodeManagedSkillsService {
     }
     if (this.targets.targets.length === 0) return 'unsupported'
     if (!skill.enabled) return 'disabled'
-    return deployable.length > 0 && deployable.every(status => status.state === 'installed')
+    // Deselected roots (#1161) are correctly empty and do not count.
+    const selected = new Set(
+      selectTargetsForProviders(this.customTargets(skill).targets, skill.providers).map(target => target.id),
+    )
+    const expected = deployable.filter(status => selected.has(status.id))
+    return expected.length > 0 && expected.every(status => status.state === 'installed')
       ? 'active'
       : 'degraded'
   }
@@ -3303,9 +3698,29 @@ function installedDiscoveryError(error: unknown): {
   return { ok: false, code: 'io-error', message: safeErrorMessage(error) }
 }
 
+function installedAcquisitionError(error: unknown): AgentCodeInstalledSkillsMutationResult {
+  const classified = installedDiscoveryError(error)
+  return { ok: false, code: 'acquisition', reason: classified.code, message: classified.message }
+}
+
+/**
+ * Validates a provider selection. Returns null for "every provider" (the
+ * record then omits the field, which is also what pre-#1161 records mean),
+ * or 'invalid' for an empty/unknown selection — an enabled skill that no
+ * provider receives is a disabled skill with extra steps.
+ */
+export function normalizeSkillProviders(
+  value: readonly unknown[] | null | undefined,
+): AgentProviderKind[] | null | 'invalid' {
+  if (value === undefined || value === null) return null
+  if (!Array.isArray(value) || value.length === 0 || !value.every(isAgentProviderKind)) return 'invalid'
+  const selected = new Set(value)
+  return AGENT_PROVIDER_KINDS.filter(kind => selected.has(kind))
+}
+
 function installedFileChanges(
   previous: AgentCodeInstalledSkillRecord['files'],
-  desired: AgentCodeInstalledSkillCandidate['files'],
+  desired: AgentCodeInstalledSkillRecord['files'],
 ): AgentCodeInstalledSkillFileChanges {
   const before = new Map(previous.map(file => [file.path, file]))
   const after = new Map(desired.map(file => [file.path, file]))

@@ -233,6 +233,10 @@ export type CommandContext = {
     openKeyVault: () => void
     /** Open the Add MCP server dialog (#1143). */
     openMcpServerDialog: () => void
+    /** Open the Add skills dialog (#1161). */
+    openAddSkillDialog: () => void
+    /** Ask the Skills grid to check every installed skill for updates. */
+    requestSkillUpdateCheck: () => void
     /** Open "Agent MCP Servers…" for the captured command-target agent. The
      *  modal stages choices and performs one reload on Apply. */
     openAgentMcpServers: (sessionId: string) => void

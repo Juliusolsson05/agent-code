@@ -660,6 +660,13 @@ export type Settings = {
    * command a downgrade removed.
    */
   commandKeybindingOverrides: Record<string, string[]>
+  /**
+   * External skills (Settings → Skills → Also found on this machine) the user
+   * chose to hide, keyed `<targetId>:<folder>` (#1161). A per-viewer display
+   * choice only: hiding never touches the folder, and a skill that appears in
+   * a new root shows up again because that is a new key.
+   */
+  hiddenExternalSkills: string[]
   /** Ambient provider-quota indicator in the SettingsBar header row.
    *  On by default: quota headroom is a planning input for dispatching
    *  agent fleets, and the whole point of the feature is ambient
@@ -764,6 +771,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Seeding this with today's defaults would pin every command to this
   // release's chords and make future default improvements invisible.
   commandKeybindingOverrides: {},
+  hiddenExternalSkills: [],
   // Off (#973): the header quota indicator is opt-in for the public build;
   // the Usage command and modal are unaffected.
   usageHeaderEnabled: false,

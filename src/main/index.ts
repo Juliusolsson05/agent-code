@@ -128,6 +128,7 @@ import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ip
 import { registerAllIpc } from '@main/ipc/index.js'
 import { registerSessionRoutingIpc } from '@main/ipc/sessionRouting.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
+import { collectExternalAgentSkills } from '@main/agentSkills/externalSkills.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { flushHistoryWrites } from '@main/dictation/historyStore.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -1308,6 +1309,15 @@ async function startApp(): Promise<void> {
     onUserMcpChangedByAgent: event => {
       appRunJournal?.record({ area: 'mcp.user', name: 'user_mcp.agent_change', ids: { sessionId: event.sessionId }, data: { message: event.message } })
       broadcastToWindows('user-mcp:agent-change', { message: event.message })
+    },
+    // #1161: the skills domain proposes through the same managed-skills
+    // service as Settings → Skills. Every agent-made change is announced, and
+    // the broadcast also refreshes any open Skills page.
+    managedSkills: agentCodeConventionsService,
+    listExternalSkills: () => collectExternalAgentSkills(agentCodeConventionsService),
+    onSkillsChangedByAgent: event => {
+      appRunJournal?.record({ area: 'skills', name: 'skills.agent_change', ids: { sessionId: event.sessionId }, data: { message: event.message } })
+      broadcastToWindows('managed-skills:agent-change', { message: event.message })
     },
     workflowService: activeWorkflowService,
     workflowBridge: activeWorkflowBridge,

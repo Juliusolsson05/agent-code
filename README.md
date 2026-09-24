@@ -129,10 +129,14 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
 
 - **Voice dictation** — via
   [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation).
-- **Managed personal skills** — save shared conventions, author instruction-only
-  custom skills, or review and install commit-pinned Agent Skills from public
-  GitHub repositories. Agent Code deploys them to Claude Code, Codex, and
-  OpenCode with collision-safe ownership and explicit deployment health.
+- **Skills** — Settings → Skills lists every personal skill your agents can
+  load, with a column per provider. Paste the `npx skills add owner/repo
+  --skill name` line from a README or skills.sh, review the exact commit and
+  its files, and Agent Code installs commit-pinned copies for the providers you
+  choose. You can also write your own skills and see skills other tools
+  installed. There is no limit on how many you keep. Agents can propose skills
+  for your review. Ownership is collision-safe and deployment health is shown
+  explicitly.
 - **Diagnostics** — durable local evidence for provider exits, transcript
   drift, rendering issues, and near-OOM events.
 

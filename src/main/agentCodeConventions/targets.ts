@@ -113,3 +113,21 @@ export async function resolveAgentCodeConventionsTargets(
   unsupportedProviders.sort()
   return { targets, unsupportedProviders }
 }
+
+/**
+ * The targets a per-skill provider choice selects (#1161): every root shared
+ * with at least one chosen provider. `undefined` means "every provider", the
+ * meaning of records written before provider choices existed.
+ *
+ * Pure and provider-name-free on purpose: the managed-skills Warning forbids
+ * provider-name branches in the service, and roots already carry which
+ * providers read them (from the exhaustive provider registry).
+ */
+export function selectTargetsForProviders(
+  targets: readonly AgentCodeConventionsTarget[],
+  providers: readonly AgentProviderKind[] | undefined,
+): AgentCodeConventionsTarget[] {
+  if (!providers) return [...targets]
+  const chosen = new Set(providers)
+  return targets.filter(target => target.providers.some(provider => chosen.has(provider)))
+}

@@ -18,6 +18,8 @@ export type BuiltInMcpDomain =
   | 'browser'
   // #1143: manage the user's own MCP servers (add/update/remove/set secret).
   | 'mcp_servers'
+  // #1161: find and propose personal skills for the user's review.
+  | 'skills'
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
@@ -32,6 +34,7 @@ export const BUILT_IN_MCP_DOMAINS = [
   'workflows',
   'browser',
   'mcp_servers',
+  'skills',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
@@ -72,6 +75,10 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   // is announced to the user. Off by default all the same: it is not in the
   // shipped default set.
   'mcp_servers',
+  // #1161: same reasoning as mcp_servers, with an even smaller blast radius —
+  // an agent can only PROPOSE a skill (saved off, pending the user's review).
+  // Off by default: not in the shipped default set.
+  'skills',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 export type ConfigurableBuiltInMcpDomain =
@@ -174,6 +181,10 @@ export const CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS = [
 export const PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS: ReadonlySet<BuiltInMcpDomain> = new Set<BuiltInMcpDomain>([
   'root_management',
   'mcp_servers',
+  // #1161: skills are instructions for every future agent. Proposals still
+  // need the user's review, but a parent with only Orchestration must not be
+  // able to hand a child a capability the user never gave the parent.
+  'skills',
 ])
 
 /**
@@ -209,6 +220,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
     // Unlike workflows, Claude has no native in-app browser to overlap with.
     'browser',
     'mcp_servers',
+    'skills',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],

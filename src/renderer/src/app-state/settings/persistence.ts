@@ -232,6 +232,12 @@ export function coerceSettings(value: unknown): Settings {
     commandKeybindingOverrides: pruneRetiredKeybindingOverrides(
       coerceCommandKeybindingOverrides(parsed.commandKeybindingOverrides),
     ),
+    // Bounded and string-only: this is persisted, untrusted input, and a
+    // malformed value must degrade to "nothing hidden", never a crash.
+    hiddenExternalSkills: Array.isArray(parsed.hiddenExternalSkills)
+      ? [...new Set(parsed.hiddenExternalSkills.filter((value: unknown): value is string =>
+          typeof value === 'string' && value.length > 0 && value.length <= 512))].slice(0, 2_000)
+      : [],
   }
 }
 

@@ -317,11 +317,12 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
-      // GitHub packages are main-owned immutable snapshots plus generated
-      // provider files. Discovery and deployment health cannot live in the
-      // renderer's scalar Settings document.
+      // Settings → Skills (#1161): installed, written-here and external
+      // skills in one grid with a column per provider. Marker row for the
+      // same reason as the MCP grid: the collection lives in main's managed
+      // skills document, and only the hidden-external list is a Setting.
       control: {
-        type: 'agent-code-installed-skills'
+        type: 'skills'
       }
     }
   | {
@@ -662,8 +663,24 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'skills',
+      category: 'skills',
+      title: 'Skills',
+      description:
+        'Every personal skill your agents can load: installed from sources, written in Agent Code, and found on this machine. A checked provider column means agents of that provider get the skill. Add skills by pasting an `npx skills add …` command. There is no limit on how many you keep.',
+      // Carries the vocabulary of the Installed Skills row it replaced, plus
+      // the words people search after reading a README or skills.sh.
+      keywords: [
+        'skills', 'skill', 'install', 'installed', 'add', 'npx', 'skills.sh', 'github', 'repository',
+        'update', 'claude', 'codex', 'opencode', 'pi', 'personal', 'packages', 'agents', 'external',
+        'npx skills add', '--skill',
+      ],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
+      control: { type: 'skills' },
+    },
+    {
       id: 'agent-code-conventions',
-      category: 'agents',
+      category: 'skills',
       title: 'Agent Code Conventions',
       description: 'Apply personal development rules to every supported agent provider.',
       keywords: [
@@ -685,7 +702,7 @@ export function getSettingsRegistry(
     },
     {
       id: 'agent-code-custom-skills',
-      category: 'agents',
+      category: 'skills',
       title: 'Custom Skills',
       description: 'Create and manage portable personal Agent Skills authored in Agent Code.',
       keywords: [
@@ -694,18 +711,6 @@ export function getSettingsRegistry(
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-custom-skills' },
-    },
-    {
-      id: 'agent-code-installed-skills',
-      category: 'agents',
-      title: 'Installed Skills',
-      description: 'Review and install portable Agent Skills from public GitHub repositories.',
-      keywords: [
-        'installed', 'skills', 'github', 'repository', 'import', 'source', 'update',
-        'claude', 'codex', 'opencode', 'pi', 'personal', 'packages',
-      ],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
-      control: { type: 'agent-code-installed-skills' },
     },
     {
       id: 'mcp-servers',

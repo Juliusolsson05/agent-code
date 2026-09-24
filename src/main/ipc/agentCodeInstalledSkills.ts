@@ -2,12 +2,14 @@ import { ipcMain, shell } from 'electron'
 import { lstat } from 'node:fs/promises'
 
 import type { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
+import { SKILL_INSTALL_INPUT_MAX_LENGTH } from '@shared/skills/installSource.js'
+import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import {
-  AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH,
   type ApplyAgentCodeInstalledSkillUpdateRequest,
   type DeleteAgentCodeInstalledSkillRequest,
   type InstallAgentCodeGitHubSkillsRequest,
   type SetAgentCodeInstalledSkillEnabledRequest,
+  type SetAgentCodeInstalledSkillProvidersRequest,
 } from '@shared/types/agentCodeInstalledSkills.js'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,11 +30,30 @@ function parseInstall(value: unknown): InstallAgentCodeGitHubSkillsRequest {
     || !isId(value.discoveryId)
     || !Array.isArray(value.candidateIds)
     || value.candidateIds.length === 0
-    || value.candidateIds.length > 100
-    || !value.candidateIds.every(isId)) {
+    // WHY no upper count (#1161): the service accepts only ids that belong to
+    // one staged discovery, so that discovery already bounds this list. A
+    // numeric cap here was a second, invented skills limit.
+    || !value.candidateIds.every(isId)
+    || !isProviderList(value.providers, true)) {
     throw new Error('Invalid installed skill request')
   }
   return value as InstallAgentCodeGitHubSkillsRequest
+}
+
+function isProviderList(value: unknown, optional: boolean): boolean {
+  if (value === undefined) return optional
+  if (value === null) return !optional
+  return Array.isArray(value) && value.length > 0 && value.every(isAgentProviderKind)
+}
+
+function parseProviders(value: unknown): SetAgentCodeInstalledSkillProvidersRequest {
+  if (!isRecord(value)
+    || !isRevision(value.expectedRevision)
+    || !isId(value.skillId)
+    || !isProviderList(value.providers, false)) {
+    throw new Error('Invalid installed skill providers request')
+  }
+  return value as SetAgentCodeInstalledSkillProvidersRequest
 }
 
 function parseEnabled(value: unknown): SetAgentCodeInstalledSkillEnabledRequest {
@@ -50,7 +71,6 @@ function parseDelete(value: unknown): DeleteAgentCodeInstalledSkillRequest {
     || !isRevision(value.expectedRevision)
     || !isId(value.skillId)
     || (value.abandonTargets !== undefined && (!Array.isArray(value.abandonTargets)
-      || value.abandonTargets.length > 100
       || !value.abandonTargets.every(item => isRecord(item)
         && isId(item.targetId)
         && typeof item.expectedConflictFingerprint === 'string'
@@ -75,12 +95,17 @@ export function registerAgentCodeInstalledSkillsIpc(service: AgentCodeConvention
   ipcMain.handle('agent-code-installed-skills:get', () => service.getInstalledSkillsSnapshot())
   ipcMain.handle('agent-code-installed-skills:audit', () =>
     service.getInstalledSkillsSnapshot({ audit: true }))
+  // Takes anything the Add dialog accepts — an `npx skills add …` command,
+  // owner/repo, a GitHub or skills.sh URL — and main parses it (#1161). The
+  // bound is for one pasted command, which can list many --skill names.
   ipcMain.handle('agent-code-installed-skills:discover', (_event, value: unknown) => {
-    if (typeof value !== 'string' || value.length > AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH) {
-      throw new Error('Invalid GitHub skill URL')
+    if (typeof value !== 'string' || value.length > SKILL_INSTALL_INPUT_MAX_LENGTH) {
+      throw new Error('Invalid skill install input')
     }
     return service.discoverGitHubSkills(value)
   })
+  ipcMain.handle('agent-code-installed-skills:set-providers', (_event, value: unknown) =>
+    service.setInstalledSkillProviders(parseProviders(value)))
   ipcMain.handle('agent-code-installed-skills:install', (_event, value: unknown) =>
     service.installGitHubSkills(parseInstall(value)))
   ipcMain.handle('agent-code-installed-skills:set-enabled', (_event, value: unknown) =>
