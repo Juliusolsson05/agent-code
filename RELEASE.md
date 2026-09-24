@@ -64,8 +64,8 @@ Rules of thumb:
 
 | Channel | Tag | Who gets it | Created by |
 |---|---|---|---|
-| **Preview** | `vX.Y.Z-preview.YYYYMMDD` (dated), plus the rolling `preview` | Only people who download it by hand. Never offered by the updater. | `.github/workflows/preview.yml`, every night from `main`, automatically. |
-| **Stable** | `vX.Y.Z` | **Everyone**, through the updater. Becomes `releases/latest`, which the landing page's download button uses. | `.github/workflows/release.yml`, **by hand only**. |
+| **Preview** | `vX.Y.Z-preview.YYYYMMDD` (dated), plus the rolling `preview` | People who choose **Settings → Workspace → Update channel → Preview**, through the updater, and anyone who downloads one by hand. | `.github/workflows/preview.yml`, every night from `main`, automatically. |
+| **Stable** | `vX.Y.Z` | **Everyone else**, through the updater. Becomes `releases/latest`, which the landing page's download button uses. | `.github/workflows/release.yml`, **by hand only**. |
 
 **Every manual release is stable.** The release workflow has no channel
 option, and it refuses a `package.json` version with a `-suffix` before it
@@ -75,7 +75,7 @@ hand-made beta.
 
 On GitHub, "stable" means published, not marked pre-release, and marked
 **Latest**. Previews are pre-releases and never Latest. That is what keeps
-them away from the landing page and the updater.
+them away from the landing page and from the updater on the Stable channel.
 
 ## Previews
 
@@ -88,9 +88,20 @@ A preview is `main`, built and signed as a preview of the **next** version.
 - **The app knows it is a preview**: the version is stamped into the build,
   so **About** and incident reports show `0.1.4-preview.20260924`, not the
   stable version the code has already moved past.
-- **Updates**: a preview install is offered the next stable release when it
-  ships (`0.1.4` sorts above every `0.1.4-preview.*`), and never another
-  preview.
+- **Getting previews through the updater (#1168)**: choose **Update
+  channel → Preview** in Settings → Workspace.
+  - **File → Check for Updates…** and the background checks then offer each
+    night's preview when it is newer than the running app. They read
+    `preview-mac.yml` on the rolling release.
+  - A preview installed by hand is on the Preview channel by default.
+  - Preview updates always download in full, because the rolling files have
+    fixed names, so differential download cannot work.
+  - When a stable release ships, Preview users get the next night's preview,
+    which contains it, not the stable build itself.
+- **Leaving Preview**: switching back to Stable never downgrades.
+  - The app stays on its preview until the next stable passes it: `0.1.4` sorts
+    above every `0.1.4-preview.*`, so 0.1.4 is offered when it ships.
+  - An update already found or downloaded on the old channel is dropped.
 - **Where to get one**:
   - each night's build is its own dated pre-release on the Releases page;
   - the rolling **Agent Code Preview (newest)** release always holds the

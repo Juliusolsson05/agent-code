@@ -12,6 +12,15 @@
 export const UPDATE_CHANNELS = ['stable', 'preview'] as const
 export type UpdateChannel = (typeof UPDATE_CHANNELS)[number]
 
+/** What Settings shows (#1168): the channel in effect and the running app. */
+export type UpdateChannelSnapshot = {
+  channel: UpdateChannel
+  /** The running app's version, shown beside the choice. */
+  version: string
+  /** False for a build run from source: it never updates, whichever channel. */
+  packaged: boolean
+}
+
 export function isUpdateChannel(value: unknown): value is UpdateChannel {
   return typeof value === 'string' && (UPDATE_CHANNELS as readonly string[]).includes(value)
 }

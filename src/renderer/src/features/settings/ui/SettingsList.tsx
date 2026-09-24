@@ -1,6 +1,7 @@
 import { useAppStore } from '@renderer/app-state/hooks'
 import { McpServersRow } from '@renderer/features/mcp/ui/McpServersRow'
 import { SkillsGrid } from '@renderer/features/skills/ui/SkillsGrid'
+import { UpdateChannelRow } from '@renderer/features/settings/ui/UpdateChannelRow'
 import { ExternalControlRow } from './ExternalControlRow'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -255,6 +256,8 @@ function SettingRow({
             }}>Open Performance Monitor</Button>
           ) : null}
           {control.type === 'external-control' ? <ExternalControlRow /> : null}
+
+          {control.type === 'update-channel' ? <UpdateChannelRow /> : null}
 
           {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
 

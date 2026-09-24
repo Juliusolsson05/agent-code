@@ -2,15 +2,7 @@ import { ipcMain } from 'electron'
 
 import type { UpdateService } from '@main/updates/UpdateService.js'
 import type { UpdateCheckStore } from '@main/updates/updateCheckStore.js'
-import { isUpdateChannel, type UpdateChannel } from '@shared/updates/updateChannel.js'
-
-export type UpdateChannelSnapshot = {
-  channel: UpdateChannel
-  /** The running app's version, shown beside the choice in Settings. */
-  version: string
-  /** False for a build run from source: it never updates, whichever channel. */
-  packaged: boolean
-}
+import { isUpdateChannel, type UpdateChannelSnapshot } from '@shared/updates/updateChannel.js'
 
 /** Settings → Workspace → Update channel (#1168). Main owns the value
  *  (updates.json), because the updater needs it before any window exists. */
