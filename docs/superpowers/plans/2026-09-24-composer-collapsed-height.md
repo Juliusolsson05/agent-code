@@ -17,13 +17,27 @@ the draft text changes. It can write a collapsed height, and it never corrects o
 
 - In the hook, skip measurement while the textarea has no layout (`clientWidth === 0`),
   leaving the last good height in place.
-- Observe the textarea with a `ResizeObserver` and re-measure when its **width** changes.
+- Observe the textarea with a `ResizeObserver` and re-measure when its **content-box width**
+  (`entry.contentRect.width`) changes.
   This covers both the hidden → visible reveal (0 → N) and pane resizes. Ignore
   height-only notifications, because our own height writes trigger them and they would
   loop.
 - Add the vertical border widths to the written height.
 - Add a renderer test with a stubbed layout (`happy-dom` has none): a hidden measurement
   doesn't write a collapsed height, and a reveal re-measures.
+
+## Review round (PR #1166, one Claude + one Codex reviewer)
+
+- Width changed from `clientWidth` to the content box, because dictation's `pr-2 → pr-16`
+  padding swap re-wraps the draft without changing `clientWidth` (reproduced in Chromium).
+- The observer's height write is deferred to `requestAnimationFrame`, coalesced, and
+  cancelled on unmount. A synchronous write raised Chromium's "ResizeObserver loop" error
+  (reproduced).
+- The test's fake observer now delivers only to `observe()`d targets, and the test uses a
+  stable ref. Both hid real regressions. Added hide → edit → reveal, dictation padding,
+  and deferral cases.
+- Not fixed: `scrollHeight` is an integer while lines are 16.8px, so the box can be up to
+  1px short (sub-pixel jiggle only). Documented at the write site.
 
 ## Verification
 
