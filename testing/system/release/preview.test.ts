@@ -44,13 +44,17 @@ const recordedReleases = () => readFileSync(join(fixtures, 'gh-api-releases-list
   .split('\n').filter(Boolean).map(line => JSON.parse(line) as { tag: string, published: string })
 
 /** DERIVED: the recorded complete `nightly` release as the rolling preview.
- * Only the fixed asset names differ between the two rolling releases. */
+ * Two differences, both visible here: the fixed asset names, and the
+ * preview feed (#1168), modelled on the recorded arm64 zip asset (same
+ * uploader and state) since the nightly never published one. */
 function asRollingPreview(release: Release, sha = RECORDED_NIGHTLY_SHA, newline = '\n'): Release {
   const body = (release.body ?? '').replace(/^built-from: [0-9a-f]{40}\r?\n/, '')
+  const assets = release.assets.map(asset => ({ ...asset, name: asset.name.replace('Agent.Code-nightly-', 'Agent.Code-preview-') }))
+  const zip = assets.find(asset => asset.name === 'Agent.Code-preview-arm64.zip')!
   return {
     ...release,
     body: `built-from: ${sha}${newline}${body}`,
-    assets: release.assets.map(asset => ({ ...asset, name: asset.name.replace('Agent.Code-nightly-', 'Agent.Code-preview-') })),
+    assets: [...assets, { ...zip, name: 'preview-mac.yml' }],
   }
 }
 
@@ -182,6 +186,16 @@ describe('preview decide: should this run build, and as which version?', () => {
     expect(result.outputs).toMatchObject({ changed: 'false', 'prev-sha': HEAD })
   })
 
+  it('rebuilds a rolling preview that has its binaries but no update feed', () => {
+    // A preview without preview-mac.yml downloads fine by hand but updates
+    // nobody on the Preview channel (#1168).
+    const release = asRollingPreview(recordedNightly(), HEAD)
+    release.assets = release.assets.filter(asset => asset.name !== 'preview-mac.yml')
+    const result = decide({ stdout: JSON.stringify(release) })
+    expect(result.outputs.changed).toBe('true')
+    expect(result.stdout).toContain('preview-mac.yml')
+  })
+
   it('does NOT take the old nightly\'s assets as a complete preview', () => {
     // The recorded release unchanged: marker for this SHA, but nightly asset
     // names. The first preview run must build rather than skip.
@@ -256,54 +270,100 @@ describe('preview decide: should this run build, and as which version?', () => {
   })
 })
 
-describe('preview rename: dated assets plus fixed-name rolling copies', () => {
-  /** A release/ folder named like the real beta artifacts, spelled the way
-   * electron-builder writes them locally since #1129 ("Agent-Code-…"). Each
-   * file's content is its original name, so the test can prove which file
-   * went where. */
-  function seedFromRecordedBeta(filter: (name: string) => boolean = () => true) {
+describe('preview rename: dated assets, rolling copies and the preview feed', () => {
+  const recordedFeed = () => readFileSync(join(fixtures, 'latest-mac-v0.1.3.yml'), 'utf8')
+  const feedNames = (text: string) => text.split('\n')
+    .map(line => /^\s*(?:-\s+)?(?:url|path):\s*(.+?)\s*$/.exec(line)?.[1])
+    .filter((name): name is string => Boolean(name))
+
+  /** A release/ folder exactly as package-macos leaves it for v0.1.3: the
+   * REAL electron-builder feed, every file it names, a blockmap per file and
+   * builder-debug.yml (all in the recorded v0.1.3 and beta payloads). Each
+   * binary's content is its own name, so the test can prove which file went
+   * where. */
+  function seedFromRecordedFeed(filter: (name: string) => boolean = () => true) {
     const dir = temp('preview-rename-')
-    for (const { name } of recordedBeta().assets) {
-      const local = name.replace(/^Agent\.Code-/, 'Agent-Code-')
-      if (filter(local)) writeFileSync(join(dir, local), local)
+    writeFileSync(join(dir, 'latest-mac.yml'), recordedFeed())
+    writeFileSync(join(dir, 'builder-debug.yml'), 'x64: {}\n')
+    for (const name of new Set(feedNames(recordedFeed()))) {
+      if (!filter(name)) continue
+      writeFileSync(join(dir, name), name)
+      writeFileSync(join(dir, `${name}.blockmap`), `${name}.blockmap`)
     }
     return dir
   }
   const rename = (dir: string) => spawnSync(process.execPath, [script, 'rename', dir], { encoding: 'utf8' })
+  const verify = (dir: string) => spawnSync(process.execPath, [join(repoRoot, 'scripts/release/verify-update-feed.mjs'), dir, 'preview-mac.yml'], { encoding: 'utf8' })
 
-  it('keeps the versioned dmg/zip for the dated release, copies them to the rolling names, and drops updater metadata', () => {
-    const dir = seedFromRecordedBeta()
-    const result = rename(dir)
-    expect(result.status).toBe(0)
+  it('keeps the versioned files for the dated release and copies them to the rolling names', () => {
+    const dir = seedFromRecordedFeed()
+    expect(rename(dir).status).toBe(0)
     for (const arch of ['arm64', 'x64']) {
       for (const ext of ['dmg', 'zip']) {
-        const versioned = `Agent-Code-0.0.2-beta.1-${arch}.${ext}`
+        const versioned = `Agent-Code-0.1.3-${arch}.${ext}`
         expect(readFileSync(join(dir, versioned), 'utf8')).toBe(versioned)
         expect(readFileSync(join(dir, `Agent.Code-preview-${arch}.${ext}`), 'utf8')).toBe(versioned)
       }
     }
-    // The recorded payload carries latest-mac.yml AND builder-debug.yml;
-    // neither may reach a preview release.
-    expect(readdirSync(dir).filter(name => name.endsWith('.blockmap') || name.endsWith('.yml'))).toEqual([])
+    // Blockmaps (differential download cannot work with fixed names) and
+    // every other yml are gone; only the preview feed remains.
+    expect(readdirSync(dir).filter(name => name.endsWith('.blockmap'))).toEqual([])
+    expect(readdirSync(dir).filter(name => name.endsWith('.yml'))).toEqual(['preview-mac.yml'])
+  })
+
+  it('writes preview-mac.yml naming the rolling copies, with the recorded version and checksums untouched', () => {
+    const dir = seedFromRecordedFeed()
+    expect(rename(dir).status).toBe(0)
+    const feed = readFileSync(join(dir, 'preview-mac.yml'), 'utf8')
+    expect(new Set(feedNames(feed))).toEqual(new Set([
+      'Agent.Code-preview-x64.zip', 'Agent.Code-preview-arm64.zip',
+      'Agent.Code-preview-x64.dmg', 'Agent.Code-preview-arm64.dmg',
+    ]))
+    // Only the file names changed: every other line is the recorded feed's.
+    const strip = (text: string) => text.split('\n').filter(line => !/(?:url|path):/.test(line))
+    expect(strip(feed)).toEqual(strip(recordedFeed()))
+    expect(feed).toContain('version: 0.1.3')
+    // And the #1129 verifier accepts it against the files being published.
+    const verified = verify(dir)
+    expect(verified.status).toBe(0)
+    expect(verified.stdout).toContain('OK')
+  })
+
+  it('the verifier rejects a preview feed naming a file that is not there', () => {
+    const dir = seedFromRecordedFeed()
+    expect(rename(dir).status).toBe(0)
+    rmSync(join(dir, 'Agent.Code-preview-arm64.zip'))
+    const verified = verify(dir)
+    expect(verified.status).toBe(1)
+    expect(verified.stderr).toMatch(/preview-mac\.yml names files that are not in .*Agent\.Code-preview-arm64\.zip/s)
+  })
+
+  it('refuses when the feed names a file with no rolling copy', () => {
+    const dir = seedFromRecordedFeed()
+    const feed = recordedFeed().replace('path: Agent-Code-0.1.3-x64.zip', 'path: Agent-Code-0.1.3-universal.zip')
+    writeFileSync(join(dir, 'latest-mac.yml'), feed)
+    const result = rename(dir)
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Agent-Code-0.1.3-universal.zip, which has no rolling copy')
+  })
+
+  it('refuses when there is no update feed at all', () => {
+    const dir = seedFromRecordedFeed()
+    rmSync(join(dir, 'latest-mac.yml'))
+    expect(rename(dir).stderr).toMatch(/exactly one update feed/)
   })
 
   it('refuses when an architecture is missing, naming what it found', () => {
-    const dir = seedFromRecordedBeta(name => name !== 'Agent-Code-0.0.2-beta.1-x64.zip')
+    const dir = seedFromRecordedFeed(name => name !== 'Agent-Code-0.1.3-x64.zip')
     const result = rename(dir)
     expect(result.status).not.toBe(0)
     expect(result.stderr).toMatch(/Expected exactly one x64 \.zip, found 0/)
   })
 
   it('refuses when an architecture has two candidate dmgs rather than guessing', () => {
-    const dir = seedFromRecordedBeta()
+    const dir = seedFromRecordedFeed()
     writeFileSync(join(dir, 'Agent-Code-0.0.3-arm64.dmg'), 'second')
     expect(rename(dir).status).not.toBe(0)
-  })
-
-  it('a rerun over its own output is not confused by the rolling copies', () => {
-    const dir = seedFromRecordedBeta()
-    expect(rename(dir).status).toBe(0)
-    expect(rename(dir).status).toBe(0)
   })
 })
 

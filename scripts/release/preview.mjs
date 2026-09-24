@@ -53,10 +53,19 @@ export const PREVIEW_ARCHES = ['arm64', 'x64']
 // newest preview. The dotted "Agent.Code-" spelling matches every other
 // published asset (GitHub stored "Agent Code-…" uploads as "Agent.Code-…"
 // before #1129), and the `-<arch>.dmg` ending is what download pages match.
-export const PREVIEW_ROLLING_ASSET_NAMES = PREVIEW_ARCHES.flatMap(arch => [
-  `Agent.Code-preview-${arch}.dmg`,
-  `Agent.Code-preview-${arch}.zip`,
-])
+/** The Preview channel's update feed on the rolling release (#1168). The
+ * generic provider asks for `<channel>-mac.yml`, with channel `preview`. */
+export const PREVIEW_FEED_NAME = 'preview-mac.yml'
+// The feed counts toward "complete" (#1168): a rolling release without it
+// downloads fine by hand but cannot update anyone on the Preview channel, so
+// the skip check must rebuild rather than skip over it.
+export const PREVIEW_ROLLING_ASSET_NAMES = [
+  ...PREVIEW_ARCHES.flatMap(arch => [
+    `Agent.Code-preview-${arch}.dmg`,
+    `Agent.Code-preview-${arch}.zip`,
+  ]),
+  PREVIEW_FEED_NAME,
+]
 /** `v0.1.4-preview.20260924` (scheduled) or `v0.1.4-preview.20260924.915`
  * (dispatched at 09:15 UTC). Only tags of exactly this shape are ever pruned. */
 export const PREVIEW_TAG = /^v\d+\.\d+\.\d+-preview\.\d{8}(?:\.\d{1,4})?$/
@@ -255,18 +264,47 @@ function commandDecide() {
     : `No commits on ${process.env.GITHUB_REF_NAME ?? 'the ref'} since the last complete preview (${prevSha}); skipping.`)
 }
 
+/** The rolling release's update feed (#1168), which the in-app updater reads
+ * on the Preview channel through electron-updater's generic provider.
+ *
+ * electron-builder writes a feed (`latest-mac.yml`: version, and every file
+ * with its sha512 and size) naming the VERSIONED files. The rolling release
+ * publishes the same bytes under fixed names, and the updater downloads
+ * exactly the names a feed lists, from the feed's own location (#1129: a feed
+ * naming files that are not there makes every update 404). So every `url`,
+ * and the top-level `path`, is rewritten to its rolling name. The version and
+ * checksums stay as they are, because they describe the same bytes. A name
+ * with no rolling copy is refused rather than left pointing at nothing.
+ *
+ * Line-based on purpose, like verify-update-feed.mjs: the feed is a small,
+ * stable electron-builder output, and only these two keys name files. */
+export function rollingPreviewFeed(text, renames) {
+  return String(text).split('\n').map(line => {
+    const match = /^(\s*(?:-\s+)?(?:url|path):\s*)(['"]?)(.+?)\2\s*$/.exec(line)
+    if (!match) return line
+    const rolling = renames.get(match[3])
+    if (!rolling) throw new Error(`The update feed names ${match[3]}, which has no rolling copy.`)
+    return `${match[1]}${rolling}`
+  }).join('\n')
+}
+
 /** Keep each architecture's single versioned dmg and zip (the dated
  * release's assets, named by electron-builder with the preview version), add
- * a copy under the fixed rolling name, and drop the updater metadata:
- * blockmaps and `*-mac.yml` describe an update channel, and previews are
- * never offered by the updater (RELEASE.md, "Channels").
+ * a copy under the fixed rolling name, and turn electron-builder's feed into
+ * `preview-mac.yml` for the rolling release (#1168). Every other yml
+ * (builder-debug.yml) and every blockmap is dropped: the Preview channel
+ * downloads in full (differential download needs versioned names, see
+ * src/shared/updates/updateChannel.ts), and the dated releases are
+ * download-only.
  *
  * Refuses rather than guesses when an architecture has zero or several
- * candidates: publishing the wrong binary under a permanent URL is worse than
+ * candidates, or when there is not exactly one feed: publishing the wrong
+ * binary, or a feed for the wrong files, under a permanent URL is worse than
  * a red run. */
 function commandRename(dir) {
   if (!dir) throw new Error('usage: preview.mjs rename <dir>')
   const files = readdirSync(dir)
+  const renames = new Map()
   for (const arch of PREVIEW_ARCHES) {
     for (const ext of ['dmg', 'zip']) {
       const rolling = `Agent.Code-preview-${arch}.${ext}`
@@ -275,11 +313,22 @@ function commandRename(dir) {
         throw new Error(`Expected exactly one ${arch} .${ext}, found ${candidates.length}: ${JSON.stringify(candidates)} (all files: ${JSON.stringify(files)})`)
       }
       copyFileSync(join(dir, candidates[0]), join(dir, rolling))
+      renames.set(candidates[0], rolling)
     }
   }
+  // electron-builder names the feed `latest-mac.yml` even for a preview
+  // version (the GitHub publisher never derives a channel from the version),
+  // but accept any single `*-mac.yml` so a future electron-builder that does
+  // cannot silently drop the feed.
+  const feeds = files.filter(name => name.endsWith('-mac.yml') && name !== PREVIEW_FEED_NAME)
+  if (feeds.length !== 1) {
+    throw new Error(`Expected exactly one update feed (*-mac.yml), found ${feeds.length}: ${JSON.stringify(feeds)}`)
+  }
+  const feed = rollingPreviewFeed(readFileSync(join(dir, feeds[0]), 'utf8'), renames)
   for (const name of readdirSync(dir)) {
     if (name.endsWith('.blockmap') || name.endsWith('.yml')) rmSync(join(dir, name))
   }
+  writeFileSync(join(dir, PREVIEW_FEED_NAME), feed)
   console.log(readdirSync(dir).join('\n'))
 }
 
