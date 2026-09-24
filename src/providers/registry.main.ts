@@ -12,6 +12,12 @@ import { discoverCodexSkillRoots } from '@providers/codex/runtime/skillDiscovery
 import { discoverOpencodeSkillRoots } from '@providers/opencode/runtime/skillDiscovery'
 import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
 import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
+import { PiSession } from '@providers/pi/runtime/piSession.js'
+import { deliverPiPrompt } from '@providers/pi/runtime/promptDelivery.js'
+import { discoverPiSkillRoots } from '@providers/pi/runtime/skillDiscovery.js'
+import { resolvePiBridgeScript } from '@providers/pi/runtime/bridgeScript.js'
+import { loadPiHistoryChunk } from '@providers/pi/runtime/piHistory.js'
+import { resolvePiSessionFile } from 'pi-terminal-headless'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
@@ -167,6 +173,39 @@ const grokMain: MainProviderConfig = {
   deliverPrompt: deliverGrokPrompt,
 }
 
+const piMain: MainProviderConfig = {
+  id: 'pi',
+  name: 'Pi',
+  discoverSkillRoots: discoverPiSkillRoots,
+  // Pi reads ~/.agents/skills (verified in Stage 0: it picked up Agent Code's
+  // managed skills from there) as well as its own <agentDir>/skills. The
+  // shared `.agents` location is where Agent Code deploys, like Codex/OpenCode.
+  personalAgentSkills: {
+    supported: true,
+    locations: [
+      {
+        id: 'agents-standard-personal-skills',
+        resolveDirectory: ({ homeDirectory }) => join(homeDirectory, '.agents', 'skills'),
+      },
+    ],
+  },
+  // Pi is terminal-only (TERMINAL_ONLY_PROVIDER_KINDS): both factories are the
+  // same native-TUI session, like Grok, so no factory choice can reach a
+  // structured runtime that does not exist.
+  createSession: (opts) => new PiSession(opts, { bridgeScriptPath: resolvePiBridgeScript() }),
+  createTerminalSession: (opts) => new PiSession(opts, { bridgeScriptPath: resolvePiBridgeScript() }),
+  getProjectDir: async (cwd) => cwd,
+  // The transcript is a file; the path is its identity (no locator). Resolved
+  // with Pi's own session-dir precedence by the package.
+  resolveTranscriptPath: async (cwd, providerSessionId) =>
+    resolvePiSessionFile({ env: process.env, cwd, sessionId: providerSessionId }),
+  // …but the shared backwards JSONL reader must not page it: a Pi file is a
+  // TREE, and a line-order walk would show turns a /tree move abandoned.
+  // History pages come from the active branch instead.
+  loadHistoryChunk: loadPiHistoryChunk,
+  deliverPrompt: deliverPiPrompt,
+}
+
 // Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that
 // adding a kind to AGENT_PROVIDER_KINDS without registering a config here
 // is a COMPILE error, not a runtime "Unknown provider" surprise. That is
@@ -176,6 +215,7 @@ const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
   codex: codexMain,
   opencode: opencodeMain,
   grok: grokMain,
+  pi: piMain,
 }
 
 // Accepts a bare string (callers pass IPC args / persisted `kind` values)

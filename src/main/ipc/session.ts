@@ -15,7 +15,7 @@ import {
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
 import type {
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
 } from '@shared/types/session.js'
@@ -171,17 +171,23 @@ export function registerSessionIpc(
   ipcMain.handle('session:kill', async (evt, sessionId: string) => {
     const lease = captureSessionWindowLease(sessionId)
     if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
+    // No caller on this legacy id-only channel: it has no renderer consumer
+    // today, so a kill.request with `caller: 'unknown'` from here is itself the
+    // signal that something started using it (#1135).
     const killed = await manager.kill(sessionId)
     releaseSession(lease)
     return killed
   })
 
-  ipcMain.handle('session:kill-owned', async (evt, options: SessionOwnershipOptions) => {
+  ipcMain.handle('session:kill-owned', async (evt, options: SessionKillOptions) => {
     const lease = captureSessionWindowLease(options.sessionId)
     // A stale window must not dispose another window's current view, even if
     // its saved provider/cwd still happen to match. Main-internal shutdown and
     // custody cleanup retain their direct manager authority.
     if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
+    // `options.caller` is forwarded untouched; killOwned re-validates it
+    // against KILL_CALLERS, so a renderer cannot write free text into the
+    // journal through it.
     const killed = await manager.killOwned(options)
     // WHY the release is conditional (#935 Codex review): killOwned returns
     // false for two different situations. One is "there was nothing to close"

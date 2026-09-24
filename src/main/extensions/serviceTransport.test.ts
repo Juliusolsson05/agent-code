@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
+
 // The transport proxy is a trust boundary in its own right: it is the only
 // network-shaped thing a sandboxed frame can reach. These tests pin the three
 // denials that boundary exists for (no grant, no running service, no method
@@ -97,17 +99,46 @@ describe('service.transport proxy', () => {
     expect(probes).toEqual([])
   })
 
-  it('forward headers are limited to accept and content-type', async () => {
+  // The cross-repo contract (#1147): services read exactly this header set
+  // (the attestation name is the SDK's export). A bearer-token service must
+  // see the frame's token,
+  // and must be told — by the host, not the caller — that the request came
+  // from its own extension's frame.
+  it('forwards accept, content-type and authorization, plus the host attestation — nothing else', async () => {
     const probes = wire({ granted: true })
     const probe = new Request('agent-code-ext://timer/__bundle/gen-1/__service/timer.host/x', {
-      method: 'POST', body: 'hi', headers: { accept: 'application/json', 'content-type': 'text/plain', cookie: 'session=secret', 'x-evil': '1' },
+      method: 'POST', body: 'hi', headers: {
+        accept: 'application/json', 'content-type': 'text/plain', authorization: 'Bearer abc',
+        cookie: 'session=secret', 'x-evil': '1',
+      },
     })
     await proxyServiceTransportRequest('timer', 'gen-1', '__service/timer.host/x', probe)
     const forwarded = probes[0]!.init!.headers as Headers
-    expect(forwarded.get('accept')).toBe('application/json')
-    expect(forwarded.get('content-type')).toBe('text/plain')
-    expect(forwarded.get('cookie')).toBeNull()
-    expect(forwarded.get('x-evil')).toBeNull()
+    // forEach, not entries(): the main project's lib has no DOM.Iterable.
+    const all: Record<string, string> = {}
+    forwarded.forEach((value, name) => { all[name] = value })
+    expect(all).toEqual({
+      accept: 'application/json',
+      'content-type': 'text/plain',
+      authorization: 'Bearer abc',
+      [TRANSPORT_ATTESTATION_HEADER]: 'service',
+    })
+  })
+
+  // The attestation is only worth anything if a caller cannot choose it. A frame
+  // claiming `lan` (or supplying forwarding facts) would otherwise make a
+  // service mis-classify its own host player, in either direction.
+  it('a caller cannot forge the attestation or forwarding facts', async () => {
+    const probes = wire({ granted: true })
+    const probe = new Request('agent-code-ext://timer/__bundle/gen-1/__service/timer.host/x', {
+      method: 'GET', headers: { [TRANSPORT_ATTESTATION_HEADER]: 'lan', 'x-forwarded-for': '10.0.0.9', 'x-forwarded-host': 'evil:1', origin: 'http://evil' },
+    })
+    await proxyServiceTransportRequest('timer', 'gen-1', '__service/timer.host/x', probe)
+    const forwarded = probes[0]!.init!.headers as Headers
+    expect(forwarded.get(TRANSPORT_ATTESTATION_HEADER)).toBe('service')
+    expect(forwarded.get('x-forwarded-for')).toBeNull()
+    expect(forwarded.get('x-forwarded-host')).toBeNull()
+    expect(forwarded.get('origin')).toBeNull()
   })
 
   it('an upstream dial failure reads as not-running, not a proxy crash', async () => {

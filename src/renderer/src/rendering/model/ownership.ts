@@ -80,6 +80,10 @@ export const SUPPRESSION_POLICY: Record<AgentProviderKind, SuppressionPolicy> = 
   // Codex's — block-local evidence is legitimately absent, so the aggressive
   // hide rule must not fire.
   grok: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
+  // Pi rows are per-message (uuid = the entry id) with no whole-turn message
+  // id, and a tool result is its own row threaded by toolCallId — the Codex /
+  // Grok shape, so the aggressive Claude hide rule must not fire.
+  pi: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
 }
 
 /** The legacy collapsed_activity churn set (helpers.ts

@@ -8,6 +8,11 @@ import {
   serviceStopRequestSchema,
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
+  serviceExposeRequestSchema,
+  netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 } from '@shared/types/extensionServices'
 
 // The host <-> extension-frame message contract (WS4, sandbox substrate).
@@ -89,20 +94,48 @@ export const frameRequestSchema = z.discriminatedUnion('method', [
   serviceStopRequestSchema,
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
+  // ── THE NETWORK AND SECRETS SCHEMAS (#1150) ──
+  // The view bootstrap (frameDocument.ts) exposed api.services.expose and
+  // api.net.fetch, and the runtime transport accepted both, but this union did
+  // not list them, so a view's call could never succeed. Every method the view
+  // bootstrap sends must appear here; frameProtocol.test.ts pins that list.
+  serviceExposeRequestSchema,
+  netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 ])
 
 /**
- * Every request carries a child-minted `id` the host echoes on the reply, so the
- * extension can correlate responses over the single postMessage channel. A `kind`
- * tag namespaces our frames away from any other postMessage traffic sharing
- * `window` — an unrelated message (a library's, a devtools bridge's) fails this
- * parse and is ignored rather than misread as a request.
+ * The correlation half of an envelope. Every request carries a child-minted
+ * `id` the host echoes on the reply, so the extension can correlate responses
+ * over the single postMessage channel. The `kind` tag namespaces our frames
+ * away from any other postMessage traffic sharing `window`: an unrelated
+ * message (a library's, a devtools bridge's) fails this parse and is ignored
+ * rather than misread as a request.
+ *
+ * Parsed SEPARATELY from the request (#1151 design review, blocker 1). The full
+ * schema used to be the only parse, so a request the SDK sent in good faith but
+ * with an invalid argument (`api.secrets.set('token', '')`, a 4097-character
+ * value) failed it and was dropped like foreign traffic: the child's promise
+ * never settled, while the same call from a runtime rejected. Our `kind` tag
+ * plus an id is enough to know the message is ours and who is waiting, so the
+ * broker answers it with `ok: false`.
  */
-export const frameRequestEnvelopeSchema = z.object({
+export const frameRequestCorrelationSchema = z.object({
   kind: z.literal('agent-code-ext:request'),
   id: z.string().min(1).max(200),
-  request: frameRequestSchema,
 })
+
+/** Every method the frame protocol accepts. Used ONLY to name the method in a
+ *  validation reply: a string outside this set is never echoed back. */
+export const FRAME_REQUEST_METHODS: ReadonlySet<string> = new Set(
+  frameRequestSchema.options.map(option => option.shape.method.value),
+)
+
+/** The full envelope: the correlation fields (declared ONCE, above) plus the
+ *  validated request. */
+export const frameRequestEnvelopeSchema = frameRequestCorrelationSchema.extend({ request: frameRequestSchema })
 
 export type FrameRequest = z.infer<typeof frameRequestSchema>
 export type FrameRequestEnvelope = z.infer<typeof frameRequestEnvelopeSchema>

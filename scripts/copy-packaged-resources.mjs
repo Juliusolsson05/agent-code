@@ -23,6 +23,13 @@ const staticResources = [
     from: 'packages/claude-code-headless/src/proxy/mitmAddon.py',
     to: 'out/main/mitmAddon.py',
   },
+  {
+    // The Pi bridge extension, loaded by pi itself with `-e` — see the matching
+    // entry in electron.vite.config.ts for why it is a raw .ts copy under the
+    // asarUnpack'ed runtime tree.
+    from: 'packages/pi-terminal-headless/src/bridge/extension.ts',
+    to: 'out/main/runtime/pi/bridge.ts',
+  },
 ]
 
 // WHY fileURLToPath and not `new URL(import.meta.url).pathname`:

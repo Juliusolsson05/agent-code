@@ -133,3 +133,37 @@ export type AgentSkillDiscovery = {
 // Names and public marker comments are not ownership proof, and consumers must
 // not infer it by parsing conventions.json or writing into provider roots.
 export type ManagedAgentSkillLocations = { paths: string[]; notices: string[] }
+
+/**
+ * A personal skill found in a provider root that Agent Code does not manage
+ * (#1161): installed by `npx skills`, Codex's `$skill-installer`, or by hand.
+ *
+ * WHY this is shown read-only and never "adopted": the managed-skills rules
+ * make a pre-existing unmanaged destination a collision that cannot be
+ * adopted — names and marker text are not ownership proof, and only the
+ * write-ahead journal is. Listing it answers "which skills do my agents
+ * see?"; managing it means reinstalling through Agent Code after the
+ * external copy is removed.
+ */
+export type ExternalAgentSkill = {
+  name: string
+  description: string
+  locations: Array<{
+    /** Stable provider-root id (e.g. `claude-personal-skills`). */
+    targetId: string
+    providers: AgentProviderKind[]
+    /** The skill's folder name inside that root; with targetId, what Reveal sends. */
+    folder: string
+    /** `~`-abbreviated folder for display only; never sent back to main. */
+    displayPath: string
+    /** The folder is a symlink — how `npx skills` installs into agent roots. */
+    linked: boolean
+  }>
+  /** From `~/.agents/.skill-lock.json` (read-only) when `npx skills` installed it. */
+  provenance?: { installer: 'npx skills'; source: string; sourceUrl?: string }
+}
+
+export type ExternalAgentSkillsSnapshot = {
+  skills: ExternalAgentSkill[]
+  notices: string[]
+}

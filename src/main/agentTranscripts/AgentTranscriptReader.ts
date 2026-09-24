@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 
 import { parseOpencodeTranscriptFile, type OpencodeStore } from 'opencode-terminal-headless'
+import { readPiBranch } from 'pi-terminal-headless'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import {
@@ -75,6 +76,10 @@ const DEFAULT_DEPS: AgentTranscriptReaderDeps = { opencode: opencodeDatabase }
 type TranscriptSource =
   | { kind: 'jsonl'; path: string }
   | { kind: 'opencode'; path: string; sessionID: string; store: OpencodeStore }
+  // A Pi session file is a TREE: `/tree` keeps abandoned turns in the same
+  // file, so it is read as the active branch (the conversation pi itself
+  // would resume), never streamed in line order like other JSONL.
+  | { kind: 'pi'; path: string }
 
 type PreparedTranscript = {
   ok: true
@@ -278,6 +283,8 @@ async function prepareTranscript(
     case 'claude':
     case 'codex':
       return { ok: true, source, provider: requestedProvider }
+    case 'pi':
+      return { ok: true, source: { kind: 'pi', path }, provider: 'pi' }
     case 'opencode':
       return {
         ok: false,
@@ -290,10 +297,10 @@ async function prepareTranscript(
         return {
           ok: false,
           error: 'provider_detection_failed',
-          message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
+          message: 'Could not detect whether this transcript is Claude, Codex or Pi JSONL.',
         }
       }
-      return { ok: true, source, provider }
+      return { ok: true, source: provider === 'pi' ? { kind: 'pi', path } : source, provider }
     }
     default:
       return {
@@ -313,6 +320,23 @@ async function* transcriptRecords(source: TranscriptSource): AsyncGenerator<Json
     case 'jsonl':
       yield* streamJsonl<JsonRecord>(source.path)
       return
+    case 'pi': {
+      // The branch can only be resolved with the whole tree in hand, so the
+      // file is read once; the walk then yields back to the event loop every
+      // page, like the OpenCode walk, so a long session never holds the main
+      // process for its whole length.
+      const { rows } = await readPiBranch(source.path)
+      let sincePause = 0
+      for (const row of rows) {
+        yield row as unknown as JsonRecord
+        sincePause += 1
+        if (sincePause >= OPENCODE_PAGE_SIZE) {
+          sincePause = 0
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      }
+      return
+    }
     case 'opencode': {
       // WHY an explicit yield between pages: `node:sqlite` is synchronous and
       // the reducers never wait on I/O, so without one a read, search or
@@ -351,7 +375,17 @@ function recordTimestamp(provider: AgentTranscriptProvider, raw: JsonRecord): nu
     // rows are type/content/ids only), so there is nothing honest to extract.
     case 'grok':
       return undefined
+    // Every Pi row carries an ISO `timestamp`; a message also has epoch ms,
+    // which is the moment the message itself was created.
+    case 'pi':
+      return finiteNumber(asRecord(raw.message)?.timestamp) ?? parseIsoTimestamp(stringField(raw, 'timestamp'))
   }
+}
+
+function parseIsoTimestamp(value: string | undefined): number | undefined {
+  if (!value) return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function extractItems(
@@ -371,6 +405,8 @@ function extractItems(
     // silently regress when the MCP transcript surface grows a Grok reader.
     case 'grok':
       return []
+    case 'pi':
+      return extractPiItems(raw, timestamp)
   }
 }
 
@@ -717,11 +753,15 @@ async function inspectTranscript(
   }
 }
 
-async function detectJsonlProvider(path: string): Promise<'claude' | 'codex' | null> {
+async function detectJsonlProvider(path: string): Promise<'claude' | 'codex' | 'pi' | null> {
   for await (const raw of streamJsonl<JsonRecord>(path)) {
     if (raw === null) continue
     const type = stringField(raw, 'type')
     const payload = asRecord(raw.payload)
+    // Pi writes its header first, always: {type:"session", id, cwd, timestamp}
+    // (v1 files have the same header without `version`). Neither Claude nor
+    // Codex has a `session` row type.
+    if (type === 'session' && stringField(raw, 'id') && stringField(raw, 'cwd')) return 'pi'
     if (type === 'response_item' || type === 'event_msg' || type === 'turn_context') return 'codex'
     if (
       (type === 'user' || type === 'assistant') &&
@@ -815,6 +855,62 @@ function extractCodexResponseItem(
     }]
   }
 
+  return []
+}
+
+// Pi rows are the session file's own JSON (pi-terminal-headless
+// PiSessionRow), on the active branch only (see transcriptRecords).
+//
+// - user text → user_message; thinking blocks are dropped like every other
+//   provider's (this domain returns an agent's work product).
+// - An assistant message's text is `final` when pi ended the message with
+//   `stop` or `length`; `toolUse` means more steps follow. An `error` /
+//   `aborted` reply keeps its partial text with the diagnostic FIRST (the
+//   OpenCode reasoning: an interrupted answer must not read as a success, and
+//   per-item truncation must not hide the failure).
+// - toolCall blocks use the shared classifier: Pi's built-ins are bash
+//   {command}, read {path}, edit {path, edits}, write {path, content}.
+// - toolResult → the raw tool output item; bashExecution (the user's own
+//   `!cmd`) → a shell command, with its output.
+function extractPiItems(raw: JsonRecord, timestamp: number | undefined): AgentTranscriptItem[] {
+  if (stringField(raw, 'type') !== 'message') return []
+  const message = asRecord(raw.message)
+  const role = stringField(message, 'role')
+  if (!message) return []
+  if (role === 'user') {
+    const text = flattenTextContent(message.content, ['text'])
+    return text ? [{ kind: 'user_message', timestamp, text }] : []
+  }
+  if (role === 'assistant') {
+    const content = Array.isArray(message.content) ? message.content : []
+    const stopReason = stringField(message, 'stopReason')
+    const failed = stopReason === 'error' || stopReason === 'aborted'
+    let text = flattenTextContent(content, ['text'])
+    if (failed) {
+      const diagnostic = stringField(message, 'errorMessage') ?? stopReason
+      text = [`[Pi ${stopReason}: ${diagnostic}]`, text].filter(Boolean).join('\n\n')
+    }
+    const items: AgentTranscriptItem[] = []
+    if (text) items.push({ kind: 'assistant_message', timestamp, text, final: !failed && (stopReason === 'stop' || stopReason === 'length') })
+    for (const block of content) {
+      const record = asRecord(block)
+      if (!record || record.type !== 'toolCall') continue
+      items.push(classifyToolCall(stringField(record, 'name') ?? 'tool', asRecord(record.arguments), timestamp))
+    }
+    return items
+  }
+  if (role === 'toolResult') {
+    const output = flattenTextContent(message.content, ['text'])
+    return output ? [{ kind: 'tool_read', timestamp, tool: RAW_TOOL_OUTPUT, excerpt: output }] : []
+  }
+  if (role === 'bashExecution') {
+    const command = stringField(message, 'command')
+    if (!command) return []
+    const items: AgentTranscriptItem[] = [{ kind: 'shell_command', timestamp, command }]
+    const output = stringField(message, 'output')
+    if (output) items.push({ kind: 'tool_read', timestamp, tool: RAW_TOOL_OUTPUT, excerpt: output })
+    return items
+  }
   return []
 }
 

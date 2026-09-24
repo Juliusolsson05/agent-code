@@ -44,6 +44,7 @@ import {
   summarizeEntryForDebug,
 } from '@renderer/session-runtime/entries'
 import {
+  clearLiveEntryWindowSession,
   isUuidTrimmed,
   liveEntryWindowOverBudget,
   markUuidsTrimmed,
@@ -103,12 +104,14 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import {
   applyJsonlProviderSessionId,
+  applyProviderSessionSwitch,
   decideJsonlProviderBurst,
   resumableProviderSessionId,
   shouldMarkProviderSessionDisconnected,
 } from '@renderer/workspace/providerSessionIdentity'
 import type { JsonlProviderStreamState } from '@renderer/workspace/providerSessionIdentity'
 import { SemanticEventBackpressureQueue } from '@renderer/workspace/hook/ipc/semanticEventBackpressure'
+import { PI_IDENTITY_ENVELOPE_TYPE } from '@providers/pi/renderer/transcript/mapper'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that
@@ -409,6 +412,9 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 // lines AND has no cross-handler state, it's a candidate for
 // further extraction.
 // -----------------------------------------------------------------------------
+
+/** PiSession's marker for "the bridge never connected" (piSession.ts). */
+const PI_BRIDGE_UNREACHABLE = '(provider_bridge_unreachable)'
 
 export function useIpcSubscriptions(
   // WHY feed identity matters: `feed` sits in the effect's dep array, so an
@@ -853,6 +859,14 @@ export function useIpcSubscriptions(
       flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
+      // Pi's bridge never connected. The durable transcript keeps working
+      // (it is read from Pi's file), so this is not a transcript error. It is
+      // a live-channel warning that must outlast the next row and clear only
+      // when the bridge connects (the diagnostic handler below).
+      if (message.includes(PI_BRIDGE_UNREACHABLE)) {
+        updateRuntime(sessionId, { liveChannelWarning: message })
+        return
+      }
       // These adapter diagnostics name a channel that cannot recover by
       // loading a snapshot. Electron preserves the message, not Error.code.
       // The nonfatal durable diagnostics deliberately remain transient:
@@ -906,9 +920,17 @@ export function useIpcSubscriptions(
     const offDiagnostic = feed.onSessionTranscriptDiagnostic(({ sessionId, diagnostic }) => {
       if (quarantinesSessionFeed(sessionId)) return
       const live = diagnostic as { kind?: string; connected?: boolean } | null
-      if (live?.kind !== 'opencode-terminal-live-state' || live.connected !== true) return
+      // Pi's bridge is the same kind of late-connecting live channel, but its
+      // "never connected" warning lives in liveChannelWarning (its transcript
+      // still works), and it clears the moment the bridge connects.
+      if (live?.kind === 'pi-terminal-live-state' && live.connected === true) {
+        if (refs.latestRuntimesRef.current[sessionId]?.liveChannelWarning) updateRuntime(sessionId, { liveChannelWarning: null })
+        return
+      }
+      const faultMarker = live?.kind === 'opencode-terminal-live-state' ? '(provider_server_unreachable)' : undefined
+      if (!faultMarker || live?.connected !== true) return
       const current = refs.latestRuntimesRef.current[sessionId]
-      if (!current?.transcriptChannelError?.includes('(provider_server_unreachable)')) return
+      if (!current?.transcriptChannelError?.includes(faultMarker)) return
       updateRuntime(sessionId, {
         transcriptChannelError: null,
         transcriptError: null,
@@ -917,6 +939,23 @@ export function useIpcSubscriptions(
         // what matters here is that the sticky override is gone.
         transcriptStatus: 'ready',
       })
+    })
+
+    const offProviderSessionChanged = feed.onSessionProviderSessionChanged(({ sessionId, providerSessionId }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      // The pane follows its runtime into another provider session (Pi /new,
+      // /resume, /fork). Rebind the durable identity, and forget the burst
+      // gate's expectation for the old id so the new session's rows are
+      // judged against the new one. The conversation itself is replaced by
+      // the history-boundary reset that follows this event.
+      setState(prev => {
+        const meta = prev.sessions[sessionId]
+        if (!meta) return prev
+        const next = applyProviderSessionSwitch(meta, providerSessionId)
+        if (!next) return prev
+        return { ...prev, sessions: { ...prev.sessions, [sessionId]: next } }
+      })
+      jsonlProviderStreamBySession.delete(sessionId)
     })
 
     const offHistoryBoundary = feed.onSessionHistoryBoundary(({ sessionId, ...boundary }) => {
@@ -938,6 +977,13 @@ export function useIpcSubscriptions(
       // rewrite is not a process death). Semantic suffixes wait for a fresh
       // turn_started via the gate in handleSemanticEvent.
       refs.seenUuidsRef.current[sessionId] = new Set()
+      // The trimmed-uuid ledger shares the dedup set's lifecycle
+      // (liveEntryWindow.ts: trimmed ⊆ ever-seen). The live path rejects
+      // seen ∪ trimmed, so keeping it past this reset dropped every replayed
+      // row the old window had trimmed: a Pi /tree back to an early branch
+      // of a long conversation came back with gaps (Astra review, finding 2).
+      // The entries are wiped below, so there is nothing trimmed left to page.
+      clearLiveEntryWindowSession(sessionId)
       refs.historyAwaitingTurnStartRef.current.add(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
@@ -1879,8 +1925,15 @@ export function useIpcSubscriptions(
           // docs/decomposition/claude-queue-reconciliation.md.
           const entryType = (raw as { type?: string }).type
           const shapeSaysCodex = isCodexRolloutEntry(raw)
+          // A Pi row (pi-terminal-headless PiSessionRow) always carries its
+          // file `line` and a `parentId` key, and the runtime's identity
+          // envelope has its own type. Without this, a Pi burst that arrives
+          // before the pane's metadata would be routed to the Claude mapper —
+          // the silent binary-provider fallthrough #394 warns about.
+          const record = raw as Record<string, unknown>
+          const shapeSaysPi = record.type === PI_IDENTITY_ENVELOPE_TYPE || (typeof record.line === 'number' && 'parentId' in record)
           const routedKind: AgentProviderKind =
-            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
+            mappingKind ?? (shapeSaysCodex ? 'codex' : shapeSaysPi ? 'pi' : 'claude')
           if (entryType === 'queue-operation' && routedKind === 'claude') {
             const op = raw as { operation?: string; content?: string; timestamp?: string }
             claudeQueue = applyQueueOperation(claudeQueue, {
@@ -2749,6 +2802,7 @@ export function useIpcSubscriptions(
       // above. The bulk path is the only one.
       offEntries()
       offHistoryBoundary()
+      offProviderSessionChanged()
       offErr()
       offDiagnostic()
       offProcessState()

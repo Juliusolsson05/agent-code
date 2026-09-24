@@ -2,6 +2,12 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { LspManager } from '@main/lspManager.js'
+import { USER_MCP_UNAVAILABLE_CHANNEL } from '@main/ipc/userMcp.js'
+import type { UserMcpUnavailableEvent } from '@shared/userMcp/types.js'
+import {
+  MANAGED_SKILLS_UNAVAILABLE_CHANNEL,
+  type ManagedSkillsUnavailableEvent,
+} from '@shared/types/tldr.js'
 
 import {
   broadcastToWindows,
@@ -127,6 +133,14 @@ export function wireSessionForwarder(
   manager.on('transcript-diagnostic', payload =>
     sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
   )
+  manager.on('provider-session-changed', payload => {
+    // An ordering fact like history-boundary: rows of the OLD session still
+    // buffered must land before the identity moves, so both windows flush
+    // first and the change crosses directly.
+    semanticEvents.flush(payload.sessionId)
+    flushJsonl(payload.sessionId)
+    sendToSessionWindow(payload.sessionId, 'session:provider-session-changed', payload)
+  })
   manager.on('terminal-data', payload =>
     sendToSessionWindow(payload.sessionId, 'session:terminal-data', payload),
   )
@@ -177,6 +191,25 @@ export function wireSessionForwarder(
   })
   manager.on('exit', payload => {
     sendToSessionWindow(payload.sessionId, 'session:exit', payload)
+  })
+  // #1133. BROADCAST, not sendToSessionWindow, on purpose. Managed-skill health
+  // is machine-wide (one broken TLDR skill affects every window's next launch),
+  // so the warning is not about one pane. Session routing would also be wrong
+  // mechanically: it quarantines events for ids no window has claimed yet and
+  // records a routing gap for them, so a main-initiated spawn would raise a
+  // false "missed session events" notice instead of this warning. Only domain
+  // names cross, never the reconcile error (see runPreSpawnSkillReconcile).
+  manager.on('managed-skills-unavailable', ({ skills }) => {
+    const event: ManagedSkillsUnavailableEvent = { skills }
+    broadcastToWindows(MANAGED_SKILLS_UNAVAILABLE_CHANNEL, event)
+  })
+  // #1143. Broadcast for the same routing reason as managed skills above: the
+  // launch can be main-initiated (orchestration child, restore) before any
+  // window has claimed the id. Only server names and fixed reason strings
+  // cross; nothing here can carry a secret value.
+  manager.on('user-mcp-unavailable', ({ servers }) => {
+    const event: UserMcpUnavailableEvent = { servers }
+    broadcastToWindows(USER_MCP_UNAVAILABLE_CHANNEL, event)
   })
     // Diagnostics are keyed by file, not by session: two windows can have the
   // same file open in their editors and both need them.

@@ -1,6 +1,8 @@
 import type { AgentCodeApiV1, JsonValue } from '@renderer/apps/api/types'
 import {
   extensionIdFromOrigin,
+  FRAME_REQUEST_METHODS,
+  frameRequestCorrelationSchema,
   frameRequestEnvelopeSchema,
   type FramePush,
   type FrameReply,
@@ -137,6 +139,18 @@ export function createFrameHost(options: {
     'service.stop': 'service.run',
     'service.status': 'service.run',
     'service.invoke': 'service.run',
+    'service.expose': 'net.listen',
+    // NOT pre-gated here: net.fetch needs net.connect for a private address
+    // and net.origins for a declared public origin, and only main holds the
+    // verified origin list that decides which. Main enforces it before dialing
+    // (capabilityService.requireGrantFor); a renderer-side guess could only be
+    // wrong in one direction or the other.
+    'net.fetch': null,
+    // Tier 0: id-scoped by main from the (extensionId, revision) this broker
+    // fixed before hearing the child. See main/extensions/secrets.ts.
+    'secrets.get': null,
+    'secrets.set': null,
+    'secrets.delete': null,
   }
 
   const perform = async (request: FrameRequest): Promise<unknown> => {
@@ -192,6 +206,11 @@ export function createFrameHost(options: {
       case 'service.stop':
       case 'service.status':
       case 'service.invoke':
+      case 'service.expose':
+      case 'net.fetch':
+      case 'secrets.get':
+      case 'secrets.set':
+      case 'secrets.delete':
         return window.api.extensionsServiceRequest(extensionId, bundleRevision, request)
       default:
         // Exhaustiveness. Without it an unhandled method fell off the end returning
@@ -210,10 +229,29 @@ export function createFrameHost(options: {
     //    extension id — or to no valid id — is dropped, never mis-attributed.
     if (event.origin !== expectedOrigin) return
     if (extensionIdFromOrigin(event.origin) !== extensionId) return
-    // 3. It matches the request schema. Anything else (an unrelated library's
-    //    postMessage, a malformed frame) fails the parse and is ignored.
+    // 3. It is OUR envelope (kind tag + correlation id). Anything else — an
+    //    unrelated library's postMessage, a devtools bridge — is ignored.
+    const correlation = frameRequestCorrelationSchema.safeParse(event.data)
+    if (!correlation.success) return
+    // 4. The request itself matches the schema. A recognisable request that
+    //    does not is ANSWERED with ok:false (#1151 design review): dropping it
+    //    left the extension's promise pending forever, while the runtime
+    //    transport rejects the same call. The reply is sanitised — it may name
+    //    a KNOWN method, never echo a submitted value (a rejected
+    //    secrets.set carries the secret; zod's issue text can quote input).
     const parsed = frameRequestEnvelopeSchema.safeParse(event.data)
-    if (!parsed.success) return
+    if (!parsed.success) {
+      const method = (event.data as { request?: { method?: unknown } }).request?.method
+      post({
+        kind: 'agent-code-ext:reply',
+        id: correlation.data.id,
+        ok: false,
+        error: typeof method === 'string' && FRAME_REQUEST_METHODS.has(method)
+          ? `Invalid arguments for ${method}.`
+          : 'Unknown extension API request.',
+      })
+      return
+    }
 
     const { id, request } = parsed.data
     void perform(request).then(

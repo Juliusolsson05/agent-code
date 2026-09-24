@@ -237,6 +237,50 @@ describe('SessionManager Codex replacement handoff', () => {
     ])
   })
 
+  it.each([
+    // The renderer's replaceSession names itself: the handoff is the user's
+    // swap (reload / resume / MCP reload), not recovery (#1135 review).
+    ['replace.predecessor', 'replace.predecessor'],
+    // An older or foreign spawner that says nothing keeps the specific
+    // main-side tag rather than 'unknown' — main knows what this kill is.
+    [undefined, 'replacement.handoff'],
+    // Renderer input is untrusted; free text must not reach the journal.
+    ['rm -rf /', 'replacement.handoff'],
+  ])('journals the handoff kill of the predecessor as %s -> %s', async (sent, journaled) => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession('predecessor', order, predecessorStopped, false)
+    const successor = new LeaseAwareCodexSession('successor', order, predecessorStopped, true)
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+
+    const { SessionManager } = await import('./sessionManager')
+    const lifecycle: Array<{ name: string; ids?: { sessionId?: string }; data?: Record<string, unknown> }> = []
+    const manager = new SessionManager(null, null, {
+      record: (event: (typeof lifecycle)[number]) => lifecycle.push(event),
+    } as never)
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'recorded-provider-session',
+    })
+    await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'recorded-provider-session',
+      predecessorSessionId: first.sessionId,
+      ...(sent === undefined ? {} : { predecessorKillCaller: sent as never }),
+    })
+
+    expect(order).toContain('predecessor:stop')
+    expect(
+      lifecycle
+        .filter(event => event.name === 'kill.request' && event.ids?.sessionId === first.sessionId)
+        .map(event => event.data?.caller),
+    ).toEqual([journaled])
+  })
+
   it('keeps start-before-stop when the Codex replacement targets a different transcript', async () => {
     const order: string[] = []
     const predecessorStopped = { value: false }

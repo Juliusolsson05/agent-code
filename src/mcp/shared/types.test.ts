@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  builtInMcpDefaultsFor,
+  coerceBuiltInMcpDefaults,
   filterBuiltInMcpDomainsForProvider,
   normalizeConfigurableBuiltInMcpDomains,
   providerSupportsBuiltInMcpDomain,
+  uniformBuiltInMcpDefaults,
 } from '@mcp/shared/types.js'
 
 describe('built-in MCP provider policy', () => {
@@ -56,5 +59,29 @@ describe('root management domain policy (#906)', () => {
     expect(filterBuiltInMcpDomainsForProvider('claude', ['root_management'])).toEqual(['root_management'])
     expect(filterBuiltInMcpDomainsForProvider('codex', ['root_management'])).toEqual(['root_management'])
     expect(filterBuiltInMcpDomainsForProvider('opencode', ['root_management'])).toEqual(['root_management'])
+  })
+})
+
+describe('per-provider built-in MCP defaults (#1143)', () => {
+  it('copies a pre-#1143 flat list to every provider so upgrading changes nobody\'s agents', () => {
+    const defaults = coerceBuiltInMcpDefaults(['tldr', 'ping', 'orchestration'], ['goal'])
+    // ping is diagnostic-only and never a default, as before.
+    expect(defaults.claude).toEqual(['tldr', 'orchestration'])
+    expect(defaults.codex).toEqual(['tldr', 'orchestration'])
+    expect(defaults.grok).toEqual(['tldr', 'orchestration'])
+  })
+
+  it('keeps an explicit empty column but gives a missing provider the shipped default', () => {
+    const defaults = coerceBuiltInMcpDefaults({ claude: [], codex: ['workflows'] }, ['tldr'])
+    expect(defaults.claude).toEqual([])
+    expect(defaults.codex).toEqual(['workflows'])
+    expect(defaults.opencode).toEqual(['tldr'])
+  })
+
+  it('reads either form for one provider', () => {
+    expect(builtInMcpDefaultsFor(['goal'], 'codex')).toEqual(['goal'])
+    expect(builtInMcpDefaultsFor({ ...uniformBuiltInMcpDefaults([]), codex: ['goal'] }, 'codex')).toEqual(['goal'])
+    expect(builtInMcpDefaultsFor({ ...uniformBuiltInMcpDefaults([]), codex: ['goal'] }, 'claude')).toEqual([])
+    expect(builtInMcpDefaultsFor(undefined, 'claude')).toEqual([])
   })
 })

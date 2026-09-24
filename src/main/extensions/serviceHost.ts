@@ -46,7 +46,7 @@ async function defaultSpawn(entryPath: string, serviceName: string): Promise<Spa
       // unlike MessagePortMain, whose events carry {data}. Wrapping for the
       // latter shape silently turned every service message into undefined
       // here and terminated the service as "not understood" (caught by the
-      // poker harness against a REAL spawned service).
+      // an Electron harness against a REAL spawned service).
       const handler = (message: unknown) => listener(message)
       child.on('message', handler)
       return () => child.off('message', handler)
@@ -280,6 +280,19 @@ export class ExtensionServiceHost {
   serviceEndpoint(extensionId: string, serviceId: string): number | null {
     const service = this.running.get(this.key(extensionId, serviceId))
     return service && !service.stopping && service.endpoints.length > 0 ? service.endpoints[0].port : null
+  }
+
+  /** Every loopback port this host owns: ALL extensions' running service
+   *  endpoints plus their LAN listeners. net.fetch refuses these (see
+   *  netFetch.ts) so no extension can reach any service, its own or another's,
+   *  around the proxy and listener that tell a service who is calling.
+   *  Listeners bind every interface, so their port is reachable on loopback. */
+  isHostOwnedLoopbackPort(port: number): boolean {
+    for (const service of this.running.values()) {
+      if (service.endpoints.some(endpoint => endpoint.port === port)) return true
+    }
+    for (const listener of this.exposed.values()) if (listener.port === port) return true
+    return false
   }
 
   /** App-quit drain: kill every service and close every exposure; no ceremony. */

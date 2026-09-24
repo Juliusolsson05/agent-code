@@ -5,6 +5,7 @@ import {
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   isBuiltInThemeMode,
+  SHIPPED_BUILT_IN_MCP_DOMAINS,
   USAGE_HEADER_LEVELS,
 } from '@renderer/app-state/settings/types'
 import {
@@ -32,7 +33,7 @@ import { coerceCommandKeybindingOverrides } from '@renderer/features/command-key
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceMouseButtonBinding, coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
-import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
+import { coerceBuiltInMcpDefaults, uniformBuiltInMcpDefaults } from '@mcp/shared/types'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -129,6 +130,14 @@ export function coerceSettings(value: unknown): Settings {
       ? DEFAULT_SETTINGS.paletteMouseChord
       : coerceMouseChordBinding(parsed.paletteMouseChord),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
+    // Strict `=== true` for the two risky switches so a malformed or hand-edited
+    // settings file can never turn them on; `!== false` for the harmless one.
+    // Already-enabled installs have made their MCP choices. Migration must
+    // not silently re-grant a domain the user removed from a provider.
+    browserPocketDefaultsInitialized: parsed.browserPocketDefaultsInitialized === true || parsed.browserPocketEnabled === true,
+    browserPocketEnabled: parsed.browserPocketEnabled === true,
+    browserPocketOpenLocalhostLinks: parsed.browserPocketOpenLocalhostLinks !== false,
+    browserPocketAllowEvaluate: parsed.browserPocketAllowEvaluate === true,
     // `=== true`: absent → off (the #973 default); an explicit `true` from an
     // older blob keeps autosend on for the user who had it.
     autoSendPromptSuggestion: parsed.autoSendPromptSuggestion === true,
@@ -171,11 +180,21 @@ export function coerceSettings(value: unknown): Settings {
     // which is why the absent branch cannot go through the normalizer —
     // normalize treats an empty array as "no preference" and would flatten
     // the shipped default to nothing.
+    //
+    // #1143: the value became a per-provider map. A pre-#1143 flat list is
+    // copied to every provider by coerceBuiltInMcpDefaults, so an upgrade
+    // changes nobody's behavior; no store version bump is needed because this
+    // coercion runs on every hydration and no persisted value changed meaning.
+    //
+    // Known, accepted limitation: a pre-#1143 build reads this object as "not
+    // an array", normalizes it to [] and autosaves that, so downgrading and
+    // then upgrading again starts every provider with no built-in defaults.
+    // Writing the map under a new key would avoid it, at the cost of two keys
+    // for one preference in every build from now on; downgrades are rare and
+    // the loss is visible and one grid away from being restored.
     defaultBuiltInMcpDomains: parsed.defaultBuiltInMcpDomains === undefined
-      ? [...DEFAULT_SETTINGS.defaultBuiltInMcpDomains]
-      : normalizeConfigurableBuiltInMcpDomains(
-        parsed.defaultBuiltInMcpDomains,
-      ),
+      ? uniformBuiltInMcpDefaults(SHIPPED_BUILT_IN_MCP_DOMAINS)
+      : coerceBuiltInMcpDefaults(parsed.defaultBuiltInMcpDomains, SHIPPED_BUILT_IN_MCP_DOMAINS),
     // Same membership-check pattern as accent/mode: garbage / typo / a
     // removed font id from a future migration falls back to the default
     // rather than crashing applyTheme with an undefined family string.
@@ -213,6 +232,12 @@ export function coerceSettings(value: unknown): Settings {
     commandKeybindingOverrides: pruneRetiredKeybindingOverrides(
       coerceCommandKeybindingOverrides(parsed.commandKeybindingOverrides),
     ),
+    // Bounded and string-only: this is persisted, untrusted input, and a
+    // malformed value must degrade to "nothing hidden", never a crash.
+    hiddenExternalSkills: Array.isArray(parsed.hiddenExternalSkills)
+      ? [...new Set(parsed.hiddenExternalSkills.filter((value: unknown): value is string =>
+          typeof value === 'string' && value.length > 0 && value.length <= 512))].slice(0, 2_000)
+      : [],
   }
 }
 
@@ -358,6 +383,18 @@ export const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
   'attach-detached-to-grid',
   'attach-all-detached-for-tab',
   'detach-to-dispatch',
+  // Retired by the MCP servers interface (#1143): one staged "Agent MCP
+  // Servers…" picker replaced the per-capability toggles and the reset
+  // command. Listed for the same stale-override reason as the block above.
+  'use-global-mcp-settings',
+  'enable-ai-workspace-mcp',
+  'enable-orchestration-mcp',
+  'enable-agent-transcripts-mcp',
+  'enable-agent-management-mcp',
+  'enable-tldr-mcp',
+  'enable-goal-mcp',
+  'enable-goal-loop-mcp',
+  'enable-workflow-mcp',
 ])
 
 /**

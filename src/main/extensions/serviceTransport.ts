@@ -1,4 +1,6 @@
 import type { ExtensionCapability } from '@shared/types/extensions.js'
+import { NET_FETCH_METHODS } from '@shared/types/extensionServices.js'
+import { TRANSPORT_ATTESTATION, TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
 
 // The service.transport proxy: the ONLY network-shaped thing a sandboxed frame
 // or runtime can do. A fetch to its own origin under __service/<serviceId>/... is
@@ -28,8 +30,20 @@ export type ServiceTransportOptions = {
   fetch?: typeof fetch
 }
 
+// The attestation header (`service` here, `lan` from the LAN listener) is
+// imported from the SDK, not declared here: services read it through the same
+// export, so the host and every service share one spelling of the wire
+// contract. The SDK's service.ts JSDoc states the trust rules services apply.
+
+/** Caller headers that survive the proxy. Everything else is dropped. Named
+ *  apart from the LAN listener's LAN_FORWARDED_HEADERS: the two lists differ on
+ *  purpose (a same-principal frame has no Origin a service could check). */
+const PROXY_FORWARDED_HEADERS = ['accept', 'content-type', 'authorization'] as const
+
 const MAX_PROXIED_BODY_BYTES = 1024 * 1024
-const PROXIED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'])
+// The same plain-verb list as net.fetch (see NET_FETCH_METHODS for why these
+// and nothing else); one list so the two frame-to-network paths cannot drift.
+const PROXIED_METHODS: ReadonlySet<string> = new Set(NET_FETCH_METHODS)
 
 let config: ServiceTransportOptions | null = null
 
@@ -117,11 +131,34 @@ export async function proxyServiceTransportRequest(
     })
   }
 
+  // WHY AN ALLOW-LIST THAT NOW INCLUDES AUTHORIZATION: a bearer-token service
+  // answered 401 to every authenticated route when only accept/content-type
+  // passed (#1147). The token
+  // is the frame's own, sent to its own service — forwarding it widens nothing.
+  // Cookies and arbitrary headers still stay behind: the frame's origin is an
+  // extension scheme, and nothing it could carry there means anything upstream.
   const headers = new Headers()
-  for (const name of ['accept', 'content-type']) {
+  for (const name of PROXY_FORWARDED_HEADERS) {
     const value = request.headers.get(name)
     if (value !== null) headers.set(name, value)
   }
+  // The host's attestation, always SET here and never copied from the caller
+  // (the allow-list above cannot carry it through). It tells the service
+  // "this request came from your owning extension's own frame; grant and
+  // endpoint checks already passed" — i.e. same-principal, so the service can
+  // treat it like its own same-origin page.
+  //
+  // WHY A CUSTOM HEADER AND NOT A SYNTHETIC ORIGIN: the dial below goes through
+  // Electron net.fetch on Chromium's network stack, where Origin is a
+  // restricted request header — whether a set value survives (or Chromium adds
+  // its own) is not something the source proves, and the service would then
+  // 403 every POST. A custom header is delivered verbatim. It is also the
+  // classic CSRF-proof signal: a browser page cannot attach it cross-origin
+  // without a CORS preflight, which a service that never answers OPTIONS with
+  // CORS headers refuses. Services must therefore only trust it on a loopback
+  // socket and must never grant CORS — see the LAN listener, which sets
+  // `lan` instead, for the downgrade half of this contract.
+  headers.set(TRANSPORT_ATTESTATION_HEADER, TRANSPORT_ATTESTATION.service)
 
   try {
     // Loopback by construction: the endpoint came from the service host's
@@ -131,6 +168,16 @@ export async function proxyServiceTransportRequest(
       headers,
       ...(body ? { body, duplex: 'half' as const } : {}),
     })
+    // RESPONSE-HEADER POLICY: only content-type crosses back; the service's
+    // CSP/nosniff are dropped on purpose (the LAN listener passes them — see
+    // LAN_FORWARDED_RESPONSE_HEADERS there). The only consumer here is the
+    // extension's own frame, the same principal as the service, and the
+    // frame's host-set CSP (childFrameCsp, default-src 'none', so no nested
+    // frame can render these as a document) is the policy that applies. A
+    // service CSP could restrict nothing the extension cannot already do. The
+    // LAN listener is different: there a third party's browser loads the
+    // service's page top-level, and the service's headers are its only
+    // protection.
     return new Response(upstream.body, {
       status: upstream.status,
       headers: {

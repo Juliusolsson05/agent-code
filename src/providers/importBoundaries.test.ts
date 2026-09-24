@@ -3,6 +3,8 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+
 // ---------------------------------------------------------------------------
 // Provider import boundaries (Phase 1 of the evidence-first rendering plan,
 // PR #554 — "Import rules, non-negotiable").
@@ -31,7 +33,9 @@ import { describe, expect, it } from 'vitest'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const srcRoot = resolve(testDir, '..') // src/
-const PROVIDERS = ['claude', 'codex', 'opencode'] as const
+// Derived from the registry's own list: the hand-written ['claude','codex',
+// 'opencode'] never checked Grok, and would not have checked Pi either.
+const PROVIDERS = AGENT_PROVIDER_KINDS
 type Provider = (typeof PROVIDERS)[number]
 
 function listSourceFiles(dir: string): string[] {

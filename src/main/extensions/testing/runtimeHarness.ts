@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import { installExtensionFromPath } from '../install.js'
@@ -11,6 +12,7 @@ import { ExtensionRuntimeService } from '../runtimeService.js'
 import { ExtensionRuntimeViews } from '../runtimeViews.js'
 import { ExtensionCapabilityService, MAX_EXTENSION_TEXT_FILE_BYTES } from '../capabilityService.js'
 import { ExtensionServiceHost } from '../serviceHost.js'
+import { createExtensionSecretStore } from '../secrets.js'
 import { extensionRevision } from '@shared/types/extensions.js'
 import type { ExtensionJson, RuntimeStatus, RuntimeViewEvent } from '@shared/types/extensionRuntime.js'
 
@@ -67,6 +69,9 @@ void (async () => {
     // the point of this harness. Timeouts stay short so a broken fixture fails
     // the journey instead of hanging it.
     services: new ExtensionServiceHost({ readyTimeoutMs: 3000, invokeTimeoutMs: 1500 }),
+    // Harness-only codec: a journey must never touch the developer's real OS
+    // keychain. Production wires createSafeStorageCodec (src/main/index.ts).
+    secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, join(tmpdir(), `agent-code-harness-secrets-${process.pid}`)),
   })
   const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, startupTimeoutMs: 3000, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
 

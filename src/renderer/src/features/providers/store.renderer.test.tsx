@@ -1,3 +1,4 @@
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -69,6 +70,7 @@ describe('provider enablement store', () => {
   it('fails open (all enabled) before the first snapshot lands', async () => {
     const { useProviderEnablementStore, enabledAgentProviderKindsSnapshot } = await import('./store')
     useProviderEnablementStore.setState({ snapshot: null })
-    expect(enabledAgentProviderKindsSnapshot().size).toBe(4)
+    // Every registered provider — derived, so a new kind cannot fall out.
+    expect([...enabledAgentProviderKindsSnapshot()].sort()).toEqual([...AGENT_PROVIDER_KINDS].sort())
   })
 })

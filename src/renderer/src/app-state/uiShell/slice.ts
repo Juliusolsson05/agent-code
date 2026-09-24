@@ -23,8 +23,16 @@ export const createUiShellSlice: StateCreator<
   mergeProjectTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
+  settingsPageCategory: null,
+  settingsPageRequest: 0,
+  mcpServerDialog: null,
+  addSkillDialog: null,
+  skillUpdateCheckRequest: 0,
+  agentMcpServersSessionId: null,
   agentTitlePromptSessionId: null,
   rootManagementPromptSessionId: null,
+  rootManagementPromptOverrides: null,
+  rootManagementPromptStopGoalLoop: false,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
@@ -135,20 +143,46 @@ export const createUiShellSlice: StateCreator<
   closePinAgents: () =>
     set({ pinAgentsOpen: false }, false, 'uiShell/closePinAgents'),
 
-  openSettingsPage: () =>
-    set({ settingsPageOpen: true }, false, 'uiShell/openSettingsPage'),
+  openSettingsPage: category =>
+    set(state => ({
+      settingsPageOpen: true,
+      settingsPageCategory: category ?? null,
+      settingsPageRequest: state.settingsPageRequest + 1,
+    }), false, 'uiShell/openSettingsPage'),
   closeSettingsPage: () =>
-    set({ settingsPageOpen: false }, false, 'uiShell/closeSettingsPage'),
+    set({ settingsPageOpen: false, settingsPageCategory: null }, false, 'uiShell/closeSettingsPage'),
+  openMcpServerDialog: target =>
+    set({ mcpServerDialog: target }, false, 'uiShell/openMcpServerDialog'),
+  closeMcpServerDialog: () =>
+    set({ mcpServerDialog: null }, false, 'uiShell/closeMcpServerDialog'),
+  openAddSkillDialog: initialInput =>
+    set({ addSkillDialog: { initialInput: initialInput ?? '' } }, false, 'uiShell/openAddSkillDialog'),
+  closeAddSkillDialog: () =>
+    set({ addSkillDialog: null }, false, 'uiShell/closeAddSkillDialog'),
+  requestSkillUpdateCheck: () =>
+    set(state => ({ skillUpdateCheckRequest: state.skillUpdateCheckRequest + 1 }), false, 'uiShell/requestSkillUpdateCheck'),
+  openAgentMcpServers: sessionId =>
+    set({ agentMcpServersSessionId: sessionId }, false, 'uiShell/openAgentMcpServers'),
+  closeAgentMcpServers: () =>
+    set({ agentMcpServersSessionId: null }, false, 'uiShell/closeAgentMcpServers'),
 
   openAgentTitlePrompt: sessionId =>
     set({ agentTitlePromptSessionId: sessionId }, false, 'uiShell/openAgentTitlePrompt'),
   closeAgentTitlePrompt: () =>
     set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
 
-  openRootManagementPrompt: sessionId =>
-    set({ rootManagementPromptSessionId: sessionId }, false, 'uiShell/openRootManagementPrompt'),
+  openRootManagementPrompt: (sessionId, stagedOverrides, stopGoalLoop) =>
+    set({
+      rootManagementPromptSessionId: sessionId,
+      rootManagementPromptOverrides: stagedOverrides ?? null,
+      rootManagementPromptStopGoalLoop: stopGoalLoop === true,
+    }, false, 'uiShell/openRootManagementPrompt'),
   closeRootManagementPrompt: () =>
-    set({ rootManagementPromptSessionId: null }, false, 'uiShell/closeRootManagementPrompt'),
+    set({
+      rootManagementPromptSessionId: null,
+      rootManagementPromptOverrides: null,
+      rootManagementPromptStopGoalLoop: false,
+    }, false, 'uiShell/closeRootManagementPrompt'),
 
   openDebugBundleNotePrompt: payload =>
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),

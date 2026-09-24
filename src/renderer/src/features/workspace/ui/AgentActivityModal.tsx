@@ -297,7 +297,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
       // Don't close the modal — user likely wants to close several
       // stale panes in a row. The row will disappear on next render
       // via the rows useMemo watching workspace.state.
-      await workspace.closeSession(row.sessionId)
+      await workspace.closeSession(row.sessionId, { killCaller: 'close.agent-activity' })
     },
     [workspace],
   )

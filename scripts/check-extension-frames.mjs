@@ -82,6 +82,7 @@ export const STATE_DIR = join(root, 'state');
 export const EXTENSIONS_DIR = join(STATE_DIR, 'extensions');
 export const EXTENSIONS_LOCKFILE = join(STATE_DIR, 'extensions.json');
 export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state');
+export const EXTENSION_SECRETS_DIR = join(STATE_DIR, 'extension-secrets');
 `)
   await build({
     absWorkingDir: repo, entryPoints: [runtimeOnly ? 'src/main/extensions/testing/runtimeHarness.ts' : 'src/main/extensions/testing/electronHarness.ts'],

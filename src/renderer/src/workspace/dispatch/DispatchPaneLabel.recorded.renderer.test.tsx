@@ -10,6 +10,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 const appState = vi.hoisted(() => ({
+  settings: { browserPocketEnabled: false },
   workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),

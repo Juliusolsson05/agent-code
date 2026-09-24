@@ -12,6 +12,9 @@ import {
   serviceInvokeRequestSchema,
   serviceExposeRequestSchema,
   netFetchRequestSchema,
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 } from './extensionServices.js'
 export { isExtensionJson, type ExtensionJson } from './extensionJson.js'
 
@@ -34,13 +37,19 @@ export const runtimeApiRequestSchema = z.discriminatedUnion('method', [
   // Service lifecycle/RPC and brokered fetch for BACKGROUND RUNTIMES. The
   // view broker (frameProtocol) already carried these; a runtime's identical
   // api.services/net calls were rejected here — one transport could host a
-  // service and the other could not, which the poker harness exposed.
+  // service and the other could not, which an Electron harness driving a
+  // runtime-hosted service exposed.
   serviceStartRequestSchema,
   serviceStopRequestSchema,
   serviceStatusRequestSchema,
   serviceInvokeRequestSchema,
   serviceExposeRequestSchema,
   netFetchRequestSchema,
+  // Tier 0 per-extension secrets; same shared schema objects as the view
+  // broker so the two transports accept exactly the same keys and values.
+  secretsGetRequestSchema,
+  secretsSetRequestSchema,
+  secretsDeleteRequestSchema,
 ])
 export type RuntimeApiRequest = z.infer<typeof runtimeApiRequestSchema>
 

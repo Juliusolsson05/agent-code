@@ -58,11 +58,11 @@ function dispatchCommand(commandId: NativeMenuCommandId): void {
 export function buildAppMenu(options: {
   /** Self-update surface: when omitted (tests, very early startup) the items
    *  stay absent rather than clicking into nothing. The single item does dual
-   *  duty: no update downloaded → force a check; update ready → apply it. A
-   *  static menu cannot flip labels, and rebuilding the menu on updater events
-   *  would briefly detach every accelerator; the OS notification carries the
-   *  state change instead. */
-  onCheckForUpdates?: () => 'checking' | 'ready' | 'disabled'
+   *  duty: no update downloaded → force a check; update ready → ask, then
+   *  apply it. A static menu cannot flip labels, and rebuilding the menu on
+   *  updater events would briefly detach every accelerator; the handler
+   *  answers with a dialog instead (UpdateService.menuCheck, #1130). */
+  onCheckForUpdates?: () => void
 } = {}): Menu {
   const isMac = process.platform === 'darwin'
 

@@ -39,6 +39,7 @@ function makeManager(): FakeManager {
     acceptance: { kind: 'transport' as const, acceptedAt: 123 },
   }))
   emitter.getSessionKind = vi.fn(() => 'claude' as const)
+  emitter.getNativeConversationId = vi.fn(() => null)
   return emitter
 }
 

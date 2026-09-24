@@ -15,7 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import type { ExtensionListEntry } from '@shared/types/extensions'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import { browserPocketEnablePatch } from '@renderer/features/browser-pocket/setup'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 
@@ -288,6 +288,21 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // One grid for built-in AND user MCP servers (#1143). Marker row: the
+      // user servers live in main's document and the built-in defaults in
+      // renderer Settings, so the row owns both reads/writes itself rather than
+      // pretending to be one scalar setting.
+      control: {
+        type: 'mcp-servers'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Custom skills are a collection in main-owned state plus generated
       // provider files. A marker row keeps the list and its deployment health
       // out of the ordinary scalar renderer Settings store.
@@ -302,11 +317,12 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
-      // GitHub packages are main-owned immutable snapshots plus generated
-      // provider files. Discovery and deployment health cannot live in the
-      // renderer's scalar Settings document.
+      // Settings → Skills (#1161): installed, written-here and external
+      // skills in one grid with a column per provider. Marker row for the
+      // same reason as the MCP grid: the collection lives in main's managed
+      // skills document, and only the hidden-external list is a Setting.
       control: {
-        type: 'agent-code-installed-skills'
+        type: 'skills'
       }
     }
   | {
@@ -359,29 +375,6 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
       'Streaming Flux path. Paste your Deepgram API key below — get $200 in free credits from console.deepgram.com.',
   },
 ]
-
-function updateDefaultBuiltInMcpDomain(
-  ctx: SettingActionContext,
-  domain: ConfigurableBuiltInMcpDomain,
-  enabled: boolean,
-): void {
-  // WHY every built-in MCP row is 'Next session' rather than 'Reloads live
-  // agents': the capability list is fixed when a provider process launches, so
-  // honoring this edit means replacing that process. Doing it on a Settings
-  // toggle would kill work in flight across the whole fleet, so the edit is
-  // recorded and each agent picks it up the next time it starts — which now
-  // includes an ordinary reload of an existing agent (#904), not just creation.
-  const current = ctx.settings.defaultBuiltInMcpDomains
-  // WHY each row rewrites one shared ordered set instead of storing four
-  // booleans: the session launch contract already speaks domain arrays, and a
-  // single persisted list makes adding a future domain a one-field migration.
-  // Filtering before append also makes the helper safe against a same-value UI
-  // event without allowing duplicates into the in-memory store.
-  const next = enabled
-    ? [...current.filter(candidate => candidate !== domain), domain]
-    : current.filter(candidate => candidate !== domain)
-  ctx.onChange({ defaultBuiltInMcpDomains: next })
-}
 
 /**
  * `SettingDefinition`s for every contributed extension setting. Reads manifests
@@ -670,13 +663,29 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'skills',
+      category: 'skills',
+      title: 'Skills',
+      description:
+        'Every personal skill your agents can load: installed from sources, written in Agent Code, and found on this machine. A checked provider column means agents of that provider get the skill. Add skills by pasting an `npx skills add …` command. There is no limit on how many you keep.',
+      // Carries the vocabulary of the Installed Skills row it replaced, plus
+      // the words people search after reading a README or skills.sh.
+      keywords: [
+        'skills', 'skill', 'install', 'installed', 'add', 'npx', 'skills.sh', 'github', 'repository',
+        'update', 'claude', 'codex', 'opencode', 'pi', 'personal', 'packages', 'agents', 'external',
+        'npx skills add', '--skill',
+      ],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
+      control: { type: 'skills' },
+    },
+    {
       id: 'agent-code-conventions',
-      category: 'agents',
+      category: 'skills',
       title: 'Agent Code Conventions',
       description: 'Apply personal development rules to every supported agent provider.',
       keywords: [
         'conventions', 'rules', 'instructions', 'agents', 'claude', 'codex',
-        'opencode', 'skills', 'commits', 'git', 'testing', 'development practices',
+        'opencode', 'pi', 'skills', 'commits', 'git', 'testing', 'development practices',
       ],
       // Personal provider skills are machine-wide and are guaranteed for newly
       // spawned agents. A live provider may cache skill discovery, so calling
@@ -685,7 +694,7 @@ export function getSettingsRegistry(
       control: { type: 'agent-code-conventions' },
     },
     {
-      id: 'external-control', category: 'agents', title: 'External operator MCP',
+      id: 'external-control', category: 'mcp', title: 'External operator MCP',
       description: 'Let an external assistant discover commands, read agents and operate all Agent Code windows alongside computer use. Disabled by default and excluded from agents launched here.',
       keywords: ['mcp', 'external', 'operator', 'codex', 'chatgpt', 'automation', 'windows', 'control'],
       metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
@@ -693,139 +702,35 @@ export function getSettingsRegistry(
     },
     {
       id: 'agent-code-custom-skills',
-      category: 'agents',
+      category: 'skills',
       title: 'Custom Skills',
       description: 'Create and manage portable personal Agent Skills authored in Agent Code.',
       keywords: [
-        'custom', 'skills', 'instructions', 'agents', 'claude', 'codex', 'opencode',
+        'custom', 'skills', 'instructions', 'agents', 'claude', 'codex', 'opencode', 'pi',
         'personal', 'manage', 'editor',
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-custom-skills' },
     },
     {
-      id: 'agent-code-installed-skills',
-      category: 'agents',
-      title: 'Installed Skills',
-      description: 'Review and install portable Agent Skills from public GitHub repositories.',
+      id: 'mcp-servers',
+      category: 'mcp',
+      title: 'MCP servers',
+      description:
+        'Every MCP server your agents can use: Agent Code\'s own and yours. A checked provider column means new agents of that provider get the server; existing agents pick changes up on their next reload. Per-agent choices (Agent MCP Servers…) take precedence.',
+      // Carries the vocabulary of the eight per-domain rows this grid replaced
+      // (#1143), so searching "tldr" or "orchestration" still finds the place
+      // those defaults now live.
       keywords: [
-        'installed', 'skills', 'github', 'repository', 'import', 'source', 'update',
-        'claude', 'codex', 'opencode', 'personal', 'packages',
+        'mcp', 'server', 'servers', 'tools', 'add', 'install', 'custom', 'beeper', 'stdio', 'http', 'sse',
+        'secret', 'token', 'oauth', 'claude', 'codex', 'default', 'reload', 'existing agents',
+        'tldr', 'summary', 'goal', 'loop', 'orchestration', 'ai workspace', 'review',
+        'transcript', 'transcripts', 'agent management', 'workflow', 'workflows',
+        // #1142: the Browser Pocket MCP lives in this grid too.
+        'browser', 'pocket',
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
-      control: { type: 'agent-code-installed-skills' },
-    },
-    {
-      id: 'default-tldr-mcp',
-      category: 'agents',
-      title: 'TLDR MCP',
-      description:
-        'Keep concise agent summaries with the managed reporting skill. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'tldr', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('tldr'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'tldr', value),
-      },
-    },
-    {
-      id: 'default-goal-mcp',
-      category: 'agents',
-      title: 'Goal MCP',
-      description:
-        'Let agents record their goal — what their work is for — with the managed goal skill, and hold Cmd+G to see it. Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'goal', 'purpose', 'objective', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal', value),
-      },
-    },
-    {
-      id: 'default-goal-loop-mcp',
-      category: 'agents',
-      title: 'Goal Loop MCP',
-      description:
-        'Let agents run harness-owned goal loops that keep re-prompting until the goal is complete, with a control strip and an overlay on the Goal Loop chord (Cmd+Shift+G by default; it yields to the editor, which owns that chord as Find Previous). Off by default. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'goal', 'loop', 'persistence', 'autonomous', 'default', 'reload', 'existing agents'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('goal_loop'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'goal_loop', value),
-      },
-    },
-    {
-      id: 'default-orchestration-mcp',
-      category: 'agents',
-      title: 'Orchestration MCP',
-      description:
-        'Let agents create and coordinate child agents. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'orchestration', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('orchestration'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'orchestration', value),
-      },
-    },
-    {
-      id: 'default-ai-workspace-mcp',
-      category: 'agents',
-      title: 'AI Workspace MCP',
-      description:
-        'Let agents curate review workspaces across worktrees. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'ai workspace', 'review', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('ai_workspace'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'ai_workspace', value),
-      },
-    },
-    {
-      id: 'default-agent-transcripts-mcp',
-      category: 'agents',
-      title: 'Agent Transcripts MCP',
-      description:
-        'Give agents bounded transcript file tools. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'transcript', 'transcripts', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_transcripts'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'agent_transcripts', value),
-      },
-    },
-    {
-      id: 'default-agent-management-mcp',
-      category: 'agents',
-      title: 'Agent Management MCP',
-      description:
-        'Let agents inspect project agents and send follow-ups; closing agents still requires explicit user authorization. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'agent management', 'agents', 'project', 'cleanup', 'default', 'reload', 'existing agents', 'claude', 'codex'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_management'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'agent_management', value),
-      },
-    },
-    {
-      id: 'default-workflow-mcp',
-      category: 'agents',
-      title: 'Workflow MCP',
-      description:
-        'Give Codex and OpenCode workflow tools. Claude uses its native workflow feature. Applies to new agents and existing agents on their next reload. Per-agent overrides take precedence; Use Global MCP Settings clears them.',
-      keywords: ['mcp', 'workflow', 'workflows', 'codex', 'default', 'reload', 'existing agents', 'claude native'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.defaultBuiltInMcpDomains.includes('workflows'),
-        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'workflows', value),
-      },
+      control: { type: 'mcp-servers' },
     },
     {
       id: 'command-keybindings',
@@ -903,6 +808,52 @@ export function getSettingsRegistry(
         onToggle: (ctx, value) => ctx.onChange({
           promptTemplatesInCommandSearchEnabled: value,
         }),
+      },
+    },
+    {
+      id: 'browser-pocket',
+      category: 'experimental',
+      title: 'Browser Pocket',
+      description:
+        'Attach a browser to an agent (⌘⇧B). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. First enable adds browser tools for new agents. Existing agents show setup in their pocket; attaching tools requires one reload. Agents with tools already attached need no reload.',
+      keywords: ['browser', 'preview', 'pocket', 'localhost', 'dev server', 'webview', 'spotlight'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.browserPocketEnabled,
+        onToggle: (ctx, value) => {
+          // Seed defaults on first enable only. Subsequent feature toggles
+          // gate execution, not authorization; provider opt-outs must survive.
+          ctx.onChange(value ? browserPocketEnablePatch(ctx.settings) : { browserPocketEnabled: false })
+        },
+      },
+    },
+    {
+      id: 'browser-pocket-localhost-links',
+      category: 'experimental',
+      title: 'Open Localhost Links in the Pocket',
+      description:
+        'Clicking a localhost link in an agent\'s output opens it in that agent\'s browser pocket. ⌘-click still opens your browser.',
+      keywords: ['browser', 'pocket', 'links', 'localhost'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.browserPocketOpenLocalhostLinks,
+        onToggle: (ctx, value) => ctx.onChange({ browserPocketOpenLocalhostLinks: value }),
+      },
+    },
+    {
+      id: 'browser-pocket-evaluate',
+      category: 'experimental',
+      title: 'Let Agents Run JavaScript in the Pocket',
+      description:
+        'Adds browser_evaluate, which runs arbitrary JavaScript in the page. Page content is untrusted and agents also have shell access, so leave this off unless you need it.',
+      keywords: ['browser', 'pocket', 'javascript', 'evaluate', 'mcp'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'dangerous' },
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.browserPocketAllowEvaluate,
+        onToggle: (ctx, value) => ctx.onChange({ browserPocketAllowEvaluate: value }),
       },
     },
     {
@@ -1157,7 +1108,7 @@ export function getSettingsRegistry(
       title: 'Providers',
       description:
         'Choose which coding agents Agent Code offers. Detected CLIs start on; turning a provider off hides it from pickers, switching, and usage — running sessions keep running. Reset returns a provider to detection.',
-      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'usage', 'hide'],
+      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'usage', 'hide'],
       // Main's setup.json is the truth (storage: 'setup'); the row mirrors it.
       metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
       control: { type: 'providers-enablement' },

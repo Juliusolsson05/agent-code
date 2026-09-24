@@ -26,11 +26,14 @@ export async function duplicateSession(
   const targetCwd = request.targetCwd ?? request.cwd
   const conversation = await adapter.read(sourceCwd, request.sourceProviderSessionId)
   const hasProjectableEntries = conversation.entries.some(entry => entry.kind !== 'opaque')
-  if (!hasProjectableEntries && request.provider !== 'opencode') {
-    // WHY OpenCode is the one exception: its supported export/import envelope
-    // represents a real blank session, and OpenCode Terminal deliberately
-    // pre-creates that durable identity before the first prompt. Consequently
-    // Duplicate is legitimately visible on a fresh terminal pane. Claude and
+  if (!hasProjectableEntries && request.provider !== 'opencode' && request.provider !== 'pi') {
+    // WHY OpenCode and Pi are the exceptions: both panes own their session
+    // identity before the first prompt, so Duplicate is legitimately visible
+    // on a fresh pane. OpenCode Terminal pre-creates the session, and its
+    // export/import envelope represents a real blank one. Pi is launched with
+    // --session-id, and the projection of an empty conversation (a header
+    // plus the import marker row) is a session the installed pi opens and
+    // appends its first turn to (the parser's live gate proves it). Claude and
     // Codex only acquire portable native history after a semantic record is
     // written; treating an empty JSONL prefix as a resumable clone would invent
     // a provider file shape neither CLI promises to accept.

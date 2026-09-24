@@ -54,6 +54,12 @@ export const EXTENSIONS_LOCKFILE = join(STATE_DIR, 'extensions.json')
 // below: those are disposable forensic caches with a disk budget, and this is *user
 // data*. A retention sweep would silently delete an extension's saved state.
 export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state')
+// Per-extension secrets (api.secrets, #1150): one safeStorage-encrypted blob per
+// key under <id>/. Separate from EXTENSION_STATE_DIR because the lifecycle
+// differs on purpose: state survives uninstall (user data), secrets do not (a
+// later install with the same id from a different source must not inherit a
+// credential). Also never under debugRetention, for the same reason as state.
+export const EXTENSION_SECRETS_DIR = join(STATE_DIR, 'extension-secrets')
 // Main-owned desired state and ownership journal for the optional personal
 // conventions skill. Provider copies are integration surfaces, never the source
 // of truth; keeping this beside workspace state gives recovery one stable path.

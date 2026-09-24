@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type ClientReq
 import { request as upstreamRequest } from 'node:http'
 import type { Socket } from 'node:net'
 
+import { TRANSPORT_ATTESTATION, TRANSPORT_ATTESTATION_HEADER } from '../../../packages/agent-code-extension-api/dist/service.js'
 import { isPrivateIpLiteral } from './netPolicy.js'
 
 // The net.listen half of host-owned LAN exposure. The service process binds
@@ -17,6 +18,22 @@ import { isPrivateIpLiteral } from './netPolicy.js'
 // also has a public interface stays unexposed on it.
 
 const MAX_LAN_REQUEST_BYTES = 1024 * 1024
+
+/** Peer headers that survive the listener (#1147). authorization lets a
+ *  bearer-token service authenticate guests at all; origin and sec-fetch-site
+ *  let the service apply ITS OWN same-origin/CSRF rule against the forwarded
+ *  host below. Everything else — cookies, arbitrary x-*, and above all any
+ *  peer-supplied x-forwarded-* or attestation header — is dropped by omission. */
+const LAN_FORWARDED_HEADERS = ['accept', 'content-type', 'authorization', 'origin', 'sec-fetch-site'] as const
+
+/** Service response headers carried back to the LAN browser. RESPONSE-HEADER
+ *  POLICY: pass the restricting ones, the opposite of the service.transport
+ *  proxy, deliberately. There the page lives in an extension frame whose own
+ *  CSP governs it; here the LAN browser loads the service's page top-level, so
+ *  the service's CSP, nosniff and framing headers are the ONLY protection it
+ *  has. Each one only RESTRICTS what that browser does, so forwarding can never
+ *  widen anything. */
+const LAN_FORWARDED_RESPONSE_HEADERS = ['content-security-policy', 'x-content-type-options', 'referrer-policy', 'x-frame-options'] as const
 
 export type LanListenerHandle = {
   readonly port: number
@@ -75,17 +92,45 @@ function proxy(req: IncomingMessage, res: ServerResponse, targetPort: number): v
   }
 
   // Header allow-list, undefined-filtered: Node's ClientRequest throws on an
-  // undefined header value, and a plain GET carries neither of these.
+  // undefined header value, and a plain GET carries none of the optional ones.
   const headers: Record<string, string> = {}
-  const accept = req.headers.accept
-  const contentType = req.headers['content-type']
-  if (accept !== undefined) headers.accept = accept
-  if (contentType !== undefined) headers['content-type'] = contentType
+  for (const name of LAN_FORWARDED_HEADERS) {
+    const value = req.headers[name]
+    if (typeof value === 'string') headers[name] = value
+  }
+  // WHY THE LISTENER STAMPS FORWARDING FACTS: it dials the service over
+  // loopback, so without them every LAN guest arrives as 127.0.0.1 with Host
+  // 127.0.0.1:<service port>. A service with loopback-only rules would then
+  // admit any guest as local, and it could not check a guest browser's Origin against the address that
+  // browser actually used. These are SET from the socket and request line —
+  // the allow-list above never copies a peer's own x-forwarded-* or
+  // attestation — so a peer can neither forge nor erase them.
+  //
+  // The attestation value `lan` is the DOWNGRADE half of the contract that
+  // serviceTransport.ts's `service` value is the other half of: a service must
+  // treat a `lan` request as the forwarded remote peer, never as local.
+  headers[TRANSPORT_ATTESTATION_HEADER] = TRANSPORT_ATTESTATION.lan
+  // Dual-stack accept reports IPv4 peers as ::ffff:a.b.c.d; services compare
+  // plain IPv4, so hand them the address the peer actually has.
+  headers['x-forwarded-for'] = peer.replace(/^::ffff:/i, '')
+  if (typeof req.headers.host === 'string') headers['x-forwarded-host'] = req.headers.host
 
   const upstream: ClientRequest = upstreamRequest(
-    { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers },
+    // Host is set explicitly, not inherited from Node's default: services use
+    // "Host is exactly 127.0.0.1:<my port>" to tell the listener's `lan`
+    // requests from a DNS-rebound page that also claims `lan` (#1147 review).
+    { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers: { ...headers, host: `127.0.0.1:${targetPort}` } },
     response => {
-      res.writeHead(response.statusCode ?? 502, { 'content-type': response.headers['content-type'] ?? 'application/octet-stream', 'cache-control': 'no-store' })
+      const passed: Record<string, string> = {}
+      for (const name of LAN_FORWARDED_RESPONSE_HEADERS) {
+        const value = response.headers[name]
+        if (typeof value === 'string') passed[name] = value
+      }
+      res.writeHead(response.statusCode ?? 502, {
+        ...passed,
+        'content-type': response.headers['content-type'] ?? 'application/octet-stream',
+        'cache-control': 'no-store',
+      })
       response.pipe(res)
     },
   )

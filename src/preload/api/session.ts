@@ -19,7 +19,7 @@ import type {
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionInputReadinessEvent,
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
@@ -35,6 +35,7 @@ import type {
   TranscriptPathResult,
   Unsub,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@preload/api/types.js'
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
@@ -90,7 +91,7 @@ export const sessionApi = {
   // Workspace teardown knows the persisted kind/cwd and should use that
   // ownership proof. The legacy id-only primitive remains for trusted main
   // integrations that already hold a live manager reference.
-  killOwnedSession: (options: SessionOwnershipOptions): Promise<boolean> =>
+  killOwnedSession: (options: SessionKillOptions): Promise<boolean> =>
     ipcRenderer.invoke('session:kill-owned', options),
 
   getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
@@ -302,6 +303,11 @@ export const sessionApi = {
    *  renderer/session-runtime/historyBoundary.ts. */
   onSessionHistoryBoundary: (cb: (e: SessionHistoryBoundaryEvent) => void): Unsub =>
     subscribe('session:history-boundary', cb),
+
+  /** The pane's provider session changed without a respawn (Pi /new, /resume,
+   *  /fork). Arrives before the history reset and rows of the new session. */
+  onSessionProviderSessionChanged: (cb: (e: SessionProviderSessionChangedEvent) => void): Unsub =>
+    subscribe('session:provider-session-changed', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

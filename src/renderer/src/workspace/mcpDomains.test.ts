@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   clonedMcpOverrides,
+  normalizeBuiltInMcpOverrides,
   normalizeSessionBuiltInMcpDomains,
   resolveSessionBuiltInMcpDomains,
   withNormalizedBuiltInMcpDomains,
@@ -78,5 +79,33 @@ describe('capability choices a clone may inherit', () => {
     // The helper must not mutate the pane it copies from: the source keeps the
     // grant the user confirmed for it.
     expect(source.builtInMcpOverrides).toEqual({ root_management: true, tldr: true })
+  })
+})
+
+describe('user MCP server choices in the override map (#1143)', () => {
+  it('keeps well-formed user: keys through normalization and drops malformed ones', () => {
+    expect(normalizeBuiltInMcpOverrides({
+      tldr: false,
+      'user:srv-beeper': true,
+      'user:bad id': true,
+      'user:': true,
+      somethingElse: true,
+    })).toEqual({ tldr: false, 'user:srv-beeper': true })
+  })
+
+  it('carries user-server choices into a duplicate, like built-in ones', () => {
+    // A clone that silently lost its servers would not be a duplicate; only
+    // the confirmation-gated root grant is withheld.
+    expect(clonedMcpOverrides({
+      builtInMcpOverrides: { 'user:srv-beeper': true, root_management: true },
+    })).toEqual({ 'user:srv-beeper': true })
+  })
+
+  it('resolves built-in domains from the per-provider Settings map', () => {
+    const defaults = { claude: ['tldr' as const], codex: ['workflows' as const], opencode: [], grok: [], pi: [] }
+    expect(resolveSessionBuiltInMcpDomains({ provider: 'claude', sessionOverrides: {}, defaultDomains: defaults }))
+      .toEqual(['tldr'])
+    expect(resolveSessionBuiltInMcpDomains({ provider: 'codex', sessionOverrides: {}, defaultDomains: defaults }))
+      .toEqual(['workflows'])
   })
 })

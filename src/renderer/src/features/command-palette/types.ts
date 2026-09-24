@@ -199,7 +199,9 @@ export type CommandContext = {
     openReorderTabs: () => void
     /** Open the Merge Project Tabs modal (#913); the modal performs the merge. */
     openMergeProjectTabs: () => void
-    openSettings: () => void
+    /** Open Settings, optionally on one category (a SettingCategoryId; an
+     *  unknown id falls back to "all"). */
+    openSettings: (category?: string) => void
     /** Open the command palette. Exists so ⌘⇧P has a command to name instead
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
@@ -229,6 +231,15 @@ export type CommandContext = {
     /** Open the Agent Analytics modal (#964); the modal fetches its own summary. */
     openAgentAnalytics: () => void
     openKeyVault: () => void
+    /** Open the Add MCP server dialog (#1143). */
+    openMcpServerDialog: () => void
+    /** Open the Add skills dialog (#1161). */
+    openAddSkillDialog: () => void
+    /** Ask the Skills grid to check every installed skill for updates. */
+    requestSkillUpdateCheck: () => void
+    /** Open "Agent MCP Servers…" for the captured command-target agent. The
+     *  modal stages choices and performs one reload on Apply. */
+    openAgentMcpServers: (sessionId: string) => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void
     toggleDebugPanel: () => void
@@ -316,6 +327,10 @@ export type CommandContext = {
     usageHeaderLevel: UsageHeaderLevel
     dangerousAgentsEnabled: boolean
     aggressiveDebugPersistenceEnabled: boolean
+    /** Experimental Browser Pocket master switch (#1142). Optional so the many
+     *  hand-built test contexts need no edit; absent means off, which is the
+     *  shipped default. */
+    browserPocketEnabled?: boolean
     /**
      * Visibility of the surfaces a command can dismiss.
      *

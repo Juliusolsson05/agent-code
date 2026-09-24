@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { addOpencodeBuiltInMcpLaunchConfig } from './builtInMcpLaunch.js'
+import { addOpencodeBuiltInMcpLaunchConfig, addPiBuiltInMcpLaunchConfig } from './builtInMcpLaunch.js'
 
 describe('addOpencodeBuiltInMcpLaunchConfig', () => {
   it('merges remote servers while keeping credentials out of inline JSON', () => {
@@ -58,5 +58,23 @@ describe('addOpencodeBuiltInMcpLaunchConfig', () => {
       }],
       { OPENCODE_CONFIG_CONTENT: '{not-json' },
     )).toThrow(/OPENCODE_CONFIG_CONTENT is not valid JSON/)
+  })
+})
+
+describe('addPiBuiltInMcpLaunchConfig', () => {
+  it('never lets a pane inherit another pane’s MCP servers and bearer, even when it has none of its own', () => {
+    const inherited = {
+      AGENT_CODE_PI_MCP_SERVERS: JSON.stringify([{ name: 'agent_code', url: 'http://127.0.0.1:1/outer', headerEnv: { Authorization: 'AGENT_CODE_MCP_0_0' } }]),
+      AGENT_CODE_MCP_0_0: 'Bearer outer-pane',
+      PATH: '/usr/bin',
+    }
+    const disabled: Record<string, string> = { ...inherited }
+    addPiBuiltInMcpLaunchConfig([], disabled)
+    expect(disabled).toEqual({ PATH: '/usr/bin' })
+
+    const own: Record<string, string> = { ...inherited }
+    addPiBuiltInMcpLaunchConfig([{ name: 'agent_code', url: 'http://127.0.0.1:2/mine', bearerToken: 'mine', headers: {} }], own)
+    expect(JSON.parse(own.AGENT_CODE_PI_MCP_SERVERS!)).toEqual([{ name: 'agent_code', url: 'http://127.0.0.1:2/mine', headerEnv: { Authorization: 'AGENT_CODE_MCP_0_0' } }])
+    expect(own.AGENT_CODE_MCP_0_0).toBe('Bearer mine')
   })
 })

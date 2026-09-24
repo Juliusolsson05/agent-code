@@ -34,6 +34,9 @@ import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyV
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
 import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
 import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
+import { McpServerDialogSurface } from '@renderer/features/mcp/surfaces/McpServerDialogSurface'
+import { AddSkillDialogSurface } from '@renderer/features/skills/surfaces/AddSkillDialogSurface'
+import { AgentMcpServersSurface } from '@renderer/features/mcp/surfaces/AgentMcpServersSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -108,6 +111,17 @@ export const modalSurfaces: SurfaceEntry[] = [
   // Appended per the contract above (#964). Opened only from a command that
   // closes the palette first, so it stacks over established modals by order.
   { id: 'agent-analytics', Component: AgentAnalyticsSurface },
+  // Appended per the contract above (#1143); both are opened from commands
+  // that close the palette first. The per-agent picker can hand off to the
+  // root-management confirmation (earlier in this array), but it closes itself
+  // before opening it, so the two are never on screen together and the order
+  // between them does not matter.
+  { id: 'agent-mcp-servers', Component: AgentMcpServersSurface },
+  { id: 'mcp-server-dialog', Component: McpServerDialogSurface },
+  // Appended per the contract above (#1161). Opened from the Skills grid, the
+  // "Add Skill…" command (which closes the palette first) and an external
+  // skill's "Manage with Agent Code"; it stacks over Settings by order.
+  { id: 'add-skill-dialog', Component: AddSkillDialogSurface },
   // Built-in apps host. Last in the array, which per the paint-order contract
   // above means it paints above every modal already mounted. That placement is
   // reasoned, not defaulted: an app is always user-initiated from the palette and

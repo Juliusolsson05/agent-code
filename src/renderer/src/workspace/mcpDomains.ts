@@ -1,11 +1,13 @@
 import {
   BUILT_IN_MCP_DOMAINS,
+  builtInMcpDefaultsFor,
   CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS,
   filterBuiltInMcpDomainsForProvider,
   normalizeBuiltInMcpDomains,
 } from '@mcp/shared/types'
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { userMcpOverrideKey, userMcpOverridesFrom } from '@shared/userMcp/types'
 
 export function normalizeSessionBuiltInMcpDomains(
   value: unknown,
@@ -42,8 +44,11 @@ export function resolveSessionBuiltInMcpDomains(params: {
   defaultDomains: unknown
   sessionOverrides?: BuiltInMcpOverrides
 }): BuiltInMcpDomain[] {
+  // `defaultDomains` is either the per-provider Settings map or a flat list
+  // meaning "every provider" (BuiltInMcpDefaultsInput); pick this provider's.
+  const defaults = builtInMcpDefaultsFor(params.defaultDomains, params.provider)
   if (params.sessionOverrides !== undefined) {
-    const requested = new Set(normalizeBuiltInMcpDomains(params.defaultDomains))
+    const requested = new Set<BuiltInMcpDomain>(defaults)
     for (const domain of BUILT_IN_MCP_DOMAINS) {
       if (params.sessionOverrides[domain] === true) requested.add(domain)
       else if (params.sessionOverrides[domain] === false) requested.delete(domain)
@@ -55,16 +60,20 @@ export function resolveSessionBuiltInMcpDomains(params: {
   // defaults into it would report tools the live process does not actually
   // serve; only an absent list (a legacy pane that never recorded one) may fall
   // back to Settings.
-  const requested = explicit ?? normalizeBuiltInMcpDomains(params.defaultDomains)
+  const requested = explicit ?? defaults
   return filterBuiltInMcpDomainsForProvider(params.provider, requested)
 }
 
 export function normalizeBuiltInMcpOverrides(value: unknown): BuiltInMcpOverrides | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  return Object.fromEntries(BUILT_IN_MCP_DOMAINS.flatMap(domain => {
+  const builtIn = BUILT_IN_MCP_DOMAINS.flatMap(domain => {
     const choice = (value as Record<string, unknown>)[domain]
     return Object.prototype.hasOwnProperty.call(value, domain) && typeof choice === 'boolean' ? [[domain, choice]] : []
-  }))
+  })
+  // User-server choices (#1143) survive normalization; the key format is
+  // validated so a hand-edited workspace cannot smuggle arbitrary keys in.
+  const user = Object.entries(userMcpOverridesFrom(value)).map(([id, choice]) => [userMcpOverrideKey(id), choice])
+  return Object.fromEntries([...builtIn, ...user])
 }
 
 export function sessionMcpOverrides(meta: { builtInMcpDomains?: BuiltInMcpDomain[]; builtInMcpOverrides?: BuiltInMcpOverrides }): BuiltInMcpOverrides {

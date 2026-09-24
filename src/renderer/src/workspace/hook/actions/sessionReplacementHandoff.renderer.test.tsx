@@ -136,10 +136,15 @@ describe('renderer session replacement handoff', () => {
       cwd: '/recorded/worktree',
       resumeSessionId: 'recorded-provider-session',
       predecessorSessionId: predecessorId,
+      // Main journals its handoff kill of the predecessor with this tag, so a
+      // Codex reload reads as the user's swap, not as recovery (#1135).
+      predecessorKillCaller: 'replace.predecessor',
       dangerousMode: destination === 'terminal' ? undefined : false,
       useProxy: destination === 'terminal' ? undefined : true,
       recoverTmuxName: undefined,
       builtInMcpDomains: destination === 'terminal' ? undefined : destination === 'codex' ? ['workflows'] : [],
+      // Agents carry the pane's user MCP choices to main (#1143); terminals never do.
+      ...(destination === 'terminal' ? {} : { userMcpOverrides: {} }),
     })
     // A transaction-bearing result means main already retired the predecessor
     // and is holding the successor pending durable workspace ownership. Sending
@@ -170,6 +175,7 @@ describe('renderer session replacement handoff', () => {
       useProxy: true,
       recoverTmuxName: undefined,
       builtInMcpDomains: [],
+      userMcpOverrides: {},
     })
   })
 })

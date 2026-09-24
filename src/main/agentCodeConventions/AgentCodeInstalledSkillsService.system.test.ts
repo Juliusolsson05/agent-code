@@ -1,12 +1,16 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentCodeInstalledSkillFileRecord } from '@shared/types/agentCodeConventions.js'
-import type { GitHubSkillDiscoveryPayload, StagedInstalledSkillCandidate } from './githubSkillSource.js'
-import { installedSkillManifestDigest } from './installedSkillPackageStore.js'
+import type {
+  GitHubSkillDiscoveryPayload,
+  ReviewedInstalledSkillCandidate,
+  StagedInstalledSkillCandidate,
+} from './githubSkillSource.js'
+import { InstalledSkillPackageStore, installedSkillManifestDigest } from './installedSkillPackageStore.js'
 import { SkillPathSafety } from './skillPathSafety.js'
 import type {
   AgentCodeConventionsTarget,
@@ -43,7 +47,9 @@ function target(root: string): AgentCodeConventionsTarget {
 function stagedPackage(input: {
   commit: string
   files: Array<{ path: string; content: string | Buffer; executable?: boolean }>
+  name?: string
 }): StagedInstalledSkillCandidate {
+  const name = input.name ?? 'review-code'
   const contents = new Map<string, Buffer>()
   const files: AgentCodeInstalledSkillFileRecord[] = input.files.map(file => {
     const content = typeof file.content === 'string' ? Buffer.from(file.content) : file.content
@@ -60,8 +66,8 @@ function stagedPackage(input: {
     snapshotDigest,
     contents,
     candidate: {
-      candidateId: createHash('sha256').update(`${input.commit}\0${snapshotDigest}`).digest('hex').slice(0, 32),
-      name: 'review-code',
+      candidateId: createHash('sha256').update(`${input.commit}\0${name}\0${snapshotDigest}`).digest('hex').slice(0, 32),
+      name,
       description: 'Review code and explain consequential findings.',
       source: {
         owner: 'example',
@@ -69,8 +75,8 @@ function stagedPackage(input: {
         repositoryUrl: 'https://github.com/example/skills',
         requestedRef: 'main',
         requestedRefType: 'branch',
-        path: 'skills/review-code',
-        skillUrl: 'https://github.com/example/skills/tree/main/skills/review-code',
+        path: `skills/${name}`,
+        skillUrl: `https://github.com/example/skills/tree/main/skills/${name}`,
         resolvedCommit: input.commit,
       },
       files,
@@ -80,28 +86,50 @@ function stagedPackage(input: {
   }
 }
 
-function payload(candidate: StagedInstalledSkillCandidate): GitHubSkillDiscoveryPayload {
+// The service only reads `candidate` from a reviewed package and hands the
+// whole object back to `acquire`; the tree-level fields belong to
+// githubSkillSource and are covered by its own tests. The test source's
+// `acquire` returns the fully staged package the review stands for.
+type TestReviewed = ReviewedInstalledSkillCandidate & { acquired: StagedInstalledSkillCandidate }
+
+function reviewedFrom(candidate: StagedInstalledSkillCandidate): TestReviewed {
   return {
-    repositoryUrl: candidate.candidate.source.repositoryUrl,
-    requestedRef: candidate.candidate.source.requestedRef,
-    requestedRefType: candidate.candidate.source.requestedRefType,
-    resolvedCommit: candidate.candidate.source.resolvedCommit,
-    candidates: [candidate],
+    candidate: candidate.candidate,
+    owner: candidate.candidate.source.owner,
+    repository: candidate.candidate.source.repository,
+    commit: candidate.candidate.source.resolvedCommit,
+    entries: [],
+    skillMarkdown: Buffer.alloc(0),
+    acquired: candidate,
+  }
+}
+
+function payload(...candidates: StagedInstalledSkillCandidate[]): GitHubSkillDiscoveryPayload {
+  const first = candidates[0]!
+  return {
+    repositoryUrl: first.candidate.source.repositoryUrl,
+    requestedRef: first.candidate.source.requestedRef,
+    requestedRefType: first.candidate.source.requestedRefType,
+    resolvedCommit: first.candidate.source.resolvedCommit,
+    candidates: candidates.map(reviewedFrom),
     notices: [],
+    missingSkills: [],
   }
 }
 
 async function harness(
   options: {
     now?: () => Date
-    snapshotMaxBytes?: number
     unsupportedProviders?: ResolvedAgentCodeConventionsTargets['unsupportedProviders']
     /** Flip `.fail` to make provider target discovery throw from then on. */
     discovery?: { fail: boolean }
+    /** Also resolve a Claude root (shared with OpenCode, like the real registry). */
+    claudeRoot?: boolean
   } = {},
 ) {
   const root = await temporaryDirectory()
   const currentTarget = target(root)
+  const claude = claudeTarget(root)
   const discoveries: GitHubSkillDiscoveryPayload[] = []
   const githubSkillSource = {
     discover: vi.fn(async () => {
@@ -109,16 +137,16 @@ async function harness(
       if (!next) throw new Error('No staged test discovery')
       return next
     }),
+    acquire: vi.fn(async (reviewed: ReviewedInstalledSkillCandidate) => (reviewed as TestReviewed).acquired),
   }
   const resolved: ResolvedAgentCodeConventionsTargets = {
-    targets: [currentTarget],
+    targets: options.claudeRoot ? [currentTarget, claude] : [currentTarget],
     unsupportedProviders: options.unsupportedProviders ?? [],
   }
   const pathSafety = new SkillPathSafety(root)
   const service = new AgentCodeConventionsService({
     stateFilePath: join(root, 'state', 'conventions.json'),
     installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
-    installedSkillSnapshotMaxBytes: options.snapshotMaxBytes,
     homeDirectory: root,
     resolveTargets: async () => {
       if (options.discovery?.fail) throw new Error('Could not read provider configuration')
@@ -133,9 +161,24 @@ async function harness(
   return {
     root,
     service,
+    githubSkillSource,
     discoveries,
     pathSafety,
     skillDirectory: join(currentTarget.skillsDirectory, 'review-code'),
+    claudeSkillDirectory: join(claude.skillsDirectory, 'review-code'),
+  }
+}
+
+function claudeTarget(root: string): AgentCodeConventionsTarget {
+  const skillsDirectory = join(root, '.claude', 'skills')
+  const skillDirectory = join(skillsDirectory, 'agent-code-conventions')
+  return {
+    id: 'claude-personal-skills',
+    providers: ['claude', 'opencode'],
+    providerNames: ['Claude', 'OpenCode'],
+    skillsDirectory,
+    skillDirectory,
+    skillFile: join(skillDirectory, 'SKILL.md'),
   }
 }
 
@@ -215,7 +258,7 @@ describe('AgentCode installed skills service', () => {
   })
 
   it('installs a reviewed package and requires a second review before updating it', async () => {
-    const { root, service, discoveries, skillDirectory } = await harness()
+    const { root, service, githubSkillSource, discoveries, skillDirectory } = await harness()
     const first = stagedPackage({
       commit: 'a'.repeat(40),
       files: [
@@ -264,6 +307,12 @@ describe('AgentCode installed skills service', () => {
     const update = await service.checkInstalledSkillForUpdates(
       skillId,
     )
+    // Review round 1: the check names the skill, so an internal skill
+    // (hidden from browsing) is still found, on the exact recorded ref/path.
+    expect(githubSkillSource.discover).toHaveBeenLastCalledWith({
+      source: { owner: 'example', repository: 'skills', ref: 'main', subpath: 'skills/review-code' },
+      skills: ['review-code'],
+    })
     expect(update).toMatchObject({
       ok: true,
       kind: 'update-available',
@@ -291,11 +340,10 @@ describe('AgentCode installed skills service', () => {
     })
     expect(await readFile(join(skillDirectory, 'SKILL.md'), 'utf8')).toBe('second instructions')
     expect((await stat(join(skillDirectory, 'scripts', 'check.sh'))).mode & 0o111).not.toBe(0)
-    // Immutable snapshots are intentionally retained: Node cannot recursively
-    // delete relative to an opened directory handle on every supported host,
-    // so automatic GC could be redirected by an ancestor-symlink race.
+    // #1161: the superseded snapshot is removed once nothing references it
+    // (content-proven, non-recursive cleanup; see installedSkillPackageStore).
     await expect(stat(join(root, 'state', 'managed-skill-snapshots', first.snapshotDigest)))
-      .resolves.toMatchObject({})
+      .rejects.toMatchObject({ code: 'ENOENT' })
 
     const removed = await service.deleteInstalledSkill({
       expectedRevision: 4,
@@ -305,42 +353,185 @@ describe('AgentCode installed skills service', () => {
     await expect(stat(join(skillDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('bounds retained source snapshots before admitting another package', async () => {
-    const { root, service, discoveries } = await harness({ snapshotMaxBytes: 30 })
-    const first = stagedPackage({
+  // #1161: the former cap of 25 refused the 26th install AND sent a larger
+  // document into Recovery required on load. Neither may happen now.
+  it('installs more than 25 skills and reloads them without recovery', async () => {
+    const { root, service, discoveries } = await harness()
+    const packages = Array.from({ length: 30 }, (_, index) => stagedPackage({
       commit: 'a'.repeat(40),
-      files: [{ path: 'SKILL.md', content: 'first instructions' }],
-    })
-    const firstDiscovery = await discoverOne(service, discoveries, first)
+      name: `skill-${index}`,
+      files: [{ path: 'SKILL.md', content: `instructions ${index}` }],
+    }))
+    discoveries.push(payload(...packages))
+    const found = await service.discoverGitHubSkills('npx skills add example/skills --all')
+    if (!found.ok) throw new Error(found.message)
     const installed = await service.installGitHubSkills({
       expectedRevision: 0,
-      discoveryId: firstDiscovery.discoveryId,
-      candidateIds: [first.candidate.candidateId],
+      discoveryId: found.discovery.discoveryId,
+      candidateIds: found.discovery.candidates.map(candidate => candidate.candidateId),
+    })
+    expect(installed).toMatchObject({ ok: true })
+    if (!installed.ok) throw new Error('installation failed')
+    expect(installed.snapshot.skills).toHaveLength(30)
+
+    const reloaded = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
+    })
+    await reloaded.initialize()
+    const snapshot = await reloaded.getInstalledSkillsSnapshot()
+    expect(snapshot.recovery).toBeUndefined()
+    expect(snapshot.skills).toHaveLength(30)
+  })
+
+  // #1161: snapshots were retained forever behind a 256 MiB stop that became
+  // a hidden skills cap. Removing a skill now removes its snapshot.
+  it('deletes the source snapshot of a removed skill', async () => {
+    const { root, service, discoveries } = await harness()
+    const staged = stagedPackage({
+      commit: 'a'.repeat(40),
+      files: [
+        { path: 'SKILL.md', content: 'first instructions' },
+        { path: 'scripts/run.sh', content: 'echo hi', executable: true },
+      ],
+    })
+    const found = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: found.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
     })
     if (!installed.ok) throw new Error('installation failed')
-    const skillId = installed.snapshot.skills[0]!.id
+    const snapshotDirectory = join(root, 'state', 'managed-skill-snapshots', staged.snapshotDigest)
+    await expect(stat(snapshotDirectory)).resolves.toMatchObject({})
     const removed = await service.deleteInstalledSkill({
       expectedRevision: installed.snapshot.revision,
-      skillId,
+      skillId: installed.snapshot.skills[0]!.id,
     })
     expect(removed).toMatchObject({ ok: true, snapshot: { skills: [] } })
-    if (!removed.ok) throw new Error('removal failed')
+    await expect(stat(snapshotDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readdir(join(root, 'state', 'managed-skill-snapshots'))).toEqual([])
+  })
 
-    const second = stagedPackage({
-      commit: 'b'.repeat(40),
-      files: [{ path: 'SKILL.md', content: 'second instructions' }],
+  it('sweeps unreferenced snapshots at startup but never a tampered one or a staging leftover', async () => {
+    const { root } = await harness()
+    const snapshots = join(root, 'state', 'managed-skill-snapshots')
+    const orphan = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: 'orphan' }] })
+    const tampered = stagedPackage({ commit: 'b'.repeat(40), files: [{ path: 'SKILL.md', content: 'original' }] })
+    const store = new InstalledSkillPackageStore(snapshots)
+    await store.store(orphan)
+    await store.store(tampered)
+    await writeFile(join(snapshots, tampered.snapshotDigest, 'SKILL.md'), 'changed by someone else')
+    await mkdir(join(snapshots, '.staging-leftover'))
+
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      installedSkillSnapshotRoot: snapshots,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
     })
-    const secondDiscovery = await discoverOne(service, discoveries, second)
-    expect(await service.installGitHubSkills({
-      expectedRevision: removed.snapshot.revision,
-      discoveryId: secondDiscovery.discoveryId,
-      candidateIds: [second.candidate.candidateId],
-    })).toMatchObject({ ok: false, code: 'io-error', message: expect.stringMatching(/safety limit/) })
-    expect((await service.getInstalledSkillsSnapshot()).skills).toEqual([])
-    await expect(stat(join(root, 'state', 'managed-skill-snapshots', first.snapshotDigest)))
-      .resolves.toMatchObject({})
-    await expect(stat(join(root, 'state', 'managed-skill-snapshots', second.snapshotDigest)))
-      .rejects.toMatchObject({ code: 'ENOENT' })
+    await service.initialize()
+    const remaining = (await readdir(snapshots)).sort()
+    expect(remaining).not.toContain(orphan.snapshotDigest)
+    expect(remaining).toContain('.staging-leftover')
+    // The tampered snapshot failed its content proof and stays quarantined,
+    // inert, with its bytes untouched.
+    const quarantined = remaining.find(name => name.startsWith(`.trash-${tampered.snapshotDigest}-`))
+    expect(quarantined).toBeDefined()
+    expect(await readFile(join(snapshots, quarantined!, 'SKILL.md'), 'utf8')).toBe('changed by someone else')
+  })
+
+  // #1161: `-a codex` / the grid's provider columns.
+  it('installs for the chosen providers only and moves the copy when the choice changes', async () => {
+    const { service, discoveries, skillDirectory, claudeSkillDirectory } = await harness({ claudeRoot: true })
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: 'codex only' }] })
+    discoveries.push(payload(staged))
+    const found = await service.discoverGitHubSkills('npx skills add example/skills --skill review-code -a codex')
+    if (!found.ok) throw new Error(found.message)
+    expect(found.discovery.selection).toMatchObject({ skills: ['review-code'], providers: ['codex'] })
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: found.discovery.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
+      providers: ['codex'],
+    })
+    expect(installed).toMatchObject({ ok: true, snapshot: { skills: [{ providers: ['codex'] }] } })
+    if (!installed.ok) throw new Error('install failed')
+    await expect(stat(join(skillDirectory, 'SKILL.md'))).resolves.toMatchObject({})
+    await expect(stat(join(claudeSkillDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const moved = await service.setInstalledSkillProviders({
+      expectedRevision: installed.snapshot.revision,
+      skillId: installed.snapshot.skills[0]!.id,
+      providers: ['claude'],
+    })
+    expect(moved).toMatchObject({ ok: true, snapshot: { skills: [{ providers: ['claude'], health: 'active' }] } })
+    await expect(stat(join(claudeSkillDirectory, 'SKILL.md'))).resolves.toMatchObject({})
+    await expect(stat(join(skillDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    if (!moved.ok) throw new Error('move failed')
+    const everywhere = await service.setInstalledSkillProviders({
+      expectedRevision: moved.snapshot.revision,
+      skillId: moved.snapshot.skills[0]!.id,
+      providers: null,
+    })
+    expect(everywhere).toMatchObject({ ok: true })
+    if (!everywhere.ok) throw new Error('reset failed')
+    expect(everywhere.snapshot.skills[0]!.providers).toBeUndefined()
+    await expect(stat(join(skillDirectory, 'SKILL.md'))).resolves.toMatchObject({})
+  })
+
+  it('changes nothing when a newly chosen folder already holds an external skill', async () => {
+    const { service, discoveries, skillDirectory, claudeSkillDirectory } = await harness({ claudeRoot: true })
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: 'codex only' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: found.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
+      providers: ['codex'],
+    })
+    if (!installed.ok) throw new Error('install failed')
+    await mkdir(claudeSkillDirectory, { recursive: true })
+    await writeFile(join(claudeSkillDirectory, 'SKILL.md'), 'someone else')
+    const moved = await service.setInstalledSkillProviders({
+      expectedRevision: installed.snapshot.revision,
+      skillId: installed.snapshot.skills[0]!.id,
+      providers: ['claude'],
+    })
+    expect(moved).toMatchObject({ ok: false, code: 'target-conflict' })
+    expect((await service.getInstalledSkillsSnapshot()).skills[0]!.providers).toEqual(['codex'])
+    expect(await readFile(join(claudeSkillDirectory, 'SKILL.md'), 'utf8')).toBe('someone else')
+    await expect(stat(join(skillDirectory, 'SKILL.md'))).resolves.toMatchObject({})
+  })
+
+  it('keeps a proposal from an agent disabled, pending review, and off provider roots', async () => {
+    const { service, discoveries, skillDirectory } = await harness()
+    const staged = stagedPackage({ commit: 'a'.repeat(40), files: [{ path: 'SKILL.md', content: 'proposal' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    const proposed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: found.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
+    }, { pendingReview: { by: 'agent', sessionId: 'session-1', requestedAt: '2026-09-23T00:00:00.000Z' } })
+    expect(proposed).toMatchObject({
+      ok: true,
+      snapshot: { skills: [{ enabled: false, pendingReview: { by: 'agent', sessionId: 'session-1' } }] },
+    })
+    await expect(stat(skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    if (!proposed.ok) throw new Error('proposal failed')
+    const enabled = await service.setInstalledSkillEnabled({
+      expectedRevision: proposed.snapshot.revision,
+      skillId: proposed.snapshot.skills[0]!.id,
+      enabled: true,
+    })
+    expect(enabled).toMatchObject({ ok: true, snapshot: { skills: [{ enabled: true }] } })
+    if (!enabled.ok) throw new Error('enable failed')
+    // The user's enable is the review; the marker must not survive it.
+    expect(enabled.snapshot.skills[0]!.pendingReview).toBeUndefined()
+    await expect(stat(join(skillDirectory, 'SKILL.md'))).resolves.toMatchObject({})
   })
 
   it('retains ownership and retry authority when provider-file removal fails', async () => {

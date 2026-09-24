@@ -92,11 +92,26 @@ const grokSetup: ProviderSetupDescriptor = {
   },
 }
 
+const piSetup: ProviderSetupDescriptor = {
+  binaryName: 'pi',
+  label: 'Pi',
+  // An npm CLI (it needs a Node runtime and a node_modules tree), so it is
+  // PATH-resolved like Grok, not bundled like OpenCode's single binary.
+  // `pi /login` (or an API key) is done in pi itself; Agent Code never
+  // touches ~/.pi/agent/auth.json.
+  detail: 'Install the pi CLI (Node 22.19+) and sign in with /login inside pi to use Pi panes.',
+  install: {
+    command: 'npm install -g @earendil-works/pi-coding-agent',
+    docsUrl: 'https://pi.dev',
+  },
+}
+
 const providerSetupDescriptors: Record<AgentProviderKind, ProviderSetupDescriptor> = {
   claude: claudeSetup,
   codex: codexSetup,
   opencode: opencodeSetup,
   grok: grokSetup,
+  pi: piSetup,
 }
 
 export function getProviderSetupDescriptor(id: string): ProviderSetupDescriptor {
