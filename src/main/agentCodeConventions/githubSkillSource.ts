@@ -348,7 +348,7 @@ export class GitHubSkillSource {
     tree: GitTreeEntry[],
     searchPath: string,
     fullDepth: boolean,
-    marketplaceRoots: string[],
+    pluginContainers: string[],
   ): string[] {
     const skillDirectories = new Set<string>()
     const children = new Map<string, Set<string>>()
@@ -413,8 +413,12 @@ export class GitHubSkillSource {
     ]) {
       walk(join(searchPath, container), 0, CONTAINER_DEPTH)
     }
-    for (const root of marketplaceRoots) {
-      if (within(root) && skillDirectories.has(root)) add(root)
+    // Plugin-manifest containers are walked one level deep, as vercel's
+    // discoverSkills does for every non-root priority directory it gets from
+    // getPluginSkillPaths (review round 1: listing only the exact declared
+    // folder missed siblings and every plugin's conventional `skills/`).
+    for (const container of pluginContainers) {
+      if (within(container)) walk(container, 0, 1)
     }
 
     // 3. Fallback: nothing found, or --full-depth asked for everything.
@@ -448,12 +452,12 @@ export class GitHubSkillSource {
       usedBytes: 0,
       maxBytes: this.maxDiscoveryBytes,
     }
-    const marketplaceRoots = await this.readMarketplaceRoots(resolved, tree, acquisitionBudget, notices)
+    const pluginContainers = await this.readPluginContainers(resolved, tree, acquisitionBudget, notices)
     const roots = this.selectCandidateRoots(
       tree,
       resolved.requestedPath,
       request.fullDepth === true,
-      marketplaceRoots,
+      pluginContainers,
     )
     if (roots.length === 0) {
       throw new GitHubSkillSourceError(
@@ -468,18 +472,16 @@ export class GitHubSkillSource {
       ? request.skills.map(name => name.toLowerCase())
       : null
     const folderName = (root: string) => root === '' ? resolved.repository : posix.basename(root)
-    // With an explicit --skill list, folders whose NAME matches are read
-    // first; the rest are read only while a requested name is still
-    // unmatched (it may be a frontmatter name that differs from its folder).
-    const ordered = requested
-      ? [
-          ...roots.filter(root => requested.includes(folderName(root).toLowerCase())),
-          ...roots.filter(root => !requested.includes(folderName(root).toLowerCase())),
-        ]
-      : roots
+    // Roots are read in DISCOVERY order even with a --skill list, and every
+    // name read counts for duplicates, requested or not (review round 1): an
+    // earlier version read folder-name matches first, so `--skill pdf` could
+    // pick a later `pdf` than the one `npx skills` (discover, then filter)
+    // installs. Reading stops once every requested name is matched — a later
+    // duplicate could never win anyway.
     const byName = new Map<string, ReviewedInstalledSkillCandidate>()
+    const firstSeen = new Map<string, string>()
     const matched = new Set<string>()
-    for (const root of ordered) {
+    for (const root of roots) {
       if (requested && requested.every(name => matched.has(name))) break
       let reviewed: ReviewedInstalledSkillCandidate
       try {
@@ -492,16 +494,19 @@ export class GitHubSkillSource {
       }
       const name = reviewed.candidate.name
       const keys = [name.toLowerCase(), folderName(root).toLowerCase()]
-      if (requested && !keys.some(key => requested.includes(key))) continue
-      const existing = byName.get(name)
-      if (existing) {
+      const earlier = firstSeen.get(name)
+      if (earlier !== undefined) {
         // First one found wins, as in `npx skills` (seenNames). The old
         // behaviour rejected the whole repository.
-        notices.push(
-          `${displayRoot(root)} was skipped: another skill named ${name} was found first at ${displayRoot(existing.candidate.source.path)}.`,
-        )
+        if (!requested || keys.some(key => requested.includes(key))) {
+          notices.push(
+            `${displayRoot(root)} was skipped: another skill named ${name} was found first at ${displayRoot(earlier)}.`,
+          )
+        }
         continue
       }
+      firstSeen.set(name, root)
+      if (requested && !keys.some(key => requested.includes(key))) continue
       // `metadata.internal` skills are hidden from browsing and `--skill '*'`
       // and appear only when named, matching vercel's includeInternal rule.
       if (reviewed.candidate.internal && !requested) continue
@@ -532,45 +537,82 @@ export class GitHubSkillSource {
   }
 
   /**
-   * Skill folders named by `.claude-plugin/marketplace.json` at the search
-   * path (vercel-labs/skills `getPluginSkillPaths`). Best effort: a malformed
-   * manifest is a notice, never a failed discovery.
+   * Containers declared by plugin manifests at the search path, ported from
+   * vercel-labs/skills `getPluginSkillPaths` (review round 1 found the first
+   * version missed most of it):
+   * - `.claude-plugin/marketplace.json`: each plugin's base is
+   *   `metadata.pluginRoot` + its string `source` (remote object sources are
+   *   skipped); every plugin contributes `<base>/skills` plus the PARENT of
+   *   each listed skill path.
+   * - `.claude-plugin/plugin.json`: the same for a single plugin at the root.
+   * Paths must start with `./` and stay inside the repository, per the
+   * manifest spec. Best effort: a malformed manifest is a notice, never a
+   * failed discovery.
    */
-  private async readMarketplaceRoots(
+  private async readPluginContainers(
     resolved: ResolvedGitHubSource,
     tree: GitTreeEntry[],
     budget: DiscoveryAcquisitionBudget,
     notices: string[],
   ): Promise<string[]> {
-    const manifestPath = [resolved.requestedPath, '.claude-plugin/marketplace.json'].filter(Boolean).join('/')
+    const containers: string[] = []
+    const base = resolved.requestedPath
+    const addContainer = (...parts: string[]) => {
+      const normalized = posix.normalize(posix.join(base || '.', ...parts))
+      const path = normalized === '.' ? '' : normalized.replace(/\/+$/, '')
+      if (path === '..' || path.startsWith('../') || (path && !isSafeRepositoryPath(path))) return
+      containers.push(path)
+    }
+    const relative = (value: unknown): string | null =>
+      typeof value === 'string' && value.startsWith('./') ? value : null
+    const addPlugin = (pluginBase: string, skills: unknown) => {
+      addContainer(pluginBase, 'skills')
+      if (!Array.isArray(skills)) return
+      for (const skill of skills) {
+        const path = relative(skill)
+        if (path) addContainer(posix.dirname(posix.join(pluginBase, path)))
+      }
+    }
+
+    const marketplace = await this.readManifest(resolved, tree, budget, notices, '.claude-plugin/marketplace.json')
+    if (isRecord(marketplace)) {
+      const metadata = isRecord(marketplace.metadata) ? marketplace.metadata : {}
+      const pluginRoot = relative(metadata.pluginRoot) ?? '.'
+      for (const plugin of Array.isArray(marketplace.plugins) ? marketplace.plugins : []) {
+        if (!isRecord(plugin)) continue
+        if (plugin.source !== undefined && typeof plugin.source !== 'string') continue
+        const source = plugin.source === undefined ? '.' : relative(plugin.source)
+        if (!source) continue
+        addPlugin(posix.join(pluginRoot, source), plugin.skills)
+      }
+    }
+    const single = await this.readManifest(resolved, tree, budget, notices, '.claude-plugin/plugin.json')
+    if (isRecord(single)) addPlugin('.', single.skills)
+    return [...new Set(containers)]
+  }
+
+  private async readManifest(
+    resolved: ResolvedGitHubSource,
+    tree: GitTreeEntry[],
+    budget: DiscoveryAcquisitionBudget,
+    notices: string[],
+    name: string,
+  ): Promise<unknown> {
+    const manifestPath = [resolved.requestedPath, name].filter(Boolean).join('/')
     const entry = tree.find(value => value.path === manifestPath && value.type === 'blob')
-    if (!entry || entry.size === undefined || entry.size > MARKETPLACE_MANIFEST_MAX_BYTES) return []
-    if (entry.size > budget.maxBytes - budget.usedBytes) return []
+    if (!entry || entry.size === undefined || entry.size > MARKETPLACE_MANIFEST_MAX_BYTES) return null
+    if (entry.size > budget.maxBytes - budget.usedBytes) return null
     budget.usedBytes += entry.size
     try {
       const bytes = await this.fetchBytes(
         rawGitHubFileUrl(resolved.owner, resolved.repository, resolved.requestedCommit, entry.path),
         entry.size,
       )
-      if (gitBlobObjectId(bytes) !== entry.object) return []
-      const parsed: unknown = JSON.parse(decodeUtf8(bytes, 'marketplace.json'))
-      const plugins = isRecord(parsed) && Array.isArray(parsed.plugins) ? parsed.plugins : []
-      const roots: string[] = []
-      for (const plugin of plugins) {
-        if (!isRecord(plugin) || !Array.isArray(plugin.skills)) continue
-        const base = typeof plugin.source === 'string' ? plugin.source : ''
-        for (const skill of plugin.skills) {
-          if (typeof skill !== 'string') continue
-          const normalized = posix.normalize(posix.join(resolved.requestedPath || '.', base, skill))
-          const root = normalized === '.' ? '' : normalized.replace(/\/+$/, '')
-          if (root.startsWith('..') || (root && !isSafeRepositoryPath(root))) continue
-          roots.push(root)
-        }
-      }
-      return roots
+      if (gitBlobObjectId(bytes) !== entry.object) return null
+      return JSON.parse(decodeUtf8(bytes, name))
     } catch {
-      notices.push('The .claude-plugin/marketplace.json manifest could not be read; its skill list was ignored.')
-      return []
+      notices.push(`${name} could not be read; its skill list was ignored.`)
+      return null
     }
   }
 

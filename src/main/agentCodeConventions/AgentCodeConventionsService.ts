@@ -128,7 +128,9 @@ import {
 } from '@shared/types/agentCodeCustomSkills.js'
 import {
   AGENT_CODE_INSTALLED_SKILL_DISCOVERY_TTL_MS,
+  AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_STAGED_DISCOVERIES,
+  AGENT_CODE_PENDING_PROPOSAL_MAX_BYTES,
   type AgentCodeInstalledSkillSelection,
   type AgentCodeInstalledSkillDiscovery,
   type AgentCodeInstalledSkillDiscoveryResult,
@@ -504,6 +506,30 @@ export class AgentCodeManagedSkillsService {
     if (providers === 'invalid') {
       return { ok: false, code: 'validation', message: 'Choose at least one provider for these skills.' }
     }
+    // Both limits are decided from the reviewed tree sizes BEFORE anything is
+    // downloaded (review round 1): the acquisitions below are buffered in
+    // memory until the mutation stores them.
+    const requestedBytes = (reviewed as ReviewedInstalledSkillCandidate[])
+      .reduce((total, candidate) => total + candidate.candidate.totalBytes, 0)
+    if (requestedBytes > AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES) {
+      return {
+        ok: false,
+        code: 'validation',
+        message: `These skills total ${Math.ceil(requestedBytes / (1024 * 1024))} MiB. Install at most ${AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES / (1024 * 1024)} MiB at a time; select fewer and install the rest next.`,
+      }
+    }
+    if (options.pendingReview) {
+      const waiting = Object.values(this.document.installedSkills)
+        .filter(skill => skill.pendingReview && !skill.enabled)
+        .reduce((total, skill) => total + skill.files.reduce((sum, file) => sum + file.bytes, 0), 0)
+      if (waiting + requestedBytes > AGENT_CODE_PENDING_PROPOSAL_MAX_BYTES) {
+        return {
+          ok: false,
+          code: 'validation',
+          message: 'Too many proposed skills are already waiting for the user\'s review. Ask the user to review them in Settings → Skills first.',
+        }
+      }
+    }
     const selected: StagedInstalledSkillCandidate[] = []
     try {
       for (const candidate of reviewed as ReviewedInstalledSkillCandidate[]) {
@@ -775,6 +801,10 @@ export class AgentCodeManagedSkillsService {
           ref: current.source.requestedRef,
           ...(current.source.path ? { subpath: current.source.path } : {}),
         },
+        // Named, so a `metadata.internal` skill is still found (review round
+        // 1): browsing hides internal skills, which made every update check
+        // for one report "no longer exists upstream".
+        skills: [current.name],
       })
       const reviewed = payload.candidates.find(value =>
         value.candidate.name === current.name

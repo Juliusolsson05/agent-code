@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { useSkillProviderColumns } from '@renderer/features/skills/lib/providerColumns'
-import { applyInstalledSkillsResult, refreshSkills, useSkillsStore } from '@renderer/features/skills/store'
+import { applyInstalledSkillsResult, currentSkillsRevision, refreshSkills } from '@renderer/features/skills/store'
 import { CandidateDetails } from '@renderer/features/skills/ui/SkillReview'
 import { describeSkillInstallInput, parseSkillInstallInput } from '@shared/skills/installSource'
 import { withVisibleControls } from '@shared/text/visibleControls'
@@ -33,7 +33,6 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 export function AddSkillDialog() {
   const target = useAppStore(state => state.addSkillDialog)
   const close = useAppStore(state => state.closeAddSkillDialog)
-  const installed = useSkillsStore(state => state.installed)
   const columns = useSkillProviderColumns()
   const [input, setInput] = useState(target?.initialInput ?? '')
   const [discovery, setDiscovery] = useState<AgentCodeInstalledSkillDiscovery | null>(null)
@@ -69,8 +68,12 @@ export function AddSkillDialog() {
       // browsing preselects nothing, except the only skill a source holds.
       const preselect = found.selection.skills !== null || found.candidates.length === 1
       setSelected(new Set(preselect ? found.candidates.map(candidate => candidate.candidateId) : []))
+      // `-a` naming only agents Agent Code does not run (e.g. `-a cursor`)
+      // leaves no provider; fall back to every column like the agent tool
+      // does, and the parser's "ignored" notice explains why (review round 1).
       const chosen = found.selection.providers
-      setProviders(new Set(Array.isArray(chosen) ? columns.filter(kind => chosen.includes(kind)) : columns))
+      const fromCommand = Array.isArray(chosen) ? columns.filter(kind => chosen.includes(kind)) : columns
+      setProviders(new Set(fromCommand.length > 0 ? fromCommand : columns))
       setFilter('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not inspect that source.')
@@ -88,7 +91,7 @@ export function AddSkillDialog() {
       // as no restriction — so a provider enabled later gets the skill too.
       const everyColumn = columns.every(kind => providers.has(kind))
       const result = await window.api.installAgentCodeGitHubSkills({
-        expectedRevision: installed?.revision ?? 0,
+        expectedRevision: currentSkillsRevision(),
         discoveryId: discovery.discoveryId,
         candidateIds: [...selected],
         ...(everyColumn ? {} : { providers: [...providers] }),

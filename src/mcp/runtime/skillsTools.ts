@@ -176,7 +176,7 @@ export function registerSkillsTools(
 
   server.registerTool('skills_remove', {
     title: 'Withdraw a proposed skill',
-    description: 'Withdraw a skill that an agent proposed and the user has not reviewed yet. Skills the user approved can only be removed by the user in Settings → Skills.',
+    description: 'Withdraw a skill that THIS agent proposed and the user has not reviewed yet. Other proposals and skills the user approved can only be removed by the user in Settings → Skills.',
     inputSchema: {
       name: z.string().min(1).max(128),
     },
@@ -191,6 +191,13 @@ export function registerSkillsTools(
       // proposal only undoes the agent's own unreviewed request.
       if (!skill.pendingReview || skill.enabled) {
         return failure(`${name} was reviewed by the user. Ask the user to remove it in Settings → Skills.`)
+      }
+      // Only the proposing session may withdraw (review round 1): otherwise
+      // one agent could silently discard another agent's proposal that the
+      // user was about to review. A reloaded agent has a new session id and
+      // must ask the user, which errs on the side of keeping the proposal.
+      if (skill.pendingReview.sessionId !== scope.sessionId) {
+        return failure(`${name} was proposed by another agent session. Ask the user to review or remove it in Settings → Skills.`)
       }
       const result = await service().deleteInstalledSkill({ expectedRevision: snapshot.revision, skillId: skill.id })
       if (!result.ok) return failure(mutationFailure(result))

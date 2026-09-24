@@ -185,6 +185,23 @@ describe('skills built-in domain (#1161)', () => {
     await close()
   })
 
+  it('refuses to withdraw another agent session\'s proposal', async () => {
+    const first = await connect(['skills'])
+    await first.call('skills_add', { source: 'anthropics/skills', skills: ['pdf'] })
+    await first.close()
+    const server = createBuiltInMcpServer({ sessionId: 'agent-2', cwd: '/tmp/project', domains: ['skills'] }, { managedSkills: service })
+    const client = new Client({ name: 'other-agent', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await server.connect(serverTransport)
+    await client.connect(clientTransport)
+    const result = await client.callTool({ name: 'skills_remove', arguments: { name: 'pdf' } })
+    expect(result.isError).toBe(true)
+    expect((result.content as { text: string }[])[0]!.text).toContain('another agent session')
+    expect((await service.getInstalledSkillsSnapshot()).skills.map(skill => skill.name)).toEqual(['pdf'])
+    await client.close()
+    await server.close()
+  })
+
   it('does not let an orchestration parent without the domain hand it to a child', async () => {
     // The clamp lives in orchestration_create_agent; this pins the policy
     // list it reads so skills cannot be dropped from it silently.

@@ -69,6 +69,19 @@ export async function refreshSkills(options: { audit?: boolean } = {}): Promise<
   }
 }
 
+/**
+ * The newest revision the page has seen.
+ *
+ * WHY one number for both collections (review round 1): installed and custom
+ * skills live in ONE main document with ONE compare-and-swap revision. After
+ * an installed-skill change the custom snapshot's revision is stale, and
+ * sending it made the next custom-skill change fail as a revision conflict.
+ */
+export function currentSkillsRevision(): number {
+  const state = useSkillsStore.getState()
+  return Math.max(state.installed?.revision ?? 0, state.custom?.revision ?? 0)
+}
+
 /** Applies a mutation's snapshot and returns its failure message, if any. */
 export function applyInstalledSkillsResult(result: AgentCodeInstalledSkillsMutationResult): string | null {
   if ('snapshot' in result) {

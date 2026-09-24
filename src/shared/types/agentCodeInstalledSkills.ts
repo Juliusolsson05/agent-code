@@ -17,6 +17,23 @@ export const AGENT_CODE_INSTALLED_SKILL_MAX_FILES = 256
 export const AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES = 5 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES = 10 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES = 25 * 1024 * 1024
+/**
+ * Package bytes ONE install may acquire (review round 1 of #1161). Lazy
+ * discovery moved package downloads from discovery (where the 25 MiB budget
+ * bounded them) to install, which buffers every selected package before the
+ * mutation. This bounds that buffer — a memory limit on one click, not a
+ * limit on how many skills exist: 256 MiB is thousands of typical skills, and
+ * a larger selection simply installs in more than one step.
+ */
+export const AGENT_CODE_INSTALLED_SKILL_MAX_INSTALL_BYTES = 256 * 1024 * 1024
+/**
+ * Package bytes agents may leave waiting for review at once. Proposals are
+ * stored snapshots the user has not asked for; without this, an agent (or a
+ * prompt injection reaching one) could fill the disk with "disabled
+ * proposals" nobody sees until it is full. The user's own installs are not
+ * counted.
+ */
+export const AGENT_CODE_PENDING_PROPOSAL_MAX_BYTES = 64 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES = 128 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_DISCOVERY_TTL_MS = 15 * 60 * 1_000
 // WHY 512 and not the former 5: this bounds in-memory review state, not how

@@ -538,18 +538,58 @@ describe('npx skills-compatible discovery', () => {
     expect(names(result)).toEqual(['beta'])
     expect(result.missingSkills).toEqual(['missing'])
     // `missing` could be a frontmatter name in another folder, so the others
-    // are read too — but a satisfied selection stops early (next test).
+    // are read too — but a satisfied selection stops early (below).
     expect(fixture.fetchBytes).toHaveBeenCalledTimes(4)
 
+    // Roots are read in discovery order (so duplicates resolve exactly as
+    // `npx skills` does), and reading stops once every name is matched.
     const { fixture: second, source: again } = source([
       { path: 'skills/alpha/SKILL.md', content: skill('alpha') },
       { path: 'skills/beta/SKILL.md', content: skill('beta') },
+      { path: 'skills/gamma/SKILL.md', content: skill('gamma') },
     ])
     await again.discover(request('npx skills add example/skills --skill beta'))
     expect(second.fetchBytes.mock.calls.map(call => call[0])).toEqual([
       second.treeUrl,
+      `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/alpha/SKILL.md`,
       `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/beta/SKILL.md`,
     ])
+  })
+
+  // Review round 1: vercel's getPluginSkillPaths honours pluginRoot, walks
+  // each plugin's `skills/` and the parent of every listed path, and reads
+  // plugin.json.
+  it('finds skills declared by marketplace and plugin manifests like npx skills', async () => {
+    const result = await source([
+      { path: 'skills/a/SKILL.md', content: skill('a') },
+      {
+        path: '.claude-plugin/marketplace.json',
+        content: JSON.stringify({
+          metadata: { pluginRoot: './plugins' },
+          plugins: [
+            { name: 'listed', source: './p', skills: ['./skills/b'] },
+            { name: 'conventional', source: './q' },
+            { name: 'remote', source: { source: 'github', repo: 'x/y' } },
+          ],
+        }),
+      },
+      { path: 'plugins/p/skills/b/SKILL.md', content: skill('b') },
+      { path: 'plugins/q/skills/c/SKILL.md', content: skill('c') },
+      { path: '.claude-plugin/plugin.json', content: JSON.stringify({ skills: ['./extra/d'] }) },
+      { path: 'extra/d/SKILL.md', content: skill('d') },
+    ]).source.discover(request('example/skills'))
+    expect(names(result).sort()).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('resolves a duplicated name the same way with and without --skill', async () => {
+    const files = [
+      { path: 'skills/tools/SKILL.md', content: skill('pdf') },
+      { path: '.claude/skills/pdf/SKILL.md', content: skill('pdf') },
+    ]
+    const browsed = await source(files).source.discover(request('example/skills'))
+    const named = await source(files).source.discover(request('npx skills add example/skills --skill pdf'))
+    expect(browsed.candidates.map(value => value.candidate.source.path)).toEqual(['skills/tools'])
+    expect(named.candidates.map(value => value.candidate.source.path)).toEqual(['skills/tools'])
   })
 
   it('hides metadata.internal skills unless they are named', async () => {

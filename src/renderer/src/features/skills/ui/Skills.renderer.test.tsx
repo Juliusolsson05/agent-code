@@ -145,6 +145,15 @@ describe('Settings → Skills grid (#1161)', () => {
     }))
   })
 
+  // Review round 1: installed and custom skills share ONE document revision.
+  it('sends the newest revision the page has seen, whichever collection moved last', async () => {
+    useSkillsStore.setState({ custom: { ...custom, revision: 9 } })
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'pdf for Claude agents' }))
+    await waitFor(() => expect(api.setAgentCodeInstalledSkillProviders)
+      .toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 9 })))
+  })
+
   it('marks a provider that sees the skill through a shared folder', () => {
     useSkillsStore.setState({
       installed: { ...installed, skills: [installedSkill({ providers: ['claude'] })] },

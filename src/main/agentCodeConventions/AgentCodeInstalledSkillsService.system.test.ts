@@ -161,6 +161,7 @@ async function harness(
   return {
     root,
     service,
+    githubSkillSource,
     discoveries,
     pathSafety,
     skillDirectory: join(currentTarget.skillsDirectory, 'review-code'),
@@ -257,7 +258,7 @@ describe('AgentCode installed skills service', () => {
   })
 
   it('installs a reviewed package and requires a second review before updating it', async () => {
-    const { root, service, discoveries, skillDirectory } = await harness()
+    const { root, service, githubSkillSource, discoveries, skillDirectory } = await harness()
     const first = stagedPackage({
       commit: 'a'.repeat(40),
       files: [
@@ -306,6 +307,12 @@ describe('AgentCode installed skills service', () => {
     const update = await service.checkInstalledSkillForUpdates(
       skillId,
     )
+    // Review round 1: the check names the skill, so an internal skill
+    // (hidden from browsing) is still found, on the exact recorded ref/path.
+    expect(githubSkillSource.discover).toHaveBeenLastCalledWith({
+      source: { owner: 'example', repository: 'skills', ref: 'main', subpath: 'skills/review-code' },
+      skills: ['review-code'],
+    })
     expect(update).toMatchObject({
       ok: true,
       kind: 'update-available',

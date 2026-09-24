@@ -18,6 +18,7 @@ import {
   checkAllSkillsForUpdates,
   checkSkillForUpdates,
   clearSkillUpdate,
+  currentSkillsRevision,
   refreshSkills,
   useSkillsStore,
   useSkillsSync,
@@ -123,7 +124,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
       return
     }
     void run(async () => applyInstalledSkillsResult(await window.api.setAgentCodeInstalledSkillProviders({
-      expectedRevision: installed!.revision,
+      expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       providers: next,
     })))
@@ -135,7 +136,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
       return
     }
     void run(async () => applyCustomSkillsResult(await window.api.setAgentCodeCustomSkillProviders({
-      expectedRevision: custom!.revision,
+      expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       providers: next,
     })))
@@ -146,7 +147,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
       `An agent proposed ${skill.name}. Review its source and files (⋯ → Source) before turning it on. Turn it on now?`,
     )) return
     void run(async () => applyInstalledSkillsResult(await window.api.setAgentCodeInstalledSkillEnabled({
-      expectedRevision: installed!.revision,
+      expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       enabled: !skill.enabled,
     })))
@@ -154,7 +155,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
   const toggleCustom = (skill: AgentCodeCustomSkill) => {
     if (skill.enabled && !window.confirm(`Turn ${skill.name} off? Managed provider copies will be removed.`)) return
     void run(async () => applyCustomSkillsResult(await window.api.setAgentCodeCustomSkillEnabled({
-      expectedRevision: custom!.revision,
+      expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       enabled: !skill.enabled,
     })))
@@ -169,7 +170,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
     if (!window.confirm(wording)) return
     void run(async () => {
       const result = await window.api.deleteAgentCodeInstalledSkill({
-        expectedRevision: installed!.revision,
+        expectedRevision: currentSkillsRevision(),
         skillId: skill.id,
         abandonTargets,
       })
@@ -184,7 +185,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
   const applyUpdate = (skill: AgentCodeInstalledSkill, update: Extract<SkillUpdateState, { kind: 'update-available' }>) => {
     void run(async () => {
       const message = applyInstalledSkillsResult(await window.api.applyAgentCodeInstalledSkillUpdate({
-        expectedRevision: installed!.revision,
+        expectedRevision: currentSkillsRevision(),
         skillId: skill.id,
         discoveryId: update.discovery.discoveryId,
         candidateId: update.candidate.candidateId,
@@ -454,10 +455,13 @@ function SkillRow({
           const sharedOnly = !chosen.has(kind) && enabled && visible.has(kind)
           return (
             <div key={kind} className="flex flex-col items-center">
+              {/* Editable while OFF too (review round 1): the user must be able
+                  to adjust an agent's proposed provider choice BEFORE turning
+                  it on, and a disabled skill only records the field (D7). */}
               <Check
                 checked={chosen.has(kind)}
                 label={`${name} for ${shortLabel} agents`}
-                disabled={disabled || !enabled}
+                disabled={disabled}
                 onChange={on => onProvider(kind, on)}
               />
               {sharedOnly ? (
@@ -614,10 +618,18 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="px-3 py-2 text-[10px] text-muted">{children}</div>
 }
 
-/** The line that reproduces this install with `npx skills` elsewhere. */
+/**
+ * The line that reproduces this install with `npx skills` elsewhere.
+ *
+ * WHY `#ref` is always included (review round 1): without it `npx skills`
+ * resolves the default branch, so a skill installed from a tag or another
+ * branch would copy as a command for a different package. Including the ref
+ * even when it is the default branch is harmless and needs no guess about
+ * which branch is the default.
+ */
 function installCommandFor(skill: AgentCodeInstalledSkill): string {
   const source = `${skill.source.owner}/${skill.source.repository}${skill.source.path ? `/${skill.source.path}` : ''}`
-  return `npx skills add ${source} --skill ${skill.name}`
+  return `npx skills add ${source}#${skill.source.requestedRef} --skill ${skill.name}`
 }
 
 /**

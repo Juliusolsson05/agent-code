@@ -182,8 +182,6 @@ function isInstalledSkill(value: unknown): value is AgentCodeInstalledSkillRecor
   return isRecord(value)
     && isOptionalProviderList(value.providers)
     && isOptionalPendingReview(value.pendingReview)
-    // A proposal is never enabled: only the user's enable clears the marker.
-    && !(value.pendingReview !== undefined && value.enabled === true)
     && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 256
     && typeof value.name === 'string'
     && value.name.length <= 64
@@ -337,6 +335,14 @@ function parseDocument(value: unknown): AgentCodeConventionsDocument | null {
   if (!Object.values(value.pendingOperations).every(isPendingOperation)) return null
   if (!Object.values(value.installedMaterializations).every(isInstalledMaterialization)) return null
   if (!Object.values(value.installedPendingOperations).every(isInstalledPendingOperation)) return null
+  // An enabled skill that still carries an agent's proposal marker was
+  // enabled by a pre-#1161 build (a downgrade), whose enable path kept
+  // unknown keys. The user's enable IS the review, so the marker is stripped
+  // rather than rejecting the document — rejecting would put every managed
+  // skill into Recovery required (review round 1).
+  for (const skill of Object.values(value.installedSkills) as AgentCodeInstalledSkillRecord[]) {
+    if (skill.enabled && skill.pendingReview) delete skill.pendingReview
+  }
   return value as AgentCodeConventionsDocument
 }
 
