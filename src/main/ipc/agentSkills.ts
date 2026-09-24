@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
+import { lstat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute } from 'node:path'
 import { getMainProvider } from '@providers/registry.main.js'
@@ -7,6 +8,7 @@ import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { AgentSkillsSnapshot } from '@shared/types/agentSkills.js'
 import type { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
 import { collectInstalledAgentSkills } from '@main/agentSkills/inventory.js'
+import { collectExternalAgentSkills, resolveExternalSkillFolder } from '@main/agentSkills/externalSkills.js'
 
 export function registerAgentSkillsIpc(service: AgentCodeManagedSkillsService): void {
   ipcMain.handle('agent-skills:list', async (_event, value: unknown): Promise<AgentSkillsSnapshot> => {
@@ -31,5 +33,19 @@ export function registerAgentSkillsIpc(service: AgentCodeManagedSkillsService): 
       environment: process.env,
     })
     return collectInstalledAgentSkills(discovery, await service.getInstalledSkillLocations(request.provider))
+  })
+  ipcMain.handle('agent-skills:external', () => collectExternalAgentSkills(service))
+  ipcMain.handle('agent-skills:reveal-external', async (_event, targetId: unknown, folder: unknown) => {
+    if (typeof targetId !== 'string' || typeof folder !== 'string') {
+      return { ok: false, message: 'Unknown skill folder.' }
+    }
+    const path = await resolveExternalSkillFolder(service, targetId, folder)
+    if (!path || !(await lstat(path).catch(() => null))) {
+      return { ok: false, message: 'That skill folder no longer exists.' }
+    }
+    // showItemInFolder selects the folder (or link) without opening or
+    // following it; an external skill is never executed from here.
+    shell.showItemInFolder(path)
+    return { ok: true }
   })
 }

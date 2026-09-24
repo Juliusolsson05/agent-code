@@ -314,6 +314,29 @@ export class AgentCodeManagedSkillsService {
     })
   }
 
+  /**
+   * The current personal skill roots, for the read-only "Also found on this
+   * machine" scan (#1161). Observational like getInstalledSkillLocations: it
+   * never initializes, reconciles or repairs, and a service in recovery
+   * reports no roots rather than guessing.
+   */
+  getPersonalSkillRoots(): Promise<Array<{
+    id: string
+    providers: AgentProviderKind[]
+    skillsDirectory: string
+    displayPath: string
+  }>> {
+    return this.serialize(async () => {
+      if (!this.initialized || this.recovery) return []
+      return this.targets.targets.map(target => ({
+        id: target.id,
+        providers: [...target.providers],
+        skillsDirectory: target.skillsDirectory,
+        displayPath: this.displayPath(target.skillsDirectory),
+      }))
+    })
+  }
+
   getInstalledSkillLocations(provider: AgentProviderKind): Promise<ManagedAgentSkillLocations> {
     return this.serialize(async () => {
       // Status is strictly observational. Unlike Settings' audit, it must not
