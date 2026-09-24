@@ -18,6 +18,7 @@ import {
 
 export type AutoUpdaterLike = {
   autoInstallOnAppQuit: boolean
+  autoDownload: boolean
   allowDowngrade: boolean
   allowPrerelease: boolean
   disableDifferentialDownload: boolean
@@ -100,6 +101,14 @@ export class UpdateService {
   // the user just chose a different channel. The first outcome clears it and
   // starts a check on the new channel instead.
   private discardInFlight = false
+  // The updater's current check. electron-updater returns the SAME promise
+  // for any checkForUpdates() made while one is running ("already in
+  // progress"), and it emits update-available / update-not-available BEFORE
+  // that promise settles (AppUpdater.checkForUpdates / doCheckForUpdates). So
+  // a check started from inside one of those events would silently get the
+  // OLD check back (review round 1 of #1168). The replacement check after a
+  // channel switch therefore waits for this to settle.
+  private inflight: Promise<unknown> | null = null
   private installWatchdog: ReturnType<typeof setTimeout> | null = null
   private readonly minimumInterval: number
 
@@ -108,6 +117,12 @@ export class UpdateService {
     // Defense in depth: even if a future electron-updater default flips, the
     // service re-asserts the never-auto-install invariant on every check.
     options.updater.autoInstallOnAppQuit = false
+    // WHY off (review round 1 of #1168): electron-updater's default
+    // autoDownload starts downloading inside its own check, before this
+    // service has decided anything. After a channel switch it would download
+    // the discarded old-channel update and report it ready. The service
+    // starts every download itself ('update-available' → downloadUpdate()).
+    options.updater.autoDownload = false
     options.updater.allowDowngrade = false
     // WHY forced off (2026-09-24, RELEASE.md "Channels"): electron-updater
     // turns allowPrerelease ON by itself whenever the running version has a
@@ -185,7 +200,11 @@ export class UpdateService {
     this.discardInFlight = false
     this.lastVersion = null
     this.set('idle')
-    void this.checkForUpdates(true)
+    // After the old check's promise settles, never from inside its event:
+    // see `inflight`. Until then the state stays 'idle', so nothing else
+    // starts a check in between.
+    const previous = this.inflight ?? Promise.resolve()
+    void previous.then(() => undefined, () => undefined).then(() => this.checkForUpdates(true))
     return true
   }
 
@@ -278,14 +297,17 @@ export class UpdateService {
     // long-lived and third-party; our invariant must not depend on its state
     // surviving untouched between checks.
     this.options.updater.autoInstallOnAppQuit = false
+    this.options.updater.autoDownload = false
     this.options.updater.allowPrerelease = false
     this.options.updater.allowDowngrade = false
     this.applyFeed()
     this.set('checking')
-    return this.options.updater.checkForUpdates().then(
+    const check = this.options.updater.checkForUpdates()
+    this.inflight = check
+    return check.then(
       () => undefined,
       () => undefined, // the error event carries reporting
-    )
+    ).finally(() => { if (this.inflight === check) this.inflight = null })
   }
 
   /** The File → Check for Updates… item. Every path ends in an answer to the

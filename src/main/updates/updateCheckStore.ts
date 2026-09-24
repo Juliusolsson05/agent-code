@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -29,6 +30,12 @@ export class UpdateCheckStore {
   private lastCheckAt: number | undefined
   private channel: UpdateChannel | undefined
   private readonly loaded: Promise<void>
+  // Every write joins one queue (review round 1 of #1168). Each write is
+  // atomic, but two in flight at once could land out of order: a Preview
+  // snapshot renamed AFTER the newer Stable one would bring back the channel
+  // the user just left. Serialized, the last write always carries the newest
+  // values, because each one snapshots memory when it actually runs.
+  private queue: Promise<void> = Promise.resolve()
 
   constructor() {
     this.loaded = readFile(FILE(), 'utf8')
@@ -72,13 +79,22 @@ export class UpdateCheckStore {
     await this.persist()
   }
 
-  private async persist(): Promise<void> {
+  private persist(): Promise<void> {
+    const write = this.queue.then(() => this.writeNow())
+    // A failed write must not wedge every later one behind a rejection.
+    this.queue = write.catch(() => {})
+    return write
+  }
+
+  private async writeNow(): Promise<void> {
     // After the initial read, so a write racing startup can never be
     // overwritten by (or overwrite) values that were already on disk.
     await this.loaded
     await mkdir(STATE_DIR, { recursive: true })
     const target = FILE()
-    const staging = `${target}.tmp-${process.pid}-${Date.now()}`
+    // A UUID, not the millisecond clock: two writes in one millisecond shared
+    // a staging name (review round 1).
+    const staging = `${target}.tmp-${process.pid}-${randomUUID()}`
     const shape: UpdateStoreShape = {
       ...(this.lastCheckAt !== undefined ? { lastCheckAt: this.lastCheckAt } : {}),
       ...(this.channel !== undefined ? { channel: this.channel } : {}),

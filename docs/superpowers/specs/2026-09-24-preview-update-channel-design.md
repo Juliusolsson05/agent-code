@@ -159,3 +159,21 @@ semver orders above every `0.1.4-preview.*`, and nothing before then.
 
 - Windows and Linux feeds: the app ships macOS only.
 - Showing release notes in the update dialog.
+
+## Review round 1 (2026-09-24): what changed
+
+Both reviewers reproduced the first two items against the real electron-updater 6.6.2.
+
+1. **Channel switch during a running check.** Two bugs:
+   - **`autoDownload`.** Its default is `true`, so electron-updater itself downloaded the discarded old-channel update and reported it ready.
+   - **The replacement check.** It started inside the old check's own outcome event, where `checkForUpdates()` returns the still-running OLD promise ("already in progress"). That left the service in `checking` for good.
+
+   The fix:
+   - `autoDownload` is forced off; the service already starts every download itself.
+   - The replacement check waits for the old check's promise to settle.
+   - The test fake now models the in-progress rule and emit-before-settle.
+2. **Version order is build order.**
+   - Every preview is stamped with the UTC date AND time. A bare date for scheduled runs sorted a 09:00 manual build above that day's 10:25 scheduled one.
+   - `target=minor` builds are published as dated releases only, never to the rolling release: `0.2.0-preview.*` would sort above every later nightly and strand Preview users.
+3. **`updates.json` writes are serialized, with UUID staging names.** Two atomic writes in flight could land out of order and restore the channel the user left.
+4. **Generated release notes** describe the Preview update channel instead of "never offered by the updater".

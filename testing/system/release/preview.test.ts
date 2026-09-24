@@ -1,4 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -27,6 +29,14 @@ import { NOTES_MAX_COMMITS, PREVIEW_KEEP_DAYS, PREVIEW_KEEP_MIN, datedCollision,
 //     only difference between the two workflows' rolling releases.
 
 const repoRoot = resolve(__dirname, '../../..')
+// Version ORDER is judged by the very semver copy electron-updater resolves,
+// because its `gt(latest, current)` is what decides whether a preview is
+// offered (AppUpdater.isUpdateAvailable).
+const require = createRequire(__filename)
+const updaterSemver = createRequire(dirname(require.resolve('electron-updater')) + '/')('semver') as {
+  compare(left: string, right: string): number
+}
+const semverCompare = (left: string, right: string) => updaterSemver.compare(left, right)
 const script = join(repoRoot, 'scripts/release/preview.mjs')
 const fixtures = join(repoRoot, 'testing/fixtures/release-preview')
 // Real commits from this repo's history (#1019's merge, and main just before
@@ -123,30 +133,40 @@ describe('preview version', () => {
   const now = new Date('2026-09-24T09:46:43Z')
 
   it('previews the next PATCH of the stable version, dated by UTC day', () => {
-    expect(previewVersion({ stableVersion: '0.1.3', now, dispatched: false })).toBe('0.1.4-preview.20260924')
+    expect(previewVersion({ stableVersion: '0.1.3', now })).toBe('0.1.4-preview.20260924.946')
   })
 
-  it('a manual run adds the UTC time so it never collides with that night\'s tag', () => {
+  it('versions sort in BUILD order, including a manual run before that day\'s scheduled one', () => {
     // 09:46 → 946: semver forbids leading zeros in numeric identifiers, and
-    // numeric comparison still orders 946 before 1415.
-    expect(previewVersion({ stableVersion: '0.1.3', now, dispatched: true })).toBe('0.1.4-preview.20260924.946')
+    // numeric comparison still orders 946 before 1025. Review round 1 of
+    // #1168: a bare date for scheduled runs sorted a 09:00 manual build above
+    // the 10:25 scheduled one, stranding Preview-channel users on it.
+    const manual = previewVersion({ stableVersion: '0.1.3', now: new Date('2026-09-24T09:00:00Z') })
+    const scheduled = previewVersion({ stableVersion: '0.1.3', now: new Date('2026-09-24T10:25:00Z') })
+    const tomorrow = previewVersion({ stableVersion: '0.1.3', now: new Date('2026-09-25T00:05:00Z') })
+    expect([manual, scheduled, tomorrow]).toEqual([
+      '0.1.4-preview.20260924.900', '0.1.4-preview.20260924.1025', '0.1.4-preview.20260925.5',
+    ])
+    const order = (left: string, right: string) => semverCompare(left, right)
+    expect(order(manual, scheduled)).toBeLessThan(0)
+    expect(order(scheduled, tomorrow)).toBeLessThan(0)
   })
 
   it('can target the next MINOR while a minor release is being prepared', () => {
-    expect(previewVersion({ stableVersion: '0.1.3', target: 'minor', now, dispatched: true })).toBe('0.2.0-preview.20260924.946')
+    expect(previewVersion({ stableVersion: '0.1.3', target: 'minor', now })).toBe('0.2.0-preview.20260924.946')
   })
 
   it('patch numbers go past 9', () => {
-    expect(previewVersion({ stableVersion: '0.1.9', now, dispatched: false })).toBe('0.1.10-preview.20260924')
+    expect(previewVersion({ stableVersion: '0.1.9', now })).toBe('0.1.10-preview.20260924.946')
   })
 
   it('a prerelease left in package.json previews its own core instead of skipping a version', () => {
-    expect(previewVersion({ stableVersion: '0.0.2-beta.1', now, dispatched: false })).toBe('0.0.2-preview.20260924')
+    expect(previewVersion({ stableVersion: '0.0.2-beta.1', now })).toBe('0.0.2-preview.20260924.946')
   })
 
   it('refuses a version that is not MAJOR.MINOR.PATCH, and an unknown target', () => {
-    expect(() => previewVersion({ stableVersion: '1.1', now, dispatched: false })).toThrow(/MAJOR\.MINOR\.PATCH/)
-    expect(() => previewVersion({ stableVersion: '0.1.3', target: 'major', now, dispatched: false })).toThrow(/patch or minor/)
+    expect(() => previewVersion({ stableVersion: '1.1', now })).toThrow(/MAJOR\.MINOR\.PATCH/)
+    expect(() => previewVersion({ stableVersion: '0.1.3', target: 'major', now })).toThrow(/patch or minor/)
   })
 })
 
@@ -157,17 +177,17 @@ describe('preview decide: should this run build, and as which version?', () => {
     // The rolling release, then the dated tag it is about to create.
     expect(result.calls).toEqual([
       'api repos/Juliusolsson05/agent-code/releases/tags/preview',
-      'api repos/Juliusolsson05/agent-code/releases/tags/v0.1.4-preview.20260924',
+      'api repos/Juliusolsson05/agent-code/releases/tags/v0.1.4-preview.20260924.946',
     ])
     expect(result.outputs).toMatchObject({
       changed: 'true', 'head-sha': HEAD, 'prev-sha': '',
-      version: '0.1.4-preview.20260924', tag: 'v0.1.4-preview.20260924',
+      version: '0.1.4-preview.20260924.946', tag: 'v0.1.4-preview.20260924.946', rolling: 'true',
     })
   })
 
   it('a dispatched minor run gets a minor, time-stamped version', () => {
     const result = decide(recorded('gh-api-nightly-404'), { GITHUB_EVENT_NAME: 'workflow_dispatch', TARGET: 'minor' })
-    expect(result.outputs).toMatchObject({ version: '0.2.0-preview.20260924.946', tag: 'v0.2.0-preview.20260924.946' })
+    expect(result.outputs).toMatchObject({ version: '0.2.0-preview.20260924.946', tag: 'v0.2.0-preview.20260924.946', rolling: 'false' })
   })
 
   it('fails loudly on any non-404 API error (recorded 401) instead of rebuilding under a false "first preview"', () => {
@@ -245,10 +265,10 @@ describe('preview decide: should this run build, and as which version?', () => {
     // target_commitish holds the SHA it was built from (7feda947), exactly as
     // the dated preview's publish step creates it. Here it is today's dated
     // preview, and this run (a re-run of yesterday's) is for another commit.
-    const todaysDated = { ...recordedNightly(), tag_name: 'v0.1.4-preview.20260924' }
+    const todaysDated = { ...recordedNightly(), tag_name: 'v0.1.4-preview.20260924.946' }
     const result = decide(recorded('gh-api-nightly-404'), {}, { stdout: JSON.stringify(todaysDated) })
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toMatch(/v0\.1\.4-preview\.20260924 already exists for commit 7feda94767c6/)
+    expect(result.stderr).toMatch(/v0\.1\.4-preview\.20260924\.946 already exists for commit 7feda94767c6/)
     expect(result.outputs.changed).toBeUndefined()
   })
 
@@ -452,7 +472,7 @@ describe('preview notes: release bodies from a real git history', () => {
     const out = temp('preview-notes-out-')
     const result = spawnSync(process.execPath, [script, 'notes', out], {
       cwd, encoding: 'utf8',
-      env: { ...process.env, HEAD_SHA: head, PREV_SHA: prev, VERSION: '0.1.4-preview.20260924', GITHUB_REPOSITORY: 'Juliusolsson05/agent-code', GITHUB_SERVER_URL: 'https://github.com' },
+      env: { ...process.env, HEAD_SHA: head, PREV_SHA: prev, VERSION: '0.1.4-preview.20260924.946', GITHUB_REPOSITORY: 'Juliusolsson05/agent-code', GITHUB_SERVER_URL: 'https://github.com' },
     })
     const read = (name: string) => existsSync(join(out, name)) ? readFileSync(join(out, name), 'utf8') : ''
     return { status: result.status, stderr: result.stderr, publishing: read('preview-body-publishing.md'), final: read('preview-body.md'), dated: read('preview-dated-body.md') }
@@ -467,10 +487,11 @@ describe('preview notes: release bodies from a real git history', () => {
     expect(result.final).not.toContain('feat: first')
     expect(result.dated).toContain('fix: second')
     expect(result.dated).not.toContain('feat: first')
-    // The dated body names the version it previews and says it is never
-    // offered by the updater; it carries no skip marker.
+    // The dated body names the version it previews and how to get previews
+    // as updates (#1168); it carries no skip marker.
     expect(result.dated).toMatch(/^Preview of Agent Code 0\.1\.4,/)
-    expect(result.dated).toContain('never offered by the in-app updater')
+    expect(result.dated).toContain('Update channel → Preview')
+    expect(result.dated).not.toContain('never offered')
     expect(result.dated).not.toMatch(/^built-from:/m)
   })
 
