@@ -343,11 +343,15 @@ needed.
   shows that honestly, as "visible via Claude's folder" (derived from the
   included targets), rather than pretending otherwise.
 - **Changing providers** (`setInstalledSkillProviders` and
-  `setCustomSkillProviders`) happens under one lock: disable, change the
-  field, re-enable. That reuses the proven journal paths. A target dropped
-  while its files still exist would otherwise be classified as *retired* and
-  left for manual cleanup. If disabling fails with a conflict, the providers
-  are not changed.
+  `setCustomSkillProviders`) takes one durable write.
+
+  *As built:* newly chosen roots are preflighted first, so a collision changes
+  nothing. Reconciliation then journals syncs for chosen roots and deletes for
+  deselected current roots, through the existing write-ahead journal. The
+  skill never goes through a disable/enable flicker, and a dropped root is
+  never mistaken for a retired one.
+
+  *Superseded draft:* disable, change the field, re-enable.
 - A disabled skill only records the field.
 - Install requests carry `providers`, taken from `-a` or the dialog.
 - The Conventions skill and product skills stay on every provider.
