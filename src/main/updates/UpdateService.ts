@@ -12,6 +12,7 @@
 export type AutoUpdaterLike = {
   autoInstallOnAppQuit: boolean
   allowDowngrade: boolean
+  allowPrerelease: boolean
   forceDevUpdateConfig: boolean
   on(event: string, listener: (value?: unknown) => void): unknown
   checkForUpdates(): Promise<unknown>
@@ -86,6 +87,18 @@ export class UpdateService {
     // service re-asserts the never-auto-install invariant on every check.
     options.updater.autoInstallOnAppQuit = false
     options.updater.allowDowngrade = false
+    // WHY forced off (2026-09-24, RELEASE.md "Channels"): electron-updater
+    // turns allowPrerelease ON by itself whenever the running version has a
+    // prerelease part (AppUpdater: `allowPrerelease =
+    // hasPrereleaseComponents(currentVersion)`). Previews are built as
+    // `0.1.4-preview.<date>`, so on a preview install its GitHub provider
+    // would skip releases/latest, walk the release feed for another
+    // "preview"-channel release, and fail looking for a `preview-mac.yml`
+    // that previews deliberately do not publish. Off, it reads
+    // releases/latest — the newest STABLE — which semver orders above every
+    // `0.1.4-preview.*`, so a preview user is offered 0.1.4 when it ships.
+    // Previews are never offered by the updater; that is the channel rule.
+    options.updater.allowPrerelease = false
     if (!options.app.isPackaged) {
       // Dev/unsigned builds have no app-update.yml and no signed feed; probing
       // would only produce noise. One log line, then permanent silence.
