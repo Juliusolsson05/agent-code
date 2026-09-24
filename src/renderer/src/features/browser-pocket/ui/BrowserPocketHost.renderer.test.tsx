@@ -1,4 +1,4 @@
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GlobalToastProvider } from '@renderer/ui/GlobalToast'
@@ -8,6 +8,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 
 import { usePlacementStore } from '../placement/placementStore'
 import { usePocketLiveStore } from '../state/pocketLiveStore'
+import { useRecoveryStore } from '../recovery/recoveryStore'
 import { BrowserPocketHost, wrapperStyle } from './BrowserPocketHost'
 
 // Review B #1–#3: the guest lifecycle had no test, and that is where the
@@ -20,6 +21,7 @@ let original = useAppStore.getState()
 
 function installApi(opts: { registerDelayMs?: number } = {}) {
   const calls = {
+    deliver: vi.fn<typeof window.api.deliverPrompt>().mockResolvedValue({ ok: true, acceptance: { kind: 'queue', acceptedAt: 1 } }),
     register: vi.fn(async (p: { pocketId: string; sessionId: string }) => {
       log.push(`register:${p.sessionId}`)
       if (opts.registerDelayMs) await new Promise(r => setTimeout(r, opts.registerDelayMs))
@@ -35,6 +37,7 @@ function installApi(opts: { registerDelayMs?: number } = {}) {
   }
   const noop = () => () => {}
   window.api = new Proxy({
+    deliverPrompt: calls.deliver,
     pocketPartition: async () => 'persist:ac-pocket-p1',
     registerPocketGuest: calls.register,
     unregisterPocketGuest: calls.unregister,
@@ -56,7 +59,12 @@ function workspace(sessionId: string, pocket: Record<string, unknown> | null) {
     runtimes: {},
     updateBrowserPocket: (t: (s: WorkspaceState) => WorkspaceState) => { updates.push(t) },
     setTiledFocusedLane: vi.fn(),
+    ensureSessionLive: vi.fn(async () => ({ sessionId })),
+    setSpotlightTarget: vi.fn(),
   } as unknown as Workspace
+  // Prompt admission reads the authoritative store even before React catches
+  // up after a wake. Keep that edge real instead of trusting a stale ws prop.
+  useAppStore.setState({ workspaceState: ws.state, workspaceRuntimes: ws.runtimes })
   return { ws, updates }
 }
 
@@ -69,7 +77,7 @@ function guest(url = 'http://localhost:3000/'): HTMLElement & { url: string } {
   Object.assign(el, {
     url,
     getWebContentsId: () => 7, getURL() { return this.url as string }, canGoBack: () => false, canGoForward: () => false,
-    loadURL: async () => {}, reload: () => {}, reloadIgnoringCache: () => {}, goBack: () => {}, goForward: () => {}, openDevTools: () => {},
+    loadURL: vi.fn(async () => {}), reload: () => {}, reloadIgnoringCache: () => {}, goBack: () => {}, goForward: () => {}, openDevTools: () => {},
   })
   return el as unknown as HTMLElement & { url: string }
 }
@@ -84,8 +92,128 @@ beforeEach(() => {
   log.length = 0
   usePlacementStore.setState({ slots: {}, paintLeases: {}, lastSize: {}, lastVisibleAt: {} })
   usePocketLiveStore.setState({ live: {} })
+  useRecoveryStore.setState({ requests: {} })
 })
 afterEach(() => { cleanup(); useAppStore.setState(original, true) })
+
+function fail(el: HTMLElement, url = 'http://localhost:3000/', code = -102) {
+  act(() => { el.dispatchEvent(Object.assign(new Event('did-fail-load'), { isMainFrame: true, validatedURL: url, errorCode: code, errorDescription: 'Connection failed' })) })
+}
+
+describe('local server recovery UI', () => {
+  it.each([['https://example.com/', -102], ['http://localhost:3000/', -200], ['http://localhost:3000/', -105]])('keeps ordinary reload without restart for %s (%i)', async (url, code) => {
+    installApi()
+    renderHost(workspace('s1', POCKET).ws)
+    showSlot()
+    await flush()
+    fail(guest(), url, code)
+    expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Reload page' })).toBeTruthy()
+  })
+
+  it('sends once, survives guest remount/hidden overlay, and reloads the failed destination without sending again', async () => {
+    const calls = installApi()
+    renderHost(workspace('s1', POCKET).ws)
+    showSlot()
+    await flush()
+    const el = guest()
+    act(() => { el.dispatchEvent(new Event('dom-ready')) })
+    await flush()
+    const failedUrl = 'http://localhost:5173/dashboard?filter=mine'
+    fail(el, failedUrl)
+    fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
+    await flush()
+    expect(calls.deliver).toHaveBeenCalledTimes(1)
+    expect(calls.deliver.mock.calls[0]?.[0]).toBe('s1')
+    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }))
+    expect((el as unknown as { loadURL: ReturnType<typeof vi.fn> }).loadURL).toHaveBeenCalledWith(failedUrl)
+    expect(log).not.toContain('unregister(guests=1)')
+    fail(el, failedUrl)
+    expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
+    act(() => { el.dispatchEvent(Object.assign(new Event('did-navigate'), { isMainFrame: true, httpResponseCode: -1 })) })
+    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    showSlot(false)
+    await flush()
+    showSlot()
+    await flush()
+    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    act(() => usePocketLiveStore.getState().patch('p1', p => ({ generation: p.generation + 1 })))
+    await flush()
+    expect(log).toContain('unregister(guests=1)')
+    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    expect(calls.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears receipts on a successful navigation and ignores events from the retired guest', async () => {
+    installApi()
+    const view = renderHost(workspace('s1', POCKET).ws)
+    showSlot()
+    await flush()
+    const el = guest()
+    fail(el)
+    fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
+    await flush()
+    act(() => { el.dispatchEvent(Object.assign(new Event('did-navigate'), { isMainFrame: true, httpResponseCode: 200 })) })
+    expect(useRecoveryStore.getState().requests.p1).toBeUndefined()
+    fail(el)
+    expect(screen.getByRole('button', { name: 'Try to restart' })).toBeTruthy()
+    view.rerender(<GlobalToastProvider><BrowserPocketHost workspace={workspace('s1', null).ws} /></GlobalToastProvider>)
+    await flush()
+    fail(el)
+    expect(usePocketLiveStore.getState().live.p1).toBeUndefined()
+  })
+
+  it('does not send to a successor when the session changes during wake', async () => {
+    const calls = installApi()
+    let finishWake!: () => void
+    const { ws } = workspace('old', POCKET)
+    vi.mocked(ws.ensureSessionLive).mockImplementation(() => new Promise(resolve => { finishWake = () => resolve({ sessionId: 'old' }) }))
+    const view = renderHost(ws)
+    showSlot()
+    await flush()
+    fail(guest())
+    fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
+    view.rerender(<GlobalToastProvider><BrowserPocketHost workspace={workspace('new', POCKET).ws} /></GlobalToastProvider>)
+    await act(async () => { finishWake() })
+    expect(calls.deliver).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Try to restart' })).toBeTruthy()
+  })
+
+  it('shows uncertainty instead of a resend and explicitly reveals this pocket owner', async () => {
+    const calls = installApi()
+    calls.deliver.mockRejectedValue(new Error('IPC lost after write'))
+    const { ws, updates } = workspace('s1', POCKET)
+    renderHost(ws)
+    showSlot()
+    await flush()
+    fail(guest())
+    fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
+    await flush()
+    expect(screen.getByRole('status').textContent).toContain('Could not confirm delivery')
+    expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'View agent' }))
+    expect(ws.setSpotlightTarget).toHaveBeenCalledWith('s1')
+    expect(updates.at(-1)!(ws.state).sessions.s1?.browserPocket?.view).toBe('collapsed')
+  })
+
+  it('revokes a pending request when main-frame navigation changes the target', async () => {
+    const calls = installApi()
+    let finishWake!: () => void
+    const { ws } = workspace('s1', POCKET)
+    vi.mocked(ws.ensureSessionLive).mockImplementation(() => new Promise(resolve => { finishWake = () => resolve({ sessionId: 's1' }) }))
+    renderHost(ws)
+    showSlot()
+    await flush()
+    const el = guest()
+    fail(el)
+    fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
+    act(() => { el.dispatchEvent(Object.assign(new Event('did-start-navigation'), { isMainFrame: true, url: 'https://example.com/' })) })
+    await act(async () => { finishWake() })
+    expect(calls.deliver).not.toHaveBeenCalled()
+  })
+})
 
 describe('guest lifecycle', () => {
   it('registers a new guest on dom-ready with the session that owns it', async () => {

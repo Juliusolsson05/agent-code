@@ -3,7 +3,7 @@
 Issue: [#1163](https://github.com/Juliusolsson05/agent-code/issues/1163)
 Branch: `feat/browser-pocket-server-recovery`
 Base: `origin/main` at `7feda94767c6c921c05aa75169c55c9a5728bf38`
-Status: planning only; this file is the branch's first commit. No runtime changes or server commands.
+Status: implemented; this file was the branch's first commit. Local verification is complete; the implementation PR will record full CI results.
 
 ## Outcome and scope
 
@@ -80,7 +80,7 @@ The prompt must work without browser tools. It asks the existing agent to perfor
 
 ## Delivery and lifecycle design
 
-Implement a feature-local `requestServerRestart` operation rather than expanding the workspace hook or adding main-process restart IPC. It uses the existing `ensureSessionLive` and `window.api.deliverPrompt` APIs and returns a typed UI outcome.
+Implement a feature-local `requestServerRestart` operation rather than expanding the workspace hook or adding main-process restart IPC. It uses the existing `ensureSessionLive` and `window.api.deliverPrompt` APIs and records a typed UI outcome in the transient recovery store.
 
 1. Synchronously reserve the request for pocketId + failed target/episode before the first await. Store an operation token so mirrored surfaces and rapid clicks share one pending operation. Main's in-flight reservation is a second boundary, not the entire deduplication design.
 2. Capture exact sessionId, pocketId, provider kind/runtime, project/worktree context and failure/URL identity. Resolve from pocket ownership, never lane index or focus. Use current state readers, not a captured Workspace snapshot across awaits.
@@ -114,7 +114,15 @@ For the first slice, use per-window pocket request admission consistent with exi
 
 Use existing renderer fixtures with deferred promises and explicit provider/guest event doubles. They verify our delivery and state contracts, not that an LLM will successfully diagnose every server. Do not add synthetic tests that merely snapshot the exact prompt prose.
 
-No Electron launch/restart or `npm run dev` during local agent verification. Native webview failure rendering and actual provider task delivery require an explicit interactive smoke check in an app build already running this implementation. That check should cover an idle agent, a busy/queued agent, and a connection failure in a narrow pane. Report this boundary honestly; planning does not execute a restart request.
+No Electron launch/restart or `npm run dev` during local agent verification. Native webview failure rendering and actual provider task delivery require an explicit interactive smoke check in an app build already running this implementation. That check should cover an idle agent, a busy/queued agent, and a connection failure in a narrow pane. Report this boundary honestly; the isolated renderer preview does not execute a real restart request.
+
+## Implementation decisions and local verification
+
+- Reload page uses the host's existing native `loadURL` navigation path with the failed URL. It preserves the guest and cookies instead of bumping its generation, and avoids retrying a previously committed URL. Remount/retirement tests still verify unregister-before-destruction.
+- Delivery revalidates ownership directly against the authoritative app store. Even a latest-rendered Workspace ref can lag a completed wake; the regression test changes state before the prop rerenders. A ref supplies only the current workspace operation method.
+- Chromium error-document navigation (`httpResponseCode === -1`) preserves the connection failure and receipt. A real main-frame response ends that episode. Same-URL failed reloads keep the duplicate-send guard.
+- The 15 focused browser, shared URL and agent-control suites pass: 179 tests. Test-contract validation, repository typecheck and the distributable-output build pass.
+- The actual failure component was checked in an isolated browser preview at 240px and 340px widths, including ready, queued and uncertain feedback. Simulated submission transitioned to queued and removed the resend button. No Electron or actual agent task was launched.
 
 ## Follow-ups deliberately separate
 
