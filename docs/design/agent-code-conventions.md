@@ -28,11 +28,32 @@ Reviewed package bytes live separately under the private, content-addressed
 `managed-skill-snapshots` state directory. The JSON document names an immutable
 manifest digest; it never embeds binary assets or accepts a renderer path. A
 snapshot becomes durable before desired state can reference it, and every read
-rechecks its bounded manifest and hashes. Unreferenced snapshots are retained
-because portable Node APIs cannot anchor recursive deletion to a securely
-opened directory handle; the complete root is capped at 256 MiB and 32,768
-filesystem entries. Bounded inert storage is safer than allowing an ancestor
-replacement race to redirect cleanup into unmanaged data.
+rechecks its bounded manifest and hashes.
+
+Snapshots that no record, materialization or pending operation references are
+removed (#1161). This happens after delete and update, and in a sweep at
+startup. Removal never uses recursive deletion:
+
+1. The directory is renamed to `.trash-<digest>-<uuid>` inside the root.
+2. Its manifest is rebuilt **from disk** and must hash to the digest. Content
+   addressing makes the name a proof of the exact bytes.
+3. Each file is re-hashed and unlinked.
+4. Directories are removed deepest-first with `rmdir`, which refuses anything
+   non-empty.
+
+Anything that fails the proof stays in place, inert. The residual
+ancestor-swap race can at worst unlink a file byte-identical to one of our own
+snapshot files at the same relative path. `.staging-*` leftovers carry no
+digest to prove, so they are left alone.
+
+This replaced the former "retain forever" rule and its 256 MiB root cap. In
+practice that cap became a hidden limit on how many skills a user could
+install.
+
+There is no cap on how many skills Agent Code manages. Every remaining limit
+bounds one package or one network response. The 16 MiB state document is the
+only aggregate ceiling. It holds thousands of skills, and exceeding it is an
+ordinary I/O error, never recovery.
 
 The persisted revision is a compare-and-swap token for renderer mutations.
 Deployment health is separate from desired `enabled` state: an enabled document
@@ -135,8 +156,55 @@ instructions because native skill discovery alone cannot guarantee activation.
 
 ## GitHub-installed packages
 
-Installed Skills accepts public `https://github.com/<owner>/<repo>` URLs and
-GitHub `/tree/<ref>/<path>` URLs. Discovery uses a hardened `git ls-remote`
+### Accepted input
+
+Settings → Skills → Add accepts the same input people paste from READMEs and
+skills.sh:
+
+- `npx skills add <source> [--skill …|'*'] [-a …] [--all] [--full-depth]`. The
+  flags `-g`, `-y` and `--copy` are accepted and change nothing here.
+- `owner/repo[@skill]`, `owner/repo/path`, `owner/repo#ref`, `github:`,
+  `git@github.com:…`, skills.sh pages, and public `https://github.com/<owner>/<repo>`
+  and `/tree/<ref>/<path>` URLs.
+
+`src/shared/skills/installSource.ts` parses the text. Main re-parses it as the
+authority. Other hosts and local paths are refused with a clear message: local
+import needs a main-owned folder picker, because a renderer path is never
+accepted.
+
+### Discovery
+
+Candidate folders are chosen by the rules of vercel-labs `npx skills` 1.7:
+
+1. A `SKILL.md` at the search path is the only candidate, unless `--full-depth`
+   is given.
+2. Otherwise these containers are searched:
+   - the direct children of the search path;
+   - `skills/`, `skills/.curated`, `skills/.experimental` and `skills/.system`,
+     three levels deep, stopping below each skill found;
+   - every top-level `.<agent>/skills` folder;
+   - folders listed in `.claude-plugin/marketplace.json`.
+3. If nothing was found, a depth-5 recursive fallback runs. It skips
+   `node_modules`, `.git`, `dist`, `build` and `__pycache__`.
+4. Duplicate names are resolved first-found-wins, with a notice.
+5. `metadata.internal` skills appear only when named.
+
+Packages install under their frontmatter name. The source folder's name is not
+required to match it.
+
+### Lazy acquisition
+
+Discovery downloads each candidate's `SKILL.md` and nothing else. The review's
+file list, sizes and executable bits come from the commit tree, and each
+reviewed file is bound to its blob ID.
+
+`acquire` fetches a selected package at install or update time. It verifies
+every byte against those blob IDs, then computes the sha256 manifest.
+Acquisition runs outside the mutation lock, and the mutation re-checks the
+revision and the staged review. Update checks acquire only the one package
+they diff and keep no bytes.
+
+The details of ref resolution and transport follow. Discovery uses a hardened `git ls-remote`
 without a shell to resolve advertised branch/tag identity; its subprocess
 environment is allowlisted so askpass, credential, proxy, and TLS overrides
 cannot cross into acquisition. Repository content is never cloned. The exact
@@ -165,6 +233,53 @@ ref, source path, and skill name and return a deterministic added/changed/remove
 file review. Nothing changes until the user applies that staged review. There
 are no background checks or automatic updates, and source-managed packages are
 view-only rather than editable as Custom Skills.
+
+## Provider choices
+
+Installed and custom records may carry `providers` (#1161). When it is absent,
+the skill goes to every provider, so existing documents need no migration.
+
+- **Roots, not providers.** A record selects every current root shared with a
+  chosen provider. Roots are physical and shared: OpenCode reads both, and Codex
+  and Pi share `~/.agents/skills`. So "Claude only" is still visible to
+  OpenCode, and Settings shows that as "shared".
+- **Changing the choice** is one durable intent:
+  - newly chosen roots are preflighted, so a collision changes nothing;
+  - reconciliation journals syncs for chosen roots and deletes for deselected
+    ones, through the same write-ahead journal as every other change.
+- **Health** is judged over chosen roots only.
+
+## Skills other tools installed
+
+`src/main/agentSkills/externalSkills.ts` lists skills in the current personal
+roots that are not Agent Code materializations. These are installed by
+`npx skills`, Codex's `$skill-installer`, or by hand.
+
+- **Scanning.** Each root is scanned separately, so an `npx skills` symlink
+  shows in every root it is visible from.
+- **Provenance.** It is read from `~/.agents/.skill-lock.json`, which Agent Code
+  **never writes**. A lock entry would let `npx skills update` rewrite
+  journal-owned files.
+- **Actions.** These skills can be revealed (the path is re-derived in main from
+  a root id and one folder name) or hidden (a per-viewer setting). They are
+  never adopted: an unmanaged destination has no ownership record. "Manage with
+  Agent Code" means removing the folder and reinstalling through the review.
+
+## Agent proposals
+
+The off-by-default `skills` built-in MCP domain gives agents four tools:
+`skills_list`, `skills_find`, `skills_add` and `skills_remove`. They drive the
+same service methods as Settings.
+
+- **`skills_add`** saves records disabled with
+  `pendingReview: { by: 'agent', sessionId, requestedAt }`. Nothing reaches a
+  provider root.
+- **Enabling is the user's.** The user enabling the skill is the review, and
+  clears the marker. Persistence rejects an enabled record that still carries
+  one.
+- **`skills_remove`** only withdraws unreviewed proposals.
+- **Orchestration children** cannot be handed the domain by a parent that lacks
+  it.
 
 ## Ownership and crash recovery
 
@@ -246,7 +361,9 @@ memory and local crash/heap captures.
 ## Warning
 
 Never replace the pending-operation journal with marker-based ownership. Never
-use recursive deletion, delete a directory Agent Code did not create, accept an
+write `~/.agents/.skill-lock.json` or adopt an external skill folder. Never
+use recursive deletion (snapshot cleanup is content-proven and non-recursive;
+keep it that way), delete a directory Agent Code did not create, accept an
 arbitrary renderer path, follow a provider symlink, log user content, or add a
 provider-name branch to the service. Provider discovery belongs in the
 exhaustive registry; ownership and materialization must remain one central
