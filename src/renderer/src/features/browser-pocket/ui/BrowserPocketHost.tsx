@@ -311,14 +311,14 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
     }
     const onCommit = (e: Event) => {
       if (elementRef.current !== el) return
-      const nav = e as unknown as { isMainFrame?: boolean; httpResponseCode?: number }
-      // Chromium's error document has no HTTP response. It is not recovery
-      // merely because a document committed; preserve failure/receipt state.
-      if (nav.isMainFrame !== false && nav.httpResponseCode !== -1) {
+      const nav = e as unknown as { isMainFrame: boolean; httpResponseCode: number }
+      // <webview>'s did-navigate carries ONLY url, unlike WebContents' event.
+      // Response evidence belongs to did-frame-navigate. The error document
+      // reports -1; neither it nor a successful iframe ends our failed episode.
+      if (nav.isMainFrame && nav.httpResponseCode >= 100) {
         patchLive(pocketId, { failed: null })
         useRecoveryStore.getState().clear(pocketId)
       }
-      onNav()
     }
     const onNavigationStart = (e: Event) => {
       if (elementRef.current !== el) return
@@ -350,7 +350,8 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
       setTimeout(() => patchLive(pocketId, prev => ({ generation: prev.generation + 1 })), delay)
     }
     el.addEventListener('dom-ready', register, { once: true })
-    el.addEventListener('did-navigate', onCommit)
+    el.addEventListener('did-navigate', onNav)
+    el.addEventListener('did-frame-navigate', onCommit)
     el.addEventListener('did-start-navigation', onNavigationStart)
     el.addEventListener('did-navigate-in-page', onNav)
     el.addEventListener('did-start-loading', onStart)
@@ -361,7 +362,8 @@ const HostedPocket = memo(function HostedPocket({ sessionId, pocket, projectId, 
     el.addEventListener('render-process-gone', onGone)
     return () => {
       el.removeEventListener('dom-ready', register)
-      el.removeEventListener('did-navigate', onCommit)
+      el.removeEventListener('did-navigate', onNav)
+      el.removeEventListener('did-frame-navigate', onCommit)
       el.removeEventListener('did-start-navigation', onNavigationStart)
       el.removeEventListener('did-navigate-in-page', onNav)
       el.removeEventListener('did-start-loading', onStart)

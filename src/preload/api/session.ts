@@ -1,7 +1,7 @@
 import type { SessionRoutingGap, SessionRoutingScope, SessionRoutingResyncResult, SessionRoutingHistoryResult } from '@shared/types/sessionRouting.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
@@ -151,8 +151,9 @@ export const sessionApi = {
     prompt: string,
     imagePaths?: string[],
     deliveryId?: string,
+    options?: PromptDeliveryOptions,
   ): Promise<PromptDeliveryResult> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId, ...(options ? [options] : [])),
 
   resolveCondition: (
     sessionId: string,

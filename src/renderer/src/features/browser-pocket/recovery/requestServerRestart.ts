@@ -50,15 +50,18 @@ export async function requestServerRestart(getWorkspace: () => Workspace, sessio
     if (!isCurrent()) { store.clear(pocketId, token); return }
     const context = restartContext(target.failure, target.owner.worktree, useLanePortsStore.getState().bySession[sessionId] ?? [])
     invoked = true
-    const delivery = await window.api.deliverPrompt(sessionId, restartPrompt(context))
+    const delivery = await window.api.deliverPrompt(sessionId, restartPrompt(context), undefined, undefined, { requireEmptyNativeComposer: true })
     // The user may have navigated or closed the pocket AFTER the write. We
     // cannot retract that task, and must neither replay it nor report success
     // into a replacement view. finish() checks the surviving operation token.
     if (delivery.ok) finish({ kind: delivery.acceptance.kind === 'queue' ? 'queued' : 'sent' })
-    else if (!delivery.retrySafe || delivery.promptWritten || delivery.enterWritten) finish({ kind: 'uncertain' })
+    // Retry permission and delivery certainty are independent. OpenCode/Grok
+    // explicitly refuse some submissions before writing but forbid replay;
+    // preserve that reason without treating a known rejection as a lost ACK.
+    else if (delivery.promptWritten || delivery.enterWritten || (!delivery.retrySafe && delivery.stage !== 'before-write' && delivery.stage !== 'reservation')) finish({ kind: 'uncertain' })
     else finish({
       kind: 'refused', message: delivery.message,
-      retryable: delivery.disposition === 'retry-same-session',
+      retryable: delivery.retrySafe && delivery.disposition === 'retry-same-session',
     })
   } catch (error) {
     // An IPC rejection after invocation may have lost only the ACK. A local

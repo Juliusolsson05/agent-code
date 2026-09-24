@@ -50,6 +50,7 @@ describe('restart request delivery', () => {
     expect(deliver).toHaveBeenCalledTimes(1)
     expect(deliver.mock.calls[0]?.[0]).toBe('agent')
     expect(deliver.mock.calls[0]?.[1]).toContain('/work/project/tree')
+    expect(deliver.mock.calls[0]?.[4]).toEqual({ requireEmptyNativeComposer: true })
     expect(status()).toEqual({ kind: kind === 'queue' ? 'queued' : 'sent' })
     expect(useAppStore.getState().workspaceRuntimes.agent.draftInput).toBe('Unfinished human draft')
   })
@@ -148,6 +149,14 @@ describe('restart request delivery', () => {
     else deliver.mockResolvedValue({ ok: false, stage: 'after-enter', code: 'acceptance-timeout', message: 'No acknowledgement', retrySafe: false, disposition: 'do-not-retry', promptWritten: true, enterWritten: true })
     await request()
     expect(status()).toEqual({ kind: 'uncertain' })
+    await request()
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['retry-same-session', 'do-not-retry'] as const)('preserves a proven refusal with retrySafe false and disposition %s', async disposition => {
+    deliver.mockResolvedValue({ ok: false, stage: 'before-write', code: 'transport-failed', message: 'Provider rejected the task', retrySafe: false, disposition, promptWritten: false, enterWritten: false })
+    await request()
+    expect(status()).toEqual({ kind: 'refused', message: 'Provider rejected the task', retryable: false })
     await request()
     expect(deliver).toHaveBeenCalledTimes(1)
   })

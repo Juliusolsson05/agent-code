@@ -100,6 +100,15 @@ function fail(el: HTMLElement, url = 'http://localhost:3000/', code = -102) {
   act(() => { el.dispatchEvent(Object.assign(new Event('did-fail-load'), { isMainFrame: true, validatedURL: url, errorCode: code, errorDescription: 'Connection failed' })) })
 }
 
+function navigate(el: HTMLElement, url: string, httpResponseCode: number, isMainFrame = true) {
+  // Match Electron.WebviewTag, not WebContents: did-navigate has only url.
+  // Frame response evidence arrives separately, including error documents.
+  act(() => {
+    el.dispatchEvent(Object.assign(new Event('did-frame-navigate'), { url, isMainFrame, httpResponseCode, httpStatusText: '', frameProcessId: 1, frameRoutingId: 1 }))
+    if (isMainFrame) el.dispatchEvent(Object.assign(new Event('did-navigate'), { url }))
+  })
+}
+
 describe('local server recovery UI', () => {
   it.each([['https://example.com/', -102], ['http://localhost:3000/', -200], ['http://localhost:3000/', -105]])('keeps ordinary reload without restart for %s (%i)', async (url, code) => {
     installApi()
@@ -132,7 +141,12 @@ describe('local server recovery UI', () => {
     expect(log).not.toContain('unregister(guests=1)')
     fail(el, failedUrl)
     expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
-    act(() => { el.dispatchEvent(Object.assign(new Event('did-navigate'), { isMainFrame: true, httpResponseCode: -1 })) })
+    navigate(el, failedUrl, -1)
+    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }))
+    fail(el, failedUrl)
+    navigate(el, failedUrl, -1)
+    navigate(el, 'https://example.com/iframe', 200, false)
     expect(screen.getByRole('status').textContent).toBe('Queued for agent')
     showSlot(false)
     await flush()
@@ -155,7 +169,7 @@ describe('local server recovery UI', () => {
     fail(el)
     fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
     await flush()
-    act(() => { el.dispatchEvent(Object.assign(new Event('did-navigate'), { isMainFrame: true, httpResponseCode: 200 })) })
+    navigate(el, POCKET.url, 200)
     expect(useRecoveryStore.getState().requests.p1).toBeUndefined()
     fail(el)
     expect(screen.getByRole('button', { name: 'Try to restart' })).toBeTruthy()
@@ -196,6 +210,19 @@ describe('local server recovery UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View agent' }))
     expect(ws.setSpotlightTarget).toHaveBeenCalledWith('s1')
     expect(updates.at(-1)!(ws.state).sessions.s1?.browserPocket?.view).toBe('collapsed')
+  })
+
+  it('shows a proven provider rejection even when the provider forbids retry', async () => {
+    const calls = installApi()
+    calls.deliver.mockResolvedValue({ ok: false, stage: 'before-write', code: 'transport-failed', message: 'Provider refused: invalid model', retrySafe: false, disposition: 'do-not-retry', promptWritten: false, enterWritten: false })
+    renderHost(workspace('s1', POCKET).ws)
+    showSlot()
+    await flush()
+    fail(guest())
+    fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
+    await flush()
+    expect(screen.getByRole('status').textContent).toBe('Provider refused: invalid model')
+    expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
   })
 
   it('revokes a pending request when main-frame navigation changes the target', async () => {

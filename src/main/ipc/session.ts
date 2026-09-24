@@ -8,6 +8,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { PromptDeliveryOptions } from '@shared/types/providerConfig.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
@@ -358,6 +359,7 @@ export function registerSessionIpc(
       prompt: string,
       imagePaths?: string[],
       deliveryId?: string,
+      options?: PromptDeliveryOptions,
     ) => {
       const record = typeof deliveryId === 'string' && deliveryId.length > 0
         ? (event: string, data?: Record<string, unknown>) => {
@@ -368,7 +370,8 @@ export function registerSessionIpc(
             })
           }
         : undefined
-      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId)
+      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId,
+        options?.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : undefined)
     },
   )
 
