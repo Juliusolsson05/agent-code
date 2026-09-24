@@ -26,6 +26,8 @@ export const createUiShellSlice: StateCreator<
   settingsPageCategory: null,
   settingsPageRequest: 0,
   mcpServerDialog: null,
+  addSkillDialog: null,
+  skillUpdateCheckRequest: 0,
   agentMcpServersSessionId: null,
   agentTitlePromptSessionId: null,
   rootManagementPromptSessionId: null,
@@ -153,6 +155,12 @@ export const createUiShellSlice: StateCreator<
     set({ mcpServerDialog: target }, false, 'uiShell/openMcpServerDialog'),
   closeMcpServerDialog: () =>
     set({ mcpServerDialog: null }, false, 'uiShell/closeMcpServerDialog'),
+  openAddSkillDialog: initialInput =>
+    set({ addSkillDialog: { initialInput: initialInput ?? '' } }, false, 'uiShell/openAddSkillDialog'),
+  closeAddSkillDialog: () =>
+    set({ addSkillDialog: null }, false, 'uiShell/closeAddSkillDialog'),
+  requestSkillUpdateCheck: () =>
+    set(state => ({ skillUpdateCheckRequest: state.skillUpdateCheckRequest + 1 }), false, 'uiShell/requestSkillUpdateCheck'),
   openAgentMcpServers: sessionId =>
     set({ agentMcpServersSessionId: sessionId }, false, 'uiShell/openAgentMcpServers'),
   closeAgentMcpServers: () =>

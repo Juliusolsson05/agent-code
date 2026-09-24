@@ -124,6 +124,13 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
     showToast(`${event.message}. See Settings → MCP.`, 8000)
   }), [showToast])
 
+  // #1161: an agent proposed or withdrew a skill through the skills domain.
+  // Always surfaced for the same reason as MCP changes: skills are
+  // instructions every future agent may load.
+  useEffect(() => window.api.onManagedSkillsAgentChange?.(event => {
+    showToast(`${event.message}. See Settings → Skills.`, 8000)
+  }), [showToast])
+
   const dismiss = useCallback(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current)

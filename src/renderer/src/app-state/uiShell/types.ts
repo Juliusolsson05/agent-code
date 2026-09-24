@@ -94,6 +94,13 @@ export type UiShellState = {
   /** Add/Edit MCP server dialog (#1143). One owner so the Settings grid and
    * the "Add MCP Server…" command open the same dialog. */
   mcpServerDialog: { mode: 'add' } | { mode: 'edit'; serverId: string } | null
+  /** Add skills dialog (#1161), optionally prefilled (for example with an
+   * `npx skills add …` line for an external skill). One owner so the grid,
+   * the "Add Skill…" command and "Manage with Agent Code" share it. */
+  addSkillDialog: { initialInput: string } | null
+  /** Bumped by "Check Skill Updates"; the Skills grid runs check-all when it
+   * changes. A counter, like settingsPageRequest, so repeats still fire. */
+  skillUpdateCheckRequest: number
   /** Target of the per-agent "Agent MCP Servers…" modal, captured when the
    * command runs so focus moving while it is open cannot retarget it. */
   agentMcpServersSessionId: SessionId | null

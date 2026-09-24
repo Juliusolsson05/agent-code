@@ -285,6 +285,8 @@ function OpenCommandPalette({
   const openApp = useAppStore(state => state.openApp)
   const openKeyVault = useAppStore(state => state.openKeyVault)
   const openMcpServerDialogState = useAppStore(state => state.openMcpServerDialog)
+  const openAddSkillDialogState = useAppStore(state => state.openAddSkillDialog)
+  const requestSkillUpdateCheck = useAppStore(state => state.requestSkillUpdateCheck)
   const openAgentMcpServers = useAppStore(state => state.openAgentMcpServers)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
@@ -551,6 +553,8 @@ function OpenCommandPalette({
         openAgentAnalytics,
         openKeyVault,
         openMcpServerDialog: () => openMcpServerDialogState({ mode: 'add' }),
+        openAddSkillDialog: () => openAddSkillDialogState(),
+        requestSkillUpdateCheck,
         openAgentMcpServers,
         toggleGitBar,
         toggleWorktreesBar,
@@ -672,6 +676,8 @@ function OpenCommandPalette({
       openApp,
       openKeyVault,
       openMcpServerDialogState,
+      openAddSkillDialogState,
+      requestSkillUpdateCheck,
       openAgentMcpServers,
       toggleGitBar,
       toggleWorktreesBar,
