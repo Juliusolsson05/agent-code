@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 // Imported from the script so the test and the implementation cannot drift
 // on the caps. The behaviour itself is asserted through the real process.
-import { NOTES_MAX_COMMITS, PREVIEW_KEEP_DAYS, PREVIEW_KEEP_MIN, previewVersion, selectPrunable } from '../../../scripts/release/preview.mjs'
+import { NOTES_MAX_COMMITS, PREVIEW_KEEP_DAYS, PREVIEW_KEEP_MIN, datedCollision, previewVersion, selectPrunable } from '../../../scripts/release/preview.mjs'
 
 // System tests for scripts/release/preview.mjs: the preview workflow's
 // version, decision, rename, release-notes and prune logic
@@ -41,7 +41,7 @@ const recordedBeta = (): Release => JSON.parse(readFileSync(join(fixtures, 'gh-r
 const recordedCrlf = (): Release => JSON.parse(readFileSync(join(fixtures, 'gh-release-react-latest-crlf.json'), 'utf8'))
 const recordedNightly = (): Release => JSON.parse(readFileSync(join(fixtures, 'gh-release-nightly-complete.json'), 'utf8'))
 const recordedReleases = () => readFileSync(join(fixtures, 'gh-api-releases-list.jsonl'), 'utf8')
-  .split('\n').filter(Boolean).map(line => JSON.parse(line) as { tag: string, created: string })
+  .split('\n').filter(Boolean).map(line => JSON.parse(line) as { tag: string, published: string })
 
 /** DERIVED: the recorded complete `nightly` release as the rolling preview.
  * Only the fixed asset names differ between the two rolling releases. */
@@ -58,44 +58,60 @@ const temps: string[] = []
 afterEach(() => { for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 function temp(prefix: string) { const dir = mkdtempSync(join(tmpdir(), prefix)); temps.push(dir); return dir }
 
-/** A stub `gh` on PATH that replays recorded output and appends every argv
- * it receives (one call per line) to `calls`. The only replaced edge. */
-function stubGh(response: { stdout: string, stderr?: string, exit?: number }) {
+type GhResponse = { stdout: string, stderr?: string, exit?: number }
+const recorded = (name: string) => ({
+  stdout: readFileSync(join(fixtures, `${name}.stdout`), 'utf8'),
+  stderr: readFileSync(join(fixtures, `${name}.stderr`), 'utf8'),
+  exit: 1,
+})
+
+/** A stub `gh` on PATH, the only replaced edge. It appends every argv it
+ * receives (one call per line) to `calls`. A lookup of a DATED preview tag
+ * (`releases/tags/v…`) replays `dated` (the recorded 404 unless a test says
+ * otherwise); `release delete` succeeds silently like the real CLI; every
+ * other call replays `response`. */
+function stubGh(response: GhResponse, dated: GhResponse = recorded('gh-api-nightly-404')) {
   const dir = temp('preview-gh-')
   const bin = join(dir, 'bin'); mkdirSync(bin)
-  writeFileSync(join(dir, 'stdout'), response.stdout)
-  writeFileSync(join(dir, 'stderr'), response.stderr ?? '')
+  for (const [name, value] of [['default', response], ['dated', dated]] as const) {
+    writeFileSync(join(dir, `${name}.stdout`), value.stdout)
+    writeFileSync(join(dir, `${name}.stderr`), value.stderr ?? '')
+    writeFileSync(join(dir, `${name}.exit`), String(value.exit ?? 0))
+  }
   writeFileSync(join(dir, 'calls'), '')
-  // `release delete` succeeds silently, like the real CLI; every other call
-  // replays the recorded response.
-  writeFileSync(join(bin, 'gh'), `#!/bin/sh\necho "$*" >> "${dir}/calls"\nif [ "$1" = release ]; then exit 0; fi\ncat "${dir}/stdout"\ncat "${dir}/stderr" >&2\nexit ${response.exit ?? 0}\n`)
+  writeFileSync(join(bin, 'gh'), [
+    '#!/bin/sh',
+    `echo "$*" >> "${dir}/calls"`,
+    'if [ "$1" = release ]; then exit 0; fi',
+    'which=default',
+    'case "$2" in */releases/tags/v*) which=dated;; esac',
+    `cat "${dir}/$which.stdout"`,
+    `cat "${dir}/$which.stderr" >&2`,
+    `exit $(cat "${dir}/$which.exit")`,
+    '',
+  ].join('\n'))
   chmodSync(join(bin, 'gh'), 0o755)
   const calls = () => readFileSync(join(dir, 'calls'), 'utf8').split('\n').filter(Boolean)
   return { path: `${bin}:${process.env.PATH}`, calls }
 }
 
 /** Run `decide` in a checkout whose package.json is the current stable (0.1.3). */
-function decide(response: { stdout: string, stderr?: string, exit?: number }, env: Record<string, string> = {}, version = '0.1.3') {
-  const gh = stubGh(response)
+function decide(response: GhResponse, env: Record<string, string> = {}, dated?: GhResponse) {
+  const gh = stubGh(response, dated)
   const cwd = temp('preview-decide-')
-  writeFileSync(join(cwd, 'package.json'), JSON.stringify({ name: 'agent-code', version }))
+  writeFileSync(join(cwd, 'package.json'), JSON.stringify({ name: 'agent-code', version: '0.1.3' }))
   const output = join(cwd, 'github-output'); writeFileSync(output, '')
   const run = spawnSync(process.execPath, [script, 'decide'], {
     cwd, encoding: 'utf8',
     env: {
       ...process.env, PATH: gh.path, GITHUB_OUTPUT: output, GITHUB_SHA: HEAD,
-      GITHUB_REPOSITORY: 'Juliusolsson05/agent-code', GITHUB_REF_NAME: 'main',
+      GITHUB_REPOSITORY: 'Juliusolsson05/agent-code', GITHUB_REF_NAME: 'main', GITHUB_REF: 'refs/heads/main',
       GITHUB_EVENT_NAME: 'schedule', FORCE: 'false', NOW: '2026-09-24T09:46:43Z', ...env,
     },
   })
   const outputs = Object.fromEntries(readFileSync(output, 'utf8').split('\n').filter(Boolean).map(line => line.split(/=(.*)/s).slice(0, 2)))
   return { status: run.status, stderr: run.stderr, stdout: run.stdout, outputs, calls: gh.calls() }
 }
-const recorded = (name: string) => ({
-  stdout: readFileSync(join(fixtures, `${name}.stdout`), 'utf8'),
-  stderr: readFileSync(join(fixtures, `${name}.stderr`), 'utf8'),
-  exit: 1,
-})
 
 describe('preview version', () => {
   // The real clock of today's scheduled run (09:46 UTC; the cron says 05:00
@@ -134,7 +150,11 @@ describe('preview decide: should this run build, and as which version?', () => {
   it('builds when no rolling preview exists yet (recorded 404), asking for exactly the preview tag', () => {
     const result = decide(recorded('gh-api-nightly-404'))
     expect(result.status).toBe(0)
-    expect(result.calls).toEqual(['api repos/Juliusolsson05/agent-code/releases/tags/preview'])
+    // The rolling release, then the dated tag it is about to create.
+    expect(result.calls).toEqual([
+      'api repos/Juliusolsson05/agent-code/releases/tags/preview',
+      'api repos/Juliusolsson05/agent-code/releases/tags/v0.1.4-preview.20260924',
+    ])
     expect(result.outputs).toMatchObject({
       changed: 'true', 'head-sha': HEAD, 'prev-sha': '',
       version: '0.1.4-preview.20260924', tag: 'v0.1.4-preview.20260924',
@@ -199,6 +219,35 @@ describe('preview decide: should this run build, and as which version?', () => {
     const release = asRollingPreview(recordedNightly(), HEAD)
     release.body = `built-from: ${HEAD.slice(0, 8)}\n\n`
     expect(decide({ stdout: JSON.stringify(release) }).outputs).toMatchObject({ changed: 'true', 'prev-sha': '' })
+  })
+
+  it('a target=minor dispatch builds even when main has not moved (it asks for a different label)', () => {
+    const result = decide({ stdout: JSON.stringify(asRollingPreview(recordedNightly(), HEAD)) }, { GITHUB_EVENT_NAME: 'workflow_dispatch', TARGET: 'minor' })
+    expect(result.outputs).toMatchObject({ changed: 'true', version: '0.2.0-preview.20260924.946' })
+  })
+
+  it('refuses to overwrite a dated preview built from another commit (Re-run all jobs on an older run)', () => {
+    // DERIVED from the recorded nightly: a real release whose
+    // target_commitish holds the SHA it was built from (7feda947), exactly as
+    // the dated preview's publish step creates it. Here it is today's dated
+    // preview, and this run (a re-run of yesterday's) is for another commit.
+    const todaysDated = { ...recordedNightly(), tag_name: 'v0.1.4-preview.20260924' }
+    const result = decide(recorded('gh-api-nightly-404'), {}, { stdout: JSON.stringify(todaysDated) })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toMatch(/v0\.1\.4-preview\.20260924 already exists for commit 7feda94767c6/)
+    expect(result.outputs.changed).toBeUndefined()
+  })
+
+  it('allows a genuine retry of the same commit over its own dated preview', () => {
+    const sameCommit = { ...recordedNightly(), target_commitish: HEAD }
+    expect(decide(recorded('gh-api-nightly-404'), {}, { stdout: JSON.stringify(sameCommit) }).outputs.changed).toBe('true')
+  })
+
+  it('refuses a dispatch from any branch but main', () => {
+    const result = decide(recorded('gh-api-nightly-404'), { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/feat/x' })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toMatch(/main only.*refs\/heads\/feat\/x/)
+    expect(result.calls).toEqual([])
   })
 
   it('force rebuilds even a complete preview for this commit', () => {
@@ -266,7 +315,7 @@ describe('preview prune: retention over the real release list', () => {
     const previews = Array.from({ length: days }, (_, index) => {
       const date = new Date(Date.UTC(2026, 8, 24 - index, 10, 23))
       const stamp = date.toISOString().slice(0, 10).replaceAll('-', '')
-      return { tag: `v0.1.4-preview.${stamp}`, created: date.toISOString() }
+      return { tag: `v0.1.4-preview.${stamp}`, published: date.toISOString() }
     })
     return [...previews, ...recordedReleases()]
   }
@@ -291,10 +340,25 @@ describe('preview prune: retention over the real release list', () => {
 
   it('always keeps the newest previews even when all are old (a quiet fortnight)', () => {
     const old = withPreviews(5).map(release => /-preview\./.test(release.tag)
-      ? { ...release, created: new Date(Date.parse(release.created) - 60 * 24 * 60 * 60 * 1000).toISOString() }
+      ? { ...release, published: new Date(Date.parse(release.published) - 60 * 24 * 60 * 60 * 1000).toISOString() }
       : release)
     const doomed = selectPrunable(old, { now }).filter(tag => tag !== 'nightly')
     expect(doomed).toHaveLength(5 - PREVIEW_KEEP_MIN)
+  })
+
+  it('ages previews by publication, not by the commit date GitHub reports as created_at', () => {
+    // A preview of an old commit, published a minute ago, must survive even
+    // with more than KEEP_MIN newer-commit previews around (review round 1).
+    const releases = [
+      ...withPreviews(PREVIEW_KEEP_MIN + 2),
+      { tag: 'v0.1.4-preview.20260801', published: '2026-09-24T10:23:00Z' },
+    ]
+    expect(selectPrunable(releases, { now })).not.toContain('v0.1.4-preview.20260801')
+  })
+
+  it('never selects a release without a valid publication time (a draft)', () => {
+    const releases = [...withPreviews(PREVIEW_KEEP_MIN), { tag: 'v0.1.4-preview.20250101', published: null as unknown as string }]
+    expect(selectPrunable(releases, { now })).not.toContain('v0.1.4-preview.20250101')
   })
 
   it('runs `gh release delete --cleanup-tag` for exactly the selected tags', () => {

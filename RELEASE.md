@@ -109,11 +109,19 @@ A preview is `main`, built and signed as a preview of the **next** version.
 gh workflow run preview.yml --repo Juliusolsson05/agent-code --ref main
 ```
 
+- Manual runs build `main` only. A run from any other branch is refused,
+  because it would replace the "newest preview" download with an unreviewed
+  branch build.
 - A manual run adds the time to the version (`0.1.4-preview.20260924.1415`),
   so it never collides with that night's build.
-- Set `target=minor` while preparing a minor release, so its previews say
-  `0.2.0-preview.…`.
-- Set `force=true` to rebuild a commit that already has a preview.
+- `target=minor` builds ONE preview labelled for the next minor
+  (`0.2.0-preview.…`), even if `main` has not moved since the last preview.
+  Scheduled nights keep previewing the next patch, so run it again whenever
+  you want a fresh minor-labelled build.
+- `force=true` rebuilds a commit that already has a preview.
+- To retry a failed preview, start a **new** run. "Re-run all jobs" on an
+  older run is refused once a newer dated preview exists: it would put the
+  old commit's build under today's date.
 
 If the next stable turns out bigger than a patch, nothing breaks: previews
 labelled `0.1.4-preview.*` still sort below `0.2.0`, and their users are
@@ -165,25 +173,129 @@ offered it.
    optional**: the release page is the only place anyone can see what
    changed, and v0.1.3 went out with an empty one.
 
-## Release notes format
+## Writing the release notes
 
-Same shape as the preview releases, so the Releases page reads consistently:
+Every stable release gets notes before you tell anyone about it. The release
+page is the only place a user can see what changed, and v0.1.3 went out with
+an empty one.
+
+### Who reads them
+
+People who use Agent Code, deciding whether to restart for the update and
+what to try afterwards. They do not know the codebase, the PR numbers or the
+internal names. Write for them, not for the team.
+
+### Gather what shipped
+
+```sh
+git log --oneline --first-parent v<previous>..origin/main
+```
+
+Every line is a merged PR. Read each PR's title and description
+(`gh pr view <number> --repo Juliusolsson05/agent-code`), then sort it:
+
+- **Users will notice it**: a new feature, a changed behaviour, or a fixed bug
+  someone could have hit. It goes in the notes.
+- **Users will not notice it**: refactors, tests, CI, docs, internal tooling,
+  dependency bumps with no visible effect. Leave it out of the highlights. It
+  still appears in the commit list at the bottom.
+- **Security fixes and fixes for crashes or data loss** always go in, even
+  when small, under **Fixed**.
+
+### What to write
+
+1. **Opening sentence**: what this release is about, in one or two sentences.
+   Name the biggest change. If there is anything the user must do, say it
+   here (for example: sign in again, re-enable a setting, restart agents).
+2. **Highlights**, grouped under **New**, **Improved** and **Fixed**, most
+   important first. Drop a group that has nothing in it. One bullet per
+   change:
+   - start with the **thing** in bold, as it appears in the app (the menu
+     item, command or setting name);
+   - then say **what changes for the user**, in plain words: what they can
+     do now, or what no longer goes wrong;
+   - add where to find it if it is new ("Settings → Skills", "the Add Skill…
+     command");
+   - one or two sentences, no implementation details, no internal names.
+3. **Before you update** (only when it applies): anything that could surprise
+   someone, such as a changed default, a migration older builds cannot read,
+   or a feature removed.
+4. **Known issues** (only when it applies): what is not working yet or not
+   verified live, and the workaround. Say it plainly rather than leaving it
+   out.
+5. **Commits since v<previous>**: the `git log` output above, unedited.
+
+### Style
+
+- Plain language, present tense, second person ("You can now…").
+- Say what the user sees, not how it was built. "Agents launched from Agent
+  Code can now use your own MCP servers", not "added launch-time `--mcp-config`
+  injection".
+- No PR or issue numbers in the highlights; the commit list carries them.
+- Don't oversell. "Faster" needs to be true in normal use; "fixed" means
+  verified fixed.
+
+### Template
 
 ```markdown
 built-from: <full commit sha>
 
-Stable release of [`<short sha>`](https://github.com/Juliusolsson05/agent-code/tree/<full sha>), signed and notarized. <One or two sentences on what this release is for.>
+Agent Code <version>, built from [`<short sha>`](https://github.com/Juliusolsson05/agent-code/tree/<full sha>), signed and notarized. <One or two sentences: what this release is about, and anything the user must do.>
 
-### Highlights since v<previous>
+### New
+- **<Name as shown in the app>** — <what the user can do now>. <Where to find it.>
 
-**<Feature or fix>** — <what changes for the user, in plain words>.
+### Improved
+- **<Name>** — <what is better, in the user's terms>.
+
+### Fixed
+- **<Name>** — <what no longer goes wrong>.
+
+### Before you update
+- <Only if needed.>
+
+### Known issues
+- <Only if needed, with the workaround.>
 
 ### Commits since v<previous>
 <output of: git log --oneline --first-parent v<previous>..v<this>>
 ```
 
-Lead with what users will notice. Put caveats (things not yet verified live,
-known limits) in a short note at the end rather than hiding them.
+### Example
+
+These are the notes v0.1.3 should have had, written from its real merges
+(v0.1.2..v0.1.3). The extension refactor, the incident-journal change and the
+proxy identity fix are internal, so they appear only in the commit list:
+
+```markdown
+Agent Code 0.1.3 lets you add your own MCP servers, gives agents a browser they can drive, adds Pi as an agent provider, and shows usage limits for more providers.
+
+### New
+- **Your own MCP servers** — add any MCP server by pasting the config from its README, choose which providers and which agents get it, and keep its tokens encrypted. Settings → MCP, or the Add MCP Server… command.
+- **Browser pocket** — each agent can open a browser beside it and drive it to check the page it is working on.
+- **Pi** — Pi is now available as an agent provider, in its own terminal.
+- **Usage limits** — choose which providers Agent Code shows, and see Grok and z.ai usage alongside the others in the Usage window.
+- **Extensions** — extensions can now call the web services they declare and keep their own secrets.
+
+### Improved
+- **Agent Management** — agents can now be targeted by the label you see beside them (such as B28) or by their spoken name.
+
+### Fixed
+- **Updates** — downloading an update now works, and Check for Updates always gives an answer.
+- **Agents with a broken skill** — an agent now starts without the broken skill instead of not starting at all.
+- **Orchestration** — sending a prompt to a child agent that is still starting now waits for it instead of failing.
+
+### Commits since v0.1.2
+<git log --oneline --first-parent v0.1.2..v0.1.3>
+```
+
+### Checklist before publishing the notes
+
+- [ ] Every user-visible change is in, and nothing internal is in the highlights.
+- [ ] Every name matches what the app shows.
+- [ ] Anything the user must do is in the opening sentence.
+- [ ] Known issues are listed, not hidden.
+- [ ] The commit list is complete.
 
 ## Don't
 
@@ -198,7 +310,9 @@ known limits) in a short note at the end rather than hiding them.
 - **Don't delete a published stable release** once anyone besides the
   maintainer may have installed it. Their updater expects the version line to
   only go up.
-- **Don't release from a branch.** Stable releases come from `main` only.
+- **Don't release from a branch.** Stable and preview releases come from `main` only.
+- **Don't publish a stable release without notes.** Write them before
+  announcing it (see "Writing the release notes").
 - **Don't publish a manual prerelease or beta.** Previews are the prerelease
   channel. The release workflow refuses a `-suffix` version anyway.
 - **Don't edit the `preview` release or the dated previews by hand.** The

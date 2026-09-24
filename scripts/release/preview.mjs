@@ -136,13 +136,36 @@ export function incompleteAssets(release) {
   return PREVIEW_ROLLING_ASSET_NAMES.filter(name => !assets.some(asset => asset.name === name && asset.state === 'uploaded'))
 }
 
-/** Pure decision over the already-fetched rolling release (null = none yet). */
-export function decide({ release, headSha, force }) {
+/** Pure decision over the already-fetched rolling release (null = none yet).
+ *
+ * WHY a non-patch target always builds (review round 1): the skip marker
+ * records only the commit, so a `target=minor` dispatch on an unchanged
+ * `main` used to be a green run that published nothing. Choosing minor is an
+ * explicit request for a differently labelled build. */
+export function decide({ release, headSha, force, target = 'patch' }) {
   const prevSha = release ? parseBuiltFrom(release.body) : ''
   const missing = release ? incompleteAssets(release) : [...PREVIEW_ROLLING_ASSET_NAMES]
   const complete = release !== null && missing.length === 0
-  const changed = force || !prevSha || prevSha !== headSha || !complete
+  const changed = force || target !== 'patch' || !prevSha || prevSha !== headSha || !complete
   return { changed, prevSha, missing }
+}
+
+/**
+ * Refuses to publish a dated preview over one built from ANOTHER commit.
+ *
+ * WHY (review round 1, both reviewers): the version is dated by the clock at
+ * decide time, but "Re-run all jobs" on an older run keeps that run's commit.
+ * Re-running yesterday's failed run after today's succeeded produced today's
+ * tag for yesterday's commit, and softprops then replaced today's assets and
+ * notes with the older build while the tag still pointed at today's commit.
+ * A dated release is created with `target_commitish` = the built SHA, so a
+ * mismatch proves the collision. The same commit is fine: that is a genuine
+ * retry of the same build.
+ */
+export function datedCollision({ dated, headSha, tag }) {
+  if (!dated || dated.target_commitish === headSha) return null
+  return `${tag} already exists for commit ${String(dated.target_commitish).slice(0, 12)}, not ${headSha.slice(0, 12)}. `
+    + 'This is usually "Re-run all jobs" on an older run; start a new run of the workflow instead.'
 }
 
 /**
@@ -156,11 +179,17 @@ export function decide({ release, headSha, force }) {
  * filter is the regex, never "prerelease: true".
  */
 export function selectPrunable(releases, { now, keepDays = PREVIEW_KEEP_DAYS, keepMin = PREVIEW_KEEP_MIN }) {
+  // WHY `published` and not `created` (review round 1): a release's
+  // `created_at` is the date of the COMMIT it was made from, not when it was
+  // published, so a preview of an older commit looked old the moment it was
+  // published and could be deleted by the same run. A release with no valid
+  // publication time (a draft) is never a candidate.
+  const published = release => Date.parse(release.published ?? '')
   const previews = releases
-    .filter(release => PREVIEW_TAG.test(release.tag))
-    .sort((left, right) => Date.parse(right.created) - Date.parse(left.created))
+    .filter(release => PREVIEW_TAG.test(release.tag) && Number.isFinite(published(release)))
+    .sort((left, right) => published(right) - published(left))
   const cutoff = now.getTime() - keepDays * 24 * 60 * 60 * 1000
-  const expired = previews.slice(keepMin).filter(release => Date.parse(release.created) < cutoff)
+  const expired = previews.slice(keepMin).filter(release => published(release) < cutoff)
   const legacy = releases.filter(release => release.tag === LEGACY_NIGHTLY_TAG)
   return [...expired, ...legacy].map(release => release.tag)
 }
@@ -199,15 +228,26 @@ function commandDecide() {
   const repo = process.env.GITHUB_REPOSITORY ?? ''
   if (!SHA.test(headSha)) throw new Error(`GITHUB_SHA is not a 40-hex commit SHA: "${headSha}"`)
   if (!repo) throw new Error('GITHUB_REPOSITORY is not set')
+  // Previews are builds of `main` (RELEASE.md). A dispatch from another
+  // branch would replace the rolling "newest" download with an unreviewed
+  // branch build whose notes say `main` (review round 1).
+  if ((process.env.GITHUB_REF ?? 'refs/heads/main') !== 'refs/heads/main') {
+    throw new Error(`Previews are built from main only, not ${process.env.GITHUB_REF}. Run the workflow with --ref main.`)
+  }
   const force = process.env.FORCE === 'true'
+  const target = process.env.TARGET || 'patch'
   const version = previewVersion({
     stableVersion: JSON.parse(readFileSync('package.json', 'utf8')).version,
-    target: process.env.TARGET || 'patch',
+    target,
     now: now(),
     dispatched: process.env.GITHUB_EVENT_NAME === 'workflow_dispatch',
   })
   const release = fetchRelease(repo, PREVIEW_ROLLING_TAG)
-  const { changed, prevSha, missing } = decide({ release, headSha, force })
+  const { changed, prevSha, missing } = decide({ release, headSha, force, target })
+  if (changed) {
+    const collision = datedCollision({ dated: fetchRelease(repo, `v${version}`), headSha, tag: `v${version}` })
+    if (collision) throw new Error(collision)
+  }
   for (const name of release ? missing : []) console.log(`Preview asset missing or incomplete: ${name}`)
   writeOutputs({ changed: String(changed), 'head-sha': headSha, 'prev-sha': prevSha, version, tag: `v${version}` })
   console.log(changed
@@ -319,7 +359,7 @@ function commandPrune() {
   if (!repo) throw new Error('GITHUB_REPOSITORY is not set')
   const listed = spawnSync('gh', [
     'api', '--paginate', `repos/${repo}/releases`,
-    '--jq', '.[] | {tag: .tag_name, created: .created_at}',
+    '--jq', '.[] | {tag: .tag_name, published: .published_at}',
   ], { encoding: 'utf8' })
   if (listed.error) throw listed.error
   if (listed.status !== 0) throw new Error(`gh api failed (exit ${listed.status}): ${listed.stderr.trim()}`)
