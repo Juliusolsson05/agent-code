@@ -1,5 +1,6 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { TabId, SessionId } from '@renderer/workspace/types'
+import type { BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ExtensionFailure } from '@renderer/apps/types'
 
@@ -82,6 +83,27 @@ export type UiShellState = {
    * pin session that the user later cancels with Escape. */
   pinAgentsOpen: boolean
   settingsPageOpen: boolean
+  /** Category the Settings page should show when opened (#1143: "MCP Servers"
+   * deep-links to Settings → MCP). A plain string, not SettingCategoryId, so
+   * this slice does not import the settings feature; SettingsPage validates
+   * it and falls back to "all". */
+  settingsPageCategory: string | null
+  /** Bumped on every openSettingsPage call, so a repeated deep link to the
+   * same category still wins over a sidebar click made in between. */
+  settingsPageRequest: number
+  /** Add/Edit MCP server dialog (#1143). One owner so the Settings grid and
+   * the "Add MCP Server…" command open the same dialog. */
+  mcpServerDialog: { mode: 'add' } | { mode: 'edit'; serverId: string } | null
+  /** Add skills dialog (#1161), optionally prefilled (for example with an
+   * `npx skills add …` line for an external skill). One owner so the grid,
+   * the "Add Skill…" command and "Manage with Agent Code" share it. */
+  addSkillDialog: { initialInput: string } | null
+  /** Bumped by "Check Skill Updates"; the Skills grid runs check-all when it
+   * changes. A counter, like settingsPageRequest, so repeats still fire. */
+  skillUpdateCheckRequest: number
+  /** Target of the per-agent "Agent MCP Servers…" modal, captured when the
+   * command runs so focus moving while it is open cannot retarget it. */
+  agentMcpServersSessionId: SessionId | null
   /**
    * The session captured when Set Title is invoked.
    *
@@ -98,6 +120,14 @@ export type UiShellState = {
    * by the time the user finishes reading the warning.
    */
   rootManagementPromptSessionId: SessionId | null
+  /** Other per-agent MCP choices staged in "Agent MCP Servers…" alongside a
+   * Root Management grant (#1143). The confirmation dialog applies them in the
+   * SAME reload, so granting root there does not silently discard the rest of
+   * the user's staged changes. Null for the plain root command. */
+  rootManagementPromptOverrides: BuiltInMcpOverrides | null
+  /** The staged choices also remove Goal Loop's tools: stop the running loop,
+   * but only once the confirmed reload actually runs (#1045 rule). */
+  rootManagementPromptStopGoalLoop: boolean
   debugBundleNotePrompt: {
     bundlePath: string
     sessionId: SessionId

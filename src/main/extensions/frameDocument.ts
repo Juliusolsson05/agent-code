@@ -86,6 +86,34 @@ export function childFrameCsp(nonce: string | null, extensionId: string): string
   ].join('; ')
 }
 
+/**
+ * The JavaScript that turns an author's `net.fetch(url, init)` into broker
+ * arguments, interpolated VERBATIM into both bootstraps (this view document and
+ * runtimeDocument.ts) so the two cannot drift again.
+ *
+ * WHY ONE SNIPPET: the runtime bootstrap omitted undefined/null init fields
+ * while this one sent them, so `net.fetch(url, { headers: null })` worked in a
+ * runtime and was rejected in a view ("Invalid arguments for net.fetch.").
+ * Omitting is the only shape both transports accept: the zod schema's optional
+ * fields refuse null, and the runtime's isExtensionJson admission refuses an
+ * undefined-valued key, so a plain `fetch(url)` must not carry four of them.
+ *
+ * THE `init.method` ALIAS: the public SDK type (NetFetchInit) names the verb
+ * `httpMethod`, but both bootstraps used to read `init.method`, so every
+ * SDK-typed POST went out as a GET (#1150). `method` stays accepted for authors
+ * who matched the old bootstrap instead of the type. REMOVE IT when the minimum
+ * supported Agent Code host is at least the first host that ships SDK 0.10.0
+ * (tracked in #1157); from then on no supported host or SDK ever read `method`.
+ *
+ * Constraints on this text: it is spliced into template literals in both
+ * builders, so it must contain no backtick and no `${`.
+ */
+export const NET_FETCH_ARGS_JS = `function netFetchArgs(url, init) {
+  const fields = { url, httpMethod: init && (init.httpMethod || init.method), headers: init && init.headers,
+    body: init && init.body, responseType: init && init.responseType };
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null));
+}`
+
 export function buildFrameDocument(input: FrameDocumentInput): string {
   const { extensionId, viewId, entry, declaredCommands, declaredViews, nonce, viewModule } = input
   // The bootstrap. Everything the child needs to (a) expose a Tier-0 API that
@@ -196,6 +224,8 @@ window.addEventListener('message', (event) => {
   }
 });
 
+${NET_FETCH_ARGS_JS}
+
 function request(method, extra) {
   const id = 'q' + (++seq);
   return new Promise((resolve, reject) => {
@@ -246,6 +276,33 @@ const api = {
     writeText: ({ sessionId, path, text, expectedVersion }) => request('fs.writeText', { sessionId, path, text, expectedVersion }),
   },
   notifications: { show: (message) => request('notifications.show', { message }) },
+  // Native sidecar lifecycle, brokered in main under the service.run grant.
+  // start() is the ONLY thing that can make native code run, so it is explicit
+  // and returns the live handle (pid + reported loopback endpoints) — a caller
+  // never has to guess whether the process actually came up.
+  services: {
+    start: (serviceId) => request('service.start', { serviceId }),
+    stop: (serviceId) => request('service.stop', { serviceId }),
+    status: (serviceId) => request('service.status', { serviceId }),
+    invoke: (serviceId, name, params) => request('service.invoke', { serviceId, name, params }),
+    // net.listen: the host binds the LAN listener and owns its lifetime; the
+    // returned port is the one to share on the local network.
+    expose: (serviceId, lan) => request('service.expose', { serviceId, lan }),
+  },
+  // net.connect / net.origins: brokered outbound fetch. The frame's own CSP
+  // still allows no network at all — this call crosses through the host, which
+  // enforces the target policy before any socket opens. Arguments come from the
+  // shared netFetchArgs (NET_FETCH_ARGS_JS), identical in the runtime.
+  net: {
+    fetch: (url, init) => request('net.fetch', netFetchArgs(url, init)),
+  },
+  // Tier 0 per-extension secrets, encrypted by the OS in main. Namespaced by
+  // this frame's origin (the broker fixes the id), never by an argument.
+  secrets: {
+    get: (key) => request('secrets.get', { key }),
+    set: (key, value) => request('secrets.set', { key, value }),
+    delete: (key) => request('secrets.delete', { key }),
+  },
 };
 
 // Listeners for host-pushed change nudges (Tier-1 observe live updates), keyed by

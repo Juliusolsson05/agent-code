@@ -1,5 +1,5 @@
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { panel, status, toggle, value } from '@renderer/features/command-palette/commandState'
@@ -13,13 +13,12 @@ import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from 
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
-import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
 import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import {
   reloadSessionWithBuiltInMcpChoice,
-  reloadSessionWithBuiltInMcpOverrides,
 } from '@renderer/workspace/builtInMcpReload'
 import {
   ROOT_MANAGEMENT_DOMAIN,
@@ -64,29 +63,6 @@ function agentViewOverrideLabel(
 }
 
 export const sessionCommands: CommandDef[] = [
-  {
-    id: 'use-global-mcp-settings',
-    category: 'session', surface: 'session', title: 'Use Global MCP Settings',
-    description: '**What it does:** Clears this agent’s MCP overrides and reloads it with the current global settings.\n\n**Use when:** You want this agent to follow Settings again, including on future reloads.\n\n**Notes:** Resumes the same conversation when its provider session is available.',
-    keywords: ['mcp', 'global', 'default', 'inherit', 'reset', 'reload'],
-    when: ({ workspace }) => {
-      const id = commandTargetSessionId(workspace)
-      const meta = id ? workspace.state.sessions[id] : null
-      return Boolean(meta && isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER))
-    },
-    run: async ({ workspace, ui }) => {
-      const id = commandTargetSessionId(workspace)
-      const meta = id ? workspace.state.sessions[id] : null
-      if (!id || !meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return
-      ui.closePalette()
-      // `{}` is the whole point: it removes every per-agent choice so this agent
-      // follows Settings again, now and on every future reload.
-      await reloadSessionWithBuiltInMcpOverrides(workspace, id, {}, {
-        reloaded: 'Reloaded with global MCP settings',
-        failed: 'MCP reload failed',
-      })
-    },
-  },
   {
     id: 'view-prompts',
     category: 'session',
@@ -180,7 +156,9 @@ export const sessionCommands: CommandDef[] = [
       // lift.
       return (
         getProviderFeatures(kind).transcriptRewind &&
-        meta?.providerRuntime !== 'terminal' &&
+        // Effective: a terminal-only provider (Pi) has no composer to receive
+        // the rewound draft even when its metadata carries no runtime.
+        effectiveProviderRuntime(kind, meta?.providerRuntime) !== 'terminal' &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -531,136 +509,6 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    id: 'enable-ai-workspace-mcp',
-    category: 'session',
-    surface: 'session',
-    title: 'AI Workspace MCP',
-    description: '**What it does:** Reloads the focused **agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
-    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'ai_workspace')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'ai_workspace'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // See the ping command: hidden commands can still be invoked outside the
-      // picker, so execution must enforce the same provider policy.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'ai_workspace') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('ai_workspace')
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'ai_workspace', enable, {
-        reloaded: enable ? 'Reloaded with AI Workspace MCP' : 'Reloaded without AI Workspace MCP',
-        failed: 'AI Workspace MCP reload failed',
-      })
-    },
-  },
-  {
-    id: 'enable-orchestration-mcp',
-    category: 'session',
-    pickerVisibility: 'advanced',
-    surface: 'session',
-    title: 'Orchestration MCP',
-    description: '**What it does:** Reloads the focused **agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
-    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'orchestration')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'orchestration'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // See the ping command: hidden commands can still be invoked outside the
-      // picker, so execution must enforce the same provider policy.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'orchestration') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('orchestration')
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'orchestration', enable, {
-        reloaded: enable ? 'Reloaded with orchestration MCP' : 'Reloaded without orchestration MCP',
-        failed: 'Orchestration MCP reload failed',
-      })
-    },
-  },
-  {
-    id: 'enable-agent-transcripts-mcp',
-    category: 'session',
-    surface: 'session',
-    title: 'Agent Transcripts MCP',
-    description: '**What it does:** Reloads the focused **agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
-    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'agent_transcripts')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'agent_transcripts'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // See the ping command: hidden commands can still be invoked outside the
-      // picker, so execution must enforce the same provider policy.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'agent_transcripts') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('agent_transcripts')
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'agent_transcripts', enable, {
-        reloaded: enable ? 'Reloaded with Agent Transcripts MCP' : 'Reloaded without Agent Transcripts MCP',
-        failed: 'Agent Transcripts MCP reload failed',
-      })
-    },
-  },
-  {
-    id: 'enable-agent-management-mcp',
-    category: 'session',
-    surface: 'session',
-    title: 'Agent Management MCP',
-    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include agents that are not in a lane, without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
-    keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'agent_management'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Command visibility is advisory—the command can still be invoked by a
-      // keybinding or programmatic caller—so provider policy is repeated at the
-      // mutation boundary before we replace a live process.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'agent_management') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('agent_management')
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'agent_management', enable, {
-        reloaded: enable ? 'Reloaded with Agent Management MCP' : 'Reloaded without Agent Management MCP',
-        failed: 'Agent Management MCP reload failed',
-      })
-    },
-  },
-  {
     id: 'enable-root-agent-code-management',
     category: 'session',
     surface: 'session',
@@ -709,163 +557,12 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    id: 'enable-tldr-mcp',
-    category: 'session',
-    surface: 'session',
-    title: 'TLDR MCP',
-    description: '**What it does:** Reloads the focused agent with TLDR reporting on or off.\n\n**Use when:** You want this agent to keep one concise summary of progress, next steps and pending decisions.\n\n**Notes:** Deploys the managed reporting skill. Hold the TLDR shortcut to read summaries across visible agents.',
-    keywords: ['tldr', 'summary', 'status', 'mcp', 'decision', 'report'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'tldr')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'tldr'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Command visibility is advisory—the command can still be invoked by a
-      // keybinding or programmatic caller—so provider policy is repeated at the
-      // mutation boundary before we replace a live process.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'tldr') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('tldr')
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'tldr', enable, {
-        reloaded: enable ? 'Reloaded with TLDR MCP' : 'Reloaded without TLDR MCP',
-        failed: 'TLDR MCP reload failed',
-      })
-    },
-  },
-  {
-    id: 'enable-goal-mcp',
-    category: 'session',
-    surface: 'session',
-    title: 'Goal MCP',
-    description: '**What it does:** Reloads the focused agent with goal recording on or off.\n\n**Use when:** You want this agent to record what its work is for, so you can see its purpose at a glance.\n\n**Notes:** Deploys the managed goal skill. Hold the Goal shortcut to read goals across visible agents. Works with or without TLDR.',
-    keywords: ['goal', 'purpose', 'objective', 'intent', 'mcp', 'why'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'goal')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'goal'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Provider policy is repeated at the mutation boundary: visibility is
-      // advisory and the command stays reachable from keybindings and control.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'goal') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('goal')
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal', enable, {
-        reloaded: enable ? 'Reloaded with Goal MCP' : 'Reloaded without Goal MCP',
-        failed: 'Goal MCP reload failed',
-      })
-    },
-  },
-  {
-    // #1006: the per-agent toggle every sibling domain has (TLDR, Goal).
-    // goal_loop already had the Settings row and the per-session override
-    // plumbing, but no command, so "turn the loop on for just this agent"
-    // meant a trip through Settings and a reload by hand.
-    id: 'enable-goal-loop-mcp',
-    category: 'session',
-    surface: 'session',
-    title: 'Goal Loop MCP',
-    description: '**What it does:** Reloads the focused agent with goal-loop tools on or off.\n\n**Use when:** You want this agent to be able to run a harness-owned goal loop that keeps re-prompting it until the goal is done.\n\n**Notes:** The agent starts a loop itself when you ask it to (goal_loop_start). Every continuation is a model call, and the loop pauses at its budget. Turning the tools off ends a running loop, because the agent would no longer be able to report that it is done. The Goal Loop command shows and controls a running loop.',
-    keywords: ['goal', 'loop', 'autonomous', 'persistence', 'keep going', 'mcp'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'goal_loop')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'goal_loop'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Provider policy is repeated at the mutation boundary: visibility is
-      // advisory and the command stays reachable from keybindings and control.
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'goal_loop') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('goal_loop')
-      // Turning the tools off ENDS a running loop (#1045 review). The loop is
-      // harness-owned, so it survives the reload on its own, but the reloaded
-      // agent no longer has goal_loop_complete: it cannot say it is done, and
-      // every continuation it is sent runs to the cap. Ending it here is the
-      // honest reading of "this agent does not do goal loops any more", and it
-      // happens BEFORE the reload so it applies to the session id the loop is
-      // filed under rather than the replacement's.
-      if (!enable) {
-        // try/catch, not .catch(): a preload without the channel throws
-        // synchronously. Either way the reload is what the user asked for and
-        // must still happen; a loop left running is visible and stoppable from
-        // the Goal Loop command.
-        try { await window.api.controlGoalLoop({ sessionId, action: 'stop' }) } catch { /* reload anyway */ }
-      }
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'goal_loop', enable, {
-        reloaded: enable ? 'Reloaded with Goal Loop MCP' : 'Reloaded without Goal Loop MCP',
-        failed: 'Goal Loop MCP reload failed',
-      })
-    },
-  },
-  {
-    id: 'enable-workflow-mcp',
-    category: 'session',
-    pickerVisibility: 'advanced',
-    surface: 'session',
-    title: 'Workflow MCP',
-    description: '**What it does:** Reloads the focused **Codex or OpenCode agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want the agent to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Claude is intentionally excluded because it has a native workflow feature. Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
-    keywords: ['mcp', 'workflow', 'workflows', 'pipeline', 'agents', 'resume', 'enable', 'disable', 'reload', 'codex', 'opencode', 'claude native'],
-    when: ({ workspace }) => {
-      return targetSupportsBuiltInMcpDomain(workspace, 'workflows')
-    },
-    getState: ctx => builtInMcpDomainState(ctx, 'workflows'),
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if (
-        !isAgentProviderKind(kind) ||
-        !providerSupportsBuiltInMcpDomain(kind, 'workflows') ||
-        !meta
-      ) return
-
-      ui.closePalette()
-      const enable = !meta.builtInMcpDomains?.includes('workflows')
-      // WHY replace the agent instead of mutating the running registration:
-      // Codex and OpenCode receive MCP configuration at process launch. Updating
-      // renderer metadata alone would display an enabled toggle while the
-      // provider still had a cached tools/list response from the old scope.
-      // Replacement keeps visible state and actual capability atomic.
-      await reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'workflows', enable, {
-        reloaded: enable ? 'Reloaded with Workflow MCP' : 'Reloaded without Workflow MCP',
-        failed: 'Workflow MCP reload failed',
-      })
-    },
-  },
-  {
     id: 'reload-agent',
     category: 'session',
     surface: 'session',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
-    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'reconnect'],
+    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'reconnect'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -974,7 +671,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
-    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode'],
+    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -1121,8 +818,8 @@ export const sessionCommands: CommandDef[] = [
 
     surface: 'session',
     title: 'Switch Provider',
-    description: '**What it does:** Opens a destination picker for continuing the focused agent with Claude, Codex, OpenCode, or OpenCode Terminal.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
-    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'translate'],
+    description: '**What it does:** Opens a destination picker for continuing the focused agent with another provider: Claude, Codex, OpenCode, OpenCode Terminal, Grok or Pi.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
+    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'grok', 'pi', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null

@@ -73,6 +73,7 @@ export type {
   UsageLimitRow,
   UsageProviderError,
   UsageProviderKind,
+  UsageSourceId,
   UsageProviderOk,
   UsageProviderSnapshot,
   UsageSeverity,

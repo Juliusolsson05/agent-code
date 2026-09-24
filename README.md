@@ -91,23 +91,31 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
     <img src="docs/screenshots/orchestration.png" alt="Agent Code agent index with orchestration MCP tool calls (send_prompt, wait_agents, read_agent, close_run) running in a live session" />
   </p>
 
-- **TLDR peek** — enable **TLDR MCP** for an agent, then hold **Cmd+L** to
+- **MCP servers** — add any MCP server (stdio, HTTP or SSE) by pasting the
+  config from its README, for example Beeper Desktop's, and choose per provider
+  which ones new Claude and Codex agents get. **Settings → MCP** shows Agent
+  Code's own MCP servers and yours in one grid with a column per provider, and
+  **Agent MCP Servers…** changes one agent's set with a single reload. Tokens
+  are stored encrypted and reach the server through environment variables,
+  never a config file or the command line. Servers the CLIs already load from
+  their own config are listed read-only and can be copied in.
+- **TLDR peek** — turn on **TLDR** for an agent, then hold **Cmd+L** to
   see each visible agent’s latest short status centered over its pane.
   A small footer shows **Last active** and **Note written** independently, using
   relative times and calendar dates for older activity. Release to return. The
   **TLDR** palette command also opens the preview; Escape dismisses it. Reporting
   is off by default. MCP settings apply to new agents and existing agents on their
   next reload, including the managed reporting skill. Explicit per-agent choices
-  take priority; **Use Global MCP Settings** clears those choices and reloads the
+  in **Agent MCP Servers…** take priority; its Reset clears them and reloads the
   agent. Claude and Codex agents with TLDR are asked to set their goal on the
   first prompt (through Goal instead when Goal MCP is also on), and at turn end to update after work that used tools without a
   report; the footer notes when that check is not running. **View TLDR History**
   shows how an agent's status evolved. The editor keeps Cmd+L Select Line.
-- **Goal peek** — enable **Goal MCP** for an agent, then hold **Cmd+G** to see
+- **Goal peek** — turn on **Goal** for an agent, then hold **Cmd+G** to see
   what each visible agent’s work is for, next to the TLDR’s where-it-is status.
   Agents set a goal once they understand a task and change it only when the
   direction changes, so it stays meaningful while the TLDR moves. Goal has its
-  own MCP setting, off by default, and works with or without TLDR; only the agent
+  own row in Settings → MCP, and works with or without TLDR; only the agent
   writes it. Claude and Codex agents with Goal are asked for one at the first
   prompt and at turn end if it is still missing. **View TLDR History** shows goal
   changes alongside status updates. The editor keeps Cmd+G Find Next.
@@ -121,10 +129,14 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
 
 - **Voice dictation** — via
   [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation).
-- **Managed personal skills** — save shared conventions, author instruction-only
-  custom skills, or review and install commit-pinned Agent Skills from public
-  GitHub repositories. Agent Code deploys them to Claude Code, Codex, and
-  OpenCode with collision-safe ownership and explicit deployment health.
+- **Skills** — Settings → Skills lists every personal skill your agents can
+  load, with a column per provider. Paste the `npx skills add owner/repo
+  --skill name` line from a README or skills.sh, review the exact commit and
+  its files, and Agent Code installs commit-pinned copies for the providers you
+  choose. You can also write your own skills and see skills other tools
+  installed. There is no limit on how many you keep. Agents can propose skills
+  for your review. Ownership is collision-safe and deployment health is shown
+  explicitly.
 - **Diagnostics** — durable local evidence for provider exits, transcript
   drift, rendering issues, and near-OOM events.
 

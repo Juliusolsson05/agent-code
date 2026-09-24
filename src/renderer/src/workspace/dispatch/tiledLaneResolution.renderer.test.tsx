@@ -26,6 +26,7 @@ import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recor
 // lane on the next render. A unit test cannot see that; only mounting can.
 
 const appState = vi.hoisted(() => ({
+  settings: { browserPocketEnabled: false },
   workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),

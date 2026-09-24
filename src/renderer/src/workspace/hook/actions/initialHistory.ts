@@ -369,6 +369,59 @@ export async function loadInitialHistoryForSession({
   // synchronous contract is asserted by the test below rather than assumed.
   let loadOutcome = 'no-terminal-write'
   let loadedEntryCount = 0
+  // ── A LOAD BELONGS TO THE CONVERSATION IT READ (Astra review, finding 1) ──
+  // A pane that follows its runtime into another provider session (Pi /new,
+  // /resume, /fork) rebinds its identity and then resets its history window.
+  // A load of the OLD session that resolves after either would merge the old
+  // conversation's rows into the new one's window (and View Prompts and the
+  // orchestration reads would serve them). So refuse to apply a result,
+  // success or failure, once the pane is no longer that conversation.
+  //
+  // WHY compare against the id this load READ, and only once the pane has a
+  // different one: a pane routinely gains its id while a load is in flight —
+  // an OpenCode runtime pre-creates its session at start, and a scoped
+  // recovery passes a meta override naming the transcript before the store
+  // holds it. A first version compared the store's id at start with the id at
+  // the end, and threw those legitimate loads away (no id → the same id is a
+  // BINDING, not a switch).
+  //
+  // WHY not the history window's generation as well: it was tried, and it
+  // threw away OpenCode Terminal's startup load, whose runtime resets the
+  // window while that load is in flight. That reset re-delivers rows but not
+  // the loader's pagination facts (totalEntries, hasOlderHistory), so the pane
+  // lost them. The identity alone is enough: every Pi session move rebinds
+  // the id BEFORE its reset, so a load of the old session is caught here, and
+  // a load that started after the rebind read the new session — its rows are
+  // the right ones, and the dedup set absorbs the overlap with the replay.
+  const readProviderSessionId = meta.providerSessionId
+  const superseded = (): boolean => {
+    const current = refs.stateRef.current.sessions[sessionId]?.providerSessionId
+    return current !== undefined && current !== readProviderSessionId
+  }
+  // A superseded load is done, not failed: the reset (and the new session's
+  // own rows) own the window now. Settle the status it set to 'loading' so
+  // neither the pane nor the stuck-load reconciler waits on it forever (#283).
+  const settleSuperseded = (): false => {
+    setRuntimes(prev => {
+      const current = prev[sessionId]
+      if (!current) {
+        loadOutcome = 'dropped-superseded'
+        return prev
+      }
+      loadOutcome = 'superseded'
+      if (preserveStatusUntilLoaded) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+          transcriptStatusChangedAt: Date.now(),
+          transcriptError: current.transcriptChannelError ?? null,
+        },
+      }
+    })
+    return false
+  }
   if (!preserveStatusUntilLoaded) setRuntimes(prev => {
     const current = prev[sessionId]
     if (!current) return prev
@@ -409,6 +462,10 @@ export async function loadInitialHistoryForSession({
       window.api.gitWorktrees(meta.cwd),
     ])
     const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+    if (superseded()) {
+      span.end({ fetched: chunk.entries.length, hasMore: chunk.hasMore, superseded: true })
+      return settleSuperseded()
+    }
 
     setRuntimes(prev => {
       const current = prev[sessionId]
@@ -615,6 +672,9 @@ export async function loadInitialHistoryForSession({
     span.fail(err)
     const message = err instanceof Error ? err.message : String(err)
     console.warn('[history] load initial failed', err)
+    // A failure to read the conversation the pane has since LEFT says nothing
+    // about the one it shows now; marking that one 'error' would be a lie.
+    if (superseded()) return settleSuperseded()
     if (!preserveStatusUntilLoaded) setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {

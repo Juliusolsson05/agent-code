@@ -5,6 +5,8 @@ import { classifyRenderedTarget } from '@shared/renderedContent/targets'
 
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { CodeRenderContext } from '@renderer/features/feed/context'
+import { openInPocket } from '@renderer/features/browser-pocket/state/pocketBus'
+import { isLoopbackUrl } from '@shared/browserPocket/url'
 
 type Props = {
   href?: string
@@ -19,7 +21,7 @@ export function SafeMarkdownLink({
   title,
   className,
 }: Props) {
-  const { workspaceRoot } = useContext(CodeRenderContext)
+  const { workspaceRoot, sessionId } = useContext(CodeRenderContext)
   const { showToast } = useGlobalToast()
   const target = classifyRenderedTarget(href, { workspaceRoot })
 
@@ -29,6 +31,11 @@ export function SafeMarkdownLink({
       event.stopPropagation()
 
       if (target.kind === 'external-url') {
+        // A dev-server link printed by an agent opens in THAT agent's browser
+        // pocket (#1142) — the whole point of a lane-attached browser is not
+        // guessing which localhost belongs to which worktree. ⌘/Ctrl-click
+        // keeps the old "open in my browser" behaviour.
+        if (sessionId && !event.metaKey && !event.ctrlKey && isLoopbackUrl(target.url) && openInPocket(sessionId, target.url)) return
         try {
           const result = await window.api.openRenderedExternalUrl({ url: target.url })
           if (!result.ok) showToast('Blocked unsupported link')

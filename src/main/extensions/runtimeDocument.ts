@@ -1,5 +1,5 @@
 import type { ExtensionManifest } from '@shared/types/extensions.js'
-import { childFrameCsp } from './frameDocument.js'
+import { childFrameCsp, NET_FETCH_ARGS_JS } from './frameDocument.js'
 
 export const RUNTIME_DOCUMENT = '__agent-code-runtime__.html'
 
@@ -23,6 +23,7 @@ let extension = null;
 let disposed = false;
 let cleanup;
 const errorText = error => String(error && error.message || error).slice(0, 2000);
+${NET_FETCH_ARGS_JS}
 const api = {
   extension: { id: cfg.id, apiVersion: cfg.apiVersion },
   storage: {
@@ -40,6 +41,26 @@ const api = {
   },
   notifications: {
     show: (message) => transport.request({ method: 'notifications.show', message }),
+  },
+  // Native sidecar lifecycle, brokered in main under the service.run grant.
+  // Same shapes as the view api on purpose: SDK authors learn one surface.
+  services: {
+    start: (serviceId) => transport.request({ method: 'service.start', serviceId }),
+    stop: (serviceId) => transport.request({ method: 'service.stop', serviceId }),
+    status: (serviceId) => transport.request({ method: 'service.status', serviceId }),
+    invoke: (serviceId, name, params) => transport.request({ method: 'service.invoke', serviceId, name, params }),
+    expose: (serviceId, lan) => transport.request({ method: 'service.expose', serviceId, lan }),
+  },
+  // Arguments come from the shared netFetchArgs (NET_FETCH_ARGS_JS in
+  // frameDocument.ts), identical in the view bootstrap; see it for the
+  // omit-empty rule and the init.method alias.
+  net: {
+    fetch: (url, init) => transport.request(Object.assign({ method: 'net.fetch' }, netFetchArgs(url, init))),
+  },
+  secrets: {
+    get: key => transport.request({ method: 'secrets.get', key }),
+    set: (key, value) => transport.request({ method: 'secrets.set', key, value }),
+    delete: key => transport.request({ method: 'secrets.delete', key }),
   },
 };
 function register(map, id, handler) {

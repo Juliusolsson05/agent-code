@@ -9,6 +9,11 @@ import { mainProbe } from '@main/performance/MainProbe.js'
 import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
 import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
+import { BrowserPocketController, type GuestLike } from '@main/browserPocket/controller/BrowserPocketController.js'
+import { LanePortWatcher } from '@main/browserPocket/LanePortWatcher.js'
+import { PORT_SCAN_SUPPORTED, listListeners, listProcesses, probe as probePort } from '@main/browserPocket/lanePortsIo.js'
+import { registerBrowserPocketIpc } from '@main/ipc/browserPocket.js'
+import type { LanePort } from '@shared/browserPocket/types.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
 import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
 import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
@@ -20,7 +25,7 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, clipboard, crashReporter, dialog, Menu, powerMonitor, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -64,7 +69,11 @@ import {
 } from '@main/extensions/scheme.js'
 import { ExtensionRuntimeService } from '@main/extensions/runtimeService.js'
 import { ExtensionCapabilityService } from '@main/extensions/capabilityService.js'
+import { createExtensionSecretStore } from '@main/extensions/secrets.js'
 import { registerExtensionRuntimeIpc } from '@main/extensions/runtimeIpc.js'
+import { ExtensionServiceHost } from '@main/extensions/serviceHost.js'
+import { autoUpdater } from 'electron-updater'
+import { clearServiceTransport, configureServiceTransport } from '@main/extensions/serviceTransport.js'
 import { registerExtensionInputIpc } from '@main/extensions/nativeInput.js'
 import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
 import { STATE_DIR, STATE_FILE, TLDR_HOOK_RUNTIME_DIR } from '@main/storage/paths.js'
@@ -119,6 +128,7 @@ import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ip
 import { registerAllIpc } from '@main/ipc/index.js'
 import { registerSessionRoutingIpc } from '@main/ipc/sessionRouting.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
+import { collectExternalAgentSkills } from '@main/agentSkills/externalSkills.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { flushHistoryWrites } from '@main/dictation/historyStore.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -135,8 +145,12 @@ import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
 import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
+import { UserMcpService } from '@main/userMcp/service.js'
+import { sweepStalePrivateMcpConfigs } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
+import { UpdateService } from '@main/updates/UpdateService.js'
+import { UpdateCheckStore } from '@main/updates/updateCheckStore.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
 import { installWindowIncidentHooks } from '@main/incident/installWindowIncidentHooks.js'
@@ -315,6 +329,7 @@ function assertStartupOpen(): void {
 // before-quit handler that used them (#945).
 let extensionRuntime: ExtensionRuntimeService | null = null
 let extensionCapabilities: ExtensionCapabilityService | null = null
+let extensionServiceHost: ExtensionServiceHost | null = null
 let unregisterExtensionRuntime: (() => void) | null = null
 let unregisterExtensionInput: (() => void) | null = null
 let extensionQuitReady = false
@@ -393,6 +408,53 @@ registerExtensionScheme()
 // wired in startApp). A committed drain failure must not resume window handoff.
 let quitting = false
 app.on('before-quit', () => { quitting = true })
+
+// Self-update (issue #1120). Everything safety-critical lives in
+// UpdateService; this wiring only supplies the real transport, the OS
+// notification surface, the persisted check clock, and the two shutdown
+// hooks: the gate swaps its final quit for quitAndInstall, and the
+// Keep-Editing veto resets the intent so a retry still works.
+const updateChecks = new UpdateCheckStore()
+const updateService = new UpdateService({
+  updater: autoUpdater,
+  app: { isPackaged: app.isPackaged, version: app.getVersion() },
+  requestQuit: () => { app.quit() },
+  notify: message => {
+    try {
+      if (Notification.isSupported()) new Notification({ title: 'Agent Code', body: message }).show()
+    } catch { /* a notification failure must never break the update flow */ }
+  },
+  // A sheet on the focused window (a free-floating box when none has focus),
+  // so the answer to a menu check shows even with notifications turned off
+  // for Agent Code (#1130). Like notify, a failure here must never break the
+  // update flow; it reads as "not confirmed", which never restarts anything.
+  showMessage: async (message, confirmLabel) => {
+    const options = {
+      type: 'info' as const,
+      message,
+      buttons: confirmLabel ? [confirmLabel, 'Later'] : ['OK'],
+      // With a confirm button, Later is both the default (Enter) and the
+      // cancel (Esc): a stray keypress must not start a restart in an app
+      // full of live sessions. The user has to choose Restart on purpose.
+      defaultId: confirmLabel ? 1 : 0,
+      cancelId: confirmLabel ? 1 : 0,
+      noLink: true,
+    }
+    try {
+      const parent = BrowserWindow.getFocusedWindow()
+      const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+      return confirmLabel !== undefined && response === 0
+    } catch {
+      return false
+    }
+  },
+  readLastCheck: () => updateChecks.read(),
+  // A failed clock write (full disk, read-only state) must never become an
+  // unhandledRejection incident report; the cost is one extra check later.
+  writeLastCheck: at => { void updateChecks.write(at).catch(() => {}) },
+  now: () => Date.now(),
+  log: line => { console.log(`[updates] ${line}`) },
+})
 
 const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
@@ -694,6 +756,11 @@ async function startApp(): Promise<void> {
   // The resolver closes over the late-created SessionManager rather than a
   // focused renderer. Startup extensions may run with zero views, but every file
   // target still has to name a live main-owned session and therefore a real cwd.
+  // Services are real child processes, not renderer lifetimes: the quit veto
+  // exists for sandboxed runtimes (their deactivate may still want one storage
+  // write). A native process is killed outright at the committed stage below;
+  // holding quit hostage to a third-party process is exactly backwards.
+  extensionServiceHost = new ExtensionServiceHost()
   extensionCapabilities = new ExtensionCapabilityService({
     resolveSessionRoot: sessionId => manager?.getSpawnCwd(sessionId) ?? null,
     // Background runtimes have no view-owned toast callback. Deliver through
@@ -702,6 +769,17 @@ async function startApp(): Promise<void> {
     notify: (extensionId, message) => {
       broadcastToWindows('extensions:notification', { extensionId, message })
     },
+    services: extensionServiceHost,
+    // api.secrets rides the same safeStorage codec as the Key Vault: one OS
+    // keychain item for the app, one encrypted blob per extension secret.
+    secrets: createExtensionSecretStore(createSafeStorageCodec()),
+  })
+  // The scheme handler is registered on every extension session long before
+  // this composition runs; the proxy module is its late-bound lookup. Wiring
+  // here (not in scheme.ts) keeps the handler testable with no main singleton.
+  configureServiceTransport({
+    hasCapability: (extensionId, revision, capability) => extensionCapabilities!.hasCapability(extensionId, revision, capability),
+    serviceEndpoint: (extensionId, serviceId) => extensionServiceHost!.serviceEndpoint(extensionId, serviceId),
   })
   extensionRuntime = new ExtensionRuntimeService({
     preload: join(__dirname, '../preload/extensionRuntime.js'),
@@ -960,15 +1038,24 @@ async function startApp(): Promise<void> {
   const agentCodeConventionsService = new AgentCodeManagedSkillsService()
   await agentCodeConventionsService.initialize()
   assertStartupOpen()
+  // User MCP servers (#1143). Loaded before the manager so the first restored
+  // agent already launches with them; initialize() never throws (a corrupt
+  // document is moved aside and reported in Settings instead).
+  const userMcpService = new UserMcpService({ stateDir: STATE_DIR, codec: createSafeStorageCodec() })
+  await userMcpService.initialize()
+  // Private MCP config files now carry user secrets; a crash must not leave
+  // them in the temp dir. Before any agent can launch, so nothing live is hit.
+  void sweepStalePrivateMcpConfigs().then(removed => {
+    if (removed > 0) appRunJournal?.record({ area: 'mcp.user', name: 'private_config.swept', data: { removed } })
+  })
   manager = new SessionManager(
     tmuxAvailable ? tmuxRegistry : null,
     builtInMcpHost,
     appRunJournal,
-    async options => {
-      await agentCodeConventionsService.audit()
-      if (options.builtInMcpDomains?.includes('tldr')) await agentCodeConventionsService.ensureTldrSkill()
-      if (options.builtInMcpDomains?.includes('goal')) await agentCodeConventionsService.ensureGoalSkill()
-    },
+    // Reports failures instead of throwing them (#1133). SessionManager
+    // decides what a failure means for the launch; see
+    // runPreSpawnSkillReconcile for why that is never "abort".
+    options => agentCodeConventionsService.prepareForAgentSpawn(options.builtInMcpDomains),
     (sessionId, sessionRunId, observation) => {
       sessionRecorders?.recordCodexTranscriptObservation(
         sessionId,
@@ -977,6 +1064,7 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  manager.setUserMcpResolver(params => userMcpService.resolveForLaunch(params))
   // Adapters seal streams a sleep severed (#963); the manager fans each
   // suspension out to the live agent runtimes.
   systemSuspension.on('suspension', (suspension: import('@shared/types/systemSuspension.js').SystemSuspension) => {
@@ -1130,7 +1218,68 @@ async function startApp(): Promise<void> {
   const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
   await goalLoopService.start()
   registerGoalLoopIpc(goalLoopService)
+  // Lane browser pocket (#1142). One controller for the app: it owns live CDP
+  // sessions and per-pocket queues that must outlive the per-request MCP
+  // server, exactly like workflowService below.
+  const lanePortCache = new Map<string, LanePort[]>()
+  // `manager` is assigned above but typed nullable (module-level let); after
+  // shutdown starts it may be cleared, and a late scan must just see no pid.
+  const pidOf = (sessionId: string): number | null => manager?.getProcessTelemetryTargets([sessionId])[0]?.pid ?? null
+  const lanePortWatcher = new LanePortWatcher({
+    listProcesses,
+    // Linux/Windows output is unrecorded (decomposition U1): report nothing
+    // rather than guess, so no chip ever points at the wrong lane.
+    listListeners: pids => (PORT_SCAN_SUPPORTED ? listListeners(pids) : Promise.resolve([])),
+    listTmuxPanes: () => (tmuxRegistry && tmuxAvailable ? tmuxRegistry.listPanePids() : Promise.resolve([])),
+    agentPid: pidOf,
+    terminalPid: pidOf,
+    probe: probePort,
+    broadcast: bySession => {
+      lanePortCache.clear()
+      for (const [id, ports] of Object.entries(bySession)) lanePortCache.set(id, ports)
+      broadcastToWindows('browser-pocket:ports', { bySession })
+    },
+    now: () => Date.now(),
+    setTimer: (fn, ms) => {
+      // unref: a pending scan must never keep the app alive at quit.
+      const timer = setTimeout(fn, ms)
+      timer.unref?.()
+      return () => clearTimeout(timer)
+    },
+  })
+  const browserPockets = new BrowserPocketController({
+    now: () => Date.now(),
+    emitDriving: event => broadcastToWindows('browser-pocket:driving', event),
+    emitPaint: (pocketId, on) => broadcastToWindows('browser-pocket:paint', { pocketId, on }),
+    // The renderer owns SessionMeta; main can only ask. Every window gets it,
+    // and only the window holding that session acts on it.
+    requestOpen: (sessionId, url) => broadcastToWindows('browser-pocket:open-request', { sessionId, ...(url ? { url } : {}) }),
+    requestViewport: (sessionId, viewport) => broadcastToWindows('browser-pocket:set-viewport', { sessionId, viewport }),
+    setWatchedSessions: sessions => lanePortWatcher.setSessions(sessions),
+    lanePorts: sessionId => lanePortCache.get(sessionId) ?? [],
+  })
+  registerBrowserPocketIpc({
+    // Electron's WebContents satisfies GuestLike structurally except for the
+    // overloaded EventEmitter signatures; the controller only uses the slice
+    // GuestLike names.
+    register: (pocketId, sessionId, guest) => browserPockets.register(pocketId, sessionId, guest as unknown as GuestLike),
+    unregister: pocketId => browserPockets.unregister(pocketId),
+    noteHumanInput: (pocketId, at) => browserPockets.noteHumanInput(pocketId, at),
+    agentTyping: pocketId => browserPockets.agentTyping(pocketId),
+    takeOver: pocketId => browserPockets.takeOver(pocketId),
+    resume: pocketId => browserPockets.resume(pocketId),
+    setFlags: flags => {
+      browserPockets.setFlags(flags)
+      if (!flags.enabled) lanePortWatcher.setSessions([])
+    },
+    thumbnail: pocketId => browserPockets.thumbnail(pocketId),
+    pick: pocketId => browserPockets.pick(pocketId),
+    cancelPick: pocketId => browserPockets.cancelPick(pocketId),
+    applyEmulation: (pocketId, emulation) => browserPockets.applyEmulation(pocketId, emulation),
+    setWatchedSessions: sessions => browserPockets.setWatchedSessions(browserPockets.isEnabled() ? sessions : []),
+  })
   builtInMcpHost.setDependencies({
+    browserPockets,
     tldrStore,
     goalStore,
     tldrEnforcement,
@@ -1153,6 +1302,23 @@ async function startApp(): Promise<void> {
     },
     sessionManager: manager,
     appRunJournal,
+    // #1143: the mcp_servers domain edits the same document Settings → MCP
+    // does, through the same service. Every agent-made change is broadcast so
+    // the user always learns that their MCP configuration changed.
+    userMcpService,
+    onUserMcpChangedByAgent: event => {
+      appRunJournal?.record({ area: 'mcp.user', name: 'user_mcp.agent_change', ids: { sessionId: event.sessionId }, data: { message: event.message } })
+      broadcastToWindows('user-mcp:agent-change', { message: event.message })
+    },
+    // #1161: the skills domain proposes through the same managed-skills
+    // service as Settings → Skills. Every agent-made change is announced, and
+    // the broadcast also refreshes any open Skills page.
+    managedSkills: agentCodeConventionsService,
+    listExternalSkills: () => collectExternalAgentSkills(agentCodeConventionsService),
+    onSkillsChangedByAgent: event => {
+      appRunJournal?.record({ area: 'skills', name: 'skills.agent_change', ids: { sessionId: event.sessionId }, data: { message: event.message } })
+      broadcastToWindows('managed-skills:agent-change', { message: event.message })
+    },
     workflowService: activeWorkflowService,
     workflowBridge: activeWorkflowBridge,
     // Root Agent Code Management (#906): the SAME operator catalog the external
@@ -1270,6 +1436,9 @@ async function startApp(): Promise<void> {
   setWindowCloseVetoedObserver(() => {
     quitting = false
     extensionQuitReady = false
+    // Keep Editing also cancels a pending update restart: the staged update
+    // stays on disk, only the intent resets (UpdateService.onQuitVetoed).
+    updateService.onQuitVetoed()
     // Announce the resume so v2 views closed by the quit's pause re-attach
     // (viewBridge retries only views that failed meanwhile). Without it every
     // open extension view stayed on "failed to start" after Keep Editing.
@@ -1347,6 +1516,7 @@ async function startApp(): Promise<void> {
   const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
+    userMcpService,
     remoteController,
     lspManager,
     ghostJournals,
@@ -1424,7 +1594,13 @@ async function startApp(): Promise<void> {
   })
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
-  Menu.setApplicationMenu(buildAppMenu())
+  Menu.setApplicationMenu(buildAppMenu({
+    // Dual duty (check, or restart into a ready update) lives in
+    // UpdateService.menuCheck, which answers every outcome in a dialog. The
+    // old inline version relied on OS notifications that only covered
+    // ready/error, so most clicks produced nothing at all (#1130).
+    onCheckForUpdates: () => { void updateService.menuCheck() },
+  }))
   performanceService.mark('app.main.window.created')
   // Both belong at window creation. The startup timing is observed first so
   // `app.startup` keeps meaning "process start until the first window exists"
@@ -1473,7 +1649,20 @@ app.on('before-quit', (event) => {
 // precedes renderer unload decisions, so only reversible preparation belongs
 // there. In particular, Keep Editing must leave workflow/MCP/LSP/remote/voice
 // services intact. The gate holds will-quit until this inventory has settled.
+// Update cadence (consulted): first check at T+3min so it never competes with
+// startup; every 4h; once more on wake. Timers are unref'd — the app must
+// never be held alive by an update check. Dev builds short-circuit inside the
+// service ('disabled'), so the timers exist but do nothing.
+if (app.isPackaged) {
+  const firstUpdateCheck = setTimeout(() => { void updateService.checkForUpdates() }, 3 * 60 * 1000)
+  firstUpdateCheck.unref()
+  const updateCheckInterval = setInterval(() => { void updateService.checkForUpdates() }, 4 * 60 * 60 * 1000)
+  updateCheckInterval.unref()
+  powerMonitor.on('resume', () => { void updateService.checkForUpdates() })
+}
+
 const sessionShutdownGate = installApplicationShutdown({
+  update: { pending: () => updateService.pendingInstall(), install: () => updateService.installUpdate() },
   app,
   platform: process.platform,
   prepare: () => {
@@ -1538,6 +1727,9 @@ const sessionShutdownGate = installApplicationShutdown({
       extensionRuntime = null
       extensionCapabilities?.dispose()
       extensionCapabilities = null
+      clearServiceTransport()
+      extensionServiceHost?.dispose()
+      extensionServiceHost = null
     },
   },
   onQuitAllowed: () => {

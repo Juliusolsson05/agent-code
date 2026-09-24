@@ -6,6 +6,13 @@ import { createGrokTranscriptEntryMapper, extractGrokProviderSessionId, isGrokTy
 import { grokComposerSubmit } from '@providers/grok/renderer/composerSubmit'
 import { GROK_CONDITION_POLICY } from '@providers/grok/renderer/conditions/policy'
 import { GROK_SEMANTIC_FOLD_POLICY } from '@providers/grok/renderer/semanticFoldPolicy'
+import { PI_IDENTITY } from '@providers/pi/renderer/identity'
+import { PI_VIEWS } from '@providers/pi/renderer/conditions/views'
+import { renderPiOperation } from '@providers/pi/renderer/rows/dispatch'
+import { createPiTranscriptEntryMapper, extractPiProviderSessionId, isPiTypedUserPrompt } from '@providers/pi/renderer/transcript/mapper'
+import { piComposerSubmit } from '@providers/pi/renderer/composerSubmit'
+import { PI_CONDITION_POLICY } from '@providers/pi/renderer/conditions/policy'
+import { PI_SEMANTIC_FOLD_POLICY } from '@providers/pi/renderer/semanticFoldPolicy'
 import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
@@ -419,11 +426,35 @@ const grokCapabilities: RendererProviderCapabilities = {
   semanticFoldPolicy: GROK_SEMANTIC_FOLD_POLICY,
 }
 
+const piCapabilities: RendererProviderCapabilities = {
+  id: 'pi',
+  name: 'Pi',
+  ...PI_IDENTITY,
+  // Attention-only conditions (answered in pi's own TUI): no outlet views.
+  conditionViews: PI_VIEWS,
+  renderOperation: renderPiOperation,
+  classifyDurableEntry: () => null,
+  // Pi has no subagent-spawn tool.
+  isSpawnTool: () => false,
+  createTranscriptEntryMapper: () => createPiTranscriptEntryMapper(),
+  extractProviderSessionId: extractPiProviderSessionId,
+  isTypedUserPrompt: isPiTypedUserPrompt,
+  // Pi stores the text the user typed verbatim; nothing to strip.
+  typedUserPromptText: text => text,
+  composerSubmit: piComposerSubmit,
+  // Prompts reach pi through the bridge as text; image delivery is unrecorded.
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
+  conditionPolicy: PI_CONDITION_POLICY,
+  semanticFoldPolicy: PI_SEMANTIC_FOLD_POLICY,
+}
+
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
   claude: claudeCapabilities,
   codex: codexCapabilities,
   opencode: opencodeCapabilities,
   grok: grokCapabilities,
+  pi: piCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

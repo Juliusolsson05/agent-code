@@ -187,10 +187,37 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
 
   // Electron child processes (GPU, utility, pepper plugin, etc.) dying.
   app.on('child-process-gone', (_event, details) => {
-    const clean = details.reason === 'clean-exit'
+    // WHY 'killed' is a warning here, exactly as it is for renderers above
+    // (#1135): on macOS quit, Electron SIGTERMs its GPU/utility/network
+    // children as part of normal teardown, and each reports `reason: 'killed'`
+    // with exitCode 15. This handler used to treat every non-clean reason as
+    // `error`, so a clean quit journaled an error that the renderer handler,
+    // for the SAME teardown, journaled as a warning. Evidence: in run
+    // 2026-09-20T08-34, seq 1020 (child, `error`) and seq 1021/1022 (render,
+    // `warn`) carry the same millisecond, the same reason and exitCode 15.
+    // The 2026-08-30..09-22 journal triage ranked a "crash" cluster first, and
+    // 11 of its 13 runs were this quit-time kill (5–92 ms before
+    // `app.before_quit`, followed by `app.shutdown.clean`).
+    //
+    // WHY only these two reasons are downgraded, by allowlist: every other
+    // reason (crashed, oom, abnormal-exit, launch-failed, integrity-failure,
+    // and anything a future Electron adds) is a real child failure and must
+    // stay `error`. Allowlisting the benign reasons means an unknown reason
+    // fails loud instead of being quietly filed as routine.
+    //
+    // WHY clean-exit is still recorded (as `warn`) rather than skipped like the
+    // renderer handler does: the renderer skip exists because every window
+    // close produces one; child clean exits are rarer, and this change is about
+    // severity, not about what reaches the journal. Kept as it was.
+    //
+    // A `killed` outside quit (an OS or user SIGTERM mid-session) is also
+    // `warn` now. That is the same trade the renderer handler already makes,
+    // and the journal still has the row plus the surrounding `app.*` events
+    // to tell the two apart; `error` is reserved for the child failing itself.
+    const benign = details.reason === 'clean-exit' || details.reason === 'killed'
     journal.recordIncident({
       kind: 'electron.child_process_gone',
-      severity: clean ? 'warn' : 'error',
+      severity: benign ? 'warn' : 'error',
       process: 'child',
       reason: details.reason,
       exitCode: details.exitCode,

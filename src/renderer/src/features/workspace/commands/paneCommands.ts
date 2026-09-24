@@ -5,6 +5,7 @@ import {
   isAgentSessionKind,
   isProcessSessionKind,
 } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
@@ -35,7 +36,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'New Agent…',
     description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. New agents land in the pool with a **new** badge in the index; the focused lane is filled only when it is empty.',
-    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'terminal'],
+    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'pi', 'terminal'],
     when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
@@ -60,7 +61,7 @@ export const paneCommands: CommandDef[] = [
     // project blanked every other lane until you switched back. With no
     // layout-wide scope (#992) nothing blanks, so the warning went with it.
     description: '**What it does:** Starts a **new agent in a project you choose**, in the focused lane.\n\n**Use when:** You want an agent for a different project than the one you last selected, e.g. to fill an empty lane.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those.',
-    keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
+    keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode', 'pi'],
     // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
     // agent would fill is not the thing on screen.
     when: ({ workspace }) => Boolean(workspace.activeTab),
@@ -120,7 +121,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Linked Agent…',
     description: '**What it does:** Starts a new agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is an ordinary pool agent. It renders directly under the parent and closes automatically when the parent closes.',
-    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex', 'opencode'],
+    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex', 'opencode', 'pi'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -242,6 +243,10 @@ export const paneCommands: CommandDef[] = [
         // than creating a default one, it just names the provider.
         category: 'create' as const,
         title: `New ${caps.shortLabel}`,
+        // #1102: a disabled provider keeps its chord (keybinding tables are
+        // static) but the command declines to run — the honest cheap
+        // behavior until command visibility becomes flag-driven.
+        when: () => enabledAgentProviderKindsSnapshot().has(kind),
         description: `**What it does:** Starts a **${caps.shortLabel} agent** now, without opening a picker.\n\n**Use when:** You know which provider you want.\n\n**Notes:** Fills the focused lane when it is empty; otherwise the agent lands in the pool with a **new** badge in the index.`,
         run: ({ workspace }: CommandContext) =>
           workspace.splitFocused(kind),
@@ -252,6 +257,7 @@ export const paneCommands: CommandDef[] = [
         category: 'create' as const,
         pickerVisibility: 'advanced' as const,
         title: `New ${caps.shortLabel} (legacy id)`,
+        when: () => enabledAgentProviderKindsSnapshot().has(kind),
         description: `**What it does:** Same as **New ${caps.shortLabel}**.\n\n**Notes:** Kept runnable for the ⌥⇧ chord and old bindings; hidden from the default palette because it is a duplicate.`,
         run: ({ workspace }: CommandContext) =>
           workspace.splitFocused(kind),

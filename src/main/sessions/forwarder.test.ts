@@ -55,3 +55,46 @@ it('delivers understood records before a fatal error through both real coalescer
     manager.removeAllListeners()
   }
 })
+
+it('flushes the old session\'s buffered rows before a provider-session change crosses to the desktop', async () => {
+  // Pi /new: rows of the session being left may still sit in the 100 ms
+  // jsonl batch. The identity must move only after they land, or the renderer
+  // would file the old session's last rows under the new identity.
+  const manager = new EventEmitter() as SessionManager & EventEmitter
+  manager.list = () => []
+  manager.getSessionKind = () => 'pi'
+  manager.getSpawnKind = () => 'pi'
+  const desktopEvents: Array<{ channel: string; payload: unknown }> = []
+  wire.receive = (channel, payload) => desktopEvents.push({ channel, payload })
+  const forwarder = wireSessionForwarder(manager, new EventEmitter() as LspManager)
+  const oldRow = { type: 'message', id: 'a1', parentId: 'u1', line: 5, message: { role: 'assistant', content: [] } }
+  try {
+    manager.emit('jsonl-entry', { sessionId: 'pane', file: '/s/old.jsonl', entry: oldRow })
+    manager.emit('provider-session-changed', { sessionId: 'pane', providerSessionId: 'new-id', transcriptFile: '/s/new.jsonl', reason: 'new' })
+    expect(desktopEvents.map(event => event.channel)).toEqual(['session:jsonl-entries', 'session:provider-session-changed'])
+    expect(desktopEvents[1]!.payload).toEqual({ sessionId: 'pane', providerSessionId: 'new-id', transcriptFile: '/s/new.jsonl', reason: 'new' })
+  } finally {
+    wire.receive = () => {}
+    manager.emit('removed', { sessionId: 'pane' })
+    forwarder.flush()
+    manager.removeAllListeners()
+  }
+})
+
+it('broadcasts a managed-skill warning to every window, carrying domain names only (#1133)', async () => {
+  // Broadcast, not session routing: the skill fault is machine-wide, and the
+  // session router would quarantine (and record a false routing gap for) a
+  // warning about an id no window has claimed yet. The payload is the renderer's
+  // entire input. The sessionId stays in main, and the reconcile error never
+  // reaches this event in the first place.
+  const { broadcastToWindows } = await import('@main/window/windowRegistry.js')
+  vi.mocked(broadcastToWindows).mockClear()
+  const manager = new EventEmitter() as SessionManager & EventEmitter
+  wireSessionForwarder(manager, new EventEmitter() as LspManager)
+  try {
+    manager.emit('managed-skills-unavailable', { sessionId: 'pane', skills: ['tldr', 'goal'] })
+    expect(broadcastToWindows).toHaveBeenCalledWith('managed-skills:unavailable', { skills: ['tldr', 'goal'] })
+  } finally {
+    manager.removeAllListeners()
+  }
+})

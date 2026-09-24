@@ -14,6 +14,7 @@ import type {
   SessionStartedEvent,
   SessionSubAgentsEvent,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -281,6 +282,15 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
     return this.sub('history-boundary', cb)
+  }
+  /**
+   * No phone frame, like the transcript diagnostic above: the event rebinds
+   * the desktop pane's durable identity (workspace.json), which the phone
+   * does not own. The phone's transcript already follows the switch through
+   * the history-boundary reset and the new rows that come after it.
+   */
+  onSessionProviderSessionChanged(_cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
+    return () => {}
   }
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub {
     return this.sub('semantic-event', cb)

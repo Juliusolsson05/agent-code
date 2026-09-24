@@ -1,9 +1,18 @@
 import type { CSSProperties } from 'react'
 
-import type { UsageProviderKind, UsageSeverity } from '@preload/index'
+import type { UsageSourceId, UsageSeverity } from '@preload/index'
 
-export function providerLabel(provider: UsageProviderKind): string {
-  return provider === 'claude' ? 'Claude' : 'Codex'
+export function providerLabel(provider: UsageSourceId): string {
+  switch (provider) {
+    case 'claude':
+      return 'Claude'
+    case 'codex':
+      return 'Codex'
+    case 'grok':
+      return 'Grok'
+    case 'opencode:zai':
+      return 'z.ai'
+  }
 }
 
 // WHY we return CSS variables + inline styles instead of Tailwind utility classes:

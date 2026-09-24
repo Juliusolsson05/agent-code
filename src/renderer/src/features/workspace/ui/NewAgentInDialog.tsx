@@ -15,7 +15,8 @@ import {
   type NewAgentInModel,
   type NewAgentInProject,
 } from '@renderer/features/workspace/lib/newAgentInProjects'
-import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
+import { AGENT_PROVIDER_CHOICES, filterAgentProviderChoices } from '@renderer/workspace/providerChoices'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { TabId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { withVisibleControls } from '@shared/text/visibleControls'
@@ -60,6 +61,12 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
   const [step, setStep] = useState<Step>('agent')
   const missingProviders = useMissingProviders()
   const [agentIndex, setAgentIndex] = useState(0)
+  // #1102: enablement filter — a disabled provider is not a creatable choice.
+  const enabledKinds = useEnabledAgentProviderKinds()
+  const providerChoices = useMemo(
+    () => filterAgentProviderChoices(AGENT_PROVIDER_CHOICES, enabledKinds),
+    [enabledKinds],
+  )
   // The highlighted project is held by TAB ID, not list index: the model is
   // live while the dialog is open (an MCP operator can close an agent or a
   // tab meanwhile), and an index would silently slide onto a different
@@ -92,7 +99,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
     committingRef.current = false
   }, [open])
 
-  const choice = AGENT_PROVIDER_CHOICES[agentIndex] ?? null
+  const choice = providerChoices[Math.min(agentIndex, providerChoices.length - 1)] ?? null
   const enabledProjects = model.projects.filter(project => project.enabled)
   const highlightedProject =
     enabledProjects.find(project => project.tabId === projectTabId) ?? null
@@ -121,7 +128,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
 
   const moveAgent = (delta: -1 | 1) => {
     setAgentIndex(index =>
-      Math.max(0, Math.min(AGENT_PROVIDER_CHOICES.length - 1, index + delta)),
+      Math.max(0, Math.min(providerChoices.length - 1, index + delta)),
     )
   }
 
@@ -226,7 +233,7 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
         */}
         <div className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas">
           {step === 'agent' ? (
-            AGENT_PROVIDER_CHOICES.map((option, index) => {
+            providerChoices.map((option, index) => {
               const focused = index === agentIndex
               return (
                 <button

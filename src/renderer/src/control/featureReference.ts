@@ -25,6 +25,7 @@ import { controlReference as reference23 } from '@renderer/features/settings/con
 import { controlReference as reference24 } from '@renderer/features/setup/controlReference'
 import { controlReference as reference25 } from '@renderer/features/spotlight/controlReference'
 import { controlReference as reference28 } from '@renderer/features/usage/controlReference'
+import { controlReference as reference34 } from '@renderer/features/providers/controlReference'
 import { controlReference as reference29 } from '@renderer/features/voice-dictation/controlReference'
 import { controlReference as reference30 } from '@renderer/features/workflows/controlReference'
 import { controlReference as reference31 } from '@renderer/features/worktrees/controlReference'
@@ -35,6 +36,9 @@ import { controlReference as performanceReference } from '@renderer/features/per
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 import { controlReference as goalLoopReference } from '@renderer/features/goal-loop/controlReference'
 import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
+import { controlReference as browserPocketReference } from '@renderer/features/browser-pocket/controlReference'
+import { controlReference as mcpReference } from '@renderer/features/mcp/controlReference'
+import { controlReference as skillsReference } from '@renderer/features/skills/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -63,6 +67,7 @@ export const featureReferences = [
   ...reference24,
   ...reference25,
   ...reference28,
+  ...reference34,
   ...reference29,
   ...reference30,
   ...reference31,
@@ -72,6 +77,9 @@ export const featureReferences = [
   ...tldrReference,
   ...goalLoopReference,
   ...agentAnalyticsReference,
+  ...browserPocketReference,
+  ...mcpReference,
+  ...skillsReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -93,7 +101,11 @@ export const referenceOwnership = {
   "command-keybindings": "keybindings",
   "workflows": "workflows",
   "usage": "usage",
+  "providers": "providers",
+  "mcp": "mcp",
+  "skills": "skills",
   "agent-analytics": "agent-analytics",
+  "browser-pocket": "browser-pocket",
   "usage-limit": "usage",
   "rendered-content": "rendered-content",
   "dispatch-pin": "pins",

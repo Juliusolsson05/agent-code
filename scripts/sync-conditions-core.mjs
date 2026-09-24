@@ -120,6 +120,20 @@ const TARGETS = [
     sync: true,
   },
   {
+    name: 'pi-terminal-headless',
+    // Pi's attention-only dialog and trust conditions run on the same engine,
+    // so their snapshots dedupe and order like every other provider's.
+    dest: path.join(
+      REPO_ROOT,
+      'packages',
+      'pi-terminal-headless',
+      'src',
+      'conditions',
+      'core',
+    ),
+    sync: true,
+  },
+  {
     name: 'grok-code-headless',
     // Grok's permission, question and plan-approval conditions use the same
     // engine, driven by native's outstanding reverse requests instead of painted

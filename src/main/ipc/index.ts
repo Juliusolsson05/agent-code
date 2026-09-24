@@ -46,6 +46,9 @@ import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
 import { registerLifecycleIpc } from '@main/ipc/lifecycle.js'
+import { registerProviderEnablementIpc } from '@main/ipc/providerEnablement.js'
+import { registerUserMcpIpc } from '@main/ipc/userMcp.js'
+import type { UserMcpService } from '@main/userMcp/service.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
 import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
@@ -72,6 +75,7 @@ import type { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspe
 
 export type IpcDeps = {
   manager: SessionManager
+  userMcpService: UserMcpService
   lspManager: LspManager
   ghostJournals: GhostJournalRegistry
   dictationDebugJournals: DictationDebugJournalRegistry
@@ -138,6 +142,8 @@ export function registerAllIpc(deps: IpcDeps): void {
     deps.sessionRecorders,
   )
   registerDebugIpc(deps.appRunJournal, lifecycleDiagnostics)
+  registerProviderEnablementIpc()
+  registerUserMcpIpc(deps.userMcpService)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)

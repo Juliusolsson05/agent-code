@@ -85,6 +85,44 @@ export function hasReportingDomain(domains: readonly string[] | undefined): bool
   return Boolean(domains?.includes('tldr') || domains?.includes('goal'))
 }
 
+/** The built-in MCP domains that come with a product-managed skill. Listed in a
+ * fixed order so every warning names the skills in the same order, whatever
+ * order the pre-spawn reconcile reported them in. */
+export const REPORTING_DOMAINS = ['tldr', 'goal'] as const
+export type ReportingDomain = (typeof REPORTING_DOMAINS)[number]
+
+/** Main → renderer broadcast: one or more product skills could not be prepared
+ * for an agent that asked for them, and that agent was started without them
+ * (#1133). App-wide by design: skill health is machine-wide, not per-pane. */
+export const MANAGED_SKILLS_UNAVAILABLE_CHANNEL = 'managed-skills:unavailable'
+export type ManagedSkillsUnavailableEvent = { skills: ReportingDomain[] }
+
+/**
+ * The user-facing text for a skipped product skill (#1133).
+ *
+ * WHY it names Settings › Agents › Custom Skills: TLDR and Goal show up there
+ * as "Managed by TLDR/Goal MCP" rows with their health and target rows, which
+ * is the only place the user can see WHY the skill is broken (a conflicting
+ * file, recovery required, a failed deploy). The toast is only a pointer. It
+ * has to say where to look, because both outages this replaced ended with
+ * someone hunting for the cause.
+ *
+ * WHY it says the agents are running: the old behavior was "nothing starts",
+ * and a warning that reads like the old failure would send the user off to
+ * restart panes that are fine. The part that is really lost is the skill's
+ * guidance. The MCP tool still carries its own server instructions.
+ *
+ * Kept pure and shared so the text is testable without a renderer, and so any
+ * future surface (remote client, notices) says exactly the same thing.
+ */
+export function managedSkillsUnavailableMessage(skills: readonly ReportingDomain[]): string {
+  const labels = REPORTING_DOMAINS
+    .filter(domain => skills.includes(domain))
+    .map(domain => (domain === 'tldr' ? 'TLDR' : 'Goal'))
+  const subject = labels.length > 1 ? `${labels.join(' and ')} skills` : `${labels[0] ?? 'Managed'} skill`
+  return `${subject} could not be prepared, so agents started without ${labels.length > 1 ? 'them' : 'it'}. Review Settings › Agents › Custom Skills.`
+}
+
 /**
  * Why a hold-to-peek gesture ended, as far as main can tell (#1066).
  *

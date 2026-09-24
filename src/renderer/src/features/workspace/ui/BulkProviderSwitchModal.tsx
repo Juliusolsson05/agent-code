@@ -24,6 +24,7 @@ import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKi
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { UsageProviderKind } from '@shared/types/usage'
 import { useUsageHeaderSnapshot } from '@renderer/features/usage/hooks/useUsageHeaderSnapshot'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { formatReset, providerLabel as usageProviderLabel } from '@renderer/features/usage/model/formatUsage'
 import { deriveProviderExhaustion } from '@shared/usage/exhaustion'
 import { estimateLiveEntriesBytes } from '@renderer/session-runtime/liveEntryWindow'
@@ -213,19 +214,35 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // reason this modal was opened. Two exhausted providers deliberately fall
   // back: moving agents from one full provider to another full one helps
   // nobody, so the user has to say what they want.
+  // #1102: a disabled provider is absent from BOTH sides of every offered
+  // direction — it cannot be a switch source (its agents can still exist)
+  // nor a target (it would sneak back into the workspace).
+  const enabledKinds = useEnabledAgentProviderKinds()
+  const directions = useMemo(
+    () => SWITCH_DIRECTIONS.filter(d => enabledKinds.has(d.source) && enabledKinds.has(d.target)),
+    [enabledKinds],
+  )
   const defaultDirectionKey = useMemo(() => {
-    if (exhaustedProviders.length !== 1) return 'codex:claude'
+    // Prefer the historical codex→claude default when both kinds are enabled;
+    // fall back to the first ENABLED direction when they are not (final
+    // review #3: the old unconditional hardcode painted a select with no
+    // matching option once enablement filtered that pair out).
+    const prefer = (key: string) => (directions.some(item => item.key === key) ? key : directions[0]?.key ?? '')
+    if (exhaustedProviders.length !== 1) return prefer('codex:claude')
     const exhaustedSource = exhaustedProviders[0].provider
-    return SWITCH_DIRECTIONS.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude'
-  }, [exhaustedProviders])
+    return prefer(directions.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude')
+  }, [exhaustedProviders, directions])
   const directionKey = directionChoice ?? defaultDirectionKey
 
-  const direction = SWITCH_DIRECTIONS.find(item => item.key === directionKey) ?? {
-    key: 'codex:claude',
-    source: 'codex' as const,
-    target: 'claude' as const,
-  }
-  const { source, target } = direction
+  // #1102 (review finding #5): the old hardcoded codex→claude fallback could
+  // name a direction enablement just filtered OUT — an empty <select> with a
+  // live Switch button. No fallback: absence means "nothing switchable".
+  const direction = directions.find(item => item.key === directionKey) ?? null
+  const { source, target } = direction ?? { source: null, target: null }
+  // Null-safe labels: with no direction (everything filtered out), the body
+  // still renders its shell; label calls must not see null kinds.
+  const sourceLabel = source ? providerLabel(source) : '—'
+  const targetLabel = target ? providerLabel(target) : '—'
   const sourceExhaustion = exhaustion.find(item => item.provider === source) ?? null
   const sourceExhausted = sourceExhaustion?.exhausted === true
 
@@ -498,7 +515,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     try {
       await workspace.switchAgentsToProvider(
         sessionIds,
-        target,
+        target!,
         {
           allowSourceTurns: compactOnSource,
           compactOnArrival,
@@ -702,7 +719,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   }}
                   className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
-                  {SWITCH_DIRECTIONS.map(item => (
+                  {directions.map(item => (
                     <option key={item.key} value={item.key}>
                       {providerLabel(item.source)} → {providerLabel(item.target)}
                     </option>
@@ -750,9 +767,9 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   className="mt-0.5 accent-current"
                 />
                 <span>
-                  Compact on arrival with {providerLabel(target)}
+                  Compact on arrival with {targetLabel}
                   <span className="text-muted">
-                    {' '}— spends {providerLabel(target)} quota, not {providerLabel(source)}&apos;s
+                    {' '}— spends {targetLabel} quota, not {sourceLabel}&apos;s
                   </span>
                 </span>
               </label>
@@ -777,16 +794,16 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 className="mt-0.5 accent-current disabled:opacity-50"
               />
               <span className={sourceExhausted ? 'text-muted' : undefined}>
-                Compact on source first (uses {providerLabel(source)} quota)
+                Compact on source first (uses {sourceLabel} quota)
                 {sourceExhausted && (
-                  <span className="text-muted"> — {providerLabel(source)} is exhausted</span>
+                  <span className="text-muted"> — {sourceLabel} is exhausted</span>
                 )}
               </span>
             </label>
 
             {sourceConfirmArmed && compactOnSource && (
               <div className="rounded-slab border border-warning/50 bg-warning/10 px-3 py-2 text-[11px] text-ink">
-                {`Compact ${pluralAgents(matchingRows.length)} on ${providerLabel(source)} first — this rewrites their live history and uses ${providerLabel(source)} quota.`}
+                {`Compact ${pluralAgents(matchingRows.length)} on ${sourceLabel} first — this rewrites their live history and uses ${sourceLabel} quota.`}
               </div>
             )}
 
@@ -802,18 +819,18 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               // transcript translation at all.
               <div className="rounded-slab mt-1 flex items-center justify-between gap-3 border border-border bg-canvas px-3 py-2">
                 <div className="min-w-0 text-[11px] text-ink-dim">
-                  Only one {providerLabel(source)} model family is exhausted — a model switch
+                  Only one {sourceLabel} model family is exhausted — a model switch
                   keeps every agent where it is.
                 </div>
                 <button
                   type="button"
                   onClick={() => void runModelSwitch()}
-                  disabled={locked || matchingRows.length === 0}
+                  disabled={locked || matchingRows.length === 0 || !direction}
                   className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
                 >
                   {switchingModel
                     ? 'Sending…'
-                    : `Switch ${pluralAgents(matchingRows.length)} to another ${providerLabel(source)} model`}
+                    : `Switch ${pluralAgents(matchingRows.length)} to another ${sourceLabel} model`}
                 </button>
               </div>
             )}
@@ -857,7 +874,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             <div className="flex-1 min-h-0 overflow-y-auto">
               {projects.length === 0 ? (
                 <div className="px-3 py-6 text-center text-[11px] text-muted">
-                  No {providerLabel(source)} agents.
+                  No {sourceLabel} agents.
                 </div>
               ) : (
                 filteredProjects.map(project => {
@@ -909,8 +926,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 </div>
                 <div className="mt-0.5 text-[10px] text-muted">
                   {matchingRows.length === 0
-                    ? `No ${providerLabel(source)} agents to switch.`
-                    : `These ${providerLabel(source)} agents will become ${providerLabel(target)} agents.`}
+                    ? `No ${sourceLabel} agents to switch.`
+                    : `These ${sourceLabel} agents will become ${targetLabel} agents.`}
                 </div>
               </div>
               {scopeMode === 'selected' && (
@@ -921,7 +938,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             <div className="flex-1 min-h-0 overflow-y-auto">
               {matchingRows.length === 0 ? (
                 <div className="px-4 py-10 text-center text-[12px] text-muted">
-                  No {providerLabel(source)} agents match the current scope.
+                  No {sourceLabel} agents match the current scope.
                 </div>
               ) : (
                 matchingRows.map(row => (
@@ -978,7 +995,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               // `locked`, matching the handler: with `busy` alone the button
               // stayed enabled during a /model fan-out while runSwitch refused
               // the click, so it looked available and did nothing.
-              disabled={locked || matchingRows.length === 0}
+              disabled={locked || matchingRows.length === 0 || !direction}
               className={`rounded-control
                 px-3 py-1.5 text-[11px] border
                 ${matchingRows.length > 0
@@ -992,8 +1009,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   // The armed label names the expensive half of what the click
                   // does. "Switch N to Claude" would hide the fact that the
                   // press also spends the source provider's quota.
-                  ? `Compact ${pluralAgents(matchingRows.length)} on ${providerLabel(source)} and switch`
-                  : `Switch ${pluralAgents(matchingRows.length)} to ${providerLabel(target)}`}
+                  ? `Compact ${pluralAgents(matchingRows.length)} on ${sourceLabel} and switch`
+                  : `Switch ${pluralAgents(matchingRows.length)} to ${targetLabel}`}
             </button>
           </div>
         </div>

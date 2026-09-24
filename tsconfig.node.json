@@ -42,6 +42,8 @@
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
       "opencode-terminal-headless": ["./packages/opencode-terminal-headless/src/index.ts"],
       "opencode-terminal-headless/*": ["./packages/opencode-terminal-headless/src/*"],
+      "pi-terminal-headless": ["./packages/pi-terminal-headless/src/index.ts"],
+      "pi-terminal-headless/*": ["./packages/pi-terminal-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "agent-voice-dictation": ["./packages/agent-voice-dictation/src/index.ts"],
@@ -90,6 +92,7 @@
     "packages/grok-code-headless/src/**/*",
     "packages/opencode-headless/src/**/*",
     "packages/opencode-terminal-headless/src/**/*",
+    "packages/pi-terminal-headless/src/**/*",
     "packages/workflow-mcp/src/**/*"
   ],
   "exclude": [

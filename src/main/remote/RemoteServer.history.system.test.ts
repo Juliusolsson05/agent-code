@@ -162,6 +162,36 @@ describe('remote history backfill', () => {
     }
   })
 
+  it('get-history pages a Pi session (a plain file with no locator grammar) by the live native id, active branch only', async () => {
+    const { mkdir } = await import('node:fs/promises')
+    const { loadLiveFixture, referenceActiveBranch, toJsonl } = await import('pi-terminal-headless/testing/index')
+    const { resolvePiSessionDir } = await import('pi-terminal-headless')
+    const rows = Object.values(loadLiveFixture('tree').files)[0]!
+    const id = String(rows[0]!.id)
+    const cwd = join(dir, 'pi-project')
+    await mkdir(cwd, { recursive: true })
+    vi.stubEnv('PI_CODING_AGENT_DIR', join(dir, 'pi-agent'))
+    const sessionDir = await resolvePiSessionDir({ env: process.env, cwd })
+    await mkdir(sessionDir, { recursive: true })
+    const file = join(sessionDir, `2026-09-22T00-00-00-000Z_${id}.jsonl`)
+    await writeFile(file, toJsonl(rows))
+    vi.mocked(manager.getSessionKind).mockReturnValue('pi')
+    vi.mocked(manager.resolveTranscriptFile).mockResolvedValue(file)
+    vi.mocked(manager.getSpawnCwd).mockReturnValue(cwd)
+    vi.mocked(manager.getNativeConversationId!).mockReturnValue(id)
+    try {
+      const { ws, frames, token } = await openAuthed()
+      ws.send(JSON.stringify({ token, id: 'pi-1', message: { type: 'get-history', sessionId: 's1', limit: 50 } }))
+      await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
+      const reply = framesOfType(frames, 'reply')[0] as { ok: boolean; result: { entries: Array<{ id: string }> } }
+      expect(reply.ok).toBe(true)
+      expect(reply.result.entries.map(entry => entry.id)).toEqual(referenceActiveBranch(rows).map(row => row.id))
+      ws.close()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('get-history fails cleanly before any transcript exists', async () => {
     const { ws, frames, token } = await openAuthed()
     ws.send(JSON.stringify({

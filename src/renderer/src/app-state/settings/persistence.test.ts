@@ -1,3 +1,4 @@
+import { uniformBuiltInMcpDefaults } from '@mcp/shared/types'
 import { describe, expect, it } from 'vitest'
 
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
@@ -61,12 +62,14 @@ describe('coerceSettings agentViewMode', () => {
   })
 
   it('defaults missing built-in MCP defaults to the shipped public set', () => {
+    // Per provider since #1143; every provider starts from the same shipped set.
     expect(coerceSettings({}).defaultBuiltInMcpDomains)
-      .toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
+      .toEqual(uniformBuiltInMcpDefaults(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows']))
   })
 
   it('respects an explicit empty MCP domain list', () => {
-    expect(coerceSettings({ defaultBuiltInMcpDomains: [] }).defaultBuiltInMcpDomains).toEqual([])
+    // A pre-#1143 flat `[]` still means "nothing by default", now for every provider.
+    expect(coerceSettings({ defaultBuiltInMcpDomains: [] }).defaultBuiltInMcpDomains).toEqual(uniformBuiltInMcpDefaults([]))
   })
 
   it('keeps only configurable built-in MCP defaults in first-seen order', () => {
@@ -80,7 +83,18 @@ describe('coerceSettings agentViewMode', () => {
         'agent_management',
         12,
       ],
-    }).defaultBuiltInMcpDomains).toEqual(['workflows', 'orchestration', 'agent_management'])
+    }).defaultBuiltInMcpDomains).toEqual(uniformBuiltInMcpDefaults(['workflows', 'orchestration', 'agent_management']))
+  })
+
+  it('keeps a per-provider choice per provider (#1143)', () => {
+    const defaults = coerceSettings({
+      defaultBuiltInMcpDomains: { claude: ['tldr', 'ping'], codex: [], opencode: ['workflows'] },
+    }).defaultBuiltInMcpDomains
+    expect(defaults.claude).toEqual(['tldr'])
+    expect(defaults.codex).toEqual([])
+    expect(defaults.opencode).toEqual(['workflows'])
+    // A provider missing from the saved map gets the shipped default.
+    expect(defaults.grok).toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
   })
 })
 
@@ -193,3 +207,10 @@ describe('coerceSettings public-release defaults (#973)', () => {
     expect(cleared.paletteMouseChord).toBe('')
   })
 })
+
+ it('preserves browser setup initialization and migrates already-enabled installs without re-seeding defaults', () => {
+  expect(coerceSettings({}).browserPocketDefaultsInitialized).toBe(false)
+  expect(coerceSettings({ browserPocketEnabled: true }).browserPocketDefaultsInitialized).toBe(true)
+  const saved = coerceSettings({ browserPocketEnabled: false, browserPocketDefaultsInitialized: true })
+  expect(coerceSettings(JSON.parse(JSON.stringify(saved))).browserPocketDefaultsInitialized).toBe(true)
+ })

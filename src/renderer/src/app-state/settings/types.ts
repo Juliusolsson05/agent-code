@@ -4,7 +4,14 @@ import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
 import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { DictationProvider } from '@shared/types/dictation'
 import type { MouseButtonBinding, MouseChordBinding } from '@renderer/lib/mouseBinding'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import { uniformBuiltInMcpDefaults } from '@mcp/shared/types'
+import type { BuiltInMcpDefaults, ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+
+/** The shipped per-provider default, before any user choice. Exported so
+ * coercion can fall back to it for a provider missing from a persisted map. */
+export const SHIPPED_BUILT_IN_MCP_DOMAINS: readonly ConfigurableBuiltInMcpDomain[] = [
+  'tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows',
+]
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 // Value import (not type-only): DEFAULT_SETTINGS.dictationShortcut shares ONE
 // source of truth with the HotkeyInput reset button and coerceHotkeyBinding's
@@ -408,7 +415,7 @@ export type Settings = {
    * including reloads. Per-domain session overrides win; a running process's
    * captured capability list is an observation, never its preference source.
    * `ping` stays diagnostic-only. Provider filters run after resolution. */
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[]
+  defaultBuiltInMcpDomains: BuiltInMcpDefaults
   /** When true, agent sessions are spawned through a per-session proxy
    *  that Agent Code owns. Claude gets a mitmproxy that decrypts Anthropic
    *  `/v1/messages` SSE in real time; Codex gets an in-process Responses
@@ -501,6 +508,17 @@ export type Settings = {
    *  DOM, semantic, and feed-debug snapshots, so they are interval-
    *  based rather than emitted on every render. */
   aggressiveDebugPersistence: boolean
+  /** Experimental master switch for the lane browser pocket (#1142). Off ⇒
+   *  no guests, no port scans, no commands, and main registers no browser_*
+   *  tools even for agents whose MCP domains include `browser`. */
+  browserPocketDefaultsInitialized: boolean
+  browserPocketEnabled: boolean
+  /** Route loopback links clicked in an agent's output into that agent's
+   *  pocket instead of the system browser (⌘-click still goes external). */
+  browserPocketOpenLocalhostLinks: boolean
+  /** Registers `browser_evaluate` (arbitrary JS in the page). Off by default:
+   *  page content is untrusted and these agents also have shell access. */
+  browserPocketAllowEvaluate: boolean
   /** When on (default), clicking a prompt-suggestion chip immediately SENDS
    *  that suggestion as the next prompt; when off, clicking only prefills the
    *  composer draft so the user can edit before submitting. The chip is an
@@ -642,6 +660,13 @@ export type Settings = {
    * command a downgrade removed.
    */
   commandKeybindingOverrides: Record<string, string[]>
+  /**
+   * External skills (Settings → Skills → Also found on this machine) the user
+   * chose to hide, keyed `<targetId>:<folder>` (#1161). A per-viewer display
+   * choice only: hiding never touches the folder, and a skill that appears in
+   * a new root shows up again because that is a new key.
+   */
+  hiddenExternalSkills: string[]
   /** Ambient provider-quota indicator in the SettingsBar header row.
    *  On by default: quota headroom is a planning input for dispatching
    *  agent fleets, and the whole point of the feature is ambient
@@ -695,6 +720,10 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationMouseButton: 'Middle',
   paletteMouseChord: 'Middle+Right',
   aggressiveDebugPersistence: false,
+  browserPocketDefaultsInitialized: false,
+  browserPocketEnabled: false,
+  browserPocketOpenLocalhostLinks: true,
+  browserPocketAllowEvaluate: false,
   // Dispatch is the product's command-center view and the way the owner runs
   // the app all day; a public fresh install should open there (#973). The
   // setting still only seeds a workspace that has no workspace.json yet —
@@ -705,7 +734,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // are the Cmd+L / Cmd+G peeks — with no domains on, a new user never sees
   // them do anything. AI Workspace and Agent Management stay opt-in. An
   // explicitly persisted list (including `[]`) always wins in coerceSettings.
-  defaultBuiltInMcpDomains: ['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'],
+  defaultBuiltInMcpDomains: uniformBuiltInMcpDefaults(SHIPPED_BUILT_IN_MCP_DOMAINS),
   // Off (#973): a click that immediately sends a prompt to an agent surprised
   // the owner enough to turn it off; fill-then-edit is the safer public default.
   autoSendPromptSuggestion: false,
@@ -742,6 +771,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Seeding this with today's defaults would pin every command to this
   // release's chords and make future default improvements invisible.
   commandKeybindingOverrides: {},
+  hiddenExternalSkills: [],
   // Off (#973): the header quota indicator is opt-in for the public build;
   // the Usage command and modal are unaffected.
   usageHeaderEnabled: false,

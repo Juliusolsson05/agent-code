@@ -60,7 +60,7 @@ The most technical part of the application is not visible in this map. Agent Cod
 
 Blue identifies Agent Code components and state. Gray, dashed boxes identify external tools, clients or their data. Amber marks checks and cautions. Every view includes a key; the labels carry the meaning even without color.
 
-This reference describes the implementation at source revision `6a19e4ee`, inspected on 2026-09-11. Sections 5.2, 5.3, 8.2.1 and 8.3 were revised against source revision `115e26fc` and the package revisions listed in 5.2, inspected on 2026-09-12.
+This reference describes the implementation at source revision `6a19e4ee`, inspected on 2026-09-11. Sections 5.2, 5.3, 8.2.1 and 8.3 were revised against source revision `115e26fc` and the package revisions listed in 5.2, inspected on 2026-09-12. Section 5.3.5 (Pi) and Pi's column in the 5.3 table were added on 2026-09-22 against the pi-terminal-headless revision listed in 5.2.
 
 ## Contents
 
@@ -243,7 +243,7 @@ The main architectural boundaries are directories with different runtime permiss
 | `testing/`, tests beside source | Fixtures, harnesses and regression evidence | Production bundles exclude test assets |
 | `scripts/`, `build/`, `.github/` | Build, native resource preparation, packaging, CI | Part of the delivery architecture, not renderer runtime |
 
-The seven application submodules at this revision are:
+The application submodules this document covers are:
 
 | Package | Pinned revision | Application use |
 | --- | --- | --- |
@@ -251,7 +251,8 @@ The seven application submodules at this revision are:
 | [codex-headless](https://github.com/Juliusolsson05/codex-headless/tree/5bfeaca988a7d83be3d1010b03bb6d0eca653edf) | `5bfeaca9` | Codex PTY observation: rollout attribution and tail, Responses proxy, prompt-input evidence, resume preparation ([5.3.3](#533-codex-headless)) |
 | [opencode-headless](https://github.com/Juliusolsson05/opencode-headless/tree/4f2ef5de7c80ad7a6199dc09869ea3b728752f0e) | `4f2ef5de` | Structured OpenCode: server spawn or attach, HTTP client, SSE dispatcher, committed message assembly ([5.3.4](#534-opencode-headless-and-opencode-terminal-headless)) |
 | [opencode-terminal-headless](https://github.com/Juliusolsson05/opencode-terminal-headless/tree/e85b3f53be39912fb295c45907b1fb6abd6e4a26) | `e85b3f53` | OpenCode TUI companion: read-only database reader, TUI server events, turn sequencing, conditions ([5.3.4](#534-opencode-headless-and-opencode-terminal-headless)) |
-| [agent-transcript-parser](https://github.com/Juliusolsson05/agent-transcript-parser/tree/9c99db00f9cf0097c87271d04fd3e3ebf9f1e894) | `9c99db00` | Neutral conversation model for provider switch, duplicate and rewind; provisional ghost records ([5.3.5](#535-agent-transcript-parser)) |
+| [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/2100dfc3da05742f9052b34ed802273fcdc40a73) | `2100dfc3` | Pi TUI companion: session-tree reader, bridge extension (live events, prompts, MCP tool proxy), turn sequencing, conditions ([5.3.5](#535-pi-terminal-headless)) |
+| [agent-transcript-parser](https://github.com/Juliusolsson05/agent-transcript-parser/tree/9c99db00f9cf0097c87271d04fd3e3ebf9f1e894) | `9c99db00` | Neutral conversation model for provider switch, duplicate and rewind; provisional ghost records ([5.3.6](#536-agent-transcript-parser)) |
 | [agent-voice-dictation](https://github.com/Juliusolsson05/agent-voice-dictation/tree/3c6f962843532da2a7ddf2cc80f38cacd3196bb1) | `3c6f9628` | Speech transport and composer integration primitives |
 | [workflow-mcp](https://github.com/Juliusolsson05/workflow-mcp/tree/b4b98f8d13f59bae0c999c927533f451b491496a) | `b4b98f8d` | Durable workflow service, store, scheduler, worker protocol and providers |
 
@@ -263,16 +264,16 @@ Build aliases resolve most local packages directly from source. Workflow integra
 
 Provider selection is exhaustive at several boundaries: main factories and native operations, renderer mapping/rendering capabilities, and setup requirements. Adding a string to a UI picker is insufficient. The source owners are [main registry](src/providers/registry.main.ts), [setup registry](src/providers/registry.setup.ts), [renderer capability registry](src/providers/registry.renderer.capabilities.ts), and [feature capabilities](src/providers/shared/featureCapabilities.ts).
 
-| Property | Claude | Codex | OpenCode structured | OpenCode terminal |
-| --- | --- | --- | --- | --- |
-| Native execution | CLI in PTY | CLI in PTY | `opencode serve` spawned by the package | TUI in PTY with its embedded server |
-| Live observations | Terminal mirror, optional mitmproxy stream | Terminal mirror, rollout events, optional Responses proxy stream | Server SSE bus | TUI server SSE: turns, phases, requests; no streaming text |
-| Committed observations | Exact JSONL tail | Attributed rollout tail | Messages assembled from bus part snapshots, plus HTTP history | Read-only SQLite event log |
-| Native identity | UUID selected before launch/resume | Exact rollout/thread identity, proven before tailing | `ses_...` | Pre-created `ses_...` |
-| Prompt path | Readiness, absorption and durable acceptance transaction | Attested PTY delivery profile | HTTP `prompt_async`, text only | Keyboard to PTY; programmatic prompts through the TUI server with the session's agent, model and variant |
-| App saved-session listing | Supported | Supported | Not implemented | Not a separate listing capability |
-| Accepted upstream version | 2.1.263 | 0.149.1 | Not pinned by the package | 1.18.30 |
-| Native terminal view | Available | Available | Not a PTY | Required; the pane always shows the TUI |
+| Property | Claude | Codex | OpenCode structured | OpenCode terminal | Pi (terminal-only) |
+| --- | --- | --- | --- | --- | --- |
+| Native execution | CLI in PTY | CLI in PTY | `opencode serve` spawned by the package | TUI in PTY with its embedded server | `pi` TUI in PTY with Agent Code's bridge extension loaded by `-e` |
+| Live observations | Terminal mirror, optional mitmproxy stream | Terminal mirror, rollout events, optional Responses proxy stream | Server SSE bus | TUI server SSE: turns, phases, requests; no streaming text | Bridge events over a private Unix socket: turns, phases, tools, dialogs, session switches; no streaming text |
+| Committed observations | Exact JSONL tail | Attributed rollout tail | Messages assembled from bus part snapshots, plus HTTP history | Read-only SQLite event log | Session JSONL tree, active branch only |
+| Native identity | UUID selected before launch/resume | Exact rollout/thread identity, proven before tailing | `ses_...` | Pre-created `ses_...` | UUID passed as `--session-id`; the pane follows `/new`, `/resume` and `/fork` inside the TUI |
+| Prompt path | Readiness, absorption and durable acceptance transaction | Attested PTY delivery profile | HTTP `prompt_async`, text only | Keyboard to PTY; programmatic prompts through the TUI server with the session's agent, model and variant | Keyboard to PTY; programmatic prompts through the bridge (`sendUserMessage` as follow-up), acknowledged only by Pi's own evidence |
+| App saved-session listing | Supported | Supported | Not implemented | Not a separate listing capability | Supported (conversation catalog) |
+| Accepted upstream version | 2.1.263 | 0.149.1 | Not pinned by the package | 1.18.30 | 0.87.1 |
+| Native terminal view | Available | Available | Not a PTY | Required; the pane always shows the TUI | Required; Pi has no other surface |
 
 #### 5.3.1 Observing a process Agent Code does not control
 
@@ -677,7 +678,28 @@ class Serve,TUI,DB external
 
 Sources: [OpenCode runtime adapters](src/providers/opencode/runtime), [terminal runtime design](docs/decomposition/opencode-terminal-headless.md).
 
-#### 5.3.5 agent-transcript-parser
+#### 5.3.5 pi-terminal-headless
+
+Pi (`@earendil-works/pi-coding-agent`) is a TUI with no server and no MCP client. What it does have is an extension API, so Agent Code observes and drives it from inside: every Pi pane loads one bridge extension. [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/2100dfc3da05742f9052b34ed802273fcdc40a73/src) owns that extension, the durable reader and the sequencing. Agent Code spawns the PTY. The package never spawns or kills.
+
+| Concern | Owner and rule |
+| --- | --- |
+| Launch | `preparePiTerminalLaunch` owns `--session-id` and `-e <bridge>`. It creates a private 0700 socket directory, and the per-spawn token goes in env only, never argv. The bridge ships as one jiti-loaded file (`out/main/runtime/pi/bridge.ts`) that has only node builtins at runtime |
+| Live channel | The host listens and the extension connects. The first frame is a token hello. Events are ids, kinds and flags; message bodies stay in the session file. Nothing thrown inside the extension may escape, because an uncaught error kills the user's `pi` |
+| Committed channel | `DurableReader` tails the session JSONL. `ActiveBranch` walks the `parentId` chain from the leaf. Abandoned `/tree` turns stay in the file and never reach the feed |
+| Ordering | The doorbell is `turn_end`/`agent_settled`, never `message_end`, because at `message_end` the row is not yet on disk. `SessionSequencer` holds a turn end, for up to 2 s, until its committed answer has been emitted |
+| Prompts | Always `deliverAs: 'followUp'`: without it, a prompt sent while Pi is busy is accepted and silently lost. The outcomes are `started`, `queued` or `unknown`, and `unknown` is never retried. A delivered `/compact` runs Pi's own `ctx.compact()` |
+| Identity | Pi rows carry no session id, and Pi switches sessions in-process. The bridge's `session_start` drives an explicit `provider-session-changed` event that the pane follows |
+| Built-in MCP | The bridge proxies Agent Code's per-session MCP endpoints as Pi tools named `mcp__<server>__<tool>`, and puts server instructions in their own prompt section. Header values travel in env vars that the bridge scrubs when it reads them |
+| Conditions | Attention-only `pi.dialog` (an extension/UI prompt is up) and `pi.trust` (Pi's project-trust selector). Agent Code never answers either one |
+
+Transcript operations (switch in both directions, duplicate, rewind) go through the parser's Pi codec. The decoder reads exactly the branch Pi would send to its model, including its compaction and `context_edit` projection. The projector writes a linear v3 file that `pi --session-id` opens. The installed-CLI live tests in both repositories are the evidence. The Rewind command stays hidden on Pi panes because a TUI has no Agent Code composer to receive the draft.
+
+**Known gaps at this revision.** A `/tree` move without a summary writes no row. Until the next row lands, transforms read the branch Pi would reopen after a restart. A failed Pi compaction writes nothing to the file, so the opt-in compact-before-switch path ends in its timeout. TLDR turn hooks are not wired for Pi. All recorded evidence comes from Pi's faux provider; no real-model capture exists yet.
+
+Sources: [Pi runtime adapter](src/providers/pi/runtime), [transcript adapter](src/main/providerSwitch/piTranscript.ts), [design](docs/decomposition/pi-terminal.md).
+
+#### 5.3.6 agent-transcript-parser
 
 [agent-transcript-parser](https://github.com/Juliusolsson05/agent-transcript-parser/tree/9c99db00f9cf0097c87271d04fd3e3ebf9f1e894/src) is the neutral hub for transcript transformation. It is not on the live observation path: history loading reads native files directly, and live Claude and Codex ingest parse JSON in their packages. The desktop renderer uses only its `ghost` subpath for provisional records.
 
@@ -893,6 +915,17 @@ participant Manager as SessionManager
 Tokens are omitted from durable workspace metadata. Launch configuration avoids putting bearer values in process arguments: Claude uses a private temporary config file retained until session disposal; Codex uses environment-backed HTTP headers; OpenCode uses process-local inline configuration with environment interpolation. Existing inline OpenCode settings are merged, with current built-in server names winning collisions.
 
 Sources: [HTTP host](src/mcp/runtime/BuiltInMcpHttpHost.ts), [tool registrar](src/mcp/runtime/createBuiltInMcpServer.ts), [launch configuration](src/providers/shared/runtime/builtInMcpLaunch.ts).
+
+**User MCP servers (#1143).** Users can also attach their own MCP servers to Claude and Codex agents.
+
+- **Storage.** Main owns them in `mcp-servers.json`, stored in the de facto `mcpServers` entry shape. Secret values live in separate `safeStorage` blobs, and entries refer to them as `${input:id}`.
+- **Launch.** The renderer sends only a pane's explicit per-agent choices, as `user:<id>` keys in the same override map as built-in domains. At launch, main applies the per-provider defaults, secret readiness, transport support, Codex name collisions and Claude's enterprise MCP policy. It passes the result to the providers.
+- **Claude.** User entries are added to the same private config file as the built-in server. Secrets are `${VAR}` references expanded from the process environment.
+- **Codex.** User servers become `--config mcp_servers.<name>.*` overrides. Header values go through `env_http_headers`, and stdio secrets through `env_vars`.
+- **Failure handling.** A requested server that cannot attach is reported (`user-mcp-unavailable`) and never fails the launch. The attached ids are an observed backend fact (`userMcpServerIds`), like `builtInMcpDomains`.
+- **Config files.** Provider config files are never written. The user-scope servers each CLI loads itself are only read, to list them and to detect collisions.
+
+Sources: [service](src/main/userMcp/service.ts), [translators](src/providers/shared/runtime/userMcpLaunch.ts), [model and import](src/shared/userMcp), [design](docs/superpowers/specs/2026-09-22-user-mcp-servers-design.md).
 
 #### 5.6.2 Domains and scope
 

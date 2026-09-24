@@ -25,11 +25,14 @@ import { agentManagementApi } from '@preload/api/agentManagement.js'
 import { aiWorkspaceApi } from '@preload/api/aiWorkspace.js'
 import { renderedContentApi } from '@preload/api/renderedContent.js'
 import { caffeinateApi } from '@preload/api/caffeinate.js'
+import { browserPocketApi } from '@preload/api/browserPocket.js'
 import { keyVaultApi } from '@preload/api/keyVault.js'
 import { menuApi } from '@preload/api/menu.js'
 import { incidentApi } from '@preload/api/incident.js'
 import { lifecycleApi } from '@preload/api/lifecycle.js'
 import { remoteApi } from '@preload/api/remote.js'
+import { providerEnablementApi } from '@preload/api/providerEnablement.js'
+import { userMcpApi } from '@preload/api/userMcp.js'
 import { usageApi } from '@preload/api/usage.js'
 import { cliUpdatesApi } from '@preload/api/cliUpdates.js'
 import { workflowsApi } from '@preload/api/workflows.js'
@@ -91,11 +94,14 @@ export const api = {
   ...aiWorkspaceApi,
   ...renderedContentApi,
   ...caffeinateApi,
+  ...browserPocketApi,
   ...keyVaultApi,
   ...menuApi,
   ...incidentApi,
   ...lifecycleApi,
   ...remoteApi,
+  ...providerEnablementApi,
+  ...userMcpApi,
   ...usageApi,
   ...cliUpdatesApi,
   ...workflowsApi,

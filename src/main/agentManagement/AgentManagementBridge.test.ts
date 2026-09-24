@@ -48,6 +48,7 @@ function rendererDescriptor(): ManagedAgentRendererDescriptor {
   return {
     agent: {
       sessionId: 'agent-1',
+      displayLabel: 'A2',
       kind: 'claude' as const,
       cwd: '/tmp/project',
       project: { tabId: 'tab-1', title: 'Project', index: 0 },
@@ -185,7 +186,7 @@ describe('AgentManagementBridge', () => {
     const list = bridge.listAgents({ callerSessionId: 'caller' })
     const send = bridge.sendPrompt({
       callerSessionId: 'caller',
-      sessionId: 'agent-1',
+      target: { sessionId: 'agent-1' },
       prompt: 'Status?',
     })
     expect(sentRendererRequests).toHaveLength(1)
@@ -206,9 +207,14 @@ describe('AgentManagementBridge', () => {
       ok: true,
       type: 'send-prompt',
       sessionId: 'agent-1',
+      displayLabel: 'A2',
       delivery: { ok: true, acceptance: { kind: 'user', acceptedAt: 10_000 } },
     })
-    await expect(send).resolves.toMatchObject({ ok: true })
+    await expect(send).resolves.toMatchObject({
+      sessionId: 'agent-1',
+      displayLabel: 'A2',
+      delivery: { ok: true },
+    })
   })
 
   it('preserves structured cascade refusal details', async () => {
@@ -217,7 +223,7 @@ describe('AgentManagementBridge', () => {
     // Issuing it here is what makes this a test of CASCADE REFUSAL rather than
     // of authorization — without it the bridge refuses earlier, for a different
     // and less interesting reason.
-    const closing = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'parent' })
+    const closing = bridge.closeAgent({ callerSessionId: 'caller', target: { sessionId: 'parent' } })
     const request = sentRendererRequests[0] as { requestId: string }
     bridge.resolve({
       requestId: request.requestId,
@@ -241,7 +247,7 @@ describe('AgentManagementBridge', () => {
 
   it('returns a typed no-wake failure when no durable transcript exists', async () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
-    const reading = bridge.readAgent({ callerSessionId: 'caller', sessionId: 'fresh-agent' })
+    const reading = bridge.readAgent({ callerSessionId: 'caller', target: { sessionId: 'fresh-agent' } })
     const request = sentRendererRequests[0] as { requestId: string }
     const descriptor = rendererDescriptor()
     descriptor.agent.sessionId = 'fresh-agent'
@@ -264,7 +270,7 @@ describe('AgentManagementBridge', () => {
 
   it('returns an honest empty transcript for a live agent that has not spoken yet', async () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
-    const reading = bridge.readAgent({ callerSessionId: 'caller', sessionId: 'agent-1' })
+    const reading = bridge.readAgent({ callerSessionId: 'caller', target: { sessionId: 'agent-1' } })
     const request = sentRendererRequests[0] as { requestId: string }
     const descriptor = rendererDescriptor()
     delete descriptor.providerSessionId
@@ -295,7 +301,7 @@ describe('AgentManagementBridge', () => {
     // Both read paths used to be unguarded.
     const bridge = new AgentManagementBridge(managerFixture() as never)
     const reading = call === 'readAgent'
-      ? bridge.readAgent({ callerSessionId: 'caller', sessionId: 'agent-1' })
+      ? bridge.readAgent({ callerSessionId: 'caller', target: { sessionId: 'agent-1' } })
       : bridge.readAgents({ callerSessionId: 'caller' })
     const request = sentRendererRequests[0] as { requestId: string }
     const descriptor = rendererDescriptor()
@@ -399,7 +405,7 @@ describe('AgentManagementBridge', () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
     const listing = bridge.listAgents({ callerSessionId: 'caller' })
     const request = sentRendererRequests[0] as { requestId: string }
-    const closing = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'agent-1' })
+    const closing = bridge.closeAgent({ callerSessionId: 'caller', target: { sessionId: 'agent-1' } })
     const rejected = expect(listing).rejects.toThrow('timed out')
     const blocked = expect(closing).rejects.toMatchObject({ code: 'renderer_unresponsive' })
 
@@ -462,7 +468,7 @@ describe('AgentManagementBridge', () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
     const sending = bridge.sendPrompt({
       callerSessionId: 'caller',
-      sessionId: 'agent-1',
+      target: { sessionId: 'agent-1' },
       prompt: 'Do the work once',
     })
     const request = sentRendererRequests[0] as { requestId: string }
@@ -483,6 +489,7 @@ describe('AgentManagementBridge', () => {
       ok: true,
       type: 'send-prompt',
       sessionId: 'agent-1',
+      displayLabel: 'A2',
       delivery: { ok: true, acceptance: { kind: 'user', acceptedAt: 10_000 } },
     })
   })

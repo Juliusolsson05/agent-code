@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
-import { decideJsonlProviderBurst, seedResumedRuntimeFields } from '@renderer/workspace/providerSessionIdentity'
+import { applyJsonlProviderSessionId, applyProviderSessionSwitch, decideJsonlProviderBurst, resumableProviderSessionId, seedResumedRuntimeFields } from '@renderer/workspace/providerSessionIdentity'
+import type { SessionMeta } from '@renderer/workspace/types'
 
 describe('decideJsonlProviderBurst', () => {
   it('accepts an observed provider id that matches the durable pane identity', () => {
@@ -98,5 +99,25 @@ it('retains a channel failure published before resume bookkeeping finishes', () 
   const existing = { ...emptyRuntime(), transcriptStatus: 'error' as const, transcriptError: 'reader stopped', transcriptChannelError: 'reader stopped' }
   expect(seedResumedRuntimeFields(existing, { providerSessionId: 'ses_saved' })).toMatchObject({
     transcriptStatus: 'error', transcriptError: 'reader stopped', transcriptChannelError: 'reader stopped',
+  })
+})
+
+describe('applyProviderSessionSwitch (a runtime following an in-TUI session switch)', () => {
+  const pane = { id: 'pane', kind: 'pi', cwd: '/w', providerSessionId: 'old', providerSessionIdSource: 'jsonl-entry' } as unknown as SessionMeta
+
+  it('replaces a durable identity that a transcript row could never replace', () => {
+    // The #290 rule still holds for rows: a different id inside a burst is a conflict.
+    expect(applyJsonlProviderSessionId(pane, 'new').status).toBe('conflict')
+    // The runtime's explicit switch is not a row: the pane follows it, and the
+    // new id is durable (reload and resume use it).
+    const next = applyProviderSessionSwitch(pane, 'new')
+    expect(next).toMatchObject({ providerSessionId: 'new', providerSessionIdSource: 'provider-follow' })
+    expect(resumableProviderSessionId(next)).toBe('new')
+  })
+
+  it('is a no-op for a repeat of the same switch and for an empty id', () => {
+    const next = applyProviderSessionSwitch(pane, 'new')!
+    expect(applyProviderSessionSwitch(next, 'new')).toBeNull()
+    expect(applyProviderSessionSwitch(pane, '')).toBeNull()
   })
 })
