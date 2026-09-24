@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import type { UpdateChannel, UpdateFeed } from '@shared/updates/updateChannel.js'
+
 import { UpdateService, type AutoUpdaterLike } from './UpdateService.js'
 
 // UpdateService is the safety-critical core of auto-update: everything that
@@ -18,12 +20,17 @@ class FakeUpdater implements AutoUpdaterLike {
   // (a preview build); the service must force it off.
   allowPrerelease = true
   forceDevUpdateConfig = false
+  disableDifferentialDownload = false
+  feeds: UpdateFeed[] = []
   checked = 0
   downloaded = 0
   installed = 0
   quitAndInstallCalls = 0
   failCheck: Error | null = null
   private listeners: Recorded[] = []
+  setFeedURL(options: UpdateFeed): void {
+    this.feeds.push(options)
+  }
   on(event: string, listener: (value?: unknown) => void): this {
     this.listeners.push({ event, listener })
     return this
@@ -56,6 +63,7 @@ function fixture(overrides: Partial<ConstructorParameters<typeof UpdateService>[
   const messages: string[] = []
   const answers = { confirm: false }
   const storage = new Map<string, number>()
+  const channels: { stored: UpdateChannel | undefined } = { stored: undefined }
   let clock = 1_000
   const service = new UpdateService({
     updater,
@@ -65,11 +73,13 @@ function fixture(overrides: Partial<ConstructorParameters<typeof UpdateService>[
     showMessage: async message => { messages.push(message); return answers.confirm },
     readLastCheck: () => storage.get('lastCheck'),
     writeLastCheck: value => { storage.set('lastCheck', value) },
+    readChannel: () => channels.stored,
+    writeChannel: channel => { channels.stored = channel },
     now: () => clock,
     log: () => {},
     ...overrides,
   })
-  return { service, updater, quits, notified, messages, answers, advance: (ms: number) => { clock += ms } }
+  return { service, updater, quits, notified, messages, answers, channels, advance: (ms: number) => { clock += ms } }
 }
 
 const available = (updater: FakeUpdater) => {
@@ -319,5 +329,117 @@ describe('restartToUpdate safety', () => {
       expect(service.state).toBe('ready')
       expect(notified.at(-1)).toMatch(/did not finish.*relaunch/i)
     } finally { vi.useRealTimers() }
+  })
+})
+
+// #1168: the opt-in Preview channel. The feeds asserted here are the exact
+// setFeedURL arguments production passes (src/shared/updates/updateChannel.ts).
+describe('UpdateService update channel', () => {
+  const STABLE_FEED = { provider: 'github', owner: 'Juliusolsson05', repo: 'agent-code' }
+  const PREVIEW_FEED = {
+    provider: 'generic',
+    url: 'https://github.com/Juliusolsson05/agent-code/releases/download/preview/',
+    channel: 'preview',
+  }
+
+  it('defaults to Stable for a stable build, and points the updater at releases/latest on the first check', async () => {
+    const { service, updater } = fixture()
+    expect(service.channel).toBe('stable')
+    await service.checkForUpdates(true)
+    expect(updater.feeds).toEqual([STABLE_FEED])
+    expect(updater.disableDifferentialDownload).toBe(false)
+  })
+
+  it('defaults to Preview for a preview build, so a hand-installed preview keeps getting previews', async () => {
+    const { service, updater } = fixture({ app: { isPackaged: true, version: '0.1.4-preview.20260924' } })
+    expect(service.channel).toBe('preview')
+    await service.checkForUpdates(true)
+    expect(updater.feeds).toEqual([PREVIEW_FEED])
+    // Fixed file names make differential download diff the build with itself.
+    expect(updater.disableDifferentialDownload).toBe(true)
+  })
+
+  it('a stored choice wins over the version-derived default', () => {
+    const { service, channels } = fixture({ app: { isPackaged: true, version: '0.1.4-preview.20260924' } })
+    channels.stored = 'stable'
+    expect(service.channel).toBe('stable')
+  })
+
+  it('switches both ways without a restart, re-pointing the feed only when it changes', async () => {
+    const { service, updater, channels } = fixture()
+    await service.checkForUpdates(true)
+    updater.emit('update-not-available')
+    service.setChannel('preview')
+    expect(channels.stored).toBe('preview')
+    expect(updater.checked).toBe(2)
+    expect(updater.feeds.at(-1)).toEqual(PREVIEW_FEED)
+    updater.emit('update-not-available')
+    service.setChannel('stable')
+    expect(updater.feeds).toEqual([STABLE_FEED, PREVIEW_FEED, STABLE_FEED])
+    expect(updater.disableDifferentialDownload).toBe(false)
+    await service.checkForUpdates(true)
+    expect(updater.feeds).toHaveLength(3)
+  })
+
+  it('never lets a channel switch enable prereleases or downgrades', async () => {
+    const { service, updater } = fixture()
+    service.setChannel('preview')
+    updater.allowDowngrade = true // what electron-updater's channel setter would do
+    updater.allowPrerelease = true
+    await service.checkForUpdates(true)
+    expect(updater.allowDowngrade).toBe(false)
+    expect(updater.allowPrerelease).toBe(false)
+  })
+
+  it('drops an update that is ready on the channel the user just left, and checks the new one', async () => {
+    const { service, updater, quits } = fixture()
+    await service.checkForUpdates(true)
+    available(updater)
+    expect(service.state).toBe('ready')
+    service.setChannel('preview')
+    expect(service.state).toBe('checking')
+    expect(service.restartToUpdate()).toBe(false)
+    expect(quits).toEqual([])
+  })
+
+  it('discards the outcome of a download still in flight from the old channel, without announcing it', async () => {
+    const { service, updater, notified, messages } = fixture()
+    await service.checkForUpdates(true)
+    updater.emit('update-available', { version: '0.1.4' })
+    expect(service.state).toBe('available')
+    service.setChannel('preview')
+    // The stable download finishes after the switch: not ready, not announced.
+    updater.emit('update-downloaded', { version: '0.1.4' })
+    expect(service.state).toBe('checking')
+    expect(notified.filter(message => message.includes('ready to install'))).toEqual([])
+    expect(messages).toEqual([])
+    expect(updater.feeds.at(-1)).toEqual(PREVIEW_FEED)
+    // The preview check that followed now proceeds normally.
+    updater.emit('update-available', { version: '0.1.4-preview.20260925' })
+    updater.emit('update-downloaded', { version: '0.1.4-preview.20260925' })
+    expect(service.state).toBe('ready')
+    expect(service.version).toBe('0.1.4-preview.20260925')
+  })
+
+  it('a menu check during a pending switch is answered by the new channel\'s check', async () => {
+    const { service, updater, messages } = fixture()
+    await service.checkForUpdates(true)
+    service.setChannel('preview') // the stable check is still in flight
+    await service.menuCheck()
+    expect(messages).toEqual([])
+    updater.emit('update-not-available') // stable outcome: discarded, preview check starts
+    expect(messages).toEqual([])
+    updater.emit('update-not-available') // preview outcome answers the menu click
+    expect(messages).toEqual([
+      "You're up to date on the Preview channel. Agent Code 0.1.1 is the newest preview.",
+    ])
+  })
+
+  it('an unpackaged build records the choice but never touches the updater', () => {
+    const { service, updater, channels } = fixture({ app: { isPackaged: false, version: '0.1.3' } })
+    service.setChannel('preview')
+    expect(channels.stored).toBe('preview')
+    expect(updater.feeds).toEqual([])
+    expect(updater.checked).toBe(0)
   })
 })

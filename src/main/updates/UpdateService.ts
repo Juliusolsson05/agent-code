@@ -9,11 +9,20 @@
 // storage, clock), so unit tests drive every invariant without Electron. The
 // production wiring lives in src/main/index.ts.
 
+import {
+  defaultUpdateChannel,
+  updateFeedFor,
+  type UpdateChannel,
+  type UpdateFeed,
+} from '@shared/updates/updateChannel.js'
+
 export type AutoUpdaterLike = {
   autoInstallOnAppQuit: boolean
   allowDowngrade: boolean
   allowPrerelease: boolean
+  disableDifferentialDownload: boolean
   forceDevUpdateConfig: boolean
+  setFeedURL(options: UpdateFeed): void
   on(event: string, listener: (value?: unknown) => void): unknown
   checkForUpdates(): Promise<unknown>
   downloadUpdate(): Promise<unknown>
@@ -37,6 +46,9 @@ export type UpdateServiceOptions = {
   showMessage(message: string, confirmLabel?: string): Promise<boolean>
   readLastCheck(): number | undefined
   writeLastCheck(at: number): void
+  /** The channel the user chose (#1168); undefined = not chosen yet. */
+  readChannel(): UpdateChannel | undefined
+  writeChannel(channel: UpdateChannel): void
   now(): number
   log(line: string): void
   readonly minimumCheckIntervalMs?: number
@@ -78,6 +90,16 @@ export class UpdateService {
   // as if the user had asked for it.
   private manualCheckPending = false
   private pendingInstallOnQuit = false
+  // The channel whose feed the updater currently points at; null until the
+  // first check applies one. Re-applying only on change keeps setFeedURL from
+  // replacing the provider (and its cached state) on every check.
+  private appliedChannel: UpdateChannel | null = null
+  // Set when the channel changes while a check or download from the OLD
+  // channel is still in flight (#1168). Its outcome arrives as ordinary
+  // updater events afterwards, and must be neither announced nor installed:
+  // the user just chose a different channel. The first outcome clears it and
+  // starts a check on the new channel instead.
+  private discardInFlight = false
   private installWatchdog: ReturnType<typeof setTimeout> | null = null
   private readonly minimumInterval: number
 
@@ -113,6 +135,7 @@ export class UpdateService {
   private wireListeners(): void {
     const { updater } = this.options
     updater.on('update-available', (info: unknown) => {
+      if (this.discardStaleOutcome()) return
       this.lastVersion = typeof (info as { version?: unknown })?.version === 'string'
         ? (info as { version: string }).version
         : null
@@ -122,8 +145,12 @@ export class UpdateService {
       // anything; only installation is gated on the committed quit.
       void this.options.updater.downloadUpdate().catch(() => { /* error event reports it */ })
     })
-    updater.on('download-progress', () => { if (this.current === 'available') this.set('downloading') })
+    updater.on('download-progress', () => {
+      if (this.discardInFlight) return
+      if (this.current === 'available') this.set('downloading')
+    })
     updater.on('update-downloaded', (info: unknown) => {
+      if (this.discardStaleOutcome()) return
       this.lastVersion = typeof (info as { version?: unknown })?.version === 'string'
         ? (info as { version: string }).version
         : this.lastVersion
@@ -135,15 +162,80 @@ export class UpdateService {
       )
     })
     updater.on('update-not-available', () => {
+      if (this.discardStaleOutcome()) return
       if (this.current === 'checking') this.set('none')
-      this.answerManualCheck(`You're up to date. Agent Code ${this.options.app.version} is the latest version.`)
+      this.answerManualCheck(this.channel === 'preview'
+        ? `You're up to date on the Preview channel. Agent Code ${this.options.app.version} is the newest preview.`
+        : `You're up to date. Agent Code ${this.options.app.version} is the latest version.`)
     })
     updater.on('error', (error: unknown) => {
+      if (this.discardStaleOutcome()) return
       this.set('error')
       // Someone waiting on a menu check gets the dialog; otherwise this is a
       // background failure and a notification is the right weight.
       if (!this.answerManualCheck(userFacingError(error))) this.options.notify(userFacingError(error))
     })
+  }
+
+  /** True when this updater event belongs to the channel the user just left.
+   *  The state goes back to idle, and the new channel is checked instead;
+   *  any menu check still waiting is answered by that check. */
+  private discardStaleOutcome(): boolean {
+    if (!this.discardInFlight) return false
+    this.discardInFlight = false
+    this.lastVersion = null
+    this.set('idle')
+    void this.checkForUpdates(true)
+    return true
+  }
+
+  /** The channel in effect: the user's choice, or the version-derived
+   *  default (a preview build defaults to Preview; see updateChannel.ts). */
+  get channel(): UpdateChannel {
+    return this.options.readChannel() ?? defaultUpdateChannel(this.options.app.version)
+  }
+
+  /**
+   * Switch channel (#1168). Takes effect without a restart: the next check
+   * points the updater at the new feed.
+   *
+   * WHY an update found, downloading or ready on the OLD channel is dropped:
+   * installing a preview after the user chose Stable (or the reverse) would
+   * contradict the choice they just made. A ready update simply stops being
+   * offered; one still in flight is discarded when its outcome arrives
+   * (discardStaleOutcome), because electron-updater cannot cancel it.
+   *
+   * WHY Preview → Stable never downgrades: allowDowngrade stays off, so a
+   * `0.1.4-preview.*` install is offered 0.1.4 once it ships (semver orders it
+   * above every 0.1.4-preview) and nothing before that.
+   */
+  setChannel(channel: UpdateChannel): void {
+    if (channel === this.channel && this.options.readChannel() !== undefined) return
+    this.options.writeChannel(channel)
+    if (this.current === 'disabled') return
+    this.lastVersion = null
+    this.pendingInstallOnQuit = false
+    if (this.current === 'checking' || this.current === 'available' || this.current === 'downloading') {
+      this.discardInFlight = true
+      return
+    }
+    this.set('idle')
+    void this.checkForUpdates(true)
+  }
+
+  /** Point the updater at the channel's feed, once per change. */
+  private applyFeed(): void {
+    const channel = this.channel
+    if (this.appliedChannel === channel) return
+    this.options.updater.setFeedURL(updateFeedFor(channel))
+    // Differential download finds the previous version's blockmap by putting
+    // the old version into the file name (electron-updater
+    // util.blockmapFiles). The rolling preview files have fixed names, so the
+    // old and new blockmap URLs would be identical, and the diff would be of
+    // the new build against itself. Previews therefore always download in
+    // full (and publish no blockmaps).
+    this.options.updater.disableDifferentialDownload = channel === 'preview'
+    this.appliedChannel = channel
   }
 
   /** Shows `message` if a menu check is waiting for its answer. Returns
@@ -186,6 +278,9 @@ export class UpdateService {
     // long-lived and third-party; our invariant must not depend on its state
     // surviving untouched between checks.
     this.options.updater.autoInstallOnAppQuit = false
+    this.options.updater.allowPrerelease = false
+    this.options.updater.allowDowngrade = false
+    this.applyFeed()
     this.set('checking')
     return this.options.updater.checkForUpdates().then(
       () => undefined,
@@ -203,6 +298,12 @@ export class UpdateService {
       await this.options.showMessage(
         'Updates are only available in the installed Agent Code app. This copy runs from a local build, so it never updates itself.',
       )
+      return
+    }
+    if (this.discardInFlight) {
+      // A channel switch is waiting for the old channel's check or download
+      // to finish; the check on the new channel that follows answers.
+      this.manualCheckPending = true
       return
     }
     if (this.current === 'ready') {

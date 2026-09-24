@@ -452,6 +452,10 @@ const updateService = new UpdateService({
   // A failed clock write (full disk, read-only state) must never become an
   // unhandledRejection incident report; the cost is one extra check later.
   writeLastCheck: at => { void updateChecks.write(at).catch(() => {}) },
+  readChannel: () => updateChecks.readChannel(),
+  // Same rule as the clock: a failed write must not become an incident. The
+  // in-memory choice still applies for this session.
+  writeChannel: channel => { void updateChecks.writeChannel(channel).catch(() => {}) },
   now: () => Date.now(),
   log: line => { console.log(`[updates] ${line}`) },
 })
@@ -1517,6 +1521,7 @@ async function startApp(): Promise<void> {
   registerAllIpc({
     manager,
     userMcpService,
+    updates: { updateService, updateChecks, app: { version: app.getVersion(), isPackaged: app.isPackaged } },
     remoteController,
     lspManager,
     ghostJournals,
