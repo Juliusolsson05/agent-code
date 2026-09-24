@@ -63,26 +63,67 @@ export function useComposerAutoGrow(
   // Both show up as a change in the element's width (N → M, or 0 → N on
   // reveal), so one observer covers them.
   //
+  // WHY the CONTENT-box width (entry.contentRect) and not clientWidth: the
+  // space the draft wraps into is the content box. Starting dictation swaps
+  // the textarea's right padding from pr-2 to pr-16 (ComposerInput), which
+  // wraps the draft onto more lines while clientWidth (content + padding)
+  // stays exactly the same. A clientWidth filter skipped that and left the
+  // text clipped; the PR #1166 review reproduced it in Chromium. contentRect
+  // is also the box a ResizeObserver reports by default, so padding changes
+  // produce a notification in the first place.
+  //
   // WHY only width changes count: this hook writes the element's height, and
   // every write produces a ResizeObserver notification. Re-measuring on those
-  // would at best waste a layout pass per keystroke and at worst trip
-  // Chromium's "ResizeObserver loop" error. Width is never written here, so
-  // a width change is always caused by something outside the hook.
+  // would be pure churn, one extra layout pass per keystroke. The width is not
+  // purely external either: at the 320px cap fitComposerHeight flips
+  // overflowY to 'auto', and where scrollbars take up space (Windows/Linux, or
+  // macOS "always show scrollbars") that narrows the content box and triggers
+  // one more measurement. That settles instead of looping, because the
+  // decision has hysteresis: measured narrower, the draft is at least as tall,
+  // so it stays 'auto'; measured wider, it is at most as tall, so it stays
+  // 'hidden'.
+  //
+  // WHY the measurement is deferred to the next frame: writing the height
+  // inside the observer callback resizes an observed element during the
+  // observer's own delivery. Chromium then reports "ResizeObserver loop
+  // completed with undelivered notifications" as a window error (the review
+  // reproduced it by narrowing across the height cap), and the app records
+  // those as renderer incidents. A frame later is invisible to the user and
+  // also collapses a burst of notifications (a drag-resize) into one
+  // measurement.
   useEffect(() => {
     const el = ref.current
     // Same guard as components/charts/useElementWidth: some test DOMs ship
     // without ResizeObserver, and the value-keyed effect above still works
     // there.
     if (!el || typeof ResizeObserver === 'undefined') return
-    let lastWidth = el.clientWidth
-    const observer = new ResizeObserver(() => {
-      const width = el.clientWidth
+    // null, not the current width: ResizeObserver delivers an initial
+    // notification on observe(), and one extra measurement at mount is harmless.
+    // Seeding from a width read here would need to reproduce contentRect's
+    // padding arithmetic, and getting that wrong silently disables the reveal.
+    let lastWidth: number | null = null
+    let frame: number | null = null
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[entries.length - 1]
+      if (!entry) return
+      const width = entry.contentRect.width
       if (width === lastWidth) return
+      // Record the width even when it is 0 (hiding). The reveal is detected as
+      // 0 → N only because the hide was recorded. Skipping the record for
+      // width 0 would make the reveal look unchanged, so a draft edited while
+      // hidden would stay clipped.
       lastWidth = width
-      fitComposerHeight(el)
+      if (frame !== null) return
+      frame = requestAnimationFrame(() => {
+        frame = null
+        fitComposerHeight(el)
+      })
     })
     observer.observe(el)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
   }, [ref])
 }
 
@@ -112,6 +153,12 @@ function fitComposerHeight(el: HTMLTextAreaElement): void {
   const style = getComputedStyle(el)
   const borders = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0)
   const capped = Math.min(desired, MAX_HEIGHT_PX)
+  // Known residual (PR #1166 review, deliberately not fixed): a line is 16.8px
+  // (12px × leading-[1.4]), but scrollHeight is a whole number, so some line
+  // counts round down (3 lines = 66.4 → 66). That leaves the box up to 1px
+  // short, enough for a sub-pixel scroll jiggle but not visible clipping. The
+  // lost fraction can't be recovered from scrollHeight. A blanket +1 would
+  // trade that for a 1px gap under every draft.
   el.style.height = `${capped + borders}px`
   // The inline overflowY win against the className `overflow-hidden`
   // we used to ship: when content fits, keep the scrollbar gone so
