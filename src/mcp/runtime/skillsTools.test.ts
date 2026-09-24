@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
 import type {
+  GitHubSkillSource,
   GitHubSkillDiscoveryPayload,
   ReviewedInstalledSkillCandidate,
   StagedInstalledSkillCandidate,
@@ -83,7 +84,7 @@ function payload(...names: string[]): GitHubSkillDiscoveryPayload {
 
 let root: string
 let service: AgentCodeManagedSkillsService
-let source: { discover: ReturnType<typeof vi.fn>; acquire: ReturnType<typeof vi.fn> }
+let source: Pick<GitHubSkillSource, 'discover' | 'acquire'>
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'skills-tools-'))
