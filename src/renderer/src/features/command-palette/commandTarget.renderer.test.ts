@@ -126,7 +126,8 @@ const EXPECTED: Record<string, {
   },
   'rewind-to-prompt': { effect: ['ui.openRewindPrompt', [TARGET]] },
   'view-prompts': { effect: ['ui.openViewPrompts', [TARGET]] },
-  'view-tldr-history': { effect: ['ui.openTldrHistory', [TARGET]] },
+  'view-tldr-history': { effect: ['ui.openReportHistory', [TARGET, 'tldr']] },
+  'view-goal-history': { effect: ['ui.openReportHistory', [TARGET, 'goal']] },
   'goal-loop-stop': { effect: ['api.controlGoalLoop', [{ sessionId: TARGET, action: 'stop' }]] },
   'copy-resume-command': { effect: ['clipboard.writeText', [expect.stringContaining('provider-target')]] },
   // The target has never been on screen, so no transcript is loaded: the

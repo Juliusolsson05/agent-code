@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   order: [] as string[],
+  queueFeedDebugAppend: vi.fn<(sessionId: string, entries: unknown[], epochMs?: number) => Promise<void>>(async () => {}),
   saveDebugBundle: vi.fn(async () => {
     harness.order.push('save')
     return { bundlePath: '/tmp/test-bundle' }
@@ -25,7 +26,7 @@ vi.mock('@main/storage/debugBundleLog.js', () => ({
     typeof reason === 'string' && reason.startsWith('autosave-'),
 }))
 vi.mock('@main/storage/feedDebugLog.js', () => ({
-  queueFeedDebugAppend: vi.fn(async () => {}),
+  queueFeedDebugAppend: harness.queueFeedDebugAppend,
 }))
 vi.mock('@main/storage/proxyEventsReader.js', () => ({
   readProxyEventsForBundle: vi.fn(async () => null),
@@ -142,5 +143,32 @@ describe('debug bundle IPC lifecycle flush', () => {
         codexTranscriptObservationCompleteness: { gapTrackingCapped: true },
       },
     )
+  })
+})
+
+describe('debug:append-feed-log forwarding (#770)', () => {
+  const entry = { id: 1, ts: 1, tMs: 0, layer: 'STATE', kind: 'probe', summary: 's', data: null }
+
+  function appendHandler(): (...args: unknown[]) => Promise<unknown> {
+    registerDebugIpc({} as never, {} as never)
+    const handler = harness.handlers.get('debug:append-feed-log')
+    if (!handler) throw new Error('debug:append-feed-log was not registered')
+    return handler as (...args: unknown[]) => Promise<unknown>
+  }
+
+  it('hands the batch generation to the writer', async () => {
+    // The writer keys its de-dup cursor on this epoch. Dropping it here puts
+    // back #770: a soft reload's ids 1..N are filtered as already written,
+    // while every renderer and writer test still passes.
+    harness.queueFeedDebugAppend.mockClear()
+    await appendHandler()({}, { sessionId: 's', entries: [entry], epochMs: 1234 })
+    expect(harness.queueFeedDebugAppend).toHaveBeenCalledWith('s', [entry], 1234)
+  })
+
+  it('passes a writer refusal back to the renderer', async () => {
+    // #771: the renderer keeps entries only when the IPC REJECTS.
+    harness.queueFeedDebugAppend.mockRejectedValueOnce(new Error('unknown size'))
+    await expect(appendHandler()({}, { sessionId: 's', entries: [entry], epochMs: 1 }))
+      .rejects.toThrow('unknown size')
   })
 })

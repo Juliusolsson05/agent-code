@@ -146,7 +146,6 @@ async function harness(
   const pathSafety = new SkillPathSafety(root)
   const service = new AgentCodeConventionsService({
     stateFilePath: join(root, 'state', 'conventions.json'),
-    installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
     homeDirectory: root,
     resolveTargets: async () => {
       if (options.discovery?.fail) throw new Error('Could not read provider configuration')
@@ -376,8 +375,7 @@ describe('AgentCode installed skills service', () => {
 
     const reloaded = new AgentCodeConventionsService({
       stateFilePath: join(root, 'state', 'conventions.json'),
-      installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
-      homeDirectory: root,
+        homeDirectory: root,
       resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
     })
     await reloaded.initialize()
@@ -428,7 +426,6 @@ describe('AgentCode installed skills service', () => {
 
     const service = new AgentCodeConventionsService({
       stateFilePath: join(root, 'state', 'conventions.json'),
-      installedSkillSnapshotRoot: snapshots,
       homeDirectory: root,
       resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
     })
@@ -441,6 +438,69 @@ describe('AgentCode installed skills service', () => {
     const quarantined = remaining.find(name => name.startsWith(`.trash-${tampered.snapshotDigest}-`))
     expect(quarantined).toBeDefined()
     expect(await readFile(join(snapshots, quarantined!, 'SKILL.md'), 'utf8')).toBe('changed by someone else')
+  })
+
+  // Regression for #1206. Two system test files built the service with a temp
+  // `stateFilePath` but no snapshot root (a separate option at the time), so
+  // the startup sweep ran their EMPTY journal against the developer's real ~/.config store and deleted every
+  // installed skill's snapshot. The contract under test is that a journal only
+  // ever sweeps the store beside it. WHY assert through the sweep and not by
+  // reading a path getter: the sweep is the destructive consumer that
+  // actually broke. If the store is ever resolved anywhere but beside the
+  // journal again, the orphan below survives and this fails. Proving it red against
+  // the unfixed code must be done with HOME pointed at a scratch directory,
+  // because the unfixed code deletes the real store as a side effect.
+  it('keeps the snapshot store beside its journal', async () => {
+    const root = await temporaryDirectory()
+    const stateDirectory = join(root, 'state')
+    const orphan = stagedPackage({ commit: 'c'.repeat(40), files: [{ path: 'SKILL.md', content: 'orphan' }] })
+    await new InstalledSkillPackageStore(join(stateDirectory, 'managed-skill-snapshots')).store(orphan)
+
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(stateDirectory, 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
+    })
+    await service.initialize()
+
+    expect(await readdir(join(stateDirectory, 'managed-skill-snapshots'))).toEqual([])
+  })
+
+  // #1206: when a snapshot was gone, every provider row showed the raw
+  // `ENOENT: … lstat '<64-hex path>'` errno, which reads like a broken
+  // provider folder even though the provider copy is fine and the skill
+  // still loads. The row must say which copy is missing.
+  // Both shapes seen in practice: the sweep emptied the store (one digest
+  // directory gone), and a user clearing ~/.config removes the whole store.
+  it.each([
+    ['its snapshot directory', (root: string, digest: string) => join(root, 'state', 'managed-skill-snapshots', digest)],
+    ['the whole snapshot store', (root: string) => join(root, 'state', 'managed-skill-snapshots')],
+  ])('reports a missing reviewed snapshot as missing when %s is gone, not as a raw lstat error', async (_, removed) => {
+    const { root, service, discoveries } = await harness()
+    const staged = stagedPackage({ commit: 'd'.repeat(40), files: [{ path: 'SKILL.md', content: 'kept' }] })
+    const found = await discoverOne(service, discoveries, staged)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: found.discoveryId,
+      candidateIds: [staged.candidate.candidateId],
+    })
+    if (!installed.ok) throw new Error('installation failed')
+    await rm(removed(root, staged.snapshotDigest), { recursive: true })
+
+    const reloaded = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
+    })
+    await reloaded.initialize()
+    const skill = (await reloaded.getInstalledSkillsSnapshot()).skills[0]!
+    expect(skill.health).toBe('degraded')
+    const messages = skill.targets.map(item => item.message ?? '')
+    expect(messages.length).toBeGreaterThan(0)
+    for (const message of messages) {
+      expect(message).toMatch(/reviewed copy of this skill is missing/)
+      expect(message).not.toMatch(/ENOENT|lstat/)
+    }
   })
 
   // #1161: `-a codex` / the grid's provider columns.

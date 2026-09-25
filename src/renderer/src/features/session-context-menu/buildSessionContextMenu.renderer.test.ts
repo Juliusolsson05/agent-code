@@ -89,7 +89,7 @@ describe('buildSessionContextMenu', () => {
       'Set Title…', 'Color Flag ▸', 'Pin Session',
       '—',
       'Reload Agent', 'Switch Provider…', 'Agent MCP Servers…', 'Duplicate Agent',
-      'Rewind to Prompt…', 'View Prompts…', 'TLDR History…',
+      'Rewind to Prompt…', 'View Prompts…', 'TLDR History…', 'Goal History…',
       '—',
       'Copy Resume Command', 'Copy Last Response',
       '—',
@@ -139,7 +139,7 @@ describe('buildSessionContextMenu', () => {
   it('offers Stop Goal Loop only while the row\'s loop is live', () => {
     expect(labels(menu(CLAUDE))).not.toContain('Stop Goal Loop')
     const live = labels(menu(CLAUDE, { request: { goalLoopLive: true } }))
-    expect(live.indexOf('Stop Goal Loop')).toBe(live.indexOf('TLDR History…') + 1)
+    expect(live.indexOf('Stop Goal Loop')).toBe(live.indexOf('Goal History…') + 1)
   })
 
   it('checks the current colour flag, and None when there is none', () => {

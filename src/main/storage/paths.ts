@@ -69,10 +69,15 @@ export const AGENT_CODE_CONVENTIONS_STATE_FILE = join(STATE_DIR, 'conventions.js
 // revisioned JSON document. The document records a content digest and manifest;
 // this private content-addressed root holds the corresponding binary files
 // without forcing assets through JSON/base64 or the renderer process.
-export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR = join(
-  STATE_DIR,
-  'managed-skill-snapshots',
-)
+//
+// WHY only a directory NAME and not an absolute path (#1206): the store is
+// always resolved beside whichever conventions.json references it (so, in the
+// app, `STATE_DIR/managed-skill-snapshots`, byte-identical to the old
+// constant). An absolute global default let a service with a temp journal
+// sweep the developer's real store. Its empty journal made every real snapshot
+// "unreferenced", and a test run deleted them all. With no absolute
+// constant, nothing can pair a journal with a store it does not own.
+export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIRNAME = 'managed-skill-snapshots'
 
 // Private per-process header files for Codex TLDR turn hooks (#917), each
 // holding one live session bearer. WHY app-owned rather than os.tmpdir(): the

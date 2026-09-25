@@ -29,6 +29,7 @@ export const controlReference = [
       "rewind-to-prompt",
       "view-prompts",
       "view-tldr-history",
+      "view-goal-history",
       "goal-loop-stop",
       "copy-resume-command",
       "copy-last-assistant",

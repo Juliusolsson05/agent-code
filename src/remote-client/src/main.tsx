@@ -11,12 +11,19 @@ import '@renderer/styles.css'
 import 'highlight.js/styles/github-dark.css'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
+import { withPhoneSymbolFont } from './phoneSymbolFont'
 import './styles.css'
 
 // Theme tokens live on <html data-mode> + an inline accent property —
 // exactly how the desktop boots its theme. Defaults for v1; a settings
 // surface on the phone can come later.
 applyTheme(DEFAULT_SETTINGS)
+// The phone's symbol face goes in front of the app's font stack (#1194; see
+// phoneSymbolFont.ts). applyTheme writes --theme-app-font inline on <html>,
+// which every font rule on the page reads (the Tailwind `font-code` utility
+// and this shell's own styles), so this one write reaches the feed rows too.
+const rootStyle = document.documentElement.style
+rootStyle.setProperty('--theme-app-font', withPhoneSymbolFont(rootStyle.getPropertyValue('--theme-app-font')))
 
 // Phone client entry point. Served by RemoteServer (src/main/remote/
 // RemoteServer.ts serveClient) from the bundle `npm run client:build`

@@ -95,7 +95,6 @@ beforeEach(async () => {
   const skillsDirectory = join(root, '.agents', 'skills')
   service = new AgentCodeManagedSkillsService({
     stateFilePath: join(root, 'state', 'conventions.json'),
-    installedSkillSnapshotRoot: join(root, 'state', 'snapshots'),
     homeDirectory: root,
     resolveTargets: async () => ({
       targets: [{

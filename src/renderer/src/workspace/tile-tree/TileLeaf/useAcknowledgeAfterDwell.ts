@@ -25,7 +25,7 @@ export const SEEN_DWELL_MS = 1500
  * WHY dwell and not focus: focus is not a read signal here. Arrow-key
  * navigation, Dispatch selection, tab restore and focus sync all move focus
  * without the user reading anything (see session-runtime/unread.ts). Clearing
- * on focus would wipe the completion stripes of every pane the user merely
+ * on focus would wipe the completion outline of every pane the user merely
  * passed through. Engagement (typing, clicking, scrolling) still clears
  * instantly through the callers' existing acknowledgeSession wiring. This hook
  * adds only the "stopped and looked" case.
@@ -47,7 +47,7 @@ export const SEEN_DWELL_MS = 1500
  * the marker appeared: a pane the user is already watching when its turn ends
  * should never flash the indicator. Its watched-since is old, the remaining
  * dwell is ≤ 0, and it acknowledges straight away. That happens in a LAYOUT
- * effect, so the store update lands before the browser paints the stripes.
+ * effect, so the store update lands before the browser paints the outline.
  * Anchoring to watched-since also makes re-arming harmless. A streaming pane
  * re-renders constantly, and every re-run of the timer effect recomputes the
  * same deadline instead of pushing it back.

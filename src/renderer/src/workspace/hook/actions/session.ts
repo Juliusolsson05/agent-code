@@ -230,6 +230,28 @@ function metaIsUnchanged(current: SessionMeta, next: SessionMeta): boolean {
   return true
 }
 
+/**
+ * Drop this session's feed-debug flush cursors (#770).
+ *
+ * A soft reload of a session WITH a durable provider transcript rebuilds the
+ * runtime, so `feedDebugNextId` restarts at 1. (The no-provider arm keeps the
+ * runtime and is therefore not a generation boundary — see its call site.)
+ * These two refs live OUTSIDE the runtime — they are per-session flush
+ * bookkeeping, deliberately kept off the store so a busy agent does not
+ * re-render the workspace on every persisted batch — so nothing in the reset
+ * above reaches them. Left behind, `selectFeedDebugAppendBatch` filters every
+ * entry of the new generation as `id <= lastPersistedId` and the session
+ * stops persisting feed-debug entirely, for the rest of the run.
+ *
+ * Main's half of the same cursor is reset by the epoch carried in each batch;
+ * it cannot be cleared from here, and an explicit "reset" message would race
+ * an append already in flight.
+ */
+function forgetFeedDebugCursors(refs: WorkspaceRefs, sessionId: SessionId): void {
+  delete refs.persistedFeedDebugIdRef.current[sessionId]
+  delete refs.inFlightFeedDebugIdRef.current[sessionId]
+}
+
 function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean): SessionRuntime {
   if (!hasProviderSession) {
     // WHY no-provider soft reload is non-destructive:
@@ -1757,6 +1779,11 @@ export function useSessionActions(
           clearTimeout(timer)
           refs.bootstrapTimersRef.current.delete(sessionId)
         }
+        // NOT cleared here. The no-provider arm of `softReloadRuntime` is
+        // deliberately non-destructive — it keeps the runtime and only marks
+        // the transcript disconnected — so the ids keep counting up and the
+        // cursors are still true. Clearing them would make the renderer
+        // re-send everything it had already persisted.
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           return {
@@ -1772,6 +1799,7 @@ export function useSessionActions(
         clearTimeout(timer)
         refs.bootstrapTimersRef.current.delete(sessionId)
       }
+      forgetFeedDebugCursors(refs, sessionId)
       refs.seenUuidsRef.current[sessionId] = new Set()
       // Seen was RESET (not deleted): the trimmed set must reset with it,
       // or the fresh seen set would treat still-trimmed uuids as brand new
