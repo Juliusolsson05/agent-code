@@ -259,7 +259,7 @@ export function useWorkspace(
     useWorkspaceHelpers(setRuntimes, refs)
 
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
-  const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
+  const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime, refs.stateRef)
 
   // ---- Actions ----
   const isCodexSession = useCallback(
