@@ -2,7 +2,6 @@ import {
   ACCENTS,
   CORNER_STYLES,
   DEFAULT_SETTINGS,
-  DEFAULT_APP_FONT_STACK,
   FONT_FAMILIES,
   isBuiltInThemeMode,
   isDarkThemeMode,
@@ -60,9 +59,8 @@ export const CORNER_CONTROL_CSS_VAR = '--theme-radius-control'
 export const CORNER_SLAB_CSS_VAR = '--theme-radius-slab'
 export const CORNER_FLOAT_CSS_VAR = '--theme-radius-float'
 
-// The default option's own stack (symbol fallbacks included, #1194), not a
-// restated literal that could drift from it.
-const FALLBACK_APP_FONT_FAMILY = DEFAULT_APP_FONT_STACK
+const FALLBACK_APP_FONT_FAMILY =
+  "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace"
 
 // The seam between "which theme" and "what colors". Returns null for built-in
 // modes, meaning "no inline overrides — let the [data-mode] CSS block win and

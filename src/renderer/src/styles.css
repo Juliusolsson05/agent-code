@@ -58,12 +58,7 @@
    new web-font option means extending both this URL AND
    `FONT_FAMILIES` in `app-state/settings/types.ts` (with
    `webFont: true`). */
-/* Noto Sans Symbols 2 + Noto Sans Symbols are the monochrome symbol
-   fallbacks every stack names (SYMBOL_FALLBACK_FONTS, #1194). Without this
-   import the names resolve to nothing and iOS draws the feed's `⏺` bullets as
-   Apple color emoji; unicode-range subsets mean they cost nothing until such
-   a symbol is actually drawn. */
-@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Ubuntu+Mono:wght@400;700&family=Noto+Sans+Symbols+2&family=Noto+Sans+Symbols&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Ubuntu+Mono:wght@400;700&display=swap');
 
 @import "tailwindcss";
 
