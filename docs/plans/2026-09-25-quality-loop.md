@@ -509,7 +509,7 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
   closed as a duplicate. #1108 merged, and #922/#923/#924 closed. #1219 opened
   (#1118, C1 paste tail through a hard wrap), under review by 2 Codex + 1 Pi.
   #1160 re-running the flaky #1171 job. The owner added a **steering
-  reviewer** (session 0c009320-b047-4fe1-9242-9c73ad200871, brief
+  reviewer** (session d98f3f4b-2846-4a58-a2cd-5d10566e6a02, a Codex agent; the brief first went to 0c009320 by mistake and was handed over; brief
   `temp/steering-loop/BRIEF.md`) that reviews both loops and may send batched
   notes. The keyboard loop opened draft #1221 (tracking #1220); its
   second-opinion #1 was answered (agree on all 5, with notes).
