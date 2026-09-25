@@ -338,6 +338,13 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     }
   })
 
+  // #1310 final review B: with no divider the pane width is unknown, and
+  // an unknown width must never produce a hard cut (it keeps the space).
+  it('keeps the space of every wrap when the pane width is unknown', () => {
+    const screen = '❯ abcdefghijklmnop\n  xx'
+    expect(pasteAbsorbedVia(activeClaudeComposerText(screen), pasteTailNeedle('abcdefghijklmnopxx'), 0, false)).toBeNull()
+  })
+
   it('keeps the space of a soft wrap between a long word and a CJK word', () => {
     const prompt = `${'a'.repeat(101)} 你好吗`
     expect(activeClaudeComposerText(screenAt(20, prompt))).toContain(' 你好吗')
