@@ -1,6 +1,6 @@
 # Right-click menu for the Sessions list
 
-Status: user-approved 2026-09-25 (native menu, Sessions list only, D4 actions) · Branch:
+Status: implemented (see As built) · user-approved 2026-09-25 (native menu, Sessions list only, D4 actions) · Branch:
 `feat/sessions-context-menu` · Issue: #1180
 
 ## Outcome
@@ -338,6 +338,55 @@ full-suite run at the end.
   PR.
 - Run `npx tsc -b`, the targeted tests, and the full suite once.
 - Open a PR and run the review round.
+
+## As built
+
+Implemented in the order above, one commit per task. Where the build differs
+from the plan, and why:
+
+- **IPC lives beside the existing menu code.** The plan said
+  `src/main/menus/popupMenu.ts` and `menus:popup`. It is
+  `src/main/menu/popupMenu.ts` (next to `appMenu.ts`), `src/main/ipc/menu.ts`
+  and channel `menu:popup`, with `showPopupMenu` on the existing preload
+  `menuApi` (which already owned `menu:command`). One home for menu IPC
+  instead of two directories that differ by a letter.
+- **Main frame only.** `menu:popup` refuses sub-frames, like
+  `agentNames/ipc.ts`: extension content runs in sub-frames, and a menu drawn
+  over the app reads as app chrome.
+- **Item ids are namespaced** (`command:<id>`, `flag:<id>`, `show-in-lane`,
+  `spotlight`) so a future command id can never shadow a built-in item.
+- **"Color Flag", not "Colour Flag".** The app spells it `color` everywhere
+  else (`Set color flag`, `dispatchColorFlags`).
+- **Disabled rows use `aria-disabled`, not `disabled`.** Chromium delivers no
+  mouse events to a disabled form control, so a disabled row could never open
+  its menu. The click guard in `onSelect` already refused the click.
+- **Show in Lane runs the row's own click callback** (carried in the store
+  request) rather than a lane index the host acts on. What a click does
+  depends on which grid row's index was clicked (`selectIntoRow`), and a
+  second definition of it in the host would drift.
+- **Toasts reach the user when the target is off screen.** Commands report
+  through `showPaneToast`, which only renders inside the target's own view.
+  A targeted invocation wraps it so it also shows a global toast while the
+  agent is in no lane and not in a takeover (`targetedCommandContext`).
+- **Copy Last Response now says when there is nothing to copy.** A hibernated
+  agent never loaded its transcript, so the old silent no-op would be the
+  common case from this menu. This also changes the palette: previously it
+  silently did nothing.
+- **Pin Session hides for extension views.** `pinSession` refuses them, so the
+  command's `when` does too.
+- **Latent bug fixed:** `RewindToPromptModal` rewound the *focused* agent,
+  not the one it was opened for (`rewindFocusedToPrompt`). It now calls
+  `rewindSessionToPrompt(sessionId, …)`.
+- **Greyed items.** An item whose command reports `presentation: 'disable'` is
+  shown disabled rather than omitted; `hide` still omits it, as planned.
+- **Palette dispatch moved.** The palette's pending-invocation effect body is
+  now `dispatchPendingInvocation`, so the targeted path is testable without
+  mounting the palette.
+
+Not verified: the menu has not been opened in the running app (the project
+rule is not to launch it). Main's settle order (click before close callback)
+relies on Electron's macOS menu controller posting the close callback after
+`itemSelected`, the same assumption the browser pocket menu makes.
 
 ## Open questions for the user
 
