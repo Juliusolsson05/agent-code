@@ -565,6 +565,7 @@ feeds the rows below G-1.
 | # | Surface | Inconsistency | Target | Status |
 |---|---|---|---|---|
 | G-1 | Provider prompts: Claude trust + permission, Codex trust, Grok and OpenCode question/permission/plan | hand-laid cards: 18px "!" glyph, 14px title, pl-6 body, lowercase "cancel" / "trust this folder" / "deny" / "approve", full-size buttons; Grok's shell a clone of OpenCode's | DialogHeader + px-4 body + DialogActions (Claude/Codex) or the shared `ConditionPromptShell` (Grok/OpenCode); sentence-case labels; sm buttons; `DialogActions.initialFocus` | done |
+| G-2 | Composer prompt-suggestion chip | led with "↵" (Enter never applied it: click sends, Tab on an empty draft fills); the app's only ✕ glyph; no focus rings | "⇥ fill" hint only while Tab really fills (empty draft, not slash mode, not OpenCode); body named "Send suggestion: …"; × like every close; T4 rings | done |
 
 ## Owner visual checklist
 
@@ -840,6 +841,10 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-2 Prompt suggestion chip (above the composer after a turn):** no more
+  "↵" in front; while the composer is empty it shows "⇥ fill" beside it
+  (Tab fills the composer, a click sends). The dismiss is × like every
+  close.
 - **G-1 Agent prompts (trust folder, permission, OpenCode/Grok questions):**
   they now look like every other dialog: a normal header with a one-line
   description, the path/command in a code box, and the standard footer.
@@ -1622,3 +1627,6 @@ Sharp corners and one light theme.
   built `packages/workflow-mcp/dist` under raw `npx vitest`). This branch
   changes nothing under `src/main`; the CI quality gate, which builds
   packages first, is the real gate for it.
+- 2026-09-25 G-2: PromptSuggestionChip `tabFills` mirrors the Tab branch in
+  useComposerKeybinds (empty draft, not slash mode, not OpenCode).
+  Confirm-red: the hint test fails on the pre-change chip.

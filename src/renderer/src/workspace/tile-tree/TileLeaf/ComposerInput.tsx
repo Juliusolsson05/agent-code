@@ -134,6 +134,10 @@ export function ComposerInput({
           text={promptSuggestion}
           onApply={onApplySuggestion}
           onDismiss={onDismissSuggestion}
+          // The same conditions useComposerKeybinds' Tab branch checks before
+          // filling: an empty draft, not in slash mode (Tab completes the
+          // picker there), and not OpenCode (whose Tab cycles agents).
+          tabFills={input.length === 0 && !slashMode && provider !== 'opencode'}
         />
       ) : null}
 
