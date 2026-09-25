@@ -1,7 +1,7 @@
 # Right-click menu for the Sessions list
 
-Status: DRAFT for the user's review (2026-09-25) · Branch:
-`feat/sessions-context-menu` · Issue: to file on approval
+Status: user-approved 2026-09-25 (native menu, Sessions list only, D4 actions) · Branch:
+`feat/sessions-context-menu` · Issue: #1180
 
 ## Outcome
 
