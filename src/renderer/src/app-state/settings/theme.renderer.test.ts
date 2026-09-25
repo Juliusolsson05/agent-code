@@ -93,4 +93,15 @@ describe('applyTheme default appearance', () => {
     applyTheme({ ...DEFAULT_SETTINGS, mode: 'light' })
     expect(document.documentElement.style.getPropertyValue('--theme-accent')).toBe('#5e81ac')
   })
+
+  // #1173 restored Lime as a choice. An id missing from ACCENTS would still
+  // "work" here — applyTheme falls back to ACCENTS[0] and paints Frost — so
+  // asserting the actual green is what proves the option is real, not a
+  // picker entry that silently renders as the default.
+  it('paints the restored Lime accent with its original green', () => {
+    applyTheme({ ...DEFAULT_SETTINGS, accent: 'lime' })
+    expect(document.documentElement.style.getPropertyValue('--theme-accent')).toBe('#7dd3a0')
+    applyTheme({ ...DEFAULT_SETTINGS, mode: 'light', accent: 'lime' })
+    expect(document.documentElement.style.getPropertyValue('--theme-accent')).toBe('#2f6f46')
+  })
 })
