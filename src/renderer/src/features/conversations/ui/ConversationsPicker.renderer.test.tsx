@@ -315,8 +315,12 @@ describe('ConversationsPicker', () => {
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
     fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
-    // Scrolling the old list asks for more while the new scope loads.
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    // Scrolling the old list asks for more while the new scope loads. A
+    // scroll, not ArrowDown: the stale key guard swallows ArrowDown before it
+    // reaches loadMore, so an arrow press never exercised this guard (#1297
+    // disposition). happy-dom reports zero heights, so any scroll is "near
+    // the bottom" and reaches loadMore.
+    fireEvent.scroll(screen.getByRole('listbox', { name: 'Conversations' }))
     await act(async () => {})
     expect(list.mock.calls.some(([request]) => (request as { cursor?: string | null }).cursor === 'next-page')).toBe(false)
     expect(screen.getByText(/^loading…/)).toBeInTheDocument()
