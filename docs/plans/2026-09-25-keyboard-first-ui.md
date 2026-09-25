@@ -578,7 +578,7 @@ feeds the rows below G-1.
 | G-12 | Raw text/number inputs (~12) | ExtensionSettingRow ×2 (square), ExternalControlRow (no focus), SkillsGrid, CustomSkills ×2, CloseOld ×2, BulkSwitch, AgentActivity filter, Pocket URL | `Input` / `NumberInput` | todo |
 | G-13 | Error boxes (7 recipes) + errors shown as muted text | Analytics/Usage, CustomSkills/Conventions, AddSkill, ViewPrompts, Conversations, Keybindings (ink text), Explorer/Skills/UpdateChannel | one `Alert` (`bg-danger-soft border-danger-border text-danger`) + inline variant | todo |
 | G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | `EmptyState` + plain muted loading text | todo |
-| G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | todo |
+| G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | in progress (`SectionLabel` exists and is used by PanelHeader + GitBar; sweep of the other sites pending) |
 | G-16 | Explorer context menu | the only floating menu not on DropdownMenu; z-30 sits under z-40 overlays | `DropdownMenu` | todo |
 | G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | `OptionCard`, one `Checkbox` | todo |
 | G-18 | Close glyph/size | × at 12/14/16px; the word "close"; ✕ (fixed in G-2) | one icon-close button | todo |
@@ -589,7 +589,7 @@ feeds the rows below G-1.
 | G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | titles/buttons/settings done (a scan found ~35 sentence-case strings in the Title Case majority); lowercase side-panel controls go with G-26 |
 | G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | todo |
 | G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | todo |
-| G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | todo |
+| G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | done (`PanelHeader` + `SectionLabel` primitives; Git, Worktrees, AI Workspace, Agent Status migrated; Title Case ghost actions; named closes; those files' row hovers + 9px text fixed too) |
 | G-27 | Dictation feedback layer | the dictation chip (z-40) is hidden under any dialog scrim (z-1100) | toast band, if dictation can target dialog fields (behaviour check) | todo |
 
 ## Owner visual checklist
@@ -866,6 +866,11 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-26 Side panels (Git, Worktrees, AI Workspace, Agent Status):** one
+  header look: the panel name as a small label (plus the agent / workspace
+  name for Agent Status and AI Workspace), actions as small ghost buttons
+  ("Copy", "Refresh", "Delete"), and the same × on the right. "not a git
+  repository" now reads "Not a Git repository."
 - **G-23 Casing (Title Case for titles, buttons, menus, settings):** e.g.
   "Trust This Folder?" / "Trust Folder" (Codex now says folder too), "Add MCP
   Server", "Workflow History", "Raise Cap", "Back to Editor", settings "Agent
