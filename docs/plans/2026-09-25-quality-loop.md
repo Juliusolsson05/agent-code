@@ -529,6 +529,22 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — **#1223 MERGED** (Fixes #732, ghost-log orphan pruning).
+  Round 2: A, B and C all MERGE-READY. The disposition table is in the PR
+  body. **#1227 opened** (Fixes #1225): restored panes read their ghost log
+  under the persisted id, and the dead spawn bootstrap is gone. Reviewers:
+  A Claude, B Pi, C Pi. **#1226 round-1 fixes** (`c6496dba`):
+  - whitespace-only prompt plus image skips the text wait, which could never
+    confirm;
+  - the rollback branch and the separator are now tested; 5 mutants killed.
+  Round 2 sent to B and C; A is still on round 1. **#1224 round-1 fixes**
+  (`ac45391a`):
+  - The Monitor tool reports as "shell", so a persistent monitor parked the
+    loop for 2 h and then paused it.
+  - Each background-work report now holds for 45 min and then DELIVERS.
+  - The latch is kept when the report is unknown.
+  - 7 mutants killed.
+  Round 2 sent to A, B and C.
 - 2026-09-25 — **#1222 MERGED** (#290 marker slice). GitHub closed #290
   through a closing link left from the PR's original "Fixes" wording, so it
   was reopened with the remaining items. The merge gate now checks
