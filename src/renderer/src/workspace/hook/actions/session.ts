@@ -20,7 +20,6 @@ import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { userMcpOverridesFrom } from '@shared/userMcp/types'
 import {
-  clearTiledLaneSessions,
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
@@ -1600,7 +1599,9 @@ export function useSessionActions(
 
       const oldRuntimes = refs.latestRuntimesRef.current
       const idMap = new Map<SessionId, SessionId>()
-      const failedIds = new Set<SessionId>()
+      // Old id -> why its respawn failed. See the setState below for why
+      // these stay in the workspace instead of being removed (#1239).
+      const failedIds = new Map<SessionId, string>()
       const freshSessions: Record<SessionId, SessionMeta> = {}
 
       for (const [oldId, meta] of agentEntries) {
@@ -1654,8 +1655,10 @@ export function useSessionActions(
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
             ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
           }
-        } catch {
-          failedIds.add(oldId)
+        } catch (error) {
+          failedIds.set(oldId, error instanceof Error && error.message.length > 0
+            ? error.message
+            : `Could not restart this agent (${meta.kind ?? DEFAULT_PROVIDER})`)
         }
       }
 
@@ -1663,7 +1666,22 @@ export function useSessionActions(
 
       setRuntimes(prev => {
         const next: Record<SessionId, SessionRuntime> = { ...prev }
-        for (const [oldId] of agentEntries) delete next[oldId]
+        for (const oldId of idMap.keys()) delete next[oldId]
+        // A failed respawn keeps its pane, in the same `failed` state a
+        // failed wake uses: its backend was killed above, so the pane must
+        // say so and offer Retry (which wakes it under the same id).
+        for (const [oldId, message] of failedIds) {
+          const current = next[oldId] ?? emptyRuntime()
+          next[oldId] = {
+            ...current,
+            processStatus: 'failed',
+            processError: message,
+            recoveryFailureCode: 'start-failed',
+            inputReady: false,
+            inputReadinessReason: null,
+            inputReadinessChangedAt: Date.now(),
+          }
+        }
         for (const [oldId, newId] of idMap.entries()) {
           // WHY merge instead of replacing with a fresh runtime:
           //
@@ -1692,43 +1710,33 @@ export function useSessionActions(
           prev.sessions,
           collectOwnedSessionIds(prev),
         )
-        for (const [oldId] of agentEntries) delete nextSessions[oldId]
+        for (const oldId of idMap.keys()) delete nextSessions[oldId]
         for (const [newId, meta] of Object.entries(freshSessions)) {
           nextSessions[newId] = meta
         }
 
         // A successor carries its predecessor's pool membership through
-        // `...restoredMeta` above, so it keeps its project and its place. An
-        // agent that FAILED to respawn was deleted a few lines up; the removal
-        // helper below then takes any project that leaves empty. (Until #992
-        // this rewrote every tile tree, the buried list and the detached
-        // bucket by hand to follow the new ids.)
-        // Remap lanes through the same old->new idMap (every reloaded agent
-        // got a fresh sessionId), then clear any lane whose session failed to
-        // respawn. Without this, "reload all" would point every lane at a dead
-        // id. Order matters: remap first, because `failedIds` are OLD ids that
-        // have no entry in idMap and so survive the remap to be cleared.
-        const nextStage = clearTiledLaneSessions(
-          remapTiledLanes(prev.stage, idMap),
-          failedIds,
-        )
-
-        // `workspaceWithoutSessions` is handed the FAILED ids against a state
-        // whose sessions map still holds them, so it can see which projects
-        // they belonged to and remove the ones left empty.
-        return workspaceWithoutSessions({
+        // `...restoredMeta` above, so it keeps its project and its place.
+        //
+        // WHY an agent whose respawn FAILED stays exactly where it was
+        // (#1239): this used to delete it, and the project it left empty,
+        // with no message. Toggling Dangerous Agents By Default therefore
+        // made any agent with a broken CLI, proxy or MCP start vanish from
+        // the workspace, its process already killed, and autosave made that
+        // permanent. It now keeps its id, lane and metadata, and its runtime
+        // (set above) shows `failed` with the spawn error and Retry.
+        //
+        // Remap lanes through the old->new idMap; failed ids have no entry,
+        // so their lanes keep pointing at the pane that is still there.
+        return {
           ...prev,
-          // Reload-all gives every agent a fresh id; remap relationship
-          // pointers across all sessions (children keep pointing at the right
-          // parent) and remap the pinned list (pins follow to the new ids).
-          sessions: {
-            ...remapSessionsRelationships(nextSessions, idMap),
-            ...Object.fromEntries([...failedIds].flatMap(id =>
-              prev.sessions[id] ? [[id, prev.sessions[id]!] as const] : [])),
-          },
+          // Reload-all gives every restarted agent a fresh id; remap
+          // relationship pointers across all sessions (children keep pointing
+          // at the right parent) and remap the pinned list (pins follow).
+          sessions: remapSessionsRelationships(nextSessions, idMap),
           pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
-          stage: nextStage,
-        }, failedIds)
+          stage: remapTiledLanes(prev.stage, idMap),
+        }
       })
       for (const [newId, meta] of Object.entries(freshSessions)) {
         if (!hasDurableProviderSession(meta)) continue
