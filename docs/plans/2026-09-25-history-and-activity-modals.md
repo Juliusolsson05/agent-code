@@ -74,6 +74,23 @@ needed: nothing here reconciles multiple sources of truth.
    windows). It is wide enough for name + goal + project + state columns, and
    the size is in line with Close Old Agents (860) and Agent Analytics (1040).
 
+## Rulings during execution
+
+- Ruling: **View Goal History is also in the Sessions right-click menu**
+  ("Goal History…", agent group, order 75, right after "TLDR History…").
+  Why: #1185 landed on main after this plan was drafted and put TLDR History in
+  that menu. Goal History is the same kind of per-agent view, so both commands
+  share `targetsAgent`/`openHistory`, which resolve through `commandTarget`.
+  Cost if wrong: one line of `contextMenu` metadata, plus its rows in
+  `commandTarget.renderer.test.ts`, `buildSessionContextMenu` and the menu's
+  control reference.
+- Ruling: **the catalog arithmetic test raises its subtracted term (61 → 62),
+  not the baseline.** That test's own comment requires it.
+- Ruling: **commits are split fix → refactor → feat.** The layout fix is
+  committed against the original `TldrHistoryModal.tsx`, and the rename to
+  `ReportHistoryModal.tsx` comes with the feature. That keeps the bug fix
+  reviewable on its own.
+
 ## Tests
 
 - `tldrHistory.renderer.test.tsx`:
