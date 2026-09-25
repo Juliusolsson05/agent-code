@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
-import wrapAnsi from 'wrap-ansi'
 
 import {
   extractActiveClaudeComposer,
@@ -112,6 +112,14 @@ describe('Claude collapsed-paste placeholder counting', () => {
     expect(placeholderCount('❯ explain what [Pasted text means')).toBe(0)
   })
 })
+
+// wrap-ansi 7 ships no types; this is the one call signature the test needs,
+// the same options Ink passes. Loaded with require because v7 is CommonJS.
+const wrapAnsi = createRequire(import.meta.url)('wrap-ansi') as (
+  input: string,
+  columns: number,
+  options: { trim: boolean; hard: boolean },
+) => string
 
 describe('inline paste tail through a HARD wrap (#1118)', () => {
   // The chrome around the composer comes from a real recorded frame
