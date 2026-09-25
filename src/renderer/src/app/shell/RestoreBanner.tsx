@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
+import { WORKSPACE_READ_ONLY_PREFIX } from '@shared/types/session'
 
 // WHY render this above TabBar instead of as a toast:
 //
@@ -37,7 +38,11 @@ export function RestoreBanner() {
             // No specific remedy: the error names the cause, and some causes
             // (a workspace.json this build refuses to write) are not fixed by
             // freeing space or permissions (#1263 review A).
-            ? `Workspace changes are not being saved: ${workspace.saveFailure}. Agent Code keeps retrying, and changes save on the next success.`
+            ? workspace.saveFailure.startsWith(WORKSPACE_READ_ONLY_PREFIX)
+              // A refusal main keeps for the whole process (#1263 review C):
+              // no retry in this session can succeed, so say what does help.
+              ? `Workspace changes cannot be saved this session: ${workspace.saveFailure.slice(WORKSPACE_READ_ONLY_PREFIX.length)}. Quit Agent Code and repair or move workspace.json; nothing more is saved until then.`
+              : `Workspace changes are not being saved: ${workspace.saveFailure}. Agent Code keeps retrying, and changes save on the next success.`
             : null
 
   // Saves failing is a different condition from autosave being OFF (they are
