@@ -153,4 +153,20 @@ describe('focusedControlOwnsSpace', () => {
     expect(focusedControlOwnsSpace(document.createElement('div'))).toBe(false)
     expect(focusedControlOwnsSpace(null)).toBe(false)
   })
+
+  it('says Working… and drops the ↩ chip while busy (review C4 and a surviving mutation)', () => {
+    // A key chip must never promise a key the dialog is refusing (H2), and
+    // the confirm must not collapse to a bare "…".
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Close agents</DialogTitle>
+          <DialogActions confirmLabel="Close 5 Agents" onConfirm={() => {}} onCancel={() => {}} busy />
+        </DialogContent>
+      </Dialog>,
+    )
+    const confirm = document.querySelector('[data-dialog-action="confirm"]')!
+    expect(confirm.textContent).toBe('Working…')
+    expect(confirm.querySelector('[data-slot="kbd"]')).toBeNull()
+  })
 })

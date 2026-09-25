@@ -313,7 +313,10 @@ export function DialogActions({
           disabled={blocked}
           onClick={onConfirm}
         >
-          {busy ? '…' : confirmLabel}
+          {/* "Working…", not a bare "…" (review C4): the verb vanished exactly
+              when the user wanted to know something was in flight. The same
+              word Bulk Provider Switch already used. */}
+          {busy ? 'Working…' : confirmLabel}
           {confirmKey !== null && !busy ? (
             // onAccent: both confirm variants (default, destructive) are
             // FILLED, so the chip takes the button's foreground.
