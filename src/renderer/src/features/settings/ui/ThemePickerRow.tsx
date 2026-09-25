@@ -62,7 +62,7 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
           }`}
         >
           <span className="min-w-0 truncate">{mode.label}</span>
-          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+          <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
             {mode.family}
           </span>
         </button>
@@ -87,7 +87,7 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
           {/* Actions replace the CUSTOM tag on hover so the resting grid stays
               quiet. group-hover alone would strand keyboard users, so
               focus-within reveals them too. */}
-          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted group-hover:hidden group-focus-within:hidden">
+          <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted group-hover:hidden group-focus-within:hidden">
             custom
           </span>
           <span className="hidden flex-shrink-0 items-center gap-1 group-hover:flex group-focus-within:flex">
@@ -122,7 +122,7 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
           }`}
         >
           <span className="min-w-0 truncate">{theme.title}</span>
-          <span className="truncate text-[9px] text-muted" title={theme.extensionName}>{theme.extensionName}</span>
+          <span className="truncate text-[10px] text-muted" title={theme.extensionName}>{theme.extensionName}</span>
         </button>
       ))}
       {isExtensionThemeMode(settings.mode) && !themes.some(theme => theme.mode === settings.mode) ? (

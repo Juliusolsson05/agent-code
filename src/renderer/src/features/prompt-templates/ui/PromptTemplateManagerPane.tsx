@@ -127,13 +127,13 @@ function TemplateRow({
         <button type="button" className="min-w-0 flex-1 text-left" onClick={onUse}>
           <div className="flex items-center gap-2">
             <span className="truncate text-[12px] text-ink">{withVisibleControls(template.title)}</span>
-            <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+            <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
               {template.scope}
             </span>
-            <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+            <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
               {template.insertMode}
             </span>
-            <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+            <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
               vars:{template.variables.length}
             </span>
           </div>

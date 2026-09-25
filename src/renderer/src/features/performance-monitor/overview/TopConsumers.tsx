@@ -92,7 +92,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
                     <tr key={session.sessionId} className="group border-t border-border hover:bg-row-hover-bg">
                       <td className="max-w-0 px-3 py-1.5">
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className={`flex-shrink-0 rounded-chip border px-1 text-[9px] font-semibold leading-[14px] ${identity?.label ? 'border-current/30 text-ink' : 'border-border text-muted'}`}
+                          <span className={`flex-shrink-0 rounded-chip border px-1 text-[10px] font-semibold leading-[14px] ${identity?.label ? 'border-current/30 text-ink' : 'border-border text-muted'}`}
                             title={identity?.label ? undefined : 'Not placed in this window'}>{identity?.label ?? '—'}</span>
                           <div className="min-w-0">
                             <div className="truncate text-ink" title={name}>{name}</div>

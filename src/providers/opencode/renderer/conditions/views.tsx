@@ -137,7 +137,7 @@ export const opencodePermissionView = defineView<
                 "Allow once" answered Enter. Wrapping keeps a long single-line
                 `python3 -c` legible; the height cap keeps the buttons on
                 screen. */}
-            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
               {withVisibleControls(state.title)}
             </pre>
           </>
@@ -157,7 +157,7 @@ export const opencodePermissionView = defineView<
           return (
             <>
               <p className="mb-1">Command:</p>
-              <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+              <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
                 {withVisibleControls(command)}
               </pre>
             </>
@@ -249,7 +249,7 @@ function QuestionBlock({
       {/* Bounded and scrollable for the same reason as the permission
           subject: Escape and outside-click are disabled, so a long question
           must never push the controls off-screen. */}
-      <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[30vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+      <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[30vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
         {withVisibleControls(question.question)}
       </pre>
       {question.options.length === 0 ? (
@@ -271,7 +271,7 @@ function QuestionBlock({
                 // similarly-named options can live, so it rides the tooltip
                 // rather than being dropped.
                 title={option.description ? withVisibleControls(option.description) : undefined}
-                className={`rounded-control border px-2.5 py-1 text-[11.5px] ${
+                className={`rounded-control border px-2.5 py-1 text-[11px] ${
                   active
                     ? 'border-accent bg-accent/15 text-accent'
                     : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover'
@@ -383,7 +383,7 @@ export const opencodeQuestionView = defineView<
       <ConditionShell heading="OpenCode is asking" actions={footerActions} dispatch={dispatch}>
         {questions.length === 0 ? (
           state.text ? (
-            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
               {withVisibleControls(state.text)}
             </pre>
           ) : (

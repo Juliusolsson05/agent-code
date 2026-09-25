@@ -932,7 +932,7 @@ function InlineEditRow({
         className="w-full rounded-control border border-input-border-focus bg-input-bg px-1 py-0.5 text-[11px] text-ink outline-none"
       />
       {error ? (
-        <span id="explorer-inline-edit-error" className="py-0.5 text-[9px] text-danger">
+        <span id="explorer-inline-edit-error" className="py-0.5 text-[10px] text-danger">
           {error}
         </span>
       ) : null}

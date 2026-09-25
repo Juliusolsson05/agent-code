@@ -71,7 +71,7 @@ export function McpServersRow({ settings, onChange }: Props) {
         <div key={server.domain} className="grid items-center gap-2 px-3 py-1.5" style={{ gridTemplateColumns: columns }}>
           <div className="min-w-0">
             <span className="text-ink">{server.title}</span>
-            <span className="ml-2 rounded-chip border border-border px-1 text-[9px] text-muted">built-in</span>
+            <span className="ml-2 rounded-chip border border-border px-1 text-[10px] text-muted">built-in</span>
             <div className="truncate text-[10px] text-muted">{server.description}</div>
           </div>
           {providers.map(kind => providerSupportsBuiltInMcpDomain(kind, server.domain) ? (
@@ -292,7 +292,7 @@ export function Check({
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`flex h-3.5 w-3.5 items-center justify-center border text-[9px] leading-none disabled:opacity-40 ${
+      className={`flex h-3.5 w-3.5 items-center justify-center border text-[10px] leading-none disabled:opacity-40 ${
         checked ? 'border-control-active-bg bg-control-active-bg text-control-active-fg' : 'border-control-border-hover bg-transparent'
       }`}
     >

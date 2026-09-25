@@ -691,7 +691,7 @@ export function AgentTerminalLeaf({
                 (~26px), `raw opencode` (~72px), TAIL (~26px), this label
                 (~76px) and the gaps, about 236px, plus roughly 80px so the cwd
                 keeps a readable tail. */}
-            <span className="hidden text-[9px] uppercase tracking-wider @min-[320px]:inline">
+            <span className="hidden text-[10px] uppercase tracking-wider @min-[320px]:inline">
               terminal view
             </span>
           </>

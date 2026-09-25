@@ -378,7 +378,7 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
         <span
           data-dispatch-new-in-pool="true"
           title="A new agent is among the hidden ones. Expand to see it"
-          className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent"
+          className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[10px] font-semibold leading-none text-accent"
         >
           new
         </span>
@@ -387,7 +387,7 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
         <span
           data-dispatch-goal-loop="true"
           title={`${hidden.length === 1 ? 'A hidden agent has a goal loop' : `${hidden.length} hidden agents have goal loops`}. Expand to see ${hidden.length === 1 ? 'it' : 'them'}. — ${goalLoopChipTitle(hiddenLoop)}`}
-          className={`ml-1 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none ${
+          className={`ml-1 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[10px] font-semibold leading-none ${
             hiddenLoop.phase === 'active' ? 'border-accent/70 bg-accent/10 text-accent' : 'border-border text-muted'
           }`}
         >
@@ -680,7 +680,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             // titles would eat exactly the token the user needs to speak.
             <span
               data-dispatch-agent-name="true"
-              className="flex-shrink-0 rounded-chip border border-border px-1 text-[9px] font-semibold leading-[13px] text-ink"
+              className="flex-shrink-0 rounded-chip border border-border px-1 text-[10px] font-semibold leading-[13px] text-ink"
             >
               {agentName}
             </span>
@@ -703,7 +703,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               title="Spawned into the pool — select it to place it in this row's focused lane"
               className="
                 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10
-                px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+                px-1.5 py-[1px] text-[10px] font-semibold leading-none text-accent
               "
             >
               new
@@ -729,7 +729,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               data-dispatch-goal-loop="true"
               title={goalLoopChipTitle(goalLoop)}
               className={`
-                flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none
+                flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[10px] font-semibold leading-none
                 ${goalLoop.phase === 'active'
                   ? 'border-accent/70 bg-accent/10 text-accent'
                   : 'border-border text-muted'}
@@ -747,7 +747,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             truncating. The index block owns the activity color now; keeping
             the secondary row visually neutral prevents the whole dispatch
             list from turning into a set of competing colored strips. */}
-        <div className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[9px] text-muted">
+        <div className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[10px] text-muted">
           <span className="truncate flex-shrink min-w-0">{subtitle}</span>
           {showWorktreeBadges && (
             <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
@@ -756,7 +756,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           {projectChip && (
             <span
               className="rounded-control
-                ml-auto flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
+                ml-auto flex-shrink-0 px-1.5 py-[1px] text-[10px] font-code
                 leading-none text-muted border border-border bg-surface-hi
                 truncate max-w-[140px]
               "
@@ -901,7 +901,7 @@ function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
       ? 'border-info-border bg-info-soft text-info'
       : 'border-border bg-surface-hi text-muted'
   return (
-    <span className={`rounded-chip flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
+    <span className={`rounded-chip flex-shrink-0 px-1.5 py-[1px] text-[10px] font-code leading-none border ${classes}`}>
       {label}
     </span>
   )
@@ -913,7 +913,7 @@ function DispatchUnreadBadge({ kind, text }: DispatchUnreadBadgeModel) {
       <span
         className="
           flex-shrink-0 rounded-chip border border-warning-border bg-warning-soft
-          px-1.5 py-[1px] text-[9px] font-semibold leading-none text-warning
+          px-1.5 py-[1px] text-[10px] font-semibold leading-none text-warning
         "
       >
         {text}
@@ -924,7 +924,7 @@ function DispatchUnreadBadge({ kind, text }: DispatchUnreadBadgeModel) {
     <span
       className="
         flex-shrink-0 rounded-chip border border-accent/70 bg-accent/20
-        px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+        px-1.5 py-[1px] text-[10px] font-semibold leading-none text-accent
       "
     >
       {text}

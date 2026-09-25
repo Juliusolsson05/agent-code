@@ -233,7 +233,7 @@ function BannerRow({
         // needs to see both the banner and the hint at the same time so
         // "wait, WHICH CLI?" stays obvious. Rendered inside the same
         // colored container so it looks attached, not floating.
-        <div className="border-t border-current/30 px-3 py-2 text-[10.5px] leading-relaxed text-ink/80">
+        <div className="border-t border-current/30 px-3 py-2 text-[10px] leading-relaxed text-ink/80">
           {entry.hint}
         </div>
       )}

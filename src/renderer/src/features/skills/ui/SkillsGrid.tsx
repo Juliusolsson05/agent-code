@@ -281,7 +281,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
             <div key={skill.id} className="grid items-center gap-2 px-3 py-1.5" style={{ gridTemplateColumns: gridColumns }}>
               <div className="min-w-0">
                 <span className="text-ink">{skill.name}</span>
-                <span className="ml-2 rounded-chip border border-border px-1 text-[9px] text-muted">managed</span>
+                <span className="ml-2 rounded-chip border border-border px-1 text-[10px] text-muted">managed</span>
                 <div className="truncate text-[10px] text-muted">
                   Follows the {skill.managedBy === 'goal' ? 'Goal' : 'TLDR'} MCP server for each agent.
                 </div>
@@ -477,7 +477,7 @@ function SkillRow({
           />
           <div className="min-w-0">
             <span className="text-ink">{name}</span>
-            {badge ? <span className="ml-2 rounded-chip border border-warning px-1 text-[9px] text-warning">{badge}</span> : null}
+            {badge ? <span className="ml-2 rounded-chip border border-warning px-1 text-[10px] text-warning">{badge}</span> : null}
             {status ? <span className="ml-2 text-[10px] text-warning">{status}</span> : null}
             {/* Descriptions and paths are repository-controlled (#1049). */}
             <div className="truncate text-[10px] text-muted" title={description}>{withVisibleControls(description)}</div>
@@ -501,7 +501,7 @@ function SkillRow({
               {sharedOnly ? (
                 // "shared" meant nothing without its hover title (K2-18); the
                 // explanation is now its accessible name as well.
-                <span className="text-[9px] text-muted" title={`${shortLabel} reads a folder this skill is installed in`} aria-label={`shared: ${shortLabel} reads a folder this skill is installed in`}>shared</span>
+                <span className="text-[10px] text-muted" title={`${shortLabel} reads a folder this skill is installed in`} aria-label={`shared: ${shortLabel} reads a folder this skill is installed in`}>shared</span>
               ) : null}
             </div>
           )

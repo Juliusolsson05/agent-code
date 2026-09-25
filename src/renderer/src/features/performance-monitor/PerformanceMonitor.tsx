@@ -201,7 +201,7 @@ function Processes() {
           ? `Shared by ${row.sharedSessionCount} sessions`
           // The label beside the agent in the workspace, never a raw session
           // UUID: an ID prefix is not something a person can find on screen.
-          : row.sessionIds[0] ? <span className="flex items-center gap-1.5"><span className="rounded-chip border border-current/30 px-1 text-[9px] font-semibold leading-[14px]">{identities.get(row.sessionIds[0])?.label ?? '—'}</span><span className="truncate">{identities.get(row.sessionIds[0])?.title ?? 'Unplaced session'}</span></span>
+          : row.sessionIds[0] ? <span className="flex items-center gap-1.5"><span className="rounded-chip border border-current/30 px-1 text-[10px] font-semibold leading-[14px]">{identities.get(row.sessionIds[0])?.label ?? '—'}</span><span className="truncate">{identities.get(row.sessionIds[0])?.title ?? 'Unplaced session'}</span></span>
             : 'Application'}</td>
         <td>{number(row.cpuPercent, '%')}</td><td>{bytes(row.memoryBytes)}</td><td>{row.quality}</td></tr>)}</tbody>
     </table></div>

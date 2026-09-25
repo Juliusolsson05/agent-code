@@ -135,7 +135,7 @@ export function WorkflowViewSelector({
               <span className="min-w-0 truncate">{workflowLabel(reference)}</span>
               <span
                 aria-label={`Status: ${activityLabel} (${workflowRunStatusLabel(reference.status)})`}
-                className={`rounded-chip ml-auto shrink-0 border px-1.5 py-0.5 text-[9px] leading-none ${
+                className={`rounded-chip ml-auto shrink-0 border px-1.5 py-0.5 text-[10px] leading-none ${
                   activity === 'active'
                     ? 'border-accent/35 text-accent'
                     : 'border-border text-muted'

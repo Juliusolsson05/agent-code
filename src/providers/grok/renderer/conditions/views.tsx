@@ -111,7 +111,7 @@ export const grokQuestionView = defineView<
     return (
       <ConditionShell heading="Grok is asking" actions={actions} dispatch={dispatch}>
         {state.text ? (
-          <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
+          <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11px]">
             {withVisibleControls(state.text)}
           </pre>
         ) : (
@@ -137,7 +137,7 @@ export const grokPlanApprovalView = defineView<
     return (
       <ConditionShell heading="Grok proposes a plan" actions={actions} dispatch={dispatch}>
         {state.planContent ? (
-          <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
+          <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11px]">
             {/* The plan is the thing being approved; a reordering override in
                 it misrepresents what the user is authorising (#1049
                 re-review). */}

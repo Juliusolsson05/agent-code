@@ -365,7 +365,7 @@ function SettingMetadataBadges({ definition }: { definition: SettingDefinition }
       {badges.map(badge => (
         <span
           key={badge}
-          className="rounded-chip border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted"
+          className="rounded-chip border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[10px] uppercase tracking-wider text-muted"
         >
           {badge}
         </span>

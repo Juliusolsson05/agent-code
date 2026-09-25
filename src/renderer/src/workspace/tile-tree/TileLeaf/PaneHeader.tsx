@@ -167,7 +167,7 @@ export function PaneHeader({
             container-query pattern for narrow tiles. */}
         <div className={`@container flex flex-1 items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
           {paneLabel && (
-            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[10px] font-semibold tabular-nums">
               {paneLabel}
             </span>
           )}

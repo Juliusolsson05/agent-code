@@ -16,7 +16,7 @@ export function CandidateDetails({ candidate }: { candidate: AgentCodeInstalledS
     <div className="min-w-0 flex-1 text-[10px]">
       <div className="text-[12px] text-ink">
         {candidate.name}
-        {candidate.internal ? <span className="ml-2 rounded-chip border border-border px-1 text-[9px] text-muted">internal</span> : null}
+        {candidate.internal ? <span className="ml-2 rounded-chip border border-border px-1 text-[10px] text-muted">internal</span> : null}
       </div>
       <div className="mt-1 text-muted">{withVisibleControls(candidate.description)}</div>
       <div className="mt-1 text-muted">

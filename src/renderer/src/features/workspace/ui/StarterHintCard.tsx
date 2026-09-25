@@ -176,7 +176,7 @@ export function StarterHintCard({ variant }: { variant: 'fresh-agent' | 'empty-l
         {rows.map(row => (
           <span key={row.key} className="flex items-baseline gap-1.5 whitespace-nowrap">
             {row.chord ? (
-              <kbd className="rounded-chip border border-border bg-surface px-1 py-[1px] font-code text-[9px] text-ink">
+              <kbd className="rounded-chip border border-border bg-surface px-1 py-[1px] font-code text-[10px] text-ink">
                 {row.chord}
               </kbd>
             ) : null}

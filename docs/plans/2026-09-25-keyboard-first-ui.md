@@ -584,7 +584,7 @@ feeds the rows below G-1.
 | G-18 | Close glyph/size | × at 12/14/16px; the word "close"; ✕ (fixed in G-2) | one icon-close button | todo |
 | G-19 | Performance Monitor | Title Case buttons, raw selects, `text-warning-fg` misuse, table cell padding, stat sizes 20/18/15px (shared with Analytics, Dictation) | primitives + one stat size | todo |
 | G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | 2 presets; padding from the primitive when `showCloseButton` | todo |
-| G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | todo |
+| G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | done (21 files: 9 → 10, 10.5 → 10, 11.5 → 11, 12.5 → 12; SVG chart ticks exempt) |
 | G-22 | Raw colours/shadows | `text-white` on flags, `bg-black/20` scrim, toast `shadow-black/20`, dictation inline rgba, chart `shadow-lg` ×2, LanePortChip `shadow-sm`, `bg-canvas/34`; `bg-danger/N` vs `-soft` families | tokens | todo |
 | G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | titles/buttons/settings done (a scan found ~35 sentence-case strings in the Title Case majority); lowercase side-panel controls go with G-26 |
 | G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | done (folder everywhere; "Session" verified as the app's agent-or-terminal noun, and the control reference fixed to match; Dictation guide Done → Close; settings paths fixed in G-23. Kept on purpose: "API Key Vault" (already consistent), Reorder Tabs "Done" (it commits), → vs › separators (low value)) |
@@ -866,6 +866,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-21 Small text:** nothing in the app is smaller than 10px now (Dispatch
+  chips, pane label chip, git formatter, Skills, theme picker…). **Check the
+  Dispatch rows** still fit their chips on one line at narrow widths.
 - **G-25 Wording:** no "click to…" in hints a keyboard user also reads
   (Explorer "Delete — press again to confirm", feed "(expand)" / "(show
   all)", tooltips). Skills' "Update available" leads with ↑ (⟳ now always
