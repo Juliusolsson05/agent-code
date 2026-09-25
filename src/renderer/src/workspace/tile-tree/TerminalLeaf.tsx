@@ -141,6 +141,13 @@ export function TerminalLeaf({
   ensureSessionLiveRef.current = workspace.ensureSessionLive
   const showPaneToastRef = useRef(workspace.showPaneToast)
   showPaneToastRef.current = workspace.showPaneToast
+  // Typing and pasting are the plainest proof a shell is in use, and the one
+  // signal its foreground poll cannot see: a quick `ls` starts and ends inside
+  // one poll, and editing a command line changes no foreground at all (#1178).
+  // A ref, like the two above, because the xterm handlers are bound once per
+  // mount. Optional-called: test harnesses hand this leaf a partial workspace.
+  const markTerminalUsedRef = useRef(workspace.markTerminalUsed)
+  markTerminalUsedRef.current = workspace.markTerminalUsed
   // The DOM node xterm.js renders into. We give it a fresh ref on
   // every mount; xterm's open() attaches on top.
   const containerRef = useRef<HTMLDivElement>(null)
@@ -355,6 +362,7 @@ export function TerminalLeaf({
         isActive: () => !disposed && focusedRef.current && ownerVisibleRef.current,
         paste: async text => {
           if (disposed || !ownerVisibleRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          markTerminalUsedRef.current?.(sessionId)
           return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
         },
       })
@@ -369,6 +377,7 @@ export function TerminalLeaf({
           if (pendingInput.length > 256) pendingInput.splice(0, pendingInput.length - 256)
           return
         }
+        markTerminalUsedRef.current?.(sessionId)
         forwarder.onData(data)
       })
 

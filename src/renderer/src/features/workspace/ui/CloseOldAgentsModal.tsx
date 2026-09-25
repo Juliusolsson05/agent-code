@@ -25,6 +25,7 @@ import {
 import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
+import { terminalLastUsedAt } from '@renderer/workspace/terminalLastUsed'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -69,13 +70,14 @@ function agentRowFor(
 
   const runtime = runtimes[sessionId]
   // Every session kind can be old (#865). Agents age by transcript
-  // timestamps; shells by their last foreground change (a command
-  // starting/finishing or a cd), which is the only activity a shell has.
-  const lastActiveAt = runtime
-    ? kind === 'terminal'
-      ? runtime.terminalForeground?.changedAt ?? null
-      : latestAgentActivityAt(runtime)
-    : null
+  // timestamps. Shells age by their DURABLE last-used record (#1178): typing,
+  // a command starting or finishing, a cd. It used to be the runtime's
+  // `terminalForeground.changedAt`, which every restart re-stamps to "now",
+  // so no terminal could ever be old after a restart. The record lives on the
+  // metadata, so a parked shell whose runtime was never rebuilt ages too.
+  const lastActiveAt = kind === 'terminal'
+    ? terminalLastUsedAt(meta)
+    : runtime ? latestAgentActivityAt(runtime) : null
 
   return {
     sessionId,

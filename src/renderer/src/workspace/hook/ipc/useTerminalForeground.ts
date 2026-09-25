@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react'
 
 import type { AppStore } from '@renderer/app-state/types'
 import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { applyTerminalForeground } from '@renderer/session-runtime/terminalForeground'
 import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
 import type { TerminalForegroundState } from '@shared/types/terminalForeground'
@@ -20,8 +21,30 @@ import type { TerminalForegroundState } from '@shared/types/terminalForeground'
 export function useTerminalForeground(
   restoreStatus: WorkspaceRestoreStatus,
   setRuntimes: AppStore['setWorkspaceRuntimes'],
+  /** The live runtime, read BEFORE the update to tell a real transition from
+   *  a first observation (#1178). A getter over the action's refs, not the
+   *  updater's `prev`: the verdict drives a second state write, and a side
+   *  effect inside a state updater runs twice under StrictMode. */
+  readRuntime: (sessionId: string) => SessionRuntime | undefined,
+  /** 'use' = a command started/finished or the shell cd'd; 'floor' = the
+   *  first observation of this terminal since it attached. */
+  recordUsage: (sessionId: string, usage: 'use' | 'floor') => void,
 ): void {
   const apply = useCallback((sessionId: string, state: TerminalForegroundState) => {
+    // WHY the first observation is only a floor (#1178): after a restart the
+    // snapshot below arrives into an EMPTY runtime, so "changed" is true for
+    // every terminal. Counting that as use is exactly how every shell came to
+    // read "active just now" after each restart. A real transition needs a
+    // previous observation to differ from.
+    const live = readRuntime(sessionId)
+    // The same ownership fence as the runtime write below: a quarantined
+    // runtime's observations are foreign, so they are not this shell's use.
+    if (live?.recoveryFailureCode === 'ownership-conflict') return
+    const previous = live?.terminalForeground ?? null
+    if (previous === null) recordUsage(sessionId, 'floor')
+    else if (previous.busy !== state.busy || previous.command !== state.command || previous.cwd !== state.cwd) {
+      recordUsage(sessionId, 'use')
+    }
     setRuntimes(prev => {
       const current = prev[sessionId] ?? emptyRuntime()
       // Same ownership fence every SessionFeed channel honors: a runtime
@@ -30,7 +53,7 @@ export function useTerminalForeground(
       const next = applyTerminalForeground(current, state, Date.now())
       return next === current ? prev : { ...prev, [sessionId]: next }
     })
-  }, [setRuntimes])
+  }, [readRuntime, recordUsage, setRuntimes])
 
   useEffect(() => {
     const bridge = typeof window === 'undefined' ? undefined : window.api
