@@ -452,7 +452,7 @@ entry when it lands.
 | S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | done (no change: F4 corner close covers it) |
 | S43 | CommandPalette | input ↑↓ Enter; sub-modes; px-3 py-2 header; raw sub-form buttons; plain-text chords | Kbd chords on rows; legend; T8 sub-form | done |
 | S44 | PathPickerModal | Tab/↑↓/⇧↵/two-phase Esc; p-6; lowercase prose + "cancel" | T3 anatomy; legend with Kbd; DialogActions | done |
-| S45 | SettingsPage | full-page takeover; sections | D5; T3; focus into section | todo |
+| S45 | SettingsPage | full-page takeover; sections | D5; T3; focus into section | done |
 
 ### Hand-rolled overlays, menus, popovers
 
@@ -486,7 +486,7 @@ entry when it lands.
 | N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
 | N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | todo |
 | N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
-| N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | todo |
+| N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | done (in S45) |
 | N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | todo |
 | N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | todo |
 | N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | todo |
@@ -772,6 +772,12 @@ Sharp corners and one light theme.
   the highlight while the keyboard scrolls the list; the AI Workspace create
   form's buttons are standard with `Cancel ⎋` / `Create ↩`; template scope
   tags are 10px.
+- **S45 Settings (⌘,):** the category column is one Tab stop — ↑↓/Home/End
+  move and switch category, with a focus ring; ⌘[ / ⌘] switch category from
+  anywhere (also on a narrow window, where the column is hidden); on/off
+  rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
+  stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
+  `Close ⎋` in the header is ghost (was outline).
 - **S44 New Tab (⌘T) path picker:** standard header "New Tab — Working
   Directory", padded body, footer (was one p-6 card); provider toggles show
   a focus ring and announce the chosen one; the path field uses input
@@ -856,6 +862,14 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S45/N14: Settings — sidebar tablist (roving, arrows select),
+  page-level ⌘[/⌘] via sectionCycle, toggles → role=switch, selects →
+  radiogroup with roving focus. Ruling: settings radios MOVE on arrow and
+  CHOOSE on Space/Enter (not APG's choose-on-arrow) because they apply live
+  (theme, update channel) — cost: one extra key. Tests render the sidebar
+  and a synthetic SettingsList directly (the full page mounts heavy rows
+  unrelated to these contracts); ⌘] tested on the page with the list
+  filtered empty. Confirm-red: all 3 fail on the pre-change files.
 - 2026-09-25 S43/N10: palette keeps its per-mode Enter handler; adds ⌃N/⌃P
   + PgUp/PgDn, combobox input with aria-activedescendant, rows as option
   with ids in a listbox, mousemove hover, Kbd shortcut column, legend strip

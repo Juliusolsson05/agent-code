@@ -11,6 +11,8 @@ import {
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Input } from '@renderer/components/ui/input'
+import { Kbd } from '@renderer/components/ui/kbd'
+import { sectionCycleTarget } from '@renderer/lib/sectionCycle'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -105,6 +107,16 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
     <div
       {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
       className="h-full min-h-0 min-w-0 bg-canvas"
+      // ⌘[ / ⌘] step categories from anywhere on the page (plan D5) — also
+      // the only category navigation on a window narrower than `md`, where
+      // the sidebar is hidden. Yields inside code editors and textareas.
+      onKeyDown={event => {
+        const ids: Array<SettingCategoryId | 'all'> = ['all', ...SETTING_CATEGORIES.map(category => category.id)]
+        const next = sectionCycleTarget(event, Math.max(0, ids.indexOf(selectedCategory)), ids.length)
+        if (next === null) return
+        event.preventDefault()
+        setSelectedCategory(ids[next]!)
+      }}
     >
       <div className="flex h-full min-h-0 min-w-0 border-t border-panel-border">
         <SettingsSidebar
@@ -121,8 +133,11 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
                 Search, browse, and change application defaults.
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={onClose}>
+            {/* Escape closes Settings (useKeybinds' focus-mode handler), so the
+                button says so (plan H2). Ghost, the close-only idiom (H5). */}
+            <Button variant="ghost" size="sm" onClick={onClose}>
               Close
+              <Kbd binding="Escape" />
             </Button>
           </div>
 

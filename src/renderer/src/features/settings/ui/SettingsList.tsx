@@ -163,8 +163,14 @@ function SettingRow({
           <SettingMetadataBadges definition={definition} />
 
           {control.type === 'toggle' ? (
+            // A real SWITCH (plan N14): it was a button whose text said
+            // Enabled/Disabled, so assistive tech heard a button named
+            // "Enabled" with no on/off state. Space/Enter toggle natively.
             <Button
               variant="outline"
+              role="switch"
+              aria-checked={control.getValue(settings)}
+              aria-label={definition.title}
               onClick={() =>
                 void control.onToggle(
                   context,
@@ -185,20 +191,49 @@ function SettingRow({
           ) : null}
 
           {control.type === 'select' ? (
+            // A RADIO GROUP (plan N14): one Tab stop (the chosen option), ←→↑↓
+            // and Home/End move focus between options, Space/Enter choose.
+            // Ruling: arrows MOVE, they do not CHOOSE (APG radios choose on
+            // arrow). These settings apply live — Theme, Update channel,
+            // Agent view mode — so choosing on every arrow would flash
+            // through every theme or flip a channel just to reach the last
+            // option. Cost if wrong: one extra key (Space) per change.
             <div
               className="grid gap-1.5"
+              role="radiogroup"
+              aria-label={definition.title}
               style={{
                 gridTemplateColumns: `repeat(${control.columns ?? 1}, minmax(0, 1fr))`,
               }}
+              onKeyDown={event => {
+                const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+                const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                if (index < 0) return
+                const next =
+                  event.key === 'ArrowRight' || event.key === 'ArrowDown' ? index + 1
+                    : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? index - 1
+                      : event.key === 'Home' ? 0
+                        : event.key === 'End' ? buttons.length - 1
+                          : null
+                if (next === null) return
+                event.preventDefault()
+                buttons[(next + buttons.length) % buttons.length]?.focus()
+              }}
             >
-              {control.options.map(option => {
+              {control.options.map((option, optionIndex) => {
                 const active = control.getValue(settings) === option.value
+                const anyActive = control.options.some(item => control.getValue(settings) === item.value)
                 return (
                   <button
                     key={option.value}
                     type="button"
+                    role="radio"
+                    aria-checked={active}
+                    // Roving: only the chosen option (or the first, if none
+                    // is) is a Tab stop, so a 6-option theme picker is one Tab.
+                    tabIndex={active || (!anyActive && optionIndex === 0) ? 0 : -1}
                     onClick={() => void control.onSelect(context, option.value)}
-                    className={`rounded-control border px-3 py-2 text-left ${
+                    className={`rounded-control border px-3 py-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                       active
                         ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
                         : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
