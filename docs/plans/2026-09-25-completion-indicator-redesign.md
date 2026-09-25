@@ -50,7 +50,7 @@ seen      [  B6  …/agent-code                 TAIL  ]   plain header
 - **Row paint.** `.pane-header-completion-outline` sets `background-color: var(--color-surface)`, `color: var(--color-accent)` and `box-shadow: inset 0 0 0 2px var(--color-accent)`.
   - It replaces `.pane-header-completion-stripes` and `.pane-header-completion-plate`, which are both deleted.
   - Everything inside inherits the accent colour: the label chip text and its `border-current/30` border, and the path.
-- **The plates from #1192 are removed.** The identity group keeps a neutral `flex min-w-0 items-center gap-2` wrapper, which still holds the start-truncating path. The trailing slot renders directly in its wrapper again.
+- **The plates from #1192 are removed.** The markup goes back to exactly the pre-#1192 flat structure: label, badge and path sit directly in the padded group, with no wrapper. The trailing slot renders directly in its wrapper again.
 - **Trailing slots in the terminal leaves need no change.**
   - They colour TAIL `text-accent` whenever the header is not *lit*. An outlined header isn't lit, so TAIL is already accent.
   - The raw-provider badge stays `text-ink`. That's a surface-coloured label on a surface background, which is what it is on any unlit header.
@@ -59,9 +59,18 @@ seen      [  B6  …/agent-code                 TAIL  ]   plain header
 - **Names.** The DOM hook becomes `data-completion-outlined` and the class `.pane-header-completion-outline`. The setting `showAgentCompletionIndicator` and its label ("Agent Completion Indicator") are unchanged; they never said "stripes".
 - **When it shows is unchanged:** `showAgentCompletionIndicator && completionUnseen && !isSessionLive`. A running agent keeps the solid working fill with Status Mode on, and a plain header with it off. Seen and dwell logic is untouched.
 
-## Contrast note
+## Contrast (changed in the #1209 review)
 
-The ring and text use `--color-accent` on `--color-surface`, the same pairing as every `text-accent` link and badge in the app. For the dark themes the pair is strong. On the light themes the lightest accent (Frost `#5e81ac` on `#f1efe9`) is the weakest, like it already is for every other `text-accent` surface.
+- **The ring** is the full `--color-accent`. It is a UI edge, which needs 3:1. The worst of 8 accents × 8 theme variants (including high contrast) is 3.21:1, Frost on Soft Light.
+- **The text** is `color-mix(in srgb, var(--color-accent) 70%, var(--color-ink))`, not the pure accent.
+  - Both reviewers found that pure accent text on the light surface drops the pane's label and path to 3.21–3.50:1 for Frost. That is below the 4.5:1 that 9–10px text needs, and worse than the 4.62:1 the same path has in `text-muted`.
+  - Leaning 30% toward the theme's own ink darkens the text on light themes and lightens it on dark ones. The worst case across the same 64 combinations becomes 4.84:1.
+- **The terminal views' TAIL keeps plain `text-accent`,** as it does on any unlit header. That weaker pairing already existed; it is not widened here.
+
+## Visual seams to check in the app (review notes, accepted)
+
+- **Status Mode label chip.** In Status Mode the row is exactly the label chip's height (16px). The 2px ring overlaps the chip's faint top and bottom border, so the chip reads as two short vertical ticks joined to the ring. No text is clipped.
+- **Colour flag.** A flagged pane's flag covers the ring's right quarter, so the outline ends in an open bracket at the flag's 1px seam. This is intentional: the flag always owns its slice.
 
 ## Follow-ups (not in this PR)
 

@@ -1152,7 +1152,8 @@ body,
    of an agent whose finished turn is still unseen, drawn as the working bar
    HOLLOW. Status Mode paints a running agent's header row solid accent; a
    finished-unseen one keeps the surface background with a full-accent ring,
-   and its label chip, path and trailing state turn accent. Filled means busy,
+   and its label chip, path and trailing state turn accent (ink-leaning, see
+   below). Filled means busy,
    outlined means done-go-look: the same bar in the same colour, so the two
    read as one family across the grid.
 
@@ -1181,9 +1182,22 @@ body,
 
    Static on purpose: an animated ring on every finished pane would pull
    attention across the whole grid; the point is to be scannable, not loud. */
+
+/* WHY the TEXT is 70% accent + 30% ink rather than the pure accent (#1209
+   review): the outline turns the pane's identity (label and path) accent,
+   and small accent text on the surface is too weak on light themes. Frost
+   `#5e81ac` on Soft Light measured 3.21:1, below the 4.5:1 needed for 9-10px
+   text, and worse than the 4.62:1 the same path has in `text-muted`. Pulling
+   the accent 30% toward the theme's own ink makes it darker on light themes
+   and lighter on dark ones, so contrast rises in both. The worst of all 8
+   accents x 8 theme variants (incl. high contrast) is then 4.84:1, again
+   Frost on Soft Light, and it still reads as the accent. Recompute before
+   lowering the 70%. The RING stays the full accent: it is a UI edge, which
+   needs 3:1 (worst case 3.21:1), and it is what carries the "same colour as
+   the working bar" signal. */
 .pane-header-completion-outline {
   background-color: var(--color-surface);
-  color: var(--color-accent);
+  color: color-mix(in srgb, var(--color-accent) 70%, var(--color-ink));
   box-shadow: inset 0 0 0 2px var(--color-accent);
 }
 
