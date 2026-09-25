@@ -410,14 +410,24 @@ function analyze(text: string): Analysis {
     keys.add(event.requestKey)
     keysByCall.set(event.callId, keys)
   }
-  let inconsistent = false
+  const inconsistentCallIds = new Set<string>()
   for (const event of events) {
     const disagrees = (keysByCall.get(event.callId)?.size ?? 0) > 1
-    if (disagrees) inconsistent = true
+    if (disagrees) inconsistentCallIds.add(event.callId)
     if ((disagrees || damagedCallIds.has(event.callId)) && event.requestKey !== undefined
       && !blockedPairs.some(pair => pair.caller === event.caller && pair.requestKey === event.requestKey)) {
       blockedPairs.push({ caller: event.caller, requestKey: event.requestKey })
     }
   }
-  return { events, torn, damaged: damagedLines > 0 || gap || inconsistent, damagedLines, blockedPairs, keyedCallsBlocked }
+  // An inconsistent call's rows leave the ACTIVE ledger (steering q17).
+  // Rewriting them unchanged could never make the ledger clean, so every
+  // launch re-quarantined the same bytes and filed another incident. Their
+  // bytes stay in the quarantine copy, and the pairs pushed above, recorded
+  // in recovery.json, keep every key they named blocked; the next launch
+  // then finds a consistent ledger and the recorded block.
+  const kept = inconsistentCallIds.size > 0 ? events.filter(event => !inconsistentCallIds.has(event.callId)) : events
+  return {
+    events: kept, torn, damaged: damagedLines > 0 || gap || inconsistentCallIds.size > 0,
+    damagedLines, blockedPairs, keyedCallsBlocked,
+  }
 }

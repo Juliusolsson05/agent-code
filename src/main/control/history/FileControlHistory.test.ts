@@ -308,6 +308,20 @@ describe('damaged history recovery (#1240) keeps request keys idempotent', () =>
     expect(effects()).toBe(1)
   })
 
+  it('recovers an inconsistent call once: later launches keep the block without re-quarantining (q17)', async () => {
+    const { directory, run, effects } = await withReceivedRewritten(({ requestKey: _lost, ...row }) => row)
+    expect(await run.invoke(request, caller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    const second = reopen(directory)
+    expect(await executor(second.history, async () => 'again').invoke(request, caller))
+      .toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    const third = reopen(directory)
+    await third.history.events()
+    expect(second.reports).toEqual([])
+    expect(third.reports).toEqual([])
+    expect((await readdir(directory)).filter(name => name.startsWith('events.quarantined-'))).toHaveLength(1)
+    expect(effects()).toBe(1)
+  })
+
   it('never lifts a recorded block when the quarantined evidence is shortened (review A)', async () => {
     const { directory, history } = await seeded()
     let effects = 0
