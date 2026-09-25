@@ -27,8 +27,8 @@ When in doubt: the doc is wrong if and only if its description no longer matches
 | Kind of doc | Lives in |
 |---|---|
 | Source-of-truth design explanation, evergreen | `docs/design/<topic>.md` (this directory) |
-| Date-stamped plan, executed once | `docs/superpowers/plans/YYYY-MM-DD-<slug>.md` |
-| Long-form diagnostic / forensic write-up of a specific incident | `docs/superpowers/plans/YYYY-MM-DD-<slug>-findings.md` |
+| Plan for one branch, kept true until merge | `docs/plans/YYYY-MM-DD-<outcome>.md` (see `docs/README.md`; `docs/superpowers/` is historical) |
+| Long-form diagnostic / forensic write-up of a specific incident | `docs/plans/YYYY-MM-DD-<slug>-findings.md` |
 | Style or convention reference | `docs/<topic>-style.md` (root of `docs/`) |
 | README for the repo / a package | `README.md` next to the code |
 
