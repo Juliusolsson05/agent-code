@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Alert } from '@renderer/components/ui/alert'
 
 import type {
@@ -63,12 +64,15 @@ function railToneClass(provider: UsageProviderSnapshot): string {
 
 function UsageProviderDetail({ provider }: { provider: UsageProviderSnapshot }) {
   if (provider.status === 'error') {
-    return <div className="px-3 py-4 text-[11px] leading-snug text-muted">{provider.message}</div>
+    // A provider's usage error is something to act on (sign in, retry), so
+    // it is a warning box, not muted body text (UI pass, G-13). Static, not
+    // announced: it appears every time this provider's tab is selected.
+    return <div className="px-3 py-3"><Alert tone="warning" role={undefined}>{provider.message}</Alert></div>
   }
   return (
     <div className="space-y-3 px-3 py-3">
       {provider.rows.length === 0 ? (
-        <div className="text-[11px] text-muted">No usage windows returned.</div>
+        <EmptyState size="inline" className="px-0">No usage windows returned.</EmptyState>
       ) : (
         provider.rows.map(row => {
           const width = row.percent === null ? 0 : Math.max(0, Math.min(100, row.percent))
