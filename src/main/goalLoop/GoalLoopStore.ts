@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { GoalLoopState } from '@shared/types/goalLoop.js'
@@ -39,6 +39,26 @@ function validLoop(raw: unknown): raw is GoalLoopState {
  * WHY no EventEmitter here: the service owns eventing and validation; the
  * store stays a dumb durable map so there is exactly one place that decides
  * what a "changed" loop means. */
+/** Write `bytes` once, atomically, to `<prefix>-<digest>.json`; an existing
+ *  copy counts only if its bytes match (a crash can leave a partial file under
+ *  the final name). Same contract as src/main/storage/preserveInvalidBytes.ts
+ *  (#1260), duplicated until both land, then consolidated. */
+async function preserveBytes(prefix: string, bytes: string): Promise<string> {
+  const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
+  let copy = `${prefix}-${digest}.json`
+  const existing = await readFile(copy, 'utf8').catch(() => null)
+  if (existing === bytes) return copy
+  if (existing !== null) copy = `${prefix}-${digest}-${randomUUID()}.json`
+  const temporary = `${copy}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' })
+    await rename(temporary, copy)
+  } finally {
+    await unlink(temporary).catch(() => {})
+  }
+  return copy
+}
+
 export class GoalLoopStore {
   private tail: Promise<unknown> = Promise.resolve()
   constructor(private readonly file: string) {}
@@ -54,37 +74,111 @@ export class GoalLoopStore {
    * and a timestamped name would be an unbounded directory of its own. */
   get quarantineFile(): string { return `${this.file}.corrupt` }
 
+  /**
+   * Set while the live file holds data that no preserved copy protects: a
+   * set-aside loop whose copy could not be written, or a malformed file that
+   * could not be moved to its quarantine. Every write is refused until a read
+   * succeeds, because the service answers a failed read by starting empty and
+   * persisting at once (#1258 review A, steering q18), which would replace the
+   * only copy.
+   */
+  private writesRefused: string | null = null
+  /** How to discharge the refusal: the owed copy or move, retried before each
+   *  write. The service reads only once, at start, so "until a read
+   *  succeeds" alone would disable persistence for the whole process. */
+  private owedPreservation: (() => Promise<void>) | null = null
+
   read(): Promise<Record<string, GoalLoopState>> {
     return this.serialize(async () => {
+      let source: string
+      let valid: Record<string, GoalLoopState>
+      let setAside = 0
+      // Named in the warning (#1258 review B): a count alone left the user
+      // hand-diffing the preserved copy to learn WHICH loop vanished.
+      const setAsideIds: string[] = []
       try {
         if ((await stat(this.file)).size > MAX_FILE_BYTES) throw new Error('Goal Loop storage exceeds its size limit.')
-        const document = JSON.parse(await readFile(this.file, 'utf8'))
+        source = await readFile(this.file, 'utf8')
+        const document = JSON.parse(source)
         const loops: unknown = document?.loops
-        if (document?.version !== 1 || !loops || typeof loops !== 'object' || Array.isArray(loops)
-          || Object.keys(loops).length > GOAL_LOOP_STORE_LIMIT
-          || !Object.values(loops).every(validLoop)) {
+        if (document?.version !== 1 || !loops || typeof loops !== 'object' || Array.isArray(loops)) {
           throw new Error(`Goal Loop storage is invalid; the original file has been moved to ${this.quarantineFile}.`)
         }
-        return loops as Record<string, GoalLoopState>
+        // WHY one unreadable loop is set aside instead of failing the file
+        // (#1248): a newer build's phase or reason, met after a downgrade,
+        // used to move the WHOLE document aside, and the service's next write
+        // made every other loop's loss permanent. A malformed container above
+        // still moves aside and throws: nothing in it can be trusted as a loop.
+        valid = {}
+        for (const [sessionId, loop] of Object.entries(loops)) {
+          if (validLoop(loop)) valid[sessionId] = loop
+          else setAsideIds.push(sessionId)
+        }
+        setAside = setAsideIds.length
+        // The limit counts READABLE loops (#1258 review A): 200 good loops and
+        // one this build cannot read are not an untrustworthy document.
+        if (Object.keys(valid).length > GOAL_LOOP_STORE_LIMIT) {
+          throw new Error(`Goal Loop storage is invalid; the original file has been moved to ${this.quarantineFile}.`)
+        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          this.writesRefused = null
+          this.owedPreservation = null
+          return {}
+        }
         // WHY move it aside instead of just throwing, as TldrStore does:
         // TldrStore keeps its promise because a failed load fails every later
         // write too, so nothing ever replaces the bad file. This store cannot
         // work that way — the service must start (it catches this error and
         // runs empty) and then rewrites the whole document on its very next
-        // state change. The first version threw "the original file has been
-        // preserved" and start() overwrote that file a few lines later.
-        // Best-effort: if the rename itself fails there is nothing better to
-        // do, and the caller still learns the read failed.
-        await rename(this.file, this.quarantineFile).catch(() => {})
+        // state change. If even the move fails, the file stays where it is and
+        // writes are refused instead, so that rewrite cannot replace it.
+        await rename(this.file, this.quarantineFile).catch(moveError => {
+          this.writesRefused = `the unreadable file could not be moved to ${this.quarantineFile} (${String(moveError)})`
+          this.owedPreservation = () => rename(this.file, this.quarantineFile)
+        })
         throw error
       }
+      // Preservation runs OUTSIDE the catch above (#1258 review A): a failed
+      // copy is not an unreadable document, and handling it as one moved the
+      // live file away and let the service persist an empty map. The copy is
+      // digest-named and atomic, never the `.corrupt` name, so it cannot
+      // replace an older quarantine either.
+      if (setAside > 0) {
+        try {
+          const copy = await preserveBytes(`${this.file}.invalid`, source)
+          console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s) (${setAsideIds.join(', ')}); original preserved at ${copy}`)
+        } catch (copyError) {
+          // The valid loops are STILL returned (steering q19): throwing here
+          // made the service start empty, and once the obstruction cleared the
+          // retried write persisted that empty map, dropping every valid loop.
+          // Instead the copy is owed and every write waits for it, so the live
+          // file keeps the unreadable loop until its bytes are safe, and the
+          // first write after that carries the valid loops forward.
+          this.writesRefused = `${setAside} unreadable loop(s) (${setAsideIds.join(', ')}) could not be preserved yet (${String(copyError)})`
+          this.owedPreservation = async () => { await preserveBytes(`${this.file}.invalid`, source) }
+          console.warn(`[goal-loop] ${this.writesRefused}; writes wait for the copy`)
+          return valid
+        }
+      }
+      this.writesRefused = null
+      this.owedPreservation = null
+      return valid
     })
   }
 
   async write(states: Record<string, GoalLoopState>): Promise<void> {
     return this.serialize(async () => {
+      if (this.writesRefused) {
+        try {
+          await this.owedPreservation?.()
+          if (!this.owedPreservation) throw new Error('nothing to retry')
+        } catch {
+          throw new Error(`Goal Loop storage is protected: ${this.writesRefused}`)
+        }
+        this.writesRefused = null
+        this.owedPreservation = null
+      }
       const temporary = `${this.file}.${randomUUID()}.tmp`
       await mkdir(dirname(this.file), { recursive: true })
       try {

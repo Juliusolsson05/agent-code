@@ -1,0 +1,36 @@
+{
+ "source": "Two real loops from the owner's ~/.config/agent-code/goal-loop.json (13 loops, 2026-09-25): session ids, phases, reasons, counters and timestamps verbatim; goal, loopPrompt and completionSummary replaced by '[redacted N chars]' markers (private prompt text).",
+ "document": {
+  "version": 1,
+  "loops": {
+   "46179162-02ed-491d-97dd-6e291392b280": {
+    "sessionId": "46179162-02ed-491d-97dd-6e291392b280",
+    "goal": "[redacted 184 chars]",
+    "loopPrompt": "[redacted 3751 chars]",
+    "phase": "ended",
+    "pauseReason": null,
+    "endReason": "done",
+    "completionSummary": "[redacted 1232 chars]",
+    "maxContinuations": 40,
+    "continuationsDelivered": 8,
+    "consecutiveDeliveryFailures": 0,
+    "startedAt": "2026-09-19T00:00:34.905Z",
+    "updatedAt": "2026-09-19T03:16:34.101Z"
+   },
+   "cf497ac5-6a35-4bfb-8ba8-51352f60634f": {
+    "sessionId": "cf497ac5-6a35-4bfb-8ba8-51352f60634f",
+    "goal": "[redacted 86 chars]",
+    "loopPrompt": "[redacted 3963 chars]",
+    "phase": "ended",
+    "pauseReason": null,
+    "endReason": "done",
+    "completionSummary": "[redacted 776 chars]",
+    "maxContinuations": 40,
+    "continuationsDelivered": 0,
+    "consecutiveDeliveryFailures": 0,
+    "startedAt": "2026-09-19T02:02:56.530Z",
+    "updatedAt": "2026-09-19T03:25:58.741Z"
+   }
+  }
+ }
+}
