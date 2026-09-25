@@ -173,6 +173,25 @@ type GoalLoopManagerPort = {
  * in paused(error) — visible and resumable — rather than prompting a dead
  * process.
  */
+/** One entry of Claude Code's Stop-hook `background_tasks` (2.1.280+). Only
+ *  the two fields the loop reads; the CLI sends more (id, description, …). */
+export type GoalLoopBackgroundTask = { type: string; status: string }
+
+/**
+ * Will this background task wake the agent by itself when it finishes?
+ *
+ * Shells, subagents, workflows and MCP tasks end with a task-notification
+ * that starts a new turn, so the agent is waiting on them. A `monitor` never
+ * finishes by design (persistent monitors run with no timeout), so holding on
+ * one would park the loop until the absolute limit; the loop continues past it
+ * as it always has. Ruling: unknown types are NOT held on, so a new CLI task
+ * kind cannot silently stall loops. Only running/pending entries count.
+ */
+function wakesTheAgent(task: GoalLoopBackgroundTask): boolean {
+  if (task.status !== 'running' && task.status !== 'pending') return false
+  return task.type === 'shell' || task.type === 'subagent' || task.type === 'workflow' || task.type === 'MCP task'
+}
+
 export class GoalLoopService extends EventEmitter {
   private readonly loops = new Map<string, GoalLoopState>()
   private readonly working = new Map<string, WorkingState>()
@@ -221,6 +240,25 @@ export class GoalLoopService extends EventEmitter {
    * queued prompt is seen to start: a UserPromptSubmit hook, or (for a
    * provider without hooks) the tracked phase going to work. */
   private readonly queuedContinuation = new Set<string>()
+  /**
+   * Sessions whose last allowed Stop reported background work that will wake
+   * the agent by itself (#1138).
+   *
+   * WHY: Claude Code ends a turn while async subagents or `run_in_background`
+   * shells are still running. The agent is not idle; it is waiting, and the
+   * CLI re-invokes it with a task-notification when the work finishes. A
+   * continuation typed into that gap got "still waiting" and cost one
+   * continuation each (observed live 2026-09-22; three in a row).
+   *
+   * The source is the CLI's own `background_tasks` field on the Stop hook
+   * payload (2.1.280+), described by its schema as the way to tell "session is
+   * done" from "session is paused waiting for background work". Captured on the
+   * wire: testing/fixtures/goal-loop-stop-hooks/. Each Stop REPLACES the set:
+   * the notification turn's own Stop reports what is still running, and an
+   * empty list releases the hold. A Stop WITHOUT the field (older CLI) clears
+   * it, because missing means unknown and unknown keeps today's behaviour.
+   */
+  private readonly backgroundWork = new Set<string>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -290,7 +328,11 @@ export class GoalLoopService extends EventEmitter {
    * delivery gate weighs every other signal too and HOLDS the continuation
    * until they all go quiet (#1033, deliveryHold).
    */
-  observeProviderHook(sessionId: string, hook: 'user-prompt-submit' | 'post-tool-use' | 'stop', outcome?: { blocked: boolean }): void {
+  observeProviderHook(
+    sessionId: string,
+    hook: 'user-prompt-submit' | 'post-tool-use' | 'stop',
+    outcome?: { blocked: boolean; backgroundTasks?: readonly GoalLoopBackgroundTask[] },
+  ): void {
     this.hookSessions.add(sessionId)
     this.lastHookSessionActivity.set(sessionId, Date.now())
     if (hook !== 'stop') {
@@ -317,6 +359,8 @@ export class GoalLoopService extends EventEmitter {
     }
     if (outcome?.blocked) return
     this.hookTurnOpen.delete(sessionId)
+    if (outcome?.backgroundTasks?.some(wakesTheAgent)) this.backgroundWork.add(sessionId)
+    else this.backgroundWork.delete(sessionId)
     // The provider says this turn ENDED, so every phase reading that described
     // it is now history — including the busy state we seeded for our own
     // delivery (markOwedATurn), which nothing else would clear on a session
@@ -570,6 +614,8 @@ export class GoalLoopService extends EventEmitter {
     this.hookTurnOpen.delete(sessionId)
     this.lastHookSessionActivity.delete(sessionId)
     this.queuedContinuation.delete(sessionId)
+    // Background tasks belonged to the dead process; they will never notify.
+    this.backgroundWork.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
@@ -655,9 +701,10 @@ export class GoalLoopService extends EventEmitter {
    * process state for is one it is not tracking (a fake in a test, a backend
    * row that lives elsewhere). "I cannot tell" must not hold a loop.
    */
-  private deliveryHold(sessionId: string): 'turn-open' | 'queued' | 'phase-working' | 'screen-busy' | null {
+  private deliveryHold(sessionId: string): 'turn-open' | 'queued' | 'background-work' | 'phase-working' | 'screen-busy' | null {
     if (this.hookSessions.has(sessionId) && this.hookTurnOpen.has(sessionId)) return 'turn-open'
     if (this.queuedContinuation.has(sessionId)) return 'queued'
+    if (this.backgroundWork.has(sessionId)) return 'background-work'
     const tracked = this.working.get(sessionId)
     if (tracked && (isWorking(tracked) || tracked.pendingTools.length > 0)) return 'phase-working'
     const active = this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
@@ -735,7 +782,14 @@ export class GoalLoopService extends EventEmitter {
       this.heldSince.set(sessionId, Date.now())
       this.progressSince.set(sessionId, Date.now())
     }
-    const silent = this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS && !this.toolIsRunning(sessionId)
+    // Background work the CLI reported is exempt from the SILENCE pause, like
+    // a running tool: a background implementer routinely runs 20–40 minutes
+    // with no turn in between, and pausing here would leave the loop paused
+    // when its notification turn arrives, so nothing would continue it
+    // (#1138). The absolute limit below still applies to it.
+    const silent = this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS
+      && !this.toolIsRunning(sessionId)
+      && !this.backgroundWork.has(sessionId)
     if (silent || this.heldForMs(sessionId) >= GOAL_LOOP_HOLD_LIMIT_MS) {
       this.pauseStalledHold(sessionId, silent ? reason : `${reason} (held ${Math.round(this.heldForMs(sessionId) / 60_000)} min)`)
       return
@@ -776,6 +830,9 @@ export class GoalLoopService extends EventEmitter {
     // without ever delivering (#1033 round 4). The user asking for a retry is
     // the signal that the queue is no longer what it was.
     this.queuedContinuation.delete(sessionId)
+    // Same for reported background work (#1138): a pause means it outlived the
+    // absolute limit, and a Resume is the user saying continue anyway.
+    this.backgroundWork.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     console.warn(`[goal-loop] ${sessionId}: held on "${reason}" after its turn ended; pausing instead of typing into it`)

@@ -116,6 +116,21 @@ function envFlag(name: string): boolean {
   return value === '1' || value === 'true' || value === 'yes'
 }
 
+/** The Stop payload's `background_tasks`, reduced to what the goal loop reads,
+ *  or undefined when the field is absent or malformed (unknown, not "none"). */
+function readBackgroundTasks(input: unknown): Array<{ type: string; status: string }> | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const raw = (input as { background_tasks?: unknown }).background_tasks
+  if (!Array.isArray(raw)) return undefined
+  return raw.flatMap(task => (
+    task && typeof task === 'object'
+      && typeof (task as { type?: unknown }).type === 'string'
+      && typeof (task as { status?: unknown }).status === 'string'
+      ? [{ type: (task as { type: string }).type, status: (task as { status: string }).status }]
+      : []
+  ))
+}
+
 export class BuiltInMcpHttpHost {
   private server: Server | null = null
   private port: number | null = null
@@ -590,7 +605,15 @@ export class BuiltInMcpHttpHost {
       if (!loopReporting || registration.revoked || fromSubagent) return
       if (unattributable && event !== 'stop') return
       const blocked = Boolean(output && typeof output === 'object' && (output as { decision?: unknown }).decision === 'block')
-      this.dependencies.goalLoopService?.observeProviderHook(registration.scope.sessionId, event, { blocked })
+      // Claude Code 2.1.280+ lists in-flight background work on the Stop
+      // payload (`background_tasks`). The loop holds while it would wake the
+      // agent by itself (#1138). Forwarded only when the field is present:
+      // its absence means an older CLI, which keeps today's behaviour.
+      const backgroundTasks = event === 'stop' ? readBackgroundTasks(input) : undefined
+      this.dependencies.goalLoopService?.observeProviderHook(registration.scope.sessionId, event, {
+        blocked,
+        ...(backgroundTasks ? { backgroundTasks } : {}),
+      })
     }
     if (!enforcing) {
       this.writeJson(res, 200, {})

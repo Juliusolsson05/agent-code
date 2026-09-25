@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -131,6 +132,27 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
     await settle()
     expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for background work the real Stop payload reports, then continues on the Stop that clears it (#1138)', async () => {
+    // Unedited Stop bodies from Claude Code 2.1.282 (testing/fixtures/
+    // goal-loop-stop-hooks/), posted over real HTTP: the host must carry
+    // `background_tasks` through to the loop, which it used to drop.
+    const recorded = JSON.parse(readFileSync(
+      new URL('../../../testing/fixtures/goal-loop-stop-hooks/claude-2.1.282.json', import.meta.url), 'utf8',
+    )) as Record<string, unknown>
+    const { host, loops, deliver, hook } = await setup()
+    const [config] = host.registerSession({ sessionId: 's1', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await hook(config!, 'post-tool-use')
+    await hook(config!, 'stop', recorded.backgroundShellRunning)
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+
+    // The task-notification turn: its prompt, then its Stop with nothing left.
+    await hook(config!, 'user-prompt-submit')
+    await hook(config!, 'stop', recorded.nothingPending)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 
   it('does not treat a Stop that TLDR enforcement blocked as a turn end', async () => {
