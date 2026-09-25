@@ -245,7 +245,7 @@ export function QueueStrip({
       >
         <button
           type="button"
-          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-surface-hi hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-surface-hi hover:text-ink outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
           aria-controls={listId}
           aria-expanded={!collapsed}
           onClick={() => setCollapsed(current => !current)}
@@ -317,7 +317,7 @@ export function QueueStrip({
                 <li key={`${q.timestamp}:${index}`} className="min-w-0 py-0.5">
                   <button
                     type="button"
-                    className="flex w-full min-w-0 items-center gap-2 text-left text-[12px] leading-[1.5] text-ink-dim hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    className="flex w-full min-w-0 items-center gap-2 text-left text-[12px] leading-[1.5] text-ink-dim hover:text-ink outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
                     onClick={() => setSelectedPrompt(q)}
                     aria-label={`View queued prompt: ${preview ?? ''}`}
                   >

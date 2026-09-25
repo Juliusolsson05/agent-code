@@ -112,7 +112,7 @@ export function DictationAudioInputRow({ value, onChange }: Props) {
             if (device) onChange({ deviceId: id, label: device.label })
           }
         }}
-        className="w-full min-w-0 rounded-control border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="w-full min-w-0 rounded-control border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
       >
         <option value="">Automatic — prefer built-in microphone</option>
         <option value="default">System default{systemDefault ? ` — ${systemDefault.replace(/^default\s*-\s*/i, '')}` : ''}</option>

@@ -480,7 +480,7 @@ entry when it lands.
 | N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | done (pills `aria-current`; layout radios roving + shared `radioGroupKeyDown`; also swept into Grid Dispatch nested agents, Settings, Color flag) |
 | N6 | Reader strip | no aria-pressed | aria-current | done (+ Older/Newer said ↑/↓ but only ⌥↑/⌥↓ acted → one binding drives chip + listener) |
 | N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | done (vertical → ↑↓/Home/End, automatic activation, wrap; Show all moved out of the tablist) |
-| N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
+| N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | done (+ same 2px accent outline in the dictation input select and both workflow rows) |
 | N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | done (Tab stop + shared list keys) |
 | N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | done (in S43) |
 | N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
@@ -778,6 +778,11 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **N8 focus ring convergence:** the queued-messages header and rows, the
+  workflow agent/activity rows and Settings › Dictation's input device select
+  now show the thin theme focus ring (they drew a 2px accent outline, a
+  second focus look). The feed's jump flash and the Dispatch menu-open
+  outline are NOT focus and keep the accent outline.
 - **N7 Session views (below the composer, once a workflow exists):** Tab
   lands on the selected view only; ↑/↓ switch views as they move (focus ring
   inset on the row); Tab again reaches "Show all". Check that "Show all" still
@@ -1257,3 +1262,8 @@ Sharp corners and one light theme.
   (invalid ARIA child) and is absolutely positioned over the Main row.
   Confirm-red: both keyboard tests fail on the pre-change selector; the
   unlisted-selection fallback is pinned by its own test (mutation observed).
+- 2026-09-25 N8: 5 `focus-visible:outline-2 outline-accent` sites → T4 (the
+  select uses the Input primitive's control form: border-input-border-focus +
+  non-inset ring). No new test: a class swap with no behavior, and a
+  class-string assertion would restate the diff. Feed.tsx flash and
+  DispatchAgentList menu-open outline deliberately left (not focus).
