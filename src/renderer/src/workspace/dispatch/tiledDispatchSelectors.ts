@@ -145,6 +145,9 @@ export function normalizeStage(stage: TiledDispatchState): TiledDispatchState {
   const grid = normalizeGridShape(stage)
   const alreadyCurrent =
     stage.ratios === undefined &&
+    // Lanes too: a repaired lanes array (#1245) must not be discarded in
+    // favour of the original, malformed one.
+    stage.lanes === grid.lanes &&
     stage.rows === grid.rows &&
     stage.laneWeights === grid.laneWeights &&
     stage.focusedLane === grid.focusedLane
