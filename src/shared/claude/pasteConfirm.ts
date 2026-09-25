@@ -73,6 +73,13 @@ const IMAGE_PLACEHOLDER_RE = /\[Image\s+#\d+\]/g
  * while still refusing to search an unbounded transcript.
  */
 export function extractActiveClaudeComposer(screen: string): string {
+  return locateActiveClaudeComposer(screen).lines.join('\n')
+}
+
+/** The composer's physical lines, plus the width of the chrome divider right
+ *  above it when there is one (Claude draws that divider across the full
+ *  composer width, so it is the width a hard wrap fills). */
+function locateActiveClaudeComposer(screen: string): { lines: string[]; width: number | null } {
   const lines = screen.split('\n')
   const isDivider = (line: string): boolean => {
     // Keep this aligned with claude-code-headless ScreenParser's proven chrome
@@ -82,6 +89,7 @@ export function extractActiveClaudeComposer(screen: string): string {
     return dividerChars >= 10 && dividerChars >= nonSpace * 0.8
   }
   let start = -1
+  let width: number | null = null
   // Normal Claude geometry has a chrome divider immediately before the input
   // box. Within that bounded segment choose the FIRST ❯: later `❯ quoted`
   // lines can be literal pasted content and must not rebase the composer.
@@ -92,6 +100,7 @@ export function extractActiveClaudeComposer(screen: string): string {
     for (let i = divider + 1; i < segmentEnd; i += 1) {
       if (/^\s*❯(?:\s|$)/u.test(lines[i] ?? '')) {
         start = i
+        width = (lines[divider] ?? '').trimEnd().length
         break
       }
     }
@@ -107,7 +116,7 @@ export function extractActiveClaudeComposer(screen: string): string {
       }
     }
   }
-  if (start < 0) return lines.slice(-12).join('\n')
+  if (start < 0) return { lines: lines.slice(-12), width: null }
 
   let end = lines.length
   for (let i = start + 1; i < lines.length; i += 1) {
@@ -116,7 +125,53 @@ export function extractActiveClaudeComposer(screen: string): string {
       break
     }
   }
-  return lines.slice(start, end).join('\n')
+  return { lines: lines.slice(start, end), width }
+}
+
+/**
+ * The text Claude's composer actually holds, with the TUI's line wrapping
+ * undone. This is what the inline-tail check compares against (#1118).
+ *
+ * WHY the wrapping has to be undone rather than tolerated: Claude's Ink wraps
+ * with `hard: true` (vendor/claude-code-src/full/ink/wrap-text.ts). A SOFT wrap
+ * breaks at a space; a HARD wrap cuts a token longer than the line in the
+ * middle, onto a continuation line with a two-space indent. Collapsing
+ * whitespace turned a hard cut into a space the payload never had, so a
+ * prompt ending in a long path was never seen as absorbed and rolled back.
+ *
+ * Two earlier fixes were withdrawn in review, and why is the point:
+ *  - stripping ALL whitespace also accepted MISSING whitespace (`foo\nbar`
+ *    matched a composer showing `foobar`), which sent Enter for pastes that
+ *    had not landed;
+ *  - a pattern allowing optional whitespace between any two characters
+ *    matched an EARLIER part of the same paste that had a real space where
+ *    the tail has none, again sending Enter before the tail arrived.
+ * Both guessed where a wrap might be. This reconstructs where it IS.
+ *
+ * The rule: a line that fills the whole width (the divider's width) and whose
+ * continuation does not start with a space was cut mid-token, so the two join
+ * with nothing between them. Every other line break was a soft wrap at a space
+ * and joins with one space. When the width is unknown (no divider on screen)
+ * every break is treated as soft, which is the old behaviour. Misreading a
+ * rare exactly-full soft line errs toward a TIMEOUT (a missed confirmation),
+ * never toward an early Enter.
+ */
+export function activeClaudeComposerText(screen: string): string {
+  const { lines, width } = locateActiveClaudeComposer(screen)
+  let text = ''
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? ''
+    if (i === 0) {
+      text = line
+      continue
+    }
+    // Continuation lines carry a two-space indent; anything after it is text.
+    const content = line.startsWith('  ') ? line.slice(2) : line.trimStart()
+    const previous = (lines[i - 1] ?? '').trimEnd()
+    const hardCut = width !== null && previous.length >= width && content.length > 0 && !/^\s/u.test(content)
+    text = hardCut ? text.trimEnd() + content : `${text} ${content}`
+  }
+  return text
 }
 
 /**
@@ -219,58 +274,18 @@ export function normalizeWhitespace(s: string): string {
 }
 
 /**
- * Does `screen` show `tail`, allowing for however the TUI wrapped it?
- *
- * WHY a pattern and not a plain substring (#1118): Claude's Ink wraps the
- * composer with `hard: true` (vendor/claude-code-src/full/ink/wrap-text.ts),
- * so a token longer than the line (an absolute path, a URL) is cut MID-TOKEN
- * onto a continuation line with a two-space indent. Collapsing whitespace
- * turned that cut into a space inside the path that the needle does not
- * contain, so absorption was never seen at 14 of 81 pane widths and the send
- * timed out and rolled back.
- *
- * WHY not simply strip all whitespace (the first cut, withdrawn in review):
- * a wrap can only ADD whitespace. Stripping also treated missing whitespace
- * as a match, so a payload `foo\nbar` "landed" on a composer showing
- * `foobar`, and a recorded unrelated `opencode [Image #1]` composer matched a
- * pending `opencode[\nImage#1]` payload. Both confirmed a paste that had not
- * landed and sent Enter. The pattern keeps the asymmetry: every whitespace run
- * in the needle must be whitespace on screen (`\s+`), and between any two
- * other characters the screen MAY hold whitespace (`\s*`), which is exactly
- * what a soft or hard wrap inserts.
- */
-function tailPattern(tail: string): RegExp {
-  const parts: string[] = []
-  for (const ch of tail) {
-    if (ch === ' ') {
-      parts.push('\\s+')
-    } else {
-      if (parts.length > 0 && parts[parts.length - 1] !== '\\s+') parts.push('\\s*')
-      parts.push(ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    }
-  }
-  return new RegExp(parts.join(''), 'u')
-}
-
-function screenShowsTail(screen: string, tail: string): boolean {
-  return tailPattern(tail).test(screen)
-}
-
-/**
  * A distinctive needle from the END of the paste. The paste's tail lands at
  * the composer cursor, so it's the most reliable contiguous substring to find
- * when Claude inlines a paste (no placeholder). Whitespace-normalized (one
- * space per run) so that `screenShowsTail` can require whitespace exactly where
- * the payload had it. Short prompts use their full normalized value. They used
- * to bypass this detector through an unsafe atomic `text + \r` write; now even
- * a one-character prompt must visibly enter the active composer before Enter
- * is allowed to follow.
+ * when Claude inlines a paste (no placeholder). Whitespace-normalized, and
+ * compared against `activeClaudeComposerText`, which has the TUI's wrapping
+ * undone, so neither a soft nor a hard wrap defeats the match. Short prompts
+ * use their full normalized value. They used to bypass this detector through
+ * an unsafe atomic `text + \r` write; now even a one-character prompt must
+ * visibly enter the active composer before Enter is allowed to follow.
  */
 export function pasteTailNeedle(payload: string): string | null {
   const norm = normalizeWhitespace(payload).trim()
-  // trimStart: a needle that starts with a space would demand whitespace
-  // before its first visible character, which says nothing about the paste.
-  return norm.length > 0 ? norm.slice(-24).trimStart() : null
+  return norm.length > 0 ? norm.slice(-24) : null
 }
 
 export type PasteAbsorbedOutcome =
@@ -296,7 +311,7 @@ export function pasteAbsorbedVia(
   tailAlreadyPresent: boolean,
 ): 'placeholder' | 'inline' | null {
   if (placeholderCount(screen) > baseCount) return 'placeholder'
-  if (tail && !tailAlreadyPresent && screenShowsTail(screen, tail)) return 'inline'
+  if (tail && !tailAlreadyPresent && normalizeWhitespace(screen).includes(tail)) return 'inline'
   return null
 }
 
@@ -317,15 +332,18 @@ export function pollPasteAbsorbed(
   opts: { timeoutMs: number; pollIntervalMs: number },
 ): Promise<PasteAbsorbedOutcome> {
   const tail = pasteTailNeedle(payload)
-  const baselineComposer = extractActiveClaudeComposer(baselineScreen)
+  // The unwrapped composer text (see `activeClaudeComposerText`), for both the
+  // baseline and every poll, so a hard-wrapped tail is found and a tail that
+  // was already there is recognised as such.
+  const baselineComposer = activeClaudeComposerText(baselineScreen)
   const baseCount = placeholderCount(baselineComposer)
   const tailAlreadyPresent = tail
-    ? screenShowsTail(baselineComposer, tail)
+    ? normalizeWhitespace(baselineComposer).includes(tail)
     : false
   const startedAt = Date.now()
   return new Promise(resolve => {
     const tick = (): void => {
-      const composer = extractActiveClaudeComposer(getScreen() ?? '')
+      const composer = activeClaudeComposerText(getScreen() ?? '')
       const via = pasteAbsorbedVia(composer, tail, baseCount, tailAlreadyPresent)
       if (via) {
         resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via })

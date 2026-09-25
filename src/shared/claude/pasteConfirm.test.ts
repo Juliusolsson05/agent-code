@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  activeClaudeComposerText,
   extractActiveClaudeComposer,
   imagePlaceholderCount,
   pasteAbsorbedVia,
@@ -159,9 +160,9 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     const tail = pasteTailNeedle(prompt)
     const missed: number[] = []
     for (let cols = 20; cols <= 140; cols += 1) {
-      const baseline = extractActiveClaudeComposer(screenAt(cols, ''))
+      const baseline = activeClaudeComposerText(screenAt(cols, ''))
       const baseCount = placeholderCount(baseline)
-      const after = extractActiveClaudeComposer(screenAt(cols, prompt))
+      const after = activeClaudeComposerText(screenAt(cols, prompt))
       if (pasteAbsorbedVia(after, tail, baseCount, false) !== 'inline') missed.push(cols)
     }
     expect(missed).toEqual([])
@@ -172,7 +173,7 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     // receiving the paste shows its head, and must not confirm.
     const tail = pasteTailNeedle(prompt)
     for (const cols of [48, 94]) {
-      const partial = extractActiveClaudeComposer(screenAt(cols, prompt.slice(0, prompt.length - 30)))
+      const partial = activeClaudeComposerText(screenAt(cols, prompt.slice(0, prompt.length - 30)))
       expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
     }
   })
@@ -182,15 +183,15 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     // strip-everything cut also accepted MISSING whitespace, so `foo\nbar`
     // "landed" on a composer showing `foobar` and Enter was sent.
     const tail = pasteTailNeedle('foo\nbar')
-    expect(pasteAbsorbedVia(extractActiveClaudeComposer(screenAt(80, 'foobar')), tail, 0, false)).toBeNull()
-    expect(pasteAbsorbedVia(extractActiveClaudeComposer(screenAt(80, 'foo bar')), tail, 0, false)).toBe('inline')
+    expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(80, 'foobar')), tail, 0, false)).toBeNull()
+    expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(80, 'foo bar')), tail, 0, false)).toBe('inline')
   })
 
   it('does not confirm a pending paste on an unrelated recorded composer', () => {
     // Review round 1 (A), built from the recorded pair itself: the composer
     // shows `… opencode [Image` / `  #1]` for a DIFFERENT prompt, while the
     // pending payload is `opencode[\nImage#1]`. Stripped, the two were equal.
-    const recordedAfter = extractActiveClaudeComposer(fixture.deliveries.wrapped.after.screen)
+    const recordedAfter = activeClaudeComposerText(fixture.deliveries.wrapped.after.screen)
     const tail = pasteTailNeedle('opencode[\nImage#1]')
     expect(pasteAbsorbedVia(recordedAfter, tail, 0, false)).toBeNull()
   })
@@ -202,5 +203,24 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     const already = screenAt(48, prompt)
     const outcome = await pollPasteAbsorbed(() => already, already, prompt, { timeoutMs: 30, pollIntervalMs: 5 })
     expect(outcome).toEqual({ kind: 'timeout' })
+  })
+
+  it('does not confirm on an earlier part of the paste that has a space the tail lacks', () => {
+    // Review round 2 (A): the payload's first line `abcdefghijkl mnopqrstuvwx`
+    // has painted, and its real tail `abcdefghijklmnopqrstuvwx` has not. A
+    // matcher that let whitespace appear anywhere confirmed here and sent
+    // Enter before the tail arrived.
+    const t = 'abcdefghijklmnopqrstuvwx'
+    const tail = pasteTailNeedle(`abcdefghijkl mnopqrstuvwx\n${t}`)
+    const partial = activeClaudeComposerText(screenAt(80, 'abcdefghijkl mnopqrstuvwx'))
+    expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
+  })
+
+  it('does not read a soft-wrapped recorded pill as a tail without its space', () => {
+    // Review round 2 (A), on the recorded frame: `[Image` / `  #1]` is a soft
+    // wrap of `[Image #1]`, not `Image#1`.
+    const recorded = activeClaudeComposerText(fixture.deliveries.wrapped.after.screen)
+    expect(recorded).toContain('[Image #1]')
+    expect(pasteAbsorbedVia(recorded, pasteTailNeedle('Image#1\n'), 0, false)).toBeNull()
   })
 })
