@@ -342,6 +342,7 @@ The surface list below is B18's starting inventory.
 - Disposition table in the PR body: finding | verdict | disposition.
 
 ### 7.4 Merge gate (all must hold)
+- **Public final disposition** comment on the PR (tested head, green run, material fixes, caveats) and a PR body that describes the behaviour being merged, posted BEFORE `gh pr merge` (steering q35).
 1. CI green (`quality-gate` and `minimum-node-fixture-gate`).
 2. `origin/main` merged in shortly before that CI run; `mergeStateStatus` clean.
    Mechanical check right before merging: `git fetch origin && git merge-base
@@ -535,6 +536,12 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 ---
 
 ## 12. Progress log (newest first)
+
+- 2026-09-25 (13:15) — **#1301 merged (`54287d90`, closes #1276).** It went green first, so the queue order became #1301 before #1300. That was intentional; one merge per cycle holds either way.
+  - **Steering q35 (process):** #1301 merged without its public disposition, and its body described pre-review behaviour. Both were fixed after the merge; the disposition includes the confirmed `tMs` caveat. **The public disposition and an accurate body are now a pre-merge gate** (§7.4), alongside reviews, CI and current-main ancestry.
+  - **#1300:** remerged onto `54287d90`. Round-2 A's plan/body drift is fixed (focus race, not frame selection; product gap is #1307). The pre-merge disposition is posted, and a fresh gate is running on `6ae2738f`. It merges next on green.
+  - **#1310 final round:** A and C blocked on overcounted widths (🌡/🗓 text-presentation pictographs, U+200B). Fixed with narrow-by-default widths (`\p{Emoji_Presentation}`, `\p{Cf}` = 0), which also makes flags 2 cells. The unknown-width guard test was added. Disposition posted on `0690e66c`.
+  - **#369 is needs-evidence:** the counters and the completed-flow replay are done, but the corpus holds 0 `response.failed` or `response.incomplete` events (34 dumps, 702k chunks). All open P0/P1 issues now need evidence or the owner. **Next:** P2 by class, starting with #372 (C6, Codex proxy mirroring).
 
 - 2026-09-25 (12:45) — **Round-2 findings fixed and dispositioned (final round):**
   - **#1312:** a rejected /model delivery after Stop no longer counts the untouched agents as failed. The modal now pins Return's stop, Escape during /model, stops during later agents and the per-run reset.
