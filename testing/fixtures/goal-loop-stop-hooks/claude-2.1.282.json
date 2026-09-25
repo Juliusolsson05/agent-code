@@ -1,0 +1,79 @@
+{
+  "source": "Real Claude Code 2.1.282 Stop hook stdin, captured 2026-09-25 with a command Stop hook in a headless 'claude -p' run (issue #1138). Unedited.",
+  "nothingPending": {
+    "session_id": "036f78c9-2b46-4107-9503-fe8e10b3a250",
+    "transcript_path": "/Users/juliusolsson/.claude/projects/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/036f78c9-2b46-4107-9503-fe8e10b3a250.jsonl",
+    "cwd": "/private/tmp/claude-501/-Users-juliusolsson-Desktop-Development-agent-code/a5fb379b-24c3-417c-acfb-25e1c70be4d4/scratchpad/stop-capture",
+    "scratchpad_dir": "/private/tmp/claude-501/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/036f78c9-2b46-4107-9503-fe8e10b3a250/scratchpad",
+    "prompt_id": "1153857e-ef6d-436d-93df-8d46f6385eb9",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "ok",
+    "background_tasks": [],
+    "session_crons": []
+  },
+  "backgroundShellRunning": {
+    "session_id": "031fd17c-2431-4b1d-a34d-d9bbc10ccd7b",
+    "transcript_path": "/Users/juliusolsson/.claude/projects/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/031fd17c-2431-4b1d-a34d-d9bbc10ccd7b.jsonl",
+    "cwd": "/private/tmp/claude-501/-Users-juliusolsson-Desktop-Development-agent-code/a5fb379b-24c3-417c-acfb-25e1c70be4d4/scratchpad/stop-capture",
+    "scratchpad_dir": "/private/tmp/claude-501/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/031fd17c-2431-4b1d-a34d-d9bbc10ccd7b/scratchpad",
+    "prompt_id": "558b99df-b963-4a4f-9bbc-e7be44ee7b90",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "started.",
+    "background_tasks": [
+      {
+        "id": "bqitm2j9w",
+        "type": "shell",
+        "status": "running",
+        "description": "sleep 40 && echo done",
+        "command": "sleep 40 && echo done"
+      }
+    ],
+    "session_crons": []
+  },
+  "asyncSubagentRunning": {
+    "session_id": "c3ff8c42-c8c7-4bf3-9c6f-6c91621db498",
+    "transcript_path": "/Users/juliusolsson/.claude/projects/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/c3ff8c42-c8c7-4bf3-9c6f-6c91621db498.jsonl",
+    "cwd": "/private/tmp/claude-501/-Users-juliusolsson-Desktop-Development-agent-code/a5fb379b-24c3-417c-acfb-25e1c70be4d4/scratchpad/stop-capture",
+    "scratchpad_dir": "/private/tmp/claude-501/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/c3ff8c42-c8c7-4bf3-9c6f-6c91621db498/scratchpad",
+    "prompt_id": "834c5b2d-3122-4ade-abc7-c448e46ba474",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "launched",
+    "background_tasks": [
+      {
+        "id": "ada7e9a49d5464808",
+        "type": "subagent",
+        "status": "running",
+        "description": "sleep 45 then reply finished",
+        "agent_type": "general-purpose"
+      }
+    ],
+    "session_crons": []
+  },
+  "afterSubagentFinishedLeftoverShell": {
+    "session_id": "c3ff8c42-c8c7-4bf3-9c6f-6c91621db498",
+    "transcript_path": "/Users/juliusolsson/.claude/projects/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/c3ff8c42-c8c7-4bf3-9c6f-6c91621db498.jsonl",
+    "cwd": "/private/tmp/claude-501/-Users-juliusolsson-Desktop-Development-agent-code/a5fb379b-24c3-417c-acfb-25e1c70be4d4/scratchpad/stop-capture",
+    "scratchpad_dir": "/private/tmp/claude-501/-private-tmp-claude-501--Users-juliusolsson-Desktop-Development-agent-code-a5fb379b-24c3-417c-acfb-25e1c70be4d4-scratchpad-stop-capture/c3ff8c42-c8c7-4bf3-9c6f-6c91621db498/scratchpad",
+    "prompt_id": "a535933a-236e-4af2-a5c3-d3b83d2ae6a0",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "Background agent completed. Result: finished",
+    "background_tasks": [
+      {
+        "id": "bdrlgrwhd",
+        "type": "shell",
+        "status": "running",
+        "description": "Sleep for 45 seconds",
+        "command": "sleep 45"
+      }
+    ],
+    "session_crons": []
+  }
+}
