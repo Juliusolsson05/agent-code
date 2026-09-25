@@ -89,6 +89,9 @@ export class GoalLoopStore {
       let source: string
       let valid: Record<string, GoalLoopState>
       let setAside = 0
+      // Named in the warning (#1258 review B): a count alone left the user
+      // hand-diffing the preserved copy to learn WHICH loop vanished.
+      const setAsideIds: string[] = []
       try {
         if ((await stat(this.file)).size > MAX_FILE_BYTES) throw new Error('Goal Loop storage exceeds its size limit.')
         source = await readFile(this.file, 'utf8')
@@ -105,8 +108,9 @@ export class GoalLoopStore {
         valid = {}
         for (const [sessionId, loop] of Object.entries(loops)) {
           if (validLoop(loop)) valid[sessionId] = loop
-          else setAside++
+          else setAsideIds.push(sessionId)
         }
+        setAside = setAsideIds.length
         // The limit counts READABLE loops (#1258 review A): 200 good loops and
         // one this build cannot read are not an untrustworthy document.
         if (Object.keys(valid).length > GOAL_LOOP_STORE_LIMIT) {
@@ -142,7 +146,7 @@ export class GoalLoopStore {
           this.writesRefused = `${setAside} unreadable loop(s) could not be preserved (${String(copyError)})`
           throw new Error(`Goal Loop storage has unreadable loops that could not be preserved; writes are refused until it is fixed: ${String(copyError)}`)
         }
-        console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s); original preserved at ${copy}`)
+        console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s) (${setAsideIds.join(', ')}); original preserved at ${copy}`)
       }
       this.writesRefused = null
       return valid

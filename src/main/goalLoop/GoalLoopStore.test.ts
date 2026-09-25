@@ -110,4 +110,37 @@ describe('one unreadable loop in a real store (#1248)', () => {
     expect(Object.keys(await store.read())).toEqual(['s1'])
     expect(await preservedCopies(file)).toContain(source)
   })
+
+  // Review B: only `phase` was ever shown to be rejected. Each field's check
+  // matters on its own (a garbage budget or timestamp would reach the cap gate
+  // and the strip), so each is pinned: that loop is set aside, the other kept.
+  it.each([
+    ['pauseReason', { pauseReason: 'naptime' }],
+    ['endReason', { endReason: 'shrug' }],
+    ['sessionId', { sessionId: '' }],
+    ['goal', { goal: 5 }],
+    ['loopPrompt', { loopPrompt: null }],
+    ['completionSummary', { completionSummary: 7 }],
+    ['maxContinuations', { maxContinuations: 0 }],
+    ['continuationsDelivered', { continuationsDelivered: -1 }],
+    ['consecutiveDeliveryFailures', { consecutiveDeliveryFailures: 1.5 }],
+    ['startedAt', { startedAt: 'yesterday' }],
+    ['updatedAt', { updatedAt: 'soon' }],
+  ])('sets aside a loop whose %s is invalid', async (_field, damage) => {
+    const { store, file } = await makeStore()
+    await writeFile(file, JSON.stringify({ version: 1, loops: { good: loop({ sessionId: 'good' }), bad: { ...loop({ sessionId: 'bad' }), ...damage } } }))
+    expect(Object.keys(await store.read())).toEqual(['good'])
+  })
+
+  it.each([
+    ['a different version', { version: 2, loops: {} }],
+    ['loops as a list', { version: 1, loops: [] }],
+    ['loops as a string', { version: 1, loops: 'x' }],
+  ])('moves a malformed container aside: %s', async (_label, document) => {
+    const { store, file } = await makeStore()
+    const source = JSON.stringify(document)
+    await writeFile(file, source)
+    await expect(store.read()).rejects.toThrow('storage is invalid')
+    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
+  })
 })
