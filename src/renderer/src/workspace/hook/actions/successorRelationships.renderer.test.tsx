@@ -97,7 +97,7 @@ function setup(childMeta: Partial<SessionMeta> = CHILD) {
     refs.latestRuntimesRef.current = typeof update === 'function' ? update(refs.latestRuntimesRef.current) : update
   }
   const spawnSession = vi.fn(async (options: SessionSpawnOptions) => ({ sessionId: 'successor', providerSessionId: options.resumeSessionId }))
-  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []), controlGoalLoop: vi.fn(async () => null) }
+  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), controlGoalLoop: vi.fn(async () => null) }
   const hook = renderHook(() => useSessionActions(state, writer.setState, setRuntimes, refs))
   return { writer, hook }
 }

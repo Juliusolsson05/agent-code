@@ -25,7 +25,7 @@ it.each(['spawn', 'retirement'] as const)('retires an uncommittable successor wh
   const gate = new Promise<void>(resolve => { finish = resolve })
   const spawnSession = vi.fn(async () => { if (stage === 'spawn') await gate; return { sessionId: 'successor' } })
   const killOwnedSession = vi.fn(async ({ sessionId }: { sessionId: string }) => { if (sessionId === 'source' && stage === 'retirement') await gate; return true })
-  window.api = { ...originalApi, spawnSession, killOwnedSession, ghostRead: vi.fn(async () => []) }
+  window.api = { ...originalApi, spawnSession, killOwnedSession }
   const mounted = renderHook(() => useSessionActions(state, useAppStore.getState().setWorkspaceState, useAppStore.getState().setWorkspaceRuntimes, refs))
   let replacement: Promise<string | undefined>
   await act(async () => { replacement = mounted.result.current.replaceSession('/recorded/project', { targetSessionId: 'source', kind: 'claude', resumeSessionId: 'native-source' }); await Promise.resolve(); await Promise.resolve() })

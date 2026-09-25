@@ -12,7 +12,6 @@ import { fsApi } from '@preload/api/fs.js'
 import { debugApi } from '@preload/api/debug.js'
 import { systemApi } from '@preload/api/system.js'
 import { gitApi } from '@preload/api/git.js'
-import { ghostApi } from '@preload/api/ghost.js'
 import { performanceApi } from '@preload/api/performance.js'
 import { editorFsApi } from '@preload/api/editorFs.js'
 import { setupApi } from '@preload/api/setup.js'
@@ -82,7 +81,6 @@ export const api = {
   ...debugApi,
   ...systemApi,
   ...gitApi,
-  ...ghostApi,
   ...performanceApi,
   ...editorFsApi,
   ...setupApi,

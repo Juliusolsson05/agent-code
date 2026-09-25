@@ -35,7 +35,7 @@ describe('TLDR identity through real session actions', () => {
     const spawnSession = vi.fn(async (options: SessionSpawnOptions) => ({ sessionId: `replacement-${++sequence}`, providerSessionId: options.resumeSessionId }))
     const saved = { text: 'The original work is complete. PR #123 is merged.', revision: 1, updatedAt: '2026-09-11T00:00:00.000Z' }
     window.api = {
-      ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []),
+      ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true),
       rewindToPrompt: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl', promptText: 'Earlier prompt', promptTimestamp: null, promptMode: 'prompt' as const, promptImages: [], promptAttachments: [] })),
       stripCodexCyberPolicy: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl' })),
       readTldrs: vi.fn(async (ids: string[]): Promise<Record<string, TldrRecord>> => ids.includes('summary-source') ? { 'summary-source': saved } : {}),
@@ -95,7 +95,7 @@ describe('TLDR identity through real session actions', () => {
       refs.latestRuntimesRef.current = typeof next === 'function' ? next(refs.latestRuntimesRef.current) : next
     }
     const spawnSession = vi.fn(async (_options: SessionSpawnOptions) => ({ sessionId: 'successor' }))
-    window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []) }
+    window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true) }
     const hook = renderHook(() => useSessionActions(state, writer.setState, setRuntimes, refs))
     await act(async () => {
       await hook.result.current.replaceSession('/project', {

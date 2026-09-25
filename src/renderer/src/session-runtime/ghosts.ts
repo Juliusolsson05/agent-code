@@ -1,12 +1,13 @@
 // Renderer-side ghost reducer + the bridge between the live
-// semantic stream, the durable JSONL transcript, and disk
-// persistence.
+// semantic stream and the durable JSONL transcript. In memory only:
+// the on-disk ghost log was removed on 2026-09-25 (see
+// src/main/storage/legacyGhostLogs.ts for why).
 //
 // -----------------------------------------------------------------------------
 // What ghost is in Agent Code today
 // -----------------------------------------------------------------------------
 //
-// Ghost is a parallel disk-backed ledger of semantic events. As
+// Ghost is a parallel in-memory ledger of semantic events. As
 // the proxy stream emits events, this file mints provisional
 // `ClaudeEntry` records via atp's `createGhost`. When the
 // authoritative JSONL entry lands (Claude's batched 100 ms drain;
@@ -20,19 +21,13 @@
 // directly off `runtime.semantic.currentTurn` — NOT through
 // ghosts. So most ticks, the ghost map has no rendered output:
 // the work this file does is bookkeeping (mint, reconcile,
-// orphan, gc, persist) for two consumers:
-//
-//   1. `selectMergedEntries` (./mergedEntries.ts) — surfaces
-//      orphan ghosts ONLY when JSONL has stalled past the proxy
-//      (live-stuck mid-turn or resume-after-crash with partial
-//      JSONL). The layered predicate there has the full design
-//      rationale.
-//
-//   2. `ghostJournal.ts` (main process) — append-only JSONL log
-//      under <userData>/ghost-logs/<sessionId>.ghost.jsonl.
-//      Survives reload / restart so the JSONL-stuck case can
-//      recover the lost partial turn on resume via the bootstrap
-//      merge in src/renderer/src/workspace/hook/actions/session.ts.
+// orphan, gc) for one consumer: `selectMergedEntries`
+// (./mergedEntries.ts), which surfaces orphan ghosts ONLY when JSONL has
+// stalled past the proxy while the pane is live. The layered predicate
+// there has the full design rationale. Nothing survives a reload: a turn
+// the transcript never got is not in the agent's own resumed conversation
+// either, so showing it after a restart would imply knowledge the agent
+// does not have.
 //
 // -----------------------------------------------------------------------------
 // Provider-aware reconciliation
@@ -264,13 +259,9 @@ export function ghostsFromSemanticTurn(
   // Compaction-synthesis turns stream raw `<analysis>...</analysis>
   // <summary>...</summary>` XML that the renderer hides behind a
   // "Compacting conversation…" placeholder (StreamingTurn handles it,
-  // foldEvent propagates the flag — see PR #74). But the GHOST log
-  // is a separate, durable on-disk record under
-  // `<userData>/ghost-logs/` that exists so we can recover proxy
-  // content when the provider JSONL hangs behind. Without this
-  // short-circuit, every /compact run accumulates the raw XML in
-  // that JSONL — invisible in the UI, but it bloats the file and
-  // makes debug bundles harder to read.
+  // foldEvent propagates the flag — see PR #74). A ghost of it would be
+  // raw XML that no view wants: it bloats the ghost map and debug
+  // bundles, and would paint if JSONL stalled.
   //
   // We fail-closed: the predicate is `=== true`, so unknown/Codex
   // turns where the flag is undefined still flow through the normal
@@ -587,11 +578,11 @@ export function isGhostHiddenBehindJsonlTail(
  * fallback the ghost system exists for — they may still render and their
  * committed owners must stay protected. A null tail keeps everything.
  *
- * WHY a grace period: the orphan transition is what persists the ghost to
- * the on-disk log (`ghostsToPersist` diffs by `updatedAt`); waiting `gcMs`
- * after `orphanedAt` gives that append the same head start superseded ghosts
- * get before `gcSupersededGhosts` drops them. Nothing durable is lost — on
- * resume the ghost is reloaded, hidden by the same rule, and swept again.
+ * WHY a grace period: the same `gcMs` superseded ghosts get before
+ * `gcSupersededGhosts` drops them. It was introduced so the orphan
+ * transition could reach the on-disk ghost log first; that log is gone
+ * (2026-09-25), and the grace stays because it is harmless and keeps the
+ * two evictions on one clock.
  *
  * Reference-stable on no-op, like every other reducer in this file.
  */
@@ -615,39 +606,4 @@ export function gcHiddenOrphanGhosts(
     next.delete(uuid)
   }
   return next ?? (prev as Map<string, GhostEntry>)
-}
-
-// -----------------------------------------------------------------------------
-// Diff helper for persistence
-// -----------------------------------------------------------------------------
-
-/**
- * Return the ghosts that changed between `prev` and `next`.
- *
- * The ghost log on disk is append-only, and atp's `reduceGhostLog`
- * picks the freshest write per uuid. That means we only need to
- * persist ghosts whose `updatedAt` is newer than what disk already
- * has (or that disk has never seen). Snapshot diff by `updatedAt`
- * captures every meaningful transition:
- *   - new ghost created (prev missing)
- *   - content updated (updatedAt bumped)
- *   - superseded (updatedAt bumped by supersedeGhost)
- *   - orphaned (updatedAt bumped by orphanGhost)
- * without writing the whole map on every semantic tick.
- */
-export function ghostsToPersist(
-  prev: ReadonlyMap<string, GhostEntry>,
-  next: ReadonlyMap<string, GhostEntry>,
-): GhostEntry[] {
-  if (prev === next) return []
-  const out: GhostEntry[] = []
-  for (const [uuid, ghost] of next) {
-    const prior = prev.get(uuid)
-    if (!prior) {
-      out.push(ghost)
-      continue
-    }
-    if (prior._atp.updatedAt !== ghost._atp.updatedAt) out.push(ghost)
-  }
-  return out
 }
