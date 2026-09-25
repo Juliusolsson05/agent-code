@@ -239,6 +239,12 @@ What the build decided that the plan did not say, or said differently.
     first poll.
   - One sink throwing no longer costs the other sinks their delivery. The
     error is re-thrown on a microtask so it still surfaces.
+  - Of the two newly relayed channels, the phone store consumes
+    `transcript-diagnostic` (added during review; see "Review round" below).
+    `provider-session-changed` is relayed but NOT consumed: the phone follows
+    a provider-session switch through its transcript roll detection and the
+    history-boundary reset, and the event's desktop job (rebinding the pane's
+    durable identity) has no phone counterpart.
 - **Stage 2.**
   - Failure is a rejected promise on both transports. That kept the desktop's
     error paths unchanged; the phone store folds the rejection back into a
@@ -305,3 +311,34 @@ What the build decided that the plan did not say, or said differently.
   `ProviderEnablementRow` show up on some local runs, and the same happens on
   an untouched `main` checkout. The final full `npm run check` after merging
   `origin/main` passed with no failures.
+
+## Review round (PR #1186)
+
+Two reviewers, one Claude and one Codex, reviewed the branch read-only. Each
+finding was verified against the code before acting on it. What changed:
+
+- **A throwing tap sink crashed the app.**
+  - The tap re-raised a sink's throw on a microtask, which main's crash hooks
+    treat as fatal. It now re-raises synchronously after every sink has had
+    the event.
+  - The failure therefore lands where a throwing listener's always did: back
+    in `SessionManager.emit`'s caller for a direct event, and in the timer
+    callback for a coalescer flush.
+- **The ledger cache ignored its new `policy` input.** The policy is now part
+  of the cache comparison. It was latent, since each provider's policy object
+  is stable.
+- **The phone never consumed `transcript-diagnostic`.**
+  - A recovered Pi bridge or late OpenCode Terminal server kept its failure on
+    the phone forever.
+  - The desktop's recovery rule moved into
+    `session-runtime/liveChannelRecovery.ts`, and both clients apply it.
+- **An exited session could seed a phone with a stale sub-agent fleet.** The
+  tap drops the fleet seed on `exit`, as the remote server's cache already
+  did.
+- **The parity test was weaker than described.** It compared only committed
+  rows through shared helpers. It now also replays recordings with
+  interleaved semantic and committed events through the replay fold and the
+  phone store, and compares the ledger rows both produce. Its header states
+  what it can and cannot catch.
+- **Stale `registry.renderer.ts` entries** were removed from both tsconfigs.
+
