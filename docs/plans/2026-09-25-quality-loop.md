@@ -1,15 +1,15 @@
 # Quality loop: make Agent Code feel finished, end to end
 
-> **Status:** PLAN, Stage 0 in progress (2026-09-25). This file is the
+> **Status:** RUNNING (goal loop started 2026-09-25). Stage 0 finishing. This file is the
 > contract and the living ledger for a long-running goal loop. Branch
 > `docs/quality-loop`, worktree `.worktrees/quality-loop`. Update it in the
 > same iteration that changes reality (commit and push), and re-read it after
 > every context compaction. If it disagrees with GitHub, GitHub wins: re-verify
 > and fix this file.
 >
-> **Decisions marked UNCONFIRMED** were proposed with a default and not yet
-> answered by the owner. The loop runs on the default and the mark stays until
-> the owner confirms or changes it.
+> **Decisions:** the owner asked for my recommendation on each and then said
+> "start the main loops" (2026-09-25), so the recommended defaults in section 5
+> are ACCEPTED. The owner can still change any of them.
 
 ---
 
@@ -176,22 +176,22 @@ Proposed, running on the default until answered:
 
 | # | Decision | Default | Why | Alternatives | State |
 |---|---|---|---|---|---|
-| 1 | May the loop look at the running app for UX bugs? | **No.** Keep "never launch the app": audit UX from source (tokens, empty/error/loading states, keyboard paths) and batch a visual checklist for the owner | Standing owner rule | (b) dev instance with its own state dir, driven by screenshots; (c) owner does all visual QA | UNCONFIRMED |
-| 2 | Repos in scope | **agent-code plus the owned submodule packages** (package PR, then bump PR, both through the pipeline) | Most C1 bugs live in the headless packages | agent-code only | UNCONFIRMED |
-| 3 | What round 2 is | **Only if round 1 had valid findings: the same reviewers verify the fix commits.** New non-blocking findings become issues. Never a round 3 | Matches the owner's cap without restarting review | full re-review | UNCONFIRMED |
-| 4 | Merge gate | Section 7.4 | | | UNCONFIRMED |
-| 5 | What waits for the owner (`needs-owner`) | **Workspace-file migrations, release/signing workflows, security or trust-boundary changes, removing or changing a feature's behaviour, and UX changes that are product calls** | These are the calls a reviewer cannot make | fewer categories | UNCONFIRMED |
-| 6 | New features | **Frozen.** Bugs, UX polish and missing states only; feature ideas become issues | Quality is the goal | allow small features | UNCONFIRMED |
-| 7 | Other agents' work | **Only the loop's own issues, PRs and worktrees.** Claim with a label and comment; never prompt or edit another agent's work | Many agents run in parallel | | UNCONFIRMED |
-| 8 | Reviewer failure | **No activity after 30 min: replace with a Codex reviewer on the same brief.** If Pi fails twice on one PR, proceed with two Codex reviewers and record it | Known stalls | | UNCONFIRMED |
-| 9 | Budget and pacing | **≤3 hunters at once; ≤2 PRs in review at once** (≤6 children plus me); **200 continuations**, then report and restart | Credits | | UNCONFIRMED |
-| 10 | Definition of done | Section 1 | | | UNCONFIRMED |
-| 11 | Testing standard | Section 8 (the 2026-09-19 standard) | Proven last loop | | UNCONFIRMED |
-| 12 | Label taxonomy | **`type:` (bug, ux, perf, feature, chore), `class:` (C1–C9), `area:`, `provider:` (exists), `sev:` (P0–P3), plus `needs-owner`, `needs-evidence`, `loop:claimed`** | Filterable backlog | `sev:` + `class:` only | UNCONFIRMED |
-| 13 | Closing authority during the audit | **Close on its own, only with cited evidence and a comment.** Uncertain → `needs-owner`, never closed | Speed; reopening is one click | owner approves a batch | UNCONFIRMED |
-| 14 | Rewriting issue bodies | **Edit into the template (section 6.3) and keep the original text folded under "Original report"** | The vague title/body is what people read first | comment only | UNCONFIRMED |
-| 15 | Where tracking lives | **Labels hold state; this file holds reasoning and evidence.** No project board | Nobody maintains a board | GitHub Project | UNCONFIRMED |
-| 16 | Structured OpenCode | **Keep; #1205 after the bug work** | Both runtimes ship | park it and invest in OpenCode Terminal only | UNCONFIRMED |
+| 1 | May the loop look at the running app for UX bugs? | **No.** Keep "never launch the app": audit UX from source (tokens, empty/error/loading states, keyboard paths) and batch a visual checklist for the owner | Standing owner rule | (b) dev instance with its own state dir, driven by screenshots; (c) owner does all visual QA | accepted |
+| 2 | Repos in scope | **agent-code plus the owned submodule packages** (package PR, then bump PR, both through the pipeline) | Most C1 bugs live in the headless packages | agent-code only | accepted |
+| 3 | What round 2 is | **Only if round 1 had valid findings: the same reviewers verify the fix commits.** New non-blocking findings become issues. Never a round 3 | Matches the owner's cap without restarting review | full re-review | accepted |
+| 4 | Merge gate | Section 7.4 | | | accepted |
+| 5 | What waits for the owner (`needs-owner`) | **Workspace-file migrations, release/signing workflows, security or trust-boundary changes, removing or changing a feature's behaviour, and UX changes that are product calls** | These are the calls a reviewer cannot make | fewer categories | accepted |
+| 6 | New features | **Frozen.** Bugs, UX polish and missing states only; feature ideas become issues | Quality is the goal | allow small features | accepted |
+| 7 | Other agents' work | **Only the loop's own issues, PRs and worktrees.** Claim with a label and comment; never prompt or edit another agent's work | Many agents run in parallel | | accepted |
+| 8 | Reviewer failure | **No activity after 30 min: replace with a Codex reviewer on the same brief.** If Pi fails twice on one PR, proceed with two Codex reviewers and record it | Known stalls | | accepted |
+| 9 | Budget and pacing | **≤3 hunters at once; ≤2 PRs in review at once** (≤6 children plus me); **200 continuations**, then report and restart | Credits | | accepted |
+| 10 | Definition of done | Section 1 | | | accepted |
+| 11 | Testing standard | Section 8 (the 2026-09-19 standard) | Proven last loop | | accepted |
+| 12 | Label taxonomy | **`type:` (bug, ux, perf, feature, chore), `class:` (C1–C9), `area:`, `provider:` (exists), `sev:` (P0–P3), plus `needs-owner`, `needs-evidence`, `loop:claimed`** | Filterable backlog | `sev:` + `class:` only | accepted |
+| 13 | Closing authority during the audit | **Close on its own, only with cited evidence and a comment.** Uncertain → `needs-owner`, never closed | Speed; reopening is one click | owner approves a batch | accepted |
+| 14 | Rewriting issue bodies | **Edit into the template (section 6.3) and keep the original text folded under "Original report"** | The vague title/body is what people read first | comment only | accepted |
+| 15 | Where tracking lives | **Labels hold state; this file holds reasoning and evidence.** No project board | Nobody maintains a board | GitHub Project | accepted |
+| 16 | Structured OpenCode | **Keep; #1205 after the bug work** | Both runtimes ship | park it and invest in OpenCode Terminal only | accepted |
 | 17 | workflow-mcp shared deps | **Peer dependencies (#1202)** | Removes the two-copies trap | lockstep pins | chosen under D-D |
 
 ---
@@ -260,7 +260,28 @@ except that fixes for P0 bugs found in any stage start immediately.
   and issues filed; a second sweep of the same class after its fixes land.
 - **Why separate:** hunts produce the backlog Stage 2 consumes; mixing them loses findings.
 
-### Stage 4: UI/UX sweep
+### Stage 4: UI/UX sweep — DELEGATED to B18 (keyboard-first loop)
+
+**Owner, 2026-09-25:** a dedicated agent (B18, session
+`86a1511a-06fc-47de-9837-31e94a2930b5`) runs its own very long loop with ONE
+PR (`feat/keyboard-first-ui`). The app becomes fully keyboard-operable, with
+compact, clear labels on every modal and operation, and every UI surface gets
+the spacing and consistency pass below. Its brief is
+`temp/keyboard-loop/BRIEF.md`. The owner reviews that PR personally; B18
+never merges it.
+
+Division of work:
+- **B18 owns** keyboard access, labels, focus, and visual consistency.
+- **This loop owns** functional bugs. C4 (input traps) sits in both; B18 owns
+  its keyboard side.
+- B18 files non-UX bugs as issues, and this loop picks them up in Stage 2.
+
+Second opinions go both ways, sparingly. **Each iteration of this loop checks
+B18's activity** (`agent_management_list_agents` / `read_agent`). If B18 has
+been idle for more than 30 minutes without a finished loop or a question to
+the owner, nudge it with a one-line prompt pointing back at its brief.
+
+The surface list below is B18's starting inventory.
 - **Produces:** fixes for inconsistencies and missing states; a batched visual
   checklist for the owner (decision 1).
 - **Surfaces:** composer and queue strip; feed and Reader Mode; condition modals
@@ -353,7 +374,10 @@ PR fully fixed but did not name, and update this ledger.
   > CI and reviewer children you started. Take the first unfinished item in
   > stage order. Follow the pipeline in section 7 and the testing standard in
   > section 8. Update the ledger and progress log in the same iteration and push.
-  > Never prompt or edit other agents' work. Call `goal_loop_complete` only when
+  > Never edit other agents' work. The one exception: check on B18 (the
+  > keyboard-first loop, session 86a1511a-06fc-47de-9837-31e94a2930b5) every
+  > iteration and nudge it if it has stalled for 30+ minutes; answer its
+  > second-opinion questions briefly. Call `goal_loop_complete` only when
   > every item in section 1 holds, or with `blocked` when only owner items remain.
 - Each iteration does one unit of work (an audit batch, a PR step, a hunt) and
   appends a line to the progress log (section 12).
@@ -363,7 +387,7 @@ PR fully fixed but did not name, and update this ledger.
 
 ## 10. Owner-only items (collected; asked once)
 
-- Decisions 1–16 in section 5 (currently running on defaults).
+- B18's keyboard-first PR (the owner merges it).
 - #1199: should v3 have a parked-note surface?
 - #1160: confirm the "harness orchestrator" positioning once it is live.
 - Batched visual checklist from Stage 4.
@@ -380,6 +404,10 @@ _Empty until Stage 1 starts. One row per issue:_
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — Owner accepted the recommended decisions and started the loops.
+  Stage 4 is delegated to B18 (keyboard-first, one PR, owner merges). Merged
+  #1195, #1111, #1106; #1108 has all review findings fixed (the Pi round
+  added a close test) and is waiting on CI; #1160 re-merged main.
 - 2026-09-25 — Plan written. Stage 0: merged #1159, #1167, #1110; closed #1121,
   #1141, #987, #575; reopened #711; opened #1195; archived the release ledger in
   #1106; resolved #1160; #1111 two review rounds MERGE-READY; #1108 two Codex
