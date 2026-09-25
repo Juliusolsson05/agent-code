@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-import type { SlashPickerState } from '@renderer/workspace/workspaceStore'
+import type { SlashPickerState } from '@shared/sessionFeed/types'
 
 // SlashCommandPicker — React rendering of the slash command dropdown.
 //
