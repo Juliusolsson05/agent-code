@@ -149,4 +149,17 @@ describe('a superseded ghost of the still-current turn (#730)', () => {
     const ticked = ghostsFromSemanticTurn(streamedOn, SESSION, reconciled)
     expect(ticked.get(minted.uuid)).toBe(before)
   })
+
+  it('orphans on the orphan TTL, not the superseded-GC grace (#1228 review)', () => {
+    // The composed tick takes two timings; swapping them orphans a live
+    // ghost after 5 s instead of 30. A ghost 10 s quiet must still be live.
+    vi.useFakeTimers({ now: minted._atp.createdAt })
+    const live = ghostsFromSemanticTurn(liveTurn, SESSION, new Map())
+    const now = minted._atp.createdAt + 10_000
+    const swept = sweepGhosts({ ghosts: live, lastJsonlEntryAt: null, semantic: { currentTurn: null } }, now, { orphanTtlMs: 30_000, gcMs: GC_MS })
+    expect(swept.get(minted.uuid)?._atp.orphanedAt).toBeUndefined()
+    const later = minted._atp.createdAt + 31_000
+    expect(sweepGhosts({ ghosts: live, lastJsonlEntryAt: null, semantic: { currentTurn: null } }, later, { orphanTtlMs: 30_000, gcMs: GC_MS })
+      .get(minted.uuid)?._atp.orphanedAt).toBe(later)
+  })
 })
