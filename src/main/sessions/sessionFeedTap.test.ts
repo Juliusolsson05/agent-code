@@ -2,8 +2,18 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionManager } from '@main/sessionManager.js'
 
-// The sub-agent watcher polls real directories; nothing here is about fleets.
-vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
+// The sub-agent watcher polls real directories. The stand-in keeps only the
+// tap's emit callback, so a test can play a fleet change the way the real
+// watcher would report one.
+const watcher = vi.hoisted(() => ({ emit: null as null | ((sessionId: string, map: Record<string, unknown>) => void) }))
+vi.mock('@main/subagents/index.js', () => ({
+  SubAgentWatcherManager: class {
+    constructor(emit: (sessionId: string, map: Record<string, unknown>) => void) { watcher.emit = emit }
+    observeParentEntry() {}
+    stop() {}
+    stopAll() {}
+  },
+}))
 
 import { SessionFeedTap } from './sessionFeedTap.js'
 import type { SessionFeedTapChannel } from './sessionFeedTap.js'
@@ -90,23 +100,31 @@ describe('SessionFeedTap', () => {
     expect(remote).toEqual(expected)
   })
 
-  it('keeps a throwing sink from costing another sink its delivery', async () => {
+  it('keeps a throwing sink from costing another sink its delivery, and raises where a listener would', () => {
     // One coalescer flush fans out to every sink in one loop. A remote failure
-    // must not strand the desktop's copy, and must still surface, not vanish.
+    // must not strand the desktop's copy, and it must surface where a
+    // throwing EventEmitter listener always did — synchronously, back to the
+    // emitter's caller — not as an uncaught exception, which main's crash
+    // hooks treat as fatal.
     const { manager, tap } = makeTap()
-    const failures: unknown[] = []
-    const onUncaught = (error: unknown) => failures.push(error)
-    process.prependListener('uncaughtException', onUncaught)
-    try {
-      tap.addSink(() => { throw new Error('socket gone') })
-      const desktop = record(tap)
-      manager.emit('conditions', { sessionId: 'pane', snapshot: { provider: 'claude', conditions: {} } as never })
-      expect(desktop.map(e => e.channel)).toEqual(['conditions'])
-      await new Promise(resolve => setImmediate(resolve))
-      expect(failures).toEqual([expect.objectContaining({ message: 'socket gone' })])
-    } finally {
-      process.off('uncaughtException', onUncaught)
-    }
+    tap.addSink(() => { throw new Error('socket gone') })
+    const desktop = record(tap)
+    expect(() =>
+      manager.emit('conditions', { sessionId: 'pane', snapshot: { provider: 'claude', conditions: {} } as never }),
+    ).toThrow('socket gone')
+    expect(desktop.map(e => e.channel)).toEqual(['conditions'])
+  })
+
+  it('seeds a late sink with the live fleet, but never with an exited session\'s', () => {
+    // The shared watcher emits only on change, so a sink attached later (the
+    // phone, enabled after agents started) is primed from the tap's snapshot.
+    // A dead process owns no live fleet: the remote server's cache drops its
+    // copy on exit, and a seed that outlived it showed a stale fleet.
+    const { manager, tap } = makeTap()
+    watcher.emit!('pane', { child: { status: 'running' } })
+    expect(tap.getSubAgentsSnapshot('pane')?.subAgents).toEqual({ child: { status: 'running' } })
+    manager.emit('exit', { sessionId: 'pane', exitCode: 0 })
+    expect(tap.getSubAgentsSnapshot('pane')).toBeNull()
   })
 
   // Moved from the deleted jsonlCoalescer.test.ts: the burst buffer is tap

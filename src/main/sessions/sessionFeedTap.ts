@@ -271,7 +271,16 @@ export class SessionFeedTap {
       // ownership describes views, not live processes, so it is not the
       // tap's business at all.
     })
-    on('exit', payload => this.emit('exit', payload))
+    on('exit', payload => {
+      // A dead process owns no live fleet. RemoteServer's late-joiner cache
+      // drops its copy on exit, so the tap's seed must too: otherwise a phone
+      // that connects after the agent exited (pane still open) is primed with
+      // the last fleet, members possibly still shown running (PR #1186
+      // review). A fleet update the still-running watcher emits after this is
+      // live truth and re-seeds normally.
+      this.lastSubAgents.delete(payload.sessionId)
+      this.emit('exit', payload)
+    })
   }
 
   /**
@@ -423,17 +432,21 @@ export class SessionFeedTap {
       // belonged to the forwarder alone. Now a coalescer flush fans out to
       // every sink inside one loop, so an unguarded throw from the remote
       // sink would abort the loop and strand the desktop's remaining
-      // sessions. The error is re-raised on a microtask instead of being
-      // swallowed: failures stay as loud (uncaught in main) as they were.
+      // sessions.
       try {
         registration.sink(channel, payload)
       } catch (error) {
         failure ??= { error }
       }
     }
-    if (failure) {
-      const { error } = failure
-      queueMicrotask(() => { throw error })
-    }
+    // Re-raised SYNCHRONOUSLY, after every sink has had the event, so the
+    // failure lands exactly where a throwing listener's always did: back in
+    // SessionManager.emit's caller for a direct event (a spawn path's own
+    // error handling sees it), and in the timer callback for a coalescer
+    // flush. A first version re-raised on a microtask, which turned every
+    // sink bug into an uncaughtException — and main's crash hooks exit the
+    // process on those (PR #1186 review). Only the FIRST failure is raised;
+    // a second sink failing on the same event is the same incident.
+    if (failure) throw failure.error
   }
 }
