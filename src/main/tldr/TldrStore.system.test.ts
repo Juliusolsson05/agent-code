@@ -462,6 +462,49 @@ describe('one invalid record in a real store (#1247)', () => {
     expect(await store.read(['toString', 'constructor'])).toEqual({})
   })
 
+  it('leaves an unreadable history file untouched rather than replacing it (round 2)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    await store.update('agent-1', 'Second.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const before = await readFile(path, 'utf8')
+    await chmod(path, 0o000)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // The report itself still succeeds; only its history row is skipped.
+      expect((await store.update('agent-1', 'Third.', () => true)).text).toBe('Third.')
+    } finally {
+      warn.mockRestore()
+      await chmod(path, 0o600)
+    }
+    expect(await readFile(path, 'utf8')).toBe(before)
+  })
+
+  it('moves an oversized history aside without loading it (round 2)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const oversized = 'x'.repeat(600 * 1024)
+    await writeFile(join(historyDirectory, name!), oversized)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await store.update('agent-1', 'Second.', () => true)
+    } finally {
+      warn.mockRestore()
+    }
+    const aside = (await readdir(historyDirectory)).filter(entry => entry.includes('.invalid-oversize-'))
+    expect(aside).toHaveLength(1)
+    expect(await readFile(join(historyDirectory, aside[0]!), 'utf8')).toBe(oversized)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Second.'])
+  })
+
   it('still refuses a malformed document container, which a write would destroy whole', async () => {
     const { file, source } = await storeWith('tldr.json', { version: 2, records: realRecords.tldr.records })
     await expect(new TldrStore(file).read([realRecords.atLimit])).rejects.toThrow('storage is invalid')

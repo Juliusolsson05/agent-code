@@ -219,8 +219,19 @@ export class TldrStore extends EventEmitter {
     // validates is carried forward.
     const previous = existed
       ? await this.readHistory(identity).catch(async () => {
-        const raw = await readFile(path, 'utf8').catch(() => null)
-        if (raw === null) return []
+        // Too large to load safely: move it aside whole instead of reading it
+        // (#1257 round 2; the reader's own size cap must hold here too).
+        if ((await stat(path)).size > MAX_HISTORY_FILE_BYTES) {
+          const aside = `${path}.invalid-oversize-${randomUUID()}`
+          await rename(path, aside)
+          console.warn(`[${this.label.toLowerCase()}] history for one identity was over its size limit; moved aside to ${aside}`)
+          return []
+        }
+        // If even the raw read fails, do NOT carry on as if it were empty:
+        // the rename below would replace a file nobody could copy (#1257
+        // round 2). The throw leaves it untouched; the caller already treats a
+        // history failure as non-fatal to the report itself.
+        const raw = await readFile(path, 'utf8')
         // No `.json` extension: history eviction counts and deletes every
         // `*.json` in this directory, and preserved evidence is neither.
         const copy = await preserveBytes(`${path}.invalid`, raw, '')
