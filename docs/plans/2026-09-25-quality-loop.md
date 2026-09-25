@@ -536,6 +536,29 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (03:40) — **#1237 merged** (`77beed18`, closes #877). Round 2 is MERGE
+  on #1236, #1238 (+ codex-headless #52) and #1252. Two-round residuals fixed in
+  the same PRs:
+  - #1236: leases are now keyed to the document (a per-load preload id), not to
+    `did-start-navigation`, which Chromium fires before the throttle where the
+    app blocks `will-navigate`, so a blocked link click froze debug panels.
+    Mutants J, A and E are pinned. Filed #1253 (picker colour-only selection,
+    pre-existing).
+  - #1238/#52: the proxy leaked the upstream body and socket for every exchange
+    the client closed after `response.completed` (16 of 30 recorded); fixed in
+    the proxy. Single transport terminal pinned; filed #1255 (no idle after a
+    mid-stream end).
+  - #1252: raw provider error text removed from panes (shared
+    `SESSION_START_FAILED_MESSAGE`); a failed process outranks transcript
+    states; no timer on failed panes.
+  - **#1254 opened for #1240** under steering q12–q14. Recovery keeps
+    idempotency: a torn tail resumes fully; other damage blocks keyed intents
+    where lost rows could hold their key; the block derives from the preserved
+    evidence and clears only by naming its digest. Plan commits `8be3658b`,
+    `4ea65889`. Reviewers: Grok (A) and Pi (B).
+  - Merges waiting only on CI: #1236, #1252; #1238 waits for #52's merge and a
+    submodule bump.
+
 - 2026-09-25 (midday):
   - **Merged:** #1229 (Fixes #1117; package PR opencode-terminal-headless#9 merged first), #1234 (Fixes #678), #1235 (Fixes #731; the on-disk ghost log is removed).
   - **GATE MISS (steering q11):**
