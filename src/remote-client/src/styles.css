@@ -53,6 +53,52 @@
   --ok: var(--theme-accent, #88c0d0);
 }
 
+/* ---------- The phone's symbol face (#1194) ----------
+ *
+ * WHY: the feed rows the phone mounts are the desktop's, and they draw app
+ * symbols carrying the Unicode Emoji property — the ⏺ bullet on every Claude
+ * row, ⏸, ☑/☐, 🖼, ↗, ↩. The coding faces lack them. On macOS the browser's
+ * last resort is a monochrome system symbol font, so the desktop never showed
+ * the problem; iOS Safari's is Apple Color Emoji, so the phone kept painting
+ * color emoji however many emoji were replaced in its own chrome (5ad922cf
+ * swapped the CHROME to SVG and never reached the rows).
+ *
+ * WHY this shape, after review of #1196 rejected an app-wide font stack:
+ *   - SELF-HOSTED: bundled into the phone build (served by RemoteServer), so it
+ *     works when Google Fonts is unreachable — the previous attempt relied on
+ *     the CDN and silently fell back to emoji without it.
+ *   - FIRST in the stack (see phoneSymbolFont.ts): WebKit expands ui-monospace
+ *     into a system cascade that reaches Apple Color Emoji before any later
+ *     face, so a face placed after it cannot win.
+ *   - SCOPED by unicode-range to exactly the app's own symbols: every other
+ *     character — including emoji an agent writes (⭐ 👍 ⏳ 🟢) — never matches
+ *     this face and keeps its normal color rendering. A general symbol font
+ *     first in the stack turned those monochrome.
+ *   - PHONE ONLY: the desktop has no bug and keeps its glyphs.
+ *   - font-display: block — the files are ~1 KB and local; swapping would
+ *     flash the very emoji this removes.
+ *
+ * The files are glyph subsets of OFL fonts (see assets/fonts/OFL.txt), made
+ * with fontTools:
+ *   pyftsubset NotoSansSymbols2-Regular.ttf --unicodes=U+23F8,U+23FA,U+2610,U+2611,U+1F5BC \
+ *     --flavor=woff2 --layout-features='' --no-hinting --desubroutinize --output-file=agent-code-symbols-a.woff2
+ *   pyftsubset NotoSansMath-Regular.ttf --unicodes=U+2197,U+21A9 \
+ *     --flavor=woff2 --layout-features='' --no-hinting --desubroutinize --output-file=agent-code-symbols-b.woff2
+ * A new Emoji-property symbol in a row the phone renders must be added to a
+ * subset AND its unicode-range; phoneSymbolFont.test.ts fails until it is. */
+@font-face {
+  font-family: 'Agent Code Symbols';
+  src: url('./assets/fonts/agent-code-symbols-a.woff2') format('woff2');
+  unicode-range: U+23F8, U+23FA, U+2610-2611, U+1F5BC;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Agent Code Symbols';
+  src: url('./assets/fonts/agent-code-symbols-b.woff2') format('woff2');
+  unicode-range: U+2197, U+21A9;
+  font-display: block;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body, #root {
