@@ -395,6 +395,19 @@ PR fully fixed but did not name, and update this ledger.
 ## 10. Owner-only items (collected; asked once)
 
 - B18's keyboard-first PR (the owner merges it).
+- **Issues labelled `needs-owner` by the audit** (one line each; the loop does
+  not touch them until answered):
+  - #1157 When can extensions require host 0.10.0 (drop the `init.method` alias)?
+  - #1098 Two launches racing a stale lock: build the `.break` breaker, or accept the residual?
+  - #1031 item 1: should the phone list hibernated agents and wake one?
+  - #944 Does the performance qualification run block a release?
+  - #766 Replace the raw PTY replay with a serialized screen, or close as moot?
+  - #739 Smart resume (attention score + preview): still wanted, or delivered by #899?
+  - #1199 Should v3 get a parked-note surface for buried panes?
+  - #115 A secrets-only log sanitizer at the write/export boundary, or close?
+  - #103 Close the "general optimization" umbrella in favour of its children?
+  - #102 Typed logger / console consolidation: steps 1-2 only, or close?
+  - #97 Is the current pin behaviour still wrong (and what should pin do), or close?
 - #1199: should v3 have a parked-note surface?
 - #1160: confirm the "harness orchestrator" positioning once it is live.
 - Batched visual checklist from Stage 4.
