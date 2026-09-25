@@ -536,6 +536,22 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (09:35) — **Merged #1265** (`9bb035c2`, closes #1243).
+  - **All Stage 3 hunts are done.** C7 filed #1302–#1306, all P3.
+  - **New P1 #1299:** dictation kept the mic open 32.8 h (Deepgram streamed for 6.8 h). There is no max duration and no silence stop. The defaults are an owner call.
+  - **New PRs:**
+    - #1300 fixes the #1261 extension CI race. Steering q28 required 3 reviewers; they are Codex, Pi and Grok.
+    - #1301 fixes #1276, the dictation journal cap. It has 3 reviewers.
+  - **Round-1 fixes pushed:**
+    - #1286 (q22 flattened at the `sessionSpawnErrorMessage` source; keybind gate follows the mounted overlay; latch generation);
+    - #1287 (no carry for `newConversation` or a successor without `goal_loop`);
+    - #1297 (the keyboard ignores stale rows while a new scope loads);
+    - #1298 (output hash, faithful fixture, marker parity);
+    - #1300 (a `focusFrame` wait; product gap filed as #1307).
+  - **#1284 round 2 fix:** the sidecar invariant is now "newest body not in the log", which covers bodies over the per-body cap. Zero budget cleans up at load.
+  - Every open PR was re-merged with main. Only `pull_request` runs are cancelled from now on.
+  - **Review quorum (q28):** new PRs get 3 reviewers. PRs opened before q28 keep their 2-reviewer rounds, which steering accepted then.
+
 - 2026-09-25 (08:40) — **Merged #1262** (`0198af02`, closes #1241).
   - **Stage 3 hunts done: C1, C2, C3, C4, C5, C6, C8, C9.** Only C7 (new-feature clusters) and the second sweeps remain. Findings files are `temp/quality-loop/hunt-c{1,8,9}.md`.
     - C1 filed #1291–#1294. #1291 has journal evidence: 4 of 5 rollbacks are `rollback-exhausted`.
