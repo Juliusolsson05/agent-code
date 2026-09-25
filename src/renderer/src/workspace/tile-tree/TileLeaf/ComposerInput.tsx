@@ -59,6 +59,7 @@ export function ComposerInput({
   onResolveUncertainDelivery,
   providerSwitchMessage = null,
   providerSwitchPhase = null,
+  locked = false,
 }: {
   sessionId: SessionId
   inputRef: MutableRefObject<HTMLTextAreaElement | null>
@@ -92,6 +93,19 @@ export function ComposerInput({
   /** Which step of the provider-switch machinery owns the pane right now. See
    *  the banner below for why the lock sentence depends on it. */
   providerSwitchPhase?: ProviderSwitchRuntimeState['phase'] | null
+  /**
+   * True while a prompt is sending (#1181). The prompt has already moved into
+   * the feed as a pending row, so the composer is read-only until the provider
+   * accepts or rejects it. Optional and off by default because this component
+   * is shared with the phone client, whose send flow has no pending row.
+   *
+   * WHY `readOnly` and not `disabled` (which the provider-switch lock uses):
+   * a disabled textarea drops DOM focus and stops receiving key events. The
+   * user expects to keep typing into the same box the moment the send settles,
+   * and Escape / Ctrl+C must still reach the agent while it is locked. The
+   * key handler (useComposerKeybinds) enforces the rest of the lock.
+   */
+  locked?: boolean
 }) {
   const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
   const showDictationActivity = dictation.enabled && dictation.busy
@@ -223,6 +237,7 @@ export function ComposerInput({
           className={`rounded-control
             w-full bg-canvas border
             ${focused ? 'border-accent' : 'border-border'}
+            ${locked ? 'opacity-60 cursor-default' : ''}
             text-ink text-[12px]
             pl-6 ${showDictationActivity ? 'pr-16' : 'pr-2'} py-2 outline-none
             placeholder:text-muted
@@ -239,6 +254,8 @@ export function ComposerInput({
           data-composer-input={sessionId}
           value={input}
           disabled={providerSwitchMessage !== null}
+          readOnly={locked}
+          aria-busy={locked || undefined}
           onChange={e => {
             onUserEngagement()
             // In slash mode we manage the value ourselves via
@@ -268,6 +285,12 @@ export function ComposerInput({
           }}
           onKeyDown={onKeyDown}
           onPaste={e => {
+            // readOnly already blocks pasted TEXT, but the image paste path
+            // reads the clipboard itself and writes draftImages directly.
+            if (locked) {
+              e.preventDefault()
+              return
+            }
             onUserEngagement()
             onPaste(e)
           }}
@@ -280,6 +303,8 @@ export function ComposerInput({
               ? undefined
               : providerSwitchMessage
                 ? 'provider switch in progress…'
+                : locked
+                ? 'sending…'
                 : showDictationPlaceholder
                 ? 'listening…'
                 : focused
