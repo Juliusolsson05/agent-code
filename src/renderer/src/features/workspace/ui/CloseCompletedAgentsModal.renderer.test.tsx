@@ -49,6 +49,14 @@ function setup(records: Record<string, TldrRecord>, options: { read?: (identitie
 }
 
 describe('Close Completed Agents modal', () => {
+  it('uses the shared footer: Cancel ⎋, and no Enter chip on the destructive close (plan S14)', async () => {
+    setup({ 'id-a': goal('Ship A.', 2, 'PR #1 merged.') })
+    await screen.findByText('✓ PR #1 merged.')
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getByRole('button', { name: 'Close 1 Agent' }).querySelector('[data-slot="kbd"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Close 1 Agent' }).closest('[data-slot="dialog-footer"]')).not.toBeNull()
+  })
+
   it('ticks idle completed agents, keeps a running one unselectable, and hands over the user’s choices', async () => {
     const { closeCompletedGoalAgents, onClose } = setup({
       'id-a': goal('Ship A.', 2, 'PR #1 merged.'),

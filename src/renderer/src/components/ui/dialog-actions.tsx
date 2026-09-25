@@ -54,6 +54,9 @@ export type DialogActionsProps = {
   /** Omit to render a confirm-only footer (an acknowledgement dialog). */
   onCancel?: () => void
   cancelLabel?: string
+  /** Disables Cancel while a surface refuses to close (an in-flight batch).
+   *  Pair with `escapeCancels={false}` so the ⎋ chip goes with it. */
+  cancelDisabled?: boolean
   /** `danger` swaps the confirm to the destructive variant. */
   tone?: 'default' | 'danger'
   /** Blocks confirm and dims it. Use for "nothing selected yet". */
@@ -195,6 +198,7 @@ export function DialogActions({
   onConfirm,
   onCancel,
   cancelLabel = 'Cancel',
+  cancelDisabled = false,
   tone = 'default',
   confirmDisabled = false,
   busy = false,
@@ -268,7 +272,7 @@ export function DialogActions({
       ) : null}
       {extraActions}
       {onCancel ? (
-        <Button variant="ghost" size="sm" data-dialog-action="cancel" onClick={onCancel}>
+        <Button variant="ghost" size="sm" data-dialog-action="cancel" disabled={cancelDisabled} onClick={onCancel}>
           {cancelLabel}
           {escapeCancels ? <Kbd binding="Escape" /> : null}
         </Button>

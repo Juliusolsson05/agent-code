@@ -418,9 +418,9 @@ entry when it lands.
 | S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | done |
 | S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | done |
 | S12 | AgentTitlePrompt | form submit | DialogActions chips; T3 | done |
-| S13 | CloseOldAgentsModal | no Enter; "Esc" header button; raw buttons | DialogActions (danger); remove Esc button; T3/T8; `focus:border-accent` → T4 | todo |
-| S14 | CloseCompletedAgentsModal | no Enter; raw header/footer | as S13 | todo |
-| S15 | BulkProviderSwitchModal | "Esc" button gets focus; busy blocks Esc silently | DialogActions; busy legend; K1 focus | todo |
+| S13 | CloseOldAgentsModal | no Enter; "Esc" header button; raw buttons | DialogActions (danger); remove Esc button; T3/T8; `focus:border-accent` → T4 | done |
+| S14 | CloseCompletedAgentsModal | no Enter; raw header/footer | as S13 | done |
+| S15 | BulkProviderSwitchModal | "Esc" button gets focus; busy blocks Esc silently | DialogActions; busy legend; K1 focus | done |
 | S16 | RootManagementConfirmDialog | checkbox focus; no Enter | DialogActions (confirmDisabled until ack); chips | todo |
 | S17 | MergeProjectTabsModal | select focus; no Enter; mx-4 mt-3 pieces | DialogActions; T3 body | todo |
 | S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | todo |
@@ -622,6 +622,17 @@ Sharp corners and one light theme.
 - **S12 Set Title:** footer is `Clear Title` at the far left (ghost), then
   `Cancel ⎋` (ghost, was outline) and `Save ↩`; body py-3 (was py-4); hint
   line 11px; typing then Enter saves.
+- **S13–S15 Close Old Agents / Close Completed / Bulk Provider Switch:** no
+  "Esc" button beside the title any more; standard header bar; filter
+  inputs/selects use the input colours and show the focus ring only on
+  keyboard focus (was accent border on any focus); All/Clear are ghost xs
+  buttons in title case; scope toggles announce pressed state and show a
+  ring; footer = `Cancel ⎋` + filled red `Close N Agents` / filled accent
+  `Switch N…` with NO ↩ chip (deliberate: bulk actions are Tab-then-Enter or
+  click); Close Old's exclusion note moved into the header description;
+  Bulk's mid-turn/terminals note is its own line above the footer, and
+  while a batch runs Cancel is disabled, the ⎋ chip disappears and the
+  footer says "Working — closing is paused…". All 860 wide (lg).
 
 ## Tasks
 
@@ -696,6 +707,15 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S13–S15: bulk family on DialogHeader + DialogActions (danger /
+  no commit key), DialogActions gained `cancelDisabled`. Ruling: Close
+  Completed keeps NATIVE checkboxes (a checkbox group is fully operable —
+  Tab + Space, state announced — and each row is an independent
+  destructive choice; K5's one-cursor listbox is for highlight lists) —
+  cost if wrong: many Tab stops on a long list. Ruling: Bulk Switch's
+  confirm has no commit key (spends quota, armed second press compacts on
+  the source). Confirm-red: 3 table tests (no Esc button + chips; CloseOld
+  focus) and the Close Completed footer test fail on the pre-change files.
 - 2026-09-25 S12: Set Title drops its <form> (DialogActions' buttons have
   no type and would submit) for DialogActions' scoped Enter. Confirm-red:
   the new Enter/chips test fails on the pre-change file; "Clear title" →

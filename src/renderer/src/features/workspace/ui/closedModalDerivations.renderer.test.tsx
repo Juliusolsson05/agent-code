@@ -154,6 +154,28 @@ describe('closed workspace modal derivations', () => {
   )
 })
 
+// Plan S13/S15: the bulk dialogs lost their header "Esc" BUTTON (a second
+// Cancel that named a key, and the node Radix focused on open), gained the
+// shared footer (Cancel ⎋), and advertise NO commit key on their batch
+// button — neither a bulk close nor a quota-spending bulk switch may be one
+// reflexive Enter away.
+describe('bulk dialogs: one exit, key chips, no key on the batch action', () => {
+  it.each([
+    { name: 'CloseOldAgentsModal', Component: CloseOldAgentsModal, confirm: /^Close \d+ Agent/ },
+    { name: 'BulkProviderSwitchModal', Component: BulkProviderSwitchModal, confirm: /^Switch / },
+  ])('$name', ({ Component, confirm }) => {
+    render(<Component open workspace={replaceRuntime(workspaceFixture(), false)} onClose={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Esc' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getByRole('button', { name: confirm }).querySelector('[data-slot="kbd"]')).toBeNull()
+  })
+
+  it('Close Old Agents opens with focus in the threshold field', () => {
+    render(<CloseOldAgentsModal open workspace={replaceRuntime(workspaceFixture(), false)} onClose={vi.fn()} />)
+    expect(document.activeElement).toBe(screen.getByRole('spinbutton', { name: 'Inactive for more than' }))
+  })
+})
+
 describe('Agent Activity rows keep the keys on the highlighted row (#867 review)', () => {
   it('keeps the per-row close button out of the tab order and out of click focus', () => {
     // The keys act on the HIGHLIGHTED row from the list container. A row
