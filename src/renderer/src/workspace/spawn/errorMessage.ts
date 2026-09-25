@@ -1,5 +1,5 @@
 import type { SessionKind } from '@renderer/workspace/types'
-import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
+import { MISSING_WORKSPACE_FOLDER_PREFIX, SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 
 // Normalize spawn errors so the user-facing toast/showToast has a
 // single string to print. When the Claude proxy startup path is the
@@ -52,8 +52,3 @@ export function sessionSpawnErrorMessage(
   // journals the raw error before it rethrows.
   return SESSION_START_FAILED_MESSAGE
 }
-
-// Mirrors main's MissingWorkspaceDirectoryError message. #1264 moves this to
-// a shared constant (MISSING_WORKSPACE_FOLDER_PREFIX in @shared/types/session);
-// this file switches to it when that lands.
-const MISSING_WORKSPACE_FOLDER_PREFIX = 'Workspace folder is missing: '
