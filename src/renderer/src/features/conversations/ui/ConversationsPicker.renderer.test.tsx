@@ -5,6 +5,8 @@ import type { Conversation, ConversationListResponse } from '@shared/conversatio
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ConversationsPicker } from './ConversationsPicker'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
 afterEach(() => {
@@ -37,13 +39,14 @@ function install(list = vi.fn(async () => response())) {
 }
 // The picker reads the commanded pane through commandTargetSessionId, which
 // walks state.tabs / activeTabId / dispatchMode, so the mock carries them.
-type WorkspaceMock = Workspace & { replaceSession: Mock; newTab: Mock }
+type WorkspaceMock = Workspace & { replaceSession: Mock; newTab: Mock; showPaneToast: Mock }
 function workspace(over: Record<string, unknown> = {}): WorkspaceMock {
   return {
     activeTab: { id: 't', focusedSessionId: 's' },
     state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude', projectId: 't', joinedAt: 0 } } },
     replaceSession: vi.fn(async () => 's2'),
     newTab: vi.fn(async () => undefined),
+    showPaneToast: vi.fn(),
     ...over,
   } as unknown as WorkspaceMock
 }
@@ -76,6 +79,45 @@ describe('ConversationsPicker', () => {
     // other caller of replaceSession continues the same agent and omits it.
     await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex', newConversation: true }))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // #1241: the picker closes, then swaps the pane. A failed swap used to be an
+  // unhandled rejection (only journaled) or a silent `undefined`; the user saw
+  // nothing change. The reason now lands on the pane it was meant for.
+  const recordedSpawnFailure = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+
+  it('tells the pane why an in-place resume failed to start (#1241)', async () => {
+    install()
+    const ws = workspace({ replaceSession: vi.fn(async () => { throw new Error(recordedSpawnFailure) }) })
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', recordedSpawnFailure))
+  })
+
+  it('tells the pane when an in-place resume could not happen at all (#1241)', async () => {
+    install()
+    const ws = workspace({ replaceSession: vi.fn(async () => undefined) })
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', expect.stringContaining("Couldn't resume")))
+  })
+
+  it('stays open and says why when no pane is selected to resume into (#1241)', async () => {
+    install()
+    const onClose = vi.fn()
+    const base = workspace()
+    const ws = workspace({ state: { ...base.state, stage: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 } } })
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
+    // Without a pane only the everywhere scope lists rows.
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await screen.findByText('break down this project')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(await screen.findByText(/no agent pane is selected/)).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(ws.replaceSession).not.toHaveBeenCalled()
   })
 
   it('does not resume the highlighted row when Enter presses a filter chip (#867)', async () => {

@@ -100,6 +100,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       setResumeError(`Can't resume ${row.nativeId.slice(0, 8)}: the transcript records no working directory.`)
       return
     }
+    // The pane the swap is aimed at, read BEFORE the picker closes: it is the
+    // one place a failure can still be reported once the picker is gone.
+    const targetSessionId = commandTargetSessionId(workspace)
+    if (workspace.activeTab && !targetSessionId) {
+      // Nothing to swap into; closing would only hide a no-op.
+      setResumeError(`Can't resume ${row.label} here: no agent pane is selected.`)
+      return
+    }
     onClose()
     if (workspace.activeTab) {
       // In-place swap: the pane stays where it is, what runs in it changes.
@@ -110,7 +118,20 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       // a stranger's conversation in, and inheriting parentage here would file
       // it as somebody's orchestration child — reported to that parent as its
       // worker's answer, and killed by `close_run`.
-      await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
+      //
+      // WHY every outcome is reported on the pane (#1241): the picker has
+      // already closed, and the callers fire this with `void`, so a spawn
+      // failure (e.g. the provider's CLI removed since the transcript was
+      // written) was an unhandled rejection and an `undefined` (no command
+      // target, missing meta, a refused commit) was silence. The pane just
+      // stayed as it was. builtInMcpReload reports the same call this way.
+      try {
+        const replaced = await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
+        if (!replaced) workspace.showPaneToast(targetSessionId!, `Couldn't resume ${row.label} in this pane.`)
+      } catch (error) {
+        workspace.showPaneToast(targetSessionId!,
+          error instanceof Error && error.message.length > 0 ? error.message : `Couldn't resume ${row.label}.`)
+      }
     } else {
       // Fresh launch with nothing to replace: a new tab in the row's cwd.
       await workspace.newTab(row.cwd, row.nativeId, row.provider)
