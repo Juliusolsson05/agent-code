@@ -5,6 +5,7 @@ import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { GhostLedgerCandidate, LedgerInput } from '@renderer/rendering/model/ledger'
 import type { GhostPredicateContext } from '@renderer/rendering/model/ghostPredicate'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // FIXTURE: sidecar-tail ghost — the dominant production ghost failure mode,
@@ -101,6 +102,7 @@ function baseInput(): LedgerInput {
   const { candidates: committed } = collectCommittedCandidates(committedEntries, 'claude', 's1')
   return {
     provider: 'claude',
+    policy: getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
     committed,
     live: [],
     statics: [],

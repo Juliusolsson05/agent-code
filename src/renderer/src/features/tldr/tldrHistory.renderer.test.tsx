@@ -87,6 +87,23 @@ describe('TLDR history', () => {
     await waitFor(() => expect(api.readGoalHistory).toHaveBeenCalledTimes(2))
   })
 
+  // #1182: a completion row carries the completion NOTE as its text, so the
+  // label is the only thing stopping it from reading as a brand-new goal.
+  it('labels a completion row as a completed goal, not as a new goal', async () => {
+    historyApi([], [
+      { ...at('PR #12 merged into main.', 2, 1), completed: true },
+      at('Ship goal completion.', 1, 30),
+    ])
+    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+      pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['goal'] },
+    })} />)
+    const list = await screen.findByRole('list', { name: 'TLDR history' })
+    const metas = [...list.querySelectorAll('li')].map(item => item.querySelector('span')!.textContent!)
+    expect(metas[0]).toMatch(/^Goal completed · Current · /)
+    expect(metas[1]).toMatch(/^Goal · /)
+    expect(metas[1]).not.toContain('completed')
+  })
+
   it('explains an agent that never had TLDR or Goal instead of reading someone else’s history', () => {
     const api = historyApi([])
     render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({ pane: { cwd: '/project', kind: 'claude' } })} />)

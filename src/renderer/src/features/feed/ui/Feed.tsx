@@ -66,7 +66,7 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import * as perf from '@renderer/performance/client'
-import { useAppStore } from '@renderer/app-state/hooks'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 import {
   RenderDebugBoundary,
   RenderingDebugProvider,
@@ -133,8 +133,10 @@ type Props = {
    *  position persistence across Feed unmount/remount (tab switches).
    *  See `scrollPositions` below. */
   sessionId: string
-  /** Which provider's row renderers to use. Default 'claude'. */
-  provider?: AgentProvider
+  /** Which provider's row renderers to use. Required since #1177: the old
+   *  `'claude'` default meant a caller that forgot it painted any provider
+   *  with Claude's rows, silently. AgentFeed, the one mount, always knows. */
+  provider: AgentProvider
   entries: Entry[]
   /**
    * The ownership-ledger pipeline's pre-decided, pre-ordered item list — the
@@ -170,6 +172,18 @@ type Props = {
    * auto-scrolls into view when the value changes.
    */
   pickerSelectedUuid?: string | null
+  /**
+   * UUID of the optimistic prompt row whose send has not settled yet (#1181).
+   * That row paints dimmed with a `Sending…` caption until the provider
+   * accepts or rejects the prompt.
+   *
+   * WHY a prop keyed by uuid and not a flag on the ledger row: "still sending"
+   * is presentation over a row the ledger already decided to show. Putting it
+   * in the candidate would make every send and every settle rebuild ledger
+   * rows and bust the identity cache (D11) during the hottest repaint window.
+   * It would also teach ordering and ownership about a state they must ignore.
+   */
+  pendingEntryUuid?: string | null
   /**
    * Instance id (`data-code-block-id`) of the code block currently
    * highlighted by the "Copy Code Block" picker. Null when that
@@ -226,6 +240,10 @@ type Props = {
     data?: unknown
   }) => void
 }
+
+/** Exported for AgentFeed (#1177), which maps a runtime onto these props
+ *  once for every surface that paints an agent feed. */
+export type FeedProps = Props
 
 // VisibleDecision + DebugVisibleRow moved to ../types.ts.
 // debugKeyForEntry + debugLabelForEntry moved to ../lib/helpers.ts.
@@ -300,7 +318,7 @@ export const Feed = memo(FeedImpl)
 function FeedImpl({
   usageLimitActions,
   sessionId,
-  provider = 'claude',
+  provider,
   entries,
   renderItemsOverride = null,
   committedOperationDecisionOverride,
@@ -310,6 +328,7 @@ function FeedImpl({
   turnStartedAt = null,
   tailMode = false,
   pickerSelectedUuid = null,
+  pendingEntryUuid = null,
   codeBlockSelectedId = null,
   workspaceRoot = null,
   onScrollInfo,
@@ -328,7 +347,10 @@ function FeedImpl({
   askUserQuestionState,
   onDebugLog,
 }: Props) {
-  const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
+  // From the host, not the app store (#1177): the store is desktop state the
+  // phone could only fake with an untyped stub, and this switch is the ONE
+  // thing the whole Feed subtree read from it.
+  const { renderingDebugMode } = useRendererHost()
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and
@@ -981,6 +1003,10 @@ function FeedImpl({
         const uuid = e.uuid
         const selected =
           pickerSelectedUuid != null && uuid === pickerSelectedUuid
+        // A pending row is by construction the newest prompt, so it always
+        // mounts eagerly; skipping LazyEntry also keeps the caption from
+        // appearing before the row it describes.
+        const pending = pendingEntryUuid != null && uuid === pendingEntryUuid
         // WHY eager rendering keys off committed-entry ordinal, not
         // render-item index: semantic/work rows now live in the
         // same ordered list, but markdown parse cost still belongs to
@@ -1014,13 +1040,27 @@ function FeedImpl({
                   : undefined
               }
             >
-              <LazyEntry
-                eager={eager}
-                suspended={bootstrapping}
-                scrollerRef={scrollerRef}
-              >
-                <EntryRow entry={e} />
-              </LazyEntry>
+              {pending ? (
+                // Dimmed, not hidden or badged elsewhere: the prompt is shown
+                // in the exact place and form it will keep once accepted, so
+                // settling is only an opacity change and nothing jumps. The
+                // caption says what the dimming means. aria-busy tells
+                // assistive tech the same thing the opacity tells sighted users.
+                <div className="opacity-50 transition-opacity duration-150" aria-busy="true">
+                  <EntryRow entry={e} />
+                  {/* 22px = MarkerRow's marker column (w-3) plus its gap-2.5,
+                      so the caption sits under the prompt text, not the ❯. */}
+                  <div className="mt-0.5 pl-[22px] text-[10px] text-muted">Sending…</div>
+                </div>
+              ) : (
+                <LazyEntry
+                  eager={eager}
+                  suspended={bootstrapping}
+                  scrollerRef={scrollerRef}
+                >
+                  <EntryRow entry={e} />
+                </LazyEntry>
+              )}
             </div>
           </RenderDebugBoundary>
         )

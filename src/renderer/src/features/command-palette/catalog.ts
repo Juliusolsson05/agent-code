@@ -4,6 +4,7 @@ import { layoutCommands } from '@renderer/features/workspace/commands/layoutComm
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
 import { mcpCommands } from '@renderer/features/mcp/commands/mcpCommands'
+import { skillsCommands } from '@renderer/features/skills/commands/skillsCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
@@ -78,6 +79,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // Right after the session commands, where the per-capability MCP toggles it
   // replaced used to sit (#1143), so the MCP family keeps its browse position.
   ...mcpCommands,
+  // Beside MCP: the same page/add/bulk-action family for skills (#1161).
+  ...skillsCommands,
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,

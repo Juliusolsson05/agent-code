@@ -317,11 +317,25 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
-      // GitHub packages are main-owned immutable snapshots plus generated
-      // provider files. Discovery and deployment health cannot live in the
-      // renderer's scalar Settings document.
+      // Update channel (#1168). Marker row: the value lives in main's
+      // updates.json, which the updater reads before any window exists.
       control: {
-        type: 'agent-code-installed-skills'
+        type: 'update-channel'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
+      // Settings → Skills (#1161): installed, written-here and external
+      // skills in one grid with a column per provider. Marker row for the
+      // same reason as the MCP grid: the collection lives in main's managed
+      // skills document, and only the hidden-external list is a Setting.
+      control: {
+        type: 'skills'
       }
     }
   | {
@@ -598,6 +612,18 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'agent-completion-indicator',
+      category: 'workspace',
+      title: 'Agent Completion Indicator',
+      description: 'Stripe an agent pane header when it finishes while you are elsewhere, until you stop on it or interact with it.',
+      keywords: ['completion', 'finished', 'done', 'unread', 'stripes', 'header', 'agent', 'pane', 'notification'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.showAgentCompletionIndicator,
+        onToggle: (ctx, value) => ctx.onChange({ showAgentCompletionIndicator: value }),
+      },
+    },
+    {
       id: 'worktree-badges',
       category: 'workspace',
       title: 'Worktree Badges',
@@ -649,6 +675,16 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'update-channel',
+      category: 'workspace',
+      title: 'Update channel',
+      description:
+        'Which updates Agent Code installs. Stable gets tested releases. Preview gets each night\'s build of the next version, so fixes arrive days earlier but may have bugs.',
+      keywords: ['update', 'updates', 'channel', 'preview', 'nightly', 'beta', 'stable', 'release', 'version', 'check for updates'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'update-channel' },
+    },
+    {
       id: 'auto-send-prompt-suggestion',
       category: 'workspace',
       title: 'Auto-send Prompt Suggestions',
@@ -662,8 +698,24 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'skills',
+      category: 'skills',
+      title: 'Skills',
+      description:
+        'Every personal skill your agents can load: installed from sources, written in Agent Code, and found on this machine. A checked provider column means agents of that provider get the skill. Add skills by pasting an `npx skills add …` command. There is no limit on how many you keep.',
+      // Carries the vocabulary of the Installed Skills row it replaced, plus
+      // the words people search after reading a README or skills.sh.
+      keywords: [
+        'skills', 'skill', 'install', 'installed', 'add', 'npx', 'skills.sh', 'github', 'repository',
+        'update', 'claude', 'codex', 'opencode', 'pi', 'personal', 'packages', 'agents', 'external',
+        'npx skills add', '--skill',
+      ],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
+      control: { type: 'skills' },
+    },
+    {
       id: 'agent-code-conventions',
-      category: 'agents',
+      category: 'skills',
       title: 'Agent Code Conventions',
       description: 'Apply personal development rules to every supported agent provider.',
       keywords: [
@@ -685,7 +737,7 @@ export function getSettingsRegistry(
     },
     {
       id: 'agent-code-custom-skills',
-      category: 'agents',
+      category: 'skills',
       title: 'Custom Skills',
       description: 'Create and manage portable personal Agent Skills authored in Agent Code.',
       keywords: [
@@ -694,18 +746,6 @@ export function getSettingsRegistry(
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-custom-skills' },
-    },
-    {
-      id: 'agent-code-installed-skills',
-      category: 'agents',
-      title: 'Installed Skills',
-      description: 'Review and install portable Agent Skills from public GitHub repositories.',
-      keywords: [
-        'installed', 'skills', 'github', 'repository', 'import', 'source', 'update',
-        'claude', 'codex', 'opencode', 'pi', 'personal', 'packages',
-      ],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
-      control: { type: 'agent-code-installed-skills' },
     },
     {
       id: 'mcp-servers',

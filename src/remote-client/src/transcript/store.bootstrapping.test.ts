@@ -18,10 +18,10 @@ const raw = (i: number): Record<string, unknown> => ({
   message: { role: 'assistant', content: [{ type: 'text', text: `synthetic ${i}` }] },
 })
 
-function fixture(getHistory: ReturnType<typeof vi.fn>) {
+function fixture(loadHistory: ReturnType<typeof vi.fn>) {
   const listeners = new Map<string, Set<(value: unknown) => void>>()
   const list = [{ sessionId: 'a', kind: 'claude', alive: true, cwd: '/synthetic', lastActivityAt: 0 }]
-  const methods = { getHistory, getSessionList: () => list }
+  const methods = { loadHistory, getSessionList: () => list }
   const feed = new Proxy(methods, {
     get(target, key: string) {
       if (key in target) return target[key as keyof typeof target]
@@ -39,15 +39,19 @@ function fixture(getHistory: ReturnType<typeof vi.fn>) {
 describe('bootstrapping flag', () => {
   it('is true while the initial backfill is pending and clears on success', async () => {
     let release!: (chunk: HistoryChunkResult) => void
-    const getHistory = vi.fn().mockImplementation(
+    const loadHistory = vi.fn().mockImplementation(
       () => new Promise(resolve => {
-        release = (chunk: HistoryChunkResult) => resolve({ ok: true, chunk })
+        release = (chunk: HistoryChunkResult) => resolve(chunk)
       }),
     )
-    const store = fixture(getHistory)
+    const store = fixture(loadHistory)
     try {
       const unsub = store.subscribe('a', () => {})
-      const pending = void store.loadInitialHistory('a')
+      // Hold the load's own promise. This used to be `void store.load…()`,
+      // so `await pending` waited exactly one microtask and passed only while
+      // the store settled within that one tick; reading through the
+      // SessionFeed contract (#1177) adds a tick and exposed it.
+      const pending = store.loadInitialHistory('a')
       expect(store.getSnapshot('a').bootstrapping).toBe(true)
       release({ entries: [raw(0), raw(1)], file: FILE, hasMore: false })
       await pending
@@ -59,8 +63,8 @@ describe('bootstrapping flag', () => {
   })
 
   it('clears on a hard failure (the flag must never wedge the feed suspended)', async () => {
-    const getHistory = vi.fn().mockResolvedValue({ ok: false, error: 'boom' })
-    const store = fixture(getHistory)
+    const loadHistory = vi.fn().mockRejectedValue(new Error('boom'))
+    const store = fixture(loadHistory)
     try {
       const unsub = store.subscribe('a', () => {})
       await store.loadInitialHistory('a')
@@ -73,20 +77,17 @@ describe('bootstrapping flag', () => {
   })
 
   it('is not set by older-page pagination', async () => {
-    const getHistory = vi
+    const loadHistory = vi
       .fn()
       .mockResolvedValueOnce({
-        ok: true,
-        chunk: {
-          entries: [raw(1)],
-          file: FILE,
-          hasMore: true,
-          offsets: [0],
-          totalEntries: 2,
-        },
+        entries: [raw(1)],
+        file: FILE,
+        hasMore: true,
+        offsets: [0],
+        totalEntries: 2,
       })
-      .mockResolvedValueOnce({ ok: true, chunk: { entries: [raw(0)], file: FILE, hasMore: false } })
-    const store = fixture(getHistory)
+      .mockResolvedValueOnce({ entries: [raw(0)], file: FILE, hasMore: false })
+    const store = fixture(loadHistory)
     try {
       const unsub = store.subscribe('a', () => {})
       await store.loadInitialHistory('a')

@@ -14,10 +14,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import { usePaletteRequest } from './usePaletteRequest'
-import {
-  dispatchCommand,
-  dispatchResolvedRow,
-} from '@renderer/features/command-palette/executeCommand'
+import { dispatchResolvedRow } from '@renderer/features/command-palette/executeCommand'
 import {
   buildAgentIndexCommand,
   isAgentIndexCommand,
@@ -27,7 +24,9 @@ import {
   buildHistoryScoreMap,
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
+import { dispatchPendingInvocation } from '@renderer/features/command-palette/dispatchPendingInvocation'
+import { useSessionMenuHost } from '@renderer/features/session-context-menu/useSessionMenuHost'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {
@@ -158,6 +157,10 @@ export function CommandPalette() {
   // #494), so a chord takes the route a menu click already took. One channel,
   // one dispatch path — rather than a second one growing beside it.
   const pendingCommandInvocation = useAppStore(state => state.pendingCommandInvocation)
+  // A Sessions row right-click (#1180) mounts the host for the same reason a
+  // chord does: building the menu runs command `when` predicates, which need
+  // the live CommandContext only this host assembles.
+  const sessionMenuRequest = useAppStore(state => state.sessionMenuRequest)
   const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
   const clearCommandInvocation = useAppStore(state => state.clearCommandInvocation)
 
@@ -205,7 +208,7 @@ export function CommandPalette() {
   // in the app — flashed the palette open and shut. Separating "the host is
   // mounted" from "the user can see it" keeps the #494 cost model (build the
   // context only when something actually needs it) without the flash.
-  if (!open && !pendingCommandInvocation && !executionRequest) return null
+  if (!open && !pendingCommandInvocation && !executionRequest && !sessionMenuRequest) return null
   return (
     <OpenCommandPalette
       visible={open}
@@ -262,6 +265,7 @@ function OpenCommandPalette({
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
+  const openCloseCompletedAgents = useAppStore(state => state.openCloseCompletedAgents)
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
   const openProviderSwitchPicker = useAppStore(state => state.openProviderSwitchPicker)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
@@ -274,6 +278,7 @@ function OpenCommandPalette({
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
+  const closeCloseCompletedAgents = useAppStore(state => state.closeCloseCompletedAgents)
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
   const closeConversations = useAppStore(state => state.closeConversations)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
@@ -285,6 +290,8 @@ function OpenCommandPalette({
   const openApp = useAppStore(state => state.openApp)
   const openKeyVault = useAppStore(state => state.openKeyVault)
   const openMcpServerDialogState = useAppStore(state => state.openMcpServerDialog)
+  const openAddSkillDialogState = useAppStore(state => state.openAddSkillDialog)
+  const requestSkillUpdateCheck = useAppStore(state => state.requestSkillUpdateCheck)
   const openAgentMcpServers = useAppStore(state => state.openAgentMcpServers)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
@@ -343,6 +350,7 @@ function OpenCommandPalette({
   const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
+  const closeCompletedAgentsOpen = useAppStore(state => state.closeCompletedAgentsOpen)
   const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
   const conversationsOpen = useAppStore(state => state.conversationsOpen)
   const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
@@ -529,6 +537,7 @@ function OpenCommandPalette({
         openAgentActivity,
         openKeyboardShortcuts,
         openCloseOldAgents,
+        openCloseCompletedAgents,
         openBulkProviderSwitch,
         openProviderSwitchPicker,
         openRewindPrompt,
@@ -541,6 +550,7 @@ function OpenCommandPalette({
         closeKeyboardShortcuts,
         closeAgentActivity,
         closeCloseOldAgents,
+        closeCloseCompletedAgents,
         closeBulkProviderSwitch,
         closeConversations,
         closeReorderTabs,
@@ -551,6 +561,8 @@ function OpenCommandPalette({
         openAgentAnalytics,
         openKeyVault,
         openMcpServerDialog: () => openMcpServerDialogState({ mode: 'add' }),
+        openAddSkillDialog: () => openAddSkillDialogState(),
+        requestSkillUpdateCheck,
         openAgentMcpServers,
         toggleGitBar,
         toggleWorktreesBar,
@@ -605,6 +617,7 @@ function OpenCommandPalette({
         keyboardShortcutsOpen,
         agentActivityOpen,
         closeOldAgentsOpen,
+        closeCompletedAgentsOpen,
         bulkProviderSwitchOpen,
         conversationsOpen,
         remotePanelOpen,
@@ -650,6 +663,7 @@ function OpenCommandPalette({
       openConversations,
       openAgentActivity,
       openCloseOldAgents,
+      openCloseCompletedAgents,
       openBulkProviderSwitch,
       openProviderSwitchPicker,
       openRewindPrompt,
@@ -661,6 +675,7 @@ function OpenCommandPalette({
       closeKeyboardShortcuts,
       closeAgentActivity,
       closeCloseOldAgents,
+      closeCloseCompletedAgents,
       closeBulkProviderSwitch,
       closeConversations,
       closeReorderTabs,
@@ -672,6 +687,8 @@ function OpenCommandPalette({
       openApp,
       openKeyVault,
       openMcpServerDialogState,
+      openAddSkillDialogState,
+      requestSkillUpdateCheck,
       openAgentMcpServers,
       toggleGitBar,
       toggleWorktreesBar,
@@ -718,6 +735,7 @@ function OpenCommandPalette({
       keyboardShortcutsOpen,
       agentActivityOpen,
       closeOldAgentsOpen,
+      closeCompletedAgentsOpen,
       bulkProviderSwitchOpen,
       conversationsOpen,
       remotePanelOpen,
@@ -1095,6 +1113,8 @@ function OpenCommandPalette({
     [commandContext, onClose, showToast],
   )
 
+  useSessionMenuHost({ commandContext, showToast })
+
   // Native menu → command dispatch (issue #148).
   //
   // The macOS File menu lives in main, but its actions are renderer commands
@@ -1112,15 +1132,13 @@ function OpenCommandPalette({
   // admission only, so hiding a command can no longer disable its menu item.
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
-    void dispatchCommand({
-      // The SOURCE travels with the request, so a chord is recorded as a
-      // keybinding invocation and a File-menu click as a native-menu one. A
-      // hardcoded source here would have made every keyboard invocation look
-      // like a menu click in personalized history.
-      id: pendingMenuCommand.id,
-      source: pendingMenuCommand.source,
-      ctx: commandContext,
-      reportError: message => showToast(message, 6000),
+    // #1180: a pending invocation may name an explicit target (the Sessions
+    // list right-click menu). Only THIS host can run it, because it is the
+    // only place a full CommandContext (with its `ui` bucket) exists.
+    void dispatchPendingInvocation({
+      pending: pendingMenuCommand,
+      commandContext,
+      showToast,
       // Without these a contributed keybinding resolved to nothing here, and the
       // outcome — `status: 'unknown'` — is not inspected by the keybinding path, so
       // every manifest-declared shortcut was a silent no-op.

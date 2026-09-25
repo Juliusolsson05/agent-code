@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { normalisePocketUrl } from '@shared/browserPocket/url'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 import { setPocketView } from '../actions'
 import { requestPocket } from '../state/pocketBus'

@@ -4,8 +4,12 @@ import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { asRecord } from '@shared/lib/asRecord'
 import { emptySemanticRuntime } from '@renderer/session-runtime/state'
 import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
-import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
-import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { stepLiveSemantic } from '@renderer/session-runtime/ingest/liveSemantic'
+import {
+  admitMappedEntries,
+  latestCommittedTimestamp,
+  type CommittedSeenLedger,
+} from '@renderer/session-runtime/ingest/committedRecords'
 import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import {
   ghostsFromSemanticTurn,
@@ -49,10 +53,12 @@ import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLed
 //       - ghost bridge from semantic → ghostsFromSemanticTurn (session-runtime/ghosts.ts)
 //       - ghost→committed handoff    → reconcileUpstream    (session-runtime/ghosts.ts)
 //       - raw JSONL line → Entry     → the provider's real TranscriptEntryMapper
-//     Only the thin ORCHESTRATION glue (dedup set, entries append, the
-//     lastJsonlEntryAt cursor, exit teardown) is re-expressed here, mirrored
-//     from the corresponding sites in useIpcSubscriptions.ts and kept
-//     deliberately faithful. The exact line references are cited at each site.
+//       - committed admission + the lastJsonlEntryAt cursor, and the
+//         fold→phase step → session-runtime/ingest/ (#1177), shared with the
+//         desktop fold AND the phone store, so all three agree by construction
+//     Only the thin ORCHESTRATION glue (entries append, exit teardown) is
+//     re-expressed here, mirrored from the corresponding sites in
+//     useIpcSubscriptions.ts and kept deliberately faithful.
 //
 // FIDELITY STATEMENT (honest): this replay is REDUCER-FAITHFUL and
 // ORCHESTRATION-MIRRORED. It exercises the real semantic fold, phase machine,
@@ -223,21 +229,17 @@ export function applyFeedEvent(
       const rawEntries = Array.isArray(p.entries)
         ? (p.entries as Array<{ entry?: unknown }>)
         : []
+      // Admission is the SHARED live rule (session-runtime/ingest/
+      // committedRecords.ts, #1177) — the very function the desktop's Pass B
+      // and the phone's store call, so replay cannot drift from either.
+      // Replay never trims its window, so no uuid is ever a tombstone here.
+      const ledger: CommittedSeenLedger = { seen: state.seenUuids, isTrimmed: () => false, releaseTrimmed: () => {} }
       const appended: Entry[] = []
       for (const item of rawEntries) {
         const raw = asRecord(item?.entry)
         if (!raw) continue
-        const { entries: mapped } = state.mapper.map(raw)
-        for (const e of mapped) {
-          const uuid = typeof (e as { uuid?: unknown }).uuid === 'string'
-            ? (e as { uuid: string }).uuid
-            : null
-          if (uuid) {
-            if (state.seenUuids.has(uuid)) continue
-            state.seenUuids.add(uuid)
-          }
-          appended.push(e)
-        }
+        const { entries: mapped, historyMarker } = state.mapper.map(raw)
+        appended.push(...admitMappedEntries(mapped, historyMarker, 'live', ledger).admitted)
       }
       // Reference-stability guard: an all-duplicate / all-filtered burst mints
       // NOTHING, so we must not replace `entries` (that would fake a change and
@@ -246,16 +248,7 @@ export function applyFeedEvent(
       if (appended.length === 0) break
 
       state.entries = [...state.entries, ...appended]
-
-      let last = state.lastJsonlEntryAt
-      for (const e of appended) {
-        const ts = (e as { timestamp?: unknown }).timestamp
-        if (typeof ts !== 'string') continue
-        const ms = Date.parse(ts)
-        if (!Number.isFinite(ms)) continue
-        if (last === null || ms > last) last = ms
-      }
-      state.lastJsonlEntryAt = last
+      state.lastJsonlEntryAt = latestCommittedTimestamp(state.lastJsonlEntryAt, appended)
 
       // Ghost→committed handoff: reconcileUpstream stamps `supersededBy` on any
       // live ghost the new entries replace. Returns `prev` on no-op, so a burst
@@ -283,11 +276,13 @@ export function applyFeedEvent(
         else if (ev.type !== 'api_error') break
       }
 
-      // Three real reducers, in the fold's exact order and composition:
-      const nextSemantic = foldSemanticEvent(state.semantic, ev, state.provider)
+      // The live semantic step every client runs (ingest/liveSemantic.ts):
+      // the real fold, then reduceStreamPhase on the POST-fold turn.
+      const step = stepLiveSemantic(state.semantic, state.phase, ev, state.provider)
+      if (step.kind === 'out-of-band') break
+      const nextSemantic = step.semantic
       state.semantic = nextSemantic
-      // reduceStreamPhase runs on the POST-fold turn per its caller contract.
-      state.phase = reduceStreamPhase(state.phase, ev, nextSemantic.currentTurn)
+      state.phase = step.phase
       // Ghost bridge from the new semantic turn (idempotent, ref-stable no-op).
       state.ghosts = ghostsFromSemanticTurn(
         nextSemantic.currentTurn,

@@ -1,28 +1,41 @@
 name: Reusable app build (macOS)
 
-# WHY this file exists: the nightly workflow (`.github/workflows/nightly.yml`,
-# #1011) needs the exact build+package pipeline that `release.yml` has proven
-# end to end. This is a VERBATIM extraction of `release.yml`'s `build-app` and
-# `package-macos` jobs with three deliberate behavioural deltas, each marked below
+# WHY this file exists: the preview workflow (`.github/workflows/preview.yml`,
+# formerly nightly.yml, #1011) needs the exact build+package pipeline that
+# `release.yml` has proven end to end. This is a VERBATIM extraction of `release.yml`'s `build-app` and
+# `package-macos` jobs with four deliberate behavioural deltas, each marked below
 # (plus one reworded comment on the upload step):
 #
 #   1. `on: workflow_call` instead of `workflow_dispatch` — callers are the
-#      versioned release (not yet; see 3) and the nightly.
+#      versioned release (not yet; see 3) and the preview. It takes an optional
+#      `version` input that is stamped into package.json before building and
+#      before packaging (the "Stamp the build version" steps).
 #   2. `build-app` no longer `needs: validate-release` — secret/tag validation
-#      is caller policy (the nightly validates secrets but has no tag).
+#      is caller policy (the preview validates secrets and decides its own tag).
 #   3. The "Create GitHub Release" step is GONE, and `package-macos` drops to
 #      `contents: read`: publishing is the caller's decision (versioned tag vs
-#      rolling nightly), and artifact upload needs no write permission. Called
+#      dated and rolling preview), and artifact upload needs no write permission. Called
 #      workflows cannot exceed the caller's permissions anyway, so keeping
 #      write here would force every caller to grant it for nothing.
+#   4. The "Stamp the build version" steps (only when `version` is passed).
+#      release.yml needs no copy: a stable release ships the version committed
+#      in package.json (RELEASE.md, "Cutting a stable release").
 #
 # DRIFT WARNING: `release.yml` still carries its own copy of these jobs. Until
-# it adopts this reusable workflow (follow-up tracked in #1011, only after the
-# first green nightly), a change to one copy MUST be mirrored in the other.
+# it adopts this reusable workflow (follow-up tracked in #1011), a change to one copy MUST be mirrored in the other.
 # When you edit this file, grep `release.yml` for the same step names.
 
 on:
   workflow_call:
+    inputs:
+      version:
+        # The version this build reports and is packaged as (RELEASE.md,
+        # "Channels"). Empty = package.json as committed. The preview passes
+        # `0.1.4-preview.20260924`, so a preview app says what it is instead
+        # of claiming the stable version its code has moved past.
+        type: string
+        required: false
+        default: ""
 
 jobs:
   build-app:
@@ -106,6 +119,19 @@ jobs:
 
       - name: Audit production dependencies
         run: npm run audit:production
+
+      - name: Stamp the build version
+        # WHY here and in package-macos too: both jobs run from a fresh
+        # checkout. build-app bakes the version into the bundle's build info
+        # (electron.vite.config.ts), and package-macos is where
+        # electron-builder reads it for Info.plist and the artifact names.
+        # `npm version` updates package.json and package-lock.json together
+        # (a hand edit leaves the lockfile stale). It runs AFTER `npm ci` and
+        # the tests, so neither sees a version the lockfile install did not.
+        if: ${{ inputs.version != '' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Prepare bundled runtime tools
         # WHY this belongs in build-app, not package-macos: `npm run build`
@@ -233,6 +259,19 @@ jobs:
         # Restores `out/` with the file modes recorded in build-app; see
         # "Archive app build" there for why the tree travels as a tar.
         run: tar -xf app-build.tar && rm app-build.tar
+
+      - name: Stamp the build version
+        # WHY here and in package-macos too: both jobs run from a fresh
+        # checkout. build-app bakes the version into the bundle's build info
+        # (electron.vite.config.ts), and package-macos is where
+        # electron-builder reads it for Info.plist and the artifact names.
+        # `npm version` updates package.json and package-lock.json together
+        # (a hand edit leaves the lockfile stale). It runs AFTER `npm ci` and
+        # the tests, so neither sees a version the lockfile install did not.
+        if: ${{ inputs.version != '' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Package macOS artifacts
         env:

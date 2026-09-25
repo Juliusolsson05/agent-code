@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { LedgerInput } from '@renderer/rendering/model/ledger'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // The first ten load-bearing tests (plan §4). Each encodes a production
@@ -27,8 +28,12 @@ function cand(partial: Partial<RenderCandidate> & Pick<RenderCandidate, 'id' | '
 
 function run(input: Partial<LedgerInput>): ReturnType<ReturnType<typeof createSessionLedger>> {
   const ledger = createSessionLedger()
+  const provider = input.provider ?? 'codex'
   return ledger({
-    provider: 'codex',
+    provider,
+    // The provider's DECLARED policy (#1177), so these cases exercise the
+    // real asymmetry the registry ships rather than a test-local copy.
+    policy: getRendererProviderCapabilities(provider).ledgerPolicy.suppression,
     committed: [],
     live: [],
     statics: [],
@@ -245,6 +250,7 @@ describe('ledger: identity stability (D11 — load-bearing, not an optimization)
     const ledger = createSessionLedger()
     const input: LedgerInput = {
       provider: 'codex',
+      policy: getRendererProviderCapabilities('codex').ledgerPolicy.suppression,
       committed: [cand({ id: 'c', owner: 'committed', contentKind: 'user-text', timestampMs: T0 })],
       live: [],
       statics: [],

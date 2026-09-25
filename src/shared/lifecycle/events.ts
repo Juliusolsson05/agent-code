@@ -527,6 +527,9 @@ export const WAKE_CALLERS = [
   'orchestration.read-agent',
   'orchestration.send-prompt',
   'control.send-prompt',
+  // Human clicked the local browser failure's restart request. Separate from
+  // generic delivery so wake diagnostics identify the initiating UI action.
+  'browser-pocket.restart-request',
   // Programmatic text delivery (#830: prompt templates / API key vault
   // inserting into a PTY surface). Same family as the MCP-driven callers
   // above — not a direct human gesture, but always downstream of one
@@ -594,10 +597,23 @@ export const KILL_CALLERS = [
   'close.lane',
   'close.tab',
   'close.agent-activity',
+  // The Sessions list right-click menu (#1180): the clicked row's agent, not
+  // the focused one — distinct from close.focused in the journal for exactly
+  // that reason.
+  'close.context-menu',
   'close.extension-surface',
   // ── renderer, bulk and automation ──────────────────────────────────────
   'bulk.close-old-agents',
   'bulk.close-idle-orchestration',
+  // Close Completed Agents… (#1182): agents whose own goal_complete said the
+  // user's task is done. Its own tag so a journal reader can tell "the agents
+  // said they were finished" from "they had been inactive for N hours".
+  'bulk.close-completed-agents',
+  // Agent Activity's multi-select close (#1170). Its own tag, not
+  // `close.agent-activity`: that one is a single row the user aimed at, this
+  // is N kills from one approval, and a journal reader triaging "why did nine
+  // agents die at once" must be able to tell the two apart.
+  'bulk.agent-activity',
   'orchestration.close-agent',
   'orchestration.close-run',
   // The Agent Management MCP close tool: a model asking to close an agent it

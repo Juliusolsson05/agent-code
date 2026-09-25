@@ -3,6 +3,7 @@ import type { PaletteMode } from '@renderer/features/command-palette/paletteMode
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
   PendingCommandInvocation,
+  SessionMenuRequest,
   UiShellState,
 } from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
@@ -37,8 +38,11 @@ export type UiShellSlice = UiShellState & {
    * CommandContext they cannot cheaply build themselves, so they record the id
    * here and the palette — which owns the context — dispatches it.
    */
-  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source']) => void
+  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source'], target?: SessionId) => void
   clearCommandInvocation: () => void
+  requestSessionMenu: (request: SessionMenuRequest) => void
+  clearSessionMenuRequest: () => void
+  setSessionMenuOpenFor: (sessionId: SessionId | null) => void
   openCommandPalette: () => void
   closeCommandPalette: () => void
   /** Enter a palette sub-mode and make the palette visible. */
@@ -56,6 +60,9 @@ export type UiShellSlice = UiShellState & {
   closeSettingsPage: () => void
   openMcpServerDialog: (target: { mode: 'add' } | { mode: 'edit'; serverId: string }) => void
   closeMcpServerDialog: () => void
+  openAddSkillDialog: (initialInput?: string) => void
+  closeAddSkillDialog: () => void
+  requestSkillUpdateCheck: () => void
   openAgentMcpServers: (sessionId: SessionId) => void
   closeAgentMcpServers: () => void
   openAgentTitlePrompt: (sessionId: SessionId) => void
@@ -126,6 +133,8 @@ export type UiShellSlice = UiShellState & {
   closeKeyboardShortcuts: () => void
   openCloseOldAgents: () => void
   closeCloseOldAgents: () => void
+  openCloseCompletedAgents: () => void
+  closeCloseCompletedAgents: () => void
   openBulkProviderSwitch: () => void
   closeBulkProviderSwitch: () => void
   openProviderSwitchPicker: (sessionId: SessionId) => void

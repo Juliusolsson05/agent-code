@@ -114,6 +114,23 @@ export const NET_FETCH_ARGS_JS = `function netFetchArgs(url, init) {
   return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null));
 }`
 
+/**
+ * The JavaScript that turns an author's `services.invoke(serviceId, name, params)`
+ * into broker arguments, spliced into both bootstraps like NET_FETCH_ARGS_JS.
+ *
+ * WHY OMIT AN ABSENT params: it is optional in the SDK, so `invoke(id, name)`
+ * is the ordinary call. Both bootstraps used to send `params: undefined`, and
+ * main's isExtensionJson admission refuses any undefined value, reporting it
+ * as "Extension host request exceeds the JSON limits." That broke Agent Code
+ * Poker 0.3.0's Host button on every click; nothing about the request was
+ * large. `null` is real JSON and passes through untouched.
+ *
+ * Same constraints as NET_FETCH_ARGS_JS: no backtick, no `${`.
+ */
+export const SERVICE_INVOKE_ARGS_JS = `function serviceInvokeArgs(serviceId, name, params) {
+  return params === undefined ? { serviceId, name } : { serviceId, name, params };
+}`
+
 export function buildFrameDocument(input: FrameDocumentInput): string {
   const { extensionId, viewId, entry, declaredCommands, declaredViews, nonce, viewModule } = input
   // The bootstrap. Everything the child needs to (a) expose a Tier-0 API that
@@ -225,6 +242,7 @@ window.addEventListener('message', (event) => {
 });
 
 ${NET_FETCH_ARGS_JS}
+${SERVICE_INVOKE_ARGS_JS}
 
 function request(method, extra) {
   const id = 'q' + (++seq);
@@ -284,7 +302,7 @@ const api = {
     start: (serviceId) => request('service.start', { serviceId }),
     stop: (serviceId) => request('service.stop', { serviceId }),
     status: (serviceId) => request('service.status', { serviceId }),
-    invoke: (serviceId, name, params) => request('service.invoke', { serviceId, name, params }),
+    invoke: (serviceId, name, params) => request('service.invoke', serviceInvokeArgs(serviceId, name, params)),
     // net.listen: the host binds the LAN listener and owns its lifetime; the
     // returned port is the one to share on the local network.
     expose: (serviceId, lan) => request('service.expose', { serviceId, lan }),

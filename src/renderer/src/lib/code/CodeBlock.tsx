@@ -14,6 +14,7 @@ import {
   unregisterCodeBlock,
 } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 import { CodeRenderContext } from '@renderer/features/feed/context'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 import {
   clearPendingSelection,
@@ -159,7 +160,16 @@ export const CodeBlock = memo(function CodeBlock({
   // Monaco: creating a hidden editor/model for the full payload would make a
   // visually collapsed row computationally open. After explicit expansion we
   // create Monaco for one bounded page only.
+  //
+  // WHY the host can veto Monaco (#1177): the editor runtime and its LSP
+  // wiring are desktop capabilities. A host without them (the phone) passes
+  // no loader and every block takes the static path — which is the SAME hljs
+  // layer Monaco paints first here, so such a host renders code identically,
+  // minus the later semantic upgrade. This replaced a phone-only CodeBlock
+  // stub that re-implemented this component's static engine by hand.
+  const { loadMonacoRuntime } = useRendererHost()
   const useMonaco =
+    loadMonacoRuntime !== null &&
     engine !== 'static' && !shouldUseStaticFallback && (!oversized || largeContentOpen)
   // Readiness belongs to one exact editor build, not to the component as a
   // boolean. On a code/page/language change React renders before useEffect can
@@ -176,7 +186,7 @@ export const CodeBlock = memo(function CodeBlock({
   const [readyMonacoBuild, setReadyMonacoBuild] = useState<object | null>(null)
   const monacoReady = readyMonacoBuild === monacoBuild
   useEffect(() => {
-    if (!useMonaco) return
+    if (!useMonaco || !loadMonacoRuntime) return
     let disposed = false
     // Collect ALL cleanup functions as they're created — even inside
     // the async block. The effect cleanup runs them all, regardless
@@ -187,7 +197,7 @@ export const CodeBlock = memo(function CodeBlock({
     const cleanups: Array<() => void> = []
 
     void (async () => {
-      const { ensureSemanticProvider, getMonaco } = await import('@renderer/lib/code/monacoRuntime')
+      const { ensureSemanticProvider, getMonaco } = await loadMonacoRuntime()
       const monaco = await getMonaco()
       if (disposed || !containerRef.current) return
 
@@ -336,6 +346,9 @@ export const CodeBlock = memo(function CodeBlock({
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged)
       cleanups.push(() => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged))
 
+      // Direct `window.api` is sound here and only here: this effect runs
+      // solely after the HOST supplied a Monaco runtime, and only the desktop
+      // host does. The LSP is part of that capability, not a separate one.
       if (workspaceRoot && supportsTranscriptLsp(normalizedLanguage)) {
         await window.api.openLspDocument({
           clientUri,
@@ -399,7 +412,7 @@ export const CodeBlock = memo(function CodeBlock({
         }
       }
     }
-  }, [useMonaco, clientUri, visibleCode, engine, monacoBuild, normalizedLanguage, path, workspaceRoot, quoteSessionId])
+  }, [useMonaco, loadMonacoRuntime, clientUri, visibleCode, engine, monacoBuild, normalizedLanguage, path, workspaceRoot, quoteSessionId])
 
   // Register only the currently materialized page in the code-block registry.
   //
@@ -499,11 +512,16 @@ export const CodeBlock = memo(function CodeBlock({
 
   // Static/fallback early return — placed AFTER all hooks so the hook
   // call order is identical on every render regardless of code path.
+  //
+  // `max-w-full` pins the block to its column so a long line scrolls INSIDE
+  // the block instead of widening the page — load-bearing on a phone, a no-op
+  // inside the desktop's 880px column. It came from the phone's former stub,
+  // which is gone now that both hosts render this component (#1177).
   if (!useMonaco) {
     const staticBlock = (
       <pre
         data-code-block-id={reactId}
-        className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink"
+        className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-w-full max-h-[360px] m-0 px-3 py-2 text-code-ink"
       >
         {highlighted == null ? (
           <code>{visibleCode}</code>
@@ -531,7 +549,7 @@ export const CodeBlock = memo(function CodeBlock({
           colored in the SAME FRAME it first paints — never gated on the
           dynamic import or the LSP round-trip. */}
       {!monacoReady ? (
-        <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink">
+        <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-w-full max-h-[360px] m-0 px-3 py-2 text-code-ink">
           {highlighted == null ? (
             <code>{visibleCode}</code>
           ) : (

@@ -236,7 +236,7 @@ The main architectural boundaries are directories with different runtime permiss
 | `src/providers/` | Provider-specific registration, process adapters, capabilities, mapping and rendering | Main and renderer entry points are separated |
 | `src/mcp/` | Built-in MCP HTTP host, tool registration and shared domain contracts | Authority is registered per managed session |
 | `src/control-sdk/` | Capability schemas, invocation, ownership and operation history | Shared contract with host and operator entry points |
-| `src/remote-client/` | Independently built browser companion | Reuses selected browser-safe renderer modules through explicit aliases |
+| `src/remote-client/` | Independently built browser companion | Mounts the real renderer modules; host-specific capabilities arrive through a typed RendererHost, not build aliases |
 | `packages/` | Pinned Git submodules used in the application | Changes to package implementation and application gitlinks are separate changes |
 | `third_party/` | Manifests and legal notices for shipped native tools | Binaries come from verified build inputs, not Git |
 | `vendor/` | Local upstream source references | Never imported, built, or shipped |
@@ -1188,11 +1188,13 @@ Outbound backlog and frame limits prevent an unresponsive device from accumulati
 
 History is capped at 500 requested entries and a separate byte budget. Oversized pages are reduced toward the cursor-relevant suffix; an individual record that cannot fit returns an explicit error. A row count alone cannot bound payload size when tool output is large.
 
-Sources: [protocol messages](src/main/remote/protocol/messages.ts), [protocol scope](src/main/remote/protocol/scope.ts), [feed source](src/main/remote/SessionFeedSource.ts), [server](src/main/remote/RemoteServer.ts).
+The phone's session events come from the same main-side [session feed tap](src/main/sessions/sessionFeedTap.ts) as the desktop's (8.2.1): [SessionFeedSource](src/main/remote/SessionFeedSource.ts) is only the remote sink over it, adding the session list and the terminal gate. Ordering, coalescing and the sub-agent watcher are therefore identical on both clients by construction; raw PTY channels are opt-in per sink and the remote sink never opts in.
+
+Sources: [protocol messages](src/main/remote/protocol/messages.ts), [protocol scope](src/main/remote/protocol/scope.ts), [feed source](src/main/remote/SessionFeedSource.ts), [feed tap](src/main/sessions/sessionFeedTap.ts), [server](src/main/remote/RemoteServer.ts).
 
 #### 5.9.4 Browser reuse without desktop privileges
 
-The remote client is a separate Vite build under `src/remote-client`. It reuses the shared transcript mappers, semantic reducers, stream phase, entry-window logic, ownership ledger and feed. Explicit aliases replace desktop-only dependencies: code rendering uses a lightweight browser path instead of the full Monaco integration, settings use controlled defaults, and Electron-specific diagnostics/links have browser implementations or stubs.
+The remote client is a separate Vite build under `src/remote-client`. It runs the desktop's own ingest core ([session-runtime/ingest](src/renderer/src/session-runtime/ingest)), ownership ledger, [agent feed model](src/renderer/src/features/feed/agent/useAgentFeedModel.ts), Feed rows and condition outlet. Nothing is substituted at build level: the few capabilities a rendered row needs from its app — a Monaco runtime loader, link and workspace-file opening, the rendering-debug switch, the session-recording bridge — arrive through the [RendererHost](src/renderer/src/features/rendererHost/RendererHostContext.tsx) context. The desktop mounts its Electron host at its root; the phone mounts [its own](src/remote-client/src/host/phoneRendererHost.ts): no Monaco (code renders through the static hljs layer the desktop paints first), links open a new tab, no editor, no recorder. Toasts share one [context](src/renderer/src/ui/GlobalToastContext.ts) that each app presents its own way. Until #1177 six Vite aliases swapped desktop modules for hand-mirrored stubs, one of which the type checker could not see.
 
 Remote transcript state supplies the rendering inputs it actually owns. It does not fabricate desktop ghost history or optimistic submissions. Live and history ingestion keep separate mapper lifetimes, and native source changes reset the relevant conversation state.
 
@@ -1995,7 +1997,7 @@ An ownership check is useful only at its own boundary. A session existing in ren
 
 #### 8.2.1 Observation channels
 
-Each provider runtime emits `AgentSession` events ([session contract](src/shared/types/session.ts)). SessionManager adds the session id, fences every listener by backend run ownership, keeps the last screen and condition snapshots for late joiners, and re-emits. [SessionForwarder](src/main/sessions/forwarder.ts) subscribes once and sends each family on its own IPC channel:
+Each provider runtime emits `AgentSession` events ([session contract](src/shared/types/session.ts)). SessionManager adds the session id, fences every listener by backend run ownership, keeps the last screen and condition snapshots for late joiners, and re-emits. ONE [session feed tap](src/main/sessions/sessionFeedTap.ts) subscribes and owns every ordering and batching decision below, then fans the resulting sequence out to sinks: the desktop [window sink](src/main/sessions/forwarder.ts), which sends each family on its own IPC channel, and the phone's [remote sink](src/main/remote/SessionFeedSource.ts). Because order is decided once before fan-out, both clients observe the same sequence. The tap knows no transport; raw PTY channels reach only sinks that opt in.
 
 | IPC channel | Produced by | Main-process policy | Recorded |
 | --- | --- | --- | --- |
@@ -2009,10 +2011,12 @@ Each provider runtime emits `AgentSession` events ([session contract](src/shared
 | `session:conditions` | Condition evaluators | Direct; legacy per-condition events are not forwarded | Yes |
 | `session:sub-agents` | Claude subagent watcher | Direct when a child changes | Yes |
 | `session:transcript-diagnostic` | Codex and OpenCode terminal diagnostics | Direct; Codex ownership diagnostics are consumed in main | Yes |
+| `session:history-boundary` | Tailers that rewrite a transcript generation (Grok) | Direct, after flushing semantic updates and JSONL of the old generation | Yes |
+| `session:provider-session-changed` | A provider-originated session switch (Pi, OpenCode) | Direct, after flushing the old session's buffered rows | Yes |
 | `session:agent-pty-data`, `session:terminal-data` | Raw PTY bytes | Direct, only while a terminal view is attached | No |
 | `session:exit` | Runtime adapter | Direct, after the removal flush | Yes |
 
-[SessionForwarder](src/main/sessions/forwarder.ts) subscribes once in main and routes session events to the owning window. [SessionWindowRouter](src/main/window/sessionWindowRouter.ts) requires an explicit revisioned display claim in the current renderer generation. Unknown-owner traffic retains bounded incident/gap metadata only. Recognized closing-window/handoff traffic is queued under per-session and application byte/item/age budgets, then revalidated on delivery; overflow and stale generations produce an explicit gap. Application-wide broadcasts remain a separate API.
+The [window sink](src/main/sessions/forwarder.ts) routes the tap's events to the owning window. [SessionWindowRouter](src/main/window/sessionWindowRouter.ts) requires an explicit revisioned display claim in the current renderer generation. Unknown-owner traffic retains bounded incident/gap metadata only. Recognized closing-window/handoff traffic is queued under per-session and application byte/item/age budgets, then revalidated on delivery; overflow and stale generations produce an explicit gap. Application-wide broadcasts remain a separate API.
 
 Recovery establishes the display claim at SessionManager's accepted target boundary, before provider startup can require visible conditions. Natural backend exit does not end pane ownership; explicit pane disposal releases only its captured claim. [Routing repair IPC](src/main/ipc/sessionRouting.ts) flushes coalesced observations before seeding available current snapshots and admits scoped saved-history reads without starting a process or writing input. The shared pane header retains a visible transient-output gap after refresh. These routing revisions fence this queue and repair path; the program's broader native binding/source-generation audit is still separate.
 
@@ -2055,7 +2059,7 @@ participant Provider as Provider events
 
 The actual forwarder has separate JSONL, semantic, screen and process coalescers. They reduce main-to-renderer serialization and IPC work as well as React updates. Coalescing only after arrival would still make Chromium deserialize every intermediate event.
 
-Sources: [semantic backpressure contract](src/shared/sessionFeed/semanticEventBackpressure.ts), [main coalescers](src/main/sessions), [forwarder](src/main/sessions/forwarder.ts).
+Sources: [semantic backpressure contract](src/shared/sessionFeed/semanticEventBackpressure.ts), [main coalescers](src/main/sessions), [session feed tap](src/main/sessions/sessionFeedTap.ts), [forwarder](src/main/sessions/forwarder.ts).
 
 #### 8.2.3 SessionFeed is deliberately narrower than preload
 
@@ -2072,7 +2076,7 @@ The chain has five layers with one-way dependencies:
 | Layer | Location | Input → output | May decide |
 | --- | --- | --- | --- |
 | Observation | [headless packages](#53-provider-integrations-and-headless-packages), [provider runtime adapters](src/providers) | Native process, network stream, transcript files → typed session events | What an observation means for one provider; which records belong to this session |
-| Transport | [SessionForwarder](src/main/sessions/forwarder.ts), [coalescers](src/main/sessions) | Session events → ordered IPC batches for the owning window | Which updates may be combined without losing boundaries (8.2) |
+| Transport | [SessionFeedTap](src/main/sessions/sessionFeedTap.ts), [coalescers](src/main/sessions), window and remote sinks | Session events → one ordered sequence, fanned out to the owning window and the phone | Which updates may be combined without losing boundaries (8.2) |
 | Ingest | [`session-runtime/`](src/renderer/src/session-runtime) | Nine observation channels plus input readiness → one `SessionRuntime` per session | How each channel folds into its own slice |
 | Decide | [`rendering/`](src/renderer/src/rendering) | `RuntimeRenderInput` → `RenderLedger { rows, decisions, unknowns }` | What is visible, who owns it, in what order, and why |
 | Render | [`features/feed/`](src/renderer/src/features/feed), [provider renderers](src/providers) | Ledger rows → `FeedRenderItem[]` → provider rows | How an already-selected unit looks |
@@ -2182,7 +2186,7 @@ A missing timestamp is lossy evidence, not proof that an event happened last. Ca
 
 Every reducer returns its previous object when nothing changed. That discipline is the foundation of identity stability (8.3.13); a reducer that clones on a no-op makes every downstream memo miss.
 
-**Committed plane.** Raw provider records pass through the provider's mapper into neutral [`Entry`](src/shared/types/transcript.ts) rows. Claude's mapper is stateless. Codex's mapper holds a turn cursor for one ingestion stream, so history loading, previews and replay need fresh mapper instances. Tool blocks are indexed by id as they arrive; the index version increments only when a pairing actually moves, which avoids rebuilding the index for every entry at bootstrap. `lastJsonlEntryAt` records the newest producer timestamp and uses `null`, never `0`, for "not seen".
+**Committed plane.** Raw provider records pass through the provider's mapper into neutral [`Entry`](src/shared/types/transcript.ts) rows. Claude's mapper is stateless. Codex's mapper holds a turn cursor for one ingestion stream, so history loading, previews and replay need fresh mapper instances. Tool blocks are indexed by id as they arrive; the index version increments only when a pairing actually moves, which avoids rebuilding the index for every entry at bootstrap. `lastJsonlEntryAt` records the newest producer timestamp and uses `null`, never `0`, for "not seen". These admission rules — the live/tail/older dedupe asymmetry, marker stamping, the pagination anchor, the #910 history placement and the history tool reindex — live once in [session-runtime/ingest](src/renderer/src/session-runtime/ingest) and are called by the desktop's live burst and history actions, the phone's store and the replay harness.
 
 **Semantic plane.** Semantic events pass a second 100 ms backpressure queue in the renderer, flushed before any JSONL, error, process-state or exit event so that folding preserves main's boundaries. A `prompt_suggestion` event is handled as a composer hint and never enters turn state. The rule is one session, one semantic reducer. Feed, Reader Mode and debug surfaces all select from `runtime.semantic`; none opens its own stream subscription. Turns are block-level: `blocks` is a record keyed by block index with a separate `blockOrder`, because deltas arrive out of order. `tool_result` attaches to its originating block by correlation id. An event carrying an explicit, different turn id is not allowed to mutate the current turn; replacing the live turn is governed by per-provider policy. Archived turns move to a history list capped at 20 turns.
 
@@ -2449,13 +2453,15 @@ class R1,R2,R3,R4,R5,R6 caution
 
 The discriminator behind every rule is **suppress when owned, reorder when not caught up**. The committed channel can be permanently dead (#159, #290), and the semantic history may be a turn's only representation. Suppressing un-owned history is data loss. When ownership cannot be proven, the candidate survives: a row that survives too long is visible and diagnosable, while a row that vanishes early is silent.
 
-Provider asymmetry is policy, not code forks ([SUPPRESSION_POLICY](src/renderer/src/rendering/model/ownership.ts)):
+Provider asymmetry is policy, not code forks. Each provider declares a [LedgerProviderPolicy](src/renderer/src/rendering/model/ownership.ts) in its own `renderer/ledgerPolicy.ts`, exposed through the renderer capability registry; the adapter resolves its suppression half into `LedgerInput.policy`, so the pure model never names a provider (collectors read the ghost and scaffolding bits from the registry they already use):
 
 | Provider | `wholeTurnByMessageId` | `hideUnresolvedHistoryTools` | Reason |
 | --- | --- | --- | --- |
 | Claude | `true` | `true` | A durable Claude row provably carries the semantic turn id, and Claude tool results always pair into the block or land as committed rows |
 | Codex | `false` | `false` | Codex commits one response item at a time and shares broad turn ids; MCP output arrives in a later turn |
 | OpenCode | `false` | `false` | Committed rows carry message ids, but id presence does not make whole-turn suppression safe; its committed channel is assembled server truth |
+| Grok | `false` | `false` | Per-item rows with no whole-turn message id; MCP tool errors pair like Codex's |
+| Pi | `false` | `false` | Per-message rows; a tool result is its own row threaded by `toolCallId` |
 
 The collapsed-running rule shows how narrow a suppression must be. Its first version hid every unresolved history tool and six legitimate running chips (Task, Edit, AskUserQuestion, MCP) went missing. Its second version lacked the tail gate and in-flight Read/Bash fan-outs vanished mid-run, because the committed tail normally lags recent history by seconds. The shipped rule requires all of: Claude, history owner, unresolved (no paired result and no completed lookup status), a churn tool name, a committed tail newer than the candidate, and no committed trace for its ids.
 
@@ -2631,7 +2637,7 @@ The bridge makes no visibility decisions, with two deliberate carve-outs that ke
 - A **running** collapsed churn run emits no item. Its row paints nothing while running because the work indicator owns the busy state; emitting it would count invisible content.
 - If every selected committed carrier becomes a named absorption, the bridge inserts an explicit empty item. Operation correlation is block-grain information the entry-grain ledger does not carry, so only the bridge can see this case.
 
-[FeedRenderItem](src/renderer/src/features/feed/model/renderModel.ts) is a discriminated union: `provider-notice`, `entry`, `absorbed-entry`, `semantic-block`, `semantic-collapsed-activity`, `semantic-text`, `work` and `empty`. [Feed](src/renderer/src/features/feed/ui/Feed.tsx) maps items to rows in ledger order and performs no sorting. [useLedgerFeedItems](src/renderer/src/features/feed/ledger/useLedgerFeedItems.ts) is the seam both the desktop pane and the [phone session view](src/remote-client/src/ui/SessionView.tsx) mount, so there is one rendering pipeline, not a second phone implementation. The phone reuses the ingest reducers and the whole decide and render stack but has no ghost plane, optimistic plane or shape capture. The control API's [conversation projection](src/renderer/src/features/feed/controlRead/projectConversation.ts) runs the same adapter, ledger and bridge and fails when a row is dropped, and Reader Mode classifies prose with the same semantic block classifier.
+[FeedRenderItem](src/renderer/src/features/feed/model/renderModel.ts) is a discriminated union: `provider-notice`, `entry`, `absorbed-entry`, `semantic-block`, `semantic-collapsed-activity`, `semantic-text`, `work` and `empty`. [Feed](src/renderer/src/features/feed/ui/Feed.tsx) maps items to rows in ledger order and performs no sorting. [useAgentFeedModel](src/renderer/src/features/feed/agent/useAgentFeedModel.ts) (ledger rows, merged-entries fallback, provider-normalized conditions) and [AgentFeed](src/renderer/src/features/feed/agent/AgentFeed.tsx) (the one place a runtime becomes Feed props) are the seam both the desktop pane and the [phone session view](src/remote-client/src/ui/SessionView.tsx) mount, together with the same ProviderConditionOutlet, so there is one rendering pipeline, not a second phone implementation. The phone runs the shared ingest core and the whole decide and render stack; it deliberately has no ghost plane, optimistic plane or shape capture, because it has no local submit and no recorder. The control API's [conversation projection](src/renderer/src/features/feed/controlRead/projectConversation.ts) runs the same adapter, ledger and bridge and fails when a row is dropped, and Reader Mode classifies prose with the same semantic block classifier.
 
 Provider interpretation lives under `src/providers/<provider>/renderer/`: adapters decode wire vocabulary, components compose provider chrome, and dispatch modules implement the capabilities (`renderDurableEntry`, `renderOperation`, `renderSemanticBlock`). Shared code starts only after an adapter has produced a narrow protocol model under [shared renderer protocols](src/providers/shared/renderer/protocols), such as code edit, command, MCP content or structured output. A tool name alone is not enough to claim a specialized shape; adapters decline to the bounded generic rows when required content does not validate. Live rows reuse committed adapters where the wire shape is equivalent, so a streaming row and its final committed row look alike.
 
@@ -2795,7 +2801,6 @@ class Gate,Inv,Golden,Triage caution
 - Replay has no orphan sweep, so a ghost never becomes orphaned during recording replay; ghost-fallback selection is covered by the ledger fixtures, not by recordings.
 - The fixture-per-reason rule is review discipline. Four declared reasons have no emitting code path, and `task-notification-joined` and `empty-write-stdin` are emitted without a test that names them.
 - The decision record is designed as the debug schema, but at runtime nothing outside `rendering/` reads `ledger.decisions`, collector decisions or `ledger.unknowns`; replay and tests do. Feed-debug logs the painted rows, and debug bundles build render diagnostics from runtime ownership sets.
-- The phone passes `lastJsonlEntryAt: 0` to the ledger hook. A zero tail is never newer than a candidate, so the collapsed-running rule never fires on the phone.
 
 The change workflow follows from these nets: obtain a capture, extract a failing fixture, assert order, owner and reason rather than mere existence, keep identity-stability tests green, and triage every corpus divergence with a written reason. [Rendering design principles](docs/rendering/rendering-design-principles.md) is the working guide.
 
@@ -3173,7 +3178,7 @@ Sources: [Vitest configuration](vitest.config.ts), [live configuration](vitest.l
 | External operation times out | [control executor](src/control-sdk/core/executor.ts), [renderer bridge](src/main/control/rendererBridge.ts) | Durable receipt, owner generation and outcome uncertainty |
 | Built-in MCP authority is stale | [MCP host](src/mcp/runtime/BuiltInMcpHttpHost.ts), [launch config](src/providers/shared/runtime/builtInMcpLaunch.ts) | Token revocation, enabled domains and private credential transport |
 | Workflow fails/resumes unexpectedly | [service composition](src/main/workflows/createWorkflowService.ts), [workflow service](https://github.com/Juliusolsson05/workflow-mcp/blob/b4b98f8d13f59bae0c999c927533f451b491496a/src/workflowService.ts) | Source approval, journal order, attempt termination and replay evidence |
-| Phone feed diverges from desktop | [remote source](src/main/remote/SessionFeedSource.ts), [remote client](src/remote-client/src) | Shared folds/ledger, mapper lifetime, snapshot/history/backpressure contract |
+| Phone feed diverges from desktop | [feed tap](src/main/sessions/sessionFeedTap.ts), [remote sink](src/main/remote/SessionFeedSource.ts), [ingest core](src/renderer/src/session-runtime/ingest), [agent feed](src/renderer/src/features/feed/agent), [renderer host](src/renderer/src/features/rendererHost) | The phone should differ only in its sink, host and shell; a divergence below those is a shared-code bug. The ingest parity test replays real transcripts through both stores |
 | Save overwrites external changes | [editor I/O](src/main/editorFileIO.ts), [buffer operations](src/renderer/src/features/editor/lib/bufferOps.ts) | Expected versions, create-only semantics and retained dirty text |
 | Skill install overwrites user files | [ownership policies](src/main/agentCodeConventions), [materializer](src/main/agentCodeConventions/installedSkillMaterializer.ts) | Exact-byte ownership proof, write-ahead operation state and no-clobber publication |
 | Packaged app fails while dev works | [builder rules](electron-builder.yml), [runtime resolver](src/main/setup/runtimeTools.ts), [package verifier](scripts/verify-packaged-mac.mjs) | Target architecture, ASAR unpacking, actual executable probes and copied resources |

@@ -1,5 +1,5 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 
 /**
@@ -49,19 +49,20 @@ export const mcpCommands: CommandDef[] = [
       'global', 'reset', 'tldr', 'goal', 'loop', 'orchestration', 'ai workspace', 'transcripts',
       'agent management', 'workflow', 'root',
     ],
-    when: ({ workspace }) => {
-      const id = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const id = commandTarget({ workspace, target })
       const meta = id ? workspace.state.sessions[id] : null
       return Boolean(meta && isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER))
     },
-    run: ({ workspace, ui }) => {
+    run: ({ workspace, ui, target }) => {
       // Captured now, not when the user presses Apply: Dispatch focus can move
       // while the picker is open, and the reload must land on this agent.
-      const id = commandTargetSessionId(workspace)
+      const id = commandTarget({ workspace, target })
       const meta = id ? workspace.state.sessions[id] : null
       if (!id || !meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return
       ui.closePalette()
       ui.openAgentMcpServers(id)
     },
+    contextMenu: { group: 'agent', order: 30 },
   },
 ]

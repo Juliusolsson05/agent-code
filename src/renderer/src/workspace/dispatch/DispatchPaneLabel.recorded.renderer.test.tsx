@@ -46,28 +46,26 @@ vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
   DispatchMiniList: () => null,
 }))
 
-vi.mock('@providers/registry.renderer', () => ({
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
   // WHY mock the provider leaf, not renderWorkspaceLeaf: the contract under
   // test is the label that crosses the shared leaf-render boundary. Mocking
   // renderWorkspaceLeaf itself would erase the exact recomputation bug and
   // merely assert how DispatchLayout called a spy.
-  getRendererProvider: () => ({
-    TileLeaf: ({
-      sessionId,
-      paneLabel,
-    }: {
-      sessionId: string
-      paneLabel: string | null
-    }) => (
-      <div
-        data-testid="recorded-provider-leaf"
-        data-session-id={sessionId}
-        data-pane-label={paneLabel ?? ''}
-      >
-        {paneLabel}
-      </div>
-    ),
-  }),
+  TileLeaf: ({
+    sessionId,
+    paneLabel,
+  }: {
+    sessionId: string
+    paneLabel: string | null
+  }) => (
+    <div
+      data-testid="recorded-provider-leaf"
+      data-session-id={sessionId}
+      data-pane-label={paneLabel ?? ''}
+    >
+      {paneLabel}
+    </div>
+  ),
 }))
 
 type DispatchRecording = {

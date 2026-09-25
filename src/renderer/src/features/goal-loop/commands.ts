@@ -1,6 +1,6 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { toggle } from '@renderer/features/command-palette/commandState'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { dismissGoalLoop, toggleGoalLoop, useGoalLoopView } from './viewState'
 
 export const goalLoopCommands: CommandDef[] = [{
@@ -29,14 +29,15 @@ export const goalLoopCommands: CommandDef[] = [{
   id: 'goal-loop-stop', title: 'Stop Goal Loop', category: 'session', surface: 'session',
   description: '**What it does:** Ends the focused agent’s active goal loop immediately (ended · cancelled).\n\n**Use when:** The loop should no longer continue.\n\n**Notes:** The agent can still finish its current turn; no further continuations are delivered.',
   keywords: ['goal', 'loop', 'stop', 'cancel', 'end'],
-  when: ({ workspace }) => {
-    const sessionId = commandTargetSessionId(workspace)
+  when: ({ workspace, target }) => {
+    const sessionId = commandTarget({ workspace, target })
     return Boolean(sessionId && workspace.state.sessions[sessionId])
   },
-  run: ({ ui, workspace }) => {
-    const sessionId = commandTargetSessionId(workspace)
+  run: ({ ui, workspace, target }) => {
+    const sessionId = commandTarget({ workspace, target })
     if (!sessionId) return
     ui.closePalette()
     void window.api.controlGoalLoop({ sessionId, action: 'stop' })
   },
+  contextMenu: { group: 'agent', order: 80, requires: 'goal-loop' },
 }]

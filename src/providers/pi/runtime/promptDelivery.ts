@@ -40,6 +40,24 @@ export async function deliverPiPrompt(io: PromptDeliveryIo): Promise<PromptDeliv
         enterWritten: false,
       }
     }
+    if (code === 'pi-terminal-tui-command') {
+      // One of pi's own TUI commands (`/new`, `/tree`, ...). Nothing reached
+      // pi, so a retry is harmless (retrySafe), but it can never succeed:
+      // do-not-retry, so an orchestration parent is not told to try again
+      // (PR review of pi-terminal-headless#2). `missing-capability` is the
+      // honest code: this delivery path cannot run TUI commands; the message
+      // tells the user to type it in the pane.
+      return {
+        ok: false,
+        stage: 'before-write',
+        code: 'missing-capability',
+        message: `pi refused the prompt for session ${io.sessionId}: ${(err as Error).message}`,
+        retrySafe: true,
+        disposition: 'do-not-retry',
+        promptWritten: false,
+        enterWritten: false,
+      }
+    }
     if (code === 'pi-terminal-rejected') {
       // Safe to retry, unlike OpenCode's refusal. Every Pi refusal is a check
       // the bridge makes BEFORE handing the text to pi: a compaction is

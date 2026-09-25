@@ -1,4 +1,5 @@
 import type { SessionId } from '@renderer/workspace/types'
+import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 
 // Clears text sitting in the PROVIDER's own composer — the TUI input line,
 // not Agent Code's textarea. Shared by the "Clear Agent Composer" palette
@@ -49,16 +50,21 @@ export function isClearingAgentComposer(sessionId: SessionId): boolean {
   return clearing.has(sessionId)
 }
 
+/**
+ * `feed` is the SessionFeed the caller writes through (#1177). It used to
+ * default to `window.api.sendInput`, the one session write in the pane that
+ * bypassed the contract every other composer write goes through — invisible
+ * to a transport that is not the preload bridge and to a test's fake feed.
+ */
 export async function clearAgentComposer(
   sessionId: SessionId,
-  sendInput: (sessionId: SessionId, data: string) => Promise<unknown> = (id, data) =>
-    window.api.sendInput(id, data),
+  feed: Pick<SessionFeed, 'sendInput'>,
 ): Promise<void> {
   if (clearing.has(sessionId)) return
   clearing.add(sessionId)
   try {
     for (let press = 0; press < CLEAR_AGENT_COMPOSER_PRESSES; press += 1) {
-      await sendInput(sessionId, '\x15')
+      await feed.sendInput(sessionId, '\x15')
       await new Promise(resolve => {
         setTimeout(resolve, CLEAR_AGENT_COMPOSER_SPACING_MS)
       })

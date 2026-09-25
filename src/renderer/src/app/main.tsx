@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from '@renderer/app/App'
 import { GlobalToastProvider } from '@renderer/ui/GlobalToast'
+import { DesktopRendererHostProvider } from '@renderer/features/rendererHost/DesktopRendererHost'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 import '@renderer/styles.css'
@@ -87,6 +88,11 @@ createRoot(document.getElementById('root')!).render(
     <WorkflowClientProvider value={ipcWorkflowClient}>
       <SessionFeedProvider value={ipcSessionFeed}>
         <GlobalToastProvider>
+          {/* The desktop's RendererHost (#1177): the Electron capabilities a
+              rendered row may use (Monaco, link opening, file opening, the
+              debug overlay switch), injected here rather than imported by the
+              rows, so the phone mounts the same rows with its own host. */}
+          <DesktopRendererHostProvider>
           {/* INSIDE AppErrorBoundary, not wrapped around it. The previous
               placement put the loader OUTSIDE the boundary while its comment
               claimed the opposite, so a throw during its render would have
@@ -98,6 +104,7 @@ createRoot(document.getElementById('root')!).render(
               <App />
             </InstalledExtensionsLoader>
           </AppErrorBoundary>
+          </DesktopRendererHostProvider>
         </GlobalToastProvider>
       </SessionFeedProvider>
     </WorkflowClientProvider>

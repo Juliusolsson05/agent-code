@@ -36,8 +36,11 @@ import { controlReference as performanceReference } from '@renderer/features/per
 import { controlReference as tldrReference } from '@renderer/features/tldr/controlReference'
 import { controlReference as goalLoopReference } from '@renderer/features/goal-loop/controlReference'
 import { controlReference as agentAnalyticsReference } from '@renderer/features/agent-analytics/controlReference'
+import { controlReference as agentActivityReference } from '@renderer/features/agent-activity/controlReference'
 import { controlReference as browserPocketReference } from '@renderer/features/browser-pocket/controlReference'
 import { controlReference as mcpReference } from '@renderer/features/mcp/controlReference'
+import { controlReference as skillsReference } from '@renderer/features/skills/controlReference'
+import { controlReference as sessionContextMenuReference } from '@renderer/features/session-context-menu/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -76,8 +79,11 @@ export const featureReferences = [
   ...tldrReference,
   ...goalLoopReference,
   ...agentAnalyticsReference,
+  ...agentActivityReference,
   ...browserPocketReference,
   ...mcpReference,
+  ...skillsReference,
+  ...sessionContextMenuReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -90,6 +96,7 @@ export const referenceOwnership = {
   "goal-loop": "goal-loop",
   "caffeinate": "caffeinate",
   "session-preview": "session-preview",
+  "session-context-menu": "session-context-menu",
   "voice-dictation": "dictation",
   "path-picker": "path-picker",
   "conversations": "conversations",
@@ -101,7 +108,9 @@ export const referenceOwnership = {
   "usage": "usage",
   "providers": "providers",
   "mcp": "mcp",
+  "skills": "skills",
   "agent-analytics": "agent-analytics",
+  "agent-activity": "agent-activity",
   "browser-pocket": "browser-pocket",
   "usage-limit": "usage",
   "rendered-content": "rendered-content",
@@ -129,5 +138,8 @@ export const referenceOwnership = {
   "debug": "debug",
   "remote": "remote",
   "shared": "conversation",
-  "sessionFeed": "conversation"
+  "sessionFeed": "conversation",
+  // What a rendered feed row may do in the app that mounts it (#1177): no UI
+  // of its own; its behavior is the conversation page's.
+  "rendererHost": "conversation"
 } as const

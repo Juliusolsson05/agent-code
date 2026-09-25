@@ -10,14 +10,14 @@ import { useRenderedLeaseHygiene } from './effects/useRenderedLeaseHygiene'
 import { appendCodexTranscriptObservation } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 
 const counts = vi.hoisted(() => ({ controller: 0, panes: {} as Record<string, number>, chronology: [] as string[] }))
-vi.mock('@providers/registry.renderer', () => ({
-  getRendererProvider: () => ({ TileLeaf: ({ sessionId, runtime, onFocusRequest }: {
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
+  TileLeaf: ({ sessionId, runtime, onFocusRequest }: {
     sessionId: string; runtime: SessionRuntime; onFocusRequest: () => void
   }) => {
     counts.panes[sessionId] = (counts.panes[sessionId] ?? 0) + 1
     useEffect(() => { counts.chronology.push(`visible:${sessionId}`) }, [sessionId, runtime])
     return <button data-testid={sessionId} onClick={onFocusRequest}>{runtime.draftInput}</button>
-  } }),
+  },
 }))
 // No provider/IPC process is started by this test. The controller, store,
 // helpers, draft actions, autosave and real subscribed tile boundaries remain

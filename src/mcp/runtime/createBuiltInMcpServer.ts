@@ -40,6 +40,7 @@ import {
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
 import { MCP_SERVERS_INSTRUCTIONS, registerUserMcpTools } from '@mcp/runtime/userMcpTools.js'
+import { registerSkillsTools, SKILLS_INSTRUCTIONS } from '@mcp/runtime/skillsTools.js'
 
 export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request. When the user names an agent by the label shown beside it (such as B28) or by its spoken agent name, pass that as \`label\` or \`name\` exactly as the user said it instead of translating it to a sessionId yourself: it is resolved against what the user sees at the moment of the call. Labels are screen positions that renumber when earlier agents close, move or are pinned, so never reuse a label or sessionId remembered from earlier in the conversation, and repeat the returned displayLabel to the user so they can confirm which agent you reached. Session IDs also change when an agent reloads.`
 
@@ -123,6 +124,34 @@ export function createBuiltInMcpServer(
         return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal update failed.' }), isError: true }
       }
     })
+
+    // #1182. Registered with `goal` rather than as its own domain: it only
+    // records a flag on the caller's own goal, and the user's bulk close still
+    // asks before anything closes, so a separate toggle would add a setting
+    // without adding safety. Same authority model as goal_set.
+    //
+    // The description carries the WHEN rule as well as the instructions do,
+    // for the same reason the close tool repeats its authorization rule:
+    // clients differ in how prominently they surface server instructions, and
+    // an early completion is exactly what would put a still-needed agent in
+    // the user's close list.
+    server.registerTool('goal_complete', {
+      title: 'Complete goal',
+      description: 'Mark your goal as achieved, with one plain sentence saying what was delivered. Call it only after the user has accepted the result (for example the PR is merged or the user said it is done) — never while a PR, review, CI or any requested work is still open. Setting a new goal with goal_set clears it.',
+      inputSchema: { summary: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ summary }) => {
+      try {
+        if (!dependencies.goalStore) throw new Error('Goal is unavailable.')
+        const record = await dependencies.goalStore.complete(
+          scope.tldrIdentity ?? scope.sessionId, summary,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal completion failed.' }), isError: true }
+      }
+    })
   }
 
   if (scope.domains.includes('goal_loop')) {
@@ -192,6 +221,10 @@ export function createBuiltInMcpServer(
     registerUserMcpTools(server, scope, dependencies)
   }
 
+  if (scope.domains.includes('skills')) {
+    registerSkillsTools(server, scope, dependencies)
+  }
+
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
   }
@@ -242,6 +275,7 @@ function builtInInstructions(
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('browser') && dependencies.browserPockets ? [BROWSER_INSTRUCTIONS] : []),
     ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('skills') ? [SKILLS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]
       : []),

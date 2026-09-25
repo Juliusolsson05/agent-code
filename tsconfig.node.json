@@ -112,16 +112,11 @@
     // single biggest source of pre-existing tsc noise in this
     // codebase.
     "src/providers/*/renderer/**/*",
-    // registry.renderer.ts lives at providers/ root (not under
-    // providers/<kind>/renderer/), so the glob above doesn't catch
-    // it. It imports TileLeaf from @renderer/workspace/tile-tree/,
-    // which transitively pulls the entire renderer subtree into
-    // the node program. Explicit exclude stops that walk at the
-    // file.
-    "src/providers/registry.renderer.ts",
-    // Capability-only renderer registry imports provider row/condition TSX
-    // modules. It is consumed by renderer feed code, not by main, so keep it
-    // out of the node project for the same reason as registry.renderer.ts.
+    // The capability-only renderer registry sits at providers/ root (not
+    // under providers/<kind>/renderer/), so the glob above doesn't catch it.
+    // It imports provider row/condition TSX modules and is consumed by
+    // renderer feed code, not by main, so an explicit exclude stops the
+    // node program from walking the renderer subtree through it.
     "src/providers/registry.renderer.capabilities.ts",
     // ...and its colocated spawn-tool test (moved here from features/feed in
     // #493 PR-2), which imports the registry and would otherwise re-trigger

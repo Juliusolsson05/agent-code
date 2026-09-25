@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
 import { RemoteServer } from '@main/remote/RemoteServer.js'
 import type { RemoteSessionControl } from '@main/remote/RemoteServer.js'
@@ -17,6 +18,7 @@ import type { RemoteSessionControl } from '@main/remote/RemoteServer.js'
 import { WebSocketSessionFeed } from './WebSocketSessionFeed'
 import type { WebSocketLike } from './WebSocketSessionFeed'
 import { TranscriptStore } from './transcript/store'
+import type { SessionHistoryRequest } from '@shared/sessionFeed/types'
 
 // The drift-catcher: real WebSocketSessionFeed against real RemoteServer over
 // real sockets. wire.ts re-declares the protocol types instead of importing
@@ -49,6 +51,8 @@ function makeManager(): FakeManager {
 let dir: string
 let manager: FakeManager
 let feedSource: SessionFeedSource
+// Main's tap outlives any one server, so restartWithDeps re-sinks the same one.
+let feedTap: SessionFeedTap
 let server: RemoteServer
 let token: string
 let wsUrl: string
@@ -91,7 +95,8 @@ beforeEach(async () => {
   const pairing = new DevicePairing({ secret: randomBytes(32), registry })
   activeRegistry = registry
   activePairing = pairing
-  feedSource = new SessionFeedSource(manager as never)
+  feedTap = new SessionFeedTap(manager as never)
+  feedSource = new SessionFeedSource(manager as never, feedTap)
   server = new RemoteServer({
     manager,
     feedSource,
@@ -114,6 +119,7 @@ afterEach(async () => {
   feed = null
   await server.stop()
   feedSource.dispose()
+  feedTap.dispose()
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
 })
 
@@ -191,6 +197,11 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     for (let frame = 0; frame < 30; frame += 1) {
       manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
       manager.emit('process-state', { sessionId: frame % 2 ? 's1' : 's2', active: true })
+      // Since #1177 main coalesces screens per 100 ms window before they reach
+      // the phone. Flushing each frame stands in for repaints spaced past that
+      // window, so every frame still crosses and the client-side rate limit
+      // under test is actually exercised.
+      feedTap.flush()
     }
     await vi.waitFor(() => expect(screens).toBe(30))
     offList()
@@ -217,6 +228,8 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     const offScreen = f.onSessionScreen(() => { screens += 1 })
     for (let frame = 0; frame < 20; frame += 1) {
       manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
+      // See the previous test: one crossing per frame despite main's coalescer.
+      feedTap.flush()
     }
     await vi.waitFor(() => expect(screens).toBe(20))
     offScreen()
@@ -521,6 +534,10 @@ describe('remote reconnect after bounded output overflow', () => {
       await writeFile(transcript, Array.from({ length: 310 }, (_, i) => JSON.stringify(entry(i))).join('\n') + '\n')
       for (let i = 0; i < 160; i++) {
         manager.emit('screen', { sessionId: 's1', recent: `${i}:` + 'x'.repeat(64 * 1024) })
+        // Main coalesces screens (#1177); flushing each one models a producer
+        // whose large frames are spaced past the window, which is the traffic
+        // that can still overflow a paused socket.
+        feedTap.flush()
         if (i % 8 === 0) await new Promise(setImmediate)
       }
       await vi.waitFor(() => expect(serverSocket.readyState).toBe(NodeWebSocket.CLOSED))
@@ -569,7 +586,7 @@ async function restartWithDeps(extra: {
 }): Promise<void> {
   await server.stop()
   feedSource.dispose()
-  feedSource = new SessionFeedSource(manager as never)
+  feedSource = new SessionFeedSource(manager as never, feedTap)
   server = new RemoteServer({
     manager,
     feedSource,
@@ -649,5 +666,93 @@ describe('v2 summary overlays and note frames through the real client', () => {
     expect(seen).toContainEqual({ sessionId: 's1', text: 'Live status' })
     // Goal stays untouched by a TLDR update.
     expect(f.getGoalRecord('s1')).toBeNull()
+  })
+})
+
+// SessionFeed.loadHistory (#1177) — the desktop and the phone page the SAME
+// transcript through the one contract call and must see the same pages.
+//
+// Before the contract call existed the two paths were written separately (two
+// preload calls vs. `get-history`), each with its own defaults and cursor
+// handling, and nothing compared them. The desktop side here is IpcSessionFeed
+// over a `window.api` stub that does exactly what main's two IPC handlers do
+// (src/main/ipc/session.ts: the historyLoader call with its default limit);
+// the phone side is the real WebSocketSessionFeed against the real server.
+// Only `file` may differ: the phone's host adds it for stale-file detection.
+describe('loadHistory parity across the two SessionFeed transports', () => {
+  const SESSION_UUID = '3f1c9a52-6b7e-4d1a-9c2f-5e8d7a6b4c30'
+  let claudeHome: string
+  let savedClaudeHome: string | undefined
+  let savedWindow: unknown
+
+  beforeEach(async () => {
+    claudeHome = await mkdtemp(join(tmpdir(), 'history-parity-claude-'))
+    savedClaudeHome = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = claudeHome
+    savedWindow = (globalThis as { window?: unknown }).window
+  })
+
+  afterEach(async () => {
+    if (savedClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedClaudeHome
+    ;(globalThis as { window?: unknown }).window = savedWindow
+    await rm(claudeHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
+  })
+
+  it('serves identical initial and older pages for the same transcript', async () => {
+    const { getProjectDirForCwd } = await import('@shared/runtime/projectDir')
+    const { loadInitialHistoryChunk, loadOlderHistoryChunk } = await import('@main/sessions/historyLoader.js')
+    const { ipcSessionFeed } = await import('@renderer/features/sessionFeed/IpcSessionFeed')
+    const { mkdir } = await import('node:fs/promises')
+
+    const cwd = dir
+    const projectDir = await getProjectDirForCwd(cwd)
+    await mkdir(projectDir, { recursive: true })
+    const file = join(projectDir, `${SESSION_UUID}.jsonl`)
+    // 330 records: more than one initial page (120) plus one full older page
+    // (200), so the walk exercises initial, a full older page and a short one.
+    const records = Array.from({ length: 330 }, (_, i) => ({
+      type: 'user',
+      uuid: `parity-${i}`,
+      sessionId: SESSION_UUID,
+      cwd,
+      timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
+      message: { role: 'user', content: `synthetic-${i}` },
+    }))
+    await writeFile(file, records.map(record => JSON.stringify(record)).join('\n') + '\n')
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(file)
+
+    ;(globalThis as { window?: unknown }).window = {
+      api: {
+        loadInitialHistory: (params: Parameters<typeof loadInitialHistoryChunk>[0] & { limit?: number }) =>
+          loadInitialHistoryChunk({ ...params, limit: params.limit ?? 120 }),
+        loadOlderHistory: (params: Parameters<typeof loadOlderHistoryChunk>[0] & { limit?: number }) =>
+          loadOlderHistoryChunk({ ...params, limit: params.limit ?? 200 }),
+      },
+    }
+    const phone = makeFeed()
+    await waitForOpen(phone)
+
+    const transcript = { kind: 'claude' as const, cwd, providerSessionId: SESSION_UUID }
+    const seen: string[] = []
+    let cursor: { beforeMarker: string; beforeOffset?: number } | null = null
+    for (let page = 0; page < 5; page += 1) {
+      const request: SessionHistoryRequest = { sessionId: 's1', transcript, ...(cursor ?? {}) }
+      const [desktopPage, phonePage] = await Promise.all([
+        ipcSessionFeed.loadHistory(request),
+        phone.loadHistory(request),
+      ])
+      const { file: phoneFile, ...phoneRest } = phonePage
+      expect(phoneFile).toBe(file)
+      expect(phoneRest).toEqual(desktopPage)
+      seen.unshift(...desktopPage.entries.map(entry => String(entry.uuid)))
+      if (!desktopPage.hasMore) break
+      cursor = {
+        beforeMarker: String(desktopPage.entries[0]!.uuid),
+        ...(desktopPage.offsets ? { beforeOffset: desktopPage.offsets[0] } : {}),
+      }
+    }
+    // Both walked the whole durable range, in order, with nothing repeated.
+    expect(seen).toEqual(records.map(record => record.uuid))
   })
 })

@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
+import { GlobalToastContext } from '@renderer/ui/GlobalToastContext'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -36,17 +37,10 @@ function userMcpUnavailableMessage(servers: readonly { name: string; reason: str
   return `${servers.length} MCP servers weren't attached (${servers.map(server => server.name).join(', ')}). See Settings → MCP.`
 }
 
-type GlobalToastContextValue = {
-  showToast: (message: string, durationMs?: number) => void
-}
-
-const GlobalToastContext = createContext<GlobalToastContextValue>({
-  showToast: () => {},
-})
-
-export function useGlobalToast(): GlobalToastContextValue {
-  return useContext(GlobalToastContext)
-}
+// The context and its hook live in GlobalToastContext.ts (#1177) so rows can
+// raise toasts without importing this provider's store and IPC wiring; the
+// re-export keeps existing desktop-chrome imports working.
+export { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 export function GlobalToastProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null)
@@ -122,6 +116,13 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
   // every future agent, so a change to it must never be silent.
   useEffect(() => window.api.onUserMcpAgentChange?.(event => {
     showToast(`${event.message}. See Settings → MCP.`, 8000)
+  }), [showToast])
+
+  // #1161: an agent proposed or withdrew a skill through the skills domain.
+  // Always surfaced for the same reason as MCP changes: skills are
+  // instructions every future agent may load.
+  useEffect(() => window.api.onManagedSkillsAgentChange?.(event => {
+    showToast(`${event.message}. See Settings → Skills.`, 8000)
   }), [showToast])
 
   const dismiss = useCallback(() => {

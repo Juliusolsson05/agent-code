@@ -1,7 +1,7 @@
 import type { SessionRoutingGap, SessionRoutingScope, SessionRoutingResyncResult, SessionRoutingHistoryResult } from '@shared/types/sessionRouting.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
@@ -151,8 +151,9 @@ export const sessionApi = {
     prompt: string,
     imagePaths?: string[],
     deliveryId?: string,
+    options?: PromptDeliveryOptions,
   ): Promise<PromptDeliveryResult> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId, ...(options ? [options] : [])),
 
   resolveCondition: (
     sessionId: string,
@@ -225,7 +226,7 @@ export const sessionApi = {
 
   // The singular `session:jsonl-entry` bridge method was removed: main
   // emits JSONL ONLY through the coalescer as `session:jsonl-entries`
-  // (see main/sessions/jsonlCoalescer.ts). A live single entry arrives as
+  // (see the JSONL burst coalescing in main/sessions/sessionFeedTap.ts). A live single entry arrives as
   // a 1-element bulk burst with ~1ms setImmediate latency, so the renderer
   // can treat every JSONL delivery identically. The old singular channel
   // was the pre-coalescer slow path that caused the bootstrap-replay

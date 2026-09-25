@@ -91,7 +91,10 @@ export async function runToggleSessionRecordingCommand(workspace: Workspace): Pr
       const provider = workspace.state.sessions[sessionId]?.kind
       const started = await window.api.startSessionRecording(sessionId, provider)
       if (started.recording && started.generation) {
-        armRenderShapeCapture(sessionId, started.generation)
+        // The desktop command arms with main's append IPC directly: it IS the
+        // desktop, and it just started the recorder this sink writes into.
+        armRenderShapeCapture(sessionId, started.generation, (id, generation, sightings) =>
+          window.api.appendRenderShapeSightings(id, generation, sightings))
         workspace.showPaneToast(sessionId, 'recording started for this pane (shape capture armed)', 3000)
       } else {
         workspace.showPaneToast(sessionId, 'recording unavailable (AGENT_CODE_DEV_DEBUG off?)', 4000)

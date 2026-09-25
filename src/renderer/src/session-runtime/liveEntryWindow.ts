@@ -2,6 +2,10 @@ import { isConversationEntry } from '@shared/types/transcript'
 import type { Entry } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import { isGhostHiddenBehindJsonlTail } from '@renderer/session-runtime/ghosts'
+// The optimistic-row marker. The trimmer must never cut a locally minted
+// prompt row (constraint 2 below); the constant is shared so the minting side
+// and this guard cannot drift apart.
+import { OPTIMISTIC_PROMPT_UUID_PREFIX } from '@renderer/session-runtime/optimisticPrompt'
 
 import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
 
@@ -279,13 +283,6 @@ export function liveEntryWindowOverBudget(entries: readonly Entry[]): boolean {
 // The trim planner
 // ---------------------------------------------------------------------------
 
-/** Shared optimistic-row uuid marker (see collectLedgerInput.ts, which
- *  partitions on the same prefix; addOptimisticCodexUserEntry mints it
- *  for every optimistic-echo provider, not just codex). Duplicated as a
- *  literal because session-runtime must not import providers/renderer
- *  modules — the prefix IS the cross-layer contract. */
-const OPTIMISTIC_UUID_PREFIX = 'optimistic-codex-user:'
-
 export type LiveEntryTrimPlan = {
   /** Drop entries[0..cut). Always > 0 when a plan is returned. */
   cut: number
@@ -475,7 +472,7 @@ export function planLiveEntryTrim(
     const entry = entries[i]
     const uuid = (entry as { uuid: string }).uuid
     // Constraint 2.
-    if (uuid.startsWith(OPTIMISTIC_UUID_PREFIX)) break
+    if (uuid.startsWith(OPTIMISTIC_PROMPT_UUID_PREFIX)) break
     // Constraint 3. When no live turn / history / ghost exists the bound
     // is Infinity and the timestamp check is skipped entirely — entries
     // without timestamps (rare non-conversation shapes) shouldn't freeze

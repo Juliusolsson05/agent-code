@@ -1148,6 +1148,50 @@ body,
   animation: cc-work-pulse 900ms ease-in-out infinite;
 }
 
+/* Agent Completion Indicator (#1172): a pane header striped in the accent
+   (activity) colour while an agent's finished turn is still unseen.
+
+   WHY stripes and not a solid fill: solid accent already means "working
+   right now" (Status Mode), so "finished" needs the same colour in a
+   different shape. It reads as related, but can't be mistaken for it at a
+   glance across the grid.
+
+   WHY the FULL accent (#1191): the stripes are the same signal family as the
+   working fill, so they use exactly its colour. The first version mixed the
+   accent down to 45% only to keep the header text legible on the bands; that
+   job now belongs to `.pane-header-completion-plate` below, which keeps the
+   text off the bands entirely, so the stripes no longer have to be faint.
+
+   WHY vertical bars 7px/7px (#1191): the user asked for straight bars. The
+   diagonal 5px/5px bands repeated every ~14px along the header; a 14px
+   vertical period keeps that rhythm instead of reading as a dense barcode.
+
+   Static on purpose: an animated background on every finished pane would
+   pull attention across the whole grid, and the point is to be scannable,
+   not loud. */
+.pane-header-completion-stripes {
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--color-accent) 0 7px,
+    transparent 7px 14px
+  );
+}
+
+/* The surface-coloured plate the header's text sits on while striped (#1191).
+
+   WHY a plate instead of recolouring the text: half of every stripe is
+   accent and half is surface, so no single text colour contrasts with both.
+   `accent-fg` fails on the surface bands and the muted colour fails on the
+   accent bands, and each glyph visibly flickers as it crosses. On the plate the
+   label and path keep exactly the colours they have on an unstriped header.
+
+   The padding/negative-margin pair is always applied (see PaneHeader): only
+   the background toggles, so text never moves when the stripes appear or
+   clear. */
+.pane-header-completion-plate {
+  background-color: var(--color-surface);
+}
+
 /* ---------- Modal animations ---------- */
 @keyframes cc-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cc-pop {

@@ -4,6 +4,7 @@ export type SettingCategoryId =
   | 'providers'
   | 'agents'
   | 'mcp'
+  | 'skills'
   | 'commands'
   | 'dictation'
   | 'performance'
@@ -45,6 +46,14 @@ export const SETTING_CATEGORIES: SettingCategory[] = [
     id: 'mcp',
     label: 'MCP',
     description: 'Tools your agents can use: Agent Code\'s own MCP servers and yours.',
+  },
+  // Its own category (#1161) for the same reason as MCP: one grid of every
+  // skill per provider, plus Conventions and the Custom Skills editor that
+  // used to sit among the Agents rows.
+  {
+    id: 'skills',
+    label: 'Skills',
+    description: 'Instructions your agents can load: installed, written here, and found on this machine.',
   },
   {
     id: 'commands',

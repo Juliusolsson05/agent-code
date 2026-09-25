@@ -83,12 +83,13 @@ export function isDarkThemeMode(mode: ThemeModeValue): boolean {
 
 export type AccentId =
   | 'frost'
+  | 'lime'
   | 'amber'
-  | 'sky'
   | 'magenta'
   | 'gold'
   | 'coral'
   | 'lavender'
+  | 'sky'
 
 export type AccentMeta = {
   id: AccentId
@@ -99,24 +100,43 @@ export type AccentMeta = {
   fgLight: string
 }
 
-// WHY Lime and Sage are gone rather than merely demoted: the public-release
-// audit (#973) asked for no green in any default, and the green accents WERE
-// the old identity — every marker, dot and focus ring wore Lime. Leaving them
-// selectable would keep two entries whose only purpose was the look we are
-// replacing. coerceSettings maps a persisted 'lime'/'sage' to Frost, so an
-// existing install lands on the new default rather than on garbage.
+// Order is the order both pickers render (the Appearance menu's 4-column grid
+// and the Settings accent choice), so it is a product decision, not an
+// alphabetisation:
+//
+// - Frost MUST stay first. It is the default, and `applyTheme` falls back to
+//   ACCENTS[0] for an id that resolves to nothing, so "first" and "default"
+//   have to be the same entry.
+// - Lime is second. #973 deleted it (along with Sage) to get green out of every
+//   DEFAULT, but the owner only wanted Nord added and made the default, not the
+//   green look taken away (#1173). "No green by default" is satisfied by Frost
+//   being the default; Lime being selectable does not break it. Lime keeps its
+//   original pre-Nord values so an install that had it looks exactly as before.
+// - Sage (the second, muted green #973 also deleted) is NOT restored: the ask
+//   was for "the green" back, and Lime is the one the app shipped with. Eight
+//   accents also fill the Appearance menu's 4-column grid evenly (4 × 2),
+//   where nine would leave a lone chip on a third row. A persisted 'sage'
+//   still lands on the default in coerceSettings.
+// - Sky is last because the owner asked for it there when Lime came back
+//   (#1173). Nothing depends on its position; it is a pure ordering choice.
 //
 // Frost is Nord's `nord8` (#88c0d0) on dark canvases and `nord10` (#5e81ac)
 // on the cream light canvases, where nord8 has too little contrast to carry
 // focus rings.
+//
+// Before re-adding a previously retired id here, check
+// migrateLegacyDefaultAppearance in persistence.ts. A migration keyed on an
+// id that "can no longer exist" is only safe while it really cannot, which is
+// exactly what went wrong when Lime came back.
 export const ACCENTS: AccentMeta[] = [
   { id: 'frost', name: 'Frost', dark: '#88c0d0', light: '#5e81ac', fgDark: '#171b21', fgLight: '#faf9f6' },
+  { id: 'lime', name: 'Lime', dark: '#7dd3a0', light: '#2f6f46', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'amber', name: 'Amber', dark: '#ff9f4a', light: '#8a470b', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'magenta', name: 'Magenta', dark: '#e66ed9', light: '#8b247f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'gold', name: 'Gold', dark: '#f5d64a', light: '#735905', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'coral', name: 'Coral', dark: '#ff6b6b', light: '#9f2929', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#5a43b4', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
 // WHY a separate type: this is the user-preference choice (a label)
@@ -377,6 +397,10 @@ export type Settings = {
    *  the modal validates before saving. */
   customAppearanceJson: string
   showStatusMode: boolean
+  /** Stripe an agent pane's header while it holds an unseen completion
+   *  (#1172). Gates the stripes only: when a completion counts as seen
+   *  (engagement, or dwelling on the pane) is the same with it off. */
+  showAgentCompletionIndicator: boolean
   showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
   /** Mode the app boots into on first launch / fresh install (no
@@ -660,6 +684,13 @@ export type Settings = {
    * command a downgrade removed.
    */
   commandKeybindingOverrides: Record<string, string[]>
+  /**
+   * External skills (Settings → Skills → Also found on this machine) the user
+   * chose to hide, keyed `<targetId>:<folder>` (#1161). A per-viewer display
+   * choice only: hiding never touches the folder, and a skill that appears in
+   * a new root shows up again because that is a new key.
+   */
+  hiddenExternalSkills: string[]
   /** Ambient provider-quota indicator in the SettingsBar header row.
    *  On by default: quota headroom is a planning input for dispatching
    *  agent fleets, and the whole point of the feature is ambient
@@ -685,6 +716,7 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'frost',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   showStatusMode: true,
+  showAgentCompletionIndicator: true,
   showWorktreeBadges: true,
   // On by default for the public build — the owner's explicit call (#973):
   // Agent Code is a workspace for people who run many agents at once, and the
@@ -764,6 +796,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Seeding this with today's defaults would pin every command to this
   // release's chords and make future default improvements invisible.
   commandKeybindingOverrides: {},
+  hiddenExternalSkills: [],
   // Off (#973): the header quota indicator is opt-in for the public build;
   // the Usage command and modal are unaffected.
   usageHeaderEnabled: false,

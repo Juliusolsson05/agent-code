@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmod,
   lstat,
@@ -6,6 +6,8 @@ import {
   mkdtemp,
   readdir,
   rename,
+  rmdir,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -16,8 +18,6 @@ import {
   AGENT_CODE_INSTALLED_SKILL_MAX_FILES,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
-  AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_BYTES,
-  AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES,
   compareAgentCodeInstalledSkillPaths,
   findAgentCodeInstalledSkillPathCollision,
   isSafeAgentCodeInstalledSkillPath,
@@ -33,10 +33,7 @@ import type { StagedInstalledSkillCandidate } from './githubSkillSource.js'
  * provider write capable of destroying the only reviewed package snapshot.
  */
 export class InstalledSkillPackageStore {
-  constructor(
-    private readonly root: string,
-    private readonly maxRootBytes = AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_BYTES,
-  ) {}
+  constructor(private readonly root: string) {}
 
   async store(candidate: StagedInstalledSkillCandidate): Promise<void> {
     assertDigest(candidate.snapshotDigest)
@@ -56,16 +53,12 @@ export class InstalledSkillPackageStore {
       return
     }
 
-    const usage = await this.rootUsage()
-    const candidateEntries = packageEntryCount(candidate.candidate.files) + 1
-    if (usage.bytes + candidate.candidate.totalBytes > this.maxRootBytes
-      || usage.entries + candidateEntries
-        > AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES) {
-      throw new Error(
-        `Installed skill source storage reached its ${formatBytes(this.maxRootBytes)} safety limit. `
-        + `Quit Agent Code and remove old snapshots from ${this.root} before installing another package.`,
-      )
-    }
+    // WHY there is no whole-root budget any more (#1161): it existed only
+    // because unreferenced snapshots were never deleted, and in practice it
+    // became a hidden skills-count cap ("Quit Agent Code and remove old
+    // snapshots"). Snapshots nothing references are now removed by
+    // `removeIfUnreferenced`/`sweepUnreferenced`, and each admitted package is
+    // still bounded by the per-package manifest limits validated above.
 
     // WHY failed staging directories are allowed to remain: recursively
     // cleaning a path after releasing the validated root inode has the same
@@ -158,15 +151,110 @@ export class InstalledSkillPackageStore {
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new Error('Installed skill snapshot path changed outside Agent Code')
     }
-    // WHY an unreferenced snapshot is retained instead of recursively removed:
-    // Node does not expose a portable openat-style recursive delete anchored to
-    // the directory inode validated above. Between lstat and rm, an external
-    // change could replace the private root with a link and redirect recursive
-    // deletion into unmanaged data. Content-addressed snapshots are inert; a
-    // retained storage is the safe failure mode until deletion can be
-    // expressed relative to a securely opened root handle. `store()` accounts
-    // for every retained snapshot and failed staging file before admitting new
-    // bytes, so choosing safety here cannot grow the app-owned root forever.
+    // WHY quarantine first: the rename happens inside the validated private
+    // root and gives the directory an unguessable name, so nothing that
+    // races us by the well-known `<digest>` name can be swept up below. The
+    // digest stays in the name so a crash mid-cleanup leaves evidence the
+    // next sweep can finish with the same proof.
+    const quarantine = join(this.root, `.trash-${digest}-${randomUUID()}`)
+    await rename(directory, quarantine)
+    await this.removeProvenSnapshot(quarantine, digest)
+  }
+
+  /**
+   * Removes every snapshot (and interrupted `.trash-<digest>-*` quarantine)
+   * that `referencedDigests` does not name. Best effort per entry: a snapshot
+   * that fails its proof is left in place, inert, and the sweep continues.
+   *
+   * WHY `.staging-*` directories are skipped: they have no digest in their
+   * name, so there is nothing to prove their contents against. They only
+   * exist after a failed store and are bounded by the per-package limits.
+   */
+  async sweepUnreferenced(referencedDigests: Set<string>): Promise<{ removed: number; failed: number }> {
+    let removed = 0
+    let failed = 0
+    try {
+      await this.assertRootIsSafe()
+    } catch {
+      return { removed, failed }
+    }
+    const entries = await readdir(this.root, { withFileTypes: true })
+    for (const entry of entries) {
+      const trash = /^\.trash-([a-f0-9]{64})-[0-9a-f-]{36}$/.exec(entry.name)
+      const digest = /^[a-f0-9]{64}$/.test(entry.name) ? entry.name : trash?.[1]
+      if (!digest || referencedDigests.has(digest)) continue
+      try {
+        if (trash) {
+          const path = join(this.root, entry.name)
+          await this.assertDirectChild(path)
+          await this.removeProvenSnapshot(path, digest)
+        } else {
+          await this.removeIfUnreferenced(digest, referencedDigests)
+        }
+        removed += 1
+      } catch {
+        failed += 1
+      }
+    }
+    return { removed, failed }
+  }
+
+  /**
+   * Deletes a quarantined snapshot using only non-recursive primitives.
+   *
+   * WHY this is safe enough to replace the old "retain forever" rule
+   * (docs/design/agent-code-conventions.md): content addressing makes the
+   * digest a proof of the directory's exact bytes. The manifest is rebuilt
+   * FROM DISK (links, special files and unsafe names are rejected by the
+   * walk) and must hash to that digest before anything is unlinked, so a
+   * directory holding anything we did not store is never touched. Each file
+   * is re-hashed immediately before its unlink, and directories are removed
+   * with `rmdir`, which refuses a non-empty directory — an unexpected entry
+   * stops the cleanup instead of widening it. The residual ancestor-swap race
+   * can at worst unlink a file byte-identical to one of our own snapshot
+   * files at the same relative path, the same bound provider-root removal
+   * already accepts.
+   */
+  private async removeProvenSnapshot(directory: string, digest: string): Promise<void> {
+    await assertSnapshotDirectory(directory)
+    const paths = await walkRegularFiles(directory)
+    const files: AgentCodeInstalledSkillFileRecord[] = []
+    for (const relativePath of paths) {
+      const target = join(directory, ...relativePath.split('/'))
+      await assertNoLinksBetween(directory, target)
+      const read = await readBoundedFile(target, AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)
+      files.push({
+        path: relativePath,
+        bytes: read.bytes.byteLength,
+        sha256: sha256(read.bytes),
+        executable: (read.stat.mode & 0o111) !== 0,
+      })
+    }
+    files.sort((left, right) => compareAgentCodeInstalledSkillPaths(left.path, right.path))
+    if (files.length === 0 || manifestDigest(files) !== digest) {
+      throw new Error('Installed skill snapshot no longer matches its digest; it was left in place.')
+    }
+    for (const file of files) {
+      const target = join(directory, ...file.path.split('/'))
+      await assertNoLinksBetween(directory, target)
+      const read = await readBoundedFile(target, AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)
+      if (sha256(read.bytes) !== file.sha256) {
+        throw new Error('Installed skill snapshot changed during cleanup; it was left in place.')
+      }
+      await unlink(target)
+    }
+    const directories = new Set<string>()
+    for (const file of files) {
+      const segments = file.path.split('/')
+      for (let length = segments.length - 1; length >= 1; length -= 1) {
+        directories.add(segments.slice(0, length).join('/'))
+      }
+    }
+    // Deepest first, so every rmdir sees an already-emptied child.
+    const ordered = [...directories].sort((left, right) =>
+      right.split('/').length - left.split('/').length || compareAgentCodeInstalledSkillPaths(left, right))
+    for (const relativePath of ordered) await rmdir(join(directory, ...relativePath.split('/')))
+    await rmdir(directory)
   }
 
   private snapshotDirectory(digest: string): string {
@@ -216,39 +304,6 @@ export class InstalledSkillPackageStore {
       || isAbsolute(fromRoot) || fromRoot.includes(sep)) {
       throw new Error('Installed skill snapshot path escaped its private root')
     }
-  }
-
-  private async rootUsage(): Promise<{ bytes: number; entries: number }> {
-    await this.assertRootIsSafe()
-    let bytes = 0
-    let entries = 0
-    const visit = async (directory: string): Promise<void> => {
-      if (bytes > this.maxRootBytes
-        || entries > AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES) return
-      const directoryEntries = await readdir(directory, { withFileTypes: true })
-      for (const entry of directoryEntries) {
-        const path = join(directory, entry.name)
-        const stat = await lstat(path)
-        entries += 1
-        if (stat.isSymbolicLink()) {
-          throw new Error('Installed skill source storage contains a symbolic link')
-        }
-        if (stat.isDirectory()) {
-          await visit(path)
-        } else if (stat.isFile()) {
-          bytes += stat.size
-        } else {
-          throw new Error('Installed skill source storage contains a non-regular filesystem object')
-        }
-        // WHY filesystem entries are capped independently of bytes: repeated
-        // failed staging attempts could otherwise fill the private root with
-        // empty files/directories and make every future audit unbounded.
-        if (bytes > this.maxRootBytes
-          || entries > AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES) return
-      }
-    }
-    await visit(this.root)
-    return { bytes, entries }
   }
 
   private async ensureContainedDirectory(directory: string, containmentRoot: string): Promise<void> {
@@ -312,19 +367,6 @@ function validateContents(
       throw new Error(`Installed skill package content does not match its manifest: ${file.path}`)
     }
   }
-}
-
-function packageEntryCount(files: AgentCodeInstalledSkillFileRecord[]): number {
-  const directories = new Set<string>()
-  for (const file of files) {
-    const segments = file.path.split('/')
-    let parent = ''
-    for (const segment of segments.slice(0, -1)) {
-      parent = parent ? `${parent}/${segment}` : segment
-      directories.add(parent)
-    }
-  }
-  return files.length + directories.size
 }
 
 async function verifyDirectory(
@@ -402,10 +444,6 @@ function assertDigest(digest: string): void {
 
 function sha256(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex')
-}
-
-function formatBytes(bytes: number): string {
-  return `${Math.ceil(bytes / (1024 * 1024))} MiB`
 }
 
 export function installedSkillManifestDigest(files: AgentCodeInstalledSkillFileRecord[]): string {

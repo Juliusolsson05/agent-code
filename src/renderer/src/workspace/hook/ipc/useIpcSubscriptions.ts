@@ -28,8 +28,12 @@ import {
   SEMANTIC_HISTORY_CAP,
   withDerivedSessionStatus,
 } from '@renderer/session-runtime/semantic/helpers'
-import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
-import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { stepLiveSemantic } from '@renderer/session-runtime/ingest/liveSemantic'
+import {
+  OPENCODE_SERVER_UNREACHABLE,
+  PI_BRIDGE_UNREACHABLE,
+  faultRecoveredByDiagnostic,
+} from '@renderer/session-runtime/liveChannelRecovery'
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/session-runtime/semantic/summarize'
 import { isSemanticRawCaptureEnabled } from '@renderer/session-runtime/semantic/rawCapture'
@@ -49,9 +53,15 @@ import {
   liveEntryWindowOverBudget,
   markUuidsTrimmed,
   planLiveEntryTrim,
-  stampHistoryMarker,
+  releaseTrimmedUuid,
   withinOlderPrependGrace,
 } from '@renderer/session-runtime/liveEntryWindow'
+import {
+  admitMappedEntries,
+  isPaginationAnchor,
+  latestCommittedTimestamp,
+  type CommittedSeenLedger,
+} from '@renderer/session-runtime/ingest/committedRecords'
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
@@ -178,10 +188,6 @@ const jsonlProviderStreamBySession = new Map<SessionId, JsonlProviderStreamState
 function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
   const value = record?.[key]
   return typeof value === 'string' ? value : null
-}
-
-function entryUuid(entry: Entry): string | null {
-  return typeof entry.uuid === 'string' ? entry.uuid : null
 }
 
 function appendQueuedSubmissionReleases(
@@ -414,7 +420,6 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 // -----------------------------------------------------------------------------
 
 /** PiSession's marker for "the bridge never connected" (piSession.ts). */
-const PI_BRIDGE_UNREACHABLE = '(provider_bridge_unreachable)'
 
 export function useIpcSubscriptions(
   // WHY feed identity matters: `feed` sits in the effect's dep array, so an
@@ -893,7 +898,7 @@ export function useIpcSubscriptions(
       // port, and the process neither paints nor exits, so this is as
       // permanent as a stopped channel and belongs in the lifetime banner: the
       // alternative is a blank pane with a warning that scrolled away.
-      const serverUnreachable = message.includes('(provider_server_unreachable)')
+      const serverUnreachable = message.includes(OPENCODE_SERVER_UNREACHABLE)
       updateRuntime(sessionId, {
         transcriptStatus: 'error',
         transcriptError: message,
@@ -919,18 +924,19 @@ export function useIpcSubscriptions(
     // else's to clear.
     const offDiagnostic = feed.onSessionTranscriptDiagnostic(({ sessionId, diagnostic }) => {
       if (quarantinesSessionFeed(sessionId)) return
-      const live = diagnostic as { kind?: string; connected?: boolean } | null
+      // Which fault this diagnostic proves recovered is the shared rule the
+      // phone applies too (session-runtime/liveChannelRecovery.ts, #1177).
+      const recovered = faultRecoveredByDiagnostic(diagnostic)
       // Pi's bridge is the same kind of late-connecting live channel, but its
       // "never connected" warning lives in liveChannelWarning (its transcript
       // still works), and it clears the moment the bridge connects.
-      if (live?.kind === 'pi-terminal-live-state' && live.connected === true) {
+      if (recovered === PI_BRIDGE_UNREACHABLE) {
         if (refs.latestRuntimesRef.current[sessionId]?.liveChannelWarning) updateRuntime(sessionId, { liveChannelWarning: null })
         return
       }
-      const faultMarker = live?.kind === 'opencode-terminal-live-state' ? '(provider_server_unreachable)' : undefined
-      if (!faultMarker || live?.connected !== true) return
+      if (recovered === null) return
       const current = refs.latestRuntimesRef.current[sessionId]
-      if (!current?.transcriptChannelError?.includes(faultMarker)) return
+      if (!current?.transcriptChannelError?.includes(recovered)) return
       updateRuntime(sessionId, {
         transcriptChannelError: null,
         transcriptError: null,
@@ -1276,43 +1282,14 @@ export function useIpcSubscriptions(
         // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
         const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
 
-        // prompt_suggestion is an ephemeral next-prompt hint, NOT a turn. It
-        // must never enter foldSemanticEvent / semantic history (that is the
-        // #174 leak). Handle it out-of-band: write the per-session runtime
-        // field and return before the turn / ghost / phase machinery runs.
-        if (semanticEvent.type === 'prompt_suggestion') {
-          const updated = applyPromptSuggestionToRuntime(current, semanticEvent)
-          if (updated === current) {
-            closeSpan({ sessionId, eventType: 'prompt_suggestion', changed: false })
-            return prev
-          }
-          closeSpan({ sessionId, eventType: 'prompt_suggestion', changed: true })
-          return { ...prev, [sessionId]: updated }
-        }
-
-        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind, current.sessionRunId)
-        const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
-        const clearOptimisticAwaiting =
-          isSemanticTurnRunning(nextSemantic.currentTurn) ||
-          eventType === 'turn_completed' ||
-          eventType === 'turn_stopped' ||
-          eventType === 'api_error' ||
-          eventType === 'stream_error'
-
-        // stream_phase — in-feed indicator state, reduced by the SHARED
-        // machine in semantic/streamPhaseMachine.ts (extracted 2026-07-06 so
-        // the remote phone client runs the identical reducer instead of a
-        // hand-copied fork — see that module's header for the full WHY and
-        // the layering rationale that used to live inline here). Runs on the
-        // POST-fold turn per the reducer's caller contract.
-        const {
-          streamPhase,
-          streamPhasePendingToolName,
-          streamPhasePendingToolUseId,
-          turnStartedAt,
-          phaseChangedAt,
-          submittedAt,
-        } = reduceStreamPhase(
+        // Fold + stream phase through the step the phone runs too (#1177;
+        // session-runtime/ingest/liveSemantic.ts owns the order and the
+        // out-of-band routing). The stream_phase reducer is the SHARED machine
+        // in semantic/streamPhaseMachine.ts (extracted 2026-07-06 so the remote
+        // phone client runs the identical reducer instead of a hand-copied
+        // fork), run on the POST-fold turn per its caller contract.
+        const step = stepLiveSemantic(
+          current.semantic,
           {
             streamPhase: current.streamPhase,
             streamPhasePendingToolName: current.streamPhasePendingToolName,
@@ -1322,8 +1299,44 @@ export function useIpcSubscriptions(
             submittedAt: current.submittedAt,
           },
           semanticEvent,
-          nextSemantic.currentTurn,
+          sessionKind,
+          current.sessionRunId,
         )
+
+        // prompt_suggestion is an ephemeral next-prompt hint, NOT a turn. It
+        // must never enter foldSemanticEvent / semantic history (that is the
+        // #174 leak). The shared step refuses to fold it; the desktop applies
+        // it out-of-band to the per-session chip and returns before the turn
+        // / ghost / phase machinery runs.
+        if (step.kind === 'out-of-band') {
+          const updated = applyPromptSuggestionToRuntime(current, semanticEvent)
+          if (updated === current) {
+            closeSpan({ sessionId, eventType: 'prompt_suggestion', changed: false })
+            return prev
+          }
+          closeSpan({ sessionId, eventType: 'prompt_suggestion', changed: true })
+          return { ...prev, [sessionId]: updated }
+        }
+
+        const nextSemantic = step.semantic
+        const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
+        const clearOptimisticAwaiting =
+          isSemanticTurnRunning(nextSemantic.currentTurn) ||
+          eventType === 'turn_completed' ||
+          eventType === 'turn_stopped' ||
+          eventType === 'api_error' ||
+          eventType === 'stream_error'
+
+        // stream_phase — in-feed indicator state, already reduced by the
+        // shared step above on the POST-fold turn.
+        const {
+          streamPhase,
+          streamPhasePendingToolName,
+          streamPhasePendingToolUseId,
+          turnStartedAt,
+          phaseChangedAt,
+          submittedAt,
+        } = step.phase
 
         // Ghost bridge — refresh the provisional ghost map from
         // the new semantic turn. This runs on every semantic tick;
@@ -1831,6 +1844,14 @@ export function useIpcSubscriptions(
         // claim that an optimistic/queued owner was reconciled or released.
         let observationRuntime = current
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
+        // The desktop keeps trimmed tombstones in liveEntryWindow's per-session
+        // registry (shared with the trim below and the older-history pager);
+        // the admission rule itself is the shared one (committedRecords.ts).
+        const seenLedger: CommittedSeenLedger = {
+          seen,
+          isTrimmed: uuid => isUuidTrimmed(sessionId, uuid),
+          releaseTrimmed: uuid => releaseTrimmedUuid(sessionId, uuid),
+        }
         const appended: Entry[] = []
         let oldestMarker: string | null = current.historyOldestMarker
         let queuedMessages = current.queuedMessages
@@ -2017,7 +2038,7 @@ export function useIpcSubscriptions(
           // bootstrap/older sites only recorded kept lines. Kept-only
           // is now uniform — worst case pagination re-reads a few
           // filtered lines, which the filter drops again.
-          if (mapped.length > 0 && marker && !oldestMarker) oldestMarker = marker
+          if (!oldestMarker && isPaginationAnchor(mapped, marker)) oldestMarker = marker
 
           // Optimistic-user reconciliation runs for every provider that
           // SEEDS optimistic rows — gate on the capability, not on
@@ -2143,37 +2164,26 @@ export function useIpcSubscriptions(
             }
           }
 
-          // ---- Shared append path (both providers) ----
+          // ---- Shared append path (every provider) ----
+          // The live rule (#375 part B): dedupe against seen ∪ trimmed, so a
+          // resume bootstrapTail replay never re-appends trimmed old rows at
+          // the tail — only the older-history loader may bring them back, in
+          // order, at the head. Each admitted entry carries this line's
+          // pagination marker (a non-enumerable rider, see liveEntryWindow.ts)
+          // so the trim below can re-anchor historyOldestMarker at the oldest
+          // RETAINED entry. The rule lives in session-runtime/ingest/
+          // committedRecords.ts (#1177), which the phone's store runs too.
+          //
           // Dedupe order note: the old claude branch added uuids of
           // FILTERED lines to `seen` too (dedupe ran before the
           // conversation filter). The mapper filters first, so
           // filtered lines never reach dedupe — inconsequential,
           // because a re-arriving filtered line is filtered again.
-          //
-          for (const e of mapped) {
-            const u = entryUuid(e)
-            if (u) {
-              // Live-path dedupe is seen ∪ trimmed (#375 part B): a trimmed
-              // uuid normally still sits in `seen`, but the trimmed check is
-              // load-bearing for any lifecycle where `seen` is reset while
-              // the runtime entries survive — a resume bootstrapTail replay
-              // must NOT re-append trimmed old rows at the tail of the feed.
-              // Only the older-history loader may bring them back (in order,
-              // at the head) — see loadOlderHistory's asymmetric dedupe.
-              if (seen.has(u) || isUuidTrimmed(sessionId, u)) continue
-              seen.add(u)
-            }
-            // Remember this line's pagination marker on the entry itself
-            // (non-enumerable rider — see liveEntryWindow.ts for why not a
-            // map). The trim below advances historyOldestMarker to the
-            // oldest RETAINED entry's marker so pagination can re-fetch the
-            // trimmed region.
-            stampHistoryMarker(e, marker)
-            appended.push(e)
-            if (indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)) {
-              toolIndexChanged = true
-            }
-          }
+          const admission = admitMappedEntries(mapped, marker, 'live', seenLedger, {
+            indexes: { toolUseIndex, toolResultIndex },
+          })
+          appended.push(...admission.admitted)
+          if (admission.toolIndexChanged) toolIndexChanged = true
         }
 
         const baseEntries = reconciledOptimisticTexts.size > 0
@@ -2206,16 +2216,7 @@ export function useIpcSubscriptions(
         // the correct behaviour: those entries do not represent a
         // fresh "JSONL is alive" signal at the wall clock the rest
         // of the predicate cares about.
-        let lastJsonlEntryAt = current.lastJsonlEntryAt
-        for (const entry of appended) {
-          const ts = (entry as { timestamp?: unknown }).timestamp
-          if (typeof ts !== 'string') continue
-          const ms = Date.parse(ts)
-          if (!Number.isFinite(ms)) continue
-          if (lastJsonlEntryAt === null || ms > lastJsonlEntryAt) {
-            lastJsonlEntryAt = ms
-          }
-        }
+        const lastJsonlEntryAt = latestCommittedTimestamp(current.lastJsonlEntryAt, appended)
 
         // ---- Usage-limit carrier (#821) ----
         // Claude persists an exhausted-quota turn as an assistant record with
@@ -2238,7 +2239,7 @@ export function useIpcSubscriptions(
         // WHY it scans `appended` and not the raw burst: `appended` is the
         // post-dedupe set (uuids already in `seen` never reach it), and a
         // RESUMED pane replays its last ~200 lines through this exact channel
-        // (main/sessions/jsonlCoalescer.ts). Scanning the burst meant every
+        // (main/sessions/sessionFeedTap.ts). Scanning the burst meant every
         // restart re-detected old carriers — and the census found one session
         // with 63 consecutive rate-limit records, so a replay could re-arm the
         // guard's exception dozens of times for an episode that ended days ago.

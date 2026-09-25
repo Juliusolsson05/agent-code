@@ -2,7 +2,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
@@ -65,6 +65,11 @@ import { hydrateTranscriptWithoutWaking as hydrateManagedTranscript } from '@ren
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { closeIdleOrchestrationAgents as runIdleOrchestrationCleanup } from '@renderer/workspace/idleOrchestrationAgents'
+import { closeAgentActivitySelection as runAgentActivityClose } from '@renderer/workspace/agentActivityClose'
+import { closeCompletedGoalAgents as runCompletedGoalClose } from '@renderer/workspace/completedGoalAgents'
+import type { TldrRecord } from '@shared/types/tldr'
+import { withTerminalLastUsed, withTerminalLastUsedFloor } from '@renderer/workspace/terminalLastUsed'
+import type { AgentActivitySelection } from '@renderer/workspace/agentActivityClose'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -270,6 +275,8 @@ export function useWorkspace(
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
   } =
     useStreamingActions(setRuntimes, isCodexSession)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
@@ -915,7 +922,28 @@ export function useWorkspace(
     [paneActions.closeSession, refs, showToast],
   )
 
-  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
+  // Agent Activity's multi-select close (#1170). Wired here for the same two
+  // reasons as the idle cleanup above: the global toast, and the live refs the
+  // flow reads before and after its confirmation dialog.
+  const closeAgentActivitySelection = useCallback(
+    (selection: readonly AgentActivitySelection[]) => runAgentActivityClose(selection, {
+      readState: () => refs.stateRef.current,
+      readRuntimes: () => refs.latestRuntimesRef.current,
+      closeSession: paneActions.closeSession,
+      confirm: requestCloseConfirmation,
+      showToast,
+    }),
+    [paneActions.closeSession, refs, showToast],
+  )
+
+  // Session events AND history reads arrive through whichever SessionFeed the
+  // app root mounted (desktop: ipcSessionFeed in app/main.tsx; remote client:
+  // its WebSocket feed; tests: FakeSessionFeed). The provider value is a
+  // module const, so identity is stable — which the subscription effect's dep
+  // array requires; see the WHY on useIpcSubscriptions. Read here, before the
+  // history actions, because older-history paging reads through it (#1177).
+  const sessionFeed = useSessionFeed()
+  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime, sessionFeed)
 
   const { undoClose, undoCloseCount } = useUndoCloseAction(
     state,
@@ -932,15 +960,44 @@ export function useWorkspace(
     showToast,
   )
 
+  // Close Completed Agents… (#1182). Wired here like the two bulk closes above
+  // for the global toast and the live refs, plus the lane removal the flow does
+  // afterwards — which is why it sits after dispatchActions. The goal records
+  // come from the modal: it is the one holding them fresh (read on open, kept
+  // current by goal:changed), and the flow reads them again at every kill.
+  const closeCompletedGoalAgents = useCallback(
+    (
+      selection: readonly SessionId[],
+      options: { removeLanes: boolean; readGoals: () => Record<string, TldrRecord> },
+    ) => runCompletedGoalClose(selection, { removeLanes: options.removeLanes }, {
+      readState: () => refs.stateRef.current,
+      readRuntimes: () => refs.latestRuntimesRef.current,
+      readGoals: options.readGoals,
+      closeSession: paneActions.closeSession,
+      removeTiledLane: dispatchActions.removeTiledLane,
+      showToast,
+    }),
+    [dispatchActions.removeTiledLane, paneActions.closeSession, refs, showToast],
+  )
+
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
-  // Session events arrive through whichever SessionFeed the app root mounted
-  // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
-  // feed; tests: FakeSessionFeed). The provider value is a module const, so
-  // identity is stable — which the subscription effect's dep array requires;
-  // see the WHY on useIpcSubscriptions.
-  const sessionFeed = useSessionFeed()
+  // `sessionFeed` is read above, next to the history actions.
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useTerminalForeground(restoreStatus, setRuntimes)
+  // A terminal's durable last-used record (#1178). One setter for both the
+  // foreground hook and the input path below, so the throttle and the
+  // floor-never-moves rule live in one pure helper.
+  const recordTerminalUsage = useCallback((sessionId: SessionId, usage: 'use' | 'floor') => {
+    const at = Date.now()
+    setState(prev => usage === 'use'
+      ? withTerminalLastUsed(prev, sessionId, at)
+      : withTerminalLastUsedFloor(prev, sessionId, at))
+  }, [setState])
+  const markTerminalUsed = useCallback((sessionId: SessionId) => recordTerminalUsage(sessionId, 'use'), [recordTerminalUsage])
+  const readRuntimeForForeground = useCallback(
+    (sessionId: SessionId) => refs.latestRuntimesRef.current[sessionId],
+    [refs],
+  )
+  useTerminalForeground(restoreStatus, setRuntimes, readRuntimeForForeground, recordTerminalUsage)
   useSessionRoutingRecovery(refs, setRuntimes, state.sessions)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useBootstrap(
@@ -1028,6 +1085,9 @@ export function useWorkspace(
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     closeIdleOrchestrationAgents,
+    closeAgentActivitySelection,
+    closeCompletedGoalAgents,
+    markTerminalUsed,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
     focusAgentBySessionId,
@@ -1047,6 +1107,8 @@ export function useWorkspace(
     appendFeedDebug,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
     setDraftInput,
     setDraftImages,
     clearDraft,

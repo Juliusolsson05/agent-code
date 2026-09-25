@@ -1,5 +1,5 @@
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { dismissGoalLoop, useGoalLoopView } from '@renderer/features/goal-loop/viewState'
 import { useEffect, useMemo, useRef } from 'react'
 

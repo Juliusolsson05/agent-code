@@ -80,10 +80,20 @@ export class TldrStore extends EventEmitter {
       if (!validTldrIdentity(identity) || !record || typeof record.text !== 'string'
         || normalizeTldrText(record.text) !== record.text
         || !Number.isSafeInteger(record.revision) || record.revision < 1
-        || typeof record.updatedAt !== 'string' || !Number.isFinite(Date.parse(record.updatedAt))) {
+        || typeof record.updatedAt !== 'string' || !Number.isFinite(Date.parse(record.updatedAt))
+        || !validCompletion(record)) {
         throw new Error('TLDR storage is invalid; the original file has been preserved.')
       }
-      records[identity] = { text: record.text, updatedAt: record.updatedAt, revision: record.revision }
+      // Rebuilt field by field, as before: whatever else a hand edit or a newer
+      // build left in the file does not survive into memory. The completion
+      // pair is copied only when present, so records written before #1182
+      // round-trip byte-identically.
+      records[identity] = {
+        text: record.text, updatedAt: record.updatedAt, revision: record.revision,
+        ...(record.completedAt !== undefined
+          ? { completedAt: record.completedAt, completionNote: record.completionNote }
+          : {}),
+      }
     }
     this.records = records
     return records
@@ -103,6 +113,16 @@ export class TldrStore extends EventEmitter {
     return this.serialize(async () => {
       if (!validTldrIdentity(identity)) throw new Error('Invalid TLDR identity.')
       return (await this.load())[identity]?.updatedAt
+    })
+  }
+
+  /** When this identity's current record was marked complete (#1182), for the
+   * prompt-time nudge that asks a completed agent given more work to set a new
+   * goal. Undefined for an incomplete or missing record. */
+  completedAt(identity: string): Promise<string | undefined> {
+    return this.serialize(async () => {
+      if (!validTldrIdentity(identity)) throw new Error('Invalid TLDR identity.')
+      return (await this.load())[identity]?.completedAt
     })
   }
 
@@ -139,7 +159,7 @@ export class TldrStore extends EventEmitter {
     return entries as TldrHistoryEntry[]
   }
 
-  private async appendHistory(identity: string, record: TldrRecord): Promise<void> {
+  private async appendHistory(identity: string, entry: TldrHistoryEntry): Promise<void> {
     const path = this.historyFile(identity)
     // Whether this adds a file is a question about the directory, not about
     // whether the old contents parsed. Repairing a corrupt file must not count
@@ -147,10 +167,13 @@ export class TldrStore extends EventEmitter {
     const existed = await stat(path).then(() => true, () => false)
     const previous = existed ? await this.readHistory(identity).catch(() => []) : []
     // An agent re-posting an unchanged status is not a new moment in the task;
-    // keeping it would bury real transitions under identical rows.
-    if (previous[0]?.text === record.text) return
-    const entries = [{ text: record.text, writtenAt: record.updatedAt, revision: record.revision }, ...previous]
-      .slice(0, TLDR_HISTORY_LIMIT)
+    // keeping it would bury real transitions under identical rows. The KIND
+    // matters too (#1182), for the one case where a completion row and a goal
+    // row carry identical text: an agent completing with its goal's own words
+    // as the note, or setting a goal worded exactly like the note it just
+    // completed with. Comparing text alone would swallow that transition.
+    if (previous[0]?.text === entry.text && Boolean(previous[0]?.completed) === Boolean(entry.completed)) return
+    const entries = [entry, ...previous].slice(0, TLDR_HISTORY_LIMIT)
     await mkdir(this.historyDirectory, { recursive: true })
     const temporary = `${path}.${randomUUID()}.tmp`
     try {
@@ -190,34 +213,95 @@ export class TldrStore extends EventEmitter {
       const records = await this.load()
       if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
       if (!records[identity] && Object.keys(records).length >= MAX_RECORDS) throw new Error('TLDR storage is full.')
-      const record = { text, updatedAt: this.now().toISOString(), revision: (records[identity]?.revision ?? 0) + 1 }
-      // Preserve the null prototype after every write, not just initial load.
-      // Otherwise a valid opaque key such as "constructor" can read inherited
-      // object properties and persist an invalid revision instead of entry 1.
-      const next = Object.assign(Object.create(null) as Record<string, TldrRecord>, records, { [identity]: record })
-      const temporary = `${this.file}.${randomUUID()}.tmp`
-      await mkdir(dirname(this.file), { recursive: true })
-      try {
-        await writeFile(temporary, JSON.stringify({ version: 1, records: next }), { mode: 0o600, flag: 'wx' })
-        // Recheck after disk I/O: a queued old-provider request may outlive a
-        // reload. Revocation is the boundary, not possession of an old token.
-        if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
-        await rename(temporary, this.file)
-      } finally {
-        await unlink(temporary).catch(() => {})
-      }
-      this.records = next
+      // A fresh record, deliberately WITHOUT any completion carried over: for
+      // the Goal store this is how a new goal clears the old one's completion
+      // (#1182). The agent sets a new goal exactly when it is given new work.
+      const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: (records[identity]?.revision ?? 0) + 1 }
+      await this.commit(identity, records, record, authorized)
       // The current record is already durable and acknowledged. History is the
       // secondary view of it, so a history failure (a full disk, a corrupt file)
       // must not turn a successful report into a failed tool call that the
       // agent would retry.
-      await this.appendHistory(identity, record).catch(error => {
-        console.warn('[tldr] history append failed:', error)
-      })
+      await this.appendHistory(identity, { text: record.text, writtenAt: record.updatedAt, revision: record.revision })
+        .catch(error => { console.warn('[tldr] history append failed:', error) })
       this.emit('changed', { identity, record: { ...record } } satisfies TldrUpdate)
       return { ...record }
     })
   }
+
+  /**
+   * Mark the current record complete (#1182; only the Goal store calls this).
+   *
+   * WHY it refuses without a record: completion is a claim ABOUT a goal. With
+   * nothing set, the user's close menu would list an agent as "done" without
+   * saying what it did, which is the one thing the list exists to show.
+   *
+   * WHY the revision bumps although `text` does not change: every reader
+   * (overlay, history modal, remote frames) keeps the higher revision when a
+   * disk read and a change event race. Without the bump, a slow read taken
+   * just before completion would win and hide it.
+   *
+   * Completing again replaces the note and time. That is idempotent in the
+   * sense the tool annotation promises — the record ends in the state the
+   * latest call asked for — and lets an agent correct a bad summary.
+   */
+  complete(identity: string, value: string, authorized: () => boolean): Promise<TldrRecord> {
+    return this.serialize(async () => {
+      if (!validTldrIdentity(identity)) throw new Error('Invalid TLDR identity.')
+      const note = normalizeTldrText(value, `${this.label} completion`)
+      const records = await this.load()
+      if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
+      const current = records[identity]
+      if (!current) throw new Error(`Set a ${this.label.toLowerCase()} with goal_set before completing it.`)
+      const completedAt = this.now().toISOString()
+      const record: TldrRecord = {
+        text: current.text, updatedAt: current.updatedAt, revision: current.revision + 1,
+        completedAt, completionNote: note,
+      }
+      await this.commit(identity, records, record, authorized)
+      await this.appendHistory(identity, { text: note, writtenAt: completedAt, revision: record.revision, completed: true })
+        .catch(error => { console.warn('[tldr] history append failed:', error) })
+      this.emit('changed', { identity, record: { ...record } } satisfies TldrUpdate)
+      return { ...record }
+    })
+  }
+
+  /** The one durable write both mutations share: temp file, revocation
+   * re-checked after the I/O, atomic rename, then the in-memory swap. Kept in
+   * one place so a guarantee fixed for `update` cannot be missing from
+   * `complete`. Must run inside `serialize`. */
+  private async commit(
+    identity: string,
+    records: Record<string, TldrRecord>,
+    record: TldrRecord,
+    authorized: () => boolean,
+  ): Promise<void> {
+    // Preserve the null prototype after every write, not just initial load.
+    // Otherwise a valid opaque key such as "constructor" can read inherited
+    // object properties and persist an invalid revision instead of entry 1.
+    const next = Object.assign(Object.create(null) as Record<string, TldrRecord>, records, { [identity]: record })
+    const temporary = `${this.file}.${randomUUID()}.tmp`
+    await mkdir(dirname(this.file), { recursive: true })
+    try {
+      await writeFile(temporary, JSON.stringify({ version: 1, records: next }), { mode: 0o600, flag: 'wx' })
+      // Recheck after disk I/O: a queued old-provider request may outlive a
+      // reload. Revocation is the boundary, not possession of an old token.
+      if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
+      await rename(temporary, this.file)
+    } finally {
+      await unlink(temporary).catch(() => {})
+    }
+    this.records = next
+  }
+}
+
+/** Completion is all-or-nothing: a time without a note (or the reverse) is not
+ * something this store ever writes, so it can only be damage. Rejecting it
+ * follows the file's existing rule — refuse and preserve rather than guess. */
+function validCompletion(record: TldrRecord): boolean {
+  if (record.completedAt === undefined && record.completionNote === undefined) return true
+  return typeof record.completedAt === 'string' && Number.isFinite(Date.parse(record.completedAt))
+    && typeof record.completionNote === 'string' && normalizeTldrText(record.completionNote) === record.completionNote
 }
 
 function validHistoryEntry(value: unknown): value is TldrHistoryEntry {
@@ -225,4 +309,5 @@ function validHistoryEntry(value: unknown): value is TldrHistoryEntry {
   return Boolean(entry) && typeof entry.text === 'string' && normalizeTldrText(entry.text) === entry.text
     && typeof entry.writtenAt === 'string' && Number.isFinite(Date.parse(entry.writtenAt))
     && Number.isSafeInteger(entry.revision) && entry.revision >= 1
+    && (entry.completed === undefined || entry.completed === true)
 }

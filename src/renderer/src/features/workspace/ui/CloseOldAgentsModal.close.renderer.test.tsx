@@ -10,7 +10,7 @@ import type { Entry } from '@shared/types/transcript'
 import { CloseOldAgentsModal } from './CloseOldAgentsModal'
 
 const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }))
-vi.mock('@renderer/ui/GlobalToast', () => ({ useGlobalToast: () => ({ showToast }) }))
+vi.mock('@renderer/ui/GlobalToastContext', () => ({ useGlobalToast: () => ({ showToast }) }))
 
 const now = Date.parse('2026-09-11T12:00:00Z')
 const old = now - 8 * 60 * 60 * 1000

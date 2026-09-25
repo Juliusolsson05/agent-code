@@ -114,6 +114,8 @@ describe('tier classification', () => {
       'toggle-tail-all', 'set-agent-view-mode', 'soft-reload-agent', 'switch-agents-provider',
       'remove-cybersecurity-block', 'enable-root-agent-code-management',
       'agent-mcp-servers', 'mcp-servers', 'add-mcp-server',
+      // #1161: the skills family follows MCP's tier for the same reason.
+      'skills', 'add-skill', 'check-skill-updates',
     ]) {
       expect(byId(id).pickerVisibility ?? 'default').toBe('default')
     }

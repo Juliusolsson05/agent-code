@@ -6,7 +6,7 @@ import {
   CodeRenderContext,
 } from '@renderer/features/feed/context'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
 import { describeConditionRefusal, refusalOf } from '@shared/conditions-core/dispatch'

@@ -289,6 +289,32 @@ export function displayKeybinding(binding: Keybinding): string {
   return `${modifiers}${DISPLAY_KEYS[parsed.key] ?? parsed.key}`
 }
 
+const ELECTRON_MODIFIERS: Record<Modifier, string> = {
+  Cmd: 'Command', Ctrl: 'Control', Alt: 'Alt', Shift: 'Shift',
+}
+
+/**
+ * Electron accelerator form, e.g. `Command+Shift+P`, for SHOWING a binding
+ * next to a native menu item (#1180, the Sessions right-click menu).
+ *
+ * WHY only the modifiers are translated: every canonical key token (`A`-`Z`,
+ * `0`-`9`, `F1`-`F20`, the NAMED_KEYS names and the punctuation set) is
+ * already spelled the way Electron's accelerator grammar spells it — that is
+ * a property of the canonical form worth keeping if a key is ever added.
+ *
+ * Null for a malformed value rather than throwing: a native menu with no
+ * shortcut hint is fine, a menu that fails to open because one persisted
+ * override is garbage is not.
+ */
+export function toElectronAccelerator(binding: Keybinding): string | null {
+  try {
+    const parsed = parseKeybinding(binding)
+    return [...parsed.modifiers.map(m => ELECTRON_MODIFIERS[m]), parsed.key].join('+')
+  } catch {
+    return null
+  }
+}
+
 /**
  * Monaco keybinding constants, as a provider-agnostic description.
  *

@@ -13,14 +13,24 @@
 
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
 import type { PromptAcceptance } from '@shared/types/providerConfig'
-import { sendBracketedPasteThenSubmit } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
+import { sha8Web } from '@shared/code/sha8'
 
 export async function codexComposerSubmit(io: ComposerSubmitIo): Promise<PromptAcceptance | null> {
   window.api.recordPasteDebugEvent(io.pasteId, {
     layer: 'RENDER',
     event: 'route:codex-bracketed-paste',
   })
-  await sendBracketedPasteThenSubmit(io.send, io.input, 0, { pasteId: io.pasteId })
+  // The write is Codex's own protocol, done here (#1177). It used to borrow
+  // the single-write fast path of Claude's paste helper, which lives in the
+  // desktop pane's TileLeaf directory — a provider importing workspace
+  // internals for one line of bytes. The debug event is the one that path
+  // recorded, so paste-debug dumps read the same.
+  window.api.recordPasteDebugEvent(io.pasteId, {
+    layer: 'IPC',
+    event: 'write:paste-and-submit-single',
+    data: { bytes: io.input.length, sha8: await sha8Web(io.input) },
+  })
+  await io.send(`\x1b[200~${io.input}\x1b[201~\r`, io.pasteId)
   // Codex has no delivery result: the submit is raw PTY writes and the
   // rollout's committed user row is the only acceptance signal, which arrives
   // later through the JSONL channel. `null` tells the composer it has no

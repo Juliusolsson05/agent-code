@@ -78,6 +78,12 @@ Agent Code renders the answers over your panes. Hold **Cmd+G** to see every
 visible agent's goal and **Cmd+L** to see its latest status. **View TLDR
 History** shows how both evolved over the session.
 
+When you accept an agent's work (its PR merged, or you said it is done), the
+agent marks its goal **complete**, and the peek shows its one-line summary.
+**Close Completed Agents…** then lists every finished agent across projects and
+closes the ones you keep ticked. Running agents stay open, and a new goal
+clears the completion.
+
 The harness never knows it is being rendered. It calls a tool; Agent Code draws
 the result. That is the general pattern: an MCP entry point the agent calls,
 with custom rendering on the Agent Code side. Hooks at the first prompt and at
@@ -122,12 +128,16 @@ turn end remind Claude Code and Codex agents that forget to report.
     <img src="docs/screenshots/reader-mode.png" alt="Agent Code Reader Mode — paginated distraction-free view of a long agent session with Older/Newer navigation across project tabs" />
   </p>
 
-- **Managed personal skills** — save shared conventions, write custom skills, or
-  install commit-pinned Agent Skills from public GitHub repositories. Agent Code
-  deploys them to every harness that reads them, and never overwrites files it
-  did not write.
 - **Voice dictation** — via
   [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation).
+- **Skills** — Settings → Skills lists every personal skill your agents can
+  load, with a column per provider. Paste the `npx skills add owner/repo
+  --skill name` line from a README or skills.sh, review the exact commit and
+  its files, and Agent Code installs commit-pinned copies for the providers you
+  choose. You can also write your own skills and see skills other tools
+  installed. There is no limit on how many you keep. Agents can propose skills
+  for your review. Ownership is collision-safe and deployment health is shown
+  explicitly.
 - **Diagnostics** — durable local evidence for provider exits, transcript
   drift, rendering issues and near-OOM events.
 
@@ -205,6 +215,8 @@ verifies both thin app bundles before upload. For day-to-day development, use
   — durable multi-agent workflows over MCP
 - [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation)
   — dictation primitives for agent composer UIs
+- [`agent-code-extension-api`](https://github.com/Juliusolsson05/agent-code-extension-api)
+  — the SDK for extensions that run inside Agent Code
 
 ## Status
 

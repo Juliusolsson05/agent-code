@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import { useCodexTranscriptObservationOutbox } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
+import { optimisticPromptUuid } from '@renderer/session-runtime/optimisticPrompt'
 
 import {
   optimisticEntrySubmissionId,
@@ -73,12 +74,14 @@ describe('optimistic submission observation identity', () => {
       )
     })
 
-    // Product UUIDs remain byte-for-byte unchanged in Stage 0 and therefore
-    // collide under the frozen clock. The observation graph must not reuse
-    // that known-nonunique key as evidence identity.
+    // Stage 0 left product UUIDs time-based, so these two rows used to share
+    // `optimistic-codex-user:<ms>` under the frozen clock. Since #1181 the uuid
+    // is keyed by the submission (Feed has to name the row that is still
+    // sending), so the rows are distinct even in the same millisecond. The
+    // observation graph still keys on its own submission id either way.
     expect(h.get(sessionId).entries.map(entry => entry.uuid)).toEqual([
-      'optimistic-codex-user:1788120000000',
-      'optimistic-codex-user:1788120000000',
+      optimisticPromptUuid(firstSubmissionId),
+      optimisticPromptUuid(secondSubmissionId),
     ])
     const candidateIds = reportSessionLifecycle.mock.calls
       .map(([report]) => report.correlationIds?.renderCandidateId)

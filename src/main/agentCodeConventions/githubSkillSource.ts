@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { dirname, posix } from 'node:path'
+import { posix } from 'node:path'
 import { parseDocument } from 'yaml'
 
 import type {
@@ -19,8 +19,8 @@ import {
   isSafeAgentCodeInstalledSkillPath,
   type AgentCodeInstalledSkillCandidate,
 } from '@shared/types/agentCodeInstalledSkills.js'
+import type { SkillInstallGitHubSource } from '@shared/skills/installSource.js'
 
-const MAX_CANDIDATES = 100
 const MAX_GIT_TEXT_BYTES = 4 * 1024 * 1024
 const PORTABLE_FRONTMATTER_FIELDS = new Set([
   'name',
@@ -31,10 +31,44 @@ const PORTABLE_FRONTMATTER_FIELDS = new Set([
   'allowed-tools',
 ])
 
+/**
+ * A reviewed package whose bytes have been acquired and verified: the only
+ * shape allowed into the private snapshot store.
+ */
 export type StagedInstalledSkillCandidate = {
-  candidate: AgentCodeInstalledSkillCandidate
+  candidate: Omit<AgentCodeInstalledSkillCandidate, 'files'> & {
+    files: AgentCodeInstalledSkillFileRecord[]
+  }
   snapshotDigest: string
   contents: Map<string, Buffer>
+}
+
+/** One file of a reviewed package, bound to the reviewed commit by its blob id. */
+export type ReviewedSkillTreeEntry = {
+  relativePath: string
+  repositoryPath: string
+  object: string
+  executable: boolean
+  size: number
+}
+
+/**
+ * A package under review (#1161): tree metadata plus its verified SKILL.md.
+ *
+ * WHY discovery stops here instead of downloading the whole package: a
+ * collection like anthropics/skills lists dozens of skills and people pick
+ * one or two. Downloading every package before the review spent the whole
+ * discovery budget on bytes nobody selected, which is why large collections
+ * used to fail outright. The tree entries' blob ids are the reviewed identity;
+ * `acquire` must reproduce exactly those bytes.
+ */
+export type ReviewedInstalledSkillCandidate = {
+  candidate: AgentCodeInstalledSkillCandidate
+  owner: string
+  repository: string
+  commit: string
+  entries: ReviewedSkillTreeEntry[]
+  skillMarkdown: Buffer
 }
 
 export type GitHubSkillDiscoveryPayload = {
@@ -42,15 +76,21 @@ export type GitHubSkillDiscoveryPayload = {
   requestedRef: string
   requestedRefType: GitRefType
   resolvedCommit: string
-  candidates: StagedInstalledSkillCandidate[]
+  candidates: ReviewedInstalledSkillCandidate[]
   notices: string[]
+  missingSkills: string[]
 }
 
-export type ParsedGitHubSkillUrl = {
-  owner: string
-  repository: string
-  repositoryUrl: string
-  treeSegments: string[]
+export type GitHubSkillDiscoveryRequest = {
+  source: SkillInstallGitHubSource
+  /** `--full-depth`: keep searching below a root SKILL.md and always run the fallback. */
+  fullDepth?: boolean
+  /**
+   * `--skill` names (matched case-insensitively against the frontmatter name
+   * or the folder name, as `npx skills` does), `'*'` for every listed skill,
+   * or null/absent to list everything for browsing.
+   */
+  skills?: string[] | '*' | null
 }
 
 type GitTreeEntry = {
@@ -61,7 +101,10 @@ type GitTreeEntry = {
   size?: number
 }
 
-type ResolvedGitHubSource = ParsedGitHubSkillUrl & {
+type ResolvedGitHubSource = {
+  owner: string
+  repository: string
+  repositoryUrl: string
   requestedRef: string
   requestedRefType: GitRefType
   requestedCommit: string
@@ -95,6 +138,17 @@ export type GitHubSkillSourceOptions = {
 }
 
 /**
+ * vercel-labs/skills `findSkillDirs` skips these in its fallback search.
+ * Matching it keeps the same repository showing the same skills in both tools.
+ */
+const FALLBACK_SKIP_DIRECTORIES = new Set(['node_modules', '.git', 'dist', 'build', '__pycache__'])
+/** `DEFAULT_SKILL_CONTAINER_DEPTH` in vercel-labs/skills. */
+const CONTAINER_DEPTH = 3
+/** `findSkillDirs` maxDepth in vercel-labs/skills. */
+const FALLBACK_DEPTH = 5
+const MARKETPLACE_MANIFEST_MAX_BYTES = 256 * 1024
+
+/**
  * Acquires selected public GitHub package bytes without cloning a repository.
  *
  * WHY ref resolution and content acquisition use separate transports: Git's
@@ -117,28 +171,76 @@ export class GitHubSkillSource {
       ?? AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES
   }
 
-  async discover(inputUrl: string): Promise<GitHubSkillDiscoveryPayload> {
-    const parsed = parseGitHubSkillUrl(inputUrl)
+  async discover(request: GitHubSkillDiscoveryRequest): Promise<GitHubSkillDiscoveryPayload> {
     const environment = isolatedGitEnvironment()
-
     try {
-      const resolved = await this.resolveSource(parsed, environment)
+      const resolved = await this.resolveSource(request.source, environment)
       const tree = await this.readGitHubTree(resolved)
-      return await this.discoverCandidates({
-        resolved,
-        resolvedCommit: resolved.requestedCommit,
-        tree,
-      })
+      return await this.discoverCandidates({ resolved, tree, request })
+    } catch (error) {
+      throw classifyGitHubSkillSourceError(error)
+    }
+  }
+
+  /**
+   * Downloads the rest of a reviewed package and proves it is the reviewed one.
+   *
+   * WHY every file is checked against the reviewed blob id rather than just
+   * the commit: raw URLs are addressed by commit + path, and the review was
+   * shown for exactly these (path, object) pairs. A mismatch means GitHub (or
+   * something between) served different bytes than the tree the user
+   * approved, and nothing from this package may become durable.
+   */
+  async acquire(reviewed: ReviewedInstalledSkillCandidate): Promise<StagedInstalledSkillCandidate> {
+    try {
+      const contents = new Map<string, Buffer>()
+      const files: AgentCodeInstalledSkillFileRecord[] = []
+      let totalBytes = 0
+      for (const entry of reviewed.entries) {
+        const content = entry.relativePath === 'SKILL.md'
+          ? reviewed.skillMarkdown
+          : await this.fetchBytes(
+              rawGitHubFileUrl(reviewed.owner, reviewed.repository, reviewed.commit, entry.repositoryPath),
+              entry.size,
+            )
+        if (content.byteLength !== entry.size || gitBlobObjectId(content) !== entry.object) {
+          throw new GitHubSkillSourceError(
+            'network',
+            `GitHub returned bytes that do not match the reviewed commit tree (${entry.relativePath}).`,
+          )
+        }
+        totalBytes += content.byteLength
+        contents.set(entry.relativePath, content)
+        files.push({
+          path: entry.relativePath,
+          bytes: content.byteLength,
+          sha256: sha256Buffer(content),
+          executable: entry.executable,
+        })
+      }
+      if (totalBytes > AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          `The package exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES)} total limit.`,
+        )
+      }
+      return {
+        candidate: { ...reviewed.candidate, files, totalBytes },
+        snapshotDigest: packageDigest(files),
+        contents,
+      }
     } catch (error) {
       throw classifyGitHubSkillSourceError(error)
     }
   }
 
   private async resolveSource(
-    parsed: ParsedGitHubSkillUrl,
+    source: SkillInstallGitHubSource,
     environment: NodeJS.ProcessEnv,
   ): Promise<ResolvedGitHubSource> {
-    const remote = `${parsed.repositoryUrl}.git`
+    const repositoryUrl = `https://github.com/${source.owner}/${source.repository}`
+    const base = { owner: source.owner, repository: source.repository, repositoryUrl }
+    const remote = `${repositoryUrl}.git`
     const refs = await this.gitText([
       '-c', 'credential.helper=',
       '-c', 'protocol.allow=never',
@@ -146,26 +248,57 @@ export class GitHubSkillSource {
       'ls-remote', '--symref', remote, 'HEAD', 'refs/heads/*', 'refs/tags/*',
     ], { environment })
     const advertised = parseAdvertisedRefs(refs)
-    if (!advertised.defaultRef) {
-      throw new GitHubSkillSourceError('not-found', 'The repository has no discoverable default branch.')
+    const requestedPath = source.subpath ?? ''
+    if (requestedPath && !isSafeRepositoryPath(requestedPath)) {
+      throw new GitHubSkillSourceError('validation', 'The directory path inside the repository is unsafe.')
     }
-    if (parsed.treeSegments.length === 0) {
+
+    if (source.ref !== undefined) {
+      // `owner/repo#ref`: the ref is explicit, so no longest-prefix guessing.
+      const identities = advertised.refs.get(source.ref) ?? []
+      if (identities.length === 0) {
+        throw new GitHubSkillSourceError('not-found', `The repository has no branch or tag named ${JSON.stringify(source.ref)}.`)
+      }
+      if (identities.length > 1) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          `GitHub advertises both a branch and tag named ${JSON.stringify(source.ref)}. Use an unambiguous source ref.`,
+        )
+      }
+      const identity = identities[0]!
+      if (identity.name.length > 512) {
+        throw new GitHubSkillSourceError('validation', 'The GitHub branch or tag name is too long.')
+      }
+      return {
+        ...base,
+        requestedRef: identity.name,
+        requestedRefType: identity.type,
+        requestedCommit: identity.commit,
+        requestedPath,
+      }
+    }
+
+    const treeSegments = source.treeSegments ?? []
+    if (treeSegments.length === 0) {
+      if (!advertised.defaultRef) {
+        throw new GitHubSkillSourceError('not-found', 'The repository has no discoverable default branch.')
+      }
       if (advertised.defaultRef.name.length > 512) {
         throw new GitHubSkillSourceError('validation', 'The default GitHub branch name is too long.')
       }
       return {
-        ...parsed,
+        ...base,
         requestedRef: advertised.defaultRef.name,
         requestedRefType: advertised.defaultRef.type,
         requestedCommit: advertised.defaultRef.commit,
-        requestedPath: '',
+        requestedPath,
       }
     }
 
     let requestedRef: AdvertisedGitRef | null = null
     let refSegmentCount = 0
-    for (let length = parsed.treeSegments.length; length >= 1; length -= 1) {
-      const candidate = parsed.treeSegments.slice(0, length).join('/')
+    for (let length = treeSegments.length; length >= 1; length -= 1) {
+      const candidate = treeSegments.slice(0, length).join('/')
       const identities = advertised.refs.get(candidate) ?? []
       if (identities.length === 0) continue
       if (identities.length > 1) {
@@ -187,122 +320,309 @@ export class GitHubSkillSource {
     if (requestedRef.name.length > 512) {
       throw new GitHubSkillSourceError('validation', 'The GitHub branch or tag name is too long.')
     }
-    const requestedPath = parsed.treeSegments.slice(refSegmentCount).join('/')
-    if (requestedPath && !isSafeRepositoryPath(requestedPath)) {
+    const treePath = treeSegments.slice(refSegmentCount).join('/')
+    if (treePath && !isSafeRepositoryPath(treePath)) {
       throw new GitHubSkillSourceError('validation', 'The GitHub directory path is unsafe.')
     }
     return {
-      ...parsed,
+      ...base,
       requestedRef: requestedRef.name,
       requestedRefType: requestedRef.type,
       requestedCommit: requestedRef.commit,
-      requestedPath,
+      requestedPath: treePath,
     }
+  }
+
+  /**
+   * Chooses candidate skill folders exactly the way `npx skills` does
+   * (vercel-labs/skills 1.7 `discoverSkills`), run over the verified commit
+   * tree instead of a checkout.
+   *
+   * WHY mirror it instead of "every SKILL.md below the path" (the previous
+   * rule): READMEs and skills.sh document commands against that tool, so the
+   * same repository must show the same skills here. The old rule surfaced
+   * `examples/**` and test fixtures as skills and rejected any repository
+   * that nests skills (ambiguous-nesting error), which is common.
+   */
+  private selectCandidateRoots(
+    tree: GitTreeEntry[],
+    searchPath: string,
+    fullDepth: boolean,
+    pluginContainers: string[],
+  ): string[] {
+    const skillDirectories = new Set<string>()
+    const children = new Map<string, Set<string>>()
+    for (const entry of tree) {
+      const segments = entry.path.split('/')
+      if (segments[segments.length - 1] === 'SKILL.md') skillDirectories.add(segments.slice(0, -1).join('/'))
+      for (let length = 1; length < segments.length; length += 1) {
+        const parent = segments.slice(0, length - 1).join('/')
+        const child = segments.slice(0, length).join('/')
+        const set = children.get(parent) ?? new Set<string>()
+        set.add(child)
+        children.set(parent, set)
+      }
+    }
+    const within = (path: string) => searchPath === '' || path === searchPath || path.startsWith(`${searchPath}/`)
+    const join = (...parts: string[]) => parts.filter(Boolean).join('/')
+    const ordered: string[] = []
+    const seen = new Set<string>()
+    const add = (directory: string) => {
+      if (seen.has(directory)) return
+      seen.add(directory)
+      ordered.push(directory)
+    }
+
+    // 1. A SKILL.md at the search path is the answer, unless --full-depth.
+    if (skillDirectories.has(searchPath)) {
+      add(searchPath)
+      if (!fullDepth) return ordered
+    }
+
+    // 2. Priority containers. The search path itself keeps depth 1 so a stray
+    //    `examples/foo/SKILL.md` is not surfaced; the others go 3 deep and stop
+    //    descending below a skill they found (walkSkillDirs).
+    const walk = (directory: string, depth: number, maxDepth: number) => {
+      const names = [...(children.get(directory) ?? [])].sort(compareAgentCodeInstalledSkillPaths)
+      for (const child of names) {
+        if (skillDirectories.has(child)) {
+          add(child)
+          continue
+        }
+        if (depth + 1 < maxDepth) walk(child, depth + 1, maxDepth)
+      }
+    }
+    // WHY "every top-level `.<name>/skills`" instead of vercel's hard-coded
+    // AGENT_PROJECT_SKILL_DIRS list: that list grows with every agent the
+    // tool supports, and a superset finds the same folders (plus any new
+    // agent's) without a release here. `.agents` and `.claude` stay first,
+    // in vercel's order, so duplicate names resolve the same way.
+    const agentContainers = [...(children.get(searchPath) ?? [])]
+      .map(child => child.slice(searchPath ? searchPath.length + 1 : 0))
+      .filter(name => /^\.[^/]+$/.test(name) && children.get(join(searchPath, name))?.has(join(searchPath, name, 'skills')))
+      .map(name => `${name}/skills`)
+      .sort((left, right) => agentContainerRank(left) - agentContainerRank(right)
+        || compareAgentCodeInstalledSkillPaths(left, right))
+    walk(searchPath, 0, 1)
+    for (const container of [
+      'skills',
+      'skills/.curated',
+      'skills/.experimental',
+      'skills/.system',
+      ...agentContainers,
+    ]) {
+      walk(join(searchPath, container), 0, CONTAINER_DEPTH)
+    }
+    // Plugin-manifest containers are walked one level deep, as vercel's
+    // discoverSkills does for every non-root priority directory it gets from
+    // getPluginSkillPaths (review round 1: listing only the exact declared
+    // folder missed siblings and every plugin's conventional `skills/`).
+    for (const container of pluginContainers) {
+      if (within(container)) walk(container, 0, 1)
+    }
+
+    // 3. Fallback: nothing found, or --full-depth asked for everything.
+    if (ordered.length === 0 || fullDepth) {
+      const depthOf = (directory: string) => directory === searchPath
+        ? 0
+        : directory.slice(searchPath ? searchPath.length + 1 : 0).split('/').length
+      for (const directory of [...skillDirectories].sort(compareAgentCodeInstalledSkillPaths)) {
+        if (!within(directory) || depthOf(directory) > FALLBACK_DEPTH) continue
+        const relative = directory.slice(searchPath ? searchPath.length + 1 : 0)
+        if (relative.split('/').some(segment => FALLBACK_SKIP_DIRECTORIES.has(segment))) continue
+        add(directory)
+      }
+    }
+    return ordered
   }
 
   private async discoverCandidates(input: {
     resolved: ResolvedGitHubSource
-    resolvedCommit: string
     tree: GitTreeEntry[]
+    request: GitHubSkillDiscoveryRequest
   }): Promise<GitHubSkillDiscoveryPayload> {
-    const { resolved, resolvedCommit, tree } = input
-    const requestedPrefix = resolved.requestedPath ? `${resolved.requestedPath}/` : ''
-    const exactSkillPath = `${requestedPrefix}SKILL.md`
-    const exact = tree.some(entry => entry.path === exactSkillPath)
-    const skillPaths = exact
-      ? [exactSkillPath]
-      : tree
-          .filter(entry => entry.path.startsWith(requestedPrefix)
-            && entry.path.endsWith('/SKILL.md'))
-          .map(entry => entry.path)
-          .sort()
-    if (skillPaths.length === 0) {
-      throw new GitHubSkillSourceError(
-        'not-found',
-        resolved.requestedPath
-          ? 'No SKILL.md package exists at or below that GitHub directory.'
-          : 'No Agent Skills packages were found in that repository.',
-      )
-    }
-    if (skillPaths.length > MAX_CANDIDATES) {
-      throw new GitHubSkillSourceError(
-        'validation',
-        `The source contains more than ${MAX_CANDIDATES} candidate skills. Use a narrower GitHub directory URL.`,
-      )
-    }
-
-    const roots = skillPaths.map(path => dirnamePosix(path))
-    for (const root of roots) {
-      const nested = roots.find(other => other !== root && isWithinRepositoryPath(other, root))
-      if (nested) {
-        throw new GitHubSkillSourceError(
-          'validation',
-          `Nested skill packages at ${displayRoot(root)} and ${displayRoot(nested)} are ambiguous. Use a direct directory URL.`,
-        )
-      }
-    }
-
-    const candidates: StagedInstalledSkillCandidate[] = []
+    const { resolved, tree, request } = input
     const notices: string[] = []
-    // WHY rejected candidates share this budget with accepted ones: a
-    // collection repository can contain many invalid packages. Charging only
-    // candidates that survive validation would let every rejected directory
-    // download its full package allowance before being skipped.
+    // WHY SKILL.md reads share one budget with the marketplace manifest and
+    // every rejected candidate: a hostile collection could otherwise make each
+    // skipped folder download its full allowance. The budget now covers
+    // SKILL.md files only (lazy acquisition), so it bounds work, not how many
+    // skills a repository may hold.
     const acquisitionBudget: DiscoveryAcquisitionBudget = {
       usedBytes: 0,
       maxBytes: this.maxDiscoveryBytes,
     }
+    const pluginContainers = await this.readPluginContainers(resolved, tree, acquisitionBudget, notices)
+    const roots = this.selectCandidateRoots(
+      tree,
+      resolved.requestedPath,
+      request.fullDepth === true,
+      pluginContainers,
+    )
+    if (roots.length === 0) {
+      throw new GitHubSkillSourceError(
+        'not-found',
+        resolved.requestedPath
+          ? 'No SKILL.md package exists at or below that directory.'
+          : 'No Agent Skills packages were found in that repository.',
+      )
+    }
+
+    const requested = Array.isArray(request.skills)
+      ? request.skills.map(name => name.toLowerCase())
+      : null
+    const folderName = (root: string) => root === '' ? resolved.repository : posix.basename(root)
+    // Roots are read in DISCOVERY order even with a --skill list, and every
+    // name read counts for duplicates, requested or not (review round 1): an
+    // earlier version read folder-name matches first, so `--skill pdf` could
+    // pick a later `pdf` than the one `npx skills` (discover, then filter)
+    // installs. Reading stops once every requested name is matched — a later
+    // duplicate could never win anyway.
+    const byName = new Map<string, ReviewedInstalledSkillCandidate>()
+    const firstSeen = new Map<string, string>()
+    const matched = new Set<string>()
     for (const root of roots) {
-      let candidate: StagedInstalledSkillCandidate
+      if (requested && requested.every(name => matched.has(name))) break
+      let reviewed: ReviewedInstalledSkillCandidate
       try {
-        candidate = await this.readCandidate({
-          root,
-          resolved,
-          resolvedCommit,
-          tree,
-          acquisitionBudget,
-        })
+        reviewed = await this.readCandidate({ root, resolved, tree, acquisitionBudget })
       } catch (error) {
         const classified = classifyGitHubSkillSourceError(error)
-        if (roots.length === 1 || error instanceof GitHubSkillDiscoveryLimitError) {
-          throw classified
-        }
+        if (roots.length === 1 || error instanceof GitHubSkillDiscoveryLimitError) throw classified
         notices.push(`${displayRoot(root)} was skipped: ${classified.message}`)
         continue
       }
-      candidates.push(candidate)
+      const name = reviewed.candidate.name
+      const keys = [name.toLowerCase(), folderName(root).toLowerCase()]
+      const earlier = firstSeen.get(name)
+      if (earlier !== undefined) {
+        // First one found wins, as in `npx skills` (seenNames). The old
+        // behaviour rejected the whole repository.
+        if (!requested || keys.some(key => requested.includes(key))) {
+          notices.push(
+            `${displayRoot(root)} was skipped: another skill named ${name} was found first at ${displayRoot(earlier)}.`,
+          )
+        }
+        continue
+      }
+      firstSeen.set(name, root)
+      if (requested && !keys.some(key => requested.includes(key))) continue
+      // `metadata.internal` skills are hidden from browsing and `--skill '*'`
+      // and appear only when named, matching vercel's includeInternal rule.
+      if (reviewed.candidate.internal && !requested) continue
+      for (const key of keys) if (requested?.includes(key)) matched.add(key)
+      byName.set(name, reviewed)
     }
+    const candidates = [...byName.values()]
+    const missingSkills = requested
+      ? (request.skills as string[]).filter(name => !matched.has(name.toLowerCase()))
+      : []
     if (candidates.length === 0) {
       throw new GitHubSkillSourceError(
-        'validation',
-        notices[0] ?? 'No valid Agent Skills packages were found.',
-      )
-    }
-    const duplicateNames = duplicateValues(candidates.map(value => value.candidate.name))
-    if (duplicateNames.length > 0) {
-      throw new GitHubSkillSourceError(
-        'validation',
-        `The source contains duplicate skill name${duplicateNames.length === 1 ? '' : 's'}: ${duplicateNames.join(', ')}.`,
+        requested ? 'not-found' : 'validation',
+        requested
+          ? `No skill named ${missingSkills.join(', ')} was found in ${resolved.owner}/${resolved.repository}.`
+          : notices[0] ?? 'No valid Agent Skills packages were found.',
       )
     }
     return {
       repositoryUrl: resolved.repositoryUrl,
       requestedRef: resolved.requestedRef,
       requestedRefType: resolved.requestedRefType,
-      resolvedCommit,
+      resolvedCommit: resolved.requestedCommit,
       candidates,
       notices,
+      missingSkills,
+    }
+  }
+
+  /**
+   * Containers declared by plugin manifests at the search path, ported from
+   * vercel-labs/skills `getPluginSkillPaths` (review round 1 found the first
+   * version missed most of it):
+   * - `.claude-plugin/marketplace.json`: each plugin's base is
+   *   `metadata.pluginRoot` + its string `source` (remote object sources are
+   *   skipped); every plugin contributes `<base>/skills` plus the PARENT of
+   *   each listed skill path.
+   * - `.claude-plugin/plugin.json`: the same for a single plugin at the root.
+   * Paths must start with `./` and stay inside the repository, per the
+   * manifest spec. Best effort: a malformed manifest is a notice, never a
+   * failed discovery.
+   */
+  private async readPluginContainers(
+    resolved: ResolvedGitHubSource,
+    tree: GitTreeEntry[],
+    budget: DiscoveryAcquisitionBudget,
+    notices: string[],
+  ): Promise<string[]> {
+    const containers: string[] = []
+    const base = resolved.requestedPath
+    const addContainer = (...parts: string[]) => {
+      const normalized = posix.normalize(posix.join(base || '.', ...parts))
+      const path = normalized === '.' ? '' : normalized.replace(/\/+$/, '')
+      if (path === '..' || path.startsWith('../') || (path && !isSafeRepositoryPath(path))) return
+      containers.push(path)
+    }
+    const relative = (value: unknown): string | null =>
+      typeof value === 'string' && value.startsWith('./') ? value : null
+    const addPlugin = (pluginBase: string, skills: unknown) => {
+      addContainer(pluginBase, 'skills')
+      if (!Array.isArray(skills)) return
+      for (const skill of skills) {
+        const path = relative(skill)
+        if (path) addContainer(posix.dirname(posix.join(pluginBase, path)))
+      }
+    }
+
+    const marketplace = await this.readManifest(resolved, tree, budget, notices, '.claude-plugin/marketplace.json')
+    if (isRecord(marketplace)) {
+      const metadata = isRecord(marketplace.metadata) ? marketplace.metadata : {}
+      const pluginRoot = relative(metadata.pluginRoot) ?? '.'
+      for (const plugin of Array.isArray(marketplace.plugins) ? marketplace.plugins : []) {
+        if (!isRecord(plugin)) continue
+        if (plugin.source !== undefined && typeof plugin.source !== 'string') continue
+        const source = plugin.source === undefined ? '.' : relative(plugin.source)
+        if (!source) continue
+        addPlugin(posix.join(pluginRoot, source), plugin.skills)
+      }
+    }
+    const single = await this.readManifest(resolved, tree, budget, notices, '.claude-plugin/plugin.json')
+    if (isRecord(single)) addPlugin('.', single.skills)
+    return [...new Set(containers)]
+  }
+
+  private async readManifest(
+    resolved: ResolvedGitHubSource,
+    tree: GitTreeEntry[],
+    budget: DiscoveryAcquisitionBudget,
+    notices: string[],
+    name: string,
+  ): Promise<unknown> {
+    const manifestPath = [resolved.requestedPath, name].filter(Boolean).join('/')
+    const entry = tree.find(value => value.path === manifestPath && value.type === 'blob')
+    if (!entry || entry.size === undefined || entry.size > MARKETPLACE_MANIFEST_MAX_BYTES) return null
+    if (entry.size > budget.maxBytes - budget.usedBytes) return null
+    budget.usedBytes += entry.size
+    try {
+      const bytes = await this.fetchBytes(
+        rawGitHubFileUrl(resolved.owner, resolved.repository, resolved.requestedCommit, entry.path),
+        entry.size,
+      )
+      if (gitBlobObjectId(bytes) !== entry.object) return null
+      return JSON.parse(decodeUtf8(bytes, name))
+    } catch {
+      notices.push(`${name} could not be read; its skill list was ignored.`)
+      return null
     }
   }
 
   private async readCandidate(input: {
     root: string
     resolved: ResolvedGitHubSource
-    resolvedCommit: string
     tree: GitTreeEntry[]
     acquisitionBudget: DiscoveryAcquisitionBudget
-  }): Promise<StagedInstalledSkillCandidate> {
-    const { root, resolved, resolvedCommit, tree, acquisitionBudget } = input
+  }): Promise<ReviewedInstalledSkillCandidate> {
+    const { root, resolved, tree, acquisitionBudget } = input
     const entries = tree
       .filter(entry => root === '' || isWithinRepositoryPath(entry.path, root))
       .map(entry => ({ ...entry, relativePath: root === '' ? entry.path : entry.path.slice(root.length + 1) }))
@@ -313,6 +633,9 @@ export class GitHubSkillSource {
         `A skill package must contain 1–${AGENT_CODE_INSTALLED_SKILL_MAX_FILES} files.`,
       )
     }
+    // Every structural rule is decided from the tree BEFORE any download, so
+    // a package that can never be installed costs nothing but its SKILL.md.
+    let totalBytes = 0
     for (const entry of entries) {
       if (!isSafeRepositoryPath(entry.relativePath)) {
         throw new GitHubSkillSourceError('validation', `Unsafe package path: ${entry.relativePath}`)
@@ -329,6 +652,19 @@ export class GitHubSkillSource {
           `Unsupported Git file mode ${entry.mode} at ${entry.relativePath}.`,
         )
       }
+      if (entry.size === undefined || entry.size > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          `${entry.relativePath} exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)} per-file limit.`,
+        )
+      }
+      totalBytes += entry.size
+    }
+    if (totalBytes > AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES) {
+      throw new GitHubSkillSourceError(
+        'validation',
+        `The package exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES)} total limit.`,
+      )
     }
     const collision = findAgentCodeInstalledSkillPathCollision(
       entries.map(entry => entry.relativePath),
@@ -340,103 +676,61 @@ export class GitHubSkillSource {
       )
     }
 
-    const contents = new Map<string, Buffer>()
-    const files: AgentCodeInstalledSkillFileRecord[] = []
-    let totalBytes = 0
-    for (const entry of entries) {
-      if (entry.size !== undefined && entry.size > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
-        throw new GitHubSkillSourceError(
-          'validation',
-          `${entry.relativePath} exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)} per-file limit.`,
-        )
-      }
-      const remainingDiscoveryBytes = acquisitionBudget.maxBytes - acquisitionBudget.usedBytes
-      if (entry.size === undefined || entry.size > remainingDiscoveryBytes) {
-        throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
-      }
-      // WHY capacity is reserved before transport and never refunded: a
-      // response may deliver its body and then fail on the stream trailer or
-      // connection. Charging only resolved fetches would let the collection
-      // loop skip that candidate and spend the same allowance again. GitHub's
-      // commit tree supplies the exact blob size, and object-id verification
-      // below proves successful bytes against that same authority.
-      acquisitionBudget.usedBytes += entry.size
-      const responseLimit = entry.size
-      let content: Buffer
-      try {
-        content = await this.fetchBytes(rawGitHubFileUrl(resolved, entry.path), responseLimit)
-      } catch (error) {
-        // Exceeding the tree-authoritative reservation is fatal. Preserve that
-        // meaning rather than letting the collection loop downgrade it to one
-        // skippable candidate notice.
-        if (error instanceof GitHubSkillSourceError
-          && error.code === 'validation'
-          && error.message.includes('acquisition limit')) {
-          throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
-        }
-        throw error
-      }
-      if (content.byteLength > entry.size) {
-        throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
-      }
-      if (content.byteLength > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
-        throw new GitHubSkillSourceError(
-          'validation',
-          `${entry.relativePath} exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)} per-file limit.`,
-        )
-      }
-      if (gitBlobObjectId(content) !== entry.object) {
-        throw new GitHubSkillSourceError(
-          'network',
-          `GitHub returned bytes that do not match the reviewed commit tree (${entry.relativePath}).`,
-        )
-      }
-      totalBytes += content.byteLength
-      if (totalBytes > AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES) {
-        throw new GitHubSkillSourceError(
-          'validation',
-          `The package exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES)} total limit.`,
-        )
-      }
-      const sha256 = sha256Buffer(content)
-      contents.set(entry.relativePath, content)
-      files.push({
-        path: entry.relativePath,
-        bytes: content.byteLength,
-        sha256,
-        executable: entry.mode === '100755',
-      })
+    const skillEntry = entries.find(entry => entry.relativePath === 'SKILL.md')
+    if (!skillEntry || skillEntry.size === undefined) {
+      throw new GitHubSkillSourceError('validation', 'The package has no root SKILL.md.')
     }
-
-    const skillBytes = contents.get('SKILL.md')
-    if (!skillBytes) throw new GitHubSkillSourceError('validation', 'The package has no root SKILL.md.')
-    if (skillBytes.byteLength > AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES) {
+    if (skillEntry.size > AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES) {
       throw new GitHubSkillSourceError(
         'validation',
         `SKILL.md exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES)} limit.`,
       )
     }
-    const skillText = decodeUtf8(skillBytes, 'SKILL.md')
-    const frontmatter = parseSkillFrontmatter(skillText)
-    // Git tree paths are always POSIX paths, even when Agent Code runs on
-    // Windows. Host-path basename would misread a repository path there.
-    const directoryName = root === '' ? resolved.repository : posix.basename(root)
-    if (directoryName !== frontmatter.name) {
+    if (skillEntry.size > acquisitionBudget.maxBytes - acquisitionBudget.usedBytes) {
+      throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
+    }
+    // WHY capacity is reserved before transport and never refunded: a
+    // response may deliver its body and then fail on the stream trailer or
+    // connection. Charging only resolved fetches would let the collection
+    // loop skip that candidate and spend the same allowance again.
+    acquisitionBudget.usedBytes += skillEntry.size
+    let skillBytes: Buffer
+    try {
+      skillBytes = await this.fetchBytes(
+        rawGitHubFileUrl(resolved.owner, resolved.repository, resolved.requestedCommit, skillEntry.path),
+        skillEntry.size,
+      )
+    } catch (error) {
+      if (error instanceof GitHubSkillSourceError
+        && error.code === 'validation'
+        && error.message.includes('acquisition limit')) {
+        throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
+      }
+      throw error
+    }
+    if (skillBytes.byteLength > skillEntry.size) throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
+    if (gitBlobObjectId(skillBytes) !== skillEntry.object) {
       throw new GitHubSkillSourceError(
-        'validation',
-        `SKILL.md name ${JSON.stringify(frontmatter.name)} must match directory ${JSON.stringify(directoryName)}.`,
+        'network',
+        'GitHub returned bytes that do not match the reviewed commit tree (SKILL.md).',
       )
     }
+    const frontmatter = parseSkillFrontmatter(decodeUtf8(skillBytes, 'SKILL.md'))
+    // WHY the folder no longer has to be named after the skill (#1161): Agent
+    // Code materializes every package to `<provider root>/<frontmatter name>`,
+    // exactly as `npx skills` installs it, so the SOURCE folder name never
+    // reaches a provider. The old rule only rejected real repositories — a
+    // root SKILL.md in a repo named `foo-skill` whose skill is `foo`.
 
     const warnings: string[] = []
-    const executableFiles = files.filter(file => file.executable).map(file => file.path)
+    const executableFiles = entries.filter(entry => entry.mode === '100755').map(entry => entry.relativePath)
     if (executableFiles.length > 0) {
       warnings.push(summarizeValues(
         `Contains ${executableFiles.length} executable file${executableFiles.length === 1 ? '' : 's'}`,
         executableFiles,
       ))
     }
-    const providerFiles = files.map(file => file.path).filter(isProviderSpecificPath)
+    const providerFiles = entries.map(entry => entry.relativePath).filter(isProviderSpecificPath)
     if (providerFiles.length > 0) {
       warnings.push(summarizeValues('Contains provider-specific metadata', providerFiles))
     }
@@ -445,7 +739,6 @@ export class GitHubSkillSource {
       warnings.push(summarizeValues('Uses unrecognized frontmatter fields', extraFields))
     }
 
-    const snapshotDigest = packageDigest(files)
     const sourcePath = root
     const skillUrl = `${resolved.repositoryUrl}/tree/${encodeGitHubPath(resolved.requestedRef)}${
       sourcePath ? `/${encodeGitHubPath(sourcePath)}` : ''
@@ -464,18 +757,45 @@ export class GitHubSkillSource {
       requestedRefType: resolved.requestedRefType,
       path: sourcePath,
       skillUrl,
-      resolvedCommit,
+      resolvedCommit: resolved.requestedCommit,
     }
+    const reviewedEntries: ReviewedSkillTreeEntry[] = entries.map(entry => ({
+      relativePath: entry.relativePath,
+      repositoryPath: entry.path,
+      object: entry.object,
+      executable: entry.mode === '100755',
+      size: entry.size!,
+    }))
+    // The id binds the review to the exact (path, mode, blob) set at this
+    // commit, which is known before download and is exactly what `acquire`
+    // must reproduce.
+    const identity = reviewedEntries
+      .map(entry => `${entry.relativePath}\0${entry.executable ? '1' : '0'}\0${entry.object}`)
+      .join('\0')
     const candidate: AgentCodeInstalledSkillCandidate = {
-      candidateId: sha256Text(`${resolved.owner}/${resolved.repository}\0${resolvedCommit}\0${root}\0${snapshotDigest}`).slice(0, 32),
+      candidateId: sha256Text(
+        `${resolved.owner}/${resolved.repository}\0${resolved.requestedCommit}\0${root}\0${identity}`,
+      ).slice(0, 32),
       name: frontmatter.name,
       description: frontmatter.description,
       source,
-      files,
+      files: reviewedEntries.map(entry => ({
+        path: entry.relativePath,
+        bytes: entry.size,
+        executable: entry.executable,
+      })),
       totalBytes,
       warnings,
+      ...(frontmatter.internal ? { internal: true } : {}),
     }
-    return { candidate, snapshotDigest, contents }
+    return {
+      candidate,
+      owner: resolved.owner,
+      repository: resolved.repository,
+      commit: resolved.requestedCommit,
+      entries: reviewedEntries,
+      skillMarkdown: skillBytes,
+    }
   }
 
   private async readGitHubTree(resolved: ResolvedGitHubSource): Promise<GitTreeEntry[]> {
@@ -524,65 +844,11 @@ class GitHubSkillDiscoveryLimitError extends GitHubSkillSourceError {
   }
 }
 
-export function parseGitHubSkillUrl(input: string): ParsedGitHubSkillUrl {
-  const trimmed = input.trim()
-  if (trimmed.length === 0 || trimmed.length > AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH) {
-    throw new GitHubSkillSourceError('validation', 'Enter a bounded GitHub repository URL.')
-  }
-  let url: URL
-  try {
-    url = new URL(trimmed)
-  } catch {
-    throw new GitHubSkillSourceError('validation', 'Enter a valid GitHub HTTPS URL.')
-  }
-  if (url.protocol !== 'https:'
-    || url.hostname.toLowerCase() !== 'github.com'
-    || url.port
-    || url.username
-    || url.password
-    || url.search
-    || url.hash) {
-    throw new GitHubSkillSourceError(
-      'validation',
-      'Only public https://github.com repository and directory URLs are supported.',
-    )
-  }
-  let segments: string[]
-  try {
-    segments = url.pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment))
-  } catch {
-    throw new GitHubSkillSourceError('validation', 'The GitHub URL contains invalid escaping.')
-  }
-  if (segments.length < 2) {
-    throw new GitHubSkillSourceError('validation', 'The GitHub URL must include an owner and repository.')
-  }
-  const owner = segments[0]!
-  const repository = segments[1]!.replace(/\.git$/, '')
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(owner)
-    || !/^[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
-    throw new GitHubSkillSourceError('validation', 'The GitHub owner or repository name is invalid.')
-  }
-  let treeSegments: string[] = []
-  if (segments.length > 2) {
-    if (segments[2] !== 'tree' || segments.length < 4) {
-      throw new GitHubSkillSourceError(
-        'validation',
-        'Use a repository URL or a GitHub /tree/<ref>/<directory> URL.',
-      )
-    }
-    treeSegments = segments.slice(3)
-    if (treeSegments.some(segment => !isSafeGitHubTreeSegment(segment))) {
-      throw new GitHubSkillSourceError('validation', 'The GitHub tree path is unsafe.')
-    }
-  }
-  const repositoryUrl = `https://github.com/${owner}/${repository}`
-  return { owner, repository, repositoryUrl, treeSegments }
-}
-
 export function parseSkillFrontmatter(text: string): {
   name: string
   description: string
   fields: string[]
+  internal: boolean
 } {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
   const lines = normalized.split('\n')
@@ -642,7 +908,11 @@ export function parseSkillFrontmatter(text: string): {
   if (description.length === 0 || description.length > 1_024 || /[\r\n\0]/.test(description)) {
     throw new GitHubSkillSourceError('validation', 'SKILL.md has an invalid portable description.')
   }
-  return { name, description, fields: fields.sort() }
+  // `metadata.internal: true` hides a skill from `npx skills` browsing; the
+  // same flag hides it here (see discoverCandidates).
+  const metadata = frontmatter.get('metadata')
+  const internal = metadata instanceof Map && metadata.get('internal') === true
+  return { name, description, fields: fields.sort(), internal }
 }
 
 function parseAdvertisedRefs(text: string): {
@@ -745,38 +1015,19 @@ function isSafeRepositoryPath(path: string): boolean {
   return isSafeAgentCodeInstalledSkillPath(path)
 }
 
-function isSafeGitHubTreeSegment(segment: string): boolean {
-  // These segments include the as-yet-unresolved ref, so filesystem-specific
-  // restrictions belong only to `requestedPath` after longest-ref resolution.
-  return segment.length > 0
-    && segment !== '.'
-    && segment !== '..'
-    && !segment.includes('/')
-    && !segment.includes('\\')
-    && !/[\u0000-\u001f\u007f]/.test(segment)
+/** `.agents/skills` then `.claude/skills` first, as in vercel's AGENT_PROJECT_SKILL_DIRS. */
+function agentContainerRank(container: string): number {
+  if (container === '.agents/skills') return 0
+  if (container === '.claude/skills') return 1
+  return 2
 }
 
 function isWithinRepositoryPath(path: string, root: string): boolean {
   return root === '' || path === root || path.startsWith(`${root}/`)
 }
 
-function dirnamePosix(path: string): string {
-  const value = posix.dirname(path)
-  return value === '.' ? '' : value
-}
-
 function displayRoot(root: string): string {
   return root || 'repository root'
-}
-
-function duplicateValues(values: string[]): string[] {
-  const seen = new Set<string>()
-  const duplicates = new Set<string>()
-  for (const value of values) {
-    if (seen.has(value)) duplicates.add(value)
-    seen.add(value)
-  }
-  return [...duplicates].sort()
 }
 
 function isProviderSpecificPath(path: string): boolean {
@@ -805,9 +1056,9 @@ function gitBlobObjectId(value: Buffer): string {
     .digest('hex')
 }
 
-function rawGitHubFileUrl(resolved: ResolvedGitHubSource, path: string): string {
-  return `https://raw.githubusercontent.com/${resolved.owner}/${resolved.repository}`
-    + `/${resolved.requestedCommit}/${encodeGitHubPath(path)}`
+function rawGitHubFileUrl(owner: string, repository: string, commit: string, path: string): string {
+  return `https://raw.githubusercontent.com/${owner}/${repository}`
+    + `/${commit}/${encodeGitHubPath(path)}`
 }
 
 function decodeUtf8(value: Buffer, label: string): string {

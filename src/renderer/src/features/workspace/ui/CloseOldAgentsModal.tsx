@@ -7,7 +7,7 @@ import {
   isSessionLiveForClose,
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 import {
   Dialog,
@@ -25,6 +25,7 @@ import {
 import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
+import { terminalLastUsedUpperBound } from '@renderer/workspace/terminalLastUsed'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -50,8 +51,28 @@ type AgentRow = {
   cwd: string
   cwdBase: string
   isLive: boolean
+  /** A terminal nobody is observing yet: counted as live, but the row must
+   *  not claim it IS running (review of #1179). */
+  livenessUnknown: boolean
   lastActiveAt: number | null
   ageMs: number | null
+}
+
+/**
+ * A terminal nobody is observing yet counts as possibly running (review of
+ * #1179).
+ *
+ * WHY: after a restart a parked tmux shell is not re-attached or
+ * foreground-polled until something wakes it, so its runtime has no
+ * foreground observation and `isSessionLiveForClose` reads it as idle — while
+ * the shell may be running a dev server. Before #1178 such a shell had no age
+ * at all and was never listed. Its durable record now gives it an age, so the
+ * missing liveness has to be stated explicitly: unknown is treated as running,
+ * which means "excluded unless Include running is ticked". The user can still
+ * close it deliberately; the default never kills what it cannot see.
+ */
+function terminalLivenessUnknown(kind: SessionKind, runtime: Workspace['runtimes'][string] | undefined): boolean {
+  return kind === 'terminal' && (runtime?.terminalForeground ?? null) === null && runtime?.exited == null
 }
 
 /** One preview row for a session filed under `tab` (null without metadata). */
@@ -69,13 +90,14 @@ function agentRowFor(
 
   const runtime = runtimes[sessionId]
   // Every session kind can be old (#865). Agents age by transcript
-  // timestamps; shells by their last foreground change (a command
-  // starting/finishing or a cd), which is the only activity a shell has.
-  const lastActiveAt = runtime
-    ? kind === 'terminal'
-      ? runtime.terminalForeground?.changedAt ?? null
-      : latestAgentActivityAt(runtime)
-    : null
+  // timestamps. Shells age by their DURABLE last-used record (#1178): typing,
+  // a command starting or finishing, a cd. It used to be the runtime's
+  // `terminalForeground.changedAt`, which every restart re-stamps to "now",
+  // so no terminal could ever be old after a restart. The record lives on the
+  // metadata, so a parked shell whose runtime was never rebuilt ages too.
+  const lastActiveAt = kind === 'terminal'
+    ? terminalLastUsedUpperBound(meta)
+    : runtime ? latestAgentActivityAt(runtime) : null
 
   return {
     sessionId,
@@ -89,7 +111,8 @@ function agentRowFor(
     // Shared with every other close path (expansion, the confirmation
     // dialog, Kill Buried). Three private copies of "is this busy" is how a
     // preview and a confirmation come to disagree about the same session.
-    isLive: isSessionLiveForClose(runtimes, sessionId),
+    isLive: isSessionLiveForClose(runtimes, sessionId) || terminalLivenessUnknown(kind, runtime),
+    livenessUnknown: !isSessionLiveForClose(runtimes, sessionId) && terminalLivenessUnknown(kind, runtime),
     lastActiveAt,
     ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
   }
@@ -222,7 +245,7 @@ function absoluteTime(ts: number): string {
 //
 // So `latestAgentActivityAt(runtime) >= sessionActivity(runtime).timestamp`
 // by construction: this rule can call an agent recent that Agent Activity
-// (AgentActivityModal: last entry ?? turnStartedAt) shows as "8h ago", and for
+// (which reads `sessionActivity` since #1170) shows as "8h ago", and for
 // a destructive filter that is the right direction to be wrong in. Keep it
 // that way — if these ever need to converge, the move is to give
 // `sessionActivity` an optional conservative mode, never to loosen this one to
@@ -300,7 +323,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
   }, [open])
 
   // Recompute ages while the modal is open so a borderline row ages into the
-  // preview without the user changing a field. 10s matches AgentActivityModal:
+  // preview without the user changing a field. 10s matches Agent Activity:
   // precise enough for human decisions, cheap enough for large workspaces.
   useEffect(() => {
     if (!open) return
@@ -663,7 +686,11 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
-                      {row.isLive ? (
+                      {row.livenessUnknown ? (
+                        <div className="text-[11px] text-warning" title="Not observed since the app started, so it may still be running a command. Wake it to check, or tick Include running to close it anyway.">
+                          not observed yet
+                        </div>
+                      ) : row.isLive ? (
                         <div className="text-[11px] text-danger">running</div>
                       ) : null}
                       {row.lastActiveAt != null && row.ageMs != null ? (
@@ -688,7 +715,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
 
         <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
-            Running agents and terminals with a command in progress are excluded unless explicitly included.
+            Running agents, terminals with a command in progress, and terminals not observed since the app started are excluded unless explicitly included.
           </div>
           <div className="flex items-center gap-2">
             <button

@@ -1,3 +1,4 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -15,7 +16,9 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
+import { hasGoalReportingAgents } from '@renderer/workspace/completedGoalAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import {
   reloadSessionWithBuiltInMcpChoice,
@@ -70,8 +73,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'View Prompts',
     description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Available for providers with transcript parsing support.',
     keywords: ['prompts', 'history', 'user', 'modal', 'session', 'context'],
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -88,11 +91,12 @@ export const sessionCommands: CommandDef[] = [
       // prompts — the modal opens over the TUI pane and mounts nothing on it.
       return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
-    run: ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       ui.openViewPrompts(sessionId)
     },
+    contextMenu: { group: 'agent', order: 60, title: 'View Prompts…' },
   },
   {
     // Rewind-to-Prompt — pick a past user prompt and re-home the
@@ -130,8 +134,8 @@ export const sessionCommands: CommandDef[] = [
       'branch',
       'checkpoint',
     ],
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -162,12 +166,13 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       ui.openRewindPrompt(sessionId)
       ui.closePalette()
     },
+    contextMenu: { group: 'agent', order: 50 },
   },
   {
     // Remove Cybersecurity Block — Codex-only recovery that forks the
@@ -271,18 +276,15 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Agent Activity — overview of every visible pane/session
-    // grouped by tab, sorted by last activity. Primary use case is
-    // triaging a long working session: scan which agents have gone
-    // idle, close or bury the ones you're done with without having
-    // to click through each tab. Always available — the modal
-    // derives "last active" from existing transcript data, so it
-    // needs nothing to be focused.
+    // Agent Activity — full-screen view of every agent in the window, lane or
+    // pool, sectioned by what it needs (#1170): needs you / working / idle /
+    // exited. Always available: it needs nothing focused, and it reads the
+    // fleet's notes only while it is open.
     id: 'open-agent-activity',
     category: 'workspace-tools',
     surface: 'app',
     title: 'Open Agent Activity…',
-    description: '**What it does:** Opens an overview of **agent activity** across the workspace.\n\n**Use when:** You want to triage active, idle, or stale agents.\n\n**Notes:** Useful for cleanup during long multi-agent sessions.',
+    description: '**What it does:** Opens a full-screen view of **every agent**, grouped into Needs you, Working, Idle and Exited.\n\n**Use when:** You want to see which agent is waiting for you, what the others are doing, or close several idle ones at once.\n\n**Notes:** Type to filter, Space to select, ⌫ to close. Close Old Agents and Close Idle Orchestration Agents stay as quick one-shot commands.',
     keywords: [
       'agent',
       'activity',
@@ -387,6 +389,41 @@ export const sessionCommands: CommandDef[] = [
       // palette.
       ui.closePalette()
       await workspace.closeIdleOrchestrationAgents()
+    },
+  },
+  {
+    // #1182. The payoff of goal_complete: one agent per feature, the PR
+    // merges, the agent says so, and this closes every finished one in one
+    // pass. A modal rather than the confirm dialog Close Idle Orchestration
+    // Agents uses, because the user picks which to keep and whether their
+    // lanes go too — a yes/no dialog cannot hold either choice. Hence the
+    // ellipsis: more input follows the invocation.
+    id: 'close-completed-agents',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Close Completed Agents…',
+    description: '**What it does:** Lists every **agent whose goal is complete** across all projects and closes the ones you keep ticked, optionally removing their lanes.\n\n**Use when:** Agents finished their features (for example the PRs merged) and are still sitting in lanes.\n\n**Notes:** Agents mark their goal complete through Goal MCP once you have accepted the work. Running agents stay open. Setting a new goal clears the completion.',
+    keywords: [
+      'close',
+      'completed',
+      'complete',
+      'done',
+      'finished',
+      'goal',
+      'merged',
+      'cleanup',
+      'lanes',
+      'batch',
+    ],
+    when: ({ workspace }) => hasGoalReportingAgents(workspace.state),
+    getState: ({ flags }) => panel(flags.closeCompletedAgentsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.closeCompletedAgentsOpen) {
+        ui.closeCloseCompletedAgents()
+        return
+      }
+      ui.openCloseCompletedAgents()
+      ui.closePalette()
     },
   },
   {
@@ -563,8 +600,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
     keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'reconnect'],
-    getState: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    getState: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The provider name is CONTEXT — which provider this command would act on —
@@ -574,8 +611,8 @@ export const sessionCommands: CommandDef[] = [
           .shortLabel,
       )
     },
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -589,7 +626,32 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: ({ workspace }) => workspace.reloadFocusedAgent(),
+    // reloadSessionAgent with the resolved id, not reloadFocusedAgent: the
+    // Focused wrapper re-resolves focus, which would reload the focused lane's
+    // agent instead of the right-clicked row (#1180). For the palette the two
+    // are identical — the wrapper is exactly this call with the focused id.
+    run: async ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
+      const result = await workspace.reloadSessionAgent(sessionId)
+      // Re-report the outcome for a targeted (Sessions row menu) reload.
+      // reloadSessionAgent toasts through the `showPaneToast` captured inside
+      // its hook, which the menu's off-screen wrapper (targetedCommandContext)
+      // cannot intercept — so reloading an agent in no lane succeeded or
+      // FAILED with no visible word (#1180 review). Repeating the same text
+      // through `workspace.showPaneToast` rewrites the identical pane toast
+      // (single slot) and adds the global one while the agent is off screen.
+      // The palette path needs none of this: its target is on screen.
+      if (target === undefined) return
+      if (result.status === 'completed') {
+        const label = getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel
+        workspace.showPaneToast(result.newSessionId, `${label} reloaded`)
+      } else {
+        workspace.showPaneToast(sessionId, result.status === 'failed' ? result.message : result.reason)
+      }
+    },
+    contextMenu: { group: 'agent', order: 10 },
   },
   {
     id: 'soft-reload-agent',
@@ -672,8 +734,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
     keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi'],
-    getState: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    getState: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The provider name is CONTEXT — which provider this command would act on —
@@ -683,8 +745,8 @@ export const sessionCommands: CommandDef[] = [
           .shortLabel,
       )
     },
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -698,8 +760,8 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: async ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -718,6 +780,7 @@ export const sessionCommands: CommandDef[] = [
         workspace.showPaneToast(sessionId, `copy failed: ${msg}`, 4000)
       }
     },
+    contextMenu: { group: 'copy', order: 10 },
   },
   {
     id: 'duplicate-agent',
@@ -729,11 +792,11 @@ export const sessionCommands: CommandDef[] = [
     title: 'Duplicate Agent',
     description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** The clone lands in the pool with a **new** badge; place it in any lane.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
-    when: ({ workspace }) => {
+    when: ({ workspace, target }) => {
       // Needs a providerSessionId (something on disk to duplicate) AND a
       // transcript adapter able to project it into a new session. Agent-hood
       // alone proves neither.
-      const sessionId = commandTargetSessionId(workspace)
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -742,8 +805,8 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: async ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -778,22 +841,41 @@ export const sessionCommands: CommandDef[] = [
         // flow rather than newTab; the 'vertical' direction argument it used
         // to pass died with the tile tree (#992) — placement is context-places
         // now (fills the focused lane when empty, else pools).
-        await workspace.splitFocused(
-          kind,
-          {
-            resumeSessionId: newProviderSessionId,
-            builtInMcpOverrides: clonedMcpOverrides(meta),
-            // OpenCode Terminal and rendered OpenCode share a provider kind.
-            // The transcript clone should branch the current experience, not
-            // silently reinterpret a terminal clone as a rendered session.
-            providerRuntime: meta.providerRuntime,
-            // WHY cwd is part of the continuation payload: command targeting may resolve a
-            // related/orchestration child displayed inside a parent pane. That child's transcript
-            // and MCP domains must be re-registered against the CHILD worktree, not whichever
-            // physical pane happens to host its UI.
-            cwd: meta.cwd,
-          },
-        )
+        const continuation = {
+          resumeSessionId: newProviderSessionId,
+          builtInMcpOverrides: clonedMcpOverrides(meta),
+          // OpenCode Terminal and rendered OpenCode share a provider kind.
+          // The transcript clone should branch the current experience, not
+          // silently reinterpret a terminal clone as a rendered session.
+          providerRuntime: meta.providerRuntime,
+          // WHY cwd is part of the continuation payload: command targeting may resolve a
+          // related/orchestration child displayed inside a parent pane. That child's transcript
+          // and MCP domains must be re-registered against the CHILD worktree, not whichever
+          // physical pane happens to host its UI.
+          cwd: meta.cwd,
+        }
+        // #1180 review: with an explicit target (the Sessions row menu) the
+        // clone is filed under the SOURCE agent's project and left unplaced.
+        // `splitFocused` resolves ownership and placement from the focused
+        // lane, so duplicating a row from project B while focused in project
+        // A filed the clone under A — and could drop it into A's empty lane,
+        // against the menu's "nothing moves" rule (D5). The palette keeps
+        // `splitFocused`: there the source IS the focused agent, and filling
+        // an empty focused lane is the behavior users already rely on.
+        if (target !== undefined && meta.projectId) {
+          await workspace.createDetachedDispatchAgent(
+            { kind, providerRuntime: meta.providerRuntime },
+            { tabId: meta.projectId, anchorSessionId: sessionId },
+            continuation,
+            { selectCreated: false },
+          )
+          // Unplaced means nothing on screen changed, so say where it went.
+          // (A targeted pane toast also shows globally while the source is
+          // off screen — see targetedCommandContext.)
+          workspace.showPaneToast(sessionId, 'Duplicated — the copy is marked new in the Sessions list', 4000)
+        } else {
+          await workspace.splitFocused(kind, continuation)
+        }
       } catch (err) {
         // Surface the failure as a pane toast, not just console.warn. Native
         // transcript export/import crosses both a CLI and storage boundary, so
@@ -809,6 +891,7 @@ export const sessionCommands: CommandDef[] = [
         console.warn('[duplicate-agent] failed', err)
       }
     },
+    contextMenu: { group: 'agent', order: 40 },
   },
   {
     id: 'switch-provider',
@@ -820,8 +903,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Switch Provider',
     description: '**What it does:** Opens a destination picker for continuing the focused agent with another provider: Claude, Codex, OpenCode, OpenCode Terminal, Grok or Pi.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
     keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'grok', 'pi', 'translate'],
-    getState: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    getState: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The provider name is CONTEXT — which provider this command would act on —
@@ -831,8 +914,8 @@ export const sessionCommands: CommandDef[] = [
           .shortLabel,
       )
     },
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       if (!meta) return false
@@ -843,8 +926,8 @@ export const sessionCommands: CommandDef[] = [
       // provider from declaring the product paths it supports.
       return getProviderFeatures(kind).switchTargets.length > 0
     },
-    run: ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       // WHY capture before closing the palette: command targeting in Dispatch
       // can differ from the active grid tab and may change while a modal is
@@ -853,6 +936,7 @@ export const sessionCommands: CommandDef[] = [
       ui.closePalette()
       ui.openProviderSwitchPicker(sessionId)
     },
+    contextMenu: { group: 'agent', order: 20, title: 'Switch Provider…' },
   },
   {
     id: 'toggle-git-bar',
@@ -1065,7 +1149,9 @@ export const sessionCommands: CommandDef[] = [
       // and every reason behind that shape live in clearAgentComposer.ts —
       // shared with the composer's Escape recovery path (#737) so the two
       // cannot drift.
-      await clearAgentComposer(sessionId)
+      // Commands run outside React, so this is the desktop's one feed (the
+      // same instance app/main.tsx provides), not a context read.
+      await clearAgentComposer(sessionId, ipcSessionFeed)
       // States what was DONE, not what was achieved. From the renderer we
       // cannot confirm the composer is empty; the pane's own readiness line is
       // the honest signal, and it updates on the next gate evaluation.

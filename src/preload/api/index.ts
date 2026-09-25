@@ -41,6 +41,7 @@ import { agentCodeConventionsApi } from '@preload/api/agentCodeConventions.js'
 import { agentCodeCustomSkillsApi } from '@preload/api/agentCodeCustomSkills.js'
 import { agentCodeInstalledSkillsApi } from '@preload/api/agentCodeInstalledSkills.js'
 import { agentSkillsApi } from '@preload/api/agentSkills.js'
+import { updatesApi } from '@preload/api/updates.js'
 import { agentActivityApi } from '@preload/api/agentActivity.js'
 
 // Composed preload API surface.
@@ -110,6 +111,7 @@ export const api = {
   ...agentCodeCustomSkillsApi,
   ...agentCodeInstalledSkillsApi,
   ...agentSkillsApi,
+  ...updatesApi,
   ...agentActivityApi,
 }
 
