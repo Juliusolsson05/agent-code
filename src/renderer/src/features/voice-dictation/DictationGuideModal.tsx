@@ -63,7 +63,7 @@ export function DictationGuideModal() {
           illustrated steps rather than a confirm prompt, so the body scrolls
           inside the dialog instead of letting the surface grow past the
           viewport. */}
-      <DialogContent className="w-[min(672px,92vw)] max-h-[88vh] grid-rows-[auto_1fr_auto]">
+      <DialogContent size="md" className="max-h-[88vh] grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <DialogTitle>Configure Voice Dictation</DialogTitle>
           <DialogDescription>
@@ -73,7 +73,10 @@ export function DictationGuideModal() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-col gap-6 overflow-y-auto px-4 py-4 text-[12px] leading-relaxed">
+        {/* Body rhythm (plan T3): py-3 like every dialog body; the gap
+            between the guide's sections stays roomier than a form's (gap-4,
+            was gap-6) because these are paragraphs, not fields. */}
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed">
           <GuideStep
             number={1}
             title="Create a Deepgram account"

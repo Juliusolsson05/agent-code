@@ -447,9 +447,9 @@ entry when it lands.
 | S37 | RemotePanel | ✕ raw button gets focus | Close ⎋; T3 | done |
 | S38 | PerformanceMonitor | showCloseButton; p-4 sections | D5 sections; Close ⎋ | done |
 | S39 | SetupGate | px-5 py-4; raw buttons; blocked Esc | T3/T8; legend when Esc blocked | done |
-| S40 | DictationGuideModal | DialogActions Done | chips (automatic from F2); T3 | todo |
+| S40 | DictationGuideModal | DialogActions Done | chips (automatic from F2); T3 | done |
 | S41 | WorkflowHistoryDialog | showCloseButton; p-3 | Close ⎋; T3 | done |
-| S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | todo |
+| S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | done (no change: F4 corner close covers it) |
 | S43 | CommandPalette | input ↑↓ Enter; sub-modes; px-3 py-2 header; raw sub-form buttons; plain-text chords | Kbd chords on rows; legend; T8 sub-form | todo |
 | S44 | PathPickerModal | Tab/↑↓/⇧↵/two-phase Esc; p-6; lowercase prose + "cancel" | T3 anatomy; legend with Kbd; DialogActions | todo |
 | S45 | SettingsPage | full-page takeover; sections | D5; T3; focus into section | todo |
@@ -760,6 +760,11 @@ Sharp corners and one light theme.
   `Retry` · `Continue ↩` / `Close ↩`, but on a fresh install with no
   provider it reads `Continue with a Terminal` with NO chip and the left
   says "Escape is off until you choose."; 860 wide.
+- **S40 Voice dictation guide:** `Done ↩` (chip from F2); 640 wide (was
+  672); body py-3 with gap-4 between sections (was py-4 / gap-6) — check
+  the guide still breathes.
+- **S42 Extension app window:** corner `× ⎋` (from F4); nothing else changes
+  — keys inside the extension belong to the extension.
 
 ## Tasks
 
@@ -834,6 +839,9 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S40/S42: Dictation guide → md preset + T3 body (class swaps,
+  owner checklist, no unit test — a test would restate classes); App Host
+  needs nothing beyond F4's corner close.
 - 2026-09-25 S39: Setup — DialogHeader + DialogActions (must-answer: no
   commit key + legend explaining the refused Escape; otherwise Enter
   continues), 4 raw buttons → Button (scripted), Input for the path.
