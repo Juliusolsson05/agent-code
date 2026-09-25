@@ -181,6 +181,14 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
  * cannot say which one left, and guessing is what this module forbids.
  *
  * Prompts keep their single prefix pass: they have no id to be ambiguous about.
+ *
+ * ACCEPTED RESIDUAL (#1234 review A): when twins are ambiguous this declines,
+ * and the open debt later settles by cohort order, which can retire the
+ * first twin as `delivered-inferred` even if the second left. The label is
+ * honest (inferred, no evidence), and a reworded twin entry has no
+ * occurrence in 2,410 local transcripts (3,646 notification enqueues); a
+ * settlement rule that remembers ambiguity would be machinery for a case
+ * never observed. Revisit if one is recorded.
  */
 function resolveEntryTarget(
   pending: readonly PendingItem[],

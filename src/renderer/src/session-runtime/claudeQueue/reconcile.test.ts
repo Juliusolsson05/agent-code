@@ -593,6 +593,20 @@ describe('a committed notification retires the twin it carries (#678)', () => {
     expect(state.pending.some(i => i.content === first.content)).toBe(true)
   })
 
+  it('matches a twin whose whole body is WRAPPED inside the committed entry', () => {
+    // Containment, not equality or prefix: a committed entry can carry the
+    // notification inside other text. (#1234 review: a prefix check passed
+    // every other test.)
+    const events = loadFixture('divergence-stranded-background-commands').events
+    const first = events[111] as Extract<FixtureEvent, { kind: 'op' }>
+    const second = events[112] as Extract<FixtureEvent, { kind: 'op' }>
+    const wrapped = { kind: 'user' as const, uuid: 'wrapped-entry', text: `<task-notification>\n<carrier-wrapper>\n${second.content}\n</carrier-wrapper>` }
+    const state = replay([...events.slice(0, 114), wrapped])
+    expect(state.decisions.find(d => d.evidence.includes('wrapped-entry'))?.reason).toBe('delivered-observed')
+    expect(state.pending.some(i => i.content === second.content)).toBe(false)
+    expect(state.pending.some(i => i.content === first.content)).toBe(true)
+  })
+
   it('retires neither twin when the entry names only their shared id', () => {
     // A reformatted body (upstream rewording) leaves only the id to go on, and
     // two pending items carry it. The id cannot say which one left, so no
