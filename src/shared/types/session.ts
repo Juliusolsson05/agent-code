@@ -176,6 +176,13 @@ export const SESSION_START_FAILED_MESSAGE = 'Session failed to start. Check prov
  *  poisoned undo-stack head; sharing the constant prevents that drift. */
 export const MISSING_WORKSPACE_FOLDER_PREFIX = 'Workspace folder is missing: '
 
+/** How main's refusal to save a workspace.json it could not read starts
+ *  (#1263 review C). That refusal is sticky for the whole process
+ *  (WorkspaceFileStore.readOnlyReason is never cleared), so the renderer must
+ *  not tell the user a later save will succeed. Shared because IPC relays
+ *  only the message text. */
+export const WORKSPACE_READ_ONLY_PREFIX = 'Workspace file is read-only this session: '
+
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
   | 'cancelled'

@@ -19,6 +19,7 @@ import type {
   WindowBounds,
   WorkspaceFile,
 } from '@main/storage/workspaceFile.js'
+import { WORKSPACE_READ_ONLY_PREFIX } from '@shared/types/session.js'
 
 // The single writer of `~/.config/agent-code/workspace.json`.
 //
@@ -208,7 +209,9 @@ export class WorkspaceFileStore {
   /** Replace one window's slice. Every other window's slice is untouched. */
   saveSlice(windowId: string, json: string, geometry: WindowGeometry): Promise<void> {
     if (this.readOnlyReason) {
-      return Promise.reject(new Error(this.readOnlyReason))
+      // Prefixed so the renderer can tell this refusal (which cannot clear
+      // until restart) from a transient failure like ENOSPC (#1263 review C).
+      return Promise.reject(new Error(`${WORKSPACE_READ_ONLY_PREFIX}${this.readOnlyReason}`))
     }
     if (this.retiredWindowIds.has(windowId)) {
       // A late `beforeunload` flush from a window whose workspace has already

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
+import { WORKSPACE_READ_ONLY_PREFIX } from '@shared/types/session'
 
 // WHY render this above TabBar instead of as a toast:
 //
@@ -31,8 +32,26 @@ export function RestoreBanner() {
         ? 'Could not load your saved workspace — running in a fresh-tab fallback. Autosave is disabled to avoid overwriting the on-disk file. Restart after resolving the issue.'
         : workspace.restoreStatus === 'bootstrap-error'
           ? 'Workspace bootstrap failed. Autosave is disabled. Check the dev console and restart Agent Code after fixing the underlying issue.'
-          : null
+          : workspace.saveFailure
+            // #1244: saves keep failing (a full disk, a permission change).
+            // The retries continue, and the banner clears on the first success.
+            // No specific remedy: the error names the cause, and some causes
+            // (a workspace.json this build refuses to write) are not fixed by
+            // freeing space or permissions (#1263 review A).
+            ? workspace.saveFailure.startsWith(WORKSPACE_READ_ONLY_PREFIX)
+              // A refusal main keeps for the whole process (#1263 review C):
+              // no retry in this session can succeed, so say what does help.
+              ? `Workspace changes cannot be saved this session: ${workspace.saveFailure.slice(WORKSPACE_READ_ONLY_PREFIX.length)}. Quit Agent Code and repair or move workspace.json; nothing more is saved until then.`
+              : `Workspace changes are not being saved: ${workspace.saveFailure}. Agent Code keeps retrying, and changes save on the next success.`
+            : null
 
+  // Saves failing is a different condition from autosave being OFF (they are
+  // still attempted), so the collapsed chip must not claim the latter.
+  const savesFailing = Boolean(message) && !['partial-restore', 'persisted-fallback', 'bootstrap-error'].includes(workspace.restoreStatus as string)
+  // Used by BOTH the expanded banner and the chip: saves failing is not
+  // autosave being off (#1263 review).
+  const stateLabel = savesFailing ? 'Not saving' : 'Autosave off'
+  const detailsLabel = savesFailing ? 'save-failure' : 'autosave-off'
   const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
@@ -58,10 +77,10 @@ export function RestoreBanner() {
             px-2 py-0.5 text-[11px] font-code text-warning
             hover:bg-warning/20
           "
-          title="Show autosave-off details"
-          aria-label="Show autosave-off details"
+          title={`Show ${detailsLabel} details`}
+          aria-label={`Show ${detailsLabel} details`}
         >
-          <span className="font-semibold uppercase tracking-wide">Autosave off</span>
+          <span className="font-semibold uppercase tracking-wide">{stateLabel}</span>
           <span aria-hidden="true">▾</span>
         </button>
       </div>
@@ -78,14 +97,14 @@ export function RestoreBanner() {
         flex-shrink-0
       "
     >
-      <span className="font-semibold uppercase tracking-wide">Autosave off</span>
+      <span className="font-semibold uppercase tracking-wide">{stateLabel}</span>
       <span className="flex-1 text-ink/90">{message}</span>
       <button
         type="button"
         onClick={() => setCollapsed(true)}
         className="text-warning/80 hover:text-warning"
         title="Collapse into a corner chip (click the chip to re-expand)"
-        aria-label="Collapse autosave-off banner"
+        aria-label={`Collapse ${detailsLabel} banner`}
       >
         Hide
       </button>
