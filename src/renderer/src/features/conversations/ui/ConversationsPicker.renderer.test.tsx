@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import type { Conversation, ConversationListResponse } from '@shared/conversations/types'
@@ -33,7 +33,7 @@ const rows = [
 function response(over: Partial<ConversationListResponse> = {}): ConversationListResponse {
   return { rows, total: 5, hiddenChildren: 2, nextCursor: null, family: { repoRoot: '/fixture/repo', roots: ['/fixture/repo'] }, timing: { ms: 3 }, ...over }
 }
-function install(list = vi.fn(async () => response())) {
+function install(list: Mock = vi.fn(async () => response())) {
   Object.defineProperty(window, 'api', { configurable: true, value: { listConversations: list, loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false })) } })
   return list
 }
@@ -71,7 +71,15 @@ describe('ConversationsPicker', () => {
     const onClose = vi.fn()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
     await screen.findByText('break down this project')
+    // findByText resolves when the rows PAINT. When this was written the
+    // picker reset the highlight in a passive effect that could still be
+    // pending; in CI (run for #1266, 0c962aaa) it flushed after the ArrowDown
+    // below, so Enter resumed row 0. Since #1297 the reset runs during render,
+    // so the flush is belt-and-braces; confirming the arrow landed before
+    // Enter is what makes the assertion honest. (No timeout was widened.)
+    await act(async () => {})
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     // `newConversation` is part of this call's meaning, not a detail (#1090):
     // the picker swaps a STRANGER's conversation into the pane, so the
@@ -217,4 +225,130 @@ describe('ConversationsPicker', () => {
     fireEvent.click(await screen.findByText('Project context bootstrapping'))
     await waitFor(() => expect(ws.newTab).toHaveBeenCalledWith('/fixture/repo', 'ededdea8-06bf-4474-b945-b3a8f8ce0fe1', 'claude'))
   })
+
+  // Steering q27: an enablement refresh (the setup check finishing, a
+  // provider toggled in another window) rebuilt the `providers` filter array
+  // with identical contents, and the reset keyed on the array's identity threw
+  // the user's highlight back to row 0, so Enter resumed a conversation the
+  // user had not chosen.
+  it('keeps the highlight when an enablement refresh leaves the filter unchanged', async () => {
+    install()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    await act(async () => {})
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
+    const { useProviderEnablementStore } = await import('@renderer/features/providers/store')
+    await act(async () => { useProviderEnablementStore.setState({ enabledKinds: new Set(useProviderEnablementStore.getState().enabledKinds) }) })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', expect.objectContaining({ kind: 'codex' })))
+  })
+
+  // #1297 review A: while a new scope or query loads, the rows on screen
+  // answer the OLD parameters, and the keyboard must not act on them.
+  function heldList() {
+    const pending: Array<() => void> = []
+    const list = install(vi.fn(async (request: { scope?: string; query?: string }) => {
+      if (request.scope === 'everywhere' || request.query) {
+        await new Promise<void>(resolve => { pending.push(resolve) })
+        // The new page keeps row 0 but has a DIFFERENT row 1.
+        return response({ rows: [rows[0]!, row({ provider: 'codex', nativeId: 'different-row-1', label: 'a different conversation', labelSource: 'first-prompt' })] })
+      }
+      return response()
+    }))
+    return { list, release: () => pending.splice(0).forEach(resolve => resolve()) }
+  }
+
+  it('does not resume a row from the old scope while the new scope loads', async () => {
+    const { list, release } = heldList()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await act(async () => {})
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    release()
+    await screen.findByText('a different conversation')
+  })
+
+  it('does not carry an arrow press on old rows over to the new page', async () => {
+    const { list, release } = heldList()
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    release()
+    const different = await screen.findByText('a different conversation')
+    expect(different.closest('[data-conversation-index]')).toHaveAttribute('aria-selected', 'false')
+    expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  // #1297 review C1: the pointer can move the highlight during the wait too.
+  // A hover over an old row used to stick when the new page kept the same
+  // head, so Enter resumed whatever replaced that index.
+  it('does not carry a hover on old rows over to the new page', async () => {
+    const { list, release } = heldList()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    const hovered = screen.getByText('break down this project').closest('[data-conversation-index]')!
+    fireEvent.mouseEnter(hovered)
+    // While stale the highlight does not follow the pointer at all.
+    expect(hovered).toHaveAttribute('aria-selected', 'false')
+    release()
+    const different = await screen.findByText('a different conversation')
+    expect(different.closest('[data-conversation-index]')).toHaveAttribute('aria-selected', 'false')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalled())
+    expect(ws.replaceSession).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ resumeSessionId: 'different-row-1' }))
+  })
+
+  // #1297 review B: pin that the reset still HAPPENS on a new query, and does
+  // not happen when loadMore only appends.
+  it('moves the highlight back to row 0 for a new query', async () => {
+    const { list, release } = heldList()
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    await act(async () => {})
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'something' } })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true'))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'something' })))
+    release()
+    await screen.findByText('a different conversation')
+    expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  // #1297 round 2: a loadMore across a filter change appended new-scope rows
+  // to old-scope rows and marked the mix fresh, reopening Enter on them.
+  it('does not page old rows after the scope changed', async () => {
+    const list = install(vi.fn(async (request: { scope?: string; cursor?: string | null }) => {
+      if (request.scope === 'everywhere' && !request.cursor) return new Promise<never>(() => {})
+      return response({ nextCursor: 'next-page' })
+    }))
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    // Scrolling the old list asks for more while the new scope loads. A
+    // scroll, not ArrowDown: the stale key guard swallows ArrowDown before it
+    // reaches loadMore, so an arrow press never exercised this guard (#1297
+    // disposition). happy-dom reports zero heights, so any scroll is "near
+    // the bottom" and reaches loadMore.
+    fireEvent.scroll(screen.getByRole('listbox', { name: 'Conversations' }))
+    await act(async () => {})
+    expect(list.mock.calls.some(([request]) => (request as { cursor?: string | null }).cursor === 'next-page')).toBe(false)
+    expect(screen.getByText(/^loading…/)).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await act(async () => {})
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+  })
 })
+

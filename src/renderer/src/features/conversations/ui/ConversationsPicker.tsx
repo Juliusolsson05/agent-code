@@ -65,7 +65,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // pane underneath the command center.
   const commandSessionId = commandTargetSessionId(workspace)
   const cwd = commandSessionId ? workspace.state.sessions[commandSessionId]?.cwd ?? null : null
-  const { response, loading, error, needsPane, loadMore } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
+  const { response, loading, error, needsPane, loadMore, stale } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
   const rows = response?.rows ?? []
 
   useEffect(() => {
@@ -81,8 +81,39 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   }, [open, focusSearch])
   // Reset the highlight when the list's head changes (a new query, filter or
   // scope), but not when loadMore appends rows below it.
+  //
+  // `providers` is keyed by CONTENT (steering q27, #1297): the enablement
+  // effect above rebuilds the array on every store update, and the old
+  // identity dependency threw the user's highlight back to row 0 whenever
+  // enablement refreshed (a setup check finishing, a toggle in another
+  // window), so Enter resumed a conversation the user had not chosen. Pinned
+  // by 'keeps the highlight when an enablement refresh…'.
+  //
+  // WHY during render and not in an effect: CI (#1266's run) showed the
+  // effect-based reset landing AFTER a key press. That ordering came from the
+  // test's act() batching; in the app, React flushes pending passive effects
+  // before it applies a discrete key event, and a MutationObserver probe
+  // found no painted frame with a stale highlight. Resetting while rendering
+  // (React's "adjust state when a prop changes") removes the dependence on
+  // that React internal: the first paint of a new head already highlights
+  // row 0.
+  //
+  // `stale` is in the key too (#1297 review C1): the reset must happen again
+  // when the fresh page LANDS, not only when the parameters change. Anything
+  // that moved the highlight in between pointed at an old row; a new page
+  // that keeps the same head would otherwise keep that index, and Enter
+  // resumed whatever replaced it. loadMore only appends to a fresh list, so
+  // it never flips `stale` and paging keeps the highlight. Today the pointer
+  // is the one thing that could move it (the key guard below stops keys, and
+  // the row's onHover ignores a stale list); this reset is the backstop for
+  // any path added later, not the only guard.
   const headId = response?.rows[0]?.nativeId ?? null
-  useEffect(() => { setSelected(0) }, [headId, query, scope, providers, includeChildren])
+  const highlightResetKey = JSON.stringify([headId, query, scope, providers.join(','), includeChildren, stale])
+  const [lastHighlightResetKey, setLastHighlightResetKey] = useState(highlightResetKey)
+  if (highlightResetKey !== lastHighlightResetKey) {
+    setLastHighlightResetKey(highlightResetKey)
+    setSelected(0)
+  }
   // An inline resume error names the row it was about; moving the highlight
   // makes it stale (#1262 review B).
   useEffect(() => { setResumeError(null) }, [selected])
@@ -150,6 +181,18 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   }, [onClose, workspace])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // While the rows on screen answer an OLDER query, scope or filter, the
+    // keyboard must not act on them (#1297 review A): Enter resumed a row the
+    // new scope excludes, and an arrow press moved the highlight onto a row
+    // the arriving page then replaced, so Enter resumed a conversation the
+    // user never highlighted. The debounce plus the request is ~120 ms+; the
+    // reset to row 0 (below) already happened when the parameters changed,
+    // so the new page arrives highlighted at its own head. A mouse click on
+    // a visible row is still a deliberate choice and stays allowed.
+    if (stale && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || (e.key === 'Enter' && !focusedControlOwnsEnter(e.target)))) {
+      e.preventDefault()
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setSelected(i => Math.min(rows.length - 1, i + 1))
@@ -170,7 +213,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       const row = rows[selected]
       if (row) void resume(row)
     }
-  }, [rows, selected, resume, loadMore])
+  }, [rows, selected, resume, loadMore, stale])
 
   const previewTarget: PreviewTarget | null = useMemo(() => {
     const row = rows[selected]
@@ -217,7 +260,10 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             </button>
           )}
           <span className="font-code opacity-80">
-            {loading
+            {/* Stale rows are on screen and the keyboard ignores them until the
+                new page lands (#1297 round 2): say so at once, including the
+                debounce before the request starts. */}
+            {loading || stale
               ? 'loading…'
               : response
                 ? query.trim()
@@ -243,7 +289,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             ) : rows.length === 0 && !loading && !error ? (
               <div className="py-12 text-center text-[12px] text-muted">{query.trim() ? `No conversations match "${query.trim()}".` : 'No conversations recorded for this scope.'}</div>
             ) : rows.map((row, i) => (
-              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} onHover={() => setSelected(i)} onSelect={() => void resume(row)} />
+              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} onHover={() => { if (!stale) setSelected(i) }} onSelect={() => void resume(row)} />
             ))}
           </div>
           <div onMouseDown={splitter.onMouseDown} className={`w-1 flex-shrink-0 cursor-col-resize ${splitter.dragging ? 'bg-accent' : 'bg-border hover:bg-border-hi'}`} />
