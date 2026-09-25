@@ -81,7 +81,6 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
   // liveEntryWindow.ts). Every site that deletes/resets a session's seen
   // set must clear it too.
   clearLiveEntryWindowSession(sessionId)
-  delete refs.latestScreenRef.current[sessionId]
   // Render traces are intentionally not stored in SessionRuntime: they are
   // large, debug-only forensic buffers populated by DOM/screen capture paths
   // that do not need to re-render the app. That module-level map must still

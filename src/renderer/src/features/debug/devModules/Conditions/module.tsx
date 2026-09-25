@@ -33,6 +33,7 @@ import type {
   ClaudeAskUserQuestionState,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
+import { useScreenLease } from '@renderer/features/debug/useScreenLease'
 
 export const conditionsDebugModule: DevDebugModule = {
   id: 'conditions',
@@ -135,6 +136,8 @@ const AUQ_SCREEN_PROBES = [
 ]
 
 function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
+  // Screen frames arrive only while leased (#762, useScreenLease).
+  useScreenLease(sessionId)
   const snapshot = runtime.conditions
   const conditionKeys = snapshot ? Object.keys(snapshot.conditions) : []
   const attention = dispatchAttentionLabelFromConditions(snapshot)
