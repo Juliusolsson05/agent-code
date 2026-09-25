@@ -487,7 +487,7 @@ entry when it lands.
 | N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | done (textarea carries aria-controls/activedescendant/autocomplete while open; T7 row + popover tokens) |
 | N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
 | N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | done (in S45) |
-| N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | todo |
+| N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | done (Kbd chips, named Buttons, conflict focus flow + focus return; dictation copy) |
 | N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | done (verified: keys already reach the agent; added shared `ConditionOptionList` listbox + legend, Tab-reachable) |
 | N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | done (in M8) |
 | N18 | SettingsBar | caff toggle no aria-pressed | aria-pressed; T4 | done (+ accessible name; T4 ring on caff + performance) |
@@ -789,6 +789,13 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **N15 Settings › Command keybindings:** bindings are key chips with a
+  small ×; Add / Reset / Replace / Cancel are standard small buttons (same
+  height and radius everywhere); the search box is the standard input.
+  Recording shows "Press keys… ⎋". On a conflict the banner takes focus on
+  Replace (or Cancel when the chord is reserved), and Enter resolves it.
+  Escape backs out and returns focus to that row's Add. Dictation hotkey
+  field: empty state reads "Record a shortcut".
 - **N16 Claude resume prompt / Codex command approval (inline strip above
   the composer):** the prose "Press enter to confirm or esc to cancel" is
   now the standard key legend (↑↓ move · ↩ confirm · ⎋ cancel). Codex's
@@ -1344,3 +1351,8 @@ Sharp corners and one light theme.
   title/reason/command). Confirm-red: both new tests fail on the pre-change
   strips; the existing pane-ownership tests stay green (keys fired on the
   strip and on the list both route).
+- 2026-09-25 N15: CommandKeybindingsRow had no tests; the new suite drives the
+  real built-in catalogue through a real zustand settings store. Chords:
+  ⌥D (Split Vertical, replaceable) and ⌘W (reserved by native menu + editor).
+  Confirm-red: all 3 fail on the pre-change row; removing the focus return
+  fails the Escape test.

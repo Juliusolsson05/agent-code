@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { Button } from '@renderer/components/ui/button'
+import { Input } from '@renderer/components/ui/input'
+import { Kbd } from '@renderer/components/ui/kbd'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
@@ -417,45 +420,77 @@ export function CommandKeybindingsRow() {
     setConflict(null)
   }, [conflict, overrides, effective, defaults, setSettings])
 
+  // Keyboard flow for a conflict (ledger N15). The user is ON the keyboard:
+  // they just pressed the chord. So the banner takes focus on its first
+  // action (Replace, or Cancel when a reserved owner blocks Replace) and
+  // Enter resolves it. When the banner goes away, focus goes back to the
+  // row's Add button instead of being dropped on <body> with the unmounted
+  // banner, which made the next Tab restart from the top of the page.
+  const conflictRef = useRef<HTMLDivElement | null>(null)
+  const returnFocusToRef = useRef<string | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (conflict) {
+      returnFocusToRef.current = conflict.commandId
+      conflictRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+      return
+    }
+    const commandId = returnFocusToRef.current
+    returnFocusToRef.current = null
+    if (!commandId) return
+    // Compared by attribute, not a built selector: command ids contain dots
+    // and colons (extension ids), which would need CSS.escape.
+    const target = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-add-binding-for]') ?? [])]
+      .find(element => element.dataset.addBindingFor === commandId)
+    target?.focus()
+  }, [conflict])
+
   return (
     <div className="flex flex-col gap-2">
-      <input
+      <Input
         value={query}
         onChange={event => setQuery(event.target.value)}
         placeholder="Search commands, shortcuts, or keywords…"
-        className="rounded-control w-full bg-input-bg border border-border px-2 py-1 text-xs text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+        aria-label="Search commands"
       />
 
       {conflict ? (
-        <div className="rounded-slab border border-danger/50 bg-danger/10 px-2 py-1.5 text-xs text-ink">
-          <div>
-            <span className="font-mono">{displayKeybinding(conflict.binding)}</span>{' '}
-            is already used by {conflict.owners.join(', ')}.
+        <div
+          ref={conflictRef}
+          role="alert"
+          className="rounded-slab border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-ink"
+          onKeyDown={event => {
+            // Escape backs out of the conflict, not out of Settings: stopped
+            // here so the page's own Escape handling never sees it.
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            event.stopPropagation()
+            setConflict(null)
+          }}
+        >
+          <div className="flex flex-wrap items-center gap-1">
+            <Kbd binding={conflict.binding} aria-hidden={false} /> is already used by{' '}
+            {conflict.owners.join(', ')}.
           </div>
-          <div className="mt-1 flex gap-2">
+          <div className="mt-2 flex items-center gap-2">
             {conflict.replaceableCommandIds.length > 0 && !conflict.hasReservedOwner ? (
-              <button
-                onClick={applyReplace}
-                className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
-              >
+              <Button variant="outline" size="xs" onClick={applyReplace}>
                 Replace
-              </button>
+              </Button>
             ) : (
               <span className="text-ink-dim">
                 Reserved by the app — pick a different chord.
               </span>
             )}
-            <button
-              onClick={() => setConflict(null)}
-              className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
-            >
+            <Button variant="ghost" size="xs" onClick={() => setConflict(null)}>
               Cancel
-            </button>
+              <Kbd binding="Escape" />
+            </Button>
           </div>
         </div>
       ) : null}
 
-      <div className="flex max-h-[420px] flex-col gap-2 overflow-auto">
+      <div ref={listRef} className="flex max-h-[420px] flex-col gap-2 overflow-auto">
         {/* Column header lives INSIDE the scroll container, and sticks.
             Outside it, the header sits in a box that is not narrowed by the
             scrollbar while the rows below it are — so on any platform with
@@ -492,41 +527,62 @@ export function CommandKeybindingsRow() {
                     <span className="text-ink-dim">Not assigned</span>
                   ) : (
                     row.bindings.map(binding => (
-                      <button
+                      // The chord as a Kbd chip (H1), and a name that says
+                      // WHICH binding goes from WHICH command: "Remove this
+                      // binding" lived only in a hover title, so every chip
+                      // announced as "⌘T ×".
+                      <Button
                         key={binding}
+                        variant="outline"
+                        size="xs"
+                        aria-label={`Remove ${displayKeybinding(binding)} from ${row.title}`}
                         title="Remove this binding"
                         onClick={() =>
                           commit(row.id, row.bindings.filter(b => b !== binding))
                         }
-                        className="rounded-control border border-border px-1 py-0.5 font-mono hover:border-danger hover:text-danger"
+                        className="gap-1 px-1 hover:border-danger hover:text-danger"
                       >
-                        {displayKeybinding(binding)} ×
-                      </button>
+                        <Kbd binding={binding} />
+                        <span aria-hidden="true">×</span>
+                      </Button>
                     ))
                   )}
 
-                  <button
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    data-add-binding-for={row.id}
+                    aria-label={capturingFor === row.id ? `Recording a shortcut for ${row.title}` : `Add a shortcut to ${row.title}`}
+                    aria-pressed={capturingFor === row.id}
                     onClick={() => {
                       setConflict(null)
                       setCapturingFor(capturingFor === row.id ? null : row.id)
                     }}
-                    className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
                   >
-                    {capturingFor === row.id ? 'Press keys… (Esc)' : 'Add'}
-                  </button>
+                    {capturingFor === row.id ? (
+                      <>
+                        Press keys…
+                        {/* Escape really stops the capture (the window
+                            listener above), so the chip is true (H2). */}
+                        <Kbd binding="Escape" />
+                      </>
+                    ) : 'Add'}
+                  </Button>
 
                   {row.customized ? (
-                    <button
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      aria-label={`Reset ${row.title} to its default shortcut`}
                       title="Return this command to its shipped default"
                       onClick={() =>
                         setSettings({
                           commandKeybindingOverrides: resetCommandKeybindings(overrides, row.id),
                         })
                       }
-                      className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
                     >
                       Reset
-                    </button>
+                    </Button>
                   ) : null}
 
                   {/* Palette column, pinned to the right edge of every row.
@@ -555,19 +611,21 @@ export function CommandKeybindingsRow() {
           effect on a concern they did not mention. They live side by side
           because the list now edits both concerns; they do not merge. */}
       <div className="flex items-center gap-2">
-        <button
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => setSettings({ commandKeybindingOverrides: {} })}
-          className="rounded-control self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
         >
           Reset all bindings
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => setSettings({ commandVisibilityOverrides: {} })}
-          className="rounded-control self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
           title="Return every command to its shipped palette visibility. Shortcuts are untouched."
         >
           Reset palette visibility
-        </button>
+        </Button>
       </div>
     </div>
   )
