@@ -529,6 +529,14 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (late morning):
+  - **#1236 opened (Fixes #762):** screen IPC by interest.
+    - Plan commit first; a recorded-frame fail-first test that is red on main.
+    - Five mutations killed.
+    - Reviewers: A Codex, B Claude, C Pi. Steering q7 applied.
+  - **#1229:** round 2 was merge-ready. B's new finding (the banner survived a successful read) is fixed. Package PR opencode-terminal-headless#9 is MERGED and the pointer is at its merge commit; waiting on CI.
+  - **#1235:** round-1 minors fixed (docs, comments, cleanup contract tests); round 2 is on the post-merge head.
+  - **#1234:** containment test added. A's major (ambiguous-twin settlement) is declined as an accepted residual, with evidence (0 occurrences in 2,410 transcripts); round 2 sent to A.
 - 2026-09-25 — **Owner approved removing the on-disk ghost log.**
   - #1227 closed unmerged; #1225 and #1232 closed. #1231 was re-scoped to live ghosts.
   - **#1235 opened (Fixes #731):** removes the journal, IPC, preload and retention bucket, cleans the old directory on launch, and updates the design doc. It has merged main (kept `sweepGhosts`); reviewers are A Claude and B Pi.
