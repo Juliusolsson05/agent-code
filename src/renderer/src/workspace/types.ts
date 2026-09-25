@@ -363,6 +363,14 @@ export type SessionMeta = {
    * row exactly as "leaves first" used to.
    */
   joinedAt?: number
+  /**
+   * Terminals only: when the user last USED this shell — typed or pasted into
+   * it, or a command started/finished, or a `cd` — in epoch ms (#1178).
+   * Persisted so Close Old Agents can age a shell across restarts; the only
+   * writer is workspace/terminalLastUsed.ts, which explains why a reload never
+   * moves it.
+   */
+  lastUsedAt?: number
 }
 
 // `BuriedPaneRecord`, `DetachedSessionSurface` and `DetachedSessionRecord` lived

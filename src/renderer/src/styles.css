@@ -1148,6 +1148,31 @@ body,
   animation: cc-work-pulse 900ms ease-in-out infinite;
 }
 
+/* Agent Completion Indicator (#1172): a pane header striped in the accent
+   (activity) colour while an agent's finished turn is still unseen.
+
+   WHY stripes and not a solid fill: solid accent already means "working
+   right now" (Status Mode), so "finished" needs the same colour in a
+   different shape. It reads as related, but can't be mistaken for it at a
+   glance across the grid.
+
+   WHY color-mix instead of the full accent: the header text sits on top of
+   the stripes in the surface's normal muted/ink colour. Full-strength accent
+   bands made the pane label and cwd flicker between two contrasts. At 45%
+   the text stays legible on both kinds of band, for any accent the user
+   picks.
+
+   Static on purpose: an animated background on every finished pane would
+   pull attention across the whole grid, and the point is to be scannable,
+   not loud. */
+.pane-header-completion-stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--color-accent) 45%, transparent) 0 5px,
+    transparent 5px 10px
+  );
+}
+
 /* ---------- Modal animations ---------- */
 @keyframes cc-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cc-pop {

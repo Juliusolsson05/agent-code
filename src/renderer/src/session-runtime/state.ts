@@ -89,7 +89,14 @@ export type ClaudeDraftImage = {
 
 export type PromptDeliveryUiState =
   | { kind: 'idle' }
-  | { kind: 'sending'; prompt: string; startedAt: number }
+  /**
+   * `submissionId` is the submit's paste-debug id. It names the ONE feed row
+   * that is still sending: the optimistic entry minted for this submit carries
+   * it in its uuid (see optimisticPromptUuid), so Feed can dim exactly that row
+   * without guessing from text or tail position (#1181). The composer is locked
+   * for as long as this state holds.
+   */
+  | { kind: 'sending'; prompt: string; startedAt: number; submissionId: string }
   | { kind: 'failed-safe'; message: string }
   /**
    * `enterWritten` is the fact that decides what the banner may claim. The
@@ -499,9 +506,10 @@ export type SessionRuntime = {
    *  entry counts: entries arrive from several sources (semantic
    *  ghosts, JSONL replay, optimistic rows), and replaying history
    *  would make count-based badges lie. The UI only needs a durable
-   *  "something happened while you were elsewhere" bit. Focus
-   *  actions clear it; IPC writers set it when hidden sessions
-   *  receive user-visible output or action-required prompts. */
+   *  "something happened while you were elsewhere" bit. Engagement
+   *  (acknowledgeSession) or dwelling on the visible pane clears it,
+   *  never a mere focus change (see unread.ts). IPC writers set it when a
+   *  turn finishes or an action-required prompt appears. */
   unreadSince: number | null
   unreadKind: 'output' | 'attention' | null
   /** Transient "new in the pool" marker for the agent index (#992 §4.3).

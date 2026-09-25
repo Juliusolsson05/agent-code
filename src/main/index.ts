@@ -1358,8 +1358,9 @@ async function startApp(): Promise<void> {
   // the tap's manager listeners take the forwarder's former position in each
   // event's listener list, so every other main subscriber still runs before
   // or after it exactly as it did.
-  sessionFeedTap = new SessionFeedTap(manager)
-  sessionForwarder = wireSessionForwarder(manager, lspManager, sessionFeedTap)
+  const feedTap = new SessionFeedTap(manager)
+  sessionFeedTap = feedTap
+  sessionForwarder = wireSessionForwarder(manager, lspManager, feedTap)
   registerSessionRoutingIpc(manager, sessionForwarder)
   // CLI auto-updater — constructed AFTER SessionManager because it uses
   // the manager to decide whether an active session of the target kind
@@ -1536,6 +1537,7 @@ async function startApp(): Promise<void> {
   const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
+    sessionFeedTap: feedTap,
     userMcpService,
     updates: { updateService, updateChecks, app: { version: app.getVersion(), isPackaged: app.isPackaged } },
     remoteController,

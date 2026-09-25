@@ -20,7 +20,7 @@ import { MergeProjectTabsSurface } from '@renderer/features/workspace/surfaces/M
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
 import { ConversationsSurface } from '@renderer/features/conversations/surfaces/ConversationsSurface'
-import { AgentActivitySurface } from '@renderer/features/workspace/surfaces/AgentActivitySurface'
+import { AgentActivitySurface } from '@renderer/features/agent-activity/surfaces/AgentActivitySurface'
 import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/CloseOldAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
 import { AgentViewModePickerSurface } from '@renderer/features/workspace/surfaces/AgentViewModePickerSurface'

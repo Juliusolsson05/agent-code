@@ -73,7 +73,7 @@ beforeEach(() => {
 
 describe('session:reseed-conditions (#895)', () => {
   it('re-emits a cached snapshot on the same channel a live change uses', () => {
-    registerSessionIpc(manager({ blocked: blocked }) as never, { flushSession: vi.fn() } as never)
+    registerSessionIpc(manager({ blocked: blocked }) as never, { flushSession: vi.fn() } as never, { flushCommitted: () => {} })
     expect(reseed(['blocked'])).toBe(1)
     // The ordinary channel, so the renderer's one fold applies the projection,
     // the unread mark and the debug log — exactly as for a live change. A
@@ -85,20 +85,20 @@ describe('session:reseed-conditions (#895)', () => {
     // No cached snapshot means no condition has ever been live. An empty
     // snapshot would be a CLAIM that everything is clear, which is a different
     // statement and would clobber whatever the renderer already holds.
-    registerSessionIpc(manager({}) as never, { flushSession: vi.fn() } as never)
+    registerSessionIpc(manager({}) as never, { flushSession: vi.fn() } as never, { flushCommitted: () => {} })
     expect(reseed(['quiet'])).toBe(0)
     expect(sent).toEqual([])
   })
 
   it('refuses a session this window does not own', () => {
-    registerSessionIpc(manager({ blocked: blocked }) as never, { flushSession: vi.fn() } as never)
+    registerSessionIpc(manager({ blocked: blocked }) as never, { flushSession: vi.fn() } as never, { flushCommitted: () => {} })
     lease.current = { windowId: 'another-window', revision: 1 }
     expect(reseed(['blocked'])).toBe(0)
     expect(sent).toEqual([])
   })
 
   it('refuses an unowned session and a malformed request without throwing', () => {
-    registerSessionIpc(manager({ blocked: blocked }) as never, { flushSession: vi.fn() } as never)
+    registerSessionIpc(manager({ blocked: blocked }) as never, { flushSession: vi.fn() } as never, { flushCommitted: () => {} })
     lease.current = null
     expect(reseed(['blocked'])).toBe(0)
     lease.current = { windowId: 'window-one', revision: 1 }

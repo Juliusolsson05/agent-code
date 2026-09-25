@@ -601,6 +601,11 @@ export const KILL_CALLERS = [
   // ── renderer, bulk and automation ──────────────────────────────────────
   'bulk.close-old-agents',
   'bulk.close-idle-orchestration',
+  // Agent Activity's multi-select close (#1170). Its own tag, not
+  // `close.agent-activity`: that one is a single row the user aimed at, this
+  // is N kills from one approval, and a journal reader triaging "why did nine
+  // agents die at once" must be able to tell the two apart.
+  'bulk.agent-activity',
   'orchestration.close-agent',
   'orchestration.close-run',
   // The Agent Management MCP close tool: a model asking to close an agent it

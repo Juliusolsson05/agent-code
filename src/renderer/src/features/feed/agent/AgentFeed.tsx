@@ -13,7 +13,8 @@ import type { AgentFeedModel, AgentFeedRuntime } from './useAgentFeedModel'
 // references). Now a prop Feed grows is wired here once.
 //
 // What a surface still passes is CHROME: behaviour that only one surface
-// has — tail mode and pickers (desktop keyboard), scroll telemetry for the
+// has — tail mode and pickers (desktop keyboard), the pending Sending row,
+// scroll telemetry for the
 // desktop's scroll indicator, usage-limit actions, render-debug logging. A
 // surface without them simply omits them, and Feed's defaults are the
 // no-chrome behaviour.
@@ -24,6 +25,9 @@ export type AgentFeedChromeProps = Pick<
   | 'workspaceRoot'
   | 'tailMode'
   | 'pickerSelectedUuid'
+  // The desktop's optimistic "Sending…" row (#1181); the phone has no local
+  // submit echo, so it never has one.
+  | 'pendingEntryUuid'
   | 'codeBlockSelectedId'
   | 'onScrollInfo'
   | 'onUserEngagement'

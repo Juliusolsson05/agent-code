@@ -18,6 +18,13 @@ import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/pane
 // panes that still want attention. Previous design used
 // green/red, but red read as "error" for merely idle panes.
 //
+// Agent Completion Indicator (#1172): a pane whose finished turn is still
+// unseen is drawn with accent STRIPES instead of the solid fill: the same
+// colour as "working" but a different shape, so "done, go look" and "busy"
+// can't be confused across the grid. "Unseen" is the session's unread marker,
+// the same one behind the Dispatch NEW badge. The leaf clears it on engagement
+// or after a dwell (useAcknowledgeAfterDwell), never on a passing focus.
+//
 // The right quarter of the strip is owned by the session's color flag when one
 // is set (PaneHeaderColorFlag). The two signals are deliberately allowed to
 // overlap: liveness is automatic and transient, the flag is manual and sticky,
@@ -50,6 +57,7 @@ export function PaneHeader({
   projectDir,
   statusMode,
   isSessionLive,
+  completionUnseen = false,
   badge,
   trailing,
 }: {
@@ -59,6 +67,10 @@ export function PaneHeader({
   projectDir: string | null
   statusMode: boolean
   isSessionLive: boolean
+  /** The agent finished while the user was elsewhere and nobody has looked
+   *  since (the session's unread marker, #1172). Only agent surfaces pass it,
+   *  so a shell TerminalLeaf never stripes. */
+  completionUnseen?: boolean
   /** Surface identity shown right after the pane label (e.g. `raw claude`). */
   badge?: ReactNode
   /** Surface state pinned to the right end of the status row, left of the
@@ -71,14 +83,32 @@ export function PaneHeader({
   // Subscribe only to this rare gap object, never every feed/PTY update.
   const routingGap = useAppStore(state => state.workspaceRuntimes?.[sessionId]?.routingGap)
   const statusLit = paneHeaderStatusLit(statusMode, isSessionLive)
+  // #1172: read here rather than drilled through MainSurface → TileTree →
+  // Dispatch/Tiled/Spotlight → leaf the way showStatusMode is. The header
+  // already subscribes to the store, and every agent surface renders this
+  // component, so this one read covers them all.
+  const completionIndicator = useAppStore(state => state.settings.showAgentCompletionIndicator)
+  // WHY a running agent never stripes: stripes say "finished, go look", and a
+  // pane that started another turn is not finished, even though its unread
+  // marker from the previous turn is still set. Keyed on `isSessionLive`, not
+  // on `statusLit`: with Status Mode off nothing is lit, and gating on the
+  // fill would claim "finished" for a pane that is busy. It also means the lit
+  // fill and the stripes can never share a row. Deliberately the same
+  // `sessionStatus` rule as the lit fill, not sessionIsWorking(): that one also
+  // counts a non-idle streamPhase, so for the moment before sessionStatus
+  // settles on a non-typed prompt (orchestration, Goal Loop) an old marker can
+  // stripe a pane that has just started streaming. Matching the fill is what
+  // keeps the two from ever overlapping, and it's the smaller cost.
+  const completionStriped = completionIndicator && completionUnseen && !isSessionLive
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
       <div
         data-pane-header-row="true"
         data-status-lit={statusLit ? 'true' : 'false'}
+        data-completion-striped={completionStriped ? 'true' : 'false'}
         className={`flex items-center justify-between text-[10px] ${
           statusLit ? 'bg-accent text-accent-fg' : 'bg-surface text-muted'
-        } ${statusMode ? 'min-h-[5px]' : ''}`}
+        } ${completionStriped ? 'pane-header-completion-stripes' : ''} ${statusMode ? 'min-h-[5px]' : ''}`}
       >
         {/* WHY ALL of the row's padding moved down onto this group — the row
             used to be `px-3 py-1` and is now bare:

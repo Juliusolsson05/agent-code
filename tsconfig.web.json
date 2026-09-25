@@ -53,6 +53,9 @@
   },
   "include": [
     "testing/fixtures/provider-usage-limits/*.json",
+    // Recorded Claude prompt-acceptance shapes: optimistic-prompt ownership
+    // tests read the real pasted-prompt row rather than an invented one.
+    "testing/fixtures/prompt-acceptance/*.json",
     "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived

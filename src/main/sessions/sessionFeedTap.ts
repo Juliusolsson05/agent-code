@@ -307,6 +307,17 @@ export class SessionFeedTap {
     this.flushJsonl(sessionId)
   }
 
+  /**
+   * Send a session's buffered committed rows NOW, ahead of whatever the
+   * caller sends next on the same renderer channel (#1181). Narrower than
+   * flushSession on purpose: the deliver-prompt reply only needs the prompt's
+   * JSONL line to overtake it, and the snapshot coalescers have no part in
+   * that ordering. An empty buffer is a no-op.
+   */
+  flushCommitted(sessionId: string): void {
+    this.flushJsonl(sessionId)
+  }
+
   flush(): void {
     this.semanticEvents.flush()
     this.screens.flush()

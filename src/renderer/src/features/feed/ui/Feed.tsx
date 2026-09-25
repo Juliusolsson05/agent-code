@@ -173,6 +173,18 @@ type Props = {
    */
   pickerSelectedUuid?: string | null
   /**
+   * UUID of the optimistic prompt row whose send has not settled yet (#1181).
+   * That row paints dimmed with a `Sending…` caption until the provider
+   * accepts or rejects the prompt.
+   *
+   * WHY a prop keyed by uuid and not a flag on the ledger row: "still sending"
+   * is presentation over a row the ledger already decided to show. Putting it
+   * in the candidate would make every send and every settle rebuild ledger
+   * rows and bust the identity cache (D11) during the hottest repaint window.
+   * It would also teach ordering and ownership about a state they must ignore.
+   */
+  pendingEntryUuid?: string | null
+  /**
    * Instance id (`data-code-block-id`) of the code block currently
    * highlighted by the "Copy Code Block" picker. Null when that
    * picker is not active. Drives an accent outline on the matching
@@ -316,6 +328,7 @@ function FeedImpl({
   turnStartedAt = null,
   tailMode = false,
   pickerSelectedUuid = null,
+  pendingEntryUuid = null,
   codeBlockSelectedId = null,
   workspaceRoot = null,
   onScrollInfo,
@@ -990,6 +1003,10 @@ function FeedImpl({
         const uuid = e.uuid
         const selected =
           pickerSelectedUuid != null && uuid === pickerSelectedUuid
+        // A pending row is by construction the newest prompt, so it always
+        // mounts eagerly; skipping LazyEntry also keeps the caption from
+        // appearing before the row it describes.
+        const pending = pendingEntryUuid != null && uuid === pendingEntryUuid
         // WHY eager rendering keys off committed-entry ordinal, not
         // render-item index: semantic/work rows now live in the
         // same ordered list, but markdown parse cost still belongs to
@@ -1023,13 +1040,27 @@ function FeedImpl({
                   : undefined
               }
             >
-              <LazyEntry
-                eager={eager}
-                suspended={bootstrapping}
-                scrollerRef={scrollerRef}
-              >
-                <EntryRow entry={e} />
-              </LazyEntry>
+              {pending ? (
+                // Dimmed, not hidden or badged elsewhere: the prompt is shown
+                // in the exact place and form it will keep once accepted, so
+                // settling is only an opacity change and nothing jumps. The
+                // caption says what the dimming means. aria-busy tells
+                // assistive tech the same thing the opacity tells sighted users.
+                <div className="opacity-50 transition-opacity duration-150" aria-busy="true">
+                  <EntryRow entry={e} />
+                  {/* 22px = MarkerRow's marker column (w-3) plus its gap-2.5,
+                      so the caption sits under the prompt text, not the ❯. */}
+                  <div className="mt-0.5 pl-[22px] text-[10px] text-muted">Sending…</div>
+                </div>
+              ) : (
+                <LazyEntry
+                  eager={eager}
+                  suspended={bootstrapping}
+                  scrollerRef={scrollerRef}
+                >
+                  <EntryRow entry={e} />
+                </LazyEntry>
+              )}
             </div>
           </RenderDebugBoundary>
         )

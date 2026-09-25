@@ -1,0 +1,209 @@
+{
+  "provenance": "ac_agents_list on the owner's live window, 2026-09-19, through Agent Code's own control MCP. 33 sessions in total across 3 projects; the 11 below are a representative slice (every provider, every placement shape, both title sources). Session ids and tab ids are truncated to 8 characters; nothing else is edited. The rambling titles are verbatim, because they are the finding.",
+  "totals": {
+    "sessions": 33,
+    "projects": 3,
+    "sessionsInLargestProject": 28,
+    "sessionsWithAnExplicitTitle": 3,
+    "sessionsWithASpokenAgentName": 0,
+    "sessionsOnALane": 11
+  },
+  "sessions": [
+    {
+      "sessionId": "575880c6",
+      "displayLabel": "B3",
+      "title": "",
+      "displayedTitle": "agent-code",
+      "provider": "claude",
+      "providerRuntime": null,
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "e6e19a29",
+      "displayLabel": "A1",
+      "title": "",
+      "displayedTitle": "bringdown",
+      "provider": "opencode",
+      "providerRuntime": "terminal",
+      "project": "bringdown",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "3bf27c7f",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "7327ced2",
+      "displayLabel": "B5",
+      "title": "",
+      "displayedTitle": "sure lets continue building all of this stuff for me .",
+      "provider": "opencode",
+      "providerRuntime": "terminal",
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        },
+        {
+          "kind": "dispatch",
+          "where": "lane 5",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "1d0db3d8",
+      "displayLabel": "B6",
+      "title": "",
+      "displayedTitle": "all of those feaatures are shit lets just not ship that then .",
+      "provider": "opencode",
+      "providerRuntime": "terminal",
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "a9c17d51",
+      "displayLabel": "B7",
+      "title": "",
+      "displayedTitle": "Status nudge: the privacy check above is still unanswered. Please answer it now \u2014 report exactly what personally identifying or sensitive content is visible in the attached landing-page hero screenshot (first names, real session text, emails, paths, tokens), with rough locations, or state explicitly that it is clean. Under 200 words, no code changes.",
+      "provider": "claude",
+      "providerRuntime": null,
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "20c09242",
+      "displayLabel": "B8",
+      "title": "",
+      "displayedTitle": "Actually we do not need to restore it i lowkey only had junk either way on my configuration, what we do need to do instead is to make it so that lest insepct the commands i had on and compare that with the defualt on set, becuase we want to make it so that the list of default commands that is on is more simullar to the configurations that i had in my workspace, so lest see if we can figure that out for me .",
+      "provider": "opencode",
+      "providerRuntime": "terminal",
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "cddf53b0",
+      "displayLabel": "B10",
+      "title": "Grok Stage 4 adapter review",
+      "displayedTitle": "Grok Stage 4 adapter review",
+      "provider": "claude",
+      "providerRuntime": null,
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "1a8cf549",
+      "displayLabel": "B28",
+      "title": "",
+      "displayedTitle": "Please break down this full project for me",
+      "provider": "grok",
+      "providerRuntime": null,
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        },
+        {
+          "kind": "dispatch",
+          "where": "lane 4",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "a15c8aa6",
+      "displayLabel": "B14",
+      "title": "",
+      "displayedTitle": "agent-code",
+      "provider": "terminal",
+      "providerRuntime": null,
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    },
+    {
+      "sessionId": "5906040e",
+      "displayLabel": "B20",
+      "title": "",
+      "displayedTitle": "continue please",
+      "provider": "claude",
+      "providerRuntime": null,
+      "project": "agent-code",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        },
+        {
+          "kind": "dispatch",
+          "where": "lane 1",
+          "visible": false
+        },
+        {
+          "kind": "spotlight",
+          "where": "e0224b91",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "sessionId": "10fbf53a",
+      "displayLabel": "B21",
+      "title": "Codex review #1045",
+      "displayedTitle": "Codex review #1045",
+      "provider": "codex",
+      "providerRuntime": null,
+      "project": "agent-code/.worktrees/goal-loop-command-parity",
+      "placements": [
+        {
+          "kind": "project",
+          "where": "e0224b91",
+          "visible": false
+        }
+      ]
+    }
+  ]
+}

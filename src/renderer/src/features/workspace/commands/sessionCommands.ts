@@ -272,18 +272,15 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Agent Activity — overview of every visible pane/session
-    // grouped by tab, sorted by last activity. Primary use case is
-    // triaging a long working session: scan which agents have gone
-    // idle, close or bury the ones you're done with without having
-    // to click through each tab. Always available — the modal
-    // derives "last active" from existing transcript data, so it
-    // needs nothing to be focused.
+    // Agent Activity — full-screen view of every agent in the window, lane or
+    // pool, sectioned by what it needs (#1170): needs you / working / idle /
+    // exited. Always available: it needs nothing focused, and it reads the
+    // fleet's notes only while it is open.
     id: 'open-agent-activity',
     category: 'workspace-tools',
     surface: 'app',
     title: 'Open Agent Activity…',
-    description: '**What it does:** Opens an overview of **agent activity** across the workspace.\n\n**Use when:** You want to triage active, idle, or stale agents.\n\n**Notes:** Useful for cleanup during long multi-agent sessions.',
+    description: '**What it does:** Opens a full-screen view of **every agent**, grouped into Needs you, Working, Idle and Exited.\n\n**Use when:** You want to see which agent is waiting for you, what the others are doing, or close several idle ones at once.\n\n**Notes:** Type to filter, Space to select, ⌫ to close. Close Old Agents and Close Idle Orchestration Agents stay as quick one-shot commands.',
     keywords: [
       'agent',
       'activity',
