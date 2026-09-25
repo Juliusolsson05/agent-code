@@ -216,49 +216,50 @@ async function deliverClaudeImagePrompt(
   const rawComposer = `${io.prompt}${separator}${imagePaths.join('\n')}`
 
   if (io.prompt.length > 0) {
-    if (isPasteLike(io.prompt)) {
-      const textBaseline = io.session.snapshotScreen()
-      if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
-        return failure({
-          stage: 'before-write', code: 'write-failed', retrySafe: true,
-          disposition: 'session-unusable',
-          promptWritten: false, enterWritten: false,
-          message: `Could not write image prompt text to session ${io.sessionId}`,
-        })
-      }
-      const textAbsorbed = await pollPasteAbsorbed(
-        () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
-        {
-          timeoutMs: remainingBudget(deliveryDeadlineAt, CONFIRM_TIMEOUT_MS),
-          pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
-        },
-      )
-      if (textAbsorbed.kind !== 'absorbed') {
-        // Same stranded-bytes hazard as the text-only path (#679). Only the
-        // TEXT has been written at this point — the image paths follow below —
-        // so a kill-to-line-start rollback can still fully clear the composer.
-        const rollback = await rollbackWrittenPrompt(io)
-        if (rollback === 'cleared') {
-          return failure({
-            stage: 'absorption', code: 'absorption-timeout', retrySafe: true,
-            disposition: 'retry-same-session',
-            promptWritten: false, enterWritten: false,
-            message: `Claude session ${io.sessionId} did not absorb image prompt text; it was not sent and the draft was cleared from Claude's composer`,
-          })
-        }
-        return failure({
-          stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
-          disposition: 'do-not-retry',
-          promptWritten: true, enterWritten: false,
-          message: `Claude session ${io.sessionId} did not absorb image prompt text, and it is still in Claude's composer`,
-        })
-      }
-    } else if (!io.write(io.prompt)) {
+    // BOTH prompt shapes wait until their text visibly entered the composer
+    // before the image paths are pasted (#1119). A short prompt used to be
+    // written raw with no wait, and the image baseline below was then sampled
+    // before its text had repainted. A prompt that literally names an image
+    // (`why does [Image #1] look wrong`) raised the placeholder count when it
+    // painted, the image poll took that for the attachment, and Enter went out
+    // with no image. Waiting here means the baseline already counts any
+    // literal the text carries, so only a real pill can move it. It is the
+    // same rule the text-only path applies to every prompt, one character up.
+    const textBaseline = io.session.snapshotScreen()
+    const textPayload = isPasteLike(io.prompt) ? `\x1b[200~${io.prompt}\x1b[201~` : io.prompt
+    if (!io.write(textPayload)) {
       return failure({
         stage: 'before-write', code: 'write-failed', retrySafe: true,
         disposition: 'session-unusable',
         promptWritten: false, enterWritten: false,
         message: `Could not write image prompt text to session ${io.sessionId}`,
+      })
+    }
+    const textAbsorbed = await pollPasteAbsorbed(
+      () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
+      {
+        timeoutMs: remainingBudget(deliveryDeadlineAt, CONFIRM_TIMEOUT_MS),
+        pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
+      },
+    )
+    if (textAbsorbed.kind !== 'absorbed') {
+      // Same stranded-bytes hazard as the text-only path (#679). Only the
+      // TEXT has been written at this point — the image paths follow below —
+      // so a kill-to-line-start rollback can still fully clear the composer.
+      const rollback = await rollbackWrittenPrompt(io)
+      if (rollback === 'cleared') {
+        return failure({
+          stage: 'absorption', code: 'absorption-timeout', retrySafe: true,
+          disposition: 'retry-same-session',
+          promptWritten: false, enterWritten: false,
+          message: `Claude session ${io.sessionId} did not absorb image prompt text; it was not sent and the draft was cleared from Claude's composer`,
+        })
+      }
+      return failure({
+        stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+        disposition: 'do-not-retry',
+        promptWritten: true, enterWritten: false,
+        message: `Claude session ${io.sessionId} did not absorb image prompt text, and it is still in Claude's composer`,
       })
     }
     if (separator && !io.write(separator)) {
