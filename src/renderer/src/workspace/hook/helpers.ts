@@ -229,6 +229,7 @@ export function useWorkspaceHelpers(
 export function usePaneToast(
   paneToastTimers: WorkspaceRefs['paneToastTimers'],
   updateRuntime: (id: SessionId, patch: Partial<SessionRuntime>) => void,
+  stateRef?: WorkspaceRefs['stateRef'],
 ): (sessionId: SessionId, message: string, durationMs?: number) => void {
   // Single-slot, auto-dismiss. Calling showPaneToast while a previous
   // toast is still visible replaces it and resets the timer. The
@@ -236,6 +237,12 @@ export function usePaneToast(
   // causing a re-render.
   return useCallback(
     (sessionId: SessionId, message: string, durationMs = 2000) => {
+      // A pane that is gone (closed while an async action it started was
+      // still running) gets no toast: updateRuntime would recreate a runtime
+      // row for the dead id, and its dismiss timer would write it again, so
+      // the row was never removed (#1262 review A; builtInMcpReload shared
+      // the shape).
+      if (stateRef && !stateRef.current.sessions[sessionId]) return
       // Clear any in-flight timer for this pane.
       const prev = paneToastTimers.current[sessionId]
       if (prev) clearTimeout(prev)
@@ -243,10 +250,13 @@ export function usePaneToast(
       updateRuntime(sessionId, { paneToast: message })
 
       paneToastTimers.current[sessionId] = setTimeout(() => {
-        updateRuntime(sessionId, { paneToast: null })
         delete paneToastTimers.current[sessionId]
+        // Closed while its toast was showing: clearing it would recreate the
+        // dead pane's runtime row, the other half of the same leak.
+        if (stateRef && !stateRef.current.sessions[sessionId]) return
+        updateRuntime(sessionId, { paneToast: null })
       }, durationMs)
     },
-    [paneToastTimers, updateRuntime],
+    [paneToastTimers, updateRuntime, stateRef],
   )
 }
