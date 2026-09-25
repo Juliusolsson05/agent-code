@@ -6,6 +6,7 @@ import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/prov
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@renderer/components/ui/dialog'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
@@ -82,6 +83,9 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // scope), but not when loadMore appends rows below it.
   const headId = response?.rows[0]?.nativeId ?? null
   useEffect(() => { setSelected(0) }, [headId, query, scope, providers, includeChildren])
+  // An inline resume error names the row it was about; moving the highlight
+  // makes it stale (#1262 review B).
+  useEffect(() => { setResumeError(null) }, [selected])
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-conversation-index="${selected}"]`)?.scrollIntoView({ block: 'nearest' })
   }, [selected])
@@ -100,6 +104,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       setResumeError(`Can't resume ${row.nativeId.slice(0, 8)}: the transcript records no working directory.`)
       return
     }
+    // The pane the swap is aimed at, read BEFORE the picker closes: it is the
+    // one place a failure can still be reported once the picker is gone.
+    const targetSessionId = commandTargetSessionId(workspace)
+    if (workspace.activeTab && !targetSessionId) {
+      // Nothing to swap into; closing would only hide a no-op.
+      setResumeError(`Can't resume ${row.label} here: no agent pane is selected.`)
+      return
+    }
     onClose()
     if (workspace.activeTab) {
       // In-place swap: the pane stays where it is, what runs in it changes.
@@ -110,10 +122,30 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       // a stranger's conversation in, and inheriting parentage here would file
       // it as somebody's orchestration child — reported to that parent as its
       // worker's answer, and killed by `close_run`.
-      await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
+      //
+      // WHY every outcome is reported on the pane (#1241): the picker has
+      // already closed, and the callers fire this with `void`, so a spawn
+      // failure (e.g. the provider's CLI removed since the transcript was
+      // written) was an unhandled rejection and an `undefined` (no command
+      // target, missing meta, a refused commit) was silence. The pane just
+      // stayed as it was. builtInMcpReload reports the same call this way.
+      try {
+        const replaced = await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
+        if (!replaced) workspace.showPaneToast(targetSessionId!, `Couldn't resume ${row.label} in this pane.`)
+      } catch {
+        // WHY a fixed sentence and never the rejection's text (steering q22,
+        // #1262 review B): the spawn rejection is Electron's wrapper around the
+        // raw provider exception, which can carry environment values, proxy
+        // URLs or scoped MCP tokens. Main's recovery path and the reload path
+        // (#1252) show this same safe message for the same failure.
+        workspace.showPaneToast(targetSessionId!, `Couldn't resume ${row.label}: ${SESSION_START_FAILED_MESSAGE}`)
+      }
     } else {
       // Fresh launch with nothing to replace: a new tab in the row's cwd.
-      await workspace.newTab(row.cwd, row.nativeId, row.provider)
+      // newTab already toasts its own failure and rethrows; the catch only
+      // keeps this `void`-fired resume from ending in an unhandled rejection
+      // (#1262 review A).
+      await workspace.newTab(row.cwd, row.nativeId, row.provider).catch(() => undefined)
     }
   }, [onClose, workspace])
 
