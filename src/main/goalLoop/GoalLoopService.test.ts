@@ -1130,4 +1130,12 @@ describe('GoalLoopService.carry (#1279)', () => {
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(deliver).not.toHaveBeenCalled()
   })
+
+  // #1287 review A: a loop the user paused must follow its pane too.
+  it('moves a paused loop, keeping it paused by the user', async () => {
+    const { svc } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.control('s1', { action: 'pause' })
+    expect(await svc.carry('s1', 's2')).toMatchObject({ sessionId: 's2', phase: 'paused', pauseReason: 'user' })
+  })
 })

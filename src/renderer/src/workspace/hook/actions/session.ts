@@ -1433,7 +1433,10 @@ export function useSessionActions(
           await killSession(newId, 'replace.orphaned-successor', { cwd, kind: nextKind, providerRuntime })
           return
         }
-        carryGoalLoops(idMap)
+        // Not for a DIFFERENT conversation swapped into the pane (the picker's
+        // newConversation), and not into a process without Goal Loop tools:
+        // it could never call goal_loop_complete (#1287 review A).
+        if (!opts?.newConversation && builtInMcpDomains?.includes('goal_loop')) carryGoalLoops(idMap)
         setRuntimes(prev => {
           // Replacement can await spawn and backend retirement while the user
           // keeps editing. Transfer the latest draft in the same state update
@@ -1527,6 +1530,8 @@ export function useSessionActions(
       // stay in the workspace instead of being removed (#1239).
       const failedIds = new Set<SessionId>()
       const freshSessions: Record<SessionId, SessionMeta> = {}
+      // Successors that can still complete a goal loop; see carryGoalLoops.
+      const goalLoopCapable = new Set<SessionId>()
 
       for (const [oldId, meta] of agentEntries) {
         try {
@@ -1564,6 +1569,7 @@ export function useSessionActions(
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
           idMap.set(oldId, newId)
+          if (builtInMcpDomains?.includes('goal_loop')) goalLoopCapable.add(newId)
           freshSessions[newId] = {
             // `agentNameId` needs no line here: withoutProvisionalProviderSession
             // is field-preserving, so `...restoredMeta` carries the identity from
@@ -1663,7 +1669,10 @@ export function useSessionActions(
           stage: remapTiledLanes(prev.stage, idMap),
         }
       })
-      carryGoalLoops(idMap)
+      // Reload Agents resolves each successor's domains from CURRENT
+      // defaults; one that lost goal_loop keeps no loop it cannot complete
+      // (#1287 review A).
+      carryGoalLoops(new Map([...idMap].filter(([, newId]) => goalLoopCapable.has(newId))))
       for (const [newId, meta] of Object.entries(freshSessions)) {
         if (!hasDurableProviderSession(meta)) continue
         void loadInitialHistoryForSession({
@@ -1771,7 +1780,9 @@ export function useSessionActions(
 }
 
 /** Tell main that each replaced pane's goal loop now belongs to its
- *  successor (#1279). Main keys loops by session id and cannot see the
+ *  successor (#1279). Callers pass only successors that continue the SAME
+ *  conversation with Goal Loop tools; a loop left behind stays paused under
+ *  the old id, as it did before this carry existed. Main keys loops by session id and cannot see the
  *  swap; this is the same old -> new map the commit just applied to pins,
  *  lanes and relationships. Fire-and-forget: a failed carry leaves the loop
  *  where it was (the pre-#1279 behaviour), never blocks the swap, and main
