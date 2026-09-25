@@ -1092,4 +1092,83 @@ describe('#1208 — reopening a document after its server was lost', () => {
     expect(authorize).not.toHaveBeenCalled()
     expect(docsOf(manager).has('inmemory://a')).toBe(false)
   })
+  // #1266 round 2 (A1, B2): the plain open path had the same flaw the epoch
+  // fixed for reopen. An old page's open that FAILED after its page navigated
+  // rolled back "one ref of this WebContents id", which was now the successor
+  // page's, so the successor's document outlived its close.
+  it('a failed open from a page that navigated away leaves the next page its document', async () => {
+    let calls = 0
+    let release!: () => void
+    let entered!: () => void
+    const inside = new Promise<void>(resolve => { entered = resolve })
+    const { manager, evt, navigate } = setup(async () => {
+      if (++calls === 1) {
+        entered()
+        await new Promise<void>(resolve => { release = resolve })
+        throw new Error('old root revoked')
+      }
+      return '/repo'
+    })
+    const stale = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'old' })
+    await inside
+    navigate()
+    const fresh = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'new' })
+    release()
+    await expect(stale).rejects.toThrow('old root revoked')
+    await fresh
+    expect(docsOf(manager).get('inmemory://a')?.refs).toBe(1)
+    await ipcHandlers.get('lsp:close-document')!(evt, 'inmemory://a')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  // #1266 round 2 (B1): the reopen rolled itself back when its owner left, but
+  // a plain open queued behind it re-added the backed marker, and the next
+  // owner's fail-open document then rejected every change as "not open".
+  it('an open queued behind an abandoned reopen does not re-mark the URI backed', async () => {
+    const { manager, server, evt, destroy } = setup()
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    const realOpen = manager.openDocument.bind(manager)
+    let entered!: () => void
+    const inside = new Promise<void>(resolve => { entered = resolve })
+    let release!: () => void
+    let paused = true
+    manager.openDocument = async params => {
+      if (paused) {
+        paused = false
+        entered()
+        await new Promise<void>(resolve => { release = resolve })
+      }
+      return await realOpen(params)
+    }
+    const reopen = ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    await inside
+    const queued = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    destroy()
+    release()
+    expect(await reopen).toBe(false)
+    await queued.catch(() => undefined)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+    const next = { sender: { ...evt.sender, id: 2, once: () => {}, on: () => {} } }
+    await ipcHandlers.get('lsp:open-document')!(next, { ...VIRTUAL, language: 'plaintext', clientUri: 'inmemory://a', content: 'x' })
+    await expect(ipcHandlers.get('lsp:change-document')!(next, 'inmemory://a', 'y')).resolves.toBeUndefined()
+  })
+
+  // Round 2 surviving mutant: every remaining IPC ref belongs to an open
+  // queued behind the reopen (the established one closed first). Claiming
+  // success there would mark the URI backed with nothing opened.
+  it('declines to reopen when every remaining reference is an open still queued behind it', async () => {
+    const { manager, server, evt } = setup()
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    const close = ipcHandlers.get('lsp:close-document')!(evt, 'inmemory://a')
+    const reopen = ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    const open = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    await close
+    expect(await reopen).toBe(false)
+    await open
+    expect(docsOf(manager).get('inmemory://a')?.refs).toBe(1)
+  })
 })

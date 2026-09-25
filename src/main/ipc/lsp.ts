@@ -261,6 +261,13 @@ export function registerLspIpc(
       // clear() miss the in-flight document and leak it after the renderer was
       // gone. LspManager's per-URI queue orders the eventual open/close pair.
       addOwnedDocument(evt.sender, params.clientUri)
+      // The page this open speaks for (see ownerEpochs). If it navigates
+      // while the open is in flight, clear() has already dropped this open's
+      // IPC reference and queued a close for it; everything below must then
+      // leave ownership alone, because a successor page on the SAME
+      // WebContents id may already hold the URI (#1266 round 2, A1/B2).
+      const epoch = ownerEpochs.get(evt.sender.id) ?? 0
+      const samePage = (): boolean => (ownerEpochs.get(evt.sender.id) ?? 0) === epoch
       pendingOpens.set(params.clientUri, (pendingOpens.get(params.clientUri) ?? 0) + 1)
       try {
         await serializeDocument(params.clientUri, async () => {
@@ -281,7 +288,12 @@ export function registerLspIpc(
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
             })
-            if (opened) lspBackedDocuments.add(params.clientUri)
+            // A page that left meanwhile does not get the marker back: clear()
+            // dropped it, and the close clear() queued behind this entry will
+            // release what this open just counted. Re-adding it left the next
+            // owner's fail-open document rejecting every change as "not open"
+            // (#1266 round 2, B1).
+            if (opened && samePage()) lspBackedDocuments.add(params.clientUri)
           } catch (err) {
             // Keep rollback inside the same IPC queue entry. A renderer
             // navigation may already have queued its own cleanup behind this
@@ -294,8 +306,14 @@ export function registerLspIpc(
           }
         })
       } catch (err) {
-        removeOwnedDocument(evt.sender.id, params.clientUri)
-        if (!ownerByDocument.has(params.clientUri)) lspBackedDocuments.delete(params.clientUri)
+        // Only the page that registered the reference may take it back.
+        // After a navigation, clear() already removed it, and removing "one
+        // ref of this WebContents id" would take the successor page's: its
+        // manager document then outlived its close (#1266 round 2, A1/B2).
+        if (samePage()) {
+          removeOwnedDocument(evt.sender.id, params.clientUri)
+          if (!ownerByDocument.has(params.clientUri)) lspBackedDocuments.delete(params.clientUri)
+        }
         throw err
       }
     },
@@ -355,7 +373,12 @@ export function registerLspIpc(
         const context = await authorizeContext(evt.sender, params)
         // The page may have navigated during authorization, and its
         // successor may even own this URI again under the same WebContents
-        // id; the epoch tells them apart (#1266 review A2).
+        // id; the epoch tells them apart (#1266 review A2). Today the
+        // `refs <= 0` rule below also refuses that case (the successor's
+        // open is necessarily queued behind this entry, so all its refs are
+        // pending), which is why mutating this check alone survives the
+        // suite (round 2). It stays: it states the rule directly instead of
+        // relying on queue order, and costs nothing.
         if (!stillOwned()) return false
         const refs =
           (documentsByOwner.get(evt.sender.id)?.get(params.clientUri) ?? 0) -
