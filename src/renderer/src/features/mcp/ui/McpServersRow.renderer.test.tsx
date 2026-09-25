@@ -8,6 +8,7 @@ import { useProviderEnablementStore } from '@renderer/features/providers/store'
 import type { ProviderEnablementSnapshot } from '@shared/types/providerEnablement'
 import type { UserMcpServerView } from '@shared/userMcp/types'
 
+import { ConfirmHost } from '@renderer/components/ui/confirm-dialog'
 import { McpServerDialog } from './McpServerDialog'
 import { McpServersRow } from './McpServersRow'
 import { useAppStore } from '@renderer/app-state/store'
@@ -175,9 +176,22 @@ describe('MCP server dialog', () => {
     fireEvent.change(box, { target: { value: box.value.replace('23373', '23374') } })
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })
     vi.useRealTimers()
-    fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Server' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0].secrets).toEqual({ 'beeper-authorization': TOKEN })
+  })
+
+  it('asks before Escape discards a pasted config, and labels Add Server ⌘↩ (plan S31)', async () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'add' } })
+    render(<><McpServerDialog /><ConfirmHost /></>)
+    const paste = screen.getByLabelText('MCP server config')
+    fireEvent.change(paste, { target: { value: '{"mcpServers":{}}' } })
+    expect(screen.getByRole('button', { name: 'Add Server' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⌘↩')
+    fireEvent.keyDown(paste, { key: 'Escape' })
+    expect(await screen.findByRole('dialog', { name: 'Discard this MCP server config?' })).toBeInTheDocument()
+    expect(useAppStore.getState().mcpServerDialog).not.toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard Changes' })) })
+    await vi.waitFor(() => expect(useAppStore.getState().mcpServerDialog).toBeNull())
   })
 
   it('adds every server found in a pasted snippet, with its lifted secrets', async () => {
@@ -206,7 +220,7 @@ describe('MCP server dialog', () => {
     expect((card as HTMLInputElement).value).toBe('beeper')
     // The lifted token no longer shows in the paste box (review round 1).
     expect((screen.getByLabelText('MCP server config') as HTMLTextAreaElement).value).not.toContain(TOKEN)
-    fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Server' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0]).toMatchObject({
       name: 'beeper',

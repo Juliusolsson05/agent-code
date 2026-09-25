@@ -435,8 +435,8 @@ entry when it lands.
 | S27 | ThemeEditorModal (SettingsPage) | name autoFocus; secondary buttons | DialogActions; T3 | done |
 | S28 | AgentCodeConventionsEditorModal | window.confirm; raw buttons | ConfirmDialog; T8; ⌘↵ save chip | done |
 | S29 | AgentCodeCustomSkillsModal | as S28 | as S28 | done |
-| S30 | AgentMcpServersModal | no Enter; `max-w-xl` no-op | size preset; Close ⎋ | todo |
-| S31 | McpServerDialog | textarea autoFocus; `max-w-2xl` no-op (renders 520) | size md; ⌘↵ confirm chip | todo |
+| S30 | AgentMcpServersModal | no Enter; `max-w-xl` no-op | size preset; Close ⎋ | done |
+| S31 | McpServerDialog | textarea autoFocus; `max-w-2xl` no-op (renders 520) | size md; ⌘↵ confirm chip | done |
 | S32 | AddSkillDialog | Enter = find; square inputs/cards | T1 tokens; legend (↵ find); DialogActions | todo |
 | S33 | ReportHistoryModal | no keys; outline Close | Close ⎋ ghost; scroller focus T4 | todo |
 | S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | todo |
@@ -705,6 +705,14 @@ Sharp corners and one light theme.
   (was a custom "control-active" filled button); while saving the custom
   skills Close disables and loses ⎋. Warning/danger-bordered status buttons
   are unchanged.
+- **S30 Agent MCP Servers (session menu → MCP):** 640 wide (the old
+  `max-w-xl` did nothing, so it was 520); body py-3; "built-in" tags 10px;
+  footer: ghost `Reset to MCP Settings`, pending-state text on the left,
+  `Cancel ⎋` (ghost, was outline), `Apply & Reload Agent` with NO ↩ chip
+  (it restarts the agent — Tab or click).
+- **S31 Add / Edit MCP server:** 640 wide (was stuck at 520); `Add Server ⌘↩`
+  / `Save ⌘↩`; Delete… stays two-step at the far left; pasting a config and
+  pressing Escape asks "Discard this MCP server config?".
 
 ## Tasks
 
@@ -779,6 +787,11 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S30/S31: MCP dialogs on DialogActions + size md; Agent MCP
+  confirm has no key (it reloads the agent); Add/Edit server Cmd+Enter with
+  a dirty-draft discard confirm (child reports dirtiness via a ref). Title
+  case labels (tests updated). Confirm-red: both new tests fail on the
+  pre-change files.
 - 2026-09-25 S28/S29: Conventions + Custom Skills editors — hand-rolled
   outline buttons → Button outline (scripted: rawbtn transform, 10 sites;
   danger/warning-bordered ones left), footers on DialogActions with

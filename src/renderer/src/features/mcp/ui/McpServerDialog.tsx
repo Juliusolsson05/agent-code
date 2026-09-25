@@ -6,10 +6,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { applyUserMcpResult, useUserMcpSnapshot } from '@renderer/features/mcp/store'
@@ -44,12 +45,32 @@ export function McpServerDialog() {
   const editing = target?.mode === 'edit'
     ? snapshot?.servers.find(server => server.id === target.serverId) ?? null
     : null
+  // A pasted or edited config is REAL typed input (B7's condition on plan
+  // D3): Escape, an outside click and Cancel all route through requestClose,
+  // which asks before discarding it. The child reports its dirtiness through
+  // a ref because only it knows what "unchanged" means (empty paste vs the
+  // opened entry), and a ref keeps that report from re-rendering the host.
+  const dirtyRef = useRef(false)
+  const requestClose = async () => {
+    if (dirtyRef.current && !(await requestConfirm({
+      title: 'Discard this MCP server config?',
+      description: 'What you pasted or edited here will be lost.',
+      confirmLabel: 'Discard Changes',
+      tone: 'danger',
+    }))) return
+    dirtyRef.current = false
+    close()
+  }
+  const reportDirty = (dirty: boolean) => { dirtyRef.current = dirty }
 
   return (
-    <Dialog open={target !== null} onOpenChange={open => { if (!open) close() }}>
-      <DialogContent className="max-w-2xl">
-        {target?.mode === 'add' ? <AddServer onDone={close} /> : null}
-        {target?.mode === 'edit' && editing ? <EditServer key={editing.id} server={editing} onDone={close} /> : null}
+    <Dialog open={target !== null} onOpenChange={open => { if (!open) void requestClose() }}>
+      {/* size md: the old `max-w-2xl` was a no-op against the base 520px
+          width, so this dialog rendered narrower than its author intended
+          (plan T2). */}
+      <DialogContent size="md">
+        {target?.mode === 'add' ? <AddServer onDone={close} onCancel={() => void requestClose()} onDirty={reportDirty} /> : null}
+        {target?.mode === 'edit' && editing ? <EditServer key={editing.id} server={editing} onDone={close} onCancel={() => void requestClose()} onDirty={reportDirty} /> : null}
         {target?.mode === 'edit' && !editing ? (
           <DialogHeader>
             <DialogTitle>Server not found</DialogTitle>
@@ -68,8 +89,9 @@ type Draft = {
   secrets: Record<string, string>
 }
 
-function AddServer({ onDone }: { onDone: () => void }) {
+function AddServer({ onDone, onCancel, onDirty }: { onDone: () => void; onCancel: () => void; onDirty: (dirty: boolean) => void }) {
   const [text, setText] = useState('')
+  useEffect(() => { onDirty(text.trim().length > 0) }, [onDirty, text])
   const [candidates, setCandidates] = useState<UserMcpImportCandidate[]>([])
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [parseError, setParseError] = useState<string | null>(null)
@@ -252,12 +274,15 @@ function AddServer({ onDone }: { onDone: () => void }) {
         ) : null}
         {saveError ? <div className="text-danger">{saveError}</div> : null}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onDone}>Cancel</Button>
-        <Button disabled={saving || parsing || pending === 0} onClick={() => void save()}>
-          {pending > 1 ? `Add ${pending} servers` : 'Add server'}
-        </Button>
-      </DialogFooter>
+      {/* ⌘↩ adds (the config textarea owns plain Enter). Guards carried
+          over (k3): Add waits for saving/parsing and a parsed candidate. */}
+      <DialogActions
+        confirmLabel={pending > 1 ? `Add ${pending} Servers` : 'Add Server'}
+        confirmKey="Cmd+Enter"
+        confirmDisabled={saving || parsing || pending === 0}
+        onConfirm={() => void save()}
+        onCancel={onCancel}
+      />
     </>
   )
 }
@@ -318,7 +343,7 @@ function editableFingerprint(server: UserMcpServerView): string {
   return JSON.stringify([server.name, server.enabled, server.providers, server.entry, server.inputs])
 }
 
-function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () => void }) {
+function EditServer({ server, onDone, onCancel, onDirty }: { server: UserMcpServerView; onDone: () => void; onCancel: () => void; onDirty: (dirty: boolean) => void }) {
   // Review round 1: the form is initialized once, but `server` keeps updating
   // from the broadcast. Saving a form opened before another window (or an
   // agent with MCP Servers) changed the same server would write the old entry
@@ -327,8 +352,12 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
   const [openedAs] = useState(() => editableFingerprint(server))
   const changedElsewhere = editableFingerprint(server) !== openedAs
   const [name, setName] = useState(server.name)
-  const [json, setJson] = useState(() => JSON.stringify(server.entry, null, 2))
+  const [openedJson] = useState(() => JSON.stringify(server.entry, null, 2))
+  const [json, setJson] = useState(openedJson)
   const [providers, setProviders] = useState(server.providers)
+  useEffect(() => {
+    onDirty(json !== openedJson || name !== server.name || JSON.stringify(providers) !== JSON.stringify(server.providers))
+  }, [json, name, onDirty, openedJson, providers, server.name, server.providers])
   const [secretEdits, setSecretEdits] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -452,16 +481,22 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
         ) : null}
 
       </div>
-      <DialogFooter>
-        {confirmDelete ? (
-          <Button variant="destructive" onClick={() => void remove()}>Delete {server.name}</Button>
+      {/* ⌘↩ saves (the config textarea owns plain Enter). Delete stays a
+          deliberate two-step at the far left — never a key. Guards carried
+          over (k3): Save waits for saving, a parsed entry and no remote
+          change. */}
+      <DialogActions
+        confirmLabel="Save"
+        confirmKey="Cmd+Enter"
+        confirmDisabled={saving || !parsed.entry || changedElsewhere}
+        onConfirm={() => void save()}
+        onCancel={onCancel}
+        extraActions={confirmDelete ? (
+          <Button variant="destructive" size="sm" className="mr-auto" onClick={() => void remove()}>Delete {server.name}</Button>
         ) : (
-          <Button variant="destructive-outline" onClick={() => setConfirmDelete(true)}>Delete…</Button>
+          <Button variant="destructive-outline" size="sm" className="mr-auto" onClick={() => setConfirmDelete(true)}>Delete…</Button>
         )}
-        <span className="flex-1" />
-        <Button variant="outline" onClick={onDone}>Cancel</Button>
-        <Button disabled={saving || !parsed.entry || changedElsewhere} onClick={() => void save()}>Save</Button>
-      </DialogFooter>
+      />
     </>
   )
 }
