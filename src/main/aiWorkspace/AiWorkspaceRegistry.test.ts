@@ -181,14 +181,61 @@ describe('malformed rows in a real registry (#1246)', () => {
     state.workspaces[0]!.entries[0]!.status = null
     const { registry } = await registryFor(state)
     const listed = await registry.list()
-    expect(listed.find(workspace => workspace.workspaceId === state.workspaces[0]!.workspaceId)!.fileCount).toBe(1)
+    const workspace = listed.find(candidate => candidate.workspaceId === state.workspaces[0]!.workspaceId)!
+    expect(workspace.fileCount).toBe(1)
+    // Reported as stale until refreshed, never as a healthy file.
+    expect(workspace.staleCount).toBe(1)
   })
 
-  it('still refuses a malformed container, which the next save would erase', async () => {
-    const { statePath, source, registry } = await registryFor({ workspaces: 5 })
+  it.each([
+    ['entries not a list', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[1]!.entries = 5 }],
+    ['a non-string name', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[1]!.name = 7 }],
+    ['a non-string entryId', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[1]!.entries[0].entryId = 7 }],
+  ])('keeps the other workspace working when one row has %s', async (_label, damage) => {
+    const state = await realState()
+    damage(state)
+    const { registry } = await registryFor(state)
+    expect((await registry.list()).map(workspace => workspace.workspaceId)).toContain(state.workspaces[0]!.workspaceId)
+  })
+
+  it('drops mistyped optional fields instead of passing them to the UI (review A)', async () => {
+    const state = await realState()
+    state.workspaces[0]!.description = { not: 'text' }
+    state.workspaces[0]!.entries[0].projectRoot = 42
+    state.workspaces[0]!.entries[0].title = 9
+    const { registry } = await registryFor(state)
+    const listed = (await registry.list()).find(workspace => workspace.workspaceId === state.workspaces[0]!.workspaceId)!
+    expect(listed).not.toHaveProperty('description')
+    const opened = (await registry.get(state.workspaces[0]!.workspaceId))!
+    expect(opened.entries[0]).not.toHaveProperty('projectRoot')
+    expect(opened.entries[0]!.title).toBe('file-0.md')
+  })
+
+  it.each([
+    ['workspaces not a list', { workspaces: 5 }],
+    ['a typo\'d key', { workspces: [{ workspaceId: 'typo-key' }] }],
+    ['a top-level list', []],
+  ])('still refuses a malformed container (%s), which the next save would erase', async (_label, document) => {
+    const { statePath, source, registry } = await registryFor(document)
     await expect(registry.list()).rejects.toThrow('storage is invalid')
     const { readFile: read } = await import('fs/promises')
     expect(await read(statePath, 'utf8')).toBe(source)
+  })
+
+  it('keeps reads working when the copy cannot be made, and refuses saves until it can', async () => {
+    const state = await realState()
+    state.workspaces[1]!.updatedAt = 1789000000
+    const { root, statePath, source, registry } = await registryFor(state)
+    const { createHash } = await import('node:crypto')
+    const { mkdir, readFile: read } = await import('fs/promises')
+    const occupied = join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`)
+    await mkdir(occupied)
+    expect((await registry.list()).map(workspace => workspace.workspaceId)).toEqual([state.workspaces[0]!.workspaceId])
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow()
+    expect(await read(statePath, 'utf8')).toBe(source)
+    await rm(occupied, { recursive: true })
+    await registry.create({ name: 'Now' })
+    expect(await read(occupied, 'utf8')).toBe(source)
   })
 
   it('does not cache a failed load: the next call re-reads the file', async () => {

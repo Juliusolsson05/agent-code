@@ -79,6 +79,33 @@ function usableStatus(raw: unknown): boolean {
     && typeof status.exists === 'boolean' && typeof status.readable === 'boolean'
 }
 
+// WHY optional and display fields are repaired field by field (#1260 review
+// A): a row that passes the identity checks still reaches the renderer, and
+// one `description: {}` made the command palette's text helper throw, taking
+// the whole picker down. A mistyped optional field is dropped; a mistyped
+// required display field gets the value the UI would derive anyway.
+function withUsableWorkspaceFields(workspace: AiWorkspaceRecord): AiWorkspaceRecord {
+  const repaired: AiWorkspaceRecord = { ...workspace }
+  if (repaired.description !== undefined && typeof repaired.description !== 'string') delete repaired.description
+  if (repaired.scope !== undefined && !isPlainObject(repaired.scope)) delete repaired.scope
+  return repaired
+}
+
+function withUsableEntryFields(entry: AiWorkspaceFileEntry, fallbackAttachedAt: string): AiWorkspaceFileEntry {
+  const repaired: AiWorkspaceFileEntry = { ...entry }
+  if (typeof repaired.title !== 'string') repaired.title = basename(repaired.path)
+  if (typeof repaired.attachedAt !== 'string') repaired.attachedAt = fallbackAttachedAt
+  for (const field of ['description', 'sourceSessionId', 'sourceAgentLabel', 'taskId', 'projectRoot', 'gitBranch'] as const) {
+    if (repaired[field] !== undefined && typeof repaired[field] !== 'string') delete repaired[field]
+  }
+  if (repaired.metadata !== undefined && !isPlainObject(repaired.metadata)) delete repaired.metadata
+  return repaired
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 function normalizePath(path: string): string {
   return resolve(path)
 }
@@ -137,6 +164,8 @@ export interface AiWorkspaceRegistry {
 export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
+  /** The loaded file while set-aside rows are not yet preserved; see load(). */
+  private owedCopy: { text: string; setAside: number } | null = null
   private saveQueue: Promise<void> = Promise.resolve()
   private readonly knownFilePaths = new Set<string>()
   private readonly gitContextCache = new Map<
@@ -430,7 +459,12 @@ export class AiWorkspaceRegistry extends EventEmitter {
     const parsed = JSON.parse(text) as { workspaces?: unknown }
     // A malformed CONTAINER still refuses: every save rewrites the whole
     // file, so migrating it as empty would erase whatever it held.
-    if (parsed === null || typeof parsed !== 'object' || (parsed.workspaces !== undefined && !Array.isArray(parsed.workspaces))) {
+    //
+    // The `workspaces` list must be PRESENT (#1260 review): every file this
+    // store writes carries it, so an object without it (a typo'd key, a
+    // top-level list, another program's JSON) was not written here, and
+    // loading it as zero workspaces let the next save erase it uncopied.
+    if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.workspaces)) {
       throw new Error('AI Workspace storage is invalid; the original file is untouched.')
     }
     // WHY per-row validation (#1246): one row with a non-string path threw in
@@ -454,13 +488,18 @@ export class AiWorkspaceRegistry extends EventEmitter {
           continue
         }
         if (!usableStatus(entry.status)) entry.status = { ...UNKNOWN_STATUS }
-        entries.push(entry)
+        entries.push(withUsableEntryFields(entry, raw.createdAt))
       }
-      workspaces.push({ ...raw, entries })
+      workspaces.push(withUsableWorkspaceFields({ ...raw, entries }))
     }
     if (setAside > 0) {
-      const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text)
-      console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
+      // A failed copy must not fail the load (#1257 review B, same rule): the
+      // rows are only dropped by a SAVE, so the copy is owed before the next
+      // save instead, which retries it and is refused while it fails.
+      this.owedCopy = { text, setAside }
+      await this.preserveOwedCopy().catch(error => {
+        console.warn(`[ai-workspace] could not preserve ${setAside} malformed row(s) yet; saves wait for it:`, error)
+      })
     }
     for (const workspace of workspaces) {
       for (const entry of workspace.entries) {
@@ -543,8 +582,19 @@ export class AiWorkspaceRegistry extends EventEmitter {
     }
   }
 
+  private async preserveOwedCopy(): Promise<void> {
+    if (!this.owedCopy) return
+    const { text, setAside } = this.owedCopy
+    const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text)
+    this.owedCopy = null
+    console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
+  }
+
   private async save(): Promise<void> {
-    const next = this.saveQueue.then(() => this.writeStateFile())
+    const next = this.saveQueue.then(async () => {
+      await this.preserveOwedCopy()
+      await this.writeStateFile()
+    })
     this.saveQueue = next.catch(() => undefined)
     await next
   }
