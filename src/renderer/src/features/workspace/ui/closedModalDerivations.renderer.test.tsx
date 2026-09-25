@@ -5,7 +5,7 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import * as workspaceQueries from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
-import { AgentActivityModal } from './AgentActivityModal'
+import { AgentActivityView } from '@renderer/features/agent-activity/ui/AgentActivityView'
 import { BulkProviderSwitchModal } from './BulkProviderSwitchModal'
 import { CloseOldAgentsModal } from './CloseOldAgentsModal'
 import { useProviderEnablementStore } from '@renderer/features/providers/store'
@@ -51,6 +51,7 @@ function workspaceFixture(): Workspace {
     runtimes: {},
     focusSessionInTab: vi.fn(),
     closeSession: vi.fn(),
+    closeAgentActivitySelection: vi.fn(),
     switchAgentsToProvider: vi.fn(),
     returnLastProviderSwitchBatch: vi.fn(),
   } as unknown as Workspace
@@ -72,12 +73,14 @@ function replaceRuntime(workspace: Workspace, running: boolean): Workspace {
 
 const modalCases = [
   {
-    name: 'AgentActivityModal',
-    Component: AgentActivityModal,
-    assertRunning: () => expect(screen.getByText('Active now')).toBeInTheDocument(),
+    // The full-screen replacement (#1170) keeps the old modal's contract: it
+    // stays mounted while closed, so its row model must not run then.
+    name: 'AgentActivityView',
+    Component: AgentActivityView,
+    assertRunning: () => expect(screen.getByRole('group', { name: 'Working' })).toHaveTextContent('terminal-perf'),
     assertIdle: () => {
-      expect(screen.queryByText('Active now')).not.toBeInTheDocument()
-      expect(screen.getByText('terminal-perf')).toBeInTheDocument()
+      expect(screen.queryByRole('group', { name: 'Working' })).not.toBeInTheDocument()
+      expect(screen.getByRole('group', { name: 'Idle' })).toHaveTextContent('terminal-perf')
     },
   },
   {
@@ -151,26 +154,26 @@ describe('closed workspace modal derivations', () => {
   )
 })
 
-describe('Agent Activity rows keep the keys on the selected row (#867 review)', () => {
+describe('Agent Activity rows keep the keys on the highlighted row (#867 review)', () => {
   it('keeps the per-row close button out of the tab order and out of click focus', () => {
-    // The row's `close` button sits INSIDE the scroller that handles the keys,
-    // and the scroller acts on the SELECTED row. The button was tabbable and
-    // `opacity-0` unless its row is selected or hovered — so it was an
-    // invisible tab stop, and Tab to row 2's close followed by Delete closed
-    // ROW 1. `tabIndex={-1}` plus a cancelled mousedown keeps focus on the
-    // scroller, which is the only place where "the row the keys act on" and
-    // "the row the user can see highlighted" are the same row.
+    // The keys act on the HIGHLIGHTED row from the list container. A row
+    // button that could take focus would split "the row the keys act on" from
+    // "the row the user sees" — the old modal's bug was Tab to row 2's close,
+    // press Delete, and row 1 closed. `tabIndex={-1}` plus a cancelled
+    // mousedown keeps focus where the keys are handled.
     const workspace = replaceRuntime(workspaceFixture(), false)
-    const mounted = render(<AgentActivityModal open workspace={workspace} onClose={vi.fn()} />)
+    const mounted = render(<AgentActivityView open workspace={workspace} onClose={vi.fn()} />)
 
-    const close = screen.getByRole('button', { name: 'close' })
+    const close = screen.getByRole('button', { name: 'Close' })
     expect(close.getAttribute('tabindex')).toBe('-1')
     // `false` = the default was prevented, which is what stops a real browser
     // moving focus to the button on click.
     expect(fireEvent.mouseDown(close)).toBe(false)
-    // And it still closes on an actual click — the fix must not disarm it.
+    // And it still closes on an actual click — through the confirming bulk
+    // flow, never a raw closeSession, even for one row.
     fireEvent.click(close)
-    expect(workspace.closeSession).toHaveBeenCalled()
+    expect(workspace.closeAgentActivitySelection).toHaveBeenCalledWith([{ sessionId: 'agent', name: 'terminal-perf' }])
+    expect(workspace.closeSession).not.toHaveBeenCalled()
     mounted.unmount()
   })
 })

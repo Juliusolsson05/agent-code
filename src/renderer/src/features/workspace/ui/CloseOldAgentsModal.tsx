@@ -222,7 +222,7 @@ function absoluteTime(ts: number): string {
 //
 // So `latestAgentActivityAt(runtime) >= sessionActivity(runtime).timestamp`
 // by construction: this rule can call an agent recent that Agent Activity
-// (AgentActivityModal: last entry ?? turnStartedAt) shows as "8h ago", and for
+// (which reads `sessionActivity` since #1170) shows as "8h ago", and for
 // a destructive filter that is the right direction to be wrong in. Keep it
 // that way — if these ever need to converge, the move is to give
 // `sessionActivity` an optional conservative mode, never to loosen this one to
@@ -300,7 +300,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
   }, [open])
 
   // Recompute ages while the modal is open so a borderline row ages into the
-  // preview without the user changing a field. 10s matches AgentActivityModal:
+  // preview without the user changing a field. 10s matches Agent Activity:
   // precise enough for human decisions, cheap enough for large workspaces.
   useEffect(() => {
     if (!open) return
