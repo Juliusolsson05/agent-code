@@ -56,4 +56,11 @@ it('records admission before work, persists final results and reports abandoned 
   const context: ControlContext = { requestId: 'read-after-restart', owner: main, caller: { kind: 'external', id: 'operator' } }
   expect(await reopened.find(item => item.descriptor.id === 'operations.read')!.execute({ callId }, context))
     .toMatchObject({ ok: true, value: { status: 'completed', result: { ok: true, value: { newSessionId: 'new' } } } })
+  // The task writer's `step` rows carry no request key while the executor's
+  // rows of the same call do. That is healthy traffic: reopening must not call
+  // it damage, quarantine it, or block the key (#1254 round 2).
+  const reports: unknown[] = []
+  await new FileControlHistory(path, { onRecovered: report => reports.push(report) }).events()
+  await new FileControlHistory(path, { onRecovered: report => reports.push(report) }).events()
+  expect(reports).toEqual([])
 })

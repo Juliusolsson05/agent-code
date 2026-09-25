@@ -50,6 +50,9 @@ const JOURNAL = 'events.jsonl'
 const RECOVERY = 'recovery.json'
 const ACCEPTED = 'recovery-accepted.json'
 const QUARANTINE = /^events\.quarantined-.+\.jsonl$/
+// The rows the executor writes, each stamped with the call's request key (or
+// none). Other writers (task `step`s, `transport`) are not keyed consistently.
+const EXECUTOR_KINDS = new Set<string>(['received', 'dispatched', 'result', 'duplicate'])
 // A malformed recovery.json preserved aside when a new recovery must rewrite
 // the marker: its block cannot be read, so it stays a global block of its own.
 const INVALID_MARKER = /^recovery\.invalid-.+\.json$/
@@ -404,15 +407,33 @@ function analyze(text: string): Analysis {
   // - a call whose kept rows DISAGREE about the key is damage in its own
   //   right, even when every row is schema-valid (a deleted or rewritten key
   //   on a `received` row), and every key it names is blocked.
+  //
+  // ONLY executor-stamped kinds are compared (#1254 round 2, both reviewers):
+  // the task writer (tasks.ts) appends `step` rows on the same callId with no
+  // key, so a healthy keyed `startControlTask` call read as "damage", its
+  // rows were dropped, and accepting that digest then let the key run twice.
+  // In the owner's journal 660 step rows carry no key; among executor kinds
+  // all 1,846 calls agree.
+  //
+  // And a keyed call must still have its intent row: every executor call
+  // begins with a durable `received` (or `duplicate`, for a retry). A keyed
+  // call left with only dispatched/result rows lost its intent, possibly
+  // rewritten into another valid-looking call, so the lookup cannot find it
+  // (0 such calls in the real journal).
   const keysByCall = new Map<string, Set<string | undefined>>()
+  const hasIntent = new Set<string>()
   for (const event of events) {
+    if (!EXECUTOR_KINDS.has(event.kind)) continue
     const keys = keysByCall.get(event.callId) ?? new Set<string | undefined>()
     keys.add(event.requestKey)
     keysByCall.set(event.callId, keys)
+    if (event.kind === 'received' || event.kind === 'duplicate') hasIntent.add(event.callId)
   }
   const inconsistentCallIds = new Set<string>()
   for (const event of events) {
-    const disagrees = (keysByCall.get(event.callId)?.size ?? 0) > 1
+    const keys = keysByCall.get(event.callId)
+    const disagrees = (keys?.size ?? 0) > 1
+      || (!hasIntent.has(event.callId) && [...(keys ?? [])].some(key => key !== undefined))
     if (disagrees) inconsistentCallIds.add(event.callId)
     if ((disagrees || damagedCallIds.has(event.callId)) && event.requestKey !== undefined
       && !blockedPairs.some(pair => pair.caller === event.caller && pair.requestKey === event.requestKey)) {

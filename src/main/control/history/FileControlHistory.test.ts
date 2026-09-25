@@ -308,6 +308,14 @@ describe('damaged history recovery (#1240) keeps request keys idempotent', () =>
     expect(effects()).toBe(1)
   })
 
+  it('blocks the real key when its received row was rewritten into another valid call', async () => {
+    // The original call keeps agreeing dispatched/result rows but has no
+    // intent row left, so the lookup cannot find it (#1254 round 2, A).
+    const { run, effects } = await withReceivedRewritten(row => ({ ...row, callId: randomUUID(), requestKey: 'somebody-else' }))
+    expect(await run.invoke(request, caller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(effects()).toBe(1)
+  })
+
   it('recovers an inconsistent call once: later launches keep the block without re-quarantining (q17)', async () => {
     const { directory, run, effects } = await withReceivedRewritten(({ requestKey: _lost, ...row }) => row)
     expect(await run.invoke(request, caller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
