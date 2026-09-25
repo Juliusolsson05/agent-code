@@ -44,9 +44,42 @@ describe('GoalLoopStore', () => {
     expect(await readFile(store.quarantineFile, 'utf8')).toBe('{broken')
     expect((await store.read())['s1']).toEqual(loop())
   })
-  it('rejects structurally invalid entries', async () => {
+  it('sets a structurally invalid entry aside instead of reading it', async () => {
     const { store, file } = await makeStore()
-    await writeFile(file, JSON.stringify({ version: 1, loops: { s1: { phase: 'zooming' } } }))
-    await expect(store.read()).rejects.toThrow()
+    const source = JSON.stringify({ version: 1, loops: { s1: { phase: 'zooming' } } })
+    await writeFile(file, source)
+    expect(await store.read()).toEqual({})
+    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
+  })
+})
+
+// #1248: one loop this build cannot read (a newer build's phase, then a
+// downgrade) used to move the WHOLE file aside; the service started empty and
+// its next write made every other loop's loss permanent. Real loops from the
+// owner's goal-loop.json (testing/fixtures/goal-loop, prompts redacted).
+describe('one unreadable loop in a real store (#1248)', () => {
+  const real = async () => (JSON.parse(await readFile(join(import.meta.dirname,
+    '../../../testing/fixtures/goal-loop/real-loops-2026-09-25.json'), 'utf8')) as {
+    document: { version: 1; loops: Record<string, GoalLoopState> }
+  }).document
+
+  it('keeps every other loop, preserves the original bytes, and survives the next write', async () => {
+    const { store, file } = await makeStore()
+    const document = await real()
+    const [newer, kept] = Object.keys(document.loops)
+    ;(document.loops[newer!] as { phase: string }).phase = 'waiting-on-review'
+    const source = JSON.stringify(document)
+    await writeFile(file, source)
+
+    const loops = await store.read()
+    expect(Object.keys(loops)).toEqual([kept])
+    expect(loops[kept!]).toEqual(document.loops[kept!])
+    // Copied, not moved: the file still holds the loops that were read.
+    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
+    expect(await readFile(file, 'utf8')).toBe(source)
+
+    await store.write(loops)
+    expect(Object.keys(await new GoalLoopStore(file).read())).toEqual([kept])
+    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
   })
 })

@@ -58,14 +58,32 @@ export class GoalLoopStore {
     return this.serialize(async () => {
       try {
         if ((await stat(this.file)).size > MAX_FILE_BYTES) throw new Error('Goal Loop storage exceeds its size limit.')
-        const document = JSON.parse(await readFile(this.file, 'utf8'))
+        const source = await readFile(this.file, 'utf8')
+        const document = JSON.parse(source)
         const loops: unknown = document?.loops
         if (document?.version !== 1 || !loops || typeof loops !== 'object' || Array.isArray(loops)
-          || Object.keys(loops).length > GOAL_LOOP_STORE_LIMIT
-          || !Object.values(loops).every(validLoop)) {
+          || Object.keys(loops).length > GOAL_LOOP_STORE_LIMIT) {
           throw new Error(`Goal Loop storage is invalid; the original file has been moved to ${this.quarantineFile}.`)
         }
-        return loops as Record<string, GoalLoopState>
+        // WHY one unreadable loop is set aside instead of failing the file
+        // (#1248): a newer build's phase or reason, met after a downgrade,
+        // used to move the WHOLE document aside, and the service's next write
+        // made every other loop's loss permanent. The valid loops are read;
+        // the original bytes are COPIED (not moved, the file still holds the
+        // loops just read) to the same quarantine name, before the next write
+        // drops the unreadable one. A malformed container above still moves
+        // aside and throws: nothing in it can be trusted as a loop.
+        const valid: Record<string, GoalLoopState> = {}
+        let setAside = 0
+        for (const [sessionId, loop] of Object.entries(loops)) {
+          if (validLoop(loop)) valid[sessionId] = loop
+          else setAside++
+        }
+        if (setAside > 0) {
+          await writeFile(this.quarantineFile, source, { mode: 0o600 })
+          console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s); original preserved at ${this.quarantineFile}`)
+        }
+        return valid
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
         // WHY move it aside instead of just throwing, as TldrStore does:
