@@ -269,3 +269,26 @@ describe('bulk switch reporting', () => {
     expect(toastDurations[0]).toBeUndefined()
   })
 })
+
+// #1271: a batch holds the app (the modal locks input) for up to five minutes
+// per agent. A stop requested during the batch ends it after the agent in
+// flight, and the summary says what was not attempted.
+describe('switchAgentsToProvider stop', () => {
+  it('stops before the next agent and reports the rest as not attempted', async () => {
+    const { result, state, toasts } = harness(null)
+    const sessions = state.sessions as Record<string, unknown>
+    for (const id of ['a', 'b', 'c']) sessions[id] = { cwd: '/recorded', kind: 'claude', title: id }
+    let stop = false
+    switchAgentProvider.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      // The user presses Stop while the first agent is switching.
+      stop = true
+      return { status: 'switched', strategy: 'native', newSessionId: `${sessionId}-new` }
+    })
+    await result.current.switchAgentsToProvider(['a', 'b', 'c'] as never, 'codex', {
+      allowSourceTurns: false, compactOnArrival: false, sourceCompactionConfirmed: false,
+    }, { shouldStop: () => stop })
+    expect(switchAgentProvider).toHaveBeenCalledTimes(1)
+    expect(toasts.at(-1)).toMatch(/^Stopped: 2 agents not attempted\. Switched 1 agent/)
+  })
+})
+

@@ -227,6 +227,7 @@ describe('BulkProviderSwitchModal policy', () => {
       ['agent'],
       'claude',
       { allowSourceTurns: true, compactOnArrival: false, sourceCompactionConfirmed: true },
+      { shouldStop: expect.any(Function) },
     )
   })
 
@@ -248,4 +249,30 @@ describe('BulkProviderSwitchModal policy', () => {
 
     expect(screen.queryByText(/are mid-turn and will be skipped/i)).not.toBeInTheDocument()
   })
+
+  // #1271: a running batch locks every exit (single-flight), and with
+  // compaction each agent can take five minutes. Cancel becomes the way out:
+  // it stops the batch after the agent in flight.
+  it('lets the user stop a running batch after the agent in flight', async () => {
+    usage.snapshot = healthySnapshot()
+    let seenStop: (() => boolean) | undefined
+    let finish!: () => void
+    const workspace = workspaceFixture()
+    ;(workspace.switchAgentsToProvider as ReturnType<typeof vi.fn>).mockImplementation(
+      (_ids: unknown, _target: unknown, _policy: unknown, control?: { shouldStop?: () => boolean }) => {
+        seenStop = control?.shouldStop
+        return new Promise<void>(resolve => { finish = resolve })
+      },
+    )
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /Switch 1 agent to Claude/i }))
+    const stop = await screen.findByRole('button', { name: 'Stop after this agent' })
+    expect(stop).not.toBeDisabled()
+    expect(seenStop?.()).toBe(false)
+    fireEvent.click(stop)
+    expect(seenStop?.()).toBe(true)
+    expect(screen.getByRole('button', { name: 'Stopping after this agent…' })).toBeDisabled()
+    finish()
+  })
 })
+

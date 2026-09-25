@@ -166,6 +166,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // them — depending on them would re-run the reset the moment a loop ended.
   const busyRef = useRef(busy)
   busyRef.current = busy
+  // #1271: the batch keeps its single-flight lock, but the user can end it
+  // after the agent in flight. A ref for the loop (read between agents), state
+  // for the label.
+  const stopRequestedRef = useRef(false)
+  const [stopRequested, setStopRequested] = useState(false)
+  const requestStop = useCallback(() => {
+    stopRequestedRef.current = true
+    setStopRequested(true)
+  }, [])
   const switchingModelRef = useRef(switchingModel)
   switchingModelRef.current = switchingModel
   /**
@@ -511,6 +520,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     const sessionIds = compactOnSource && confirmedSessionIds
       ? confirmedSessionIds
       : matchingRows.map(row => row.sessionId)
+    stopRequestedRef.current = false
+    setStopRequested(false)
     setBusy(true)
     try {
       await workspace.switchAgentsToProvider(
@@ -527,6 +538,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           // must key on the second.
           sourceCompactionConfirmed: compactOnSource,
         },
+        { shouldStop: () => stopRequestedRef.current },
       )
       onClose()
     } finally {
@@ -639,6 +651,9 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden"
         onEscapeKeyDown={event => {
           if (locked) event.preventDefault()
+          // During a provider batch Escape asks to stop after the agent in
+          // flight (#1271), the one exit a locked batch can safely offer.
+          if (busy) requestStop()
         }}
         onPointerDownOutside={event => {
           // WHY an in-flight batch cannot be dismissed: the old overlay kept
@@ -983,11 +998,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={requestClose}
-              disabled={locked}
+              // While a provider batch runs, Cancel is the way out (#1271): it
+              // stops the batch after the agent in flight instead of closing
+              // a modal whose loop would keep running unseen.
+              onClick={busy ? requestStop : requestClose}
+              disabled={busy ? stopRequested : locked}
               className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
-              Cancel
+              {busy ? (stopRequested ? 'Stopping after this agent…' : 'Stop after this agent') : 'Cancel'}
             </button>
             <button
               type="button"

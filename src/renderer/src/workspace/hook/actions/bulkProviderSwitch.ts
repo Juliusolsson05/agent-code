@@ -115,11 +115,17 @@ export function useBulkProviderSwitchActions(
     sessionIds: SessionId[],
     targetKind: AgentProviderKind,
     policy: BulkSwitchPolicy,
+    control?: { shouldStop?: () => boolean },
   ) => Promise<void>
   returnLastProviderSwitchBatch: () => Promise<void>
 } {
   const switchAgentsToProvider = useCallback(
-    async (sessionIds: SessionId[], targetKind: AgentProviderKind, policy: BulkSwitchPolicy) => {
+    async (
+      sessionIds: SessionId[],
+      targetKind: AgentProviderKind,
+      policy: BulkSwitchPolicy,
+      control?: { shouldStop?: () => boolean },
+    ) => {
       if (sessionIds.length === 0) return
 
       // Sequential, not concurrent. switchAgentProvider → replaceSession mutates
@@ -151,7 +157,18 @@ export function useBulkProviderSwitchActions(
       // is the only one who can decide whether the loss mattered.
       const counts: Record<SwitchStrategy, number> = { native: 0, raw: 0, shrunk: 0 }
 
-      for (const sessionId of sessionIds) {
+      // #1271: the modal locks the app while this runs, and with compaction
+      // each agent can take up to five minutes, so a batch of N could hold
+      // every input for N x 5 min with reload the only way out. The user can
+      // now ask to stop: checked BEFORE each agent, never mid-switch, because
+      // interrupting a replaceSession could strand the agent between
+      // providers. The agent in flight finishes; the rest are not attempted.
+      let notAttempted = 0
+      for (const [index, sessionId] of sessionIds.entries()) {
+        if (control?.shouldStop?.()) {
+          notAttempted = sessionIds.length - index
+          break
+        }
         // Read meta fresh each iteration — earlier switches have already mutated
         // the session map. We capture originalKind/cwd/title BEFORE the switch
         // because afterward this id is dead (replaceSession mints a new one).
@@ -239,7 +256,8 @@ export function useBulkProviderSwitchActions(
       const base = `Switched ${pluralAgents(switched.length)} to ${providerLabel(targetKind)}${tally ? `: ${tally}` : ''}`
       // Notes exist only when some agent's switch lost something; those are the
       // summaries worth reading, so they get the lossy duration.
-      showToast(summarize(base, { skipped, failed }, notes), notes.size > 0 ? LOSSY_SWITCH_TOAST_MS : undefined)
+      const stopped = notAttempted > 0 ? `Stopped: ${pluralAgents(notAttempted)} not attempted. ` : ''
+      showToast(stopped + summarize(base, { skipped, failed }, notes), notes.size > 0 || stopped ? LOSSY_SWITCH_TOAST_MS : undefined)
     },
     [refs, sessionActions, setRuntimes, setState, showToast],
   )
