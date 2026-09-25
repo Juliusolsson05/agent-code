@@ -179,22 +179,17 @@ export function activeClaudeComposerText(screen: string): string {
     // so a full CJK row can be one cell short. For single-width text this is
     // exactly the old `length >= width - 1`.
     //
-    // #1310 review: xterm drops trailing spaces from a row, so a row that
-    // ends one cell short with a WIDE character next is ambiguous. It is
-    // either a hard cut (the wide character could not use the last cell) or
-    // a soft wrap at a space in that cell. Joining a soft wrap without its
-    // space can confirm a paste EARLY (an Enter before the tail landed), the
-    // one failure this detector must never have; inserting a spurious space
-    // costs only a timeout. So the short case counts as a hard cut only when
-    // the row itself ends in a wide character (a run of CJK, which has no
-    // spaces to wrap at). A full row (width - 1) is a hard cut as before.
-    const firstChar = graphemes(content)[0] ?? ''
+    // Only a FULL row (width - 1 cells, measured per grapheme cluster, #1292)
+    // is a hard cut. A row one cell short is ambiguous once the terminal has
+    // dropped trailing spaces: a wide character that could not use the last
+    // cell, or a soft wrap whose real space sat in that cell (#1310 review,
+    // steering q34 — both a Latin and a CJK row can end that way). Joining it
+    // without the space confirmed pastes that had not landed; keeping the
+    // space costs a timeout at worst. A full visible row has no cell left for
+    // a space, so it cannot be a soft wrap.
     const previousCells = displayWidth(previous)
-    const lastChar = graphemes(previous).at(-1) ?? ''
-    const hardCut = width !== null && content.length > 0 && !/^\s/u.test(content) && (
-      previousCells >= width - 1
-      || (previousCells + displayWidth(firstChar) > width - 1 && displayWidth(lastChar) === 2)
-    )
+    const hardCut = width !== null && content.length > 0 && !/^\s/u.test(content)
+      && previousCells >= width - 1
     text = hardCut ? text.trimEnd() + content : `${text} ${content}`
   }
   return text

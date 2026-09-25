@@ -180,13 +180,22 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
   // was read as soft, joined with a space, and the tail never matched: a 5 s
   // timeout and a rollback for most multi-row CJK prompts. And with an odd
   // free width a wide character cannot fill the last cell, so a CJK row can
-  // stop one cell short of full; the cut is judged by whether the next
-  // character would have fit.
+  // stop one cell short of full. That one-cell-short row is AMBIGUOUS once
+  // xterm drops trailing spaces (a soft wrap can end in a wide glyph with its
+  // real space in the last cell, steering q34), so it keeps the space and the
+  // delivery waits out the timeout. The sweeps therefore run over the widths
+  // whose body (cols - 3) is EVEN, where wide rows fill completely; the odd
+  // ones are pinned below as a timeout, never a false confirmation.
   const cjkPrompt = '请检查这个问题并修复所有相关的测试然后运行完整的测试套件确认没有回归再提交拉取请求并通知审查人员继续推进后续工作'
-  it('confirms a wrapped CJK prompt at every pane width from 20 to 140 columns', () => {
+  // Pane widths whose composer body (cols - 3) is even: a run of two-cell
+  // glyphs fills every row to the last cell, so each cut is a full row.
+  const evenBodyWidths = Array.from({ length: 121 }, (_, i) => 20 + i).filter(cols => (cols - 3) % 2 === 0)
+  const oddBodyWidths = Array.from({ length: 121 }, (_, i) => 20 + i).filter(cols => (cols - 3) % 2 === 1)
+
+  it('confirms a wrapped CJK prompt at every pane width whose rows fill', () => {
     const tail = pasteTailNeedle(cjkPrompt)
     const missed: number[] = []
-    for (let cols = 20; cols <= 140; cols += 1) {
+    for (const cols of evenBodyWidths) {
       const baseline = activeClaudeComposerText(screenAt(cols, ''))
       const after = activeClaudeComposerText(screenAt(cols, cjkPrompt))
       if (pasteAbsorbedVia(after, tail, placeholderCount(baseline), false) !== 'inline') missed.push(cols)
@@ -198,7 +207,7 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     const mixed = `${cjkPrompt} /Users/example/project/src/providers/claude/runtime/promptDelivery.ts`
     const tail = pasteTailNeedle(mixed)
     const missed: number[] = []
-    for (let cols = 20; cols <= 140; cols += 1) {
+    for (const cols of evenBodyWidths) {
       if (pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, mixed)), tail, 0, false) !== 'inline') missed.push(cols)
     }
     expect(missed).toEqual([])
@@ -211,13 +220,34 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     ['rockets', '🚀'.repeat(60)],
     ['fullwidth punctuation', '︐'.repeat(101)],
     ['check marks before a path', `${'✅'.repeat(40)} /Users/example/project/src/providers/claude/runtime/promptDelivery.ts`],
-  ])('confirms wrapped %s at every width', (_name, prompt) => {
+  ])('confirms wrapped %s at every width whose rows fill', (_name, prompt) => {
     const tail = pasteTailNeedle(prompt)
     const missed: number[] = []
-    for (let cols = 20; cols <= 140; cols += 1) {
+    for (const cols of evenBodyWidths) {
       if (pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, prompt)), tail, 0, false) !== 'inline') missed.push(cols)
     }
     expect(missed).toEqual([])
+  })
+
+  // The known residual (#1292 stays open for it): with an odd body width a
+  // wide-glyph row stops one cell short and is read as a soft wrap. The
+  // delivery then times out and rolls back; it must NEVER confirm.
+  it('times out rather than confirms when wide rows stop one cell short', () => {
+    const tail = pasteTailNeedle(cjkPrompt)
+    const missed: number[] = []
+    for (const cols of oddBodyWidths) {
+      const result = pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, cjkPrompt)), tail, 0, false)
+      // Anything but a miss or a true inline match would be a false signal.
+      expect([null, 'inline']).toContain(result)
+      if (result === null) missed.push(cols)
+    }
+    // Measured on this head. The widths between 60 and 68 confirm because the
+    // tail needle sits wholly after the last one-short cut. A fix that shrinks
+    // this list is welcome; update the pin. Growing it is a regression.
+    expect(missed).toEqual([
+      20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58,
+      70, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 102, 104, 106, 108, 110, 112, 114,
+    ])
   })
 
   // #1310 review A/B: a SOFT wrap before a wide word must keep its space. A
@@ -257,6 +287,17 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
         if (pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, prompt)), tail, 0, false) !== 'inline') missed.push(cols)
       }
       expect(missed).toEqual([])
+    }
+  })
+
+  // Steering q34: a soft wrap can END in a wide glyph too, with its real
+  // space in the last cell; xterm drops that space, so a one-cell-short row is
+  // ambiguous. Joining it confirmed a paste that had not landed.
+  it('never confirms early across a soft wrap after a CJK run', () => {
+    const shown = `${'你'.repeat(8)} 好abcdefgh`
+    const absent = `${'你'.repeat(8)}好abcdefgh`
+    for (let cols = 20; cols <= 40; cols += 1) {
+      expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, shown)), pasteTailNeedle(absent), 0, false)).toBeNull()
     }
   })
 
