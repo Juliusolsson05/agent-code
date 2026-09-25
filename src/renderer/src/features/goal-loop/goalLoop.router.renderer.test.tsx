@@ -139,6 +139,27 @@ describe('goal loop overlay controls from the keyboard (K2-1)', () => {
     expect(keyDown({ key: 'x', code: 'KeyX' })).toBe(false)
   })
 
+  it('brings a stranded keyboard user back with Tab, only from <body> (review of #1221, A F4)', async () => {
+    // A focused control can unmount without a phase change (Raise Cap at the
+    // ceiling hides itself), dropping focus to <body>. The gate then swallowed
+    // Tab/Enter/Space, and only Escape or the chord got out.
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    act(() => { toggleGoalLoop() })
+    await screen.findByText('Goal loop · active')
+    const dialog = screen.getByRole('dialog')
+    flush()
+    ;(document.activeElement as HTMLElement).blur()
+    expect(document.activeElement).toBe(document.body)
+    expect(keyDown({ key: 'Tab' })).toBe(false)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    // From the dimmed composer, Tab is still swallowed and goes nowhere.
+    const composer = screen.getByLabelText('Composer')
+    composer.focus()
+    expect(keyDown({ key: 'Tab' })).toBe(false)
+    expect(document.activeElement).toBe(composer)
+  })
+
   it('with two panes, only the ACTIVE pane s overlay takes focus (review A1)', async () => {
     // The latch is app-wide, so both visible panes mount an overlay. Before
     // the fix each pulled focus and the LATER one won: Enter then paused the
