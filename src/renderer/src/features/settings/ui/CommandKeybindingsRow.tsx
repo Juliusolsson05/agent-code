@@ -395,6 +395,39 @@ export function CommandKeybindingsRow() {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [capturingFor, contextForCommandId, effective, effectiveAsDefaults, settings.dictationShortcut, commit])
 
+  // The recording owns every key, so it must end the moment the user's
+  // attention does (#1272, C4 hunt): a click anywhere but the recorder's own
+  // button, or the window losing focus. Escape alone was not enough, because
+  // clicking the Settings search box and typing "t" silently bound "T" to the
+  // command. The outside-click half matches HotkeyInput and MouseButtonInput;
+  // ending on blur is stricter than HotkeyInput (which only clears held
+  // modifiers), because a recording left armed across an app switch is exactly
+  // how a stray key got saved.
+  //
+  // Grabbing the LIST's scrollbar is not leaving (#1308 review B): the list is
+  // 134 rows in a 420 px scroller, and a mousedown on its scrollbar targets the
+  // scroller element itself, which is not inside any recorder button. The
+  // scroller is also the target for its own flex gaps (8 px strips between
+  // category blocks, #1308 round 2), so only a press PAST its client box, on
+  // the scrollbar, is exempt; a gap or a row still ends recording.
+  // Capture phase, so a control that stops propagation cannot keep it armed.
+  useEffect(() => {
+    if (!capturingFor) return
+    const release = () => setCapturingFor(null)
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Element | null
+      if (target?.closest?.('[data-shortcut-recorder]')) return
+      if (target instanceof HTMLElement && target.matches('[data-shortcut-list]') && onScrollbar(target, event)) return
+      release()
+    }
+    window.addEventListener('mousedown', onMouseDown, true)
+    window.addEventListener('blur', release)
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown, true)
+      window.removeEventListener('blur', release)
+    }
+  }, [capturingFor])
+
   /**
    * The ONLY override path. Removes the binding from every command that owns
    * it and installs it on the requester, in ONE settings write — so the store
@@ -455,7 +488,9 @@ export function CommandKeybindingsRow() {
         </div>
       ) : null}
 
-      <div className="flex max-h-[420px] flex-col gap-2 overflow-auto">
+      {/* data-shortcut-list: a mousedown ON this element is its scrollbar,
+          which must not end a recording (#1308 review B). */}
+      <div data-shortcut-list="" className="flex max-h-[420px] flex-col gap-2 overflow-auto">
         {/* Column header lives INSIDE the scroll container, and sticks.
             Outside it, the header sits in a box that is not narrowed by the
             scrollbar while the rows below it are — so on any platform with
@@ -506,6 +541,9 @@ export function CommandKeybindingsRow() {
                   )}
 
                   <button
+                    // Clicks on the recorder itself toggle it (below) and must
+                    // not count as "clicked elsewhere".
+                    data-shortcut-recorder=""
                     onClick={() => {
                       setConflict(null)
                       setCapturingFor(capturingFor === row.id ? null : row.id)
@@ -642,3 +680,14 @@ function commandLabel(commandId: string): string {
   if (!command) return commandId
   return typeof command.title === 'function' ? commandId : command.title
 }
+
+/** Did this mousedown land on the element's own scrollbar? The scrollbar sits
+ *  outside the client box (clientWidth/clientHeight exclude it), so a press
+ *  past either edge of the client area is on it. */
+function onScrollbar(element: HTMLElement, event: MouseEvent): boolean {
+  const rect = element.getBoundingClientRect()
+  const x = event.clientX - rect.left - element.clientLeft
+  const y = event.clientY - rect.top - element.clientTop
+  return x >= element.clientWidth || y >= element.clientHeight
+}
+

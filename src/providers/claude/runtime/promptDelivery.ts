@@ -453,12 +453,7 @@ async function rollbackWrittenPrompt(
   io: PromptDeliveryIo,
 ): Promise<'cleared' | 'restored' | 'unrecoverable'> {
   const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
-    // Classified WITHOUT cell attributes, which is the fail-closed path: with
-    // no attributes an unrecognised row is reported as 'drafted'. That error
-    // direction is the safe one here — a false 'drafted' aborts and restores,
-    // whereas a false 'empty' would let us report success over a composer still
-    // holding half a prompt.
-    parseClaudeComposerState(io.session.snapshotScreen?.() ?? '', null)
+    classifyRollbackComposer(io.session.readComposer?.() ?? null, io.session.snapshotScreen?.() ?? '')
 
   // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
   //
@@ -534,3 +529,48 @@ function describeReadiness(
   if (outcome.kind === 'occupied') return 'occupied by a human draft'
   return `unavailable (${outcome.reason})`
 }
+
+/**
+ * The rollback's reading of Claude's composer (#1291, #1309 review).
+ *
+ * After a kill empties the composer, Claude repaints placeholder text into it
+ * (a prompt suggestion, a hint), and the text-only read calls any unrecognised
+ * row 'drafted'. The paste-debug corpus holds 4 `rollback-exhausted` (all 64
+ * presses, then yanked back), 1 `rollback-cleared` and 7 `rollback-unobserved`.
+ * The exhausted records carry no screen, so a repainted placeholder is the
+ * explanation that fits them (one prompt was a typical suggestion, "yes fix
+ * all 9"), not a recorded observation.
+ *
+ * Exported so a test can drive it with a real ClaudeCodeHeadless frame.
+ */
+export function classifyRollbackComposer(
+  live: { screen: string; attributes: { dim: number; inverse: number; plain: number } | null } | null,
+  fallbackScreen: string,
+): 'empty' | 'drafted' | 'unpainted' {
+  // The rule (#1309 review):
+  //  - the text-only read stays the base. It fails closed, and its 'empty'
+  //    is trustworthy for a bare prompt marker;
+  //  - but NOT for its allowlisted hints ("Press up to edit") when the live
+  //    cells show typed text (#1309 round 2, reviews A and B). A kill clears
+  //    only the current VISUAL row, so a prompt whose first row reads exactly
+  //    like a hint can leave that row behind, plain. Calling it cleared told
+  //    the caller a retry was safe, and the retry would append to it;
+  //  - it is overruled to 'empty' only when the LIVE cell attributes show a
+  //    painted placeholder: dim cells and no typed (plain) cells. A leftover
+  //    character under the inverse cursor has no dim cells, so it stays
+  //    'drafted';
+  //  - text and attributes come from the live buffer at the same instant,
+  //    never the per-frame cache, which lags a 25 ms kill loop and can
+  //    stall behind pendingWrites.
+  // A false 'drafted' aborts and restores; a false 'empty' would report
+  // success over half a prompt, so every doubt resolves to 'drafted'.
+  const screen = live?.screen ?? fallbackScreen
+  const textOnly = parseClaudeComposerState(screen, null)
+  const attributes = live?.attributes
+  if (textOnly === 'empty' && attributes && attributes.plain > 0) return 'drafted'
+  if (textOnly !== 'drafted') return textOnly
+  if (attributes && attributes.plain === 0 && attributes.dim > 0
+    && parseClaudeComposerState(screen, attributes) === 'empty') return 'empty'
+  return 'drafted'
+}
+
