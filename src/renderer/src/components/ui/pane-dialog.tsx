@@ -82,6 +82,8 @@ export type PaneDialogHost = {
   restoreFocus?: () => void
 }
 
+const PANE_INERT_COUNT = 'data-pane-inert-count'
+
 export const PaneDialogHostContext = React.createContext<PaneDialogHost | null>(null)
 
 export function PaneDialogHostProvider({ children, ...host }: PaneDialogHost & { children: React.ReactNode }) {
@@ -148,6 +150,42 @@ export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogCont
       })
       return () => cancelAnimationFrame(frame)
     }, [host.active])
+
+    // The rest of the pane becomes `inert` while the prompt is up (review
+    // findings A2 / B1). The scrim only stops the POINTER: without this, Tab
+    // and Shift+Tab walked from the dialog into the same pane's composer
+    // underneath, where typing edited a draft nobody could see and Enter could
+    // submit it past the unanswered prompt. `inert` removes those controls
+    // from focus and input while leaving them visible. Other panes are
+    // untouched, which is the point of #713.
+    //
+    // A counter on each element, not a plain attribute, because two condition
+    // prompts can stack in one pane: the first to close must not wake the
+    // pane under the second. Declared BEFORE the focus-restore effect below,
+    // so on close `inert` is removed first and focus can land on the composer.
+    React.useEffect(() => {
+      const container = host.container
+      if (!container) return
+      const marked: Element[] = []
+      for (const child of Array.from(container.children)) {
+        if (child.hasAttribute('data-pane-dialog') || child.getAttribute('data-slot') === 'pane-dialog-scrim') continue
+        const count = Number(child.getAttribute(PANE_INERT_COUNT) ?? '0')
+        child.setAttribute(PANE_INERT_COUNT, String(count + 1))
+        child.setAttribute('inert', '')
+        marked.push(child)
+      }
+      return () => {
+        for (const child of marked) {
+          const count = Number(child.getAttribute(PANE_INERT_COUNT) ?? '1') - 1
+          if (count > 0) {
+            child.setAttribute(PANE_INERT_COUNT, String(count))
+          } else {
+            child.removeAttribute(PANE_INERT_COUNT)
+            child.removeAttribute('inert')
+          }
+        }
+      }
+    }, [host.container])
 
     // Whether focus is inside, tracked from focus events rather than read
     // from document.activeElement at unmount. A passive-effect cleanup runs

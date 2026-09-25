@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GoalLoopState } from '@shared/types/goalLoop'
@@ -137,6 +137,26 @@ describe('goal loop overlay controls from the keyboard (K2-1)', () => {
 
     // Letters are still consumed: nothing types into the composer below.
     expect(keyDown({ key: 'x', code: 'KeyX' })).toBe(false)
+  })
+
+  it('with two panes, only the ACTIVE pane s overlay takes focus (review A1)', async () => {
+    // The latch is app-wide, so both visible panes mount an overlay. Before
+    // the fix each pulled focus and the LATER one won: Enter then paused the
+    // other agent. Pane A is active and renders first, B renders second.
+    render(<>
+      <Harness model={workspace()} />
+      <div data-testid="pane-a"><GoalLoopPane sessionId="a" focused /></div>
+      <div data-testid="pane-b"><GoalLoopPane sessionId="b" focused={false} /></div>
+    </>)
+    screen.getByLabelText('Composer').focus()
+    act(() => { toggleGoalLoop() })
+    await waitFor(() => expect(screen.getAllByText('Goal loop · active')).toHaveLength(2))
+    flush()
+    const paneA = screen.getByTestId('pane-a')
+    const focused = document.activeElement as HTMLElement
+    expect(paneA.contains(focused)).toBe(true)
+    fireEvent.click(focused)
+    expect(api.controlGoalLoop).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'a' }))
   })
 
   it('returns focus to the composer when the overlay closes', async () => {

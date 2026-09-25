@@ -30,7 +30,7 @@ function describe(loop: GoalLoopState): string {
  * `data-goal-loop-overlay` attribute. The keyboard router gates on that
  * attribute being mounted (#1021), so a latched state that renders any other
  * markup would reopen the invisible-trap bug. */
-function GoalLoopOverlay({ children }: { children: ReactNode }) {
+function GoalLoopOverlay({ children, takeFocus }: { children: ReactNode; takeFocus: boolean }) {
   // Keyboard ownership (K2-1). The overlay stamps the APP interaction-owner
   // marker and the router consumes every key while it is latched, so it has
   // to hold focus itself, or a keyboard user sees buttons they cannot reach:
@@ -40,19 +40,36 @@ function GoalLoopOverlay({ children }: { children: ReactNode }) {
   //     app-owning surface would land where the router admits no key;
   //   - on close, focus returns to whatever held it before (the composer,
   //     usually) instead of dropping to <body>.
+  //
+  // ONLY the ACTIVE pane's overlay does any of this (`takeFocus`, review
+  // finding A1). The latch is app-wide, so every visible agent pane mounts an
+  // overlay at once; when each one pulled focus, the LAST pane's frame won, and
+  // Enter then paused or stopped a different agent from the one the user
+  // opened the preview on. Background overlays stay visible but never take
+  // focus, and moving the active pane (⌥↓) hands focus to that pane's overlay.
   const ref = useRef<HTMLDivElement | null>(null)
+  // Whether focus is inside, from focus events: an effect cleanup runs after
+  // React detached the node, so reading document.activeElement there always
+  // says <body> (the same trap pane-dialog.tsx documents).
+  const holdsFocus = useRef(false)
   useEffect(() => {
+    if (!takeFocus) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const frame = requestAnimationFrame(() => {
       ref.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
     })
     return () => {
       cancelAnimationFrame(frame)
-      if (previous?.isConnected) previous.focus()
+      // Hand focus back only if it is still inside THIS overlay: a pane switch
+      // has already moved it to the next active overlay, and yanking it back to
+      // the old composer would undo that.
+      if (previous?.isConnected && holdsFocus.current) previous.focus()
     }
-  }, [])
+  }, [takeFocus])
   return <div
     ref={ref}
+    onFocus={() => { holdsFocus.current = true }}
+    onBlur={event => { holdsFocus.current = ref.current?.contains(event.relatedTarget as Node | null) ?? false }}
     data-agent-code-interaction-owner="app"
     data-goal-loop-overlay=""
     role="dialog"
@@ -86,7 +103,7 @@ function GoalLoopOverlay({ children }: { children: ReactNode }) {
  * without opening anything; the overlay is where actions live. Both follow
  * TldrOverlay's input discipline: stop propagation so pane chrome never sees
  * the clicks, and theme tokens so they read in every theme. */
-export function GoalLoopPane({ sessionId }: { sessionId: string }) {
+export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string; focused?: boolean }) {
   const [loop, setLoop] = useState<GoalLoopState | null>(null)
   // WHY the overlay also requires VISIBILITY, not just the latch (#1021
   // review): Reader, Spotlight, Settings and the fullscreen Global Editor
@@ -126,7 +143,7 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     // way ("No TLDR yet"). A loop being read for the first time also lands
     // here briefly. That is acceptable: the overlay is up, it explains itself,
     // and it swaps to the real loop the moment the read resolves.
-    return <GoalLoopOverlay>
+    return <GoalLoopOverlay takeFocus={focused}>
       <p className="text-sm sm:text-base">No goal loop on this agent</p>
       <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP.</p>
       <div className="flex gap-3 text-sm">
@@ -183,7 +200,7 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   if (!latched) return strip
   return <>
     {strip}
-    <GoalLoopOverlay>
+    <GoalLoopOverlay takeFocus={focused}>
         <p className="text-sm sm:text-base">Goal loop · {PHASE_LABEL[loop.phase]}{loop.phase === 'paused' ? ` · ${loop.pauseReason}` : ''}</p>
         <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{withVisibleControls(loop.goal)}</p>
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>

@@ -11,6 +11,10 @@ import {
 } from '@renderer/lib/interaction-ownership'
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
+import { useRef } from 'react'
+import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
+import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePasteToFocus'
+import type { SessionId } from '@renderer/workspace/types'
 
 // #713: one pane's condition modal must not take the whole app hostage.
 //
@@ -107,6 +111,20 @@ describe('pane-scoped condition dialogs (#713)', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('composer A'))
   })
 
+  it('makes the rest of ITS pane inert, so Tab cannot reach the covered composer (review A2/B1)', () => {
+    // The scrim stops the pointer only. Shift+Tab from the prompt used to walk
+    // into the same pane's composer, where typing edited a hidden draft.
+    const { rerender } = render(<TwoPanes trustActive onDecline={vi.fn(async () => {})} />)
+    const composerA = screen.getByLabelText('composer A')
+    expect(composerA.closest('[inert]')).not.toBeNull()
+    // The prompt itself and every other pane stay live.
+    expect(screen.getByRole('dialog').closest('[inert]')).toBeNull()
+    expect(screen.getByLabelText('composer B').closest('[inert]')).toBeNull()
+    // Answered: the pane wakes up again.
+    rerender(<TwoPanes trustActive promptUp={false} onDecline={vi.fn(async () => {})} />)
+    expect(composerA.closest('[inert]')).toBeNull()
+  })
+
   it('marks only its own pane for the pane-local routers', () => {
     render(<TwoPanes trustActive={false} onDecline={vi.fn(async () => {})} />)
     expect(paneHasInteractionOwner(screen.getByLabelText('composer A'))).toBe(true)
@@ -142,6 +160,60 @@ describe('pane-scoped condition dialogs (#713)', () => {
     expect(submitB).toHaveBeenCalledTimes(1)
     unregisterA()
     unregisterB()
+  })
+})
+
+describe('pane-local routers yield to a pane dialog (review A, B2)', () => {
+  it('never lets a hovered, prompted composer take Enter', () => {
+    // B2: the hovered branch returned before the focused branch's `blocked`
+    // check, and no test covered it. Pointer over pane A (with its prompt up),
+    // keyboard elsewhere: Enter must not submit A's covered draft.
+    const submit = vi.fn()
+    render(<TwoPanes trustActive onDecline={vi.fn(async () => {})} />)
+    const composerA = screen.getByLabelText('composer A')
+    const unregister = registerComposerEnterTarget({
+      key: 'pane-a',
+      focused: false,
+      hovered: true,
+      blocked: () => paneHasInteractionOwner(composerA),
+      hasSubmittableDraft: () => true,
+      focus: () => {},
+      submit,
+    })
+    // AFTER registering: the registry only listens for pointer moves while a
+    // target exists, and hover counts only when the pointer moved last.
+    fireEvent.pointerMove(document.body)
+    fireEvent.keyDown(document.body, { key: 'Enter' })
+    expect(submit).not.toHaveBeenCalled()
+    unregister()
+  })
+
+  function Routers({ onDraft }: { onDraft: (next: string) => void }) {
+    const [pane, setPane] = useState<HTMLDivElement | null>(null)
+    const inputRef = useRef<HTMLTextAreaElement | null>(null)
+    const setDraftInput = (_id: SessionId, next: string) => onDraft(next)
+    useTypeToFocus({ focused: true, sessionId: 'a' as SessionId, inputRef, setDraftInput })
+    usePasteToFocus({ focused: true, sessionId: 'a' as SessionId, inputRef, setDraftInput, handlePaste: async () => ({ kind: 'none' }) as never })
+    return (
+      <div ref={setPane} data-pane-id="pane-a" className="relative">
+        <textarea ref={inputRef} aria-label="composer A" />
+        <PaneDialogHostProvider container={pane} active>
+          <TrustDialogModal state={{ workspace: '/w' }} onAccept={async () => {}} onDecline={async () => {}} />
+        </PaneDialogHostProvider>
+      </div>
+    )
+  }
+
+  it('does not type or paste into the covered composer (review A)', () => {
+    // A's mutation run: removing the paste guard survived every test. Keys and
+    // pastes from a non-editable target used to be redirected into the draft.
+    const onDraft = vi.fn()
+    render(<Routers onDraft={onDraft} />)
+    fireEvent.keyDown(document.body, { key: 'x' })
+    const paste = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+    Object.defineProperty(paste, 'clipboardData', { value: { getData: () => 'secret', items: [], files: [], types: ['text/plain'] } })
+    document.body.dispatchEvent(paste)
+    expect(onDraft).not.toHaveBeenCalled()
   })
 })
 
