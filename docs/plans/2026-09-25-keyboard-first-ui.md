@@ -416,7 +416,7 @@ entry when it lands.
 | S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | done |
 | S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | done |
 | S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | done |
-| S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | todo |
+| S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | done |
 | S12 | AgentTitlePrompt | form submit | DialogActions chips; T3 | todo |
 | S13 | CloseOldAgentsModal | no Enter; "Esc" header button; raw buttons | DialogActions (danger); remove Esc button; T3/T8; `focus:border-accent` → T4 | todo |
 | S14 | CloseCompletedAgentsModal | no Enter; raw header/footer | as S13 | todo |
@@ -511,6 +511,7 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 | X2 | `font-mono` → `font-code` sweep (T6) | todo |
 | X3 | `focus:border-accent` / `outline-none` sweep (T4) | todo |
 | X4 | Stale comments (`defaults.ts` dictation) | done |
+| X5 | Undefined theme tokens (`text-fg`, `bg-surface-raised`) outside the S-rows — found in S10/S11 | todo |
 
 ## Owner visual checklist
 
@@ -612,6 +613,12 @@ Sharp corners and one light theme.
   checked = accent text + ✓; highlight = row-selected + 2px bar; description
   at 11px (was 10px); footer `↑ ↓ move  ␣ toggle` · `Any Project` ·
   `Close ⎋` (was ghost "Any project" + filled "Done"); title "Row Projects".
+- **S11 Grid Dispatch (⌘D):** 440 wide in Simple, 640 in Advanced (were
+  400/560); Simple/Advanced, the row ×, project chips and Show all/Cap all
+  show a focus ring when tabbed and a working hover (the `text-fg` token did
+  not exist); the lane preview squares are square (was a 2px radius);
+  Advanced row boxes use the plate radius; description 11px; footer
+  `Cancel ⎋` · `Apply ↩`; "+ Add Row".
 
 ## Tasks
 
@@ -686,6 +693,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S11: Grid Dispatch footer on DialogActions (Enter still
+  applies only from number fields — chip shown, listener not wired), mode
+  switch aria-pressed, nested-agents radiogroup, focus rings, tokens.
+  Confirm-red: both new tests fail on the pre-change file.
 - 2026-09-25 S10: Row Projects → multiselect listbox on useListNavigation
   (keyed by tab id; Space/Enter toggle live), undefined tokens replaced,
   close-only footer + Any Project. Confirm-red: both new tests fail on the
