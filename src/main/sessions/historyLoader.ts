@@ -1,4 +1,5 @@
 import { mainOperations } from '@main/performance/operations.js'
+import { codexRolloutIdentity } from '@shared/codex/rolloutIdentity.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { FileHandle } from 'fs/promises'
 import { open, stat } from 'fs/promises'
@@ -121,9 +122,9 @@ function extractClaudeHistoryMarker(entry: Record<string, unknown>): string | nu
     : null
 }
 
+// The renderer's marker rule, shared so the two cannot drift (#1288).
 function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
-  const payload = entry.payload as Record<string, unknown> | undefined
-  return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
+  return codexRolloutIdentity(entry)
 }
 
 /**

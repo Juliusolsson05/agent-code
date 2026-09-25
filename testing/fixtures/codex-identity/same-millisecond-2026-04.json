@@ -1,0 +1,54 @@
+{
+  "source": "owner ~/.codex/sessions rollouts 2026-04-28 (call/output) and 2026-04-16 (messages); text redacted, ids replaced",
+  "callAndOutput": [
+    {
+      "timestamp": "2026-04-28T16:36:01.649Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "name": "exec_command",
+        "arguments": "{\"cmd\":\"df -h .\"}",
+        "call_id": "call_REDACTED_1"
+      }
+    },
+    {
+      "timestamp": "2026-04-28T16:36:01.649Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "call_id": "call_REDACTED_1",
+        "output": "Process exited with code 0\nOutput:\nFilesystem  Size  Used\n"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "timestamp": "2026-04-16T14:34:49.436Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Continue from the summary."
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": "2026-04-16T14:34:49.436Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Picking up where we left off."
+          }
+        ]
+      }
+    }
+  ]
+}
