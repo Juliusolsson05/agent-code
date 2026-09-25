@@ -1,4 +1,5 @@
 import { Timeline } from './Timeline'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Select } from '@renderer/components/ui/select'
 import { Overview } from './overview/Overview'
 import { useAgentIdentities } from './agentIdentity'
@@ -50,7 +51,7 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
           {/* Coverage counters only when they say something: a permanent "0 dropped
               records · 0 restarts" line was noise that trained people to skip
               the header. */}
-          {snapshot && (snapshot.droppedRecords > 0 || snapshot.restarts > 0) && <span className="text-warning-fg">{snapshot.droppedRecords.toLocaleString()} dropped records · {snapshot.restarts} collector restarts</span>}
+          {snapshot && (snapshot.droppedRecords > 0 || snapshot.restarts > 0) && <span className="text-warning">{snapshot.droppedRecords.toLocaleString()} dropped records · {snapshot.restarts} collector restarts</span>}
         </div>
       </DialogHeader>
       <nav aria-label="Performance views" className="flex gap-2 border-b border-border px-4 py-2">
@@ -214,6 +215,6 @@ function Processes() {
 function Operations({ snapshot }: { snapshot: MonitorSnapshot }) {
   const rows = useMemo(() => [...snapshot.operations].sort((a, b) => b.histogram.maxMs - a.histogram.maxMs), [snapshot.operations])
   return <section className="space-y-3"><h2 className="font-medium">Operation latency</h2><p className="text-[11px] text-muted">Percentiles are histogram bucket upper bounds. Sample counts and outcomes keep slow failures visible. Provider and first-output durations include waiting; transcript.commit ends at React layout commit, before paint.</p>
-    {!rows.length ? <p className="text-muted">No operations recorded in this run.</p> : <table className="w-full text-left text-[11px] tabular-nums"><thead className="text-muted"><tr>{['Operation', 'Outcome', 'Count', 'p50', 'p95', 'p99', 'Maximum'].map(label => <th className="py-2 font-normal" key={label}>{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr className="border-t border-border" key={`${row.name}:${row.outcome}`}><td className="py-2">{row.name}</td><td>{row.outcome}</td><td>{row.histogram.count.toLocaleString()}</td>{[0.5, 0.95, 0.99].map(q => { const value = latencyQuantile(row.histogram, q); return <td key={q}>{value?.overflow ? '>60 s' : number(value?.upperBoundMs, ' ms')}</td> })}<td>{number(row.histogram.maxMs, ' ms')}</td></tr>)}</tbody></table>}
+    {!rows.length ? <EmptyState>No operations recorded in this run.</EmptyState> : <table className="w-full text-left text-[11px] tabular-nums"><thead className="text-muted"><tr>{['Operation', 'Outcome', 'Count', 'p50', 'p95', 'p99', 'Maximum'].map(label => <th className="px-3 py-2 font-normal" key={label}>{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr className="border-t border-border" key={`${row.name}:${row.outcome}`}><td className="px-3 py-2">{row.name}</td><td className="px-3 py-2">{row.outcome}</td><td className="px-3 py-2">{row.histogram.count.toLocaleString()}</td>{[0.5, 0.95, 0.99].map(q => { const value = latencyQuantile(row.histogram, q); return <td key={q} className="px-3 py-2">{value?.overflow ? '>60 s' : number(value?.upperBoundMs, ' ms')}</td> })}<td className="px-3 py-2">{number(row.histogram.maxMs, ' ms')}</td></tr>)}</tbody></table>}
   </section>
 }
