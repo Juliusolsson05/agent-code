@@ -429,8 +429,8 @@ entry when it lands.
 | S21 | AgentActivityView | richest keys; legend row; pt-4, 15px title | legend → DialogActions/footer legend; D3; T3/T5 | done (D3 exception kept: Esc clears the filter first) |
 | S22 | QuickOpenOverlay | ↑↓ Enter; sr-only hint; outline-none input | useListNavigation; legend; T4 | done |
 | S23 | ContentSearchOverlay | ↑↓ Enter; sr-only hint | as S22 | done |
-| S24 | ConfirmCloseDialog (editor) | autoFocus Save&Close | DialogActions-like 3-button footer with chips; K1 | todo |
-| S25 | ConfirmDeleteDialog (editor) | autoFocus Cancel | DialogActions danger | todo |
+| S24 | ConfirmCloseDialog (editor) | autoFocus Save&Close | DialogActions-like 3-button footer with chips; K1 | done |
+| S25 | ConfirmDeleteDialog (editor) | autoFocus Cancel | DialogActions danger | done |
 | S26 | KeyboardShortcutsModal | search focus; no arrows; font-mono chips | Kbd chips; ↑↓ over results; Close ⎋ | todo |
 | S27 | ThemeEditorModal (SettingsPage) | name autoFocus; secondary buttons | DialogActions; T3 | todo |
 | S28 | AgentCodeConventionsEditorModal | window.confirm; raw buttons | ConfirmDialog; T8; ⌘↵ save chip | todo |
@@ -678,6 +678,13 @@ Sharp corners and one light theme.
   ring; Quick Open is 520 wide (default), Search 640 (md). The search inputs
   keep their borderless look with the caret as the focus signal (T4
   exception, as the palette).
+- **S24 Editor "Unsaved changes" on tab close:** `Discard` moved to the far
+  left as a red-OUTLINE button (was a second filled button beside Save);
+  `Cancel ⎋` ghost; `Save & Close ↩` filled and focused on open; while
+  saving everything disables, the ⎋ chip hides and Escape waits; 440 wide.
+- **S25 Editor "Delete from disk?":** opens with the ring on `Cancel ⎋`; red
+  `Delete` / `Delete & Discard` has no ↩ chip; the dirty-file list is 11px
+  in a py-3 body (was 10px pb-3); 440 wide.
 
 ## Tasks
 
@@ -752,6 +759,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S24/S25: editor confirms on DialogActions — Close: confirm =
+  Save & Close (focused, Enter saves), Discard destructive-outline extra,
+  every `disabled={saving}` guard carried (k3) plus Escape/outside guards
+  mid-save; Delete: danger, focus Cancel, no key. Confirm-red: both Close
+  tests fail on the pre-change file; the Delete test passes there (it
+  already autofocused Cancel and had no key) and stays as a guard.
 - 2026-09-25 S22/S23: Quick Open + Search in Files on useListNavigation
   (positional: a new query replaces the ranking; Search resets on search
   start and on results landing), duplicate input-level Escape handlers

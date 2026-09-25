@@ -1,9 +1,9 @@
 import { Button } from '@renderer/components/ui/button'
+import { DialogActions, focusDialogActionOnOpen } from '@renderer/components/ui/dialog-actions'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
@@ -42,7 +42,16 @@ export function ConfirmCloseDialog({
         if (!open) onCancel()
       }}
     >
-      <DialogContent className="w-[min(420px,92vw)]">
+      <DialogContent
+        size="sm"
+        // Save & Close takes focus (it had autoFocus): the SAFE answer keeps
+        // the edits, so Enter-on-open saving is the right reflex here.
+        onOpenAutoFocus={focusDialogActionOnOpen('confirm')}
+        // Mid-save the dialog must not vanish (steering note k3's rule):
+        // Escape and outside clicks wait, as Cancel does (cancelDisabled).
+        onEscapeKeyDown={event => { if (saving) event.preventDefault() }}
+        onInteractOutside={event => { if (saving) event.preventDefault() }}
+      >
         <DialogHeader>
           <DialogTitle>{deleted ? 'File deleted on disk' : 'Unsaved changes'}</DialogTitle>
           <DialogDescription>
@@ -59,17 +68,24 @@ export function ConfirmCloseDialog({
             </p>
           ) : null}
         </DialogHeader>
-        <DialogFooter>
-          <Button type="button" onClick={onCancel} variant="outline" disabled={saving}>
-            Cancel
-          </Button>
-          <Button type="button" onClick={onDiscard} variant="destructive" disabled={saving}>
-            Discard
-          </Button>
-          <Button type="button" onClick={onSaveAndClose} autoFocus disabled={saving}>
-            {saving ? 'Saving…' : deleted ? 'Recreate & Close' : 'Save & Close'}
-          </Button>
-        </DialogFooter>
+        {/* Every old `disabled={saving}` guard carries over (k3): Cancel,
+            Discard and the confirm all wait for the save. Discard is the
+            destructive-OUTLINE variant — it is the dangerous answer but not
+            the primary one, and a second filled button beside Save & Close
+            competed with it. It has no key: Enter saves, Escape cancels. */}
+        <DialogActions
+          confirmLabel={saving ? 'Saving…' : deleted ? 'Recreate & Close' : 'Save & Close'}
+          confirmDisabled={saving}
+          onConfirm={onSaveAndClose}
+          onCancel={onCancel}
+          cancelDisabled={saving}
+          escapeCancels={!saving}
+          extraActions={
+            <Button type="button" variant="destructive-outline" size="sm" className="mr-auto" onClick={onDiscard} disabled={saving}>
+              Discard
+            </Button>
+          }
+        />
       </DialogContent>
     </Dialog>
   )
