@@ -82,7 +82,69 @@ export type PaneDialogHost = {
   restoreFocus?: () => void
 }
 
-const PANE_INERT_COUNT = 'data-pane-inert-count'
+
+// Marks the pane's children inert while any pane dialog is open; see the
+// WHY at registerPaneDialog's caller. Keyed by the pane container.
+type PaneDialogNodes = { content: HTMLElement; scrim: HTMLElement }
+type PaneInertController = { dialogs: PaneDialogNodes[]; observer: MutationObserver; marked: Set<Element> }
+const paneControllers = new WeakMap<HTMLElement, PaneInertController>()
+
+/** The pane toast region, which must stay readable and announced above an
+ *  open prompt (#713). PaneToast stamps it. */
+export const PANE_FEEDBACK_ATTRIBUTE = 'data-pane-feedback'
+
+function recomputePaneInert(container: HTMLElement, controller: PaneInertController) {
+  const live = controller.dialogs.filter(d => d.content.isConnected)
+  // The newest dialog in DOM order is the one on top (same z-layer, later wins).
+  const newest = live.reduce<PaneDialogNodes | null>((top, d) =>
+    !top || top.content.compareDocumentPosition(d.content) & Node.DOCUMENT_POSITION_FOLLOWING ? d : top, null)
+  const want = new Set<Element>()
+  if (newest) {
+    for (const child of Array.from(container.children)) {
+      if (child === newest.content || child === newest.scrim) continue
+      if (child.hasAttribute(PANE_FEEDBACK_ATTRIBUTE)) continue
+      want.add(child)
+    }
+  }
+  for (const el of controller.marked) {
+    if (!want.has(el)) { el.removeAttribute('inert'); controller.marked.delete(el) }
+  }
+  for (const el of want) {
+    // Never take over an inert someone else set: it is not ours to remove.
+    if (controller.marked.has(el) || el.hasAttribute('inert')) continue
+    el.setAttribute('inert', '')
+    controller.marked.add(el)
+  }
+}
+
+function registerPaneDialog(container: HTMLElement, nodes: PaneDialogNodes): () => void {
+  let controller = paneControllers.get(container)
+  if (!controller) {
+    const created: PaneInertController = {
+      dialogs: [],
+      marked: new Set(),
+      // childList only: a child mounting after the prompt opened must go inert
+      // too (reviewer A F2). The recompute only writes attributes, which a
+      // childList observer does not see, so it cannot re-trigger itself.
+      observer: new MutationObserver(() => recomputePaneInert(container, created)),
+    }
+    controller = created
+    paneControllers.set(container, controller)
+    controller.observer.observe(container, { childList: true })
+  }
+  controller.dialogs.push(nodes)
+  recomputePaneInert(container, controller)
+  return () => {
+    const current = paneControllers.get(container)
+    if (!current) return
+    current.dialogs = current.dialogs.filter(d => d !== nodes)
+    recomputePaneInert(container, current)
+    if (current.dialogs.length === 0) {
+      current.observer.disconnect()
+      paneControllers.delete(container)
+    }
+  }
+}
 
 export const PaneDialogHostContext = React.createContext<PaneDialogHost | null>(null)
 
@@ -160,39 +222,28 @@ export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogCont
     // from focus and input while leaving them visible. Other panes are
     // untouched, which is the point of #713.
     //
-    // A counter on each element, not a plain attribute, because two condition
-    // prompts can stack in one pane: the first to close must not wake the
-    // pane under the second. Declared BEFORE the focus-restore effect below,
-    // so on close `inert` is removed first and focus can land on the composer.
-    //
-    // WHY it skips only THIS dialog's own two nodes, not every pane dialog
-    // (round-2 review A-P1): with two prompts stacked, the older one used to
-    // stay live under the newer one's scrim. Shift+Tab walked into it, and
-    // Enter answered a question the user could not see. The newest prompt
-    // now makes everything else in the pane inert, older prompts included,
-    // and the counter hands them back as it closes.
+    // WHY one controller per pane instead of a pass in each dialog (Claude
+    // review of #1221, reviewer B F1/F2, reviewer A F2). Each dialog used to
+    // mark the pane's children inert once, on mount, except its own two nodes.
+    // That broke three ways:
+    //   - two prompts mounting in ONE commit (any TileLeaf remount, since the
+    //     host container is state and is null on the first render) each saw
+    //     the other and inerted it, so NEITHER could be answered;
+    //   - a pane child mounted after the prompt opened (the Retry row, Mouse
+    //     Mode Send/Stop, the queue strip) stayed live under the scrim, so
+    //     Shift+Tab reached a hidden Send;
+    //   - the always-mounted pane toast was inerted, which silences its live
+    //   region, although #713 lifted it above the scrim to be read.
+    // The controller recomputes from DOM order whenever a dialog registers or
+    // leaves, and whenever the pane's children change: only the NEWEST dialog
+    // and its scrim stay live, plus the feedback layer; everything else is
+    // inert. It removes only the inert it set itself.
     React.useEffect(() => {
       const container = host.container
-      if (!container) return
-      const marked: Element[] = []
-      for (const child of Array.from(container.children)) {
-        if (child === contentRef.current || child === scrimRef.current) continue
-        const count = Number(child.getAttribute(PANE_INERT_COUNT) ?? '0')
-        child.setAttribute(PANE_INERT_COUNT, String(count + 1))
-        child.setAttribute('inert', '')
-        marked.push(child)
-      }
-      return () => {
-        for (const child of marked) {
-          const count = Number(child.getAttribute(PANE_INERT_COUNT) ?? '1') - 1
-          if (count > 0) {
-            child.setAttribute(PANE_INERT_COUNT, String(count))
-          } else {
-            child.removeAttribute(PANE_INERT_COUNT)
-            child.removeAttribute('inert')
-          }
-        }
-      }
+      const content = contentRef.current
+      const scrim = scrimRef.current
+      if (!container || !content || !scrim) return
+      return registerPaneDialog(container, { content, scrim })
     }, [host.container])
 
     // Whether focus is inside, tracked from focus events rather than read

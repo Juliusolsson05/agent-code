@@ -233,7 +233,7 @@ export function WorkflowHistoryDialog({
                       <span>Loading timestamps…</span>
                     ) : details.error ? (
                       <span className="flex items-center gap-2" role="alert">
-                        <span>Couldn’t load details</span>
+                        <span>Could not load details.</span>
                         <button
                           type="button"
                           onClick={() => retryDetails(reference)}

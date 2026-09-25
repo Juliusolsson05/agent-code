@@ -50,7 +50,7 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
         onPointerDownOutside={event => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Trust This Folder?</DialogTitle>
+          <DialogTitle>Trust this folder?</DialogTitle>
           <DialogDescription>Codex is about to work in this folder.</DialogDescription>
         </DialogHeader>
         <div className="px-4 py-3 text-[12px] leading-[1.6] text-ink-dim">

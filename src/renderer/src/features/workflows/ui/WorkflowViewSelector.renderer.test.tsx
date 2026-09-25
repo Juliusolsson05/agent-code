@@ -248,7 +248,7 @@ describe('WorkflowViewSelector', () => {
     expect(within(missingRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
     expect(within(missingRow).getByText('Timestamp unavailable')).toBeInTheDocument()
     expect(within(errorRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
-    expect(within(errorRow).getByRole('alert')).toHaveTextContent('Couldn’t load details')
+    expect(within(errorRow).getByRole('alert')).toHaveTextContent('Could not load details.')
 
     fireEvent.click(within(errorRow).getByRole('button', { name: 'Retry' }))
     await waitFor(() => {

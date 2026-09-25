@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
@@ -91,7 +92,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
     if (!row.cwd) {
       // A transcript that never recorded a cwd (a bridge-session stub) has
       // nowhere to resume in; the row is listed so it can be seen, not used.
-      setResumeError(`Can't resume ${row.nativeId.slice(0, 8)}: the transcript records no working directory.`)
+      setResumeError(`Can't resume ${row.nativeId.slice(0, 8)}: the transcript records no working folder.`)
       return
     }
     // The pane the swap is aimed at, read BEFORE the picker closes: it is the
@@ -121,14 +122,14 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       // stayed as it was. builtInMcpReload reports the same call this way.
       try {
         const replaced = await workspace.replaceSession(row.cwd, { resumeSessionId: row.nativeId, kind: row.provider, newConversation: true })
-        if (!replaced) workspace.showPaneToast(targetSessionId!, `Couldn't resume ${row.label} in this pane.`)
+        if (!replaced) workspace.showPaneToast(targetSessionId!, `Could not resume ${row.label} in this pane.`)
       } catch {
         // WHY a fixed sentence and never the rejection's text (steering q22,
         // #1262 review B): the spawn rejection is Electron's wrapper around the
         // raw provider exception, which can carry environment values, proxy
         // URLs or scoped MCP tokens. Main's recovery path and the reload path
         // (#1252) show this same safe message for the same failure.
-        workspace.showPaneToast(targetSessionId!, `Couldn't resume ${row.label}: ${SESSION_START_FAILED_MESSAGE}`)
+        workspace.showPaneToast(targetSessionId!, `Could not resume ${row.label}: ${SESSION_START_FAILED_MESSAGE}`)
       }
     } else {
       // Fresh launch with nothing to replace: a new tab in the row's cwd.
@@ -252,14 +253,17 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-[11px] text-muted">
           {/* The shared segmented look (UI pass, G-10). */}
           <SegmentedControl size="sm" label="Scope" value={scope} onChange={setScope} options={SCOPES.map(s => ({ value: s.id, label: s.label }))} />
+          {/* The filter chips match the sm segmented control beside them
+              (10px text) and name each provider by its display label, not its
+              lowercase kind id (Claude review of #1221, reviewer C F4/F7). */}
           <div role="group" aria-label="Providers" className="flex gap-1">
             {AGENT_PROVIDER_KINDS.filter(kind => enabledKinds.has(kind)).map(kind => (
-              <button key={kind} type="button" aria-pressed={providers.includes(kind)} onClick={() => toggleProvider(kind)} className={`rounded-control border border-border px-2 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${providers.includes(kind) ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{kind}</button>
+              <button key={kind} type="button" aria-pressed={providers.includes(kind)} onClick={() => toggleProvider(kind)} className={`rounded-control border border-border px-2 py-0.5 text-[10px] outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${providers.includes(kind) ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{getRendererProviderCapabilities(kind).shortLabel}</button>
             ))}
           </div>
           {response && (
-            <button type="button" aria-pressed={includeChildren} onClick={() => setIncludeChildren(v => !v)} className="ml-auto rounded-control border border-border px-2 py-0.5 outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring">
-              {includeChildren ? `showing ${response.hiddenChildren} children` : `${response.hiddenChildren} hidden`}
+            <button type="button" aria-pressed={includeChildren} onClick={() => setIncludeChildren(v => !v)} className="ml-auto rounded-control border border-border px-2 py-0.5 text-[10px] outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring">
+              {includeChildren ? `Showing ${response.hiddenChildren} Children` : `${response.hiddenChildren} Hidden`}
             </button>
           )}
           <span className="font-code opacity-80">
@@ -277,7 +281,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
           {/* The prose " · ↑↓ ↵ resume" became chips (plan H3). */}
           <KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'resume' }]} className="text-[10px]" />
         </div>
-        {banner && <div role="alert" className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger">{banner}</div>}
+        {banner && <div role="alert" className="border-b border-danger-border bg-danger-soft px-4 py-2 text-[12px] text-danger">{banner}</div>}
         <div className="flex min-h-0 flex-1">
           <div
             ref={listRef}

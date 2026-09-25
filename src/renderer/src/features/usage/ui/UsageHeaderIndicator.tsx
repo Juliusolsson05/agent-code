@@ -98,7 +98,7 @@ export function UsageHeaderIndicator({ level }: { level: UsageHeaderLevel }) {
   if (providers.length === 0) {
     return (
       <button type="button" onClick={openUsageModal} title={tooltip} className={chipClass}>
-        <span className="text-muted">Usage n/a</span>
+        <span className="text-muted">Usage N/A</span>
       </button>
     )
   }

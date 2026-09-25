@@ -717,8 +717,10 @@ Sharp corners and one light theme.
   line 11px; typing then Enter saves.
 - **S13–S15 Close Old Agents / Close Completed / Bulk Provider Switch:** no
   "Esc" button beside the title any more; standard header bar; filter
-  inputs/selects use the input colours and show the focus ring only on
-  keyboard focus (was accent border on any focus); All/Clear are ghost xs
+  inputs/selects use the input colours and show the focus ring (selects on
+  keyboard focus only; text inputs on ANY focus, because Chromium matches
+  :focus-visible for a text field however it was focused; corrected after
+  the Claude review of #1221); All/Clear are ghost xs
   buttons in title case; scope toggles announce pressed state and show a
   ring; footer = `Cancel ⎋` + filled red `Close N Agents` / filled accent
   `Switch N…` with NO ↩ chip (deliberate: bulk actions are Tab-then-Enter or
@@ -771,7 +773,7 @@ Sharp corners and one light theme.
   ring; Quick Open is 520 wide (default), Search 640 (md). The search inputs
   keep their borderless look with the caret as the focus signal (T4
   exception, as the palette).
-- **S24 Editor "Unsaved changes" on tab close:** `Discard` moved to the far
+- **S24 Editor "Unsaved Changes" on tab close:** `Discard` moved to the far
   left as a red-OUTLINE button (was a second filled button beside Save);
   `Cancel ⎋` ghost; `Save & Close ↩` filled and focused on open; while
   saving everything disables, the ⎋ chip hides and Escape waits; 440 wide.
@@ -781,7 +783,7 @@ Sharp corners and one light theme.
 - **S26 Keyboard Shortcuts (⌘⇧/):** chords are the standard chips (same
   look as every button hint; were font-mono pills); rows are flat with a
   faint divider (were bordered rounded plates); 12px rows; search is the
-  standard input (ring only on keyboard focus); ↓ from search moves into
+  standard input (its ring shows on any focus, as for every text field); ↓ from search moves into
   the list (inset ring) where ↑↓ scroll, PgUp/PgDn page from the search box;
   footer `Close ⎋`; 860 wide (was 720).
 - **S27 Theme editor (Settings → Appearance → New/Edit theme):** standard
@@ -867,7 +869,8 @@ Sharp corners and one light theme.
   move and switch category, with a focus ring; ⌘[ / ⌘] switch category from
   anywhere (also on a narrow window, where the column is hidden); on/off
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
-  stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
+  stop — arrows move AND apply the choice (k9; corrected after the Claude
+  review of #1221, this line predated it);
   `Close ⎋` in the header is ghost (was outline).
 - **X3 NumberInput (Grid Dispatch lane counts, settings numbers):** the
   field shows the focus ring on its whole rounded box; Tab skips the −/+
@@ -912,7 +915,7 @@ Sharp corners and one light theme.
   centred grey sentence with a period ("No matching commands.", "No
   conversations match “x”."). Loading lines are plain, not italic.
 - **G-21 Small text:** nothing in the app is smaller than 10px now (developer
-  debug panels excepted) (Dispatch
+  debug panels and SVG chart tick labels excepted) (Dispatch
   chips, pane label chip, git formatter, Skills, theme picker…). **Check the
   Dispatch rows** still fit their chips on one line at narrow widths.
 - **G-25 Wording:** no "click to…" in hints a keyboard user also reads
@@ -979,8 +982,9 @@ Sharp corners and one light theme.
 - **G-1 Agent prompts (trust folder, permission, OpenCode/Grok questions):**
   they now look like every other dialog: a normal header with a one-line
   description, the path/command in a code box, and the standard footer.
-  Labels are sentence case: "Cancel · Trust folder ↩", "Deny · Approve ↩",
-  "Trust directory". The 18px "!" glyph is gone. Check a long command still
+  Labels are Title Case (ask-2 ruling): "Cancel · Trust Folder ↩", "Deny ·
+  Approve ↩", and Codex says "folder" too. The question titles are sentence
+  case ("Trust this folder?"). The 18px "!" glyph is gone. Check a long command still
   wraps inside the box and the buttons stay on screen in a short pane.
 - **K2-18 Settings › Skills › "Also found on this machine":** one grey key
   line under the heading explains ● and —.
@@ -1085,9 +1089,10 @@ Sharp corners and one light theme.
   and both buttons show a focus ring.
 - **N5 Spotlight header:** Tab reaches each agent pill (focus ring); the
   Split | Browser | Agent control is ONE Tab stop on the chosen layout, ←/→
-  move between the three and Space/Enter choose (arrows never switch the
-  layout by themselves). The focus ring sits inside the control's rounded
+  move between the three AND choose (the k9 radio contract: arrows switch the
+  layout as they move). The focus ring sits inside the control's rounded
   ends. Same arrow behavior on Grid Dispatch's "Nested agents" pair.
+  (Corrected after the Claude review of #1221: this line predated k9.)
 - **N4 Tiled Dispatch splitters:** Tab reaches the row divider, each row's
   agent-list divider and each lane divider (thin focus ring on the hit
   area); ←/→ move vertical dividers and ↑/↓ the row divider by 2% per press,
@@ -1128,7 +1133,7 @@ Sharp corners and one light theme.
   row-hover and 11px text (were accent-soft and 11.5px); the explorer
   rename field shows its focus border.
 - **S44 New Tab (⌘T) path picker:** standard header "New Tab — Working
-  Directory", padded body, footer (was one p-6 card); provider toggles show
+  Folder", padded body, footer (was one p-6 card); provider toggles show
   a focus ring and announce the chosen one; the path field uses input
   colours; the lowercase prose line became chips `⇥ complete  ↑ ↓ browse
   ↩ open` (+ `⇧↩ new tab` when the folder is already open); footer `Cancel
