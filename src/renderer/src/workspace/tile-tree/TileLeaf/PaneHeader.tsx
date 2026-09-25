@@ -93,7 +93,12 @@ export function PaneHeader({
   // marker from the previous turn is still set. Keyed on `isSessionLive`, not
   // on `statusLit`: with Status Mode off nothing is lit, and gating on the
   // fill would claim "finished" for a pane that is busy. It also means the lit
-  // fill and the stripes can never share a row.
+  // fill and the stripes can never share a row. Deliberately the same
+  // `sessionStatus` rule as the lit fill, not sessionIsWorking(): that one also
+  // counts a non-idle streamPhase, so for the moment before sessionStatus
+  // settles on a non-typed prompt (orchestration, Goal Loop) an old marker can
+  // stripe a pane that has just started streaming. Matching the fill is what
+  // keeps the two from ever overlapping, and it's the smaller cost.
   const completionStriped = completionIndicator && completionUnseen && !isSessionLive
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">

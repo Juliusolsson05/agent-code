@@ -40,6 +40,29 @@ once you've actually seen the pane.
   the stripes only. The dwell is what "seen" now means, whether or not stripes are drawn.
 - A `.pane-header-completion-stripes` CSS class next to the other theme-token animations.
 
+## Review round (PR #1176, one Claude + one Codex reviewer)
+
+Codex said to block the merge. Claude said merge after one fix. All of these were verified and fixed:
+
+- **Background window counted as watching** (both). A turn ending while the user was in another
+  app was cleared at once. Fixed with `lib/useWindowFocused` (`hasFocus()` plus `visibilityState`).
+- **Dwell carried across agents** (Codex). Tiled lanes and Spotlight reuse one focused leaf for a
+  different session. Fixed by keying watched-since on `sessionId`.
+- **Arrowing out of a raw terminal pane cleared it** (Codex). Its keydown capture handler counted
+  navigation keys. Fixed with `engagementKeydown.ts`: router-consumed keys and bare modifiers aren't
+  engagement. The bare Alt of Option+Arrow was a second leak. It's applied to shell `TerminalLeaf`
+  too, since it's the same bug for the NEW badge.
+- **Peek overlays counted as watching** (Codex). TLDR/Goal/Goal Loop peeks cover the panes.
+- **Caller wiring untested** (Claude). The hook now decides "watched" itself (focused + owner-visible
+  + window + no peek), so callers pass only `focused`.
+- **Doc fixes** (Claude):
+  - Shells have no dwell.
+  - A held Dispatch selection counts as seen, by design.
+  - Why the stripes use `sessionStatus` rather than `sessionIsWorking()`.
+  - The plan moved to `docs/plans/`.
+- **Not fixed:** Hybrid view remounts restart the dwell (Claude, unconfirmed). That can only delay a
+  clear, never clear early, and it's documented in the hook.
+
 ## Tests
 
 - Hook (fake timers): passing through doesn't acknowledge. Dwelling acknowledges at exactly

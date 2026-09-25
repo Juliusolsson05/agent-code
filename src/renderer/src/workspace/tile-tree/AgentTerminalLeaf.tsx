@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useAcknowledgeAfterDwell } from '@renderer/workspace/tile-tree/TileLeaf/useAcknowledgeAfterDwell'
+import { isEngagementKeydown } from '@renderer/workspace/tile-tree/engagementKeydown'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -96,14 +97,12 @@ export function AgentTerminalLeaf({
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
-  // #1172: same "seen" rule as TileLeaf, so switching a pane between Feed and
-  // raw Terminal view never changes when its completion stripes clear. Focused
-  // AND owner-visible is useInteractiveOwnership's `interactive`, spelled out
-  // because this surface already holds `ownerVisible`.
+  // #1172: the same hook as TileLeaf, so switching a pane between Feed and raw
+  // Terminal view never changes when its completion stripes clear.
   const completionUnseen = runtime.unreadKind !== null
   // Stable so the dwell timer isn't re-armed on every terminal re-render.
   const acknowledgeThisSession = useCallback(() => acknowledgeSession(sessionId), [acknowledgeSession, sessionId])
-  useAcknowledgeAfterDwell(focused && ownerVisible, completionUnseen, acknowledgeThisSession)
+  useAcknowledgeAfterDwell({ sessionId, focused, unread: completionUnseen, acknowledge: acknowledgeThisSession })
   const tailAllMode = useAppStore(state => state.tailAllMode)
   const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
@@ -613,7 +612,9 @@ export function AgentTerminalLeaf({
       // bubbling keyboard events. Capture observes actual engagement without
       // feeding every spinner/DSR response through React state. Paste and IME
       // commits need their own events because neither requires a normal key.
-      onKeyDownCapture={() => acknowledgeSession(sessionId)}
+      // Filtered: keys the workspace router consumed (pane navigation) and bare
+      // modifiers aren't engagement. See engagementKeydown.ts.
+      onKeyDownCapture={event => { if (isEngagementKeydown(event)) acknowledgeSession(sessionId) }}
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >

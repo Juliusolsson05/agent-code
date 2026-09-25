@@ -245,11 +245,10 @@ export function TileLeaf({
   }, [acknowledgeWorkspaceSession, sessionId])
   // #1172: the pane header's completion stripes render this same unread marker,
   // the one behind Dispatch's NEW badge, so the two surfaces can't disagree.
-  // Engagement clears it through acknowledgeSession above; this adds "stayed on
-  // the pane long enough to see it". `interactive` rather than `focused`: a
-  // focused pane hidden behind Reader/Settings/editor fullscreen isn't seen.
+  // Engagement clears it through acknowledgeSession above; the hook adds "stayed
+  // on the pane long enough to see it", and owns what "watching" means.
   const completionUnseen = runtime.unreadKind !== null
-  useAcknowledgeAfterDwell(interactive, completionUnseen, acknowledgeSession)
+  useAcknowledgeAfterDwell({ sessionId, focused, unread: completionUnseen, acknowledge: acknowledgeSession })
   const setDraftImages = workspace.setDraftImages
   // Agent kinds route through the registry; undefined kind is the
   // pre-kind-persistence back-compat case (#394 phase 2c-4 — the old
