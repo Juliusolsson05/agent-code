@@ -1,9 +1,19 @@
+import { Switch } from '@renderer/components/ui/switch'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Input } from '@renderer/components/ui/input'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Settings } from '@renderer/app-state/settings/types'
 import { Button } from '@renderer/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@renderer/components/ui/dropdown-menu'
 import { Check } from '@renderer/features/mcp/ui/McpServersRow'
 import {
   chosenSkillProviders,
@@ -141,33 +151,51 @@ export function SkillsGrid({ settings, onChange }: Props) {
       providers: next,
     })))
   }
-  const toggleInstalled = (skill: AgentCodeInstalledSkill) => {
-    if (skill.enabled && !window.confirm(`Turn ${skill.name} off? Agent Code removes its copies from the provider folders.`)) return
-    if (!skill.enabled && skill.pendingReview && !window.confirm(
-      `An agent proposed ${skill.name}. Review its source and files (⋯ → Source) before turning it on. Turn it on now?`,
-    )) return
+  const toggleInstalled = async (skill: AgentCodeInstalledSkill) => {
+    if (skill.enabled && !(await requestConfirm({
+      title: `Turn ${skill.name} off?`,
+      description: 'Agent Code removes its copies from the provider folders.',
+      confirmLabel: 'Turn Off',
+      tone: 'danger',
+    }))) return
+    // Not `danger`: turning a skill ON removes nothing. It is still a
+    // deliberate review gate, so it asks — but Enter-to-confirm is fine here.
+    if (!skill.enabled && skill.pendingReview && !(await requestConfirm({
+      title: `An agent proposed ${skill.name}.`,
+      description: 'Review its source and files (⋯ → Source) before turning it on. Turn it on now?',
+      confirmLabel: 'Turn On',
+    }))) return
     void run(async () => applyInstalledSkillsResult(await window.api.setAgentCodeInstalledSkillEnabled({
       expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       enabled: !skill.enabled,
     })))
   }
-  const toggleCustom = (skill: AgentCodeCustomSkill) => {
-    if (skill.enabled && !window.confirm(`Turn ${skill.name} off? Managed provider copies will be removed.`)) return
+  const toggleCustom = async (skill: AgentCodeCustomSkill) => {
+    if (skill.enabled && !(await requestConfirm({
+      title: `Turn ${skill.name} off?`,
+      description: 'Managed provider copies will be removed.',
+      confirmLabel: 'Turn Off',
+      tone: 'danger',
+    }))) return
     void run(async () => applyCustomSkillsResult(await window.api.setAgentCodeCustomSkillEnabled({
       expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       enabled: !skill.enabled,
     })))
   }
-  const removeInstalled = (
+  const removeInstalled = async (
     skill: AgentCodeInstalledSkill,
     abandonTargets?: Array<{ targetId: string; expectedConflictFingerprint: string }>,
   ) => {
     const wording = abandonTargets
       ? `Leave ${abandonTargets.length} external folder${abandonTargets.length === 1 ? '' : 's'} untouched and forget ${skill.name}?`
       : `Remove ${skill.name}? Agent Code removes its copies from the provider folders and its stored source.`
-    if (!window.confirm(wording)) return
+    if (!(await requestConfirm({
+      title: wording,
+      confirmLabel: abandonTargets ? 'Forget Skill' : 'Remove Skill',
+      tone: 'danger',
+    }))) return
     void run(async () => {
       const result = await window.api.deleteAgentCodeInstalledSkill({
         expectedRevision: currentSkillsRevision(),
@@ -205,9 +233,9 @@ export function SkillsGrid({ settings, onChange }: Props) {
   return (
     <div className="rounded-slab border border-border bg-surface text-[11px]">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <input
+        <Input
           aria-label="Filter skills"
-          className="min-w-[160px] flex-1 border border-input-border bg-input-bg px-2 py-1 text-ink"
+          className="min-w-[160px] flex-1"
           placeholder="Filter skills…"
           value={filter}
           onChange={event => setFilter(event.target.value)}
@@ -220,7 +248,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
         >
           Check updates{updatesAvailable > 0 ? ` (${updatesAvailable})` : ''}
         </Button>
-        <Button size="xs" onClick={() => openAddSkill()}>+ Add skill…</Button>
+        <Button size="xs" onClick={() => openAddSkill()}>+ Add Skill…</Button>
       </div>
 
       <div className="grid items-center gap-2 border-b border-border px-3 py-2 text-[10px] uppercase tracking-wider text-muted" style={{ gridTemplateColumns: gridColumns }}>
@@ -235,11 +263,16 @@ export function SkillsGrid({ settings, onChange }: Props) {
         <div role="alert" className="flex flex-col gap-2 border-b border-danger px-3 py-2 text-[10px] text-danger">
           <span>{installed.recovery.message}</span>
           <div className="flex flex-wrap gap-2">
-            <Button size="xs" variant="outline" onClick={() => void window.api.revealAgentCodeInstalledSkillsRecoveryFile()}>Reveal state file</Button>
-            <Button size="xs" variant="outline" onClick={() => {
-              if (!window.confirm('Reset all Agent Code-managed skill state? Existing provider folders are left untouched.')) return
+            <Button size="xs" variant="outline" onClick={() => void window.api.revealAgentCodeInstalledSkillsRecoveryFile()}>Reveal State File</Button>
+            <Button size="xs" variant="outline" onClick={async () => {
+              if (!(await requestConfirm({
+                title: 'Reset all Agent Code-managed skill state?',
+                description: 'Existing provider folders are left untouched.',
+                confirmLabel: 'Reset State',
+                tone: 'danger',
+              }))) return
               void run(async () => applyInstalledSkillsResult(await window.api.resetAgentCodeInstalledSkillsRecovery()))
-            }}>Reset managed skill state</Button>
+            }}>Reset Managed Skill State</Button>
           </div>
         </div>
       ) : null}
@@ -251,7 +284,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
             <div key={skill.id} className="grid items-center gap-2 px-3 py-1.5" style={{ gridTemplateColumns: gridColumns }}>
               <div className="min-w-0">
                 <span className="text-ink">{skill.name}</span>
-                <span className="ml-2 rounded-chip border border-border px-1 text-[9px] text-muted">managed</span>
+                <span className="ml-2 rounded-chip border border-border px-1 text-[10px] text-muted">managed</span>
                 <div className="truncate text-[10px] text-muted">
                   Follows the {skill.managedBy === 'goal' ? 'Goal' : 'TLDR'} MCP server for each agent.
                 </div>
@@ -276,7 +309,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
           chosen={chosenSkillProviders(skill.providers, supported)}
           visible={visibleSkillProviders(skill.targets)}
           disabled={busy}
-          onToggle={() => toggleCustom(skill)}
+          onToggle={() => void toggleCustom(skill)}
           onProvider={(kind, on) => setCustomProviders(skill, kind, on)}
           status={skill.health === 'active' || skill.health === 'disabled' ? null : `${HEALTH_LABELS[skill.health] ?? skill.health}`}
           targets={skill.targets}
@@ -302,7 +335,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
             chosen={chosenSkillProviders(skill.providers, supported)}
             visible={visibleSkillProviders(skill.targets)}
             disabled={busy || skill.health === 'recovery-required'}
-            onToggle={() => toggleInstalled(skill)}
+            onToggle={() => void toggleInstalled(skill)}
             onProvider={(kind, on) => setInstalledProviders(skill, kind, on)}
             badge={skill.pendingReview ? 'proposed by an agent · review' : undefined}
             source={`${skill.source.owner}/${skill.source.repository}${skill.source.path ? ` · ${skill.source.path}` : ''} @ ${skill.source.resolvedCommit.slice(0, 7)}`}
@@ -313,14 +346,14 @@ export function SkillsGrid({ settings, onChange }: Props) {
               <SkillMenu
                 label={skill.name}
                 items={[
-                  { label: 'Check for update', onSelect: () => void checkSkillForUpdates(skill.id) },
-                  { label: 'Reveal source', onSelect: () => void window.api.revealAgentCodeInstalledSkillSource(skill.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal the source.') }) },
+                  { label: 'Check for Update', onSelect: () => void checkSkillForUpdates(skill.id) },
+                  { label: 'Reveal Source', onSelect: () => void window.api.revealAgentCodeInstalledSkillSource(skill.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal the source.') }) },
                   ...skill.targets.filter(target => target.state === 'installed' || target.state === 'conflict').map(target => ({
                     label: `Reveal in ${target.displayPath}`,
                     onSelect: () => void window.api.revealAgentCodeInstalledSkillTarget(skill.id, target.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal that folder.') }),
                   })),
-                  { label: 'Copy install command', onSelect: () => void navigator.clipboard?.writeText(installCommandFor(skill)) },
-                  { label: 'Remove…', danger: true, onSelect: () => removeInstalled(skill) },
+                  { label: 'Copy Install Command', onSelect: () => void navigator.clipboard?.writeText(installCommandFor(skill)) },
+                  { label: 'Remove…', danger: true, onSelect: () => void removeInstalled(skill) },
                 ]}
               />
             )}
@@ -338,7 +371,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
                   <Button size="xs" variant="outline" className="self-start" onClick={() => removeInstalled(
                     skill,
                     blocked.map(target => ({ targetId: target.id, expectedConflictFingerprint: target.conflictFingerprint! })),
-                  )}>Leave external copies and forget skill</Button>
+                  )}>Leave External Copies and Forget Skill</Button>
                 ) : null}
               </div>
             ) : null}
@@ -349,7 +382,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
       <button
         type="button"
         onClick={() => setExternalOpen(open => !open)}
-        className="flex w-full items-center justify-between border-t border-border px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted hover:text-ink"
+        className="flex w-full items-center justify-between border-t border-border px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         aria-expanded={externalOpen}
       >
         <span>{externalOpen ? '▾' : '▸'} Also found on this machine (not managed by Agent Code)</span>
@@ -357,7 +390,11 @@ export function SkillsGrid({ settings, onChange }: Props) {
       </button>
       {externalOpen ? (
         <>
-          {shownExternal.length === 0 ? <Empty>No other personal skills found.</Empty> : null}
+          {shownExternal.length === 0 ? <Empty>No other personal skills found.</Empty> : (
+            // The ● / — cells explained themselves only in hover titles on
+            // non-focusable cells (K2-18). One visible key for the whole list.
+            <div className="px-3 pb-1 text-[10px] text-muted">● agents of that provider load it · — not in a folder that provider reads</div>
+          )}
           {shownExternal.map(skill => (
             <ExternalRow
               key={skill.name}
@@ -372,7 +409,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
           ))}
           {hiddenCount > 0 ? (
             <div className="px-3 pb-2">
-              <Button size="xs" variant="ghost" onClick={() => setShowHidden(value => !value)}>{showHidden ? 'Hide hidden skills' : `Show ${hiddenCount} hidden`}</Button>
+              <Button size="xs" variant="ghost" onClick={() => setShowHidden(value => !value)}>{showHidden ? 'Hide Hidden Skills' : `Show ${hiddenCount} Hidden`}</Button>
             </div>
           ) : null}
           {external?.notices.map(notice => <div key={notice} className="px-3 py-1 text-[10px] text-warning">{notice}</div>)}
@@ -432,18 +469,15 @@ function SkillRow({
     <div role="group" aria-label={`Skill ${name}`} className={`border-t border-border/50 px-3 py-1.5 ${enabled ? '' : 'opacity-70'}`}>
       <div className="grid items-center gap-2" style={{ gridTemplateColumns: gridColumns }}>
         <div className="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
+          <Switch
+            checked={enabled}
             aria-label={`${name} on or off`}
             disabled={disabled}
-            onClick={onToggle}
-            className={`h-3 w-5 shrink-0 rounded-full border disabled:opacity-50 ${enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border bg-transparent'}`}
+            onCheckedChange={() => onToggle()}
           />
           <div className="min-w-0">
             <span className="text-ink">{name}</span>
-            {badge ? <span className="ml-2 rounded-chip border border-warning px-1 text-[9px] text-warning">{badge}</span> : null}
+            {badge ? <span className="ml-2 rounded-chip border border-warning px-1 text-[10px] text-warning">{badge}</span> : null}
             {status ? <span className="ml-2 text-[10px] text-warning">{status}</span> : null}
             {/* Descriptions and paths are repository-controlled (#1049). */}
             <div className="truncate text-[10px] text-muted" title={description}>{withVisibleControls(description)}</div>
@@ -465,7 +499,9 @@ function SkillRow({
                 onChange={on => onProvider(kind, on)}
               />
               {sharedOnly ? (
-                <span className="text-[9px] text-muted" title={`${shortLabel} reads a folder this skill is installed in`}>shared</span>
+                // "shared" meant nothing without its hover title (K2-18); the
+                // explanation is now its accessible name as well.
+                <span className="text-[10px] text-muted" title={`${shortLabel} reads a folder this skill is installed in`} aria-label={`shared: ${shortLabel} reads a folder this skill is installed in`}>shared</span>
               ) : null}
             </div>
           )
@@ -507,15 +543,17 @@ function UpdateLine({
   return (
     <div className="mt-1 flex flex-col gap-1">
       <div className="flex items-center gap-2 text-[10px] text-accent">
-        <span>⟳ Update available · {changed} file{changed === 1 ? '' : 's'} changed</span>
-        <Button size="xs" variant="outline" onClick={() => setOpen(value => !value)}>{open ? 'Hide review' : 'Review…'}</Button>
+        {/* ↑, not ⟳: ⟳ is the app's "loading" spinner (the pocket strip spins
+            it), so it read as "checking…" here (UI pass, G-25). */}
+        <span>↑ Update available · {changed} file{changed === 1 ? '' : 's'} changed</span>
+        <Button size="xs" variant="outline" onClick={() => setOpen(value => !value)}>{open ? 'Hide Review' : 'Review…'}</Button>
         <Button size="xs" variant="ghost" onClick={onDismiss}>Dismiss</Button>
       </div>
       {open ? (
         <div className="border border-panel-border p-2">
           <UpdateReviewPanel review={update} />
           <div className="mt-2 flex justify-end">
-            <Button size="xs" disabled={disabled} onClick={() => onApply(update)}>Apply reviewed update</Button>
+            <Button size="xs" disabled={disabled} onClick={() => onApply(update)}>Apply Reviewed Update</Button>
           </div>
         </div>
       ) : null}
@@ -554,7 +592,10 @@ function ExternalRow({
         </div>
         {columns.map(kind => (
           <div key={kind} className="text-center text-muted" title={visible.has(kind) ? 'Agents of this provider can load it' : 'Not in a folder this provider reads'}>
-            {visible.has(kind) ? '●' : '—'}
+            {/* The glyph is decoration for assistive tech; the words are the
+                cell's content (K2-18). */}
+            <span aria-hidden="true">{visible.has(kind) ? '●' : '—'}</span>
+            <span className="sr-only">{visible.has(kind) ? 'loaded by' : 'not read by'} {getRendererProviderCapabilities(kind).shortLabel}</span>
           </div>
         ))}
         <div className="flex justify-end">
@@ -567,7 +608,13 @@ function ExternalRow({
                 onSelect: () => {
                   // Adopting the folder is not possible (it has no ownership
                   // record), so managing means reinstalling after it is gone.
-                  if (window.confirm(`Agent Code can only manage ${skill.name} after the existing folder is removed${skill.provenance ? ` (for example: npx skills remove -g ${skill.name})` : ''}. Open Add skills with its source?`)) onManage()
+                  void requestConfirm({
+                    title: `Agent Code can only manage ${skill.name} after the existing folder is removed.`,
+                    description: `${skill.provenance ? `For example: npx skills remove -g ${skill.name}. ` : ''}Open Add skills with its source?`,
+                    confirmLabel: 'Open Add Skills',
+                  }).then(confirmed => {
+                    if (confirmed) onManage()
+                  })
                 },
               },
               { label: hidden ? 'Show' : 'Hide', onSelect: () => onHide(!hidden) },
@@ -579,34 +626,33 @@ function ExternalRow({
   )
 }
 
+// WHY the shared DropdownMenu (keyboard-first plan M2): this menu was a
+// hand-rolled `role="menu"` div with NO keyboard handling — no focus entry,
+// no arrows, no Escape — and it closed on `mouseLeave`, so a keyboard user
+// who opened it with Enter had nothing to move to, and a mouse user who
+// drifted one pixel outside lost it mid-aim. Radix owns focus entry, roving
+// items, typeahead, Escape back to ⋯, and layering above Settings.
 function SkillMenu({ label, items }: { label: string; items: Array<{ label: string; onSelect: () => void; danger?: boolean }> }) {
-  const [open, setOpen] = useState(false)
   return (
-    <div className="relative">
-      <Button size="xs" variant="ghost" aria-label={`Actions for ${label}`} aria-expanded={open} onClick={() => setOpen(value => !value)}>⋯</Button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 z-10 mt-1 min-w-[220px] rounded-float border border-border bg-surface py-1 shadow-lg"
-          onMouseLeave={() => setOpen(false)}
-        >
-          {items.map(item => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className={`block w-full truncate px-3 py-1 text-left text-[11px] hover:bg-control-bg ${item.danger ? 'text-danger' : 'text-ink'}`}
-              onClick={() => {
-                setOpen(false)
-                item.onSelect()
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="xs" variant="ghost" aria-label={`Actions for ${label}`}>⋯</Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[220px] max-w-[360px]">
+        {items.map(item => (
+          <DropdownMenuItem
+            key={item.label}
+            danger={item.danger}
+            // onSelect runs after Radix closes the menu and restores focus to
+            // ⋯ — so a confirm opened by the item (Remove…) returns focus to
+            // the row's own trigger when it closes, not to the page top.
+            onSelect={() => item.onSelect()}
+          >
+            <span className="truncate">{item.label}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -615,7 +661,8 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="px-3 py-2 text-[10px] text-muted">{children}</div>
+  // The shared inline empty state (UI pass, G-14).
+  return <EmptyState size="inline">{children}</EmptyState>
 }
 
 /**

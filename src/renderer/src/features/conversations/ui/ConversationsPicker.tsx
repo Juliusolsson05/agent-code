@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
+import { EmptyState } from '@renderer/components/ui/empty-state'
+import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 
 import type { Conversation, ConversationScope } from '@shared/conversations/types'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
@@ -27,9 +30,9 @@ import { ConversationRow } from '@renderer/features/conversations/ui/Conversatio
 type Props = { open: boolean; focusSearch: boolean; workspace: Workspace; onClose: () => void }
 
 const SCOPES: Array<{ id: ConversationScope; label: string }> = [
-  { id: 'cwd', label: 'this folder' },
-  { id: 'repository', label: 'repository' },
-  { id: 'everywhere', label: 'everywhere' },
+  { id: 'cwd', label: 'This Folder' },
+  { id: 'repository', label: 'Repository' },
+  { id: 'everywhere', label: 'Everywhere' },
 ]
 
 export function ConversationsPicker({ open, focusSearch, workspace, onClose }: Props) {
@@ -45,7 +48,6 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
     setProviders(prev => prev.filter(kind => enabledKinds.has(kind)))
   }, [enabledKinds])
   const [includeChildren, setIncludeChildren] = useState(false)
-  const [selected, setSelected] = useState(0)
   const [resumeError, setResumeError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -71,24 +73,11 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   useEffect(() => {
     if (!open) return
     setQuery('')
-    setSelected(0)
     setIncludeChildren(false)
     setResumeError(null)
-    requestAnimationFrame(() => {
-      if (focusSearch) inputRef.current?.focus()
-      else listRef.current?.focus()
-    })
+    // (Initial focus moved to DialogContent's onOpenAutoFocus — the rAF here
+    // raced Radix's own mount focus.)
   }, [open, focusSearch])
-  // Reset the highlight when the list's head changes (a new query, filter or
-  // scope), but not when loadMore appends rows below it.
-  const headId = response?.rows[0]?.nativeId ?? null
-  useEffect(() => { setSelected(0) }, [headId, query, scope, providers, includeChildren])
-  // An inline resume error names the row it was about; moving the highlight
-  // makes it stale (#1262 review B).
-  useEffect(() => { setResumeError(null) }, [selected])
-  useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>(`[data-conversation-index="${selected}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [selected])
 
   const resume = useCallback(async (row: Conversation) => {
     if (!row.available) {
@@ -149,28 +138,41 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
     }
   }, [onClose, workspace])
 
-  const onKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setSelected(i => Math.min(rows.length - 1, i + 1))
-      if (selected >= rows.length - 5) loadMore()
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setSelected(i => Math.max(0, i - 1))
-    } else if (e.key === 'Enter') {
-      // A focused control owns its own Enter (#867). This handler sits on
-      // `DialogContent`, and the scope and provider chips below are ordinary
-      // tabbable buttons inside it — so without this, Tab to the "everywhere"
-      // chip and Enter did not toggle the chip: it RESUMED the highlighted
-      // conversation, replacing what was running in the focused pane. The
-      // #867 audit called this picker safe because it has no footer; the rule
-      // is about the focused CONTROL, not the footer slot.
-      if (focusedControlOwnsEnter(e.target)) return
-      e.preventDefault()
-      const row = rows[selected]
+  // The shared list keys (plan K5/S20). Keyed by conversation so a
+  // loadMore append — or a live index refresh — never slides the highlight;
+  // reset to the top whenever the list's HEAD changes (a new query, filter or
+  // scope), exactly as the hand-rolled version did, but not on appends.
+  //
+  // A focused control owns its own Enter (#867), enforced inside the hook:
+  // the scope and provider chips are ordinary tabbable buttons, and without
+  // the rule Tab to "everywhere" + Enter RESUMED the highlighted conversation,
+  // replacing what was running in the focused pane.
+  const headId = response?.rows[0]?.nativeId ?? null
+  const rowKeys = useMemo(() => rows.map(row => `${row.provider}:${row.nativeId}`), [rows])
+  const nav = useListNavigation({
+    count: rows.length,
+    keys: rowKeys,
+    resetKey: `${open}|${headId}|${query}|${scope}|${providers.join(',')}|${includeChildren}`,
+    onActivate: index => {
+      const row = rows[index]
       if (row) void resume(row)
+    },
+    idPrefix: 'conversation',
+  })
+  const selected = nav.index
+  // An inline resume error names the row it was about; moving the highlight
+  // makes it stale (#1262 review B). The reset-on-new-head and scroll-into-view
+  // effects that sat beside this on main are useListNavigation's job here
+  // (resetKey + follow), so only this one survives the merge.
+  useEffect(() => { setResumeError(null) }, [selected])
+  const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!nav.onKeyDown(e)) return
+    // Page in more rows as the keyboard highlight nears the end (the scroll
+    // handler below covers the mouse wheel).
+    if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'End' || (e.ctrlKey && e.key === 'n')) {
+      if (nav.index >= rows.length - 6) loadMore()
     }
-  }, [rows, selected, resume, loadMore])
+  }, [nav, rows.length, loadMore])
 
   const previewTarget: PreviewTarget | null = useMemo(() => {
     const row = rows[selected]
@@ -184,7 +186,21 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
-      <DialogContent ref={modalRef} className="w-[min(1240px,96vw)] top-[8vh] max-h-[84vh] translate-y-0 flex flex-col overflow-hidden" onKeyDown={onKeyDown}>
+      <DialogContent
+        ref={modalRef}
+        size="xl"
+        className="top-[8vh] max-h-[86vh] translate-y-0 flex flex-col overflow-hidden"
+        onKeyDown={onKeyDown}
+        onOpenAutoFocus={event => {
+          // Search Conversations… opens in the search box, Resume Session… on
+          // the list — each is the focus OWNER of the highlight in its mode
+          // (the input as a combobox, the list as a listbox; focus-owner
+          // invariant, useListNavigation).
+          event.preventDefault()
+          if (focusSearch) inputRef.current?.focus()
+          else listRef.current?.focus()
+        }}
+      >
         <DialogTitle className="sr-only">Conversations</DialogTitle>
         <DialogDescription className="sr-only">Find a past conversation across this repository's worktrees and every provider, preview it, and resume it.</DialogDescription>
         <div className="flex items-center gap-3 border-b border-border px-4 py-3">
@@ -196,23 +212,31 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             placeholder="Search conversations by title, name or prompt…"
             spellCheck={false}
             autoComplete="off"
-            className="flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-muted"
+            // Combobox pattern: DOM focus stays here while the arrows move the
+            // highlight, so THIS element must carry aria-activedescendant.
+            role="combobox"
+            aria-label="Search conversations"
+            aria-expanded
+            aria-controls="conversations-listbox"
+            aria-activedescendant={nav.activeId}
+            // outline-none with the caret as the focus signal: the search
+            // box is the header's only text field and the palette's idiom
+            // (plan T4 exception for a borderless primary search field).
+            className="flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-muted"
           />
-          <span className="text-[10px] uppercase tracking-wider text-muted select-none">esc</span>
+          {/* The lowercase "esc" text became the shared chip (plan H1). */}
+          <Kbd binding="Escape" />
         </div>
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-[11px] text-muted">
-          <div role="group" aria-label="Scope" className="flex overflow-hidden rounded-slab border border-border">
-            {SCOPES.map(s => (
-              <button key={s.id} type="button" aria-pressed={scope === s.id} onClick={() => setScope(s.id)} className={`px-2 py-0.5 ${scope === s.id ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{s.label}</button>
-            ))}
-          </div>
+          {/* The shared segmented look (UI pass, G-10). */}
+          <SegmentedControl size="sm" label="Scope" value={scope} onChange={setScope} options={SCOPES.map(s => ({ value: s.id, label: s.label }))} />
           <div role="group" aria-label="Providers" className="flex gap-1">
             {AGENT_PROVIDER_KINDS.filter(kind => enabledKinds.has(kind)).map(kind => (
-              <button key={kind} type="button" aria-pressed={providers.includes(kind)} onClick={() => toggleProvider(kind)} className={`rounded-slab border border-border px-2 py-0.5 ${providers.includes(kind) ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{kind}</button>
+              <button key={kind} type="button" aria-pressed={providers.includes(kind)} onClick={() => toggleProvider(kind)} className={`rounded-control border border-border px-2 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${providers.includes(kind) ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{kind}</button>
             ))}
           </div>
           {response && (
-            <button type="button" aria-pressed={includeChildren} onClick={() => setIncludeChildren(v => !v)} className="ml-auto rounded-slab border border-border px-2 py-0.5 hover:bg-row-hover-bg">
+            <button type="button" aria-pressed={includeChildren} onClick={() => setIncludeChildren(v => !v)} className="ml-auto rounded-control border border-border px-2 py-0.5 outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring">
               {includeChildren ? `showing ${response.hiddenChildren} children` : `${response.hiddenChildren} hidden`}
             </button>
           )}
@@ -224,29 +248,52 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
                   ? `${response.rows.length}${response.nextCursor ? '+' : ''} matches of ${response.total}`
                   : `${response.total} conversations`
                 : ''}
-            {' · ↑↓ ↵ resume'}
           </span>
+          {/* The prose " · ↑↓ ↵ resume" became chips (plan H3). */}
+          <KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'resume' }]} className="text-[10px]" />
         </div>
         {banner && <div role="alert" className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger">{banner}</div>}
         <div className="flex min-h-0 flex-1">
           <div
             ref={listRef}
-            tabIndex={-1}
+            id="conversations-listbox"
+            // A Tab stop (plan K4, was -1): Shift+Tab from the chips must be
+            // able to reach the list, which owns the highlight when focused.
+            tabIndex={0}
             role="listbox"
             aria-label="Conversations"
-            className="min-h-0 overflow-y-auto outline-none"
+            aria-activedescendant={nav.activeId}
+            className="min-h-0 overflow-y-auto outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
             style={{ width: listWidth, flexShrink: 0 }}
             onScroll={e => { const el = e.currentTarget; if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) loadMore() }}
           >
             {needsPane ? (
-              <div className="py-12 text-center text-[12px] text-muted">Focus a pane to list its repository, or switch the scope to everywhere.</div>
+              <EmptyState>Focus a pane to list its repository, or switch the scope to everywhere.</EmptyState>
             ) : rows.length === 0 && !loading && !error ? (
-              <div className="py-12 text-center text-[12px] text-muted">{query.trim() ? `No conversations match "${query.trim()}".` : 'No conversations recorded for this scope.'}</div>
+              <EmptyState role="status">{query.trim() ? `No conversations match “${query.trim()}”.` : 'No conversations recorded for this scope.'}</EmptyState>
             ) : rows.map((row, i) => (
-              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} onHover={() => setSelected(i)} onSelect={() => void resume(row)} />
+              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} itemProps={nav.getItemProps(i)} />
             ))}
           </div>
-          <div onMouseDown={splitter.onMouseDown} className={`w-1 flex-shrink-0 cursor-col-resize ${splitter.dragging ? 'bg-accent' : 'bg-border hover:bg-border-hi'}`} />
+          {/* Keyboard-resizable (plan N11): it was mouse-only. A focusable
+              separator; ←/→ move it 24px, the same clamp as the drag. */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize conversation list"
+            aria-valuenow={listWidth}
+            aria-valuemin={360}
+            aria-valuemax={800}
+            tabIndex={0}
+            onMouseDown={splitter.onMouseDown}
+            onKeyDown={event => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+              event.preventDefault()
+              event.stopPropagation()
+              setListWidth(width => Math.max(360, Math.min(800, width + (event.key === 'ArrowLeft' ? -24 : 24))))
+            }}
+            className={`w-1 flex-shrink-0 cursor-col-resize outline-none focus-visible:bg-focus-ring ${splitter.dragging ? 'bg-accent' : 'bg-border hover:bg-border-hi'}`}
+          />
           <div className="min-w-0 flex-1 border-l border-border">
             <SessionPreviewPane target={previewTarget} turnCount={rows[selected]?.promptCount ?? null} />
           </div>

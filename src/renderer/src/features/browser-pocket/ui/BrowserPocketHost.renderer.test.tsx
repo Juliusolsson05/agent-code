@@ -83,6 +83,9 @@ function guest(url = 'http://localhost:3000/'): HTMLElement & { url: string } {
 }
 
 const flush = async () => { await act(async () => { await new Promise(r => setTimeout(r, 10)) }) }
+// The pocket's own status line. The global toast host (plan N17) keeps an
+// always-mounted live region too, so "the" status must exclude it.
+const pocketStatus = () => screen.getAllByRole('status').find(el => !el.hasAttribute('data-global-toast'))!
 const renderHost = (ws: Workspace) => render(<GlobalToastProvider><BrowserPocketHost workspace={ws} /></GlobalToastProvider>)
 const POCKET = { pocketId: 'p1', url: 'http://localhost:3000/', view: 'open', profile: 'lane' }
 
@@ -117,7 +120,7 @@ describe('local server recovery UI', () => {
     await flush()
     fail(guest(), url, code)
     expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Reload page' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reload Page' })).toBeTruthy()
   })
 
   it('sends once, survives guest remount/hidden overlay, and reloads the failed destination without sending again', async () => {
@@ -134,29 +137,29 @@ describe('local server recovery UI', () => {
     await flush()
     expect(calls.deliver).toHaveBeenCalledTimes(1)
     expect(calls.deliver.mock.calls[0]?.[0]).toBe('s1')
-    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    expect(pocketStatus().textContent).toBe('Queued for agent')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Page' }))
     expect((el as unknown as { loadURL: ReturnType<typeof vi.fn> }).loadURL).toHaveBeenCalledWith(failedUrl)
     expect(log).not.toContain('unregister(guests=1)')
     fail(el, failedUrl)
     expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
     navigate(el, failedUrl, -1)
-    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
-    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }))
+    expect(pocketStatus().textContent).toBe('Queued for agent')
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Page' }))
     fail(el, failedUrl)
     navigate(el, failedUrl, -1)
     navigate(el, 'https://example.com/iframe', 200, false)
-    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    expect(pocketStatus().textContent).toBe('Queued for agent')
     showSlot(false)
     await flush()
     showSlot()
     await flush()
-    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    expect(pocketStatus().textContent).toBe('Queued for agent')
     act(() => usePocketLiveStore.getState().patch('p1', p => ({ generation: p.generation + 1 })))
     await flush()
     expect(log).toContain('unregister(guests=1)')
-    expect(screen.getByRole('status').textContent).toBe('Queued for agent')
+    expect(pocketStatus().textContent).toBe('Queued for agent')
     expect(calls.deliver).toHaveBeenCalledTimes(1)
   })
 
@@ -205,9 +208,9 @@ describe('local server recovery UI', () => {
     fail(guest())
     fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
     await flush()
-    expect(screen.getByRole('status').textContent).toContain('Could not confirm delivery')
+    expect(pocketStatus().textContent).toContain('Could not confirm delivery')
     expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'View agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'View Agent' }))
     expect(ws.setSpotlightTarget).toHaveBeenCalledWith('s1')
     expect(updates.at(-1)!(ws.state).sessions.s1?.browserPocket?.view).toBe('collapsed')
   })
@@ -221,7 +224,7 @@ describe('local server recovery UI', () => {
     fail(guest())
     fireEvent.click(screen.getByRole('button', { name: 'Try to restart' }))
     await flush()
-    expect(screen.getByRole('status').textContent).toBe('Provider refused: invalid model')
+    expect(pocketStatus().textContent).toBe('Provider refused: invalid model')
     expect(screen.queryByRole('button', { name: 'Try to restart' })).toBeNull()
   })
 

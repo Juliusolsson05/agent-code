@@ -283,7 +283,7 @@ export function registerDictationIpc(deps: {
         return {
           kind: 'error',
           message:
-            'No Deepgram API key configured. Open Settings → Voice Dictation and paste a key.',
+            'No Deepgram API key configured. Open Settings → Dictation and paste a key.',
         }
       }
 

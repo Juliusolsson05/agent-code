@@ -1,4 +1,6 @@
 import { useContext, useEffect, useRef, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
+import { Input } from '@renderer/components/ui/input'
 import type { KeyboardEvent } from 'react'
 
 import {
@@ -478,17 +480,17 @@ export function AskUserQuestionRow({
                     typed-text → option → Submit transition reviewable. */}
                 <div className="mt-1 flex flex-col gap-1">
                   {!q.multiSelect && (
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
+                    <div className="text-[10px] uppercase tracking-wider text-muted">
                       or custom answer
                     </div>
                   )}
-                  <input
+                  <Input
                     value={textByQuestion[qi] ?? ''}
                     disabled={controlsDisabled}
                     onFocus={() => activateCustomText(qi)}
                     onChange={event => updateCustomText(qi, event.target.value)}
                     placeholder="Type something"
-                    className="rounded-control border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
+                    
                   />
                 </div>
               </div>
@@ -496,21 +498,18 @@ export function AskUserQuestionRow({
           )
         })}
         {!useImmediateSingle ? (
-          <button
+          <Button
+            // The shared Button (UI pass, G-9): the feed's submit was a
+            // hand-styled 13px bordered button, the only one of its kind.
             type="button"
+            variant="default"
+            size="sm"
+            className="self-start"
             disabled={!structuredReady || answering}
             onClick={submitStructuredAnswers}
-            className={`
-              self-start rounded-control border border-border px-3 py-1.5 text-[13px] transition-colors
-              ${
-                !structuredReady || answering
-                  ? 'cursor-default opacity-60'
-                  : 'cursor-pointer hover:border-accent hover:bg-surface-hi'
-              }
-            `}
           >
             {answering ? 'Answering…' : 'Submit'}
-          </button>
+          </Button>
         ) : answering ? (
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}

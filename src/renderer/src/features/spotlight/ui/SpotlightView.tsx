@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { setPocketView } from '@renderer/features/browser-pocket/actions'
 import { useSpotlightPocketMode } from '@renderer/features/browser-pocket/state/spotlightPocketMode'
@@ -54,8 +55,13 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
               <button
                 key={sessionId}
                 type="button"
+                // aria-current, not aria-pressed: exactly one pill is the
+                // spotlighted agent, so this is "which one is shown", not an
+                // on/off toggle per pill. The accent fill was the only signal,
+                // which a screen reader never hears (ledger N5).
+                aria-current={active ? 'true' : undefined}
                 onClick={() => workspace.setSpotlightSession(sessionId)}
-                className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                   active
                     ? 'bg-accent text-accent-fg border-accent'
                     : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
@@ -112,19 +118,21 @@ function SpotlightPocketModes({ sessionId, workspace }: { sessionId: SessionId; 
     workspace.updateBrowserPocket(s => setPocketView(s, sessionId, next === 'agent' ? 'collapsed' : 'open'))
   }
   return (
-    <div className="ml-auto flex flex-shrink-0 items-center rounded-control border border-border text-[10px]" role="radiogroup" aria-label="Spotlight layout">
-      {(['split', 'browser', 'agent'] as const).map(option => (
-        <button
-          key={option}
-          type="button"
-          role="radio"
-          aria-checked={mode === option}
-          onClick={() => choose(option)}
-          className={`px-2 py-0.5 capitalize ${mode === option ? 'bg-accent text-accent-fg' : 'text-ink-dim hover:text-ink'}`}
-        >
-          {option}
-        </button>
-      ))}
-    </div>
+    // The shared segmented control in radio mode (UI pass, G-10): arrows
+    // move AND choose (the k9 rule), one Tab stop. This group's own markup
+    // was the model for the primitive.
+    <SegmentedControl
+      className="ml-auto"
+      size="sm"
+      semantics="radio"
+      label="Spotlight layout"
+      value={mode}
+      onChange={choose}
+      options={[
+        { value: 'split', label: 'Split' },
+        { value: 'browser', label: 'Browser' },
+        { value: 'agent', label: 'Agent' },
+      ]}
+    />
   )
 }

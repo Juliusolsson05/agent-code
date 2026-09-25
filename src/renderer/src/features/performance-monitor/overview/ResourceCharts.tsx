@@ -101,7 +101,7 @@ export function ResponsivenessCards({ snapshot }: { snapshot: MonitorSnapshot })
                   <tr key={window.windowId} className="border-t border-border">
                     <td className="py-1 text-ink">Window {index + 1}</td>
                     <td className="capitalize text-muted">{window.visibility}</td>
-                    <td className={`text-right ${window.lagMs >= 1000 ? 'text-danger-fg' : window.lagMs >= 100 ? 'text-warning-fg' : 'text-ink-dim'}`}>{formatMs(window.lagMs)}</td>
+                    <td className={`text-right ${window.lagMs >= 1000 ? 'text-danger' : window.lagMs >= 100 ? 'text-warning' : 'text-ink-dim'}`}>{formatMs(window.lagMs)}</td>
                     <td className="text-right text-ink-dim">{window.longTasksSupported ? window.longTaskCount : '—'}</td>
                     <td className="text-right text-ink-dim">{window.inputSupported ? formatMs(window.inputMaxMs) : '—'}</td>
                     <td className="text-right text-ink-dim">{formatBytes(window.heapUsedBytes)}</td>

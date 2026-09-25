@@ -195,7 +195,7 @@ export function CommandSortControl({
       >
         <span aria-hidden>⇅</span>
         <span>{label}</span>
-        {!searching && <span aria-hidden className="text-[9px]">▾</span>}
+        {!searching && <span aria-hidden className="text-[10px]">▾</span>}
       </button>
 
       {open && !searching && (

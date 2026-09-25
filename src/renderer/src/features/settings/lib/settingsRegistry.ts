@@ -584,7 +584,7 @@ export function getSettingsRegistry(
       // is finite (so a large workspace will legitimately see "Apollo 2").
       id: 'agent-names',
       category: 'workspace',
-      title: 'Agent names',
+      title: 'Agent Names',
       description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are named too, from the same list.',
       keywords: ['voice', 'spoken', 'name', 'names', 'apollo', 'agent', 'mcp', 'operator', 'header', 'dispatch'],
       // No explicit `metadata`. DEFAULT_SETTING_METADATA is already exactly
@@ -640,7 +640,7 @@ export function getSettingsRegistry(
       category: 'workspace',
       title: 'Usage in Header',
       description:
-        'Show Claude and Codex quota usage in the header bar. Click the indicator to open the full Usage modal.',
+        'Show Claude and Codex quota usage in the header bar. Select the indicator to open the full Usage modal.',
       keywords: ['usage', 'quota', 'limits', 'header', 'tokens', 'claude', 'codex'],
       control: {
         type: 'toggle',
@@ -667,7 +667,7 @@ export function getSettingsRegistry(
         options: [
           { value: 'minimal', label: 'Minimal', description: 'Single worst-case percentage across both providers.' },
           { value: 'providers', label: 'Providers', description: 'One chip per provider showing its most constrained limit.' },
-          { value: 'all', label: 'All limits', description: 'Every active limit row per provider, compact labels.' },
+          { value: 'all', label: 'All Limits', description: 'Every active limit row per provider, compact labels.' },
           { value: 'detailed', label: 'Detailed', description: 'All limits plus severity bars and reset countdowns.' },
         ],
         onSelect: (ctx, value) =>
@@ -677,7 +677,7 @@ export function getSettingsRegistry(
     {
       id: 'update-channel',
       category: 'workspace',
-      title: 'Update channel',
+      title: 'Update Channel',
       description:
         'Which updates Agent Code installs. Stable gets tested releases. Preview gets each night\'s build of the next version, so fixes arrive days earlier but may have bugs.',
       keywords: ['update', 'updates', 'channel', 'preview', 'nightly', 'beta', 'stable', 'release', 'version', 'check for updates'],
@@ -729,7 +729,7 @@ export function getSettingsRegistry(
       control: { type: 'agent-code-conventions' },
     },
     {
-      id: 'external-control', category: 'mcp', title: 'External operator MCP',
+      id: 'external-control', category: 'mcp', title: 'External Operator MCP',
       description: 'Let an external assistant discover commands, read agents and operate all Agent Code windows alongside computer use. Disabled by default and excluded from agents launched here.',
       keywords: ['mcp', 'external', 'operator', 'codex', 'chatgpt', 'automation', 'windows', 'control'],
       metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
@@ -750,7 +750,7 @@ export function getSettingsRegistry(
     {
       id: 'mcp-servers',
       category: 'mcp',
-      title: 'MCP servers',
+      title: 'MCP Servers',
       description:
         'Every MCP server your agents can use: Agent Code\'s own and yours. A checked provider column means new agents of that provider get the server; existing agents pick changes up on their next reload. Per-agent choices (Agent MCP Servers…) take precedence.',
       // Carries the vocabulary of the eight per-domain rows this grid replaced
@@ -850,7 +850,7 @@ export function getSettingsRegistry(
       category: 'experimental',
       title: 'Browser Pocket',
       description:
-        'Attach a browser to an agent (⌘⇧B). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. First enable adds browser tools for new agents. Existing agents show setup in their pocket; attaching tools requires one reload. Agents with tools already attached need no reload.',
+        'Attach a browser to an agent (the Browser Pocket command). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. First enable adds browser tools for new agents. Existing agents show setup in their pocket; attaching tools requires one reload. Agents with tools already attached need no reload.',
       keywords: ['browser', 'preview', 'pocket', 'localhost', 'dev server', 'webview', 'spotlight'],
       metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
       control: {

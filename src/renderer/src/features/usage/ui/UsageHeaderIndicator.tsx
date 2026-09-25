@@ -1,3 +1,4 @@
+import { buttonVariants } from '@renderer/components/ui/button'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import { useUsageHeaderSnapshot } from '@renderer/features/usage/hooks/useUsageHeaderSnapshot'
@@ -85,11 +86,11 @@ export function UsageHeaderIndicator({ level }: { level: UsageHeaderLevel }) {
   const providers = toHeaderProviders(snapshot)
   const worst = worstAcross(providers)
   const tooltip = headerTooltip(snapshot, stale)
-  const chipClass = `
-    inline-flex items-center gap-2 border border-border bg-surface-hi
-    px-2 py-1 text-[10px] font-code leading-none
-    transition-colors hover:border-accent cursor-pointer
-  `
+  // The settings bar's shared control look (ledger G-28; SettingsBar has
+  // the WHY). `font-normal` because the chip mixes weights itself: provider
+  // codes are semibold and the numbers plain, and the variant's medium would
+  // flatten that. It used to be square, with no focus ring.
+  const chipClass = buttonVariants({ variant: 'outline', size: 'xs', className: 'font-normal' })
 
   // Both providers errored / nothing active: a single muted chip whose
   // tooltip carries the provider error messages (spec §3.2). Still
@@ -97,7 +98,7 @@ export function UsageHeaderIndicator({ level }: { level: UsageHeaderLevel }) {
   if (providers.length === 0) {
     return (
       <button type="button" onClick={openUsageModal} title={tooltip} className={chipClass}>
-        <span className="text-muted">usage n/a</span>
+        <span className="text-muted">Usage n/a</span>
       </button>
     )
   }
@@ -105,7 +106,7 @@ export function UsageHeaderIndicator({ level }: { level: UsageHeaderLevel }) {
   if (level === 'minimal') {
     return (
       <button type="button" onClick={openUsageModal} title={tooltip} className={chipClass}>
-        <span className="text-muted">usage</span>
+        <span className="text-muted">Usage</span>
         {worst ? (
           <span style={severityTextStyle(worst.severity)}>{formatPercent(worst.percent)}</span>
         ) : (

@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
+import { Button } from '@renderer/components/ui/button'
+import { Kbd } from '@renderer/components/ui/kbd'
+import { useEffect, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { useSwapFocus } from '@renderer/lib/useSwapFocus'
 
 const PHASE_LABEL: Record<GoalLoopState['phase'], string> = {
   active: 'active', paused: 'paused', ended: 'ended',
@@ -17,13 +20,57 @@ function describe(loop: GoalLoopState): string {
   return `iteration ${budget}`
 }
 
+// Buttons (plan M7): these were UNSTYLED <button>s — the browser's default
+// look, no focus ring beyond the global outline — in a strip and an overlay
+// the user reaches by keyboard. They are the shared Button now: ghost/xs in
+// the pane-top strip, outline/sm on the overlay, Stop red-outline in both
+// (it ends the loop), Close with the ⎋ chip Escape honours.
+
 /** The latched overlay's shell, shared by the "loop" and "no loop" states so
  * both carry the SAME interaction-ownership marker and the same
  * `data-goal-loop-overlay` attribute. The keyboard router gates on that
  * attribute being mounted (#1021), so a latched state that renders any other
  * markup would reopen the invisible-trap bug. */
-function GoalLoopOverlay({ children }: { children: ReactNode }) {
+function GoalLoopOverlay({ children, takeFocus }: { children: ReactNode; takeFocus: boolean }) {
+  // Keyboard ownership (K2-1). The overlay stamps the APP interaction-owner
+  // marker and the router consumes every key while it is latched, so it has
+  // to hold focus itself, or a keyboard user sees buttons they cannot reach:
+  //   - on open, focus moves to the first action (rAF: the pane's own focus
+  //     effects run in the same commit and would take it straight back);
+  //   - Tab / Shift+Tab wrap inside, because focus that left this
+  //     app-owning surface would land where the router admits no key;
+  //   - on close, focus returns to whatever held it before (the composer,
+  //     usually) instead of dropping to <body>.
+  //
+  // ONLY the ACTIVE pane's overlay does any of this (`takeFocus`, review
+  // finding A1). The latch is app-wide, so every visible agent pane mounts an
+  // overlay at once; when each one pulled focus, the LAST pane's frame won, and
+  // Enter then paused or stopped a different agent from the one the user
+  // opened the preview on. Background overlays stay visible but never take
+  // focus, and moving the active pane (⌥↓) hands focus to that pane's overlay.
+  const ref = useRef<HTMLDivElement | null>(null)
+  // Whether focus is inside, from focus events: an effect cleanup runs after
+  // React detached the node, so reading document.activeElement there always
+  // says <body> (the same trap pane-dialog.tsx documents).
+  const holdsFocus = useRef(false)
+  useEffect(() => {
+    if (!takeFocus) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const frame = requestAnimationFrame(() => {
+      ref.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      // Hand focus back only if it is still inside THIS overlay: a pane switch
+      // has already moved it to the next active overlay, and yanking it back to
+      // the old composer would undo that.
+      if (previous?.isConnected && holdsFocus.current) previous.focus()
+    }
+  }, [takeFocus])
   return <div
+    ref={ref}
+    onFocus={() => { holdsFocus.current = true }}
+    onBlur={event => { holdsFocus.current = ref.current?.contains(event.relatedTarget as Node | null) ?? false }}
     data-agent-code-interaction-owner="app"
     data-goal-loop-overlay=""
     role="dialog"
@@ -31,6 +78,19 @@ function GoalLoopOverlay({ children }: { children: ReactNode }) {
     className="absolute inset-0 z-50 bg-canvas text-ink"
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
+    onKeyDown={event => {
+      if (event.key !== 'Tab') return
+      const buttons = [...(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])]
+      if (buttons.length === 0) return
+      const index = buttons.indexOf(document.activeElement as HTMLElement)
+      const last = buttons.length - 1
+      const next = event.shiftKey ? (index <= 0 ? last : index - 1) : (index === last || index < 0 ? 0 : index + 1)
+      // Only the wrap needs taking over; within the row the browser's own
+      // Tab order is the same, but handling every Tab here keeps focus from
+      // ever escaping when a button is disabled mid-press.
+      event.preventDefault()
+      buttons[next]?.focus()
+    }}
   >
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
       {children}
@@ -44,7 +104,7 @@ function GoalLoopOverlay({ children }: { children: ReactNode }) {
  * without opening anything; the overlay is where actions live. Both follow
  * TldrOverlay's input discipline: stop propagation so pane chrome never sees
  * the clicks, and theme tokens so they read in every theme. */
-export function GoalLoopPane({ sessionId }: { sessionId: string }) {
+export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string; focused?: boolean }) {
   const [loop, setLoop] = useState<GoalLoopState | null>(null)
   // WHY the overlay also requires VISIBILITY, not just the latch (#1021
   // review): Reader, Spotlight, Settings and the fullscreen Global Editor
@@ -74,6 +134,10 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     read()
     return () => { current = false; unsubscribe() }
   }, [sessionId])
+  // One carrier per surface: the strip and the latched overlay each draw
+  // their own controls, and focus must stay in the surface that was pressed.
+  const stripFocus = useSwapFocus<HTMLSpanElement>(loop?.phase)
+  const overlayFocus = useSwapFocus<HTMLDivElement>(loop?.phase)
   if (!loop) {
     if (!latched) return null
     // #1021: the latch is app-wide and running the command is an explicit
@@ -84,11 +148,13 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     // way ("No TLDR yet"). A loop being read for the first time also lands
     // here briefly. That is acceptable: the overlay is up, it explains itself,
     // and it swaps to the real loop the moment the read resolves.
-    return <GoalLoopOverlay>
+    return <GoalLoopOverlay takeFocus={focused}>
       <p className="text-sm sm:text-base">No goal loop on this agent</p>
-      <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP. Press Escape to close.</p>
+      <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP.</p>
       <div className="flex gap-3 text-sm">
-        <button type="button" onClick={dismissGoalLoop}>Close</button>
+        {/* Escape dismisses the latch (useKeybinds' goal-loop gate), so the
+            button carries the chip instead of the prose saying so (plan M7). */}
+        <Button type="button" variant="ghost" size="sm" onClick={dismissGoalLoop}>Close<Kbd binding="Escape" /></Button>
       </div>
     </GoalLoopOverlay>
   }
@@ -98,14 +164,31 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   // the button is not offered at all.
   const raisedCap = Math.min(loop.maxContinuations + 25, GOAL_LOOP_MAX_CONTINUATIONS_CEILING)
   const canRaise = loop.phase === 'paused' && loop.pauseReason === 'cap' && raisedCap > loop.maxContinuations
-  const control = (action: GoalLoopControlAction) => () => {
+  // Pause becomes Resume and Stop becomes Dismiss: each press unmounts the
+  // control that had focus, once main reports the new phase. Focus is
+  // carried to the pressed surface's first control for the new phase (G-41,
+  // useSwapFocus, declared above the early return so the hook order holds).
+  // Dismiss removes the strip itself, so there is nothing to carry to, and
+  // type-to-focus reclaims the pane.
+  const control = (action: GoalLoopControlAction, surface: 'strip' | 'overlay' = 'strip') => (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const carrier = surface === 'strip' ? stripFocus : overlayFocus
+    const phaseAtPress = loop.phase
+    carrier.beforeSwap(event.currentTarget)
     // A rejected control call changes nothing in main, and the next changed
     // ping re-reads the truth; the catch only keeps a rejection from becoming
     // an unhandled one in the renderer.
+    //
+    // Either way the focus carry must be disarmed when no swap is coming:
+    // after a rejection, or when main answers with the phase unchanged (Raise
+    // Cap keeps the phase). Otherwise a much later unrelated phase change
+    // would take focus back to this pane (round-2 review A-P2). If the change
+    // ping landed first, the carry has already happened and cancel is a no-op.
     void window.api.controlGoalLoop({
       sessionId, action,
       value: action === 'raise-cap' ? raisedCap : undefined,
-    }).catch(() => {})
+    }).then(next => {
+      if (!next || next.phase === phaseAtPress) carrier.cancel()
+    }).catch(() => { carrier.cancel() })
   }
   // NO interaction-ownership marker here, deliberately: the strip is passive
   // status chrome that stays mounted for the loop's whole life (and ended
@@ -124,38 +207,38 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     {/* The goal is agent-authored and sits beside Resume, Raise cap and Stop
         — the controls that grant it more turns (#1049 re-review). */}
     <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {withVisibleControls(loop.goal)}</span>
-    <span className="flex shrink-0 gap-2">
-      {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
-      {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
-      {canRaise && <button type="button" onClick={control('raise-cap')}>Raise cap</button>}
-      {loop.phase !== 'ended' && <button type="button" onClick={control('stop')}>Stop</button>}
+    <span ref={stripFocus.counterpartRef} className="flex shrink-0 gap-2">
+      {loop.phase === 'active' && <Button type="button" variant="ghost" size="xs" onClick={control('pause')}>Pause</Button>}
+      {loop.phase === 'paused' && <Button type="button" variant="ghost" size="xs" onClick={control('resume')}>Resume</Button>}
+      {canRaise && <Button type="button" variant="ghost" size="xs" onClick={control('raise-cap')}>Raise Cap</Button>}
+      {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="xs" onClick={control('stop')}>Stop</Button>}
       {/* An ended loop has nothing left to control, but its strip still sits
           over the pane's top line — and ended loops are persisted, so without
           this it would stay there across restarts until a new loop replaced
           it. Dismiss removes the ended record in main. */}
-      {loop.phase === 'ended' && <button type="button" onClick={control('dismiss')}>Dismiss</button>}
+      {loop.phase === 'ended' && <Button type="button" variant="ghost" size="xs" onClick={control('dismiss')}>Dismiss</Button>}
     </span>
   </div>
   if (!latched) return strip
   return <>
     {strip}
-    <GoalLoopOverlay>
+    <GoalLoopOverlay takeFocus={focused}>
         <p className="text-sm sm:text-base">Goal loop · {PHASE_LABEL[loop.phase]}{loop.phase === 'paused' ? ` · ${loop.pauseReason}` : ''}</p>
         <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{withVisibleControls(loop.goal)}</p>
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>
         {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {withVisibleControls(loop.completionSummary)}</p>}
-        <div className="flex gap-3 text-sm">
-          {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
-          {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
-          {canRaise && <button type="button" onClick={control('raise-cap')}>Raise cap to {raisedCap}</button>}
-          {loop.phase !== 'ended' && <button type="button" onClick={control('stop')}>Stop</button>}
-          {loop.phase === 'ended' && <button type="button" onClick={control('dismiss')}>Dismiss</button>}
+        <div ref={overlayFocus.counterpartRef} className="flex gap-3 text-sm">
+          {loop.phase === 'active' && <Button type="button" variant="outline" size="sm" onClick={control('pause', 'overlay')}>Pause</Button>}
+          {loop.phase === 'paused' && <Button type="button" variant="outline" size="sm" onClick={control('resume', 'overlay')}>Resume</Button>}
+          {canRaise && <Button type="button" variant="outline" size="sm" onClick={control('raise-cap', 'overlay')}>Raise Cap to {raisedCap}</Button>}
+          {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="sm" onClick={control('stop', 'overlay')}>Stop</Button>}
+          {loop.phase === 'ended' && <Button type="button" variant="outline" size="sm" onClick={control('dismiss', 'overlay')}>Dismiss</Button>}
           {/* The latch is one app-wide flag and this overlay is opaque over
               the whole pane, so it needs an exit that does not depend on
               remembering the chord. Escape is deliberately NOT bound here: in
               an agent pane Escape interrupts the running turn, and the
               capture-phase owner of that key is useKeybinds, not this pane. */}
-          <button type="button" onClick={dismissGoalLoop}>Close</button>
+          <Button type="button" variant="ghost" size="sm" onClick={dismissGoalLoop}>Close<Kbd binding="Escape" /></Button>
         </div>
     </GoalLoopOverlay>
   </>

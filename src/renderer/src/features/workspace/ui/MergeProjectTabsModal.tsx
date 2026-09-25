@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Select } from '@renderer/components/ui/select'
 
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import type { TabId } from '@renderer/workspace/types'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
@@ -50,9 +50,9 @@ type Props = {
 export function MergeProjectTabsModal({ open, tabs, initialTargetId, onCancel, onConfirm }: Props) {
   return (
     <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onCancel() }}>
-      <DialogContent className="flex max-h-[80vh] w-[560px] max-w-[calc(100vw-64px)] flex-col">
+      <DialogContent size="md" className="flex max-h-[86vh] flex-col">
         <DialogHeader>
-          <DialogTitle className="font-semibold">Merge Project Tabs</DialogTitle>
+          <DialogTitle>Merge Project Tabs</DialogTitle>
           <DialogDescription>
             Keep one tab; the agents of the merged tabs move to its Dispatch list. Nothing restarts and no agent is closed.
           </DialogDescription>
@@ -105,37 +105,43 @@ function MergeDraft({ tabs, initialTargetId, onCancel, onConfirm }: Omit<Props, 
   const sourceSet = useMemo(() => new Set(sources), [sources])
   const movedCount = tabs.filter(tab => sourceSet.has(tab.id)).reduce((sum, tab) => sum + tab.sessionCount, 0)
 
+  // One padded body (plan T3) instead of three `mx-4 mt-3` fragments that
+  // each carried their own inset. Sources stay NATIVE checkboxes (the Close
+  // Completed ruling: a checkbox group is fully operable and each tab is an
+  // independent choice).
   return (
     <>
-      <div className="mx-4 mt-3 flex-shrink-0">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-3">
+      <div className="flex-shrink-0">
         <label className="text-[10px] uppercase tracking-wider text-muted" htmlFor="merge-target">
           Keep
         </label>
-        <select
+        <Select
           id="merge-target"
           value={targetId}
           onChange={event => {
             const next = event.target.value
             setDraft({ targetId: next, sources: defaultSourcesFor(tabs, next) })
           }}
-          className="rounded-control mt-1 w-full border border-border bg-canvas px-2 py-1 text-[12px] text-ink"
+          className="mt-1 w-full"
         >
           {/* Source and destination of a merge that moves every agent
               (#1049 re-review). */}
           {tabs.map(tab => (
             <option key={tab.id} value={tab.id}>{withVisibleControls(tab.label)}</option>
           ))}
-        </select>
+        </Select>
       </div>
 
-      <div className="mx-4 mt-3 text-[10px] uppercase tracking-wider text-muted">Merge into it</div>
-      <div className="rounded-slab mx-4 mb-3 mt-1 min-h-0 flex-1 overflow-auto border border-border bg-canvas">
+      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="text-[10px] uppercase tracking-wider text-muted">Merge into it</div>
+      <div className="rounded-slab mt-1 min-h-0 flex-1 overflow-auto border border-border bg-canvas">
         {tabs.filter(tab => tab.id !== targetId).map(tab => {
           const checked = sourceSet.has(tab.id)
           return (
             <label
               key={tab.id}
-              className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-surface"
+              className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-row-hover-bg"
             >
               <input
                 type="checkbox"
@@ -160,22 +166,24 @@ function MergeDraft({ tabs, initialTargetId, onCancel, onConfirm }: Omit<Props, 
         })}
       </div>
 
-      <div className="mx-4 mb-2 flex-shrink-0 text-[11px] text-muted" role="status">
-        {sources.length === 0 || !target
-          ? 'Tick at least one tab to merge.'
-          : `${sources.length} tab${sources.length === 1 ? '' : 's'}, ${movedCount} agent${movedCount === 1 ? '' : 's'} move to ${withVisibleControls(target.label)}.`}
+      </div>
       </div>
 
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button
-          type="button"
-          disabled={sources.length === 0 || !target}
-          onClick={() => { if (target) onConfirm(target.id, sources) }}
-        >
-          Merge
-        </Button>
-      </DialogFooter>
+      {/* Merge moves agents between tabs and closes nothing, so Enter may
+          commit it (Merge ↩). The status line rides in the footer's left
+          slot, still a live region. */}
+      <DialogActions
+        confirmLabel="Merge"
+        confirmDisabled={sources.length === 0 || !target}
+        onConfirm={() => { if (target) onConfirm(target.id, sources) }}
+        onCancel={onCancel}
+      >
+        <span role="status">
+          {sources.length === 0 || !target
+            ? 'Tick at least one tab to merge.'
+            : `${sources.length} tab${sources.length === 1 ? '' : 's'}, ${movedCount} agent${movedCount === 1 ? '' : 's'} move to ${withVisibleControls(target.label)}.`}
+        </span>
+      </DialogActions>
     </>
   )
 }

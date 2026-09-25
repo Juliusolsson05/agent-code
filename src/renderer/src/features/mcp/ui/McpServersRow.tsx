@@ -1,3 +1,4 @@
+import { Switch } from '@renderer/components/ui/switch'
 import { useState } from 'react'
 
 import { providerSupportsBuiltInMcpDomain, type BuiltInMcpDefaults } from '@mcp/shared/types'
@@ -9,7 +10,7 @@ import { BUILT_IN_MCP_SERVERS } from '@renderer/features/mcp/lib/builtInServers'
 import { applyUserMcpResult, useUserMcpSnapshot } from '@renderer/features/mcp/store'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
-import { isUserMcpProvider, type NativeMcpServer, type UserMcpServerView } from '@shared/userMcp/types'
+import { isUserMcpProvider, USER_MCP_PROVIDERS, type NativeMcpServer, type UserMcpServerView } from '@shared/userMcp/types'
 
 type Props = {
   settings: Settings
@@ -71,7 +72,7 @@ export function McpServersRow({ settings, onChange }: Props) {
         <div key={server.domain} className="grid items-center gap-2 px-3 py-1.5" style={{ gridTemplateColumns: columns }}>
           <div className="min-w-0">
             <span className="text-ink">{server.title}</span>
-            <span className="ml-2 rounded-chip border border-border px-1 text-[9px] text-muted">built-in</span>
+            <span className="ml-2 rounded-chip border border-border px-1 text-[10px] text-muted">built-in</span>
             <div className="truncate text-[10px] text-muted">{server.description}</div>
           </div>
           {providers.map(kind => providerSupportsBuiltInMcpDomain(kind, server.domain) ? (
@@ -93,7 +94,7 @@ export function McpServersRow({ settings, onChange }: Props) {
       </div>
 
       <SectionHeading
-        action={<Button size="xs" variant="outline" onClick={() => openDialog({ mode: 'add' })}>Add server…</Button>}
+        action={<Button size="xs" variant="outline" onClick={() => openDialog({ mode: 'add' })}>Add Server…</Button>}
       >
         Your servers
       </SectionHeading>
@@ -125,7 +126,7 @@ export function McpServersRow({ settings, onChange }: Props) {
           <button
             type="button"
             onClick={() => setNativeOpen(open => !open)}
-            className="flex w-full items-center justify-between border-t border-border px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted hover:text-ink"
+            className="flex w-full items-center justify-between border-t border-border px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
             aria-expanded={nativeOpen}
           >
             <span>{nativeOpen ? '▾' : '▸'} Also loaded by the CLIs directly (read-only)</span>
@@ -142,7 +143,10 @@ export function McpServersRow({ settings, onChange }: Props) {
       ) : null}
 
       <div className="border-t border-border px-3 py-2 text-[10px] text-muted">
-        Changes apply to new agents, and to existing agents when they reload. Secrets are encrypted on this computer and passed to agents through environment variables — the agent itself can read them, like any tool it runs.
+        {/* The provider-wide "—" (a provider that cannot take user servers
+            at all) is the same on every row, so it is explained once here
+            rather than in a hover title per cell (K2-16). */}
+        “—” means that provider cannot use the server. Changes apply to new agents, and to existing agents when they reload. Secrets are encrypted on this computer and passed to agents through environment variables — the agent itself can read them, like any tool it runs.
       </div>
     </div>
   )
@@ -169,13 +173,10 @@ function UserServerRow({
     <div className={`border-t border-border/50 px-3 py-1.5 ${server.enabled ? '' : 'opacity-60'}`}>
       <div className="grid items-center gap-2" style={{ gridTemplateColumns: columns }}>
         <div className="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={server.enabled}
+          <Switch
+            checked={server.enabled}
             aria-label={`${server.name} on or off everywhere`}
-            onClick={onToggleEnabled}
-            className={`h-3 w-5 shrink-0 rounded-full border ${server.enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border bg-transparent'}`}
+            onCheckedChange={() => onToggleEnabled()}
           />
           <div className="min-w-0">
             <span className="text-ink">{server.name}</span>
@@ -205,6 +206,19 @@ function UserServerRow({
         {server.problems.map(problem => (
           <span key={`${problem.kind}:${problem.message}`} className="text-warning">⚠ {problem.message}</span>
         ))}
+        {/* Why a provider column shows "—" for THIS server (K2-16). It was
+            only in the cell's hover title; the cell is not focusable, so a
+            keyboard user could not learn it at all. */}
+        {USER_MCP_PROVIDERS.flatMap(kind => {
+          const support = server.support[kind]
+          // Only for columns on screen: a provider switched off in Settings
+          // has no "—" to explain.
+          return support.ok || !providers.includes(kind) ? [] : [
+            <span key={`unsupported:${kind}`} className="text-muted">
+              — {getRendererProviderCapabilities(kind).shortLabel}: {support.reason}
+            </span>,
+          ]
+        })}
       </div>
     </div>
   )
@@ -217,15 +231,20 @@ function NativeServerRow({ server, onCopyIn }: { server: NativeMcpServer; onCopy
         <span className="text-ink">{server.name}</span>
         <span className="ml-2 text-[10px] text-muted">{getRendererProviderCapabilities(server.provider).shortLabel} · {server.source}</span>
         <div className="truncate text-[10px] text-muted">{server.summary}</div>
+        {/* The disabled Copy In's reason, visible (it was the button's hover
+            title, and a disabled button is out of the Tab order). */}
+        {!server.copyable ? (
+          <div className="text-[10px] text-muted">Cannot be copied: not a standard MCP config.</div>
+        ) : null}
       </div>
       <Button
         size="xs"
         variant="outline"
         disabled={!server.copyable}
-        title={server.copyable ? 'Manage a copy here and share it with the other provider' : 'This entry cannot be expressed as a standard MCP config'}
+        title={server.copyable ? 'Manage a copy here and share it with the other provider' : undefined}
         onClick={onCopyIn}
       >
-        Copy in
+        Copy In
       </Button>
     </div>
   )
@@ -271,7 +290,7 @@ export function Check({
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`flex h-3.5 w-3.5 items-center justify-center border text-[9px] leading-none disabled:opacity-40 ${
+      className={`flex h-3.5 w-3.5 items-center justify-center border text-[10px] leading-none disabled:opacity-40 ${
         checked ? 'border-control-active-bg bg-control-active-bg text-control-active-fg' : 'border-control-border-hover bg-transparent'
       }`}
     >

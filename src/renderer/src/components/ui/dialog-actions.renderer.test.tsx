@@ -44,11 +44,91 @@ describe('DialogActions Enter ownership', () => {
   })
 })
 
+// Key chips (keyboard-first plan H2). The rule these pin: a chip is shown
+// exactly when that key performs that button's action — never a chip that
+// lies. Before the chips, every dialog footer was silent about its keys.
+function chipsOn(name: string | RegExp): string[] {
+  const button = screen.getByRole('button', { name })
+  return [...button.querySelectorAll('[data-slot="kbd"]')].map(chip => chip.textContent ?? '')
+}
+
+describe('DialogActions key chips', () => {
+  it('labels Cancel with Escape and confirm with Enter', () => {
+    harness()
+    expect(chipsOn('Cancel')).toEqual(['⎋'])
+    expect(chipsOn('Close 3 Agents')).toEqual(['↩'])
+  })
+
+  it('keeps the chip text out of the accessible name', () => {
+    // A screen reader should hear "Cancel", not "Cancel escape".
+    harness()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+  })
+
+  it('drops the Escape chip while the surface refuses Escape', () => {
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Switching</DialogTitle>
+          <DialogActions confirmLabel="Switch" onConfirm={() => {}} onCancel={() => {}} escapeCancels={false} />
+        </DialogContent>
+      </Dialog>,
+    )
+    expect(chipsOn('Cancel')).toEqual([])
+  })
+
+  it('shows no chip and commits on no key when confirmKey is null', () => {
+    const onConfirm = vi.fn()
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Deliberate</DialogTitle>
+          <DialogActions confirmLabel="Apply" onConfirm={onConfirm} confirmKey={null} />
+        </DialogContent>
+      </Dialog>,
+    )
+    expect(chipsOn('Apply')).toEqual([])
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+})
+
+describe('DialogActions Cmd+Enter commit', () => {
+  function textareaHarness() {
+    const onConfirm = vi.fn()
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Note</DialogTitle>
+          <textarea aria-label="note" />
+          <DialogActions confirmLabel="Save" onConfirm={onConfirm} onCancel={() => {}} confirmKey="Cmd+Enter" />
+        </DialogContent>
+      </Dialog>,
+    )
+    return { onConfirm, textarea: screen.getByRole('textbox', { name: 'note' }) }
+  }
+
+  it('commits on Cmd+Enter from inside the textarea and labels the button ⌘↩', () => {
+    const { onConfirm, textarea } = textareaHarness()
+    expect(chipsOn('Save')).toEqual(['⌘↩'])
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    expect(onConfirm).toHaveBeenCalledOnce()
+  })
+
+  it('leaves plain Enter in the textarea as a newline', () => {
+    const { onConfirm, textarea } = textareaHarness()
+    expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(true)
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+})
+
 describe('focusedControlOwnsEnter', () => {
   it('claims Enter for buttons, links and textareas only', () => {
     expect(focusedControlOwnsEnter(document.createElement('button'))).toBe(true)
     expect(focusedControlOwnsEnter(document.createElement('a'))).toBe(true)
     expect(focusedControlOwnsEnter(document.createElement('textarea'))).toBe(true)
+    // A native select opens/confirms its own list with Enter (steering k4).
+    expect(focusedControlOwnsEnter(document.createElement('select'))).toBe(true)
     // The dialog surface and ordinary containers do not: Enter there is the
     // dialog's to handle.
     expect(focusedControlOwnsEnter(document.createElement('div'))).toBe(false)
@@ -67,9 +147,26 @@ describe('focusedControlOwnsSpace', () => {
     expect(focusedControlOwnsSpace(document.createElement('button'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('textarea'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('input'))).toBe(true)
+    expect(focusedControlOwnsSpace(document.createElement('select'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('a'))).toBe(false)
     expect(focusedControlOwnsEnter(document.createElement('a'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('div'))).toBe(false)
     expect(focusedControlOwnsSpace(null)).toBe(false)
+  })
+
+  it('says Working… and drops the ↩ chip while busy (review C4 and a surviving mutation)', () => {
+    // A key chip must never promise a key the dialog is refusing (H2), and
+    // the confirm must not collapse to a bare "…".
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Close agents</DialogTitle>
+          <DialogActions confirmLabel="Close 5 Agents" onConfirm={() => {}} onCancel={() => {}} busy />
+        </DialogContent>
+      </Dialog>,
+    )
+    const confirm = document.querySelector('[data-dialog-action="confirm"]')!
+    expect(confirm.textContent).toBe('Working…')
+    expect(confirm.querySelector('[data-slot="kbd"]')).toBeNull()
   })
 })

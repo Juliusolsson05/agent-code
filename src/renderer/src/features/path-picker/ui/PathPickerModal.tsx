@@ -1,4 +1,5 @@
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -6,10 +7,14 @@ import { MISSING_PROVIDER_HINT, preferredPickerProvider, useMissingProviders } f
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { PathInput } from '@renderer/features/path-picker/ui/PathInput'
@@ -215,7 +220,7 @@ export function PathPickerModal({
         // instead of misreporting it as a successful zero-result scan.
         setSessions([])
         setListingTarget(null)
-        setListingError('Unable to load saved sessions. You can still start a new session.')
+        setListingError('Could not load saved sessions. You can still start a new session.')
       } finally {
         if (v === reqVersion.current) setSessionsLoading(false)
       }
@@ -316,18 +321,27 @@ export function PathPickerModal({
         if (!nextOpen) onCancel()
       }}
     >
+      {/* Standard anatomy (plan S44): header / padded body / DialogActions.
+          It padded the WHOLE content (p-6) with a bespoke title and a
+          lowercase prose legend, the one dialog in the app that did. */}
       <DialogContent
-        className="modal-pop flex max-h-[80vh] w-[620px] max-w-[calc(100vw-64px)] flex-col p-6"
+        size="md"
+        className="modal-pop flex max-h-[86vh] flex-col"
+        // While a spawn is in flight nothing hides the dialog (the k3 rule).
+        onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
+        onInteractOutside={event => { if (busy) event.preventDefault() }}
       >
-        <DialogTitle className="mb-3 flex-shrink-0 font-semibold">
-          New tab — working directory
-        </DialogTitle>
-        <DialogDescription className="sr-only">
-          Choose a provider and working directory, then start or resume a session.
-        </DialogDescription>
+        <DialogHeader className="flex-shrink-0">
+          <DialogTitle>New Tab — Working Folder</DialogTitle>
+          <DialogDescription className="sr-only">
+            Choose a provider and working directory, then start or resume a session.
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Provider toggle: Claude / Codex */}
-        <div className="flex gap-2 mb-3 flex-shrink-0">
+        <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+        {/* Provider toggle: one choice among providers, announced by
+            aria-pressed (it was colour only) with a keyboard focus ring. */}
+        <div className="flex gap-2 mb-3 flex-shrink-0" role="group" aria-label="Provider">
           {AGENT_PROVIDER_KINDS.filter(p => enabledKinds.has(p)).map(p => (
             <button
               key={p}
@@ -340,9 +354,10 @@ export function PathPickerModal({
               // the spawn re-resolves the CLI itself (see useMissingProviders).
               title={missingProviders.has(p) ? MISSING_PROVIDER_HINT : undefined}
               data-provider-missing={missingProviders.has(p) || undefined}
+              aria-pressed={provider === p}
               className={`rounded-control
-                px-3 py-1 text-[11px] font-semibold uppercase tracking-wider
-                border transition-colors duration-120
+                px-3 py-1 text-[11px] font-medium uppercase tracking-wider
+                border transition-colors duration-120 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
                 ${provider === p
                   ? 'bg-accent text-accent-fg border-accent'
                   : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
@@ -376,8 +391,9 @@ export function PathPickerModal({
               bg-canvas text-ink text-[12px]
               pl-6 pr-3 py-2.5
               border
-              ${error ? 'border-danger' : 'border-border'}
-              focus:border-accent
+              ${error ? 'border-danger' : 'border-input-border'}
+              rounded-control bg-input-bg
+              focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring
               outline-none
               transition-colors duration-120
             `}
@@ -400,11 +416,20 @@ export function PathPickerModal({
               <span className="text-ink">{withVisibleControls(pendingCreatePath)}</span>
             </span>
           ) : (
-            <span className="text-muted">
-              {preferred
-                ? 'tab completes · ↑↓ to browse · enter to go there · ⇧enter for a new tab anyway · esc to cancel'
-                : 'tab completes · ↑↓ to browse · enter to open · esc to cancel'}
-            </span>
+            // The lowercase prose legend became chips (plan H3). Enter, ⇧Enter
+            // and Escape are ALSO on the footer buttons they perform; the
+            // legend keeps the path-field keys (⇥ completes, ↑↓ browse).
+            <KbdLegend
+              className="text-muted"
+              items={[
+                // Tab completes only while suggestions show; otherwise it
+                // moves on (PathInput's k7 exit rule), so the label says so.
+                { keys: ['Tab'], label: 'complete / next' },
+                { keys: ['Up', 'Down'], label: 'browse' },
+                { keys: ['Enter'], label: preferred ? 'go there' : 'open' },
+                ...(preferred ? [{ keys: ['Shift+Enter'], label: 'new tab' }] : []),
+              ]}
+            />
           )}
         </div>
 
@@ -433,50 +458,42 @@ export function PathPickerModal({
           </div>
         )}
 
-        <div className="flex justify-end gap-2 mt-4 flex-shrink-0">
-          <Button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            variant="outline"
-          >
-            cancel
-          </Button>
-          {/* WHY every button forces the action its label names: the labels
-              follow the debounced hint, and a click can land before the hint
-              has caught up with the typed path. Letting `submit` re-decide
-              would then switch tabs under a button that said "new session".
-              Enter is the only submit that decides at submit time, because
-              Enter carries no label to honour and reuse is the safer default
-              for a keypress that outran the hint. */}
-          {preferred ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void submit({ forceNewTab: true })}
-                disabled={busy}
-              >
-                new tab anyway
-              </Button>
-              <Button
-                type="button"
-                onClick={() => { onActivateTab?.(preferred.tabId) }}
-                disabled={busy}
-              >
-                {preferred.current ? 'stay here' : 'go to tab'}
-              </Button>
-            </>
-          ) : (
-            <Button
-              type="button"
-              onClick={() => void submit({ forceNewTab: true })}
-              disabled={busy || value.trim() === ''}
-            >
-              {pendingCreatePath ? 'create & open' : 'new session'}
-            </Button>
-          )}
         </div>
+
+        {/* WHY every button forces the action its label names: the labels
+            follow the debounced hint, and a click can land before the hint
+            has caught up with the typed path. Letting `submit` re-decide
+            would then switch tabs under a button that said "new session".
+            Enter is the only submit that decides at submit time, because
+            Enter carries no label to honour and reuse is the safer default
+            for a keypress that outran the hint.
+            CHIPS: the primary shows ↩ and "New Tab Anyway" ⇧↩ because those
+            are what Enter / Shift+Enter in the path field do (PathInput owns
+            them — confirmOnEnter={false}, so the footer wires no second
+            listener). Guards carried over (k3): everything waits while busy;
+            the dialog also refuses Escape while busy (onEscapeKeyDown). */}
+        <DialogActions
+          confirmLabel={
+            preferred
+              ? (preferred.current ? 'Stay Here' : 'Go to Tab')
+              : pendingCreatePath ? 'Create & Open' : 'New Session'
+          }
+          confirmOnEnter={false}
+          confirmDisabled={busy || (!preferred && value.trim() === '')}
+          onConfirm={() => {
+            if (preferred) onActivateTab?.(preferred.tabId)
+            else void submit({ forceNewTab: true })
+          }}
+          onCancel={onCancel}
+          cancelDisabled={busy}
+          escapeCancels={!busy}
+          extraActions={preferred ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => void submit({ forceNewTab: true })} disabled={busy}>
+              New Tab Anyway
+              <Kbd binding="Shift+Enter" />
+            </Button>
+          ) : null}
+        />
       </DialogContent>
     </Dialog>
   )
@@ -499,12 +516,30 @@ function ResumeSection({
   onResume: (sessionId: string) => void | Promise<void>
   disabled: boolean
 }) {
+  // KEYBOARD (plan N9): this list was UNREACHABLE from the keyboard — rows
+  // were rendered with selected={false} and a no-op hover, and nothing took
+  // focus. It is now a Tab stop (after the path field and the footer's tab
+  // order position) and the focus owner of its own highlight, on the shared
+  // list keys; Enter resumes the highlighted session. Keyed by conversation
+  // because the listing refreshes as the typed path changes.
+  const keys = sessions.map(row => `${row.provider}:${row.nativeId}`)
+  const nav = useListNavigation({
+    count: sessions.length,
+    keys,
+    resetKey: resolvedPath,
+    isDisabled: index => !sessions[index]?.available,
+    onActivate: index => {
+      const row = sessions[index]
+      if (row?.available && !disabled) void onResume(row.nativeId)
+    },
+    idPrefix: 'path-picker-resume',
+  })
   if (!resolvedPath) return null
 
   return (
     <div className="flex-1 min-h-0 flex flex-col border-t border-border pt-3">
-      <div className="text-[10px] uppercase tracking-[0.15em] text-muted font-medium mb-2 flex-shrink-0">
-        resume
+      <div className="text-[10px] uppercase tracking-wider text-muted mb-2 flex-shrink-0">
+        Resume
         {loading && (
           <span className="ml-2 text-ink-dim normal-case tracking-normal">
             loading…
@@ -513,19 +548,24 @@ function ResumeSection({
       </div>
 
       {sessions.length === 0 && !loading ? (
-        <div className="text-[11px] text-muted italic py-2">
-          no previous sessions recorded in this directory
-        </div>
+        // The shared empty state (G-14): it was italic, lowercase, no period.
+        <EmptyState size="inline" className="px-0">No previous sessions recorded in this folder.</EmptyState>
       ) : (
-        <div className={`flex-1 min-h-0 overflow-auto -mx-2 ${disabled ? 'pointer-events-none opacity-50' : ''}`} role="listbox" aria-label="Previous sessions">
+        <div
+          className={`flex-1 min-h-0 overflow-auto -mx-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+          role="listbox"
+          aria-label="Previous sessions"
+          aria-activedescendant={nav.activeId}
+          tabIndex={0}
+          onKeyDown={event => { nav.onKeyDown(event) }}
+        >
           {sessions.map((row, i) => (
             <ConversationRow
               key={`${row.provider}:${row.nativeId}`}
               row={row}
               index={i}
-              selected={false}
-              onHover={() => {}}
-              onSelect={() => { if (row.available) void onResume(row.nativeId) }}
+              selected={i === nav.index}
+              itemProps={nav.getItemProps(i)}
             />
           ))}
         </div>

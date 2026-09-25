@@ -4,7 +4,7 @@ import {
   isAgentProviderKind,
   isAgentSessionKind,
 } from '@shared/types/providerKind'
-import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { sessionIsWorking } from '@renderer/session-runtime/working'
@@ -207,7 +207,8 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   ? 'Cap orchestrated agents'
                   : 'Show all orchestrated agents'
               }
-              className="px-1 leading-none text-[11px] text-muted hover:text-fg"
+              // `text-fg` was an undefined token (plan X5): hover did nothing.
+              className="rounded-control px-1 leading-none text-[11px] text-muted outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
             >
               {gridRow?.capChildren === false ? '⊟' : '⊞'}
             </button>
@@ -224,7 +225,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
               onClick={onPickRowProject}
               data-dispatch-row="true"
               title={rowProjectTitle}
-              className="max-w-[9rem] truncate uppercase hover:text-fg"
+              className="rounded-control max-w-[9rem] truncate uppercase outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
             >
               {rowProjectLabel ?? 'Any project'}
             </button>
@@ -356,19 +357,28 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
   const hiddenLoop = hidden.find(loop => loop.phase === 'ended')
     ?? hidden.find(loop => loop.phase === 'active')
     ?? hidden[0]
+  // Same as a session row (K2-10): the chips' explanations as the toggle's
+  // description instead of hover-only titles.
+  const descriptionId = useId()
+  const description = [
+    hidesNew ? 'A new agent is among the hidden ones.' : null,
+    hiddenLoop ? `${hidden.length === 1 ? 'A hidden agent has a goal loop' : `${hidden.length} hidden agents have goal loops`}: ${goalLoopChipTitle(hiddenLoop)}` : null,
+  ].filter((part): part is string => part !== null).join(' ')
   return (
+    <>
     <button
       type="button"
+      aria-describedby={description ? descriptionId : undefined}
       onClick={onToggle}
       data-dispatch-row="true"
-      className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
+      className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted outline-none hover:text-ink hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
     >
       {label}
       {hidesNew && (
         <span
           data-dispatch-new-in-pool="true"
           title="A new agent is among the hidden ones. Expand to see it"
-          className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent"
+          className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[10px] font-semibold leading-none text-accent"
         >
           new
         </span>
@@ -377,7 +387,7 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
         <span
           data-dispatch-goal-loop="true"
           title={`${hidden.length === 1 ? 'A hidden agent has a goal loop' : `${hidden.length} hidden agents have goal loops`}. Expand to see ${hidden.length === 1 ? 'it' : 'them'}. — ${goalLoopChipTitle(hiddenLoop)}`}
-          className={`ml-1 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none ${
+          className={`ml-1 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[10px] font-semibold leading-none ${
             hiddenLoop.phase === 'active' ? 'border-accent/70 bg-accent/10 text-accent' : 'border-border text-muted'
           }`}
         >
@@ -385,6 +395,8 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
         </span>
       )}
     </button>
+    {description ? <span id={descriptionId} hidden>{description}</span> : null}
+    </>
   )
 })
 
@@ -540,6 +552,23 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     openMenu()
   }, [openMenu])
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    // ↑/↓ on a FOCUSED row move focus to the neighbouring row (plan N2) —
+    // focus only, like walking a menu: Enter still selects, and ⌥↑/⌥↓ (the
+    // lane grammar) still move the SELECTION without touching focus. Rows that
+    // refuse selection (shown in another lane) are skipped, as Tab skips
+    // them. Before, the only way down the list from the keyboard was Tab
+    // through every row AND every header control between groups.
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      const list = event.currentTarget.closest('aside')
+      if (!list) return
+      const rows = [...list.querySelectorAll<HTMLButtonElement>('[data-dispatch-session-row="true"]:not([aria-disabled="true"])')]
+      const index = rows.indexOf(event.currentTarget)
+      const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]
+      if (!next) return
+      event.preventDefault()
+      next.focus()
+      return
+    }
     // The platform keys for "this item's menu", as in the file explorer
     // (editor.context-menu). Anchored to the row, not the pointer: the mouse
     // may be resting anywhere while the user is on the keyboard.
@@ -562,10 +591,30 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   // re-addressing #816 is about, even when it is only a tooltip.
   const nameAndTitle = [agentName, title].filter(Boolean).join(' — ')
   const unreadBadge = dispatchUnreadBadge(runtime, row.kind)
+  // What the row's hover titles say, as its accessible DESCRIPTION (K2-10).
+  // The "new" and goal-loop chips and the row itself explained themselves
+  // only in `title`s. A title on a span inside a button never reaches the
+  // button's name or description, so a screen reader heard "new" and "loop
+  // 3/25" with no idea what either meant, or what Enter would do to which
+  // lane. Kept in a hidden sibling, not inside the button: anything inside
+  // becomes part of the row's NAME, which is read on every arrow press.
+  // aria-describedby may point at a hidden element, and its text still counts.
+  const descriptionId = useId()
+  const description = [
+    disabled
+      ? 'Shown in another lane.'
+      : targetLaneIndex === undefined
+        ? null
+        : `Enter shows it in lane ${targetLaneIndex + 1}, replacing that lane's view.`,
+    runtime.isNewInPool ? 'New: spawned into the pool and not placed in a lane yet.' : null,
+    isShownGoalLoop(goalLoop) ? goalLoopChipTitle(goalLoop) : null,
+  ].filter((part): part is string => part !== null).join(' ')
 
   return (
+    <>
     <button
       type="button"
+      aria-describedby={description ? descriptionId : undefined}
       onClick={onSelect}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
@@ -581,6 +630,10 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // (which need focus) stay limited to rows you can select, as before.
       tabIndex={disabled ? -1 : undefined}
       data-menu-open={menuOpen ? 'true' : undefined}
+      data-dispatch-session-row="true"
+      // The agent this row's lane is showing, announced (plan N2) — it was
+      // shown by colour only.
+      aria-current={active ? 'true' : undefined}
       title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
@@ -627,7 +680,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             // titles would eat exactly the token the user needs to speak.
             <span
               data-dispatch-agent-name="true"
-              className="flex-shrink-0 rounded-chip border border-border px-1 text-[9px] font-semibold leading-[13px] text-ink"
+              className="flex-shrink-0 rounded-chip border border-border px-1 text-[10px] font-semibold leading-[13px] text-ink"
             >
               {agentName}
             </span>
@@ -647,10 +700,10 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             // happened while I was away".
             <span
               data-dispatch-new-in-pool="true"
-              title="Spawned into the pool — click to place it in this row's focused lane"
+              title="Spawned into the pool — select it to place it in this row's focused lane"
               className="
                 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10
-                px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+                px-1.5 py-[1px] text-[10px] font-semibold leading-none text-accent
               "
             >
               new
@@ -676,7 +729,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               data-dispatch-goal-loop="true"
               title={goalLoopChipTitle(goalLoop)}
               className={`
-                flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none
+                flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[10px] font-semibold leading-none
                 ${goalLoop.phase === 'active'
                   ? 'border-accent/70 bg-accent/10 text-accent'
                   : 'border-border text-muted'}
@@ -694,7 +747,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             truncating. The index block owns the activity color now; keeping
             the secondary row visually neutral prevents the whole dispatch
             list from turning into a set of competing colored strips. */}
-        <div className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[9px] text-muted">
+        <div className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[10px] text-muted">
           <span className="truncate flex-shrink min-w-0">{subtitle}</span>
           {showWorktreeBadges && (
             <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
@@ -703,7 +756,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           {projectChip && (
             <span
               className="rounded-control
-                ml-auto flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
+                ml-auto flex-shrink-0 px-1.5 py-[1px] text-[10px] font-code
                 leading-none text-muted border border-border bg-surface-hi
                 truncate max-w-[140px]
               "
@@ -721,6 +774,8 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           the same real 10px flex allocation in both rich and tiled lists. */}
       <DispatchColorFlagStrip sessionId={row.sessionId} />
     </button>
+    {description ? <span id={descriptionId} hidden>{description}</span> : null}
+    </>
   )
 })
 
@@ -846,7 +901,7 @@ function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
       ? 'border-info-border bg-info-soft text-info'
       : 'border-border bg-surface-hi text-muted'
   return (
-    <span className={`rounded-chip flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
+    <span className={`rounded-chip flex-shrink-0 px-1.5 py-[1px] text-[10px] font-code leading-none border ${classes}`}>
       {label}
     </span>
   )
@@ -858,7 +913,7 @@ function DispatchUnreadBadge({ kind, text }: DispatchUnreadBadgeModel) {
       <span
         className="
           flex-shrink-0 rounded-chip border border-warning-border bg-warning-soft
-          px-1.5 py-[1px] text-[9px] font-semibold leading-none text-warning
+          px-1.5 py-[1px] text-[10px] font-semibold leading-none text-warning
         "
       >
         {text}
@@ -869,7 +924,7 @@ function DispatchUnreadBadge({ kind, text }: DispatchUnreadBadgeModel) {
     <span
       className="
         flex-shrink-0 rounded-chip border border-accent/70 bg-accent/20
-        px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+        px-1.5 py-[1px] text-[10px] font-semibold leading-none text-accent
       "
     >
       {text}
@@ -911,41 +966,41 @@ export function dispatchActivityClasses(
   // spells out whether the underlying session is running, working, or exited.
   if (active) {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-accent text-accent-fg',
       title: '',
     }
   }
   if (activity === 'working') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-success text-success-fg',
       title: '',
     }
   }
   if (activity === 'running') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-info text-info-fg',
       title: '',
     }
   }
   if (activity === 'starting') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-warning text-warning-fg',
       title: '',
     }
   }
   if (activity === 'exited') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
+      row: 'bg-surface hover:bg-row-hover-bg text-muted opacity-75',
       index: 'bg-danger text-danger-fg',
       title: '',
     }
   }
   return {
-    row: 'bg-surface hover:bg-surface-hi text-ink-dim',
+    row: 'bg-surface hover:bg-row-hover-bg text-ink-dim',
     index: 'bg-surface-hi text-muted',
     title: '',
   }

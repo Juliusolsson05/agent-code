@@ -78,7 +78,7 @@ describe('desktop observation repair with the real history mapper and shared pan
     // `stale` — and permanently so once an ordinary recovery mints a new
     // ownership revision (#935 Codex review). The warning stays, because that
     // output really is gone.
-    expect(screen.queryByRole('button', { name: 'Refresh view' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Refresh View' })).toBeNull()
     // A LATER incident issues a new ticket, and the control comes back with
     // it. Replaying the repair must not duplicate what it already seeded.
     act(() => live({ ...gap, gapRevision: gap.gapRevision + 1 }))

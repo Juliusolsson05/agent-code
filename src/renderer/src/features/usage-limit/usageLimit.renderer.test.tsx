@@ -45,8 +45,8 @@ describe('shared usage notice presentation and host actions', () => {
     expect(screen.getByText('Session reset reported for 2:10pm (America/Los_Angeles)')).toBeInTheDocument()
     expect(screen.getByText('The session reset does not raise the monthly spend cap.')).toBeInTheDocument()
     expect(screen.getByText(fixture.claude.message.content[0]!.text).closest('details')).toHaveTextContent('Original provider message')
-    expect(screen.getByRole('link', { name: 'Manage usage ↗' })).toHaveAttribute('href', 'https://claude.ai/settings/usage?from=cc_cli_limit_message')
-    expect(screen.queryByRole('button', { name: 'Switch provider…' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Manage Usage ↗' })).toHaveAttribute('href', 'https://claude.ai/settings/usage?from=cc_cli_limit_message')
+    expect(screen.queryByRole('button', { name: 'Switch Provider…' })).not.toBeInTheDocument()
   })
 
   it('gives a member owner guidance and keeps provider markup inert', () => {
@@ -65,15 +65,15 @@ describe('shared usage notice presentation and host actions', () => {
     const notice = codexUsageLimitNotice(fixture.codex[0])!
     render(<UsageLimitNoticeView notice={notice} sessionRunId="run-a" actions={result.current} />)
     useAppStore.setState({ usageModalOpen: true, providerSwitchPickerSessionId: null })
-    fireEvent.click(screen.getByRole('button', { name: 'Usage overview' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Usage Overview' }))
     expect(useAppStore.getState().usageModalOpen).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Switch provider…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Switch Provider…' }))
     expect(useAppStore.getState().providerSwitchPickerSessionId).toBe(h.pane)
     useAppStore.setState({ providerSwitchPickerSessionId: null })
     // Deliberately no React rerender: catches the action-time race between an
     // already-painted button and a replacement backend in the same pane.
     h.replaceRun()
-    fireEvent.click(screen.getByRole('button', { name: 'Switch provider…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Switch Provider…' }))
     expect(useAppStore.getState().providerSwitchPickerSessionId).toBeNull()
     expect(h.workspace.showPaneToast).toHaveBeenCalledWith(h.pane, expect.stringContaining('replaced agent'))
   })
@@ -155,6 +155,6 @@ it('connected remote SessionView replaces raw fallback with a no-turn notice on 
     await act(async () => { emit('onSessionSemanticEvent', { sessionId: 'remote-cap', event: fixture.codex[0] }) })
     expect(screen.getByRole('heading', { name: 'Usage limit reached' })).toBeInTheDocument()
     expect(screen.queryByText('Raw terminal fallback')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Switch provider…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Switch Provider…' })).not.toBeInTheDocument()
   } finally { view.unmount(); store.dispose() }
 })

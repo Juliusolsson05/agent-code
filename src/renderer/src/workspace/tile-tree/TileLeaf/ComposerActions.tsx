@@ -1,4 +1,5 @@
 import { Button } from '@renderer/components/ui/button'
+import { Kbd } from '@renderer/components/ui/kbd'
 import type { DictationStatus } from '@shared/types/dictation'
 
 // ComposerActions — pointer-clickable Send and Stop, shown only in Mouse Mode.
@@ -105,17 +106,26 @@ export function ComposerActions({
           className="hover:border-danger hover:bg-transparent hover:text-danger"
         >
           Stop
+          {/* Escape in the composer interrupts the turn, so the chip is true
+              (H2). Mouse Mode is exactly where the keyboard equivalent is
+              worth teaching. */}
+          <Kbd binding="Escape" />
         </Button>
       ) : null}
-      <button
-        type="button"
+      {/* The shared primary Button (UI pass, G-5). It was a raw ~20px button
+          beside Stop's 28px `Button sm`, so the two controls of the strip
+          had different heights, radii and focus looks. Enter in the composer
+          sends, hence the ↩ chip. */}
+      <Button
+        variant="default"
+        size="sm"
         disabled={sendDisabled}
         onMouseDown={event => event.preventDefault()}
         onClick={onSend}
-        className="rounded-control border border-control-border bg-control-active-bg px-3 py-1 text-[11px] leading-none text-control-active-fg hover:bg-control-hover-bg disabled:opacity-40 disabled:hover:bg-control-active-bg"
       >
         {sending ? '…' : 'Send'}
-      </button>
+        {sending ? null : <Kbd binding="Enter" tone="onAccent" />}
+      </Button>
     </div>
   )
 }

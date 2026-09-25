@@ -36,4 +36,23 @@ describe('ViewPromptsModal', () => {
     expect(screen.getByText('3 prompts')).toBeInTheDocument()
     expect(listConversationPrompts).toHaveBeenCalledWith({ provider: 'claude', nativeId: 'native-1', cwd: '/repo/project' })
   })
+
+  it('focuses a scroller that is a Tab stop, and closes from one Close ⎋ button', async () => {
+    // Plan S8: the read-only viewer's scroller was tabIndex -1, so after
+    // tabbing to the footer Shift+Tab could never get back to scrolling; the
+    // footer was an outline "Close" with no key hint.
+    Object.defineProperty(window, 'api', { configurable: true, value: { listConversationPrompts: vi.fn(async () => []) } })
+    const workspace = {
+      state: { sessions: { s: { kind: 'claude', cwd: '/repo/project', providerSessionId: 'native-1' } } },
+      getRuntime: () => ({ entries: [], hasOlderHistory: false, loadingOlderHistory: false }),
+    } as unknown as Workspace
+    render(<ViewPromptsModal open sessionId="s" workspace={workspace} onClose={vi.fn()} />)
+    const scroller = screen.getByLabelText('Prompts')
+    expect(document.activeElement).toBe(scroller)
+    expect(scroller).toHaveAttribute('tabindex', '0')
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getAllByRole('button').filter(button => button.closest('[data-slot="dialog-footer"]'))).toHaveLength(1)
+  })
 })
+

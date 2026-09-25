@@ -50,7 +50,7 @@ describe('AgentCodeCustomSkillsRow', () => {
     render(<AgentCodeCustomSkillsRow />)
 
     expect(await screen.findByText('No Agent Code-authored skills')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
     expect(await screen.findByRole('dialog', { name: 'Custom Skills' })).toBeTruthy()
     expect(screen.getByText(/External and project-local skills remain outside/)).toBeTruthy()
     expect(screen.getByText(/Installed and project-local skills are intentionally not imported/)).toBeTruthy()
@@ -68,12 +68,12 @@ describe('AgentCodeCustomSkillsRow', () => {
     })
     render(<AgentCodeCustomSkillsRow />)
     await screen.findByText('No Agent Code-authored skills')
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'New skill…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'New Skill…' }))
     fireEvent.change(screen.getByLabelText('Skill name'), { target: { value: 'review-code' } })
     fireEvent.change(screen.getByLabelText('Skill description'), { target: { value: 'Review code when asked' } })
     fireEvent.change(screen.getByLabelText('Skill instructions'), { target: { value: '# Review\n\nExplain why findings matter.' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
 
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       expectedRevision: 0,
@@ -96,15 +96,20 @@ describe('AgentCodeCustomSkillsRow', () => {
     })
     render(<AgentCodeCustomSkillsRow />)
     await screen.findByText('1 skill · 0 active')
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Edit review-code' }))
     fireEvent.change(screen.getByLabelText('Skill instructions'), {
       target: { value: '# Submitted draft' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
 
     expect(screen.getByLabelText('Skill instructions')).toBeDisabled()
     expect(screen.getByLabelText('Skill description')).toBeDisabled()
+    // The in-flight save also holds the exit (plan S29, the k3 rule): Close is
+    // disabled and advertises no ⎋ while the save runs.
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close).toBeDisabled()
+    expect(close.querySelector('[data-slot="kbd"]')).toBeNull()
     await act(async () => pending.resolve({
       ok: true,
       snapshot: {
@@ -136,18 +141,18 @@ describe('AgentCodeCustomSkillsRow', () => {
     })
     render(<AgentCodeCustomSkillsRow />)
     await screen.findByText('1 skill · 0 active')
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Edit review-code' }))
     fireEvent.change(screen.getByLabelText('Skill instructions'), {
       target: { value: '# My stale draft' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
 
     expect(await screen.findByText(/Choose how to continue/)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save Draft' })).toBeDisabled()
     expect(update).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: 'Keep my draft' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep My Draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
     await waitFor(() => expect(update).toHaveBeenLastCalledWith(expect.objectContaining({
       expectedRevision: 2,
       markdown: '# My stale draft',
@@ -167,11 +172,11 @@ describe('AgentCodeCustomSkillsRow', () => {
     await screen.findByText('No Agent Code-authored skills')
     act(() => announceAgentCodeManagedSkillsChange({ source: 'conventions', revision: 1 }))
     await waitFor(() => expect(audit).toHaveBeenCalledTimes(2))
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'New skill…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'New Skill…' }))
     fireEvent.change(screen.getByLabelText('Skill name'), { target: { value: 'review-code' } })
     fireEvent.change(screen.getByLabelText('Skill instructions'), { target: { value: '# Review' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       expectedRevision: 1,
     })))
@@ -196,7 +201,7 @@ describe('AgentCodeCustomSkillsRow', () => {
     })
     render(<AgentCodeCustomSkillsRow />)
     await screen.findByText('1 skill · 0 active')
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
     const reveals = await screen.findAllByRole('button', { name: /Reveal review-code/ })
     expect(reveals).toHaveLength(1)
     fireEvent.click(reveals[0]!)
@@ -215,7 +220,7 @@ describe('AgentCodeCustomSkillsRow', () => {
     })
     render(<AgentCodeCustomSkillsRow />)
     await screen.findByText('2 skills · 0 active')
-    fireEvent.click(screen.getByRole('button', { name: 'Manage custom skills…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
     expect(await screen.findByRole('button', { name: 'Edit review-code' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Delete write-release-notes' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Custom skill review-code' })).toBeTruthy()

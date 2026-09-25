@@ -1,4 +1,5 @@
 // OpenCode condition VIEW modules (#406 step 6).
+import { Button } from '@renderer/components/ui/button'
 //
 // Unlike the Claude/Codex views — thin adapters over existing modal
 // components whose buttons emit raw PTY keystrokes via
@@ -39,14 +40,8 @@ import type {
 } from '@shared/types/providerConditions'
 import { useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { ConditionPromptShell } from '@providers/shared/renderer/conditions/ConditionPromptShell'
 
 // Per-provider kind→state binding (see CodexStateByKind for the rationale
 // — eraseRegistry checks the registry literal against this, so filing a
@@ -65,38 +60,8 @@ function isRejectAction(action: ConditionAction): boolean {
   return /reject|deny|decline/i.test(action.label)
 }
 
-function ConditionButtons({
-  actions,
-  dispatch,
-}: {
-  actions: ConditionAction[]
-  dispatch: (action: ConditionAction) => Promise<void>
-}) {
-  // autoFocus the first non-destructive action so Enter accepts, not
-  // rejects — matches the trust-dialog convention.
-  const firstPrimaryIdx = actions.findIndex(a => !isRejectAction(a))
-  return (
-    <div className="flex justify-end gap-2 mt-6">
-      {actions.map((action, i) => {
-        const reject = isRejectAction(action)
-        return (
-          <Button
-            key={action.kind === 'custom' ? action.id : `pty-${i}`}
-            type="button"
-            autoFocus={i === firstPrimaryIdx}
-            onClick={() => {
-              void dispatch(action)
-            }}
-            variant={reject ? 'outline' : 'default'}
-          >
-            {action.label}
-          </Button>
-        )
-      })}
-    </div>
-  )
-}
-
+// The shell is shared with the other runtime-authored provider (UI pass):
+// providers/shared/renderer/conditions/ConditionPromptShell.tsx.
 function ConditionShell({
   heading,
   children,
@@ -109,25 +74,15 @@ function ConditionShell({
   dispatch: (action: ConditionAction) => Promise<void>
 }) {
   return (
-    <Dialog open>
-      <DialogContent
-        className="modal-pop w-[480px] max-w-[calc(100vw-64px)] p-6"
-        onEscapeKeyDown={event => event.preventDefault()}
-        onPointerDownOutside={event => event.preventDefault()}
-      >
-        <div className="flex items-start gap-3 mb-4">
-          <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
-          <DialogTitle className="text-[14px] font-semibold leading-[1.3]">{heading}</DialogTitle>
-          <DialogDescription className="sr-only">
-            OpenCode is waiting for an explicit response before it can continue.
-          </DialogDescription>
-        </div>
-        <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">{children}</div>
-        <div className="pl-6">
-          <ConditionButtons actions={actions} dispatch={dispatch} />
-        </div>
-      </DialogContent>
-    </Dialog>
+    <ConditionPromptShell
+      heading={heading}
+      description="OpenCode is waiting for an explicit response before it can continue."
+      actions={actions}
+      dispatch={dispatch}
+      isReject={isRejectAction}
+    >
+      {children}
+    </ConditionPromptShell>
   )
 }
 
@@ -183,7 +138,7 @@ export const opencodePermissionView = defineView<
                 "Allow once" answered Enter. Wrapping keeps a long single-line
                 `python3 -c` legible; the height cap keeps the buttons on
                 screen. */}
-            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
               {withVisibleControls(state.title)}
             </pre>
           </>
@@ -203,7 +158,7 @@ export const opencodePermissionView = defineView<
           return (
             <>
               <p className="mb-1">Command:</p>
-              <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+              <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
                 {withVisibleControls(command)}
               </pre>
             </>
@@ -283,7 +238,7 @@ function QuestionBlock({
   return (
     <div className="mb-3">
       {total > 1 && (
-        <div className="text-[10px] uppercase tracking-wide text-muted mb-1">
+        <div className="text-[10px] uppercase tracking-wider text-muted mb-1">
           Question {index + 1} of {total}
         </div>
       )}
@@ -295,7 +250,7 @@ function QuestionBlock({
       {/* Bounded and scrollable for the same reason as the permission
           subject: Escape and outside-click are disabled, so a long question
           must never push the controls off-screen. */}
-      <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[30vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+      <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-2 max-h-[30vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
         {withVisibleControls(question.question)}
       </pre>
       {question.options.length === 0 ? (
@@ -317,7 +272,7 @@ function QuestionBlock({
                 // similarly-named options can live, so it rides the tooltip
                 // rather than being dropped.
                 title={option.description ? withVisibleControls(option.description) : undefined}
-                className={`rounded-control border px-2.5 py-1 text-[11.5px] ${
+                className={`rounded-control border px-2.5 py-1 text-[11px] ${
                   active
                     ? 'border-accent bg-accent/15 text-accent'
                     : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover'
@@ -429,7 +384,7 @@ export const opencodeQuestionView = defineView<
       <ConditionShell heading="OpenCode is asking" actions={footerActions} dispatch={dispatch}>
         {questions.length === 0 ? (
           state.text ? (
-            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11.5px]">
+            <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words text-[11px]">
               {withVisibleControls(state.text)}
             </pre>
           ) : (
@@ -468,14 +423,9 @@ export const opencodeQuestionView = defineView<
               />
             ))}
             {!single && (
-              <button
-                type="button"
-                disabled={!complete}
-                onClick={submit}
-                className="rounded-control border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg disabled:opacity-40"
-              >
+              <Button type="button" variant="default" size="sm" disabled={!complete} onClick={submit}>
                 {complete ? 'Answer' : 'Choose an option for each question'}
-              </button>
+              </Button>
             )}
           </>
         )}

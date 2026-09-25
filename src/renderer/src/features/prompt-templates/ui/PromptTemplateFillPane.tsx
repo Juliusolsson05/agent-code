@@ -48,7 +48,7 @@ export function PromptTemplateFillPane({
               <div className="mb-1 flex items-center gap-2">
                 <span>{variable.label}</span>
                 {variable.required ? (
-                  <span className="text-[9px] uppercase tracking-wider text-danger">required</span>
+                  <span className="text-[10px] uppercase tracking-wider text-danger">required</span>
                 ) : null}
               </div>
               <Input

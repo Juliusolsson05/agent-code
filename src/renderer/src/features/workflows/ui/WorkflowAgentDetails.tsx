@@ -35,7 +35,7 @@ function DetailSlab({
 }): React.JSX.Element {
   return (
     <section>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">
         {label}
       </div>
       <div
@@ -88,7 +88,7 @@ export function WorkflowAgentDetails({
       {prompt ? <DetailSlab label="Prompt" value={prompt} /> : null}
 
       <section>
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+        <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">
           Activity · {totalActivities} {totalActivities === 1 ? 'event' : 'events'}
         </div>
         {totalActivities > 0 ? (
@@ -96,7 +96,7 @@ export function WorkflowAgentDetails({
             {firstVisibleActivity > 0 ? (
               <button
                 type="button"
-                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
+                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-control-hover-bg hover:text-ink"
                 onClick={() => {
                   // WHY the right edge freezes on first history expansion: otherwise every live
                   // append shifts the tail window and silently evicts the oldest row the user just
@@ -111,7 +111,7 @@ export function WorkflowAgentDetails({
             {newerActivityCount > 0 ? (
               <button
                 type="button"
-                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
+                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-control-hover-bg hover:text-ink"
                 onClick={() => {
                   setActivityWindowEnd(null)
                   setVisibleActivityCount(ACTIVITY_WINDOW)
@@ -135,7 +135,7 @@ export function WorkflowAgentDetails({
             </div>
           </div>
         ) : (
-          <div className="text-[11px] italic text-muted">
+          <div role="status" className="text-[11px] text-muted">
             {agent.status === 'running' || agent.status === 'queued'
               ? 'Waiting for provider activity…'
               : 'No activity was recorded.'}

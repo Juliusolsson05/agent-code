@@ -1,10 +1,13 @@
 import { Timeline } from './Timeline'
+import { EmptyState } from '@renderer/components/ui/empty-state'
+import { Select } from '@renderer/components/ui/select'
 import { Overview } from './overview/Overview'
 import { useAgentIdentities } from './agentIdentity'
 import { useEffect, useMemo, useState } from 'react'
 import type { PerformancePanelRequest } from '@renderer/app-state/uiShell/types'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
+import { sectionCycleTarget } from '@renderer/lib/sectionCycle'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import type { MonitorReportPreview, MonitorTraceMode, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
@@ -14,6 +17,7 @@ import { useMonitor } from './useMonitor'
 const bytes = (value: number | null | undefined) => value == null ? '—' : value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`
 const number = (value: number | null | undefined, suffix = '') => value == null ? '—' : `${value.toFixed(1)}${suffix}`
 type View = 'overview' | 'timeline' | 'processes' | 'operations' | 'recordings'
+const VIEWS: readonly View[] = ['overview', 'timeline', 'processes', 'operations', 'recordings']
 // Module scope, not a ref: StrictMode and a close/reopen both remount the
 // component, and a replayed request would open a second native dialog.
 let lastHandledRequest = 0
@@ -23,7 +27,19 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
   const [view, setView] = useState<View>(request?.view ?? 'overview')
   useEffect(() => { if (request) setView(request.view) }, [request])
   return <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-    <DialogContent className="w-[min(1360px,96vw)] h-[min(920px,94vh)] grid-rows-[auto_auto_minmax(0,1fr)]" showCloseButton>
+    {/* Sized to the WINDOW, not to content: a deliberate non-preset width
+        (plan T2 exception for full-viewport tools). ⌘[ / ⌘] step through the
+        five views from anywhere in the dialog (plan D5). */}
+    <DialogContent
+      className="w-[min(1360px,96vw)] h-[min(920px,94vh)] grid-rows-[auto_auto_minmax(0,1fr)]"
+      showCloseButton
+      onKeyDown={event => {
+        const next = sectionCycleTarget(event, VIEWS.indexOf(view), VIEWS.length)
+        if (next === null) return
+        event.preventDefault()
+        setView(VIEWS[next]!)
+      }}
+    >
       <DialogHeader>
         <DialogTitle>Performance Monitor</DialogTitle>
         <DialogDescription>Live health and local performance evidence for Agent Code and your agents.</DialogDescription>
@@ -35,15 +51,15 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
           {/* Coverage counters only when they say something: a permanent "0 dropped
               records · 0 restarts" line was noise that trained people to skip
               the header. */}
-          {snapshot && (snapshot.droppedRecords > 0 || snapshot.restarts > 0) && <span className="text-warning-fg">{snapshot.droppedRecords.toLocaleString()} dropped records · {snapshot.restarts} collector restarts</span>}
+          {snapshot && (snapshot.droppedRecords > 0 || snapshot.restarts > 0) && <span className="text-warning">{snapshot.droppedRecords.toLocaleString()} dropped records · {snapshot.restarts} collector restarts</span>}
         </div>
       </DialogHeader>
       <nav aria-label="Performance views" className="flex gap-2 border-b border-border px-4 py-2">
-        {(['overview', 'timeline', 'processes', 'operations', 'recordings'] as const).map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
+        {VIEWS.map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
           {tab[0].toUpperCase() + tab.slice(1)}
         </Button>)}
       </nav>
-      <div className="overflow-auto p-4 text-[12px] min-h-[min(400px,50vh)]">
+      <div className="overflow-auto px-4 py-3 text-[12px] min-h-[min(400px,50vh)]">
         {!snapshot ? <p className="text-muted" role="status">{error ? 'Performance readings are unavailable. Collection will reconnect automatically.' : 'Waiting for the first sample…'}</p>
           : view === 'overview' ? <Overview snapshot={snapshot} onClose={onClose} />
             : view === 'timeline' ? <Timeline incidents={snapshot.incidents ?? []} />
@@ -138,7 +154,7 @@ function Recordings({ snapshot, request, onRequestHandled }: { snapshot: Monitor
   }
   return <div className="space-y-5">
     <section className="rounded-slab border border-border bg-canvas p-4 space-y-3"><h2 className="font-medium">Local performance report</h2><p className="text-[11px] leading-5 text-muted">Includes bounded metric rollups, operation histograms, incidents, coverage and build metadata. It contains no prompts, transcript text, paths, DOM, audio, environment variables or stacks. Nothing is uploaded.</p>
-      <label className="text-muted">Range <select className="ml-2 rounded-control border border-border bg-canvas p-1 text-ink" value={range} onChange={event => setRange(Number(event.target.value))}><option value={15 * 60_000}>15 minutes</option><option value={24 * 60 * 60_000}>24 hours</option><option value={7 * 24 * 60 * 60_000}>7 days</option></select></label>
+      <label className="text-muted">Range <Select size="sm" className="ml-2" value={range} onChange={event => setRange(Number(event.target.value))}><option value={15 * 60_000}>15 minutes</option><option value={24 * 60 * 60_000}>24 hours</option><option value={7 * 24 * 60 * 60_000}>7 days</option></Select></label>
       <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>Save Performance Report</Button><Button size="sm" variant="destructive-outline" disabled={busy || snapshot.history?.exporting} onClick={() => void clear()}>Clear Local History</Button></div>
       <p className="text-[11px] text-muted">{preview ? `${preview.dataClasses.join(', ')} · estimated ${(preview.estimatedBytes / 1024).toFixed(1)} KiB · local file only` : 'Preparing report preview…'}</p>
       <p className="text-[11px] text-muted">{snapshot.history ? `${(snapshot.history.bytes / 1024 / 1024).toFixed(1)} MiB stored · ${snapshot.history.state}${snapshot.history.shortened ? ' · shortened' : ''}` : 'History is warming up.'}</p>
@@ -177,7 +193,7 @@ function Processes() {
   }, [offset, sort])
   return <section className="space-y-4">
     <div className="flex items-center justify-between gap-3"><div><h2 className="font-medium">All managed processes</h2><p className="mt-1 text-[11px] text-muted">Includes background and detached agents. Shared helpers are counted once in application totals.</p></div>
-      <label className="text-muted">Sort <select className="ml-2 rounded-control border border-border bg-canvas p-1 text-ink" value={sort} onChange={event => { setSort(event.target.value as 'cpu' | 'memory'); setOffset(0) }}><option value="cpu">CPU</option><option value="memory">Memory</option></select></label>
+      <label className="text-muted">Sort <Select size="sm" className="ml-2" value={sort} onChange={event => { setSort(event.target.value as 'cpu' | 'memory'); setOffset(0) }}><option value="cpu">CPU</option><option value="memory">Memory</option></Select></label>
     </div>
     {error && <p role="status" className="text-muted">Process readings delayed.</p>}
     <div className="overflow-auto rounded-slab border border-border"><table className="w-full text-left text-[11px] tabular-nums">
@@ -187,7 +203,7 @@ function Processes() {
           ? `Shared by ${row.sharedSessionCount} sessions`
           // The label beside the agent in the workspace, never a raw session
           // UUID: an ID prefix is not something a person can find on screen.
-          : row.sessionIds[0] ? <span className="flex items-center gap-1.5"><span className="rounded-chip border border-current/30 px-1 text-[9px] font-semibold leading-[14px]">{identities.get(row.sessionIds[0])?.label ?? '—'}</span><span className="truncate">{identities.get(row.sessionIds[0])?.title ?? 'Unplaced session'}</span></span>
+          : row.sessionIds[0] ? <span className="flex items-center gap-1.5"><span className="rounded-chip border border-current/30 px-1 text-[10px] font-semibold leading-[14px]">{identities.get(row.sessionIds[0])?.label ?? '—'}</span><span className="truncate">{identities.get(row.sessionIds[0])?.title ?? 'Unplaced session'}</span></span>
             : 'Application'}</td>
         <td>{number(row.cpuPercent, '%')}</td><td>{bytes(row.memoryBytes)}</td><td>{row.quality}</td></tr>)}</tbody>
     </table></div>
@@ -199,6 +215,6 @@ function Processes() {
 function Operations({ snapshot }: { snapshot: MonitorSnapshot }) {
   const rows = useMemo(() => [...snapshot.operations].sort((a, b) => b.histogram.maxMs - a.histogram.maxMs), [snapshot.operations])
   return <section className="space-y-3"><h2 className="font-medium">Operation latency</h2><p className="text-[11px] text-muted">Percentiles are histogram bucket upper bounds. Sample counts and outcomes keep slow failures visible. Provider and first-output durations include waiting; transcript.commit ends at React layout commit, before paint.</p>
-    {!rows.length ? <p className="text-muted">No operations recorded in this run.</p> : <table className="w-full text-left text-[11px] tabular-nums"><thead className="text-muted"><tr>{['Operation', 'Outcome', 'Count', 'p50', 'p95', 'p99', 'Maximum'].map(label => <th className="py-2 font-normal" key={label}>{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr className="border-t border-border" key={`${row.name}:${row.outcome}`}><td className="py-2">{row.name}</td><td>{row.outcome}</td><td>{row.histogram.count.toLocaleString()}</td>{[0.5, 0.95, 0.99].map(q => { const value = latencyQuantile(row.histogram, q); return <td key={q}>{value?.overflow ? '>60 s' : number(value?.upperBoundMs, ' ms')}</td> })}<td>{number(row.histogram.maxMs, ' ms')}</td></tr>)}</tbody></table>}
+    {!rows.length ? <EmptyState>No operations recorded in this run.</EmptyState> : <table className="w-full text-left text-[11px] tabular-nums"><thead className="text-muted"><tr>{['Operation', 'Outcome', 'Count', 'p50', 'p95', 'p99', 'Maximum'].map(label => <th className="px-3 py-2 font-normal" key={label}>{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr className="border-t border-border" key={`${row.name}:${row.outcome}`}><td className="px-3 py-2">{row.name}</td><td className="px-3 py-2">{row.outcome}</td><td className="px-3 py-2">{row.histogram.count.toLocaleString()}</td>{[0.5, 0.95, 0.99].map(q => { const value = latencyQuantile(row.histogram, q); return <td key={q} className="px-3 py-2">{value?.overflow ? '>60 s' : number(value?.upperBoundMs, ' ms')}</td> })}<td className="px-3 py-2">{number(row.histogram.maxMs, ' ms')}</td></tr>)}</tbody></table>}
   </section>
 }

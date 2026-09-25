@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
 
 import { Button } from '@renderer/components/ui/button'
 import { BarChart } from '@renderer/components/charts/BarChart'
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { sectionCycleTarget } from '@renderer/lib/sectionCycle'
 import { formatAgentTime, formatDayLabel } from '@renderer/features/agent-analytics/model/formatAgentTime'
 import type {
   AgentActivityDay,
@@ -40,6 +41,8 @@ const RANGES: ReadonlyArray<{ id: AgentActivityRange; label: string }> = [
   { id: '24h', label: '24 hours' },
   { id: '7d', label: '7 days' },
   { id: '30d', label: '30 days' },
+  // Sentence case like its siblings: range options read as values
+  // ("7 days"), not commands (ledger G-31 ruling, round-2 review C1).
   { id: 'all', label: 'All time' },
 ]
 
@@ -57,6 +60,9 @@ function Stat({ label, value, detail }: { label: string; value: string; detail?:
   return (
     <div className="rounded-slab border border-border bg-surface px-3 py-2">
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+      {/* The one stat size (UI pass, G-17): 18px semibold tabular, shared
+          with Performance's health tiles and Dictation's history stats,
+          which were 20px and 15px for the same "big number" idea. */}
       <div className="mt-1 text-[18px] font-semibold tabular-nums text-ink">{value}</div>
       {detail ? <div className="mt-0.5 text-[10px] text-muted">{detail}</div> : null}
     </div>
@@ -113,7 +119,7 @@ function ProjectRow({ project, totalMs }: { project: AgentActivityProjectRow; to
         type="button"
         onClick={() => setExpanded(value => !value)}
         aria-expanded={expanded}
-        className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left hover:bg-surface-hi"
+        className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
       >
         <div className="min-w-0">
           <div className="truncate text-[12px] font-semibold text-ink">
@@ -227,11 +233,25 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[90vh] w-[min(1040px,calc(100vw-2rem))] flex-col">
-        <DialogHeader className="flex-row items-start justify-between gap-4">
+      <DialogContent
+        size="xl"
+        className="flex max-h-[86vh] flex-col"
+        // No footer: the corner `× ⎋` is the exit (plan H5), replacing the
+        // header's lowercase "close" button.
+        showCloseButton
+        onKeyDown={event => {
+          // ⌘[ / ⌘] step through the time ranges from anywhere (plan D5).
+          const index = RANGES.findIndex(option => option.id === range)
+          const next = sectionCycleTarget(event, Math.max(0, index), RANGES.length)
+          if (next === null) return
+          event.preventDefault()
+          setRange(RANGES[next]!.id)
+        }}
+      >
+        <DialogHeader>
           <div>
-            <DialogTitle className="font-semibold">Agent Analytics</DialogTitle>
-            <DialogDescription className="mt-0.5 text-[10px]">
+            <DialogTitle>Agent Analytics</DialogTitle>
+            <DialogDescription className="mt-0.5">
               Where your agents&apos; working time went. Time asleep and time waiting on you are not counted.
             </DialogDescription>
             {showing?.recordingSince != null ? (
@@ -240,11 +260,6 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
               </div>
             ) : null}
           </div>
-          <DialogClose asChild>
-            <Button type="button" variant="secondary" size="sm">
-              close
-            </Button>
-          </DialogClose>
         </DialogHeader>
 
         <nav aria-label="Time range" className="flex flex-wrap gap-2 border-b border-border px-4 py-2">
@@ -262,11 +277,9 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
           ))}
         </nav>
 
-        <div className="overflow-auto p-4">
+        <div className="overflow-auto px-4 py-3">
           {error ? (
-            <div className="rounded-slab mb-3 border border-danger bg-danger/10 px-3 py-2 text-[11px] text-danger" role="alert">
-              {error}
-            </div>
+            <Alert className="mb-3">{error}</Alert>
           ) : null}
 
           {!showing ? (

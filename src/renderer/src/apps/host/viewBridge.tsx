@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
@@ -329,9 +330,9 @@ function buildViewComponent(
             <div className="mt-1 text-[12px] text-muted">
               {failureMessage}
             </div>
-            <button type="button" aria-label={`Retry ${displayName}`} className="mt-3 rounded border border-border px-3 py-1 text-[12px] text-ink" onClick={() => setAttempt(current => current + 1)}>
+            <Button type="button" aria-label={`Retry ${displayName}`} variant="outline" size="sm" className="mt-3" onClick={() => setAttempt(current => current + 1)}>
               Retry
-            </button>
+            </Button>
           </div>
         ) : null}
         {/* Always present so the ref exists before the effect runs.
