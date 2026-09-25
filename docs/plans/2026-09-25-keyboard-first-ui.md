@@ -425,7 +425,7 @@ entry when it lands.
 | S17 | MergeProjectTabsModal | select focus; no Enter; mx-4 mt-3 pieces | DialogActions; T3 body | done |
 | S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | done |
 | S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | done |
-| S20 | ConversationsPicker | ↑↓ Enter; "esc" label + prose | useListNavigation; legend; T4 input | todo |
+| S20 | ConversationsPicker | ↑↓ Enter; "esc" label + prose | useListNavigation; legend; T4 input | done |
 | S21 | AgentActivityView | richest keys; legend row; pt-4, 15px title | legend → DialogActions/footer legend; D3; T3/T5 | todo |
 | S22 | QuickOpenOverlay | ↑↓ Enter; sr-only hint; outline-none input | useListNavigation; legend; T4 | todo |
 | S23 | ContentSearchOverlay | ↑↓ Enter; sr-only hint | as S22 | todo |
@@ -481,7 +481,7 @@ entry when it lands.
 | N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
 | N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | todo |
 | N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | todo |
-| N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | todo |
+| N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
 | N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | todo |
 | N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
 | N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | todo |
@@ -654,6 +654,13 @@ Sharp corners and one light theme.
   `Save Note ⌘↩`; plain Enter is a newline; with text typed, Skip or Escape
   first asks "Discard this note?" (red Discard Note, focus on Cancel); body
   py-3; 640 wide.
+- **S20 Conversations (⌘⇧R / Search Conversations…):** header shows a `⎋`
+  chip where the lowercase "esc" was; the filter row ends with `↑ ↓ move  ↩
+  resume` chips instead of "· ↑↓ ↵ resume"; scope/provider chips show a focus
+  ring when tabbed (provider/children chips now control radius); Search
+  opens in the box, Resume on the list (ring on the list when tabbed back
+  to); the list/preview divider takes focus (turns the focus colour) and
+  ←/→ resize it; 1240 wide (xl).
 
 ## Tasks
 
@@ -728,6 +735,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S20: Conversations on useListNavigation (keyed by
+  provider:nativeId, reset on head/query/filter change, loadMore near the
+  end), input = combobox focus owner in Search mode, listbox in Resume mode;
+  ConversationRow takes itemProps (PathPicker still on onHover/onSelect until
+  N9); keyboard splitter. Confirm-red: 3 new tests fail on the pre-change
+  files.
 - 2026-09-25 S18/S19: Queued Prompt viewer focuses its text (read-only
   viewer pattern); debug note on DialogActions with confirmKey Cmd+Enter and
   a discard confirm for typed notes (B7's D3 condition). Ruling: the note's

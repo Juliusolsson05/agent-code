@@ -6,12 +6,21 @@ import { withVisibleControls } from '@shared/text/visibleControls'
 // The one row every picker renders. It makes no naming decision: label and
 // provenance come from the catalog; a fallback label is italic so the user
 // knows they are looking at a stand-in (#701's requirement, now possible).
-export function ConversationRow({ row, selected, index, onHover, onSelect }: {
+import type { ListItemProps } from '@renderer/lib/useListNavigation'
+
+export function ConversationRow({ row, selected, index, onHover, onSelect, itemProps }: {
   row: Conversation
   selected: boolean
   index: number
-  onHover: () => void
-  onSelect: () => void
+  onHover?: () => void
+  onSelect?: () => void
+  /**
+   * The list-navigation wiring (id for aria-activedescendant, mousemove
+   * highlight, click, no mousedown focus theft, scroll-into-view ref) from
+   * useListNavigation — the Conversations picker's path (plan S20). The
+   * onHover/onSelect pair remains for callers not yet on the shared hook.
+   */
+  itemProps?: ListItemProps
 }) {
   const fallback = row.labelSource === 'cwd' || row.labelSource === 'native-id'
   const label = row.match?.field === 'label'
@@ -23,8 +32,9 @@ export function ConversationRow({ row, selected, index, onHover, onSelect }: {
       aria-selected={selected}
       aria-disabled={!row.available}
       data-conversation-index={index}
-      onMouseEnter={onHover}
-      onClick={onSelect}
+      onMouseEnter={itemProps ? undefined : onHover}
+      onClick={itemProps ? undefined : onSelect}
+      {...itemProps}
       className={`cursor-pointer border-b border-border px-3 py-2 last:border-b-0 ${selected ? 'bg-row-selected-bg text-row-selected-fg' : 'text-ink-dim hover:bg-row-hover-bg'} ${row.available ? '' : 'opacity-60'}`}
     >
       <div className="flex items-center gap-2 text-[12px]">
