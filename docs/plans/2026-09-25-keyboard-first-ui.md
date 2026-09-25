@@ -1,6 +1,6 @@
 # UI: every surface is keyboard-operable, labelled, and visually consistent
 
-Refs #512 (floating-surface unification — the Radix migration did most of it;
+Refs #1220 (tracking issue), Refs #512 (floating-surface unification — the Radix migration did most of it;
 this finishes the keyboard/labels half), Refs #713 (condition modal traps all
 input — keyboard side owned here, functional side coordinated with B7).
 Branch `feat/keyboard-first-ui` · Worktree `.worktrees/keyboard-first-ui` ·
