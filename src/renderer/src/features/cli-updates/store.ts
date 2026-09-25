@@ -79,7 +79,13 @@ export function dismissKey(cli: CliUpdateKind, state: CliUpdateState): string {
     case 'failed':
       return `${cli}:failed:${state.wantedLatest}`
     case 'deferred':
-      return `${cli}:deferred:${state.wantedLatest}`
+      // A user-requested deferral is keyed per CLICK (#1265 review A): the
+      // row's Update now retries, and a dismissed explanation must not
+      // swallow the answer to the next click. Automatic deferrals are silent
+      // anyway.
+      return state.requestedByUser
+        ? `${cli}:deferred:${state.wantedLatest}:${state.checkedAt}`
+        : `${cli}:deferred:${state.wantedLatest}`
     case 'idle':
     case 'up-to-date':
     default:
