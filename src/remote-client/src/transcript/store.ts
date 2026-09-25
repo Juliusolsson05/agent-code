@@ -22,7 +22,7 @@ import {
   type HistoryWindow,
 } from '@renderer/session-runtime/historyBoundary'
 import type { SemanticLiveTurn, SemanticRuntimeState } from '@renderer/session-runtime/state'
-import { isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
@@ -358,12 +358,13 @@ export class TranscriptStore {
     return this.state(sessionId).transcript
   }
 
-  /** Resolved provider kind (list-backed; 'claude' until the list lands —
-   *  the server sends the list before any session event on every connect,
-   *  so the fallback window is one frame). Exposed so SessionView doesn't
-   *  duplicate the lookup (review finding). */
+  /** Resolved provider kind (list-backed). Until the list lands it is the
+   *  named DEFAULT_PROVIDER — the server sends the list before any session
+   *  event on every connect, so that window is one frame, and the rows keep
+   *  no state from it. Exposed so SessionView doesn't duplicate the lookup
+   *  (review finding). */
   getKind(sessionId: string): AgentProviderKind {
-    return this.kindOf(sessionId) ?? 'claude'
+    return this.kindOf(sessionId) ?? DEFAULT_PROVIDER
   }
 
   // --- backfill ---
@@ -558,7 +559,7 @@ export class TranscriptStore {
     // TRANSIENT claude-default mapper and do NOT memoize, so the real kind
     // still wins once known. The claude mapper is stateless, so a transient
     // instance loses nothing.
-    return getRendererProviderCapabilities('claude').createTranscriptEntryMapper()
+    return getRendererProviderCapabilities(DEFAULT_PROVIDER).createTranscriptEntryMapper()
   }
 
   /** Fresh chunk-scoped mapper — the desktop's rule for history chunks
@@ -567,7 +568,7 @@ export class TranscriptStore {
    *  with the live turn id, and the live cursor never inherits a stale
    *  historical one. */
   private chunkMapper(sessionId: string): Mapper {
-    const kind = this.kindOf(sessionId) ?? 'claude'
+    const kind = this.kindOf(sessionId) ?? DEFAULT_PROVIDER
     return getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
   }
 
@@ -850,7 +851,7 @@ export class TranscriptStore {
     // then the shared phase machine over the POST-fold turn, with
     // prompt_suggestion routed around both. The phone has no suggestion chip,
     // so an out-of-band event is simply dropped here.
-    const kind = this.kindOf(sessionId) ?? 'claude'
+    const kind = this.kindOf(sessionId) ?? DEFAULT_PROVIDER
     const step = stepLiveSemantic(state.semantic, state.transcript.phase, record, kind)
     if (step.kind === 'out-of-band') return
     const nextSemantic = step.semantic

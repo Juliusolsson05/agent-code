@@ -133,8 +133,10 @@ type Props = {
    *  position persistence across Feed unmount/remount (tab switches).
    *  See `scrollPositions` below. */
   sessionId: string
-  /** Which provider's row renderers to use. Default 'claude'. */
-  provider?: AgentProvider
+  /** Which provider's row renderers to use. Required since #1177: the old
+   *  `'claude'` default meant a caller that forgot it painted any provider
+   *  with Claude's rows, silently. AgentFeed, the one mount, always knows. */
+  provider: AgentProvider
   entries: Entry[]
   /**
    * The ownership-ledger pipeline's pre-decided, pre-ordered item list — the
@@ -304,7 +306,7 @@ export const Feed = memo(FeedImpl)
 function FeedImpl({
   usageLimitActions,
   sessionId,
-  provider = 'claude',
+  provider,
   entries,
   renderItemsOverride = null,
   committedOperationDecisionOverride,
