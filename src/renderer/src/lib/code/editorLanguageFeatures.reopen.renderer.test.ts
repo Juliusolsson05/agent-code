@@ -80,3 +80,20 @@ it('does not reopen on any other failure', async () => {
   expect(reopen).not.toHaveBeenCalled()
   unregister()
 })
+
+// #1266 review B3: the newest mount replaced the shared reopen callback, and
+// unmounting it left that dead callback selected for the surviving mount.
+it('reopens with the surviving mount after the newest one unmounts', async () => {
+  ;(window as { api?: unknown }).api = { changeLspDocument: vi.fn(async () => { throw lost }) }
+  const survivor = vi.fn(async (_content: string) => true)
+  const departed = vi.fn(async (_content: string) => false)
+  const editor = model('file-editor://two-mounts')
+  const unregisterA = registerEditorLspContext('file-editor://two-mounts', { workspaceRoot: '/repo', openDefinition: async () => false, reopen: survivor })
+  const unregisterB = registerEditorLspContext('file-editor://two-mounts', { workspaceRoot: '/repo', openDefinition: async () => false, reopen: departed })
+  unregisterB()
+  editor.type('second')
+  expect(await syncEditorLspModel(editor as never)).toBe(true)
+  expect(survivor).toHaveBeenCalledWith('second')
+  expect(departed).not.toHaveBeenCalled()
+  unregisterA()
+})

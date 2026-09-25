@@ -35,6 +35,13 @@ type ModelContext = {
   reopenBlockedUntil: number
   reopenBackoffMs: number
   refs: number
+  /** Every live mount's callbacks, oldest first. `openDefinition` and
+   *  `reopen` above are always the NEWEST mount's (its authorization is the
+   *  current one), and fall back to the next-newest when it unmounts
+   *  (#1266 review B3). Overwriting in place, as this once did, left an
+   *  unmounted view's callbacks selected: the surviving mount then reopened
+   *  with a dead authorization and never regained LSP. */
+  mounts: Array<Pick<ModelContext, 'openDefinition' | 'reopen'>>
   syncedVersion: number | null
   pendingSync: { version: number; promise: Promise<boolean> } | null
 }
@@ -49,15 +56,18 @@ export function registerEditorLspContext(
   clientUri: string,
   context: Pick<ModelContext, 'workspaceRoot' | 'openDefinition' | 'reopen'>,
 ): () => void {
+  // Its own object, so unregister removes THIS mount even when two mounts
+  // pass identical callbacks.
+  const mount = { openDefinition: context.openDefinition, reopen: context.reopen }
   const existing = modelContexts.get(clientUri)
   if (existing && existing.workspaceRoot === context.workspaceRoot) {
     existing.refs += 1
-    existing.openDefinition = context.openDefinition
-    // The newest mount's authorization is the current one.
-    if (context.reopen) existing.reopen = context.reopen
+    existing.mounts.push(mount)
+    selectNewestMount(existing)
   } else {
     modelContexts.set(clientUri, {
       ...context,
+      mounts: [mount],
       refs: 1,
       syncedVersion: null,
       pendingSync: null,
@@ -69,7 +79,30 @@ export function registerEditorLspContext(
     const current = modelContexts.get(clientUri)
     if (!current || current.workspaceRoot !== context.workspaceRoot) return
     current.refs -= 1
-    if (current.refs <= 0) modelContexts.delete(clientUri)
+    if (current.refs <= 0) {
+      modelContexts.delete(clientUri)
+      return
+    }
+    const index = current.mounts.indexOf(mount)
+    if (index >= 0) current.mounts.splice(index, 1)
+    selectNewestMount(current)
+  }
+}
+
+function selectNewestMount(context: ModelContext): void {
+  const newest = context.mounts[context.mounts.length - 1]
+  if (!newest) return
+  context.openDefinition = newest.openDefinition
+  // A mount without a reopen callback (a surface that cannot re-authorize)
+  // must not erase an older mount's: pick the newest that has one. (A loop,
+  // not findLast: the web project targets ES2020.)
+  context.reopen = undefined
+  for (let i = context.mounts.length - 1; i >= 0; i--) {
+    const candidate = context.mounts[i].reopen
+    if (candidate) {
+      context.reopen = candidate
+      break
+    }
   }
 }
 

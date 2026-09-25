@@ -801,17 +801,45 @@ describe('#1208 — reopening a document after its server was lost', () => {
   }
   const VIRTUAL = { language: 'typescript', workspaceRoot: '/repo', filePath: null, authorization: { kind: 'editor-root' } } as const
 
-  function setup(authorize: (sender: unknown, root: string) => Promise<string> = async () => '/repo') {
+  function setup(
+    authorize: (sender: unknown, root: string) => Promise<string> = async () => '/repo',
+    aiWorkspaces: unknown = {},
+  ) {
     ipcHandlers.clear()
-    const { manager, server } = managerWithServer()
-    registerLspIpc(manager, { authorize } as never, {} as never)
-    const listeners = new Map<string, () => void>()
+    const { manager, server, notifications } = managerWithServer()
+    registerLspIpc(manager, { authorize } as never, aiWorkspaces as never)
+    const listeners = new Map<string, (details?: unknown) => void>()
     const sender = {
       id: 1, isDestroyed: () => false,
       once: (event: string, fn: () => void) => { listeners.set(event, fn) },
-      on: (event: string, fn: () => void) => { listeners.set(event, fn) },
+      on: (event: string, fn: (details?: unknown) => void) => { listeners.set(event, fn) },
     }
-    return { manager, server, evt: { sender }, destroy: () => listeners.get('destroyed')?.() }
+    return {
+      manager, server, notifications, evt: { sender },
+      destroy: () => listeners.get('destroyed')?.(),
+      // A main-frame navigation to a new document: same WebContents id, new page.
+      navigate: () => listeners.get('did-start-navigation')?.({ isMainFrame: true, isSameDocument: false }),
+    }
+  }
+  /** An authorize() that can be paused once, from the test, at a chosen call. */
+  function pausable() {
+    let paused = false
+    let release!: () => void
+    let entered!: () => void
+    const inside = new Promise<void>(resolve => { entered = resolve })
+    return {
+      authorize: async () => {
+        if (paused) {
+          paused = false
+          entered()
+          await new Promise<void>(resolve => { release = resolve })
+        }
+        return '/repo'
+      },
+      pauseNext: () => { paused = true },
+      inside,
+      release: () => release(),
+    }
   }
 
   it('restores every reference the renderer holds, so closing one mount keeps LSP for the other', async () => {
@@ -940,5 +968,115 @@ describe('#1208 — reopening a document after its server was lost', () => {
     } finally {
       await rm(base, { recursive: true, force: true })
     }
+  })
+  // #1266 review A2: navigation keeps the WebContents id. A reopen issued by
+  // the old page must not borrow the NEW page's ownership of the same URI and
+  // re-send the old page's text under the old page's authorization.
+  it('refuses a reopen from a page that navigated away, even when the next page owns the URI again', async () => {
+    const gate = pausable()
+    const { manager, server, evt, navigate, notifications } = setup(gate.authorize)
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'old secret' })
+    discard(manager, server)
+    gate.pauseNext()
+    const reopen = ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'old secret' })
+    await gate.inside
+    navigate()
+    const reclaim = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'new content' })
+    gate.release()
+    expect(await reopen).toBe(false)
+    await reclaim
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // Exactly the new page's one reference, holding the new page's text.
+    expect(docsOf(manager).get('inmemory://a')?.refs).toBe(1)
+    const opened = notifications
+      .filter(n => n.method === 'textDocument/didOpen')
+      .map(n => (n.params as { textDocument: { text: string } }).textDocument.text)
+    // The first open's text, then only the new page's: never the old text again.
+    expect(opened).toEqual(['old secret', 'new content'])
+  })
+
+  // #1266 review B1: lsp:open-document counts its IPC reference before it
+  // queues. A reopen that ran first read that reference and restored it, and
+  // the queued open then added its own: manager 3 against IPC 2, and a server
+  // document no close ever released.
+  it('does not count an open queued behind the reopen twice', async () => {
+    const gate = pausable()
+    const { manager, server, evt } = setup(gate.authorize)
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    gate.pauseNext()
+    const reopen = ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    await gate.inside
+    const second = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    gate.release()
+    expect(await reopen).toBe(true)
+    await second
+    expect(docsOf(manager).get('inmemory://a')?.refs).toBe(2)
+    await ipcHandlers.get('lsp:close-document')!(evt, 'inmemory://a')
+    await ipcHandlers.get('lsp:close-document')!(evt, 'inmemory://a')
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  // #1266 review B2: the owner can go away during the MANAGER open, after the
+  // post-authorization check. The completed reopen re-marked the URI backed,
+  // so the next owner's unsupported-language document rejected every change
+  // with "not open" instead of the fail-open no-op.
+  it('leaves nothing behind when the owner goes away during the manager open', async () => {
+    const { manager, server, evt, destroy } = setup()
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    const realOpen = manager.openDocument.bind(manager)
+    let entered!: () => void
+    const inside = new Promise<void>(resolve => { entered = resolve })
+    let release!: () => void
+    manager.openDocument = async params => {
+      entered()
+      await new Promise<void>(resolve => { release = resolve })
+      return await realOpen(params)
+    }
+    const reopen = ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    await inside
+    destroy()
+    release()
+    expect(await reopen).toBe(false)
+    manager.openDocument = realOpen
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+    const next = { sender: { ...evt.sender, id: 2, once: () => {}, on: () => {} } }
+    await ipcHandlers.get('lsp:open-document')!(next, { ...VIRTUAL, language: 'plaintext', clientUri: 'inmemory://a', content: 'x' })
+    await expect(ipcHandlers.get('lsp:change-document')!(next, 'inmemory://a', 'y')).resolves.toBeUndefined()
+  })
+
+  it('rolls back a partial reopen whose later open comes back false', async () => {
+    const { manager, server, evt } = setup()
+    const open = ipcHandlers.get('lsp:open-document')!
+    await open(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    await open(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    const realOpen = manager.openDocument.bind(manager)
+    let calls = 0
+    manager.openDocument = async params => (++calls === 1 ? await realOpen(params) : false)
+    expect(await ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'two' })).toBe(false)
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  it('re-authorizes an AI Workspace entry, and a removed entry opens nothing', async () => {
+    let entryAlive = true
+    const aiWorkspaces = {
+      authorizeLspEntry: async () => {
+        if (!entryAlive) throw new Error('AI Workspace entry is gone')
+        return { workspaceRoot: '/repo', filePath: null }
+      },
+    }
+    const { manager, server, evt } = setup(async () => { throw new Error('editor roots are not used here') }, aiWorkspaces)
+    const params = { ...VIRTUAL, clientUri: 'inmemory://ai', content: 'one', authorization: { kind: 'ai-workspace', workspaceId: 'w', entryId: 'e' } }
+    await ipcHandlers.get('lsp:open-document')!(evt, params)
+    discard(manager, server)
+    entryAlive = false
+    await expect(ipcHandlers.get('lsp:reopen-document')!(evt, params)).rejects.toThrow('entry is gone')
+    expect(docsOf(manager).has('inmemory://ai')).toBe(false)
+    entryAlive = true
+    expect(await ipcHandlers.get('lsp:reopen-document')!(evt, params)).toBe(true)
+    expect(docsOf(manager).get('inmemory://ai')?.refs).toBe(1)
   })
 })
