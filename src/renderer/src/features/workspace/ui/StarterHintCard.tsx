@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { Kbd } from '@renderer/components/ui/kbd'
 import { useShallow } from 'zustand/react/shallow'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -176,9 +177,9 @@ export function StarterHintCard({ variant }: { variant: 'fresh-agent' | 'empty-l
         {rows.map(row => (
           <span key={row.key} className="flex items-baseline gap-1.5 whitespace-nowrap">
             {row.chord ? (
-              <kbd className="rounded-chip border border-border bg-surface px-1 py-[1px] font-code text-[10px] text-ink">
-                {row.chord}
-              </kbd>
+              // The shared chip (plan H1): this was the last hand-drawn <kbd>.
+              // aria-hidden={false}: here the key IS the information.
+              <Kbd aria-hidden={false}>{row.chord}</Kbd>
             ) : null}
             <span>{row.label}</span>
           </span>

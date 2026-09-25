@@ -15,7 +15,7 @@ export function WelcomeEmpty({ onNewTabRequest }: { onNewTabRequest: () => void 
   return (
     <div className="h-full flex items-center justify-center">
       <div className="flex flex-col items-center gap-3">
-        <div className="text-muted text-[12px]">no tabs open</div>
+        <div className="text-muted text-[12px]">No tabs open.</div>
         <Button type="button" onClick={onNewTabRequest}>
           New Tab
           {newTabBinding ? <Kbd binding={newTabBinding} tone="onAccent" /> : null}
