@@ -410,7 +410,7 @@ entry when it lands.
 | S2 | PinAgentsModal (`dispatch-pin`) | ↑↓ j/k Space Enter; bare `<kbd>` legend in body; p-5 | legend → DialogActions legend; useListNavigation; T3 anatomy + header | done |
 | S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | done |
 | S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | done |
-| S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | todo |
+| S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | done |
 | S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | todo |
 | S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | todo |
 | S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | todo |
@@ -582,6 +582,10 @@ Sharp corners and one light theme.
   medium (not semibold); footer `↑ ↓ move` · `Cancel ⎋` · `Apply ↩` (new
   button; disabled when the highlighted mode is unavailable); the list gets
   a focus ring when tabbed back to.
+- **S5 Switch Provider:** same picker pattern as S4 — padded body, T7 rows
+  (py-2, 12px medium), footer `↑ ↓ move` · `Cancel ⎋` (ghost, was outline) ·
+  `Switch ↩`; the old prose line "↑↓ choose · Enter switch · Esc cancel" is
+  gone; width is the 520 default (was 500).
 
 ## Tasks
 
@@ -656,6 +660,9 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S5: Switch Provider on useListNavigation (⌃N/⌃P kept via the
+  hook), listbox focus owner with role=option rows, Switch button.
+  Confirm-red: both new tests fail on the pre-change file.
 - 2026-09-25 S4: Agent View Mode on useListNavigation (isDisabled skips,
   opens on the current mode), listbox focus owner, Apply button for Enter.
   Pattern for pick-one pickers: `↑↓ move` legend + Cancel ⎋ + <Verb> ↩.
