@@ -450,7 +450,7 @@ entry when it lands.
 | S40 | DictationGuideModal | DialogActions Done | chips (automatic from F2); T3 | done |
 | S41 | WorkflowHistoryDialog | showCloseButton; p-3 | Close ⎋; T3 | done |
 | S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | done (no change: F4 corner close covers it) |
-| S43 | CommandPalette | input ↑↓ Enter; sub-modes; px-3 py-2 header; raw sub-form buttons; plain-text chords | Kbd chords on rows; legend; T8 sub-form | todo |
+| S43 | CommandPalette | input ↑↓ Enter; sub-modes; px-3 py-2 header; raw sub-form buttons; plain-text chords | Kbd chords on rows; legend; T8 sub-form | done |
 | S44 | PathPickerModal | Tab/↑↓/⇧↵/two-phase Esc; p-6; lowercase prose + "cancel" | T3 anatomy; legend with Kbd; DialogActions | done |
 | S45 | SettingsPage | full-page takeover; sections | D5; T3; focus into section | todo |
 
@@ -482,7 +482,7 @@ entry when it lands.
 | N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | todo |
 | N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
 | N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | done (Tab stop + shared list keys) |
-| N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | todo |
+| N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | done (in S43) |
 | N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
 | N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | todo |
 | N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
@@ -765,6 +765,13 @@ Sharp corners and one light theme.
   the guide still breathes.
 - **S42 Extension app window:** corner `× ⎋` (from F4); nothing else changes
   — keys inside the extension belong to the extension.
+- **S43 Command palette (⌘⇧P):** every row's shortcut is the standard chip
+  (was plain muted text); a thin strip at the bottom reads `↑ ↓ move  ↩ run
+  ⎋ close` (↩ insert / open / clear and ⎋ back in the template and AI
+  Workspace lists); ⌃N/⌃P and PgUp/PgDn move; hovering no longer steals
+  the highlight while the keyboard scrolls the list; the AI Workspace create
+  form's buttons are standard with `Cancel ⎋` / `Create ↩`; template scope
+  tags are 10px.
 - **S44 New Tab (⌘T) path picker:** standard header "New Tab — Working
   Directory", padded body, footer (was one p-6 card); provider toggles show
   a focus ring and announce the chosen one; the path field uses input
@@ -849,6 +856,14 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S43/N10: palette keeps its per-mode Enter handler; adds ⌃N/⌃P
+  + PgUp/PgDn, combobox input with aria-activedescendant, rows as option
+  with ids in a listbox, mousemove hover, Kbd shortcut column, legend strip
+  for list modes, Button for the create sub-form. First mounted palette
+  test (recorded dispatch fixture). Confirm-red: both tests fail on the
+  pre-change file. NOTE: renderer tests must run under Node 24 — Node 25's
+  global localStorage breaks a pre-existing palette test (memory: Node 24
+  only); all runs from here use ~/.nvm Node 24.
 - 2026-09-25 steering note k7 (valid, high): PathInput preventDefault-ed
   EVERY Tab (incl. Shift+Tab, no suggestions, dismissed dropdown), so the
   new Resume listbox was still unreachable — the S44 test focused the list

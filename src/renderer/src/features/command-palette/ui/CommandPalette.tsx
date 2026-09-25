@@ -6,6 +6,7 @@ import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import ReactMarkdown from 'react-markdown'
 
 import { Button } from '@renderer/components/ui/button'
+import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
 import {
   Dialog,
   DialogContent,
@@ -1432,7 +1433,20 @@ function OpenCommandPalette({
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'ArrowDown') {
+      // The shared list keys (plan K5/S43) beyond ↑↓: ⌃N/⌃P (the emacs line
+      // keys macOS text fields already honour — ctrl only, so ⌘N stays New
+      // Agent) and PageUp/PageDown by ten rows. Home/End stay with the
+      // input's caret. The palette keeps its own handler (rather than
+      // useListNavigation) because Enter means something different in each
+      // of its ten modes; the movement rules are the shared ones.
+      const ctrlOnly = e.ctrlKey && !e.metaKey && !e.altKey
+      if (e.key === 'PageDown' || e.key === 'PageUp') {
+        e.preventDefault()
+        const delta = e.key === 'PageDown' ? 10 : -10
+        setSelectedIndex(prev => Math.max(0, Math.min(prev + delta, Math.max(0, filteredLength - 1))))
+        return
+      }
+      if (e.key === 'ArrowDown' || (ctrlOnly && e.key === 'n')) {
         e.preventDefault()
         // Clamp the ceiling at 0, not at filteredLength - 1. Modes that render
         // their own pane instead of the shared list (the template manager,
@@ -1443,7 +1457,7 @@ function OpenCommandPalette({
         setSelectedIndex(prev => Math.min(prev + 1, Math.max(0, filteredLength - 1)))
         return
       }
-      if (e.key === 'ArrowUp') {
+      if (e.key === 'ArrowUp' || (ctrlOnly && e.key === 'p')) {
         e.preventDefault()
         setSelectedIndex(prev => Math.max(prev - 1, 0))
         return
@@ -1502,7 +1516,7 @@ function OpenCommandPalette({
   )
 
   // The template preview panel mirrors the highlighted row: every row calls
-  // `onMouseEnter={() => setSelectedIndex(i)}`, so hover and keyboard (↑/↓)
+  // `onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}`, so hover and keyboard (↑/↓)
   // both write this one index. Deriving the previewed template from it means
   // the panel follows hover AND arrow keys with no hover state of its own.
   //
@@ -1688,6 +1702,15 @@ function OpenCommandPalette({
               setSelectedIndex(0)
             }}
             onKeyDown={onKeyDown}
+            // Combobox pattern (plan S43): focus stays in this input while the
+            // arrows move the highlight, so THIS element names the active row
+            // — before, the rows were unlabelled divs and a screen reader
+            // heard nothing as the highlight moved.
+            role="combobox"
+            aria-label="Command palette search"
+            aria-expanded
+            aria-controls="command-palette-list"
+            aria-activedescendant={filteredLength > 0 ? `palette-row-${selectedIndex}` : undefined}
             spellCheck={false}
             autoComplete="off"
             readOnly={
@@ -1718,6 +1741,9 @@ function OpenCommandPalette({
         <div className="flex-1 min-h-0 flex overflow-hidden">
           <div
             ref={listRef}
+            id="command-palette-list"
+            role="listbox"
+            aria-label="Commands"
             className={`
               min-h-0 py-1
               ${
@@ -1819,6 +1845,9 @@ function OpenCommandPalette({
                       <div
                         key={`prompt-template:${template.id}`}
                         data-palette-row={i}
+                        id={`palette-row-${i}`}
+                        role="option"
+                        aria-selected={i === selectedIndex}
                         className={`
                           flex items-center justify-between gap-3
                           px-3 py-1.5
@@ -1830,7 +1859,7 @@ function OpenCommandPalette({
                               : 'text-ink-dim hover:bg-row-hover-bg'
                           }
                         `}
-                        onMouseEnter={() => setSelectedIndex(i)}
+                        onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}
                         onClick={() => void executePromptTemplate(template, i)}
                       >
                         <div className="min-w-0 flex items-center gap-2">
@@ -1859,7 +1888,7 @@ function OpenCommandPalette({
                             )}
                           </div>
                         </div>
-                        <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+                        <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
                           {template.scope}
                         </span>
                       </div>
@@ -1895,6 +1924,9 @@ function OpenCommandPalette({
                       )}
                       <div
                         data-palette-row={i}
+                        id={`palette-row-${i}`}
+                        role="option"
+                        aria-selected={i === selectedIndex}
                         className={`
                         flex items-center justify-between
                         px-3 py-1.5
@@ -1907,7 +1939,7 @@ function OpenCommandPalette({
                         }
                         ${i === starredBoundaryIndex ? 'border-b border-border' : ''}
                       `}
-                        onMouseEnter={() => setSelectedIndex(i)}
+                        onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}
                         onClick={() => executeCommand(command)}
                       >
                         <div className="min-w-0 flex items-center gap-2">
@@ -1935,10 +1967,12 @@ function OpenCommandPalette({
                           <span>{command.title}</span>
                           {command.state && <CommandStateBadge state={command.state} />}
                         </div>
+                        {/* The shared chip (plan H1): this was plain muted text,
+                            unlike every other chord in the app. `shortcut` is
+                            already the live display form (registry.ts resolves
+                            the user's binding), so it renders as-is. */}
                         {command.shortcut && (
-                          <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
-                            {command.shortcut}
-                          </span>
+                          <Kbd className="ml-3" aria-hidden={false}>{command.shortcut}</Kbd>
                         )}
                       </div>
                     </Fragment>
@@ -1973,6 +2007,9 @@ function OpenCommandPalette({
                         type="button"
                         key={workspace.workspaceId}
                         data-palette-row={i}
+                        id={`palette-row-${i}`}
+                        role="option"
+                        aria-selected={i === selectedIndex}
                         disabled={aiWorkspacePending !== null}
                         className={`
                           block w-full border-b border-border px-3 py-2 text-left last:border-b-0
@@ -1985,7 +2022,7 @@ function OpenCommandPalette({
                               : 'text-ink-dim hover:bg-row-hover-bg'
                           }
                         `}
-                        onMouseEnter={() => setSelectedIndex(i)}
+                        onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}
                         onClick={() => {
                           if (mode === 'ai-workspace-clear') void clearAiWorkspace(workspace)
                           else openAiWorkspace(workspace.workspaceId)
@@ -2028,9 +2065,13 @@ function OpenCommandPalette({
                     : 'Press Enter to create and open the named AI Workspace.'}
                 </div>
                 <div className="flex justify-end gap-2">
-                  <button
+                  {/* Shared buttons (plan T8) carrying the keys that already do
+                      these things in this mode: Escape backs out of it, Enter
+                      in the name field creates (onKeyDown above). */}
+                  <Button
                     type="button"
-                    className="rounded-control border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setMode('commands')
                       setQuery('')
@@ -2038,15 +2079,17 @@ function OpenCommandPalette({
                     }}
                   >
                     Cancel
-                  </button>
-                  <button
+                    <Kbd binding="Escape" />
+                  </Button>
+                  <Button
                     type="button"
-                    className="rounded-control border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
+                    size="sm"
                     disabled={!query.trim() || aiWorkspacePending !== null}
                     onClick={() => void createAiWorkspace()}
                   >
                     {aiWorkspacePending === 'create' ? 'Creating…' : 'Create'}
-                  </button>
+                    {aiWorkspacePending === null ? <Kbd binding="Enter" tone="onAccent" /> : null}
+                  </Button>
                 </div>
               </div>
             )}
@@ -2072,7 +2115,10 @@ function OpenCommandPalette({
                     }
                   `}
                     data-palette-row={i}
-                    onMouseEnter={() => setSelectedIndex(i)}
+                        id={`palette-row-${i}`}
+                        role="option"
+                        aria-selected={i === selectedIndex}
+                    onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}
                     onClick={() => void executePromptTemplate(template)}
                   >
                     <div className="flex items-center gap-2 min-w-0">
@@ -2101,7 +2147,7 @@ function OpenCommandPalette({
                           </button>
                         </div>
                       )}
-                      <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+                      <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
                         {template.scope}
                       </span>
                     </div>
@@ -2133,6 +2179,21 @@ function OpenCommandPalette({
           )}
 
         </div>
+        {/* The palette's keys, shown (plan H3) — the command list is the
+            most-used surface in the app and the only one whose keys were
+            never written anywhere. One quiet strip, list modes only: the
+            template editor/fill panes carry their own buttons. */}
+        {(mode === 'commands' || mode === 'prompt-template' || mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') ? (
+          <div className="flex flex-shrink-0 items-center border-t border-popover-border px-3 py-1 text-[10px] text-muted">
+            <KbdLegend
+              items={[
+                { keys: ['Up', 'Down'], label: 'move' },
+                { keys: ['Enter'], label: mode === 'prompt-template' ? 'insert' : mode === 'ai-workspace-open' ? 'open' : mode === 'ai-workspace-clear' ? 'clear' : 'run' },
+                { keys: ['Escape'], label: mode === 'commands' ? 'close' : 'back' },
+              ]}
+            />
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   )
