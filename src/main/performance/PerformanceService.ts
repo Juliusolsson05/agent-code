@@ -346,12 +346,41 @@ export class PerformanceService {
     this.flushTimer.unref?.()
   }
 
+  /**
+   * Named numbers sampled into the heartbeat as gauges, alongside RSS.
+   *
+   * WHY a registry and not a direct call (#369): the numbers that explain a
+   * main-process OOM live in subsystems this service must not import (the
+   * Codex proxy adapters, owned by SessionManager). The owner registers a
+   * reader once; a reader that throws or returns null is skipped for that
+   * tick, never allowed to break the probe.
+   */
+  private readonly gaugeSources = new Map<string, () => number | null>()
+
+  setGaugeSource(name: string, read: (() => number | null) | null): void {
+    if (read) this.gaugeSources.set(name, read)
+    else this.gaugeSources.delete(name)
+  }
+
+  sampleGaugeSources(): void {
+    for (const [name, read] of this.gaugeSources) {
+      let value: number | null
+      try {
+        value = read()
+      } catch {
+        continue
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) this.metric(name, value, 'gauge')
+    }
+  }
+
   // Optional verbose recording consumes the same cached baseline. It does not
   // acquire a second histogram or change interval ownership when enabled.
   private startProbes(): void {
     this.sampleTimer = setInterval(() => {
       const sample = mainProbe.read()
       this.metric('main.memory.rss', sample.rss, 'gauge', { heapUsed: sample.heapUsed })
+      this.sampleGaugeSources()
       if (sample.eventLoopDelay) {
         this.metric('main.eventLoop.delay.mean', sample.eventLoopDelay.meanMs, 'sample', {
           maxMs: sample.eventLoopDelay.maxMs, p99Ms: sample.eventLoopDelay.p99Ms,

@@ -1074,6 +1074,10 @@ async function startApp(): Promise<void> {
       )
     },
   )
+  // #369: the Codex proxy adapters' retained state, in the 5 s heartbeat
+  // next to RSS. A retention leak climbs here long before it OOMs main.
+  performanceService.setGaugeSource('codex.proxy.flows', () => manager?.codexProxyDiagnostics().flows ?? null)
+  performanceService.setGaugeSource('codex.proxy.bufferedChars', () => manager?.codexProxyDiagnostics().bufferedChars ?? null)
   manager.setUserMcpResolver(params => userMcpService.resolveForLaunch(params))
   // Adapters seal streams a sleep severed (#963); the manager fans each
   // suspension out to the live agent runtimes.
