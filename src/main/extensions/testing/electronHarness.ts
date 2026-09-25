@@ -282,7 +282,22 @@ void (async () => {
         }
       }
       await waitBindings('Cmd+Shift+P')
-      await child.executeJavaScript('document.body.tabIndex = 0; document.body.focus()')
+      // nativeInput forwards a chord only while contents.focusedFrame IS the
+      // extension frame; focusing its body is a request, not a guarantee.
+      // Wait until Electron reports it (#1261 / #1300 review). Compared by
+      // processId + routingId: frame wrappers are not promised to be the same
+      // object across getters.
+      const focusFrame = async (frame: Electron.WebFrameMain) => {
+        const deadline = performance.now() + 3000
+        for (;;) {
+          await frame.executeJavaScript('document.body.tabIndex = 0; document.body.focus()')
+          const focused = win.webContents.focusedFrame
+          if (focused && focused.processId === frame.processId && focused.routingId === frame.routingId) return
+          if (performance.now() > deadline) throw new Error('the extension frame never took focus')
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+      }
+      await focusFrame(child)
       await win.webContents.executeJavaScript('window.fixtureHarness.resetInput()')
       // Forged DOM keys/postMessage must never become application authority.
       await child.executeJavaScript(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', metaKey: true, shiftKey: true, bubbles: true })); parent.postMessage({ kind: 'extensions:native-input', input: { key: 'W', metaKey: true } }, '*')`)
@@ -306,8 +321,15 @@ void (async () => {
       const oldDocument = child.url
       await win.webContents.executeJavaScript('window.fixtureHarness.render("managed", 0, false, "managed.main", true)')
       await waitFor(win, state => state.messages.some(message => message.kind === 'fixture:mount'), 'managed modal mount')
-      const modal = win.webContents.mainFrame.frames.find(frame => frame.url.startsWith('agent-code-ext://managed/'))!
-      await modal.executeJavaScript('document.body.tabIndex = 0; document.body.focus()')
+      // #1261/#1171: the step pressed the palette chord right after asking the
+      // modal's body for focus, and nativeInput ignores keys unless Electron's
+      // focusedFrame is the extension frame; under Radix's own focus handling
+      // that was not yet true on a slow runner. Wait for it (focusFrame).
+      // Excluding the old pane's URL is defensive only: the fixture unmounts
+      // the pane before mounting the modal (#1300 review).
+      const modal = win.webContents.mainFrame.frames.find(frame => frame.url.startsWith('agent-code-ext://managed/') && frame.url !== oldDocument)!
+      assert.ok(modal, 'the modal document must be a new frame, not the replaced pane view')
+      await focusFrame(modal)
       await win.webContents.executeJavaScript('window.fixtureHarness.resetInput()')
       win.webContents.send('extensions:native-input', { kind: 'key', url: oldDocument, type: 'keydown', input: { key: 'W', code: 'KeyW', metaKey: true } })
       press('D', ['alt'])

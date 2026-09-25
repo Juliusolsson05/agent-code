@@ -693,6 +693,20 @@ export class LspManager extends EventEmitter {
     })
   }
 
+  /** Whether a server document currently backs this client URI. Reopen
+   *  (#1208) uses it to act only when the document was really lost, so it
+   *  can never add a reference to a live one. */
+  hasDocument(clientUri: string): boolean {
+    return this.docs.has(clientUri)
+  }
+
+  /** How many opens this client URI's document holds (0 when there is none).
+   *  Reopen's rollback reads it, because an open can count a reference and
+   *  THEN throw (a shared alias's didChange rejected, steering q23). */
+  documentRefs(clientUri: string): number {
+    return this.docs.get(clientUri)?.refs ?? 0
+  }
+
   async closeDocument(clientUri: string): Promise<void> {
     this.bumpDocumentIntent(clientUri)
     try {

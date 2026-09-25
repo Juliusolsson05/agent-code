@@ -77,6 +77,33 @@ export function registerLspIpc(
    */
   const lspBackedDocuments = new Set<string>()
 
+  /**
+   * One number per renderer, bumped every time clear() drops its documents
+   * (#1266 review A2/B2).
+   *
+   * WHY an epoch and not the WebContents id alone: navigation keeps the id.
+   * A reopen issued by the old page can pause in authorization while the
+   * page navigates (clear() runs) and the NEW page opens the same client URI.
+   * Comparing ids alone accepted that new page's ownership and reference
+   * count, then re-sent the old page's text under the old page's
+   * authorization. A reopen captures the epoch when it arrives and is void
+   * the moment it moves.
+   */
+  const ownerEpochs = new Map<number, number>()
+
+  /**
+   * Opens whose IPC reference is already counted (addOwnedDocument runs
+   * before the queue, see lsp:open-document) but whose queued manager open
+   * has not started yet (#1266 review B1).
+   *
+   * A reopen restores the manager to the owner's IPC count. Without this, an
+   * open queued BEHIND the reopen was counted twice: once by the reopen,
+   * which read its IPC ref, and once more by its own manager open, leaving
+   * the manager one reference above IPC and a server document that no close
+   * ever releases. Keyed by client URI because a URI has one owner.
+   */
+  const pendingOpens = new Map<string, number>()
+
   const serializeDocument = async <T>(clientUri: string, task: () => Promise<T>): Promise<T> => {
     const previous = documentQueues.get(clientUri) ?? Promise.resolve()
     const result = previous.catch(() => undefined).then(task)
@@ -96,6 +123,7 @@ export function registerLspIpc(
     if (trackedOwners.has(sender)) return
     trackedOwners.add(sender)
     const clear = (): void => {
+      ownerEpochs.set(sender.id, (ownerEpochs.get(sender.id) ?? 0) + 1)
       const documents = documentsByOwner.get(sender.id)
       documentsByOwner.delete(sender.id)
       if (!documents) return
@@ -233,8 +261,22 @@ export function registerLspIpc(
       // clear() miss the in-flight document and leak it after the renderer was
       // gone. LspManager's per-URI queue orders the eventual open/close pair.
       addOwnedDocument(evt.sender, params.clientUri)
+      // The page this open speaks for (see ownerEpochs). If it navigates
+      // while the open is in flight, clear() has already dropped this open's
+      // IPC reference and queued a close for it; everything below must then
+      // leave ownership alone, because a successor page on the SAME
+      // WebContents id may already hold the URI (#1266 round 2, A1/B2).
+      const epoch = ownerEpochs.get(evt.sender.id) ?? 0
+      const samePage = (): boolean => (ownerEpochs.get(evt.sender.id) ?? 0) === epoch
+      pendingOpens.set(params.clientUri, (pendingOpens.get(params.clientUri) ?? 0) + 1)
       try {
         await serializeDocument(params.clientUri, async () => {
+          // From here on this open is no longer "pending": whatever the
+          // manager holds now, it adds its own reference below. See
+          // pendingOpens.
+          const pending = (pendingOpens.get(params.clientUri) ?? 1) - 1
+          if (pending > 0) pendingOpens.set(params.clientUri, pending)
+          else pendingOpens.delete(params.clientUri)
           let managerOpenStarted = false
           try {
             const context = await authorizeContext(evt.sender, params)
@@ -246,7 +288,12 @@ export function registerLspIpc(
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
             })
-            if (opened) lspBackedDocuments.add(params.clientUri)
+            // A page that left meanwhile does not get the marker back: clear()
+            // dropped it, and the close clear() queued behind this entry will
+            // release what this open just counted. Re-adding it left the next
+            // owner's fail-open document rejecting every change as "not open"
+            // (#1266 round 2, B1).
+            if (opened && samePage()) lspBackedDocuments.add(params.clientUri)
           } catch (err) {
             // Keep rollback inside the same IPC queue entry. A renderer
             // navigation may already have queued its own cleanup behind this
@@ -259,10 +306,125 @@ export function registerLspIpc(
           }
         })
       } catch (err) {
-        removeOwnedDocument(evt.sender.id, params.clientUri)
-        if (!ownerByDocument.has(params.clientUri)) lspBackedDocuments.delete(params.clientUri)
+        // Only the page that registered the reference may take it back.
+        // After a navigation, clear() already removed it, and removing "one
+        // ref of this WebContents id" would take the successor page's: its
+        // manager document then outlived its close (#1266 round 2, A1/B2).
+        if (samePage()) {
+          removeOwnedDocument(evt.sender.id, params.clientUri)
+          if (!ownerByDocument.has(params.clientUri)) lspBackedDocuments.delete(params.clientUri)
+        }
         throw err
       }
+    },
+  )
+
+  // #1208: an editor that stays open after its server was lost (a crash, or
+  // retirement for ignoring cancelled requests, #924) asks for its document
+  // back. WHY the renderer drives this, with its own current authorization,
+  // rather than main re-opening from what it cached at the first open: that
+  // design was reviewed and withdrawn. A cached capability outlived its owner,
+  // skipped the physical checks (a directory swapped for a symlink out of the
+  // root re-opened fine), and restored one reference of two. Here:
+  //   - only the renderer that owns the URI may ask;
+  //   - authorization is re-run NOW through authorizeContext, physical
+  //     target and regular-file checks included; nothing cached is reused;
+  //   - it runs in the URI's IPC queue and re-checks ownership, by owner
+  //     EPOCH, after authorization and again after the manager open; an owner
+  //     cleared or navigated at any point gets nothing (#1266 review A2/B2);
+  //   - it restores the manager to the owner's IPC reference count for the
+  //     URI, minus opens still queued behind it, so two mounts get two
+  //     references back and a third mount arriving meanwhile is counted
+  //     once, by its own open (#1266 review B1);
+  //   - it is a no-op while the manager still has the document.
+  ipcMain.handle(
+    'lsp:reopen-document',
+    async (
+      evt,
+      params: {
+        clientUri: string
+        content: string
+        language: string
+        workspaceRoot: string
+        filePath?: string | null
+        authorization: LspDocumentAuthorization
+      },
+    ): Promise<boolean> => {
+      if (
+        typeof params.clientUri !== 'string' ||
+        params.clientUri.length === 0 ||
+        params.clientUri.length > 8_192 ||
+        typeof params.content !== 'string' ||
+        Buffer.byteLength(params.content, 'utf8') > MAX_LSP_CONTENT_BYTES
+      ) {
+        throw new Error('invalid or oversized LSP document')
+      }
+      if (!isOwned(evt.sender, params.clientUri)) return false
+      // Captured when the request ARRIVES: it speaks for the page that sent
+      // it, and any later clear() means that page is gone.
+      const epoch = ownerEpochs.get(evt.sender.id) ?? 0
+      return await serializeDocument(params.clientUri, async () => {
+        const stillOwned = (): boolean =>
+          ownerByDocument.get(params.clientUri) === evt.sender.id &&
+          !evt.sender.isDestroyed() &&
+          (ownerEpochs.get(evt.sender.id) ?? 0) === epoch
+        if (!stillOwned()) return false
+        if (lspManager.hasDocument(params.clientUri)) return true
+        const context = await authorizeContext(evt.sender, params)
+        // The page may have navigated during authorization, and its
+        // successor may even own this URI again under the same WebContents
+        // id; the epoch tells them apart (#1266 review A2). Today the
+        // `refs <= 0` rule below also refuses that case (the successor's
+        // open is necessarily queued behind this entry, so all its refs are
+        // pending), which is why mutating this check alone survives the
+        // suite (round 2). It stays: it states the rule directly instead of
+        // relying on queue order, and costs nothing.
+        if (!stillOwned()) return false
+        const refs =
+          (documentsByOwner.get(evt.sender.id)?.get(params.clientUri) ?? 0) -
+          (pendingOpens.get(params.clientUri) ?? 0)
+        // Every reference the owner holds belongs to an open still queued
+        // behind this one; that open restores the document itself. Marking
+        // the URI backed here would be a guess about its outcome.
+        if (refs <= 0) return false
+        // Transactional against the manager's OWN count, not the number of
+        // opens that fulfilled (steering q23): an open can count a shared-alias
+        // reference and then throw on its didChange. The manager had no
+        // document before this (the no-op guard above), so every reference it
+        // holds after a failure belongs to this attempt and is closed.
+        let opened = 0
+        let failure: unknown = null
+        try {
+          for (; opened < refs; opened++) {
+            const ok = await lspManager.openDocument({
+              clientUri: params.clientUri,
+              content: params.content,
+              language: params.language,
+              workspaceRoot: context.workspaceRoot,
+              filePath: context.filePath,
+            })
+            if (!ok) break
+          }
+        } catch (err) {
+          failure = err
+        }
+        // The owner can also go away DURING the manager open (a cold server
+        // spawn is seconds). clear() then queued closes behind this entry
+        // and dropped the backed marker; adding the marker back, or keeping
+        // references for a page that is gone, left the next owner of the URI
+        // with a stale "backed" flag (#1266 review B2). Undo it here, inside
+        // the queue entry, so those queued closes find nothing.
+        const ownerLeft = !stillOwned()
+        if (failure !== null || opened < refs || ownerLeft) {
+          for (let leaked = lspManager.documentRefs(params.clientUri); leaked > 0; leaked--) {
+            await lspManager.closeDocument(params.clientUri).catch(() => undefined)
+          }
+          if (failure !== null && !ownerLeft) throw failure
+          return false
+        }
+        lspBackedDocuments.add(params.clientUri)
+        return true
+      })
     },
   )
 
