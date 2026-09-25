@@ -885,8 +885,12 @@ export class GoalLoopService extends EventEmitter {
     // without ever delivering (#1033 round 4). The user asking for a retry is
     // the signal that the queue is no longer what it was.
     this.queuedContinuation.delete(sessionId)
-    // Same for reported background work (#1138): a pause means it outlived the
-    // absolute limit, and a Resume is the user saying continue anyway.
+    // Same for reported background work (#1138). One report expires long
+    // before the absolute limit, but a CHAIN of them does not: notification
+    // turns that each end with new work re-report it and keep the hold going
+    // past two hours (#1224 review). The pause is the backstop for that, and
+    // a Resume is the user saying continue anyway — without this clear it
+    // would wait out the last report's window first.
     this.backgroundWork.delete(sessionId)
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
