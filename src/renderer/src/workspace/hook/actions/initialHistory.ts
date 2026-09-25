@@ -33,6 +33,8 @@ import { reportLifecycle } from '@renderer/lifecycle/report'
 import { placeHistoryEntries, type HistoryPlacement } from '@renderer/session-runtime/ingest/historyPlacement'
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
+import { reduceGhostLogSansSuperseded } from 'agent-transcript-parser/ghost'
+import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 const INITIAL_HISTORY_CONCURRENCY = 2
 let activeInitialHistoryLoads = 0
@@ -81,6 +83,30 @@ function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
   for (const entry of runtime.entries) {
     const uuid = (entry as { uuid?: string }).uuid
     if (uuid) seen.add(uuid)
+  }
+}
+
+/**
+ * The pane's persisted ghosts, reduced to the latest non-superseded ghost per
+ * uuid, or an empty map when there are none or the read fails.
+ *
+ * WHY here (#1225): the ghost system exists for crash-resume, where Agent
+ * Code died mid-turn and the committed transcript ends before the turn the
+ * proxy saw. A restored pane loads its history HERE, under its persisted id.
+ * The only other reader (`spawn`) runs under an id main just minted, so since
+ * the July recovery rewrite no restore had read its log at all.
+ *
+ * Non-fatal on purpose: a missing or unreadable log only loses provisional
+ * rows, never the committed history this loader exists to load.
+ */
+async function readPersistedGhosts(sessionId: SessionId): Promise<Map<string, GhostEntry>> {
+  try {
+    const raw = await window.api.ghostRead?.(sessionId)
+    if (!Array.isArray(raw) || raw.length === 0) return new Map()
+    return reduceGhostLogSansSuperseded(raw as never[]) as Map<string, GhostEntry>
+  } catch (err) {
+    console.warn('[ghost] restore read failed:', err)
+    return new Map()
   }
 }
 
@@ -279,9 +305,10 @@ export async function loadInitialHistoryForSession({
         releaseHistorySlot()
       }
     })()
-    const [chunk, worktreesResult] = await Promise.all([
+    const [chunk, worktreesResult, persistedGhosts] = await Promise.all([
       historyRead,
       window.api.gitWorktrees(meta.cwd),
+      readPersistedGhosts(sessionId),
     ])
     const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
     if (superseded()) {
@@ -350,11 +377,25 @@ export async function loadInitialHistoryForSession({
         initialEntries.push(...admitMappedEntries(mapped, marker, 'tail', seenLedger, { placement }).admitted)
       }
 
-      let nextGhosts = current.ghosts
+      // The pane's own ghost log fills slots the runtime has not produced
+      // itself (#1225). A ghost already in memory wins: it can only be fresher
+      // than what was persisted. The loaded tail then supersedes the ghosts
+      // whose turns it committed, and only what that CHANGED is appended
+      // back, diffed against the merged state rather than the empty runtime,
+      // so a restore does not re-append the whole log it just read (#731).
+      let loadedGhosts = current.ghosts
+      if (persistedGhosts.size > 0) {
+        const merged = new Map(current.ghosts)
+        for (const [uuid, ghost] of persistedGhosts) {
+          if (!merged.has(uuid)) merged.set(uuid, ghost)
+        }
+        loadedGhosts = merged
+      }
+      let nextGhosts = loadedGhosts
       for (const entry of initialEntries) {
         nextGhosts = reconcileUpstream(entry, nextGhosts)
       }
-      for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
+      for (const ghost of ghostsToPersist(loadedGhosts, nextGhosts)) {
         window.api.ghostAppend(sessionId, ghost)
       }
 

@@ -487,9 +487,12 @@ describe('useSessionActions recovery retry', () => {
 
     expect(state.sessions[sessionId]).toBeUndefined()
     expect(state.sessions['replacement-session']?.title).toBe('Edited during switch')
-    // `spawn` intentionally defers ghost bootstrap by one timer tick. Let that
-    // owned task finish before afterEach removes the API mock, or this test can
-    // leak an irrelevant unhandled rejection into a later full-suite worker.
-    await vi.waitFor(() => expect(ghostRead).toHaveBeenCalledWith('replacement-session'))
+    // WHY no ghostRead wait any more: this used to wait for the deferred
+    // spawn-time ghost bootstrap so it could not leak past afterEach. #1225
+    // deleted that bootstrap — persisted ghosts are now read only by the
+    // history load (initialHistory.ts), which a bare replacement with no
+    // durable provider id never runs. Nothing async is left in flight here,
+    // so asserting "not read" also pins that the dead path stays dead.
+    expect(ghostRead).not.toHaveBeenCalled()
   })
 })
