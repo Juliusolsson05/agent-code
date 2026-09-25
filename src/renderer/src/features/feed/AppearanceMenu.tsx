@@ -1,3 +1,4 @@
+import { buttonVariants } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -48,15 +49,10 @@ export function AppearanceMenu({ settings, onChange }: Props) {
     <DropdownMenu>
       <DropdownMenuTrigger
         title="Appearance"
-        className="rounded-control
-          flex items-center justify-center
-          w-7 h-7
-          text-ink-dim hover:text-ink
-          border border-border hover:border-border-hi
-          transition-colors duration-150
-          outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring
-          [-webkit-app-region:no-drag]
-        "
+        // The settings bar's shared control look, square at the bar's 24px
+        // height (ledger G-28; SettingsBar has the WHY). It was a 28px box
+        // with its own border tokens, taller than its neighbours.
+        className={buttonVariants({ variant: 'outline', size: 'xs', className: 'w-6 px-0 [-webkit-app-region:no-drag]' })}
       >
         <EyeIcon />
         <span className="sr-only">Appearance</span>

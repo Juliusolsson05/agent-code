@@ -591,6 +591,7 @@ feeds the rows below G-1.
 | G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | done for copy (7 strings: press / select / expand / show all; the mouse-button binding keeps "Click", it IS a click) and ⟳ (now only "loading"; update available is ↑). Kept: • / ● / ★, whose meanings are clear in context; recorded for the owner |
 | G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | done (`PanelHeader` + `SectionLabel` primitives; Git, Worktrees, AI Workspace, Agent Status migrated; Title Case ghost actions; named closes; those files' row hovers + 9px text fixed too) |
 | G-27 | Dictation feedback layer | the dictation chip (z-40) is hidden under any dialog scrim (z-1100) | toast band, if dictation can target dialog fields (behaviour check) | done (z-[1200] per ask-2; the chip's status text is sentence case) |
+| G-28 | Settings bar controls | Usage square chip with no focus ring + accent hover, Appearance 28px box, performance / caff ~22px lowercase chips (N18 deferred the "caff" name here) | `buttonVariants` outline xs | done (all four on outline xs, 24px; toggles keep the accent on-fill with hover pinned; labels Title Case: Usage, Performance, Caffeinate; unsupported Caffeinate keeps its why-tooltip on hover) |
 
 ## Owner visual checklist
 
@@ -908,6 +909,10 @@ Sharp corners and one light theme.
 - **G-27 Dictation chip:** now visible above an open dialog (it was hidden
   behind the dialog's scrim). Its text reads "Transcribing…", "Hold to
   dictate · release to paste", "Press the shortcut again to finish".
+- **G-28 Settings bar (top-right chrome):** Usage, the Appearance eye,
+  Performance and Caffeinate are one height with one border, hover and focus
+  ring. "caff" now reads "Caffeinate". **Check** the row still fits beside
+  the detailed usage level on a narrow window.
 - **G-6 Composer:** its accent border now means "the caret is in here"
   (real focus), not "this pane is selected", so it goes plain when you Tab
   or click into the feed. The pane's own outline still marks the active
