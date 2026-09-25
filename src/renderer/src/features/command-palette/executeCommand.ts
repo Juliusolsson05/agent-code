@@ -1,6 +1,6 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { resolveCommandAvailability } from '@renderer/features/command-palette/resolveInvocation'
-import { recordCommandUse } from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { recordCommandUse, type RecentCommandSource } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 
@@ -58,12 +58,23 @@ export type CommandInvocationSource =
  * personalized ranking — otherwise a background caller could quietly promote a
  * command the user has never chosen to the top of their palette.
  */
-const USER_SOURCES: ReadonlySet<CommandInvocationSource> = new Set([
+const USER_SOURCES: ReadonlySet<CommandInvocationSource> = new Set<RecentCommandSource>([
   'palette',
   'native-menu',
   'keybinding',
   'context-menu',
 ])
+
+/**
+ * Narrowing form of `USER_SOURCES.has`. WHY a guard instead of the cast that
+ * used to sit at the call site: the cast told tsc that every user source was
+ * one the history cache knew, so adding 'context-menu' here (#1180) compiled
+ * while the cache silently discarded it on read. With the guard, the history
+ * union must name every user source or this stops type-checking.
+ */
+function isUserSource(source: CommandInvocationSource): source is RecentCommandSource {
+  return USER_SOURCES.has(source)
+}
 
 export type CommandDispatchOutcome =
   /** Admitted and completed without throwing. The only outcome that counts as use. */
@@ -305,8 +316,8 @@ async function runGuarded(options: {
   // Transient agent-index rows are excluded too: their ids embed a session id
   // that can never rank a future palette open, so recording them would evict
   // real commands from a bounded history for no benefit.
-  if (USER_SOURCES.has(source) && !isTransientRowId(id)) {
-    recordCommandUse(id, source as 'palette' | 'native-menu' | 'keybinding')
+  if (isUserSource(source) && !isTransientRowId(id)) {
+    recordCommandUse(id, source)
   }
 
   return { status: 'ran', id, source }

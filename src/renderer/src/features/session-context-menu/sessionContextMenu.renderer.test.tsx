@@ -118,6 +118,11 @@ describe('Sessions row', () => {
     const { focusSessionInTab, button } = renderList({ disabled: [TARGET] })
     fireEvent.click(button(TARGET))
     expect(focusSessionInTab).not.toHaveBeenCalled()
+    // aria-disabled (so the right-click arrives) without joining the Tab
+    // order, which `disabled` used to keep it out of.
+    expect(button(TARGET).getAttribute('aria-disabled')).toBe('true')
+    expect(button(TARGET).tabIndex).toBe(-1)
+    expect(button(FOCUSED).tabIndex).toBe(0)
 
     fireEvent.contextMenu(button(TARGET))
     const request = useAppStore.getState().sessionMenuRequest!

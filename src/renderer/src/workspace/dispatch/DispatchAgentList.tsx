@@ -575,6 +575,11 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // "where is this agent, and what can I do with it". `onSelect` already
       // refuses the click, so the attribute only ever did presentation.
       aria-disabled={disabled || undefined}
+      // …but keep it out of the Tab order, as `disabled` did (#1180 review):
+      // a keyboard user stepping through a grid should not stop on rows that
+      // refuse Enter. Right-click still reaches it; the keyboard menu keys
+      // (which need focus) stay limited to rows you can select, as before.
+      tabIndex={disabled ? -1 : undefined}
       data-menu-open={menuOpen ? 'true' : undefined}
       title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}

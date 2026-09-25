@@ -99,11 +99,20 @@ export function popupMenuTemplate(items: PopupMenuItem[], choose: (id: string) =
  * pocket menu's rule — an invoke that never settles leaks its renderer
  * promise and, here, leaves the row's "menu open" highlight on for good).
  */
+/**
+ * Windows with a popup on screen. One at a time per window (#1180 review):
+ * a native menu is modal, so a second request while one is up can only come
+ * from a renderer bug or loop, and stacking modal menus would leave the user
+ * dismissing them one by one. The second request resolves null instead.
+ */
+const windowsWithPopup = new WeakSet<Electron.BrowserWindow>()
+
 export function showPopupMenu(sender: Electron.WebContents, request: PopupMenuRequest): Promise<string | null> {
   const items = validatePopupMenu(request?.items)
   const window = BrowserWindow.fromWebContents(sender)
-  if (!window || items.length === 0) return Promise.resolve(null)
-  return new Promise(resolve => {
+  if (!window || items.length === 0 || windowsWithPopup.has(window)) return Promise.resolve(null)
+  windowsWithPopup.add(window)
+  return new Promise<string | null>(resolve => {
     // Same settle shape as the pocket menu (showPocketMenu): a click resolves
     // with its id, and the close callback resolves null. A promise settles
     // once, so whichever runs first wins — and Electron's macOS menu
@@ -122,5 +131,5 @@ export function showPopupMenu(sender: Electron.WebContents, request: PopupMenuRe
         resolve(null)
       },
     })
-  })
+  }).finally(() => { windowsWithPopup.delete(window) })
 }

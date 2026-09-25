@@ -114,6 +114,17 @@ describe('showPopupMenu', () => {
     await expect(showPopupMenu(sender, { items })).resolves.toBeNull()
   })
 
+  it('refuses a second popup on the same window while one is up', async () => {
+    const first = showPopupMenu(sender, { items })
+    await expect(showPopupMenu(sender, { items })).resolves.toBeNull()
+    expect(native.popup).toHaveBeenCalledTimes(1)
+    ;(native.popup.mock.lastCall![0] as Electron.PopupOptions).callback!()
+    await first
+    // Closed → the window may show a menu again.
+    void showPopupMenu(sender, { items })
+    expect(native.popup).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects a malformed template before building anything', () => {
     expect(() => showPopupMenu(sender, { items: [{ type: 'item', role: 'quit' } as never] })).toThrow()
     expect(native.build).not.toHaveBeenCalled()
