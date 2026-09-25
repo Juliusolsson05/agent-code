@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { STATE_DIR } from '@main/storage/paths.js'
+import { preserveInvalidBytes } from '@main/storage/preserveInvalidBytes.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import {
   atomicWriteTextFile,
@@ -48,6 +49,34 @@ function errorMessage(err: unknown): string {
   if (e.code === 'EISDIR') return 'is a directory'
   if (e.code === 'EACCES' || e.code === 'EPERM') return 'permission denied'
   return e.message ?? 'filesystem operation failed'
+}
+
+const UNKNOWN_STATUS: AiWorkspaceFileStatus = {
+  exists: false,
+  readable: false,
+  staleReason: 'status unknown; refresh the workspace',
+  size: null,
+  mtimeMs: null,
+}
+
+function usableWorkspace(raw: unknown): raw is AiWorkspaceRecord {
+  const workspace = raw as AiWorkspaceRecord | null
+  return workspace !== null && typeof workspace === 'object'
+    && typeof workspace.workspaceId === 'string' && typeof workspace.name === 'string'
+    && typeof workspace.createdAt === 'string' && typeof workspace.updatedAt === 'string'
+    && Array.isArray(workspace.entries)
+}
+
+function usableEntry(raw: unknown): raw is AiWorkspaceRecord['entries'][number] {
+  const entry = raw as AiWorkspaceRecord['entries'][number] | null
+  return entry !== null && typeof entry === 'object'
+    && typeof entry.entryId === 'string' && typeof entry.path === 'string'
+}
+
+function usableStatus(raw: unknown): boolean {
+  const status = raw as AiWorkspaceFileStatus | null
+  return status !== null && typeof status === 'object'
+    && typeof status.exists === 'boolean' && typeof status.readable === 'boolean'
 }
 
 function normalizePath(path: string): string {
@@ -381,32 +410,73 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   private async ensureLoaded(): Promise<void> {
-    this.loadPromise ??= this.load()
+    // A failed load is not cached (#1246): a transient read error used to
+    // fail every AI Workspace operation for the rest of the process.
+    this.loadPromise ??= this.load().catch(error => {
+      this.loadPromise = null
+      throw error
+    })
     await this.loadPromise
   }
 
   private async load(): Promise<void> {
+    let text: string
     try {
-      const text = await readFile(this.stateFile, 'utf8')
-      const parsed = JSON.parse(text) as PersistedAiWorkspaceState
-      for (const workspace of parsed.workspaces ?? []) {
-        for (const entry of workspace.entries) {
-          const normalized = normalizePath(entry.path)
-          // Migrate live legacy symlink entries in memory so their editor and
-          // LSP identities agree. Stale references intentionally retain their
-          // lexical path: preserving a useful broken-link explanation is more
-          // valuable than dropping an entry merely because realpath fails.
-          entry.path = await realpath(normalized).catch(() => normalized)
-        }
-        this.workspaces.set(workspace.workspaceId, workspace)
-        for (const entry of workspace.entries) this.knownFilePaths.add(normalizePath(entry.path))
-      }
-      // Stored statuses are allowed to be slightly stale at startup.
-      // Refreshing all references here made first use perform an uncapped
-      // filesystem sweep. The selected workspace is refreshed when opened.
+      text = await readFile(this.stateFile, 'utf8')
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
     }
+    const parsed = JSON.parse(text) as { workspaces?: unknown }
+    // A malformed CONTAINER still refuses: every save rewrites the whole
+    // file, so migrating it as empty would erase whatever it held.
+    if (parsed === null || typeof parsed !== 'object' || (parsed.workspaces !== undefined && !Array.isArray(parsed.workspaces))) {
+      throw new Error('AI Workspace storage is invalid; the original file is untouched.')
+    }
+    // WHY per-row validation (#1246): one row with a non-string path threw in
+    // resolve(), the rejected load was cached, and every operation failed for
+    // the rest of the process; list() also read updatedAt and entry.status
+    // unguarded. A bad workspace or entry is set aside for itself, the file's
+    // bytes are preserved before the next save can drop it, and an entry
+    // whose only damage is its cached status keeps a status of "unknown"
+    // (statuses are a refreshable cache, not the user's data).
+    let setAside = 0
+    const workspaces: AiWorkspaceRecord[] = []
+    for (const raw of (parsed.workspaces ?? []) as unknown[]) {
+      if (!usableWorkspace(raw)) {
+        setAside++
+        continue
+      }
+      const entries: AiWorkspaceRecord['entries'] = []
+      for (const entry of raw.entries) {
+        if (!usableEntry(entry)) {
+          setAside++
+          continue
+        }
+        if (!usableStatus(entry.status)) entry.status = { ...UNKNOWN_STATUS }
+        entries.push(entry)
+      }
+      workspaces.push({ ...raw, entries })
+    }
+    if (setAside > 0) {
+      const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text)
+      console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
+    }
+    for (const workspace of workspaces) {
+      for (const entry of workspace.entries) {
+        const normalized = normalizePath(entry.path)
+        // Migrate live legacy symlink entries in memory so their editor and
+        // LSP identities agree. Stale references intentionally retain their
+        // lexical path: preserving a useful broken-link explanation is more
+        // valuable than dropping an entry merely because realpath fails.
+        entry.path = await realpath(normalized).catch(() => normalized)
+      }
+      this.workspaces.set(workspace.workspaceId, workspace)
+      for (const entry of workspace.entries) this.knownFilePaths.add(normalizePath(entry.path))
+    }
+    // Stored statuses are allowed to be slightly stale at startup.
+    // Refreshing all references here made first use perform an uncapped
+    // filesystem sweep. The selected workspace is refreshed when opened.
   }
 
   private requiredWorkspace(workspaceId: string): AiWorkspaceRecord {

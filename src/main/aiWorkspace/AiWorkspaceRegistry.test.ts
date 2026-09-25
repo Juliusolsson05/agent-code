@@ -134,3 +134,70 @@ describe('AI Workspace editor file authority', () => {
     await expect(readFile(filePath, 'utf8')).resolves.toBe('recreated')
   })
 })
+
+// #1246: one malformed row used to throw inside load(); the rejected load was
+// cached, so every AI Workspace operation failed for the rest of the process,
+// and list() read updatedAt / entry.status unguarded. Real workspaces from the
+// owner's ai-workspaces.json (testing/fixtures/ai-workspace, redacted).
+describe('malformed rows in a real registry (#1246)', () => {
+  async function realState() {
+    const { readFile: read } = await import('fs/promises')
+    return (JSON.parse(await read(join(import.meta.dirname,
+      '../../../testing/fixtures/ai-workspace/real-workspaces-2026-09-25.json'), 'utf8')) as {
+      state: { workspaces: Array<Record<string, any>> }
+    }).state
+  }
+  async function registryFor(state: unknown) {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-ai-workspace-malformed-'))
+    tempRoots.push(root)
+    const statePath = join(root, 'ai-workspaces.json')
+    const source = JSON.stringify(state)
+    await writeFile(statePath, source)
+    return { root, statePath, source, registry: new AiWorkspaceRegistry(statePath) }
+  }
+
+  it('sets a bad entry and a bad workspace aside and keeps every other operation working', async () => {
+    const state = await realState()
+    const [kept, broken] = state.workspaces
+    // A newer or hand-edited file: one entry with a non-string path, one
+    // workspace with a non-string timestamp.
+    kept!.entries.push({ ...kept!.entries[0], entryId: 'bad-entry', path: 42 })
+    broken!.updatedAt = 1789000000
+    const { root, source, registry } = await registryFor(state)
+
+    const listed = await registry.list()
+    expect(listed.map(workspace => workspace.workspaceId)).toEqual([kept!.workspaceId])
+    expect(listed[0]!.fileCount).toBe(1)
+    // Writes work too, and the bad rows' bytes survive the save that drops them.
+    await registry.create({ name: 'Fresh' })
+    const { readdir, readFile: read } = await import('fs/promises')
+    const preserved = (await readdir(root)).filter(name => name.startsWith('ai-workspaces.json.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await read(join(root, preserved[0]!), 'utf8')).toBe(source)
+  })
+
+  it('keeps an entry whose stored status is malformed, with an unknown status', async () => {
+    const state = await realState()
+    state.workspaces[0]!.entries[0]!.status = null
+    const { registry } = await registryFor(state)
+    const listed = await registry.list()
+    expect(listed.find(workspace => workspace.workspaceId === state.workspaces[0]!.workspaceId)!.fileCount).toBe(1)
+  })
+
+  it('still refuses a malformed container, which the next save would erase', async () => {
+    const { statePath, source, registry } = await registryFor({ workspaces: 5 })
+    await expect(registry.list()).rejects.toThrow('storage is invalid')
+    const { readFile: read } = await import('fs/promises')
+    expect(await read(statePath, 'utf8')).toBe(source)
+  })
+
+  it('does not cache a failed load: the next call re-reads the file', async () => {
+    const state = await realState()
+    const { statePath, registry } = await registryFor(state)
+    const { chmod } = await import('fs/promises')
+    await chmod(statePath, 0o000)
+    await expect(registry.list()).rejects.toThrow()
+    await chmod(statePath, 0o600)
+    expect(await registry.list()).toHaveLength(2)
+  })
+})
