@@ -49,8 +49,6 @@ export function coerceSettings(value: unknown): Settings {
   // silently reset itself.
   const savedThemes = migrateLegacyCustomAppearance(parsed, coerceSavedThemes(parsed.savedThemes))
   const savedPromptTemplates = coerceSavedPromptTemplates(parsed.savedPromptTemplates)
-  // Must run before mode/accent are resolved below — see migrateLegacyDefaultAppearance.
-  const legacyAppearance = migrateLegacyDefaultAppearance(parsed)
 
   return {
     ...DEFAULT_SETTINGS,
@@ -64,15 +62,16 @@ export function coerceSettings(value: unknown): Settings {
     savedThemes,
     savedPromptTemplates,
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
-    mode: legacyAppearance?.mode ?? resolvePersistedMode(parsed, savedThemes),
+    mode: resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     agentNamesEnabled: parsed.agentNamesEnabled === true,
-    // A retired accent id ('lime', 'sage') fails the membership test and lands
-    // on Frost — that is the intended landing for the green accents (#973).
-    accent: legacyAppearance?.accent
-      ?? (ACCENTS.some(a => a.id === parsed.accent)
-        ? (parsed.accent as AccentId)
-        : DEFAULT_SETTINGS.accent),
+    // A retired accent id (today only 'sage') fails the membership test and
+    // lands on the default. 'lime' passes again since #1173 restored it; the
+    // Dark + Lime → Nord + Frost step is NOT here any more — it lives in the
+    // store's version-gated `migrate`, see migrateLegacyDefaultAppearance.
+    accent: ACCENTS.some(a => a.id === parsed.accent)
+      ? (parsed.accent as AccentId)
+      : DEFAULT_SETTINGS.accent,
     customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
     showStatusMode: parsed.showStatusMode !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
@@ -287,24 +286,32 @@ function migrateLegacyCustomAppearance(
 // "the default changed" means for an existing install (#973). Any other mode
 // or accent is a choice the user made and is left alone.
 //
-// WHY this is safe to run on every hydration rather than only in `migrate`:
-// after it runs the accent is 'frost', and 'lime' no longer exists as a
-// selectable accent, so the condition can never be true twice. A user who
-// later picks Dark again keeps Dark. Same reasoning as
-// migrateLegacyCustomAppearance for living in coerceSettings: `migrate` only
-// fires for older versions, `merge` coerces every launch.
-// Deliberately typed `string`, not `AccentId`: 'lime' was REMOVED from the
-// union, but the whole point of this check is to catch blobs persisted while
-// it was still selectable. A literal-typed constant would make TS reject the
-// comparison as a no-overlap error and hide the migration.
-const LEGACY_DEFAULT_MODE = 'dark'
-const LEGACY_DEFAULT_ACCENT: string = 'lime'
+// WHY this is NOT in coerceSettings (it used to be): coerceSettings runs on
+// EVERY hydration via the store's `merge`. That was only safe while 'lime'
+// could not be selected, so the pair could never be true twice. #1173 brought
+// Lime back, and from then on a user who deliberately picks Dark + Lime would
+// be flipped to Nord + Frost on every launch — silently, and indistinguishable
+// from "my setting did not save". A value can only be read as "untouched old
+// default" if it was persisted BEFORE the default changed, and the store
+// version is the one record of that: #973 bumped it to 11. So the store calls
+// this from `migrate`, only for blobs older than
+// LEGACY_DEFAULT_APPEARANCE_BEFORE_VERSION. Every v11+ blob has already been
+// through this step once, which is why no new version bump is needed.
+//
+// The version check lives HERE rather than at the call site so the "only
+// before v11" rule cannot be dropped by a caller that forgets it — the store
+// just forwards the persisted version Zustand handed to `migrate`.
+export const LEGACY_DEFAULT_APPEARANCE_BEFORE_VERSION = 11
+const LEGACY_DEFAULT_MODE: Settings['mode'] = 'dark'
+const LEGACY_DEFAULT_ACCENT: AccentId = 'lime'
 
-function migrateLegacyDefaultAppearance(
-  parsed: Partial<Settings>,
-): Pick<Settings, 'mode' | 'accent'> | null {
-  if (parsed.mode !== LEGACY_DEFAULT_MODE || parsed.accent !== LEGACY_DEFAULT_ACCENT) return null
-  return { mode: DEFAULT_SETTINGS.mode, accent: DEFAULT_SETTINGS.accent }
+export function migrateLegacyDefaultAppearance(
+  settings: Partial<Settings> | undefined,
+  version: number,
+): Partial<Settings> | undefined {
+  if (version >= LEGACY_DEFAULT_APPEARANCE_BEFORE_VERSION) return settings
+  if (settings?.mode !== LEGACY_DEFAULT_MODE || settings.accent !== LEGACY_DEFAULT_ACCENT) return settings
+  return { ...settings, mode: DEFAULT_SETTINGS.mode, accent: DEFAULT_SETTINGS.accent }
 }
 
 const LEGACY_CUSTOM_THEME_NAME = 'Custom'
