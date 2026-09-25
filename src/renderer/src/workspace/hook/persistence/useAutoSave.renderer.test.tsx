@@ -277,6 +277,7 @@ describe('workspace autosave durability retry', () => {
     const refs = {
       latestStateRef: ref(state), latestRuntimesRef: ref({ s: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     let failing = true
     const saveWorkspace = vi.fn(async () => { if (failing) throw ipcError })
@@ -291,9 +292,12 @@ describe('workspace autosave durability retry', () => {
       }
       await act(async () => { await Promise.resolve() })
     }
-    await until(SAVE_FAILURE_BANNER_AFTER - 1)
+    // The threshold is THREE failed saves (a literal, not the constant: a
+    // test that imports the constant moves with any change to it).
+    expect(SAVE_FAILURE_BANNER_AFTER).toBe(3)
+    await until(2)
     expect(health).not.toHaveBeenCalledWith(expect.any(String))
-    await until(SAVE_FAILURE_BANNER_AFTER)
+    await until(3)
     // The storage error itself, without the IPC channel wrapper.
     expect(health).toHaveBeenLastCalledWith(String(realError!).replace(/^Error: /, ''))
     expect(String(health.mock.lastCall![0])).toMatch(/EACCES/)
@@ -301,6 +305,37 @@ describe('workspace autosave durability retry', () => {
     failing = false
     await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
     expect(health).toHaveBeenLastCalledWith(null)
+    unmount()
+  })
+
+  // #1263 review: every edit resets the backoff, and the failure count used
+  // to ride on it, so a user who kept typing on a full disk never saw it.
+  it('reports repeated failures even while the user keeps editing', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const base: WorkspaceState = {
+      tabs: [{ id: 'tab-a', title: 'recorded' }], activeTabId: 'tab-a', stage: oneLaneStage('s'),
+      sessions: { s: { cwd: '/recorded', kind: 'claude', projectId: 'tab-a', joinedAt: 0 } }, pinnedSessionIds: [],
+    }
+    const refs = {
+      latestStateRef: ref(base), latestRuntimesRef: ref({ s: emptyRuntime() }),
+      saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
+    } as unknown as WorkspaceRefs
+    const saveWorkspace = vi.fn(async () => { throw new Error("Error invoking remote method 'workspace:save': Error: ENOSPC: no space left on device, write") })
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveWorkspace } })
+    const health = vi.fn()
+    let state = base
+    const { rerender, unmount } = renderHook(() => useAutoSave(state, 0, refs, true, health))
+    for (let edit = 0; edit < 4; edit++) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(450) })
+      // A new edit before the backoff retry fires.
+      state = { ...state, tabs: [{ id: 'tab-a', title: `edit ${edit}` }] }
+      refs.latestStateRef.current = state
+      rerender()
+    }
+    expect(saveWorkspace.mock.calls.length).toBeGreaterThanOrEqual(3)
+    expect(health).toHaveBeenCalledWith('ENOSPC: no space left on device, write')
     unmount()
   })
 })

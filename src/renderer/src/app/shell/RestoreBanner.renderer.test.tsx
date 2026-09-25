@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 // The banner reads two fields of the layout context; mocking the hook keeps
@@ -25,5 +25,31 @@ describe('RestoreBanner', () => {
     context = { restoreStatus: 'partial-restore', saveFailure: 'ENOSPC' }
     render(<RestoreBanner />)
     expect(screen.getByRole('alert').textContent).toContain('partially restored')
+  })
+
+  it('labels failing saves "Not saving", expanded and collapsed, never "Autosave off" (#1263 review)', () => {
+    vi.useFakeTimers()
+    try {
+      context = { restoreStatus: 'complete-restore', saveFailure: 'ENOSPC: no space left on device' }
+      render(<RestoreBanner />)
+      expect(screen.getByRole('alert').textContent).toContain('Not saving')
+      expect(screen.getByRole('alert').textContent).not.toContain('Autosave off')
+      act(() => { vi.advanceTimersByTime(60_000) })
+      expect(screen.getByRole('button', { name: 'Show save-failure details' }).textContent).toContain('Not saving')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps "Autosave off" for a restore problem, whose autosave really is off', () => {
+    vi.useFakeTimers()
+    try {
+      context = { restoreStatus: 'partial-restore', saveFailure: null }
+      render(<RestoreBanner />)
+      act(() => { vi.advanceTimersByTime(60_000) })
+      expect(screen.getByRole('button', { name: 'Show autosave-off details' }).textContent).toContain('Autosave off')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

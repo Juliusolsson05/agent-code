@@ -60,6 +60,11 @@ export function useAutoSave(
   onSaveHealthRef.current = onSaveHealth
   const retryEnabledRef = useRef(false)
   const retryAttemptRef = useRef(0)
+  // Consecutive REJECTED saves, reset only by a successful save (#1263
+  // review). retryAttemptRef is the backoff position and is reset by every
+  // edit, so counting with it meant a user who kept typing on a full disk
+  // (the #1244 case exactly) never reached the threshold.
+  const failedSavesRef = useRef(0)
   const flushSaveRef = useRef<() => void>(() => undefined)
   const flushSave = useCallback(() => {
     const saveSpan = perf.span('workspace.autosave.flush')
@@ -171,6 +176,7 @@ export function useAutoSave(
     void window.api.saveWorkspace(json)
       .then(() => {
         retryAttemptRef.current = 0
+        failedSavesRef.current = 0
         onSaveHealthRef.current(null)
         // Drain any adopted-window confirmations now that the merged rows are
         // DURABLE. Main deletes the closed window's slice on this call, so it
@@ -205,7 +211,8 @@ export function useAutoSave(
         // changes that are lost at quit. One failure is often transient (the
         // retry fixes it silently); SAVE_FAILURE_BANNER_AFTER in a row is a
         // condition the user must know about.
-        if (retryAttemptRef.current + 1 >= SAVE_FAILURE_BANNER_AFTER) {
+        failedSavesRef.current += 1
+        if (failedSavesRef.current >= SAVE_FAILURE_BANNER_AFTER) {
           onSaveHealthRef.current(saveFailureText(err))
         }
         if (

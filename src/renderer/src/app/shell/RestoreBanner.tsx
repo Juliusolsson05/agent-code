@@ -34,13 +34,19 @@ export function RestoreBanner() {
           : workspace.saveFailure
             // #1244: saves keep failing (a full disk, a permission change).
             // The retries continue, and the banner clears on the first success.
-            ? `Workspace changes are not being saved: ${workspace.saveFailure}. Agent Code keeps retrying; free disk space or fix permissions, and changes save on the next success.`
+            // No specific remedy: the error names the cause, and some causes
+            // (a workspace.json this build refuses to write) are not fixed by
+            // freeing space or permissions (#1263 review A).
+            ? `Workspace changes are not being saved: ${workspace.saveFailure}. Agent Code keeps retrying, and changes save on the next success.`
             : null
 
   // Saves failing is a different condition from autosave being OFF (they are
   // still attempted), so the collapsed chip must not claim the latter.
   const savesFailing = Boolean(message) && !['partial-restore', 'persisted-fallback', 'bootstrap-error'].includes(workspace.restoreStatus as string)
-  const chipLabel = savesFailing ? 'Not saving' : 'Autosave off'
+  // Used by BOTH the expanded banner and the chip: saves failing is not
+  // autosave being off (#1263 review).
+  const stateLabel = savesFailing ? 'Not saving' : 'Autosave off'
+  const detailsLabel = savesFailing ? 'save-failure' : 'autosave-off'
   const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
@@ -66,10 +72,10 @@ export function RestoreBanner() {
             px-2 py-0.5 text-[11px] font-code text-warning
             hover:bg-warning/20
           "
-          title={`Show ${chipLabel.toLowerCase()} details`}
-          aria-label={`Show ${chipLabel.toLowerCase()} details`}
+          title={`Show ${detailsLabel} details`}
+          aria-label={`Show ${detailsLabel} details`}
         >
-          <span className="font-semibold uppercase tracking-wide">{chipLabel}</span>
+          <span className="font-semibold uppercase tracking-wide">{stateLabel}</span>
           <span aria-hidden="true">▾</span>
         </button>
       </div>
@@ -86,14 +92,14 @@ export function RestoreBanner() {
         flex-shrink-0
       "
     >
-      <span className="font-semibold uppercase tracking-wide">Autosave off</span>
+      <span className="font-semibold uppercase tracking-wide">{stateLabel}</span>
       <span className="flex-1 text-ink/90">{message}</span>
       <button
         type="button"
         onClick={() => setCollapsed(true)}
         className="text-warning/80 hover:text-warning"
         title="Collapse into a corner chip (click the chip to re-expand)"
-        aria-label="Collapse autosave-off banner"
+        aria-label={`Collapse ${detailsLabel} banner`}
       >
         Hide
       </button>
