@@ -127,6 +127,8 @@ describe('focusedControlOwnsEnter', () => {
     expect(focusedControlOwnsEnter(document.createElement('button'))).toBe(true)
     expect(focusedControlOwnsEnter(document.createElement('a'))).toBe(true)
     expect(focusedControlOwnsEnter(document.createElement('textarea'))).toBe(true)
+    // A native select opens/confirms its own list with Enter (steering k4).
+    expect(focusedControlOwnsEnter(document.createElement('select'))).toBe(true)
     // The dialog surface and ordinary containers do not: Enter there is the
     // dialog's to handle.
     expect(focusedControlOwnsEnter(document.createElement('div'))).toBe(false)
@@ -145,6 +147,7 @@ describe('focusedControlOwnsSpace', () => {
     expect(focusedControlOwnsSpace(document.createElement('button'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('textarea'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('input'))).toBe(true)
+    expect(focusedControlOwnsSpace(document.createElement('select'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('a'))).toBe(false)
     expect(focusedControlOwnsEnter(document.createElement('a'))).toBe(true)
     expect(focusedControlOwnsSpace(document.createElement('div'))).toBe(false)

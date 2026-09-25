@@ -143,7 +143,18 @@ export type DialogActionsProps = {
  */
 export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
-  return target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'TEXTAREA'
+  // SELECT (steering note k4): a native <select> uses Enter to open/confirm
+  // its own option list on several platforms, and the dialog-level listener
+  // saw that Enter bubble up — Merge Project Tabs opens with focus on its
+  // Keep select, so "Enter to choose the kept tab" MERGED the tabs at once.
+  // Every caller of this predicate only ever steps ASIDE when it returns
+  // true, so widening it cannot make any handler act where it did not.
+  return (
+    target.tagName === 'BUTTON' ||
+    target.tagName === 'A' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT'
+  )
 }
 
 /**
@@ -165,7 +176,13 @@ export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
  */
 export function focusedControlOwnsSpace(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
-  return target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA' || target.tagName === 'INPUT'
+  // SELECT for the same reason as Enter above: Space opens a native select.
+  return (
+    target.tagName === 'BUTTON' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'INPUT' ||
+    target.tagName === 'SELECT'
+  )
 }
 
 /**

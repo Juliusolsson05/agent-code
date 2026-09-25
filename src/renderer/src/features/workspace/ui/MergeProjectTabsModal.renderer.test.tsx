@@ -88,5 +88,20 @@ describe('MergeProjectTabsModal', () => {
     fireEvent.keyDown(box('A · repo'), { key: 'Enter' })
     expect(onConfirm).toHaveBeenCalledWith('tab-c', ['tab-a'])
   })
+
+  it('does NOT merge on Enter in the Keep select, where Enter means "choose this tab" (steering note k4)', () => {
+    const onConfirm = vi.fn()
+    render(<MergeProjectTabsModal open tabs={tabs()} initialTargetId="tab-c" onCancel={vi.fn()} onConfirm={onConfirm} />)
+    keep().focus()
+    expect(fireEvent.keyDown(keep(), { key: 'Enter' })).toBe(true) // default kept for the select
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('leaves Enter on a focused Cancel to Cancel', () => {
+    const onConfirm = vi.fn()
+    render(<MergeProjectTabsModal open tabs={tabs()} initialTargetId="tab-c" onCancel={vi.fn()} onConfirm={onConfirm} />)
+    expect(fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Enter' })).toBe(true)
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
 })
 

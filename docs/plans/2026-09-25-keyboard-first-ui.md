@@ -720,6 +720,19 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k4 (valid, major): Merge opens focused on its
+  native Keep <select>, and focusedControlOwnsEnter did not exempt SELECT,
+  so Enter to choose the kept tab bubbled to DialogActions and merged.
+  Fixed in the shared predicates (SELECT owns Enter and Space); every caller
+  only steps aside on true, so the widening cannot make a handler act —
+  callers scanned: DialogActions, useListNavigation, Reorder, Pin,
+  Conversations (none of their dialogs holds a select). happy-dom cannot
+  show whether a real native select consumes Enter before it bubbles, so
+  the invariant is protected by a test regardless. Mutation-checked:
+  dropping SELECT fails the new Merge test; Enter from a ticked checkbox
+  still merges, Enter on Cancel stays Cancel. Migration checklist now:
+  carry every old disabled guard (k3) and check every native control in the
+  dialog against the Enter predicate (k4).
 - 2026-09-25 S17: Merge on one padded body + DialogActions (Enter merges —
   nothing closes). Checked the old footer's disabled guards (only Merge's,
   kept as confirmDisabled) — the k3 lesson, now part of every migration.
