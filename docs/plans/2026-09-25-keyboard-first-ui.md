@@ -566,6 +566,7 @@ feeds the rows below G-1.
 |---|---|---|---|---|
 | G-1 | Provider prompts: Claude trust + permission, Codex trust, Grok and OpenCode question/permission/plan | hand-laid cards: 18px "!" glyph, 14px title, pl-6 body, lowercase "cancel" / "trust this folder" / "deny" / "approve", full-size buttons; Grok's shell a clone of OpenCode's | DialogHeader + px-4 body + DialogActions (Claude/Codex) or the shared `ConditionPromptShell` (Grok/OpenCode); sentence-case labels; sm buttons; `DialogActions.initialFocus` | done |
 | G-2 | Composer prompt-suggestion chip | led with "↵" (Enter never applied it: click sends, Tab on an empty draft fills); the app's only ✕ glyph; no focus rings | "⇥ fill" hint only while Tab really fills (empty draft, not slash mode, not OpenCode); body named "Send suggestion: …"; × like every close; T4 rings | done |
+| G-3 | Prose key hints (audit of literal ↵ / "Press Enter" / ⌘ in UI text) | Command palette AI Workspace: "Press Enter or click again to confirm…" and "Press Enter to create…" (the buttons already carry the chips) | chip inline (`Confirm metadata deletion: ↩ or click again`); a what-happens sentence instead of the duplicate key prose. Remaining hits are code comments or terminal-behaviour prose (template pane), kept | done |
 
 ## Owner visual checklist
 

@@ -2037,7 +2037,8 @@ function OpenCommandPalette({
                           {pending
                             ? 'Clearing…'
                             : clearArmed
-                              ? 'Press Enter or click again to confirm metadata deletion'
+                              // A key chip, not the prose "Press Enter" (H1/H3).
+                              ? <span className="inline-flex items-center gap-1 text-danger">Confirm metadata deletion: <Kbd binding="Enter" /> or click again</span>
                               : `${workspace.fileCount} files${
                                   workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''
                                 }${workspace.description ? ` · ${withVisibleControls(workspace.description)}` : ''}`}
@@ -2062,7 +2063,9 @@ function OpenCommandPalette({
                 <div className="mb-3 text-[12px] text-muted">
                   {aiWorkspacePending === 'create'
                     ? 'Creating AI Workspace…'
-                    : 'Press Enter to create and open the named AI Workspace.'}
+                    // What happens, not which key: the buttons below carry
+                    // the ↩ / ⎋ chips already, so the prose repeated them.
+                    : 'Creates the named AI Workspace and opens it.'}
                 </div>
                 <div className="flex justify-end gap-2">
                   {/* Shared buttons (plan T8) carrying the keys that already do
