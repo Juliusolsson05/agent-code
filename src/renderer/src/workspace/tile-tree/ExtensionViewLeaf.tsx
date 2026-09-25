@@ -4,7 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
 import { viewComponentFor } from '@renderer/apps/host/viewBridge'
 import { refreshInstalledExtensions } from '@renderer/apps/host/installedExtensionsState'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 

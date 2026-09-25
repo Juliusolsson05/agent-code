@@ -7,7 +7,7 @@ import {
   isSessionLiveForClose,
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 import {
   Dialog,

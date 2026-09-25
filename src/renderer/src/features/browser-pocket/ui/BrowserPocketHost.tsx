@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { viewportSize } from '@shared/browserPocket/devices'
 import { isAllowedTopLevelUrl } from '@shared/browserPocket/url'
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { BrowserPocketConfig, SessionId } from '@renderer/workspace/types'
 

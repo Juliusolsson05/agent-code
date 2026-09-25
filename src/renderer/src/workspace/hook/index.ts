@@ -2,7 +2,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { providerChoiceLabel } from '@renderer/workspace/providerChoices'

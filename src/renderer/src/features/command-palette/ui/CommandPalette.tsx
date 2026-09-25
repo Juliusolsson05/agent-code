@@ -27,7 +27,7 @@ import {
   buildHistoryScoreMap,
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {

@@ -4,7 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
 import { deriveAppDefinitions } from '@renderer/apps/host/derive'
 import { Dialog, DialogContent, DialogTitle } from '@renderer/components/ui/dialog'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 import type { AppDefinition } from '@renderer/apps/types'
 
