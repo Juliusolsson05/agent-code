@@ -8,6 +8,19 @@ import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import type { Entry } from '@shared/types/transcript'
 
 describe('Agent title prompt', () => {
+  it('saves on Enter in the title field and labels Save ↩ / Cancel ⎋ (plan S12)', () => {
+    // The form was replaced by DialogActions; Enter-in-field must still save,
+    // and now the footer says which key does what.
+    const onSave = vi.fn()
+    render(<AgentTitlePrompt open initialTitle="Old" description="/w" onCancel={vi.fn()} onSave={onSave} />)
+    const input = screen.getByLabelText('Title')
+    fireEvent.change(input, { target: { value: 'New' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSave).toHaveBeenCalledWith('New')
+    expect(screen.getByRole('button', { name: 'Save' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+  })
+
   it('prefills and saves the edited title', () => {
     const onSave = vi.fn()
     render(
@@ -39,7 +52,7 @@ describe('Agent title prompt', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear title' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Title' }))
     expect(onSave).toHaveBeenCalledWith('')
   })
 

@@ -417,7 +417,7 @@ entry when it lands.
 | S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | done |
 | S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | done |
 | S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | done |
-| S12 | AgentTitlePrompt | form submit | DialogActions chips; T3 | todo |
+| S12 | AgentTitlePrompt | form submit | DialogActions chips; T3 | done |
 | S13 | CloseOldAgentsModal | no Enter; "Esc" header button; raw buttons | DialogActions (danger); remove Esc button; T3/T8; `focus:border-accent` → T4 | todo |
 | S14 | CloseCompletedAgentsModal | no Enter; raw header/footer | as S13 | todo |
 | S15 | BulkProviderSwitchModal | "Esc" button gets focus; busy blocks Esc silently | DialogActions; busy legend; K1 focus | todo |
@@ -619,6 +619,9 @@ Sharp corners and one light theme.
   not exist); the lane preview squares are square (was a 2px radius);
   Advanced row boxes use the plate radius; description 11px; footer
   `Cancel ⎋` · `Apply ↩`; "+ Add Row".
+- **S12 Set Title:** footer is `Clear Title` at the far left (ghost), then
+  `Cancel ⎋` (ghost, was outline) and `Save ↩`; body py-3 (was py-4); hint
+  line 11px; typing then Enter saves.
 
 ## Tasks
 
@@ -693,6 +696,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S12: Set Title drops its <form> (DialogActions' buttons have
+  no type and would submit) for DialogActions' scoped Enter. Confirm-red:
+  the new Enter/chips test fails on the pre-change file; "Clear title" →
+  "Clear Title" (test lookup updated).
 - 2026-09-25 S11: Grid Dispatch footer on DialogActions (Enter still
   applies only from number fields — chip shown, listener not wired), mode
   switch aria-pressed, nested-agents radiogroup, focus rings, tokens.
