@@ -122,13 +122,18 @@ function readBackgroundTasks(input: unknown): Array<{ type: string; status: stri
   if (!input || typeof input !== 'object') return undefined
   const raw = (input as { background_tasks?: unknown }).background_tasks
   if (!Array.isArray(raw)) return undefined
-  return raw.flatMap(task => (
+  const tasks = raw.flatMap(task => (
     task && typeof task === 'object'
       && typeof (task as { type?: unknown }).type === 'string'
       && typeof (task as { status?: unknown }).status === 'string'
       ? [{ type: (task as { type: string }).type, status: (task as { status: string }).status }]
       : []
   ))
+  // WHY a list with entries but none readable is unknown, not empty (#1224
+  // review): `[]` releases the loop's hold, so coercing an unreadable report
+  // to "nothing running" types the continuation into the gap the hold exists
+  // for. 2.1.282 always sets both strings, so this only guards a future shape.
+  return raw.length > 0 && tasks.length === 0 ? undefined : tasks
 }
 
 export class BuiltInMcpHttpHost {

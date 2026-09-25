@@ -97,6 +97,31 @@ export const GOAL_LOOP_HOLD_LIMIT_MS = 2 * 60 * 60_000
  * Stop), and a 1 s timer that exists only while something is held is cheaper
  * than the bugs. */
 const HOLD_POLL_MS = 1_000
+/**
+ * How long ONE Stop's report of background work may hold a continuation.
+ *
+ * WHY background work gets its own bound, and why it DELIVERS rather than
+ * pauses when it runs out (#1224 review, both reviewers, against the 2.1.282
+ * binary): the CLI cannot tell us whether a background task will ever end.
+ * The Monitor tool registers as a `local_bash` task and goes out on the wire
+ * as `type: "shell"` with no `kind`, so a persistent monitor is
+ * indistinguishable from a build running in the background, and a dev server
+ * started with `run_in_background` never ends either (36 corpus tasks ran past
+ * two hours). Under the absolute limit alone, such a shell parked an
+ * unattended loop for two hours, paused it as an error, and after each Resume
+ * the next turn's Stop listed the same shell and parked it again.
+ *
+ * Expiring the report instead restores exactly the pre-#1138 behaviour for
+ * work that outlives it: the continuation lands, at worst the agent answers
+ * "still waiting" once, and that turn's Stop starts a fresh window if the work
+ * is still listed. A never-ending shell therefore costs one continuation per
+ * window, never a dead loop.
+ *
+ * Forty-five minutes: past the 20–40 minute background implementers #1138
+ * was about, so the common case still waits for its notification, and inside
+ * the hour so a loop beside a dev server keeps moving.
+ */
+export const GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS = 45 * 60_000
 
 // WHY structural instead of Pick<SessionManager, 'on'>: SessionManager's
 // typed event map is not satisfied by a plain EventEmitter test double, and
@@ -181,11 +206,16 @@ export type GoalLoopBackgroundTask = { type: string; status: string }
  * Will this background task wake the agent by itself when it finishes?
  *
  * Shells, subagents, workflows and MCP tasks end with a task-notification
- * that starts a new turn, so the agent is waiting on them. A `monitor` never
- * finishes by design (persistent monitors run with no timeout), so holding on
- * one would park the loop until the absolute limit; the loop continues past it
- * as it always has. Ruling: unknown types are NOT held on, so a new CLI task
- * kind cannot silently stall loops. Only running/pending entries count.
+ * that starts a new turn, so the agent is waiting on them. The wire names are
+ * the CLI's own map (2.1.282: local_bash→"shell", local_agent→"subagent",
+ * local_workflow→"workflow", mcp_task→"MCP task"). `monitor` is what
+ * monitor_mcp/monitor_ws tasks are called, and those never finish, so they are
+ * not held on. The Monitor TOOL is different: it is a local_bash task and
+ * arrives as "shell", so it IS held on. That hold is bounded by
+ * GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS, which is what keeps a persistent monitor
+ * from parking the loop. Ruling: unknown types are NOT held on, so a new CLI
+ * task kind cannot silently stall loops. Only running/pending entries count
+ * (the CLI only emits those: its filter is running || pending).
  */
 function wakesTheAgent(task: GoalLoopBackgroundTask): boolean {
   if (task.status !== 'running' && task.status !== 'pending') return false
@@ -255,10 +285,20 @@ export class GoalLoopService extends EventEmitter {
    * done" from "session is paused waiting for background work". Captured on the
    * wire: testing/fixtures/goal-loop-stop-hooks/. Each Stop REPLACES the set:
    * the notification turn's own Stop reports what is still running, and an
-   * empty list releases the hold. A Stop WITHOUT the field (older CLI) clears
-   * it, because missing means unknown and unknown keeps today's behaviour.
+   * empty list releases the hold.
+   *
+   * The value is when that Stop arrived: a report holds for
+   * GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS and then expires on its own, see there.
+   *
+   * A Stop WITHOUT the field keeps whatever is latched (#1224 review). An
+   * older CLI never sends it, so it never latches and nothing changes there;
+   * the only other way to lose the field is a Stop body that did not parse,
+   * which is forwarded blind so the turn end is not missed. Reading that as
+   * "no background work" typed the continuation into exactly the gap this
+   * latch protects. Unknown keeps the last known answer, and the window
+   * bounds how long that can matter.
    */
-  private readonly backgroundWork = new Set<string>()
+  private readonly backgroundWork = new Map<string, number>()
 
   constructor(private readonly deps: {
     manager: GoalLoopManagerPort
@@ -359,8 +399,9 @@ export class GoalLoopService extends EventEmitter {
     }
     if (outcome?.blocked) return
     this.hookTurnOpen.delete(sessionId)
-    if (outcome?.backgroundTasks?.some(wakesTheAgent)) this.backgroundWork.add(sessionId)
-    else this.backgroundWork.delete(sessionId)
+    const reported = outcome?.backgroundTasks
+    if (reported?.some(wakesTheAgent)) this.backgroundWork.set(sessionId, Date.now())
+    else if (reported) this.backgroundWork.delete(sessionId)
     // The provider says this turn ENDED, so every phase reading that described
     // it is now history — including the busy state we seeded for our own
     // delivery (markOwedATurn), which nothing else would clear on a session
@@ -704,7 +745,7 @@ export class GoalLoopService extends EventEmitter {
   private deliveryHold(sessionId: string): 'turn-open' | 'queued' | 'background-work' | 'phase-working' | 'screen-busy' | null {
     if (this.hookSessions.has(sessionId) && this.hookTurnOpen.has(sessionId)) return 'turn-open'
     if (this.queuedContinuation.has(sessionId)) return 'queued'
-    if (this.backgroundWork.has(sessionId)) return 'background-work'
+    if (this.backgroundWorkHolds(sessionId)) return 'background-work'
     const tracked = this.working.get(sessionId)
     if (tracked && (isWorking(tracked) || tracked.pendingTools.length > 0)) return 'phase-working'
     const active = this.deps.manager.getProcessStateSnapshot(sessionId)?.active === true
@@ -717,6 +758,18 @@ export class GoalLoopService extends EventEmitter {
    * pause) hang off this instant. */
   private noteHeldProgress(sessionId: string): void {
     if (this.progressSince.has(sessionId)) this.progressSince.set(sessionId, Date.now())
+  }
+
+  /** Does the last Stop's background-work report still hold delivery? An
+   * expired report is dropped here, so the silence exemption above and the
+   * gate agree on one answer (a stale latch must not keep suppressing the
+   * 30-minute silence pause of an unrelated turn-open hold). */
+  private backgroundWorkHolds(sessionId: string): boolean {
+    const since = this.backgroundWork.get(sessionId)
+    if (since === undefined) return false
+    if (Date.now() - since < GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS) return true
+    this.backgroundWork.delete(sessionId)
+    return false
   }
 
   private heldForMs(sessionId: string): number {
@@ -786,10 +839,12 @@ export class GoalLoopService extends EventEmitter {
     // a running tool: a background implementer routinely runs 20–40 minutes
     // with no turn in between, and pausing here would leave the loop paused
     // when its notification turn arrives, so nothing would continue it
-    // (#1138). The absolute limit below still applies to it.
+    // (#1138). The exemption lasts only as long as the report does
+    // (GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS), and the absolute limit below
+    // still applies.
     const silent = this.quietWhileHeldMs(sessionId) >= GOAL_LOOP_HOLD_STALL_MS
       && !this.toolIsRunning(sessionId)
-      && !this.backgroundWork.has(sessionId)
+      && !this.backgroundWorkHolds(sessionId)
     if (silent || this.heldForMs(sessionId) >= GOAL_LOOP_HOLD_LIMIT_MS) {
       this.pauseStalledHold(sessionId, silent ? reason : `${reason} (held ${Math.round(this.heldForMs(sessionId) / 60_000)} min)`)
       return
