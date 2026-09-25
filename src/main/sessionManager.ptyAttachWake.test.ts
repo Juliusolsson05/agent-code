@@ -112,5 +112,26 @@ describe('raw PTY view across a same-id wake', () => {
     second.emit('pty-data', 'nobody is watching')
     expect(forwarded).toEqual([])
   })
+
+  // #1311 review A: the restore size belongs to the process. A successor
+  // started while the view is attached takes the VIEW's size, and the final
+  // detach restores the successor's own natural size, never the dead one's.
+  it('sizes a same-id successor for the attached view and restores its own size on detach', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const first = new FakeAgentSession()
+    const second = new FakeAgentSession()
+    const secondResize = vi.spyOn(second, 'resize')
+    createSession.mockImplementationOnce(() => first).mockImplementationOnce(() => second)
+    const manager = new SessionManager()
+    await manager.recover({ sessionId: 's3', kind: 'claude', cwd: '/tmp/project', cols: 90, rows: 25 })
+    manager.attachAgentPty('s3')
+    manager.resize('s3', 130, 45)
+    first.emit('exit', { exitCode: 1 })
+    await manager.recover({ sessionId: 's3', kind: 'claude', cwd: '/tmp/project' })
+    expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ cols: 130, rows: 45 }))
+    manager.detachAgentPty('s3')
+    expect(secondResize).toHaveBeenLastCalledWith(120, 40)
+    expect(secondResize).not.toHaveBeenCalledWith(90, 25)
+  })
 })
 
