@@ -605,6 +605,13 @@ export interface AgentSession extends AgentSessionEmitter {
    *  headless instance isn't up yet. */
   snapshotScreen?(): string
 
+  /** Optional (Claude today): the screen and the composer's cell-attribute
+   *  counts read from the LIVE buffer at the same instant (#1291/#1309). Not
+   *  the per-frame cached classification the prompt gate uses: the delivery
+   *  rollback verifies its own keystroke 25 ms later, faster than that cache
+   *  moves. Null when the headless instance isn't up. */
+  readComposer?(): { screen: string; attributes: { dim: number; inverse: number; plain: number } | null } | null
+
   /**
    * Optional (Claude today): arm an authoritative prompt-acceptance waiter
    * BEFORE Enter is written. Claude acknowledges a finished prompt through
