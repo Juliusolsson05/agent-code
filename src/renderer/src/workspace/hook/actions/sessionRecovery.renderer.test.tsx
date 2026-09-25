@@ -426,7 +426,6 @@ describe('useSessionActions recovery retry', () => {
       useProxyStreamingRef: ref(false),
       defaultBuiltInMcpDomainsRef: ref([]),
       seenUuidsRef: ref({}),
-      latestScreenRef: ref({}),
     } as unknown as WorkspaceRefs
     const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next

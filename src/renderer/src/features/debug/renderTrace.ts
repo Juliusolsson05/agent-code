@@ -1,4 +1,10 @@
 import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
+import {
+  hashText,
+  SCREEN_MAX_SAMPLES,
+  SCREEN_TAIL_LINES,
+  type ScreenTailSample,
+} from '@shared/debug/screenTail'
 
 type TraceReason = 'initial' | 'mutation' | 'screen' | 'manual'
 
@@ -28,28 +34,15 @@ type HtmlCheckpoint = {
   content: string
 }
 
-type ScreenTailSample = {
-  id: string
-  seq: number
-  ts: number
-  tsIso: string
-  hash: string
-  lineCount: number
-  content: string
-}
-
 type SessionTrace = {
   sessionId: string
   startedAt: number
   htmlCommits: HtmlCommit[]
   htmlCheckpoints: HtmlCheckpoint[]
-  screenSamples: ScreenTailSample[]
   nextHtmlSeq: number
-  nextScreenSeq: number
   lastHtml: string
   lastHtmlHash: string | null
   lastHtmlCommitId: string | null
-  lastScreenHash: string | null
 }
 
 type BundleFile = {
@@ -61,8 +54,6 @@ const HTML_TRACE_DIR = 'trace/html'
 const SCREEN_TRACE_DIR = 'trace/screen'
 const HTML_CHECKPOINT_EVERY = 20
 const HTML_MAX_COMMITS = 200
-const SCREEN_MAX_SAMPLES = 300
-const SCREEN_TAIL_LINES = 50
 
 const traces = new Map<string, SessionTrace>()
 
@@ -74,32 +65,16 @@ function getTrace(sessionId: string): SessionTrace {
       startedAt: Date.now(),
       htmlCommits: [],
       htmlCheckpoints: [],
-      screenSamples: [],
       nextHtmlSeq: 0,
-      nextScreenSeq: 0,
       lastHtml: '',
       lastHtmlHash: null,
       lastHtmlCommitId: null,
-      lastScreenHash: null,
     }
     traces.set(sessionId, trace)
   }
   return trace
 }
 
-function hashText(text: string): string {
-  let h1 = 0xdeadbeef ^ text.length
-  let h2 = 0x41c6ce57 ^ text.length
-  for (let i = 0; i < text.length; i++) {
-    const ch = text.charCodeAt(i)
-    h1 = Math.imul(h1 ^ ch, 2654435761)
-    h2 = Math.imul(h2 ^ ch, 1597334677)
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
-  const n = 4294967296 * (2097151 & h2) + (h1 >>> 0)
-  return n.toString(16).padStart(13, '0')
-}
 
 function nowIso(ts: number): string {
   return new Date(ts).toISOString()
@@ -127,20 +102,6 @@ function buildDelta(base: string, next: string, baseHash: string): TextDelta {
     suffixLen,
     insert: next.slice(prefixLen, next.length - suffixLen),
   }
-}
-
-function sanitizeScreenText(text: string): string {
-  return text
-    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/[^\S\n\t]+$/gm, '')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-    .trimEnd()
-}
-
-function tailLines(text: string, count: number): string {
-  const lines = text.split('\n')
-  return lines.length <= count ? text : lines.slice(lines.length - count).join('\n')
 }
 
 function pruneHtmlTrace(trace: SessionTrace): void {
@@ -216,57 +177,38 @@ export function recordHtmlTraceSnapshot(
   pruneHtmlTrace(trace)
 }
 
-export function recordScreenTailSnapshot(sessionId: string, screenText: string): void {
-  const trace = getTrace(sessionId)
-  const content = tailLines(sanitizeScreenText(screenText), SCREEN_TAIL_LINES)
-  if (!content) return
-
-  const hash = hashText(content)
-  if (hash === trace.lastScreenHash) return
-
-  const ts = Date.now()
-  const seq = trace.nextScreenSeq++
-  trace.screenSamples.push({
-    id: `${seq.toString(36)}-${hash}`,
-    seq,
-    ts,
-    tsIso: nowIso(ts),
-    hash,
-    lineCount: content.split('\n').length,
-    content,
-  })
-  trace.lastScreenHash = hash
-
-  if (trace.screenSamples.length > SCREEN_MAX_SAMPLES) {
-    trace.screenSamples.splice(0, trace.screenSamples.length - SCREEN_MAX_SAMPLES)
-  }
-}
-
-export function exportDebugTraceFiles(sessionId: string): BundleFile[] {
+/**
+ * @param screenSamples main's screen-tail history for this session (#762:
+ *   recorded in main from every frame, since the renderer no longer receives
+ *   them; fetched with window.api.getScreenDebug).
+ */
+export function exportDebugTraceFiles(sessionId: string, screenSamples: readonly ScreenTailSample[] = []): BundleFile[] {
   const trace = traces.get(sessionId)
-  if (!trace) return []
+  if (!trace && screenSamples.length === 0) return []
+  const htmlCommits = trace?.htmlCommits ?? []
+  const htmlCheckpoints = trace?.htmlCheckpoints ?? []
 
   const capturedAt = Date.now()
   const manifest = {
     schemaVersion: 1,
     sessionId,
-    startedAt: trace.startedAt,
-    startedAtIso: nowIso(trace.startedAt),
+    startedAt: trace?.startedAt ?? null,
+    startedAtIso: trace ? nowIso(trace.startedAt) : null,
     capturedAt,
     capturedAtIso: nowIso(capturedAt),
     html: {
-      commits: trace.htmlCommits.length,
-      checkpoints: trace.htmlCheckpoints.length,
+      commits: htmlCommits.length,
+      checkpoints: htmlCheckpoints.length,
       checkpointEvery: HTML_CHECKPOINT_EVERY,
       maxCommits: HTML_MAX_COMMITS,
-      latestHash: trace.lastHtmlHash,
+      latestHash: trace?.lastHtmlHash ?? null,
     },
     screen: {
-      samples: trace.screenSamples.length,
+      samples: screenSamples.length,
       tailLines: SCREEN_TAIL_LINES,
       maxSamples: SCREEN_MAX_SAMPLES,
-      latestHash: trace.lastScreenHash,
-      mode: 'deduped snapshots; no commit chain',
+      latestHash: screenSamples.at(-1)?.hash ?? null,
+      mode: 'deduped snapshots; no commit chain; recorded in main',
     },
   }
 
@@ -277,22 +219,22 @@ export function exportDebugTraceFiles(sessionId: string): BundleFile[] {
     },
     {
       name: `${HTML_TRACE_DIR}/commits.jsonl`,
-      content: trace.htmlCommits.map(commit => JSON.stringify(commit)).join('\n') +
-        (trace.htmlCommits.length ? '\n' : ''),
+      content: htmlCommits.map(commit => JSON.stringify(commit)).join('\n') +
+        (htmlCommits.length ? '\n' : ''),
     },
     {
       name: `${HTML_TRACE_DIR}/checkpoints.jsonl`,
-      content: trace.htmlCheckpoints.map(checkpoint => JSON.stringify(checkpoint)).join('\n') +
-        (trace.htmlCheckpoints.length ? '\n' : ''),
+      content: htmlCheckpoints.map(checkpoint => JSON.stringify(checkpoint)).join('\n') +
+        (htmlCheckpoints.length ? '\n' : ''),
     },
     {
       name: `${SCREEN_TRACE_DIR}/tail-samples.jsonl`,
-      content: trace.screenSamples.map(sample => JSON.stringify(sample)).join('\n') +
-        (trace.screenSamples.length ? '\n' : ''),
+      content: screenSamples.map(sample => JSON.stringify(sample)).join('\n') +
+        (screenSamples.length ? '\n' : ''),
     },
   ]
 
-  const latestScreen = trace.screenSamples[trace.screenSamples.length - 1]
+  const latestScreen = screenSamples[screenSamples.length - 1]
   if (latestScreen) {
     files.push({
       name: `${SCREEN_TRACE_DIR}/latest-tail.txt`,

@@ -521,7 +521,7 @@ export interface AgentSessionEmitter {
  *
  * Optional methods encode capabilities that are legitimately
  * provider-specific today. The manager already duck-types them
- * (sessionManager awaitClaudePastePlaceholder / resolveCondition /
+ * (sessionManager resolveCondition /
  * awaitCodexReadyForPrompt) — declaring them optional here just makes
  * that duck-typing type-checked. Phase 2c generalizes these into a
  * `promptDelivery` capability shape; the individual optional methods
@@ -583,16 +583,6 @@ export interface AgentSession extends AgentSessionEmitter {
    *  provider must use a rebinding-proof route; a user-configurable chord is
    *  not one. Never throws. */
   jumpToLatest?(): Promise<{ ok: true } | { ok: false; reason: string }>
-
-  /** Optional (Claude today): wait for the bracketed-paste placeholder
-   *  to appear before firing Enter. See sessionManager.ts:952. */
-  awaitPastePlaceholder?(
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'appeared'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-  >
 
   /** Optional (Claude today): a synchronous read of the live plain-text TUI
    *  screen (headless snapshotPlain). The prompt-delivery path polls this to

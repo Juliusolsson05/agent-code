@@ -19,6 +19,7 @@ import type { DevDebugModule, DevDebugModuleProps } from '@renderer/features/deb
 import type { PasteDebugSession } from '@preload/api/types'
 
 import { buildLifecycle, buildStats } from './timeline'
+import { useScreenLease } from '@renderer/features/debug/useScreenLease'
 
 // The real submit-detection rules, mirrored from claude-code-headless so we can
 // watch them fire against the same screen text the parser sees:
@@ -53,6 +54,8 @@ function matches(value: string, pattern: string, flags: string): boolean {
 }
 
 function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps) {
+  // Screen frames arrive only while leased (#762, useScreenLease).
+  useScreenLease(sessionId)
   const plain = runtime.screen ?? ''
   const markdown = runtime.screenMarkdown ?? ''
   const [sessions, setSessions] = useState<PasteDebugSession[]>([])

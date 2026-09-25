@@ -37,7 +37,6 @@ import {
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/session-runtime/semantic/summarize'
 import { isSemanticRawCaptureEnabled } from '@renderer/session-runtime/semantic/rawCapture'
-import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
   isCodexRolloutEntry,
   isOptimisticCodexUserEntry,
@@ -64,7 +63,6 @@ import {
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
-import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   ghostsFromSemanticTurn,
   sweepGhosts,
@@ -410,7 +408,7 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 //
 // Handlers intentionally stay inline here rather than broken into
 // one-per-event files because they share refs, setters, and
-// bookkeeping state (seenUuidsRef, latestScreenRef, bootstrapTimersRef)
+// bookkeeping state (seenUuidsRef, bootstrapTimersRef)
 // — breaking them apart would mean passing the whole ctx into each,
 // gaining nothing but file count. If a handler ever grows to >200
 // lines AND has no cross-handler state, it's a candidate for
@@ -702,18 +700,18 @@ export function useIpcSubscriptions(
     })
 
     const offScreen = feed.onSessionScreen(
-      ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
+      ({ sessionId, plain, markdown, recent, recentMarkdown }) => {
         if (quarantinesSessionFeed(sessionId)) return
         const startedAt = performance.now()
-        // latestScreenRef is the synchronous source of truth for
-        // the Enter-baseline capture in TileLeaf — always update
-        // it, even when we bail on React state below.
-        // Use `recent` (wider window) so the baseline includes any
-        // assistant text that may have already scrolled out of the
-        // viewport. The baseline comparison is the basis for "is
-        // the streaming card stale?", which depends on seeing the
-        // same marker the streaming extractor will see.
-        refs.latestScreenRef.current[sessionId] = recent
+        // WHY only the screen strings are applied here (#762): frames now
+        // arrive only while a debug surface holds a screen lease, so this
+        // handler feeds DebugPanel and the dev modules, nothing live. The
+        // frame's `picker` is NOT written: the composer's slash picker is
+        // owned by the conditions channel (applyConditionSnapshot), and a
+        // second writer here was split authority that could re-show a
+        // picker the conditions had just cleared. The Enter-baseline ref and
+        // the screen-tail trace this used to feed are gone: the baseline was
+        // dead code, and main records the trace from every frame.
 
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
@@ -730,11 +728,7 @@ export function useIpcSubscriptions(
           // every no-op frame. This is the difference between
           // "scheduled work on every frame" and "scheduled work
           // only when the screen actually changed".
-          if (
-            current.screen === plain &&
-            current.recentScreen === recent &&
-            pickerEqual(current.picker, picker)
-          ) {
+          if (current.screen === plain && current.recentScreen === recent) {
             const durationMs = performance.now() - startedAt
             if (durationMs > 8) {
               perf.metric('workspace.ipc.screen.noop.slow', durationMs, 'sample', {
@@ -747,7 +741,6 @@ export function useIpcSubscriptions(
           const changed: string[] = []
           if (current.screen !== plain) changed.push('screen')
           if (current.recentScreen !== recent) changed.push('recent')
-          if (!pickerEqual(current.picker, picker)) changed.push('picker')
           // Screen frames can differ only by transient TUI chrome
           // (cursor blink, spinner tick, timestamp) while the
           // visible transcript is unchanged. We still commit the
@@ -767,8 +760,7 @@ export function useIpcSubscriptions(
           const chromeTickOnly =
             changed.every(k => k === 'screen' || k === 'recent') &&
             changed.length > 0 &&
-            recent.length === current.recentScreen.length &&
-            pickerEqual(current.picker, picker)
+            recent.length === current.recentScreen.length
 
           const nextBody = {
             ...current,
@@ -776,7 +768,6 @@ export function useIpcSubscriptions(
             screenMarkdown: markdown,
             recentScreen: recent,
             recentScreenMarkdown: recentMarkdown,
-            picker,
             // activityStatus is owned by the process-state IPC
             // handler below — it carries the provider-correct verb
             // (Claude's spinner verb, Codex's bottom-row text).
@@ -795,22 +786,16 @@ export function useIpcSubscriptions(
                   summary: `screen update · ${changed.join(', ')}`,
                   data: {
                     changed,
-                    pickerVisible: picker.visible,
-                    pickerCount: picker.items.length,
                     recentLength: recent.length,
                   },
                 },
               )
-          if (!chromeTickOnly) {
-            recordScreenTailSnapshot(sessionId, recent)
-          }
           const durationMs = performance.now() - startedAt
           if (durationMs > 8) {
             perf.metric('workspace.ipc.screen.apply.slow', durationMs, 'sample', {
               sessionId,
               changed,
               recentLength: recent.length,
-              pickerVisible: picker.visible,
             })
           }
           return {

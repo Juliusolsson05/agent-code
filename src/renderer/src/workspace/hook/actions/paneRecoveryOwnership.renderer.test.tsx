@@ -44,7 +44,6 @@ function renderPaneActionsHarness(
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
     seenUuidsRef: ref<Record<SessionId, Set<string>>>({}),
-    latestScreenRef: ref<Record<SessionId, string>>({}),
     undoStackRef: ref(new UndoCloseStack()),
     // Close operations release a pending bootstrap debounce for each session
     // they end, as sessionActions.killSession always did (#886 round 2).
@@ -124,7 +123,6 @@ describe('pane recovery ownership', () => {
       latestStateRef: ref(state),
       latestRuntimesRef: ref(runtimes),
       seenUuidsRef: ref<Record<SessionId, Set<string>>>({}),
-      latestScreenRef: ref<Record<SessionId, string>>({}),
       undoStackRef: ref(new UndoCloseStack()),
       bootstrapTimersRef: ref(new Map()),
     } as unknown as WorkspaceRefs
