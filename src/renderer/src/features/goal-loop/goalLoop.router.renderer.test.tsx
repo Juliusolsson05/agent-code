@@ -135,6 +135,10 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     runGoalLoopCommand()
     expect(await screen.findByText('No goal loop on this agent')).toBeTruthy()
     expect(screen.getByRole('dialog')).toBeTruthy()
+    // Plan M7: the exit is a real (shared) button carrying the ⎋ it honours.
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close).toHaveAttribute('data-slot', 'button')
+    expect(close.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
     keyDown({ key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(useGoalLoopView.getState().latched).toBe(false)

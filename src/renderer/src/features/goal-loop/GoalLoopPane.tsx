@@ -1,3 +1,5 @@
+import { Button } from '@renderer/components/ui/button'
+import { Kbd } from '@renderer/components/ui/kbd'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
@@ -16,6 +18,12 @@ function describe(loop: GoalLoopState): string {
   if (loop.phase === 'paused') return `paused · ${loop.pauseReason} · ${budget}`
   return `iteration ${budget}`
 }
+
+// Buttons (plan M7): these were UNSTYLED <button>s — the browser's default
+// look, no focus ring beyond the global outline — in a strip and an overlay
+// the user reaches by keyboard. They are the shared Button now: ghost/xs in
+// the pane-top strip, outline/sm on the overlay, Stop red-outline in both
+// (it ends the loop), Close with the ⎋ chip Escape honours.
 
 /** The latched overlay's shell, shared by the "loop" and "no loop" states so
  * both carry the SAME interaction-ownership marker and the same
@@ -86,9 +94,11 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     // and it swaps to the real loop the moment the read resolves.
     return <GoalLoopOverlay>
       <p className="text-sm sm:text-base">No goal loop on this agent</p>
-      <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP. Press Escape to close.</p>
+      <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP.</p>
       <div className="flex gap-3 text-sm">
-        <button type="button" onClick={dismissGoalLoop}>Close</button>
+        {/* Escape dismisses the latch (useKeybinds' goal-loop gate), so the
+            button carries the chip instead of the prose saying so (plan M7). */}
+        <Button type="button" variant="ghost" size="sm" onClick={dismissGoalLoop}>Close<Kbd binding="Escape" /></Button>
       </div>
     </GoalLoopOverlay>
   }
@@ -125,15 +135,15 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
         — the controls that grant it more turns (#1049 re-review). */}
     <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {withVisibleControls(loop.goal)}</span>
     <span className="flex shrink-0 gap-2">
-      {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
-      {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
-      {canRaise && <button type="button" onClick={control('raise-cap')}>Raise cap</button>}
-      {loop.phase !== 'ended' && <button type="button" onClick={control('stop')}>Stop</button>}
+      {loop.phase === 'active' && <Button type="button" variant="ghost" size="xs" onClick={control('pause')}>Pause</Button>}
+      {loop.phase === 'paused' && <Button type="button" variant="ghost" size="xs" onClick={control('resume')}>Resume</Button>}
+      {canRaise && <Button type="button" variant="ghost" size="xs" onClick={control('raise-cap')}>Raise cap</Button>}
+      {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="xs" onClick={control('stop')}>Stop</Button>}
       {/* An ended loop has nothing left to control, but its strip still sits
           over the pane's top line — and ended loops are persisted, so without
           this it would stay there across restarts until a new loop replaced
           it. Dismiss removes the ended record in main. */}
-      {loop.phase === 'ended' && <button type="button" onClick={control('dismiss')}>Dismiss</button>}
+      {loop.phase === 'ended' && <Button type="button" variant="ghost" size="xs" onClick={control('dismiss')}>Dismiss</Button>}
     </span>
   </div>
   if (!latched) return strip
@@ -145,17 +155,17 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>
         {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {withVisibleControls(loop.completionSummary)}</p>}
         <div className="flex gap-3 text-sm">
-          {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
-          {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
-          {canRaise && <button type="button" onClick={control('raise-cap')}>Raise cap to {raisedCap}</button>}
-          {loop.phase !== 'ended' && <button type="button" onClick={control('stop')}>Stop</button>}
-          {loop.phase === 'ended' && <button type="button" onClick={control('dismiss')}>Dismiss</button>}
+          {loop.phase === 'active' && <Button type="button" variant="outline" size="sm" onClick={control('pause')}>Pause</Button>}
+          {loop.phase === 'paused' && <Button type="button" variant="outline" size="sm" onClick={control('resume')}>Resume</Button>}
+          {canRaise && <Button type="button" variant="outline" size="sm" onClick={control('raise-cap')}>Raise cap to {raisedCap}</Button>}
+          {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="sm" onClick={control('stop')}>Stop</Button>}
+          {loop.phase === 'ended' && <Button type="button" variant="outline" size="sm" onClick={control('dismiss')}>Dismiss</Button>}
           {/* The latch is one app-wide flag and this overlay is opaque over
               the whole pane, so it needs an exit that does not depend on
               remembering the chord. Escape is deliberately NOT bound here: in
               an agent pane Escape interrupts the running turn, and the
               capture-phase owner of that key is useKeybinds, not this pane. */}
-          <button type="button" onClick={dismissGoalLoop}>Close</button>
+          <Button type="button" variant="ghost" size="sm" onClick={dismissGoalLoop}>Close<Kbd binding="Escape" /></Button>
         </div>
     </GoalLoopOverlay>
   </>
