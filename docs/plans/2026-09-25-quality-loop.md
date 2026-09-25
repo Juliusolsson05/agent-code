@@ -529,6 +529,15 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — **#1224 MERGED** (Fixes #1138, after steering q5: a partly unreadable report is unknown). **#1226 MERGED** (Fixes #1119; follow-up #1230).
+  - **#1227 (restore reads ghost logs):**
+    - Blocker from reviewer A: stale ghosts repainted as duplicates. Fixed with a last-content-update clock and response identity.
+    - Steering q6: a straddle hid lost tails; 7 real cases were found and fixed.
+    - The restore no longer holds tail-passed ghosts.
+    - Follow-ups: #1231 (Codex ghost id), #1232 (Reload Agents ids).
+    - **On hold:** owner asked whether the on-disk ghost log should be deleted entirely (nothing has read it since July; 2.1 GB).
+  - **#1228 (Fixes #730):** 3,231 re-mints counted on disk; `sweepGhosts` extracted after review; follow-up #1233. Round 2 is running.
+  - **#1229 (Fixes #1117):** a host heal on `db_path_recovered_late`. A busy late open now reports (opencode-terminal-headless#9), and a failed heal keeps the lifetime banner. Round 2 is running.
 - 2026-09-25 — **#1223 MERGED** (Fixes #732, ghost-log orphan pruning).
   Round 2: A, B and C all MERGE-READY. The disposition table is in the PR
   body. **#1227 opened** (Fixes #1225): restored panes read their ghost log
