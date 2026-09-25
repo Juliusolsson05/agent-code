@@ -351,7 +351,7 @@ const MEMORY_GAUGE_INTERVAL_MS = 30_000
 // that advantage away: four busy agents produced 100+ React/ghost/debug/perf
 // pipelines per second, and the input/paint queue then sat behind seconds (or
 // minutes) of obsolete work even while JS heap stayed flat. A 100 ms preview
-// cadence matches the existing transcript and ghost journal batches, remains
+// cadence matches the existing transcript batch interval, remains
 // visually live for text, and puts a hard per-owner ceiling on renderer work.
 // Structural semantic events bypass this delay and first flush the latest
 // queued snapshots, preserving block/turn completion ordering.
@@ -1330,9 +1330,8 @@ export function useIpcSubscriptions(
         //   sub-slice and knows nothing about sessionId or the
         //   outer runtime. The ghost map lives on SessionRuntime
         //   because it needs to survive across semantic history
-        //   archival (when `currentTurn` flips to null) and because
-        //   the ghost journal persists it to disk with session-
-        //   scoped file names. Calling the ghost reducer at this
+        //   archival (when `currentTurn` flips to null). Calling the
+        //   ghost reducer at this
         //   outer boundary keeps the layering clean.
         const nextGhosts = ghostsFromSemanticTurn(
           nextSemantic.currentTurn,

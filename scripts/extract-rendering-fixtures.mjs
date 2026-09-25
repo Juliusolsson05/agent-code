@@ -16,8 +16,11 @@
 //   semantic  → proxy-semantic.json (full SemanticRuntimeState dump)
 //   ghosts    → ghost journal (userData/ghost-logs/<sessionId>.ghost.jsonl)
 //               folded by uuid, last record with updatedAt <= capturedAt.
-//               The on-disk ghost log was removed on 2026-09-25; bundles
-//               captured after that reconstruct with an empty ghost plane.
+//               The on-disk ghost log was removed on 2026-09-25 and the
+//               app deletes this directory on launch, so bundles (even
+//               older ones) can no longer be re-extracted with ghosts once
+//               a post-removal build has run; the empty ghost plane is
+//               expected, not an extraction failure.
 //   scalars   → state-snapshot.json (streamPhase, pendingTool*,
 //               lastJsonlEntryAt, queuedMessages)
 //   expected  → last RENDER visible_rows event in feed-debug.jsonl

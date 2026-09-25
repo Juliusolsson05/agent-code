@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
