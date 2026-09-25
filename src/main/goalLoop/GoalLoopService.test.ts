@@ -617,37 +617,39 @@ describe('GoalLoopService', () => {
     expect(await readFile(store.quarantineFile, 'utf8')).toBe('{broken')
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, loops: {} })
   })
-  it('never writes over the only copy when an unreadable loop cannot be preserved (#1258 review, q18)', async () => {
+  it('keeps the valid loops live, and never writes over the only copy, while an unreadable loop cannot be preserved (q18, q19)', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
     directories.push(directory)
     const file = join(directory, 'goal-loop.json')
     const fixture = JSON.parse(await readFile(join(import.meta.dirname,
       '../../../testing/fixtures/goal-loop/real-loops-2026-09-25.json'), 'utf8')) as { document: { version: 1; loops: Record<string, { phase: string }> } }
-    const [newer] = Object.keys(fixture.document.loops)
+    const [newer, kept] = Object.keys(fixture.document.loops)
     fixture.document.loops[newer!]!.phase = 'waiting-on-review'
     const source = JSON.stringify(fixture.document)
     await writeFile(file, source)
-    // The preserved copy cannot be written: something already occupies its
-    // name (here a directory), as any unwritable location would.
+    // Both preservation targets are obstructed (here by directories), as any
+    // unwritable location would be.
     const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
-    await mkdir(join(directory, `goal-loop.json.invalid-${digest}.json`))
-    // And the whole-file quarantine name too (review A, sequence B): a failed
-    // copy must never fall through to moving or overwriting the live file.
+    const copyPath = join(directory, `goal-loop.json.invalid-${digest}.json`)
+    await mkdir(copyPath)
     await mkdir(join(directory, 'goal-loop.json.corrupt'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const store = new GoalLoopStore(file)
     const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store })
     await svc.start()
-    warn.mockRestore()
-    // start() persists immediately; without a preserved copy that write must
-    // not happen, or the unreadable loop (and here every loop) is gone.
+    // The valid loop is live; the unreadable one is not.
+    expect(Object.keys(svc.snapshot())).toEqual([kept])
+    // start() persisted, and that write was refused: the only copy of the
+    // unreadable loop is still the live file.
     expect(await readFile(file, 'utf8')).toBe(source)
-    // Once the copy can be made, the next write makes it and persists: the
-    // service reads only at start, so a refusal must not last the process.
-    await rm(join(directory, `goal-loop.json.invalid-${digest}.json`), { recursive: true })
-    await store.write({})
-    expect(await readFile(join(directory, `goal-loop.json.invalid-${digest}.json`), 'utf8')).toBe(source)
-    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, loops: {} })
+
+    // The obstruction clears; the next persist makes the copy and then writes
+    // the live state, which still holds the valid loop.
+    await rm(copyPath, { recursive: true })
+    await store.write(svc.snapshot())
+    warn.mockRestore()
+    expect(await readFile(copyPath, 'utf8')).toBe(source)
+    expect(Object.keys(JSON.parse(await readFile(file, 'utf8')).loops)).toEqual([kept])
   })
 
   it('keeps a malformed file in place when its quarantine name cannot take it', async () => {

@@ -145,15 +145,21 @@ export class GoalLoopStore {
       // digest-named and atomic, never the `.corrupt` name, so it cannot
       // replace an older quarantine either.
       if (setAside > 0) {
-        let copy: string
         try {
-          copy = await preserveBytes(`${this.file}.invalid`, source)
+          const copy = await preserveBytes(`${this.file}.invalid`, source)
+          console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s) (${setAsideIds.join(', ')}); original preserved at ${copy}`)
         } catch (copyError) {
-          this.writesRefused = `${setAside} unreadable loop(s) could not be preserved (${String(copyError)})`
+          // The valid loops are STILL returned (steering q19): throwing here
+          // made the service start empty, and once the obstruction cleared the
+          // retried write persisted that empty map, dropping every valid loop.
+          // Instead the copy is owed and every write waits for it, so the live
+          // file keeps the unreadable loop until its bytes are safe, and the
+          // first write after that carries the valid loops forward.
+          this.writesRefused = `${setAside} unreadable loop(s) (${setAsideIds.join(', ')}) could not be preserved yet (${String(copyError)})`
           this.owedPreservation = async () => { await preserveBytes(`${this.file}.invalid`, source) }
-          throw new Error(`Goal Loop storage has unreadable loops that could not be preserved; writes are refused until it is fixed: ${String(copyError)}`)
+          console.warn(`[goal-loop] ${this.writesRefused}; writes wait for the copy`)
+          return valid
         }
-        console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s) (${setAsideIds.join(', ')}); original preserved at ${copy}`)
       }
       this.writesRefused = null
       this.owedPreservation = null
