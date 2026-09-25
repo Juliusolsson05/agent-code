@@ -200,6 +200,19 @@ describe('pane-scoped condition dialogs (#713)', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('composer A'))
   })
 
+  it('never pulls focus back when a prompt resolves while the user is in another pane (Claude review A #4)', () => {
+    // The central #713 promise: a prompt that closes on its own (the agent
+    // answered it, or it timed out) must not yank focus out of the pane the
+    // user is typing in. Only a prompt that HELD focus hands it back.
+    const onDecline = vi.fn(async () => {})
+    const { rerender } = render(<TwoPanes trustActive={false} onDecline={onDecline} />)
+    flushFrames()
+    const composerB = screen.getByLabelText('composer B')
+    composerB.focus()
+    rerender(<TwoPanes trustActive={false} promptUp={false} onDecline={onDecline} />)
+    expect(document.activeElement).toBe(composerB)
+  })
+
   it('makes the rest of ITS pane inert, so Tab cannot reach the covered composer (review A2/B1)', () => {
     // The scrim stops the pointer only. Shift+Tab from the prompt used to walk
     // into the same pane's composer, where typing edited a hidden draft.

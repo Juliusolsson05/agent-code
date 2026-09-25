@@ -153,6 +153,14 @@ describe('goal loop overlay controls from the keyboard (K2-1)', () => {
     expect(keyDown({ key: 'Tab' })).toBe(false)
     expect(dialog.contains(document.activeElement)).toBe(true)
 
+    // Enter and Space from the dimmed composer are swallowed too: the latch
+    // admits them only when focus is INSIDE the overlay (Claude review A
+    // #33). Otherwise Enter would submit the draft under the overlay.
+    const composerForEnter = screen.getByLabelText('Composer')
+    composerForEnter.focus()
+    expect(keyDown({ key: 'Enter' })).toBe(false)
+    expect(keyDown({ key: ' ' })).toBe(false)
+
     // From the dimmed composer, Tab is still swallowed and goes nowhere.
     const composer = screen.getByLabelText('Composer')
     composer.focus()
