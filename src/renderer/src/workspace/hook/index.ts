@@ -68,6 +68,7 @@ import { closeIdleOrchestrationAgents as runIdleOrchestrationCleanup } from '@re
 import { closeAgentActivitySelection as runAgentActivityClose } from '@renderer/workspace/agentActivityClose'
 import { closeCompletedGoalAgents as runCompletedGoalClose } from '@renderer/workspace/completedGoalAgents'
 import type { TldrRecord } from '@shared/types/tldr'
+import { withTerminalLastUsed, withTerminalLastUsedFloor } from '@renderer/workspace/terminalLastUsed'
 import type { AgentActivitySelection } from '@renderer/workspace/agentActivityClose'
 
 // -----------------------------------------------------------------------------
@@ -978,7 +979,21 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useTerminalForeground(restoreStatus, setRuntimes)
+  // A terminal's durable last-used record (#1178). One setter for both the
+  // foreground hook and the input path below, so the throttle and the
+  // floor-never-moves rule live in one pure helper.
+  const recordTerminalUsage = useCallback((sessionId: SessionId, usage: 'use' | 'floor') => {
+    const at = Date.now()
+    setState(prev => usage === 'use'
+      ? withTerminalLastUsed(prev, sessionId, at)
+      : withTerminalLastUsedFloor(prev, sessionId, at))
+  }, [setState])
+  const markTerminalUsed = useCallback((sessionId: SessionId) => recordTerminalUsage(sessionId, 'use'), [recordTerminalUsage])
+  const readRuntimeForForeground = useCallback(
+    (sessionId: SessionId) => refs.latestRuntimesRef.current[sessionId],
+    [refs],
+  )
+  useTerminalForeground(restoreStatus, setRuntimes, readRuntimeForForeground, recordTerminalUsage)
   useSessionRoutingRecovery(refs, setRuntimes, state.sessions)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useBootstrap(
@@ -1068,6 +1083,7 @@ export function useWorkspace(
     closeIdleOrchestrationAgents,
     closeAgentActivitySelection,
     closeCompletedGoalAgents,
+    markTerminalUsed,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
     focusAgentBySessionId,
