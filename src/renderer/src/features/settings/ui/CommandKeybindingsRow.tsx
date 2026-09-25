@@ -395,6 +395,26 @@ export function CommandKeybindingsRow() {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [capturingFor, contextForCommandId, effective, effectiveAsDefaults, settings.dictationShortcut, commit])
 
+  // The recording owns every key, so it must end the moment the user's
+  // attention does (#1272, C4 hunt): a click anywhere but the recorder's own
+  // button, or the window losing focus. Escape alone was not enough, because
+  // clicking the Settings search box and typing "t" silently bound "T" to the
+  // command. Same release rule as HotkeyInput and MouseButtonInput.
+  useEffect(() => {
+    if (!capturingFor) return
+    const release = () => setCapturingFor(null)
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Element | null
+      if (!target?.closest?.('[data-shortcut-recorder]')) release()
+    }
+    window.addEventListener('mousedown', onMouseDown, true)
+    window.addEventListener('blur', release)
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown, true)
+      window.removeEventListener('blur', release)
+    }
+  }, [capturingFor])
+
   /**
    * The ONLY override path. Removes the binding from every command that owns
    * it and installs it on the requester, in ONE settings write — so the store
@@ -506,6 +526,9 @@ export function CommandKeybindingsRow() {
                   )}
 
                   <button
+                    // Clicks on the recorder itself toggle it (below) and must
+                    // not count as "clicked elsewhere".
+                    data-shortcut-recorder=""
                     onClick={() => {
                       setConflict(null)
                       setCapturingFor(capturingFor === row.id ? null : row.id)
