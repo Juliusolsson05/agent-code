@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 
-import { formatReadinessElapsed, resolveReadinessText } from './readiness'
+import { formatReadinessElapsed, readinessStatusSince, resolveReadinessText } from './readiness'
 
 describe('resolveReadinessText', () => {
   it('does not present a deliberately parked backend as starting', () => {
@@ -105,6 +105,21 @@ describe('resolveReadinessText', () => {
     })).toBe('starting agent')
   })
 
+  it('reports a failed process even when the transcript reader had already stopped', () => {
+    // A restart fails on a pane whose transcript had errored: the failure,
+    // not the stale reader error, is why the pane is down.
+    for (const transcriptStatus of ['error', 'disconnected', 'loading'] as const) {
+      expect(resolveReadinessText({
+        ...emptyRuntime(),
+        processStatus: 'failed',
+        processError: 'Session failed to start. Check provider setup and retry.',
+        recoveryFailureCode: 'start-failed',
+        transcriptStatus,
+        transcriptError: 'old reader stopped',
+      })).toBe('Session failed to start. Check provider setup and retry. (start-failed)')
+    }
+  })
+
   it('appends the typed recovery code to a failed pane', () => {
     // 'ownership-conflict' (another backend owns this id) and 'start-failed'
     // (the provider would not launch) need completely different responses from
@@ -140,6 +155,18 @@ describe('resolveReadinessText', () => {
       inputReadinessChangedAt: now - 600_000,
       transcriptStatusChangedAt: now - 2_000,
     }, now)).toBe('loading transcript · 2s')
+  })
+
+  it('reports no clock for a failed pane, whose line shows no elapsed time', () => {
+    // A failed line outranks a loading transcript and has no elapsed suffix,
+    // so the transcript clock would only drive a 1 Hz re-render of nothing.
+    expect(readinessStatusSince({
+      ...emptyRuntime(),
+      processStatus: 'failed',
+      transcriptStatus: 'loading',
+      transcriptStatusChangedAt: 1_000,
+      inputReadinessChangedAt: 2_000,
+    })).toBeNull()
   })
 
   it('reports no clock for a healthy pane, so no timer is mounted for it', () => {
