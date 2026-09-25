@@ -116,11 +116,23 @@ export function NumberInput({
   const atMax = draft === null && value >= max
 
   return (
-    <div className={cn('flex items-stretch overflow-hidden rounded-control border border-control-border bg-control-bg', className)}>
+    // Focus is drawn on the WRAPPER, keyed on the field's :focus-visible. The
+    // field itself is outline-none, and the wrapper's overflow-hidden (needed
+    // for the rounded stepper ends) would clip any ring drawn on the field, so
+    // before this a focused NumberInput showed no focus at all (plan T4/K8).
+    // `has-[input:focus-visible]` rather than `focus-within`, because a
+    // stepper press must not light the ring up (it never takes focus anyway,
+    // see below).
+    <div className={cn('flex items-stretch overflow-hidden rounded-control border border-control-border bg-control-bg has-[input:focus-visible]:border-input-border-focus has-[input:focus-visible]:ring-1 has-[input:focus-visible]:ring-focus-ring', className)}>
       <button
         type="button"
         aria-label="Decrease"
         disabled={atMin}
+        // Out of the Tab order (APG spinbutton): a focused number field
+        // already steps with ↑/↓, so these would be two extra Tab stops per
+        // field, each with a focus ring the wrapper's overflow clips. They
+        // stay clickable.
+        tabIndex={-1}
         // Keeps focus in the field so a user can click the stepper and then
         // keep typing, and so the dialog's Enter-to-confirm still applies to
         // the field rather than re-firing this button.
@@ -159,6 +171,8 @@ export function NumberInput({
         type="button"
         aria-label="Increase"
         disabled={atMax}
+        // See Decrease: ↑ on the field does this.
+        tabIndex={-1}
         onMouseDown={event => event.preventDefault()}
         onClick={() => commitNumber(value + step)}
         className="w-7 shrink-0 border-l border-control-border text-[13px] leading-none text-control-fg hover:bg-control-hover-bg hover:text-ink disabled:opacity-40 disabled:hover:bg-control-bg"

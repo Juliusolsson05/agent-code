@@ -423,7 +423,7 @@ export function CommandKeybindingsRow() {
         value={query}
         onChange={event => setQuery(event.target.value)}
         placeholder="Search commands, shortcuts, or keywords…"
-        className="rounded-control w-full bg-input-bg border border-border px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+        className="rounded-control w-full bg-input-bg border border-border px-2 py-1 text-xs text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
       />
 
       {conflict ? (

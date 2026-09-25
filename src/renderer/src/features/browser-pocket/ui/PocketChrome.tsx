@@ -52,7 +52,7 @@ export function PocketChrome({ sessionId, workspace, compact = false, inLane = f
         ref={input}
         aria-label="Address"
         spellCheck={false}
-        className="mx-1 h-7 min-w-0 flex-1 rounded-control border border-border bg-canvas px-2 font-code text-[12px] text-ink outline-none focus:border-accent"
+        className="mx-1 h-7 min-w-0 flex-1 rounded-control border border-border bg-canvas px-2 font-code text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
         value={draft ?? pocket.url ?? ''}
         placeholder={ports[0] ? `localhost:${ports[0].port}` : 'localhost:5173 or a URL'}
         onFocus={e => e.currentTarget.select()}

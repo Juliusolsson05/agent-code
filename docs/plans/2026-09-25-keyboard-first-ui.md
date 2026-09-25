@@ -511,7 +511,7 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 |---|---|---|
 | X1 | #713 condition modal scoped to its pane (keyboard side; tell B7) | todo |
 | X2 | `font-mono` → `font-code` sweep (T6) | todo |
-| X3 | `focus:border-accent` / `outline-none` sweep (T4) | todo |
+| X3 | `focus:border-accent` / `outline-none` sweep (T4) | done (4 `focus:border-accent` inputs → control focus form; Apps settings raw controls → Button/Input; exemptions recorded in Execution notes) |
 | X4 | Stale comments (`defaults.ts` dictation) | done |
 | X5 | Undefined theme tokens (`text-fg`, `bg-surface-raised`) outside the S-rows — found in S10/S11 | done (N2/N3) |
 
@@ -778,6 +778,17 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **X3 NumberInput (Grid Dispatch lane counts, settings numbers):** the
+  field shows the focus ring on its whole rounded box; Tab skips the −/+
+  steppers; ↑/↓ in the field step the value (native, not testable here —
+  please confirm it steps and clamps).
+- **X3 Settings › Apps:** the repo field is now the standard Input (rounded,
+  12px code font, focus ring). Install / Load folder / Update are outline
+  Buttons, and both Remove buttons are **destructive-outline (red text)**.
+  That is a visible change: they were neutral grey. "Retry loading
+  extensions" shows a focus ring. Also: the Command keybindings search, the
+  pocket URL bar and the headless-probe debug inputs focus with the theme ring
+  instead of an accent border.
 - **N8 focus ring convergence:** the queued-messages header and rows, the
   workflow agent/activity rows and Settings › Dictation's input device select
   now show the thin theme focus ring (they drew a 2px accent outline, a
@@ -1267,3 +1278,19 @@ Sharp corners and one light theme.
   non-inset ring). No new test: a class swap with no behavior, and a
   class-string assertion would restate the diff. Feed.tsx flash and
   DispatchAgentList menu-open outline deliberately left (not focus).
+- 2026-09-25 X3: `focus:border-accent` → `focus-visible:border-input-border-focus
+  focus-visible:ring-1 focus-visible:ring-focus-ring` (CommandKeybindingsRow,
+  PocketChrome, HeadlessSnapshotProbe ×2). AppsSettingsRow raw controls, which
+  had NO focus indicator, → `Button`/`Input` (T8). Ruling: Remove uses
+  `destructive-outline`, matching destructive actions elsewhere. Cost if
+  wrong: a one-word variant change. Intentional `outline-none` without a ring
+  kept: caret-signal search inputs (ContentSearch, QuickOpen, Conversations),
+  Radix Dialog/Dropdown content (items use data-highlighted), listbox focus
+  owners whose active row is the signal (NewAgentPlacement, Rewind scroller
+  uses aria-activedescendant rows), the Explorer rename input (always focused,
+  focus-coloured border). NumberInput was NOT exempt: it had no focus
+  indicator at all → the wrapper draws the ring on `has-[input:focus-visible]`,
+  steppers leave the Tab order (APG spinbutton; the field steps with native
+  ↑/↓). Confirm-red: its Tab-stop test fails on the pre-change component. ResumePromptModal/CodexApprovalModal belong to N16. No new
+  tests: class/primitive swaps; the existing Apps and settings suites cover
+  the behaviour.

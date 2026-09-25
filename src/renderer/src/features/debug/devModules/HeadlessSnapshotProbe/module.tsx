@@ -61,7 +61,7 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
             <input
               value={pattern}
               onChange={event => setPattern(event.target.value)}
-              className="rounded-control bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus:border-accent"
+              className="rounded-control bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
               spellCheck={false}
             />
           </label>
@@ -70,7 +70,7 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
             <input
               value={flags}
               onChange={event => setFlags(event.target.value)}
-              className="rounded-control bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus:border-accent"
+              className="rounded-control bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
               spellCheck={false}
             />
           </label>
