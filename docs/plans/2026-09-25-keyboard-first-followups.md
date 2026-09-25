@@ -60,7 +60,7 @@ K2-5 (persistent toasts), and the #1221 UNCONFIRMED product calls.
 
 | Finding | Verdict | Disposition |
 |---|---|---|
-| main: 9 renderer tests fail (stale accessible names) | valid | fixed in `e092232c` |
+| main: 9 renderer tests fail (stale accessible names) | valid | fixed in `e092232c`; main fixed the same queries in parallel, and the merge takes main's version |
 | A-F1: an inline approval listbox disables Enter-to-send app-wide | valid, regression | fixed in `4915e869` |
 | A-F3: Enter inside a pane prompt sends another pane's hovered draft | valid | fixed in `4915e869` |
 | B-F1: two prompts mounting in one commit inert each other (deadlock) | valid | fixed in `73b7fae2` (one controller per pane) |
