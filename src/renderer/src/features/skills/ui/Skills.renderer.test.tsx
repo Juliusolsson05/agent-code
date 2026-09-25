@@ -217,7 +217,7 @@ describe('Add skills dialog (#1161)', () => {
     fireEvent.change(input, { target: { value: 'npx skills add anthropics/skills --skill docx -a codex' } })
     expect(screen.getByText(/Understood: source anthropics\/skills · skills: docx · agents: codex/)).toBeTruthy()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Find skills' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Find Skills' }))
     })
     expect(api.discoverAgentCodeGitHubSkills).toHaveBeenCalledWith('npx skills add anthropics/skills --skill docx -a codex')
     // `--skill docx` preselects it; `-a codex` ticks only Codex.
@@ -225,7 +225,7 @@ describe('Add skills dialog (#1161)', () => {
     expect((screen.getByRole('checkbox', { name: 'Install for Codex' }) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByRole('checkbox', { name: 'Install for Claude' }) as HTMLInputElement).checked).toBe(false)
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Install 1 skill' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Install 1 Skill' }))
     })
     expect(api.installAgentCodeGitHubSkills).toHaveBeenCalledWith({
       expectedRevision: 7,
@@ -240,7 +240,28 @@ describe('Add skills dialog (#1161)', () => {
     useAppStore.setState({ addSkillDialog: { initialInput: 'https://gitlab.com/o/r' } })
     render(<AddSkillDialog />)
     expect(screen.getByText(/GitHub only for now/)).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'Find skills' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Find Skills' }) as HTMLButtonElement).disabled).toBe(true)
     expect(api.discoverAgentCodeGitHubSkills).not.toHaveBeenCalled()
   })
+
+  // Plan S32: Enter in the source field finds (and Find says so), Install is a
+  // deliberate press, and a running find/install cannot be hidden.
+  it('labels Find Skills ↩, gives Install no key, and holds the dialog while finding', async () => {
+    let settle!: () => void
+    api.discoverAgentCodeGitHubSkills.mockImplementationOnce(() => new Promise(resolve => {
+      settle = () => resolve({ ok: true, discovery: discovery() })
+    }))
+    useAppStore.setState({ addSkillDialog: { initialInput: 'anthropics/skills' } })
+    render(<AddSkillDialog />)
+    expect(screen.getByRole('button', { name: 'Find Skills' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    expect(screen.getByRole('button', { name: /^Install/ }).querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Install command or source' }), { key: 'Enter' })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(useAppStore.getState().addSkillDialog).not.toBeNull()
+    await act(async () => { settle() })
+  })
 })
+

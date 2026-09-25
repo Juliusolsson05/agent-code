@@ -437,7 +437,7 @@ entry when it lands.
 | S29 | AgentCodeCustomSkillsModal | as S28 | as S28 | done |
 | S30 | AgentMcpServersModal | no Enter; `max-w-xl` no-op | size preset; Close ⎋ | done |
 | S31 | McpServerDialog | textarea autoFocus; `max-w-2xl` no-op (renders 520) | size md; ⌘↵ confirm chip | done |
-| S32 | AddSkillDialog | Enter = find; square inputs/cards | T1 tokens; legend (↵ find); DialogActions | todo |
+| S32 | AddSkillDialog | Enter = find; square inputs/cards | T1 tokens; legend (↵ find); DialogActions | done |
 | S33 | ReportHistoryModal | no keys; outline Close | Close ⎋ ghost; scroller focus T4 | todo |
 | S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | todo |
 | S35 | AgentAnalyticsModal | "close" button; p-4 | as S34 | todo |
@@ -716,6 +716,11 @@ Sharp corners and one light theme.
   secret field was changed (typing into a secret and emptying it again is
   not a change); while a save runs, Cancel disables, loses ⎋, and Escape /
   outside clicks wait (same in the Conventions editor).
+- **S32 Add Skills:** the source and filter fields are the standard inputs
+  (were square with no focus styling); `Find Skills ↩` (Enter in the source
+  field runs it); repo/notice/candidate boxes have the plate radius and
+  candidates a hover; footer `Cancel ⎋` + `Install N Skills` with no chip;
+  while finding/installing, Cancel disables and Escape waits; 860 wide.
 
 ## Tasks
 
@@ -790,6 +795,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S32: Add Skills — Input primitive, Kbd on Find, DialogActions
+  (Install: no key — it writes a repository's files into provider
+  folders), busy guards on every close path. Confirm-red: the new test
+  fails on the pre-change file (two others fail there only on title case).
 - 2026-09-25 steering note k5 (valid, both high): (1) Edit Server's dirty
   predicate ignored `secretEdits`, so a secret-only edit was discarded by
   Escape/Cancel without asking — now included (key present = edited; typed
