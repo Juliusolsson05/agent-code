@@ -536,6 +536,25 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (04:45) — **Merged #1252** (`d86ef9b9`, closes #1239) and **#1238**
+  (`dd5a44f7`, Refs #369) plus codex-headless #52 (`ae0e935`). Open:
+  - **#1236:** q15 fixed (the preload announces its document on every load,
+    so a reload retires old leases). Waiting only on CI.
+  - **#1254 (#1240):** round 2 found keyed `startControlTask` step rows read
+    as damage. The consistency check is now executor-kinds-only, with a
+    missing-intent rule (0 hits in the real journal); q17 fixed (no
+    per-launch re-quarantine). Merges on green.
+  - **#1256 (#1245):** v2 shapes added per q16. Review A's
+    `detachedSessions` suspicion was verified (27→3 agents) and fixed with a
+    typed lock and entry re-homing. Round 2 is out.
+  - **#1257 (#1247)**, TLDR/Goal per-record set-aside: A's atomic copy,
+    history salvage and revision floor are fixed; B is pending.
+  - **#1258 (#1248)**, goal-loop per-loop set-aside: in review.
+  - **#1259 (#1249)** plus grok-code-headless#4, mistyped summary fields: in
+    review.
+  - Filed #1253, #1255. The CI queue is saturated; superseded runs are
+    being cancelled.
+
 - 2026-09-25 (03:40) — **#1237 merged** (`77beed18`, closes #877). Round 2 is MERGE
   on #1236, #1238 (+ codex-headless #52) and #1252. Two-round residuals fixed in
   the same PRs:
