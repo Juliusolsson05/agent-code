@@ -17,6 +17,7 @@ import type { ConversationService } from '@main/conversations/service.js'
 import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
+import { registerMenuIpc } from '@main/ipc/menu.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { registerGhostIpc } from '@main/ipc/ghost.js'
 import { registerDebugIpc } from '@main/ipc/debug.js'
@@ -118,6 +119,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)
+  registerMenuIpc()
   registerGhostIpc(deps.ghostJournals)
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
