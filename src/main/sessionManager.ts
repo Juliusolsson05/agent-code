@@ -5502,6 +5502,25 @@ export class SessionManager extends EventEmitter {
     return buffer ? { raw: buffer.read(), capChars: buffer.cap } : null
   }
 
+  /**
+   * Retained Codex proxy state across every live session (#369): flows the
+   * adapters still hold and their undrained SSE text. Sampled into the
+   * performance heartbeat, so a retention leak is a climbing number instead
+   * of a crash. Sessions without a proxy adapter contribute nothing.
+   */
+  codexProxyDiagnostics(): { flows: number; bufferedChars: number } {
+    let flows = 0
+    let bufferedChars = 0
+    for (const entry of this.sessions.values()) {
+      const diagnostics = (entry.session as { proxyDiagnostics?: () => { flows: number; bufferedChars: number } | null })
+        .proxyDiagnostics?.()
+      if (!diagnostics) continue
+      flows += diagnostics.flows
+      bufferedChars += diagnostics.bufferedChars
+    }
+    return { flows, bufferedChars }
+  }
+
   /** Latest screen snapshot observed for a live session, or null before the
    *  first frame. See the cache fields' WHY comment — this exists for
    *  late-attaching consumers (remote companion) to seed their state. */

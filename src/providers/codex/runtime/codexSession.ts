@@ -253,6 +253,12 @@ export class CodexSession extends EventEmitter {
   private readonly beforeResumeOwnershipAcquire: (() => Promise<void>) | null
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
+
+  /** Per-request state the proxy adapter holds right now (#369), or null
+   *  when this session streams without the proxy. */
+  proxyDiagnostics(): { flows: number; bufferedChars: number } | null {
+    return this.proxyAdapter?.diagnostics() ?? null
+  }
   private nextStartGeneration = 0
   private activeStartAttempt: CodexStartAttempt | null = null
   // Exists only across prepare -> PTY spawn -> event wiring. The parent keeps
