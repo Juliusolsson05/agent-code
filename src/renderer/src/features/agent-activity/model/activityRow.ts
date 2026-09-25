@@ -165,9 +165,11 @@ export function attentionReason(
   const failure = terminalProviderFailure(runtime, meta)
   if (failure) return `Turn failed: ${firstLine(failure.message)}`
   if (isLimitIdle(runtime) && !isWorking(runtime)) return 'Hit a usage limit'
-  if (runtime.promptDelivery.kind === 'failed-safe' || runtime.promptDelivery.kind === 'uncertain') {
-    return 'Your prompt did not send'
-  }
+  // Two different claims, so two different sentences (review of #1105):
+  // `failed-safe` KNOWS the prompt was not delivered (re-send it), while
+  // `uncertain` only could not confirm it was absorbed (go and look).
+  if (runtime.promptDelivery.kind === 'failed-safe') return 'Your prompt did not send'
+  if (runtime.promptDelivery.kind === 'uncertain') return 'Your prompt may not have sent'
   if (loop?.phase === 'ended' && loop.endReason === 'blocked') return 'Goal loop is blocked on you'
   // A paused loop is waiting for a human decision whatever paused it — raise
   // the cap, look at the error, or resume — so every pause reason counts
@@ -274,6 +276,11 @@ export function buildActivityRows(
     const meta = state.sessions[indexRow.sessionId]
     if (!meta) continue
     const kind = meta.kind ?? DEFAULT_PROVIDER
+    // Extension views are pool citizens, so the index lists them, but they
+    // have no process and no transcript: every column here would be blank or
+    // a false "Starting…" forever. The old modal skipped them for the same
+    // reason (review of #1105 caught the first cut listing them).
+    if (kind === 'extension-view') continue
     const runtime = runtimes[indexRow.sessionId]
     const identity = tldrIdentityForSession(indexRow.sessionId, meta)
     const goal = identity ? notes.goals[identity] : undefined

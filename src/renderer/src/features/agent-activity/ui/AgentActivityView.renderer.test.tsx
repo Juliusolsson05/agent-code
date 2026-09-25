@@ -96,7 +96,7 @@ describe('Agent Activity, full screen', () => {
   it('shows who needs you first, then who is working, then the longest-idle agents first', async () => {
     await openView()
     expect(rowNames()).toEqual(['asking', 'busy', 'idle-old', 'idle-new'])
-    expect(within(screen.getByRole('region', { name: 'Needs you' })).getByText('Wants permission')).toBeInTheDocument()
+    expect(within(screen.getByRole('group', { name: 'Needs you' })).getByText('Wants permission')).toBeInTheDocument()
     expect(screen.getByText('1 need you · 1 working · 2 idle')).toBeInTheDocument()
   })
 

@@ -77,10 +77,10 @@ const modalCases = [
     // stays mounted while closed, so its row model must not run then.
     name: 'AgentActivityView',
     Component: AgentActivityView,
-    assertRunning: () => expect(screen.getByRole('region', { name: 'Working' })).toHaveTextContent('terminal-perf'),
+    assertRunning: () => expect(screen.getByRole('group', { name: 'Working' })).toHaveTextContent('terminal-perf'),
     assertIdle: () => {
-      expect(screen.queryByRole('region', { name: 'Working' })).not.toBeInTheDocument()
-      expect(screen.getByRole('region', { name: 'Idle' })).toHaveTextContent('terminal-perf')
+      expect(screen.queryByRole('group', { name: 'Working' })).not.toBeInTheDocument()
+      expect(screen.getByRole('group', { name: 'Idle' })).toHaveTextContent('terminal-perf')
     },
   },
   {

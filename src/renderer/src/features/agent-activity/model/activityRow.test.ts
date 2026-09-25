@@ -87,7 +87,10 @@ describe('Agent Activity sections, replayed against the recorded runtime corpus'
       .map(record => ({ id: record.sessionId, row: rowFor({ kind: record.provider as SessionMeta['kind'] }, hydrate(record)) }))
       .filter(item => item.row.section === 'needs-you')
     expect(new Set(needsYou.map(item => item.id))).toEqual(undelivered)
-    expect(needsYou.every(item => item.row.reason === 'Your prompt did not send')).toBe(true)
+    expect(Object.fromEntries(needsYou.map(item => [item.id.slice(0, 8), item.row.reason]))).toEqual({
+      '6052830c': 'Your prompt did not send',
+      '39e22d50': 'Your prompt may not have sent',
+    })
   })
 
   it('treats a queued prompt behind a working agent as normal, not as stuck', () => {
@@ -283,6 +286,13 @@ describe('row names on the owner\'s real fleet: title, then Goal, then folder', 
       goals: { [titled.sessionId]: { text: 'Fix authentication', updatedAt: '', revision: 1 } },
     })
     expect(filterActivityRows(withTitleGoal, 'authentication')).toHaveLength(1)
+  })
+})
+
+describe('what is not an agent', () => {
+  it('leaves extension views out: no process, nothing to report', () => {
+    const state = workspaceOf({ agent: { kind: 'claude' }, panel: { kind: 'extension-view' } })
+    expect(buildActivityRows(state, {}, EMPTY_FLEET_NOTES).map(row => row.sessionId)).toEqual(['agent'])
   })
 })
 

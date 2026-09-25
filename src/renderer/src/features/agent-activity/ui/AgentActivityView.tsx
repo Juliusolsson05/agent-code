@@ -319,7 +319,11 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
           {sections.map(({ section, rows: sectionRows }) => {
             if (sectionRows.length === 0 && section !== 'needs-you') return null
             return (
-              <section key={section} aria-label={SECTION_TITLES[section]} className="mb-4">
+              // role="group" (review of #1105): a plain <section> is a region
+              // landmark between the listbox and its options, so strict screen
+              // readers stopped associating the rows with the list. A labelled
+              // group is the ARIA-sanctioned way to section a listbox.
+              <section key={section} role="group" aria-label={SECTION_TITLES[section]} className="mb-4">
                 <div className="sticky top-0 z-10 flex items-center justify-between bg-canvas py-1.5">
                   <h3 className={cn(
                     'text-[11px] font-medium uppercase tracking-wider',
