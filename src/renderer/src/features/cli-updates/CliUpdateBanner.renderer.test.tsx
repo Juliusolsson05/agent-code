@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CliUpdateBanner, describeState } from './CliUpdateBanner'
-import { useCliUpdateStore } from './store'
+import { dismissKey, useCliUpdateStore } from './store'
 import { DEFAULT_CLI_UPDATE_SNAPSHOT } from '@shared/types/cliUpdate'
 
 const deferred = (cli: 'claude' | 'codex') => ({ kind: 'deferred' as const, cli, from: '2.1.281', wantedLatest: '2.1.282', reason: 'session-active' as const, checkedAt: 1 })
@@ -25,5 +25,13 @@ describe('CliUpdateBanner deferred state (#1243)', () => {
 
   it('keeps an automatic deferral silent', () => {
     expect(describeState('claude', deferred('claude'))).toBeNull()
+  })
+
+  it('re-shows the explanation for a NEW click after the previous one was dismissed (#1265 review A)', () => {
+    const first = { ...deferred('claude'), requestedByUser: true as const, checkedAt: 1 }
+    const second = { ...first, checkedAt: 2 }
+    expect(dismissKey('claude', first)).not.toBe(dismissKey('claude', second))
+    // The same click re-emitted keeps its dismissal.
+    expect(dismissKey('claude', first)).toBe(dismissKey('claude', { ...first }))
   })
 })

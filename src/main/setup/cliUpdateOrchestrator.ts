@@ -194,9 +194,19 @@ export class CliUpdateOrchestrator extends EventEmitter {
     const setup = await loadSetupState()
     const cachedLatest = setup.cliUpdateCache[cli]?.latestVersion
     const latestVersion = cachedLatest ?? ''
-    if (!latestVersion || compareSemver(installed.version, latestVersion) >= 0) {
-      // Nothing to do — either the banner was stale (cache empty) or
-      // an earlier auto-run beat us to it. Silent.
+    if (!latestVersion) return
+    if (compareSemver(installed.version, latestVersion) >= 0) {
+      // Already current (updated outside Agent Code, or an earlier run beat
+      // this click). Returning silently left the stale "available" offer up,
+      // and every click did nothing (#1265 review A); the answer to the
+      // click is that there is nothing left to do.
+      this.updateSnapshot(cli, {
+        kind: 'up-to-date',
+        installed: installed.version,
+        latest: latestVersion,
+        installMethod: await detectCliInstallMethod(binary),
+        checkedAt: Date.now(),
+      })
       return
     }
 
