@@ -323,7 +323,7 @@ function CandidateCard({
         <span className="text-muted">{transport ?? 'unknown transport'}</span>
         <span className="ml-auto flex items-center gap-3">
           {USER_MCP_PROVIDERS.map(provider => (
-            <label key={provider} className="flex items-center gap-1" title={support[provider].ok ? undefined : support[provider].reason}>
+            <label key={provider} className="flex items-center gap-1">
               <Check
                 checked={draft.providers[provider]}
                 disabled={!support[provider].ok}
@@ -335,6 +335,7 @@ function CandidateCard({
           ))}
         </span>
       </div>
+      <UnsupportedProviderNotes support={support} />
       {entryProblems.map(problem => <div key={problem.message} className="mt-1 text-warning">⚠ {problem.message}</div>)}
       {candidate.inputs.length > 0 ? (
         <SecretFields
@@ -458,7 +459,7 @@ function EditServer({ server, onDone, onCancel, onDirty, onSaving }: { server: U
           <span className="text-muted">Transport: {transport ?? '—'}</span>
           <span className="ml-auto flex items-center gap-3">
             {USER_MCP_PROVIDERS.map(provider => (
-              <label key={provider} className="flex items-center gap-1" title={support[provider].ok ? undefined : support[provider].reason}>
+              <label key={provider} className="flex items-center gap-1">
                 <Check
                   checked={providers[provider] && support[provider].ok}
                   disabled={!support[provider].ok}
@@ -470,6 +471,7 @@ function EditServer({ server, onDone, onCancel, onDirty, onSaving }: { server: U
             ))}
           </span>
         </div>
+        <UnsupportedProviderNotes support={support} />
         <Textarea
           value={json}
           onChange={event => setJson(event.target.value)}
@@ -617,4 +619,31 @@ function SignInHelp({ name, url }: { name: string; url: string }) {
 
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:=-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * Why a provider's checkbox is locked, as VISIBLE text (K2-11).
+ *
+ * The reason ("Codex cannot pass a secret named GITHUB_TOKEN", "… does not
+ * support this transport") lived only in the label's hover `title`, and a
+ * disabled checkbox is out of the Tab order. So a keyboard or screen reader
+ * user met a locked control with no reachable explanation at all, and a mouse
+ * user had to find it by hovering. It is the answer to "why can't I attach
+ * this here?", so it is shown under the row for everyone.
+ */
+function UnsupportedProviderNotes({ support }: { support: ReturnType<typeof providerSupportForEntry> }) {
+  const notes = USER_MCP_PROVIDERS.flatMap(provider => {
+    const entry = support[provider]
+    return entry.ok ? [] : [{ provider, reason: entry.reason }]
+  })
+  if (notes.length === 0) return null
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5 text-muted">
+      {notes.map(note => (
+        <li key={note.provider}>
+          {PROVIDER_LABEL[note.provider]} not available: {note.reason}
+        </li>
+      ))}
+    </ul>
+  )
 }

@@ -100,6 +100,9 @@ describe('Settings → MCP grid', () => {
     render(<McpServersRow settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
     expect(screen.queryByRole('checkbox', { name: 'linear for new Codex agents' })).toBeNull()
     expect(screen.getByLabelText('Codex does not support SSE servers')).toBeTruthy()
+    // K2-16: the reason is also VISIBLE text under the row, not only a label
+    // on an unfocusable cell.
+    expect(screen.getByText(/Codex: Codex does not support SSE servers/)).toBeVisible()
   })
 
   it('writes a user-server provider choice to main, not to renderer Settings', () => {
@@ -112,6 +115,18 @@ describe('Settings → MCP grid', () => {
 })
 
 describe('MCP server dialog', () => {
+  it('says in visible text why a provider cannot be attached (K2-11)', () => {
+    // The reason lived only in a hover title on a DISABLED checkbox, which is
+    // out of the Tab order: unreachable by keyboard or screen reader.
+    const sse = { type: 'sse' as const, url: 'http://localhost:9/sse' }
+    useUserMcpStore.setState({ snapshot: { servers: [server({ entry: sse, transport: 'sse' })], native: [], claudeManagedPolicy: false } })
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    expect(screen.getByLabelText('Attach to Codex')).toBeDisabled()
+    expect(screen.getByText(/Codex not available: Codex does not support SSE servers/)).toBeVisible()
+    expect(document.querySelector('label[title]')).toBeNull()
+  })
+
   it('never renders a stored secret, only its hint', () => {
     useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
     render(<McpServerDialog />)

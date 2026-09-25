@@ -533,12 +533,12 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | todo |
 | K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | todo |
 | K2-10 | Dispatch "new" / goal-loop chips (`dispatch/DispatchAgentList.tsx:369,378,670,697`) | explanation title-only | aria-describedby on the row | todo |
-| K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | todo |
+| K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | done (UnsupportedProviderNotes under the provider row, both dialog modes) |
 | K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | todo |
 | K2-13 | Worktree badge (`TileLeaf/SessionBadges.tsx:56`) | branch/touched files title-only | reveal on focus / Agent Status | todo |
 | K2-14 | Provider tool rows (CommandView, CodeEditView, Claude read/web/agent, Codex embedded-op/plan/tool-result) | truncated full command/path title-only | show full text when expanded | todo |
 | K2-15 | PocketedLeaf viewport note (`PocketedLeaf.tsx:115`) | title-only | visible helper / menu | todo |
-| K2-16 | McpServersRow summary + Unsupported reason (`McpServersRow.tsx:183,252`) | title-only | inline reason | todo |
+| K2-16 | McpServersRow summary + Unsupported reason (`McpServersRow.tsx:183,252`) | title-only | inline reason | done (per-server reasons on the row's second line; one footer key for the provider-wide “—”; Copy in reason inline; switch + expander rings) |
 | K2-17 | Keybindings palette checkbox suppressed reason (`CommandKeybindingsRow.tsx` PaletteToggle) | reason title-only for sighted keyboard users | visible "Hidden while X is off" | todo |
 | K2-18 | SkillsGrid "shared" chip + ●/— cells (`skills/ui/SkillsGrid.tsx:498,586`) | meaning title-only | column legend | todo |
 | K2-19 | Dictation history WPM caveat (`DictationHistoryRow.tsx:106`) | title-only | footnote | todo |
@@ -828,6 +828,11 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-11/16 Settings › MCP servers:** in the server dialog, a locked
+  provider checkbox now has a visible line under it ("Codex not available:
+  Codex does not support SSE servers"). In the list, the same reason sits
+  on the server's second line, the footer explains "—", a non-copyable
+  CLI server says why, and the on/off switch shows a focus ring.
 - **K2-6 Editor save-conflict banner:** the whole message wraps (it was cut
   to one line); very long ones scroll after ~4 lines. "Reload from disk" and
   "Overwrite" are standard small buttons, and **Overwrite is red-outline**
@@ -1526,3 +1531,6 @@ Sharp corners and one light theme.
   measurement and adds a control to a two-button banner, and a capped
   scroller is keyboard-reachable on Electron's Chromium. Confirm-red: the
   banner test fails on the pre-change component.
+- 2026-09-25 K2-11 / K2-16: MCP reasons are visible text, and the `title`s
+  are removed. Confirm-red: the dialog test fails with McpServerDialog at
+  HEAD, and the row test fails with McpServersRow at HEAD.
