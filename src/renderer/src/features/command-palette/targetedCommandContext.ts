@@ -2,6 +2,11 @@ import type { ReaderModeState, SessionId, SpotlightState, WorkspaceState } from 
 
 import type { CommandContext } from './types'
 
+/** What the user is told when the agent a menu was opened for is gone by the
+ *  time they pick an item (#1180, plan D5). One string for every path that
+ *  can notice it: the menu host, and admission refusing a targeted command. */
+export const AGENT_GONE_MESSAGE = 'That agent is no longer open.'
+
 /**
  * Is this agent's view on screen right now, so a pane toast on it would be
  * seen?

@@ -247,8 +247,9 @@ function onContextMenu(event: Event): void {
   // Only while a chord anchor is held. Suppressing contextmenu unconditionally
   // would cost Monaco's editor menu and the Explorer's file menu permanently;
   // scoping it to the anchor hold makes the cost last only as long as the
-  // gesture. (There is no native Electron context menu in this app — those two
-  // are the entire blast radius.)
+  // gesture. (Those two, plus the Sessions list row menu (#1180), are the
+  // entire blast radius; the row relies on this capture-phase stop to let a
+  // chord win.)
   if (!anchorHeld) return
   event.preventDefault()
   event.stopPropagation()

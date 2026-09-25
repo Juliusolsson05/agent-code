@@ -14,10 +14,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import { usePaletteRequest } from './usePaletteRequest'
-import {
-  dispatchCommand,
-  dispatchResolvedRow,
-} from '@renderer/features/command-palette/executeCommand'
+import { dispatchResolvedRow } from '@renderer/features/command-palette/executeCommand'
 import {
   buildAgentIndexCommand,
   isAgentIndexCommand,
@@ -28,7 +25,8 @@ import {
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import { targetedCommandContext } from '@renderer/features/command-palette/targetedCommandContext'
+import { dispatchPendingInvocation } from '@renderer/features/command-palette/dispatchPendingInvocation'
+import { useSessionMenuHost } from '@renderer/features/session-context-menu/useSessionMenuHost'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {
@@ -159,6 +157,10 @@ export function CommandPalette() {
   // #494), so a chord takes the route a menu click already took. One channel,
   // one dispatch path — rather than a second one growing beside it.
   const pendingCommandInvocation = useAppStore(state => state.pendingCommandInvocation)
+  // A Sessions row right-click (#1180) mounts the host for the same reason a
+  // chord does: building the menu runs command `when` predicates, which need
+  // the live CommandContext only this host assembles.
+  const sessionMenuRequest = useAppStore(state => state.sessionMenuRequest)
   const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
   const clearCommandInvocation = useAppStore(state => state.clearCommandInvocation)
 
@@ -206,7 +208,7 @@ export function CommandPalette() {
   // in the app — flashed the palette open and shut. Separating "the host is
   // mounted" from "the user can see it" keeps the #494 cost model (build the
   // context only when something actually needs it) without the flash.
-  if (!open && !pendingCommandInvocation && !executionRequest) return null
+  if (!open && !pendingCommandInvocation && !executionRequest && !sessionMenuRequest) return null
   return (
     <OpenCommandPalette
       visible={open}
@@ -1102,6 +1104,8 @@ function OpenCommandPalette({
     [commandContext, onClose, showToast],
   )
 
+  useSessionMenuHost({ commandContext, showToast })
+
   // Native menu → command dispatch (issue #148).
   //
   // The macOS File menu lives in main, but its actions are renderer commands
@@ -1119,48 +1123,17 @@ function OpenCommandPalette({
   // admission only, so hiding a command can no longer disable its menu item.
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
-    const target = pendingMenuCommand.target
-    // #1180: an explicit target (the Sessions list right-click menu) runs the
-    // command against the clicked agent rather than the focused one. Only
-    // THIS host can do that, because it is the only place a full
-    // CommandContext (with its `ui` bucket) exists — which is why the menu
-    // routes its picks through this channel instead of calling `run` itself.
-    const ctx = target === undefined
-      ? commandContext
-      : targetedCommandContext({
-        ctx: commandContext,
-        target,
-        getState: () => useAppStore.getState().workspaceState,
-        getTakeover: () => {
-          const store = useAppStore.getState()
-          return store.workspaceReaderMode ?? store.workspaceSpotlight
-        },
-        showGlobalToast: showToast,
-      })
-    void dispatchCommand({
-      // The SOURCE travels with the request, so a chord is recorded as a
-      // keybinding invocation and a File-menu click as a native-menu one. A
-      // hardcoded source here would have made every keyboard invocation look
-      // like a menu click in personalized history.
-      id: pendingMenuCommand.id,
-      source: pendingMenuCommand.source,
-      ctx,
-      reportError: message => showToast(message, 6000),
+    // #1180: a pending invocation may name an explicit target (the Sessions
+    // list right-click menu). Only THIS host can run it, because it is the
+    // only place a full CommandContext (with its `ui` bucket) exists.
+    void dispatchPendingInvocation({
+      pending: pendingMenuCommand,
+      commandContext,
+      showToast,
       // Without these a contributed keybinding resolved to nothing here, and the
       // outcome — `status: 'unknown'` — is not inspected by the keybinding path, so
       // every manifest-declared shortcut was a silent no-op.
       extraCommands: extensionCommands,
-    }).then(outcome => {
-      // A right-click menu is built from a snapshot and the pick arrives
-      // after the user has been looking at the menu for a while; the agent
-      // may have exited or been reloaded under a new id meanwhile. Fresh
-      // admission refuses that (commandTarget never falls back to focus), and
-      // the user deserves to hear why the click did nothing. Keybindings and
-      // the File menu keep their existing silent refusal — a chord pressed in
-      // the wrong context is common and not worth a toast.
-      if (target === undefined || outcome.status !== 'unavailable') return
-      const gone = !useAppStore.getState().workspaceState.sessions[target]
-      showToast(gone ? 'That agent is no longer open.' : outcome.reason, 4000)
     })
     onMenuCommandHandled()
     // A command that OPENED the palette must not be closed by the "return to

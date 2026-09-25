@@ -65,7 +65,7 @@ function menu(
     target: sessionId,
   } as unknown as CommandContext
   return buildSessionContextMenu({
-    request: { sessionId, showInLaneLabel: 'Lane 2', goalLoopLive: false, ...options.request },
+    request: { sessionId, showInLane: { label: 'Lane 2', run: () => {} }, goalLoopLive: false, ...options.request },
     ctx,
     colorFlag: options.colorFlag,
     spotlightSessionId: options.spotlightSessionId ?? null,
@@ -132,7 +132,7 @@ describe('buildSessionContextMenu', () => {
   })
 
   it('drops Show in Lane for a disabled row, and Spotlight when already spotlit', () => {
-    const items = labels(menu(CLAUDE, { request: { showInLaneLabel: undefined }, spotlightSessionId: CLAUDE }))
+    const items = labels(menu(CLAUDE, { request: { showInLane: undefined }, spotlightSessionId: CLAUDE }))
     expect(items[0]).toBe('Set Title…')
   })
 

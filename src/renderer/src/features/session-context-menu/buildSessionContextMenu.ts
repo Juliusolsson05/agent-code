@@ -9,33 +9,14 @@ import type {
 } from '@renderer/features/command-palette/types'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
+import type { SessionMenuRequest } from '@renderer/app-state/uiShell/types'
 import type { SessionId } from '@renderer/workspace/types'
 import { toElectronAccelerator } from '@shared/keybindings'
 import type { PopupMenuItem } from '@shared/types/popupMenu'
 
-/**
- * What a Sessions row knows about itself when it asks for a menu (#1180).
- *
- * The row supplies the two facts only it can compute cheaply and that are not
- * commands: which lane a left click would use (`targetLaneIndex`, already
- * derived for the row's own click), and whether its goal loop is live (the
- * row already subscribes to that for its badge). Everything else comes from
- * the workspace through the CommandContext.
- */
-export type SessionMenuRequest = {
-  sessionId: SessionId
-  /**
-   * Label for "Show in <label>", e.g. "Lane 2". Absent for a disabled row:
-   * its agent is already shown in another lane of this grid row, and a left
-   * click does nothing there either.
-   */
-  showInLaneLabel?: string
-  /** Whether "Stop Goal Loop" applies — see `requires: 'goal-loop'`. */
-  goalLoopLive: boolean
-  /** Window coordinates for a keyboard-opened menu; absent = at the cursor. */
-  x?: number
-  y?: number
-}
+// The request type lives with the store field that carries it
+// (uiShell/types.ts); re-exported so menu code has one import site.
+export type { SessionMenuRequest }
 
 /** A menu pick, mapped back from the opaque id main returns. */
 export type SessionMenuChoice =
@@ -108,8 +89,8 @@ export function buildSessionContextMenu(options: {
   const { request, ctx, colorFlag, spotlightSessionId, commands = builtInCommandCatalog } = options
   const groups = new Map<string, Entry[]>(GROUP_ORDER.map(group => [group, []]))
 
-  if (request.showInLaneLabel) {
-    groups.get('open')!.push({ order: 10, item: { type: 'item', id: SHOW_IN_LANE, label: `Show in ${request.showInLaneLabel}` } })
+  if (request.showInLane) {
+    groups.get('open')!.push({ order: 10, item: { type: 'item', id: SHOW_IN_LANE, label: `Show in ${request.showInLane.label}` } })
   }
   // Already the Spotlight agent → the item would do nothing.
   if (spotlightSessionId !== request.sessionId) {

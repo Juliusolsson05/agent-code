@@ -4,7 +4,7 @@ import type { StateCreator } from 'zustand'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 
 import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
-import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
+import type { PendingCommandInvocation, SessionMenuRequest } from '@renderer/app-state/uiShell/types'
 import type { SessionId } from '@renderer/workspace/types'
 
 // Last issued Performance Monitor command-request ID (see openPerformancePanel).
@@ -86,6 +86,8 @@ export const createUiShellSlice: StateCreator<
   // sane bounds when the user actually drags the splitter.
   dispatchListRatio: 0.25,
   pendingCommandInvocation: null,
+  sessionMenuRequest: null,
+  sessionMenuOpenFor: null,
 
   // Records the request and opens the palette when it is closed, because the
   // palette component is what owns the live CommandContext. `closeAfterRun`
@@ -108,6 +110,12 @@ export const createUiShellSlice: StateCreator<
     }), false, 'uiShell/requestCommandInvocation'),
   clearCommandInvocation: () =>
     set({ pendingCommandInvocation: null }, false, 'uiShell/clearCommandInvocation'),
+  requestSessionMenu: (request: SessionMenuRequest) =>
+    set({ sessionMenuRequest: request }, false, 'uiShell/requestSessionMenu'),
+  clearSessionMenuRequest: () =>
+    set({ sessionMenuRequest: null }, false, 'uiShell/clearSessionMenuRequest'),
+  setSessionMenuOpenFor: (sessionId: SessionId | null) =>
+    set({ sessionMenuOpenFor: sessionId }, false, 'uiShell/setSessionMenuOpenFor'),
 
   // Opening always lands in the command list. Reopening should never resume a
   // half-finished sub-flow the user abandoned.

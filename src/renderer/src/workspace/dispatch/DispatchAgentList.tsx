@@ -508,6 +508,46 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
   }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
+  // The right-click menu (#1180). The row only RECORDS the request; the
+  // command palette host builds and shows the menu, because the menu's items
+  // are commands whose `when` needs the live CommandContext (see
+  // SessionMenuRequest in uiShell/types.ts).
+  const requestSessionMenu = useAppStore(state => state.requestSessionMenu)
+  const menuOpen = useAppStore(state => state.sessionMenuOpenFor === row.sessionId)
+  const goalLoopLive = goalLoop !== undefined && goalLoop.phase !== 'ended'
+  const openMenu = useCallback((point?: { x: number; y: number }) => {
+    requestSessionMenu({
+      sessionId: row.sessionId,
+      // `onSelect` itself, so "Show in Lane N" is by construction exactly what
+      // a left click on this row does — including TiledDispatchLayout's
+      // row-scoped lane choice, which this component does not know.
+      showInLane: disabled
+        ? undefined
+        : { label: targetLaneIndex === undefined ? 'Lane' : `Lane ${targetLaneIndex + 1}`, run: onSelect },
+      goalLoopLive,
+      ...point,
+    })
+  }, [disabled, goalLoopLive, onSelect, requestSessionMenu, row.sessionId, targetLaneIndex])
+  const onContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    // A mouse chord wins without a check here: while a chord anchor is held,
+    // lib/mouseArbiter.ts cancels contextmenu with stopPropagation in the
+    // window CAPTURE phase, so this handler never runs and the chord keeps
+    // its second click.
+    //
+    // No `focusSessionInTab`: right-click never selects (D5). The user is
+    // asking about this agent, not asking to look at it.
+    openMenu()
+  }, [openMenu])
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    // The platform keys for "this item's menu", as in the file explorer
+    // (editor.context-menu). Anchored to the row, not the pointer: the mouse
+    // may be resting anywhere while the user is on the keyboard.
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    openMenu({ x: rect.left + Math.min(rect.width, 24), y: rect.top + Math.min(rect.height, 20) })
+  }, [openMenu])
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
@@ -527,7 +567,15 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     <button
       type="button"
       onClick={onSelect}
-      disabled={disabled}
+      onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
+      // aria-disabled, not `disabled` (#1180): Chromium delivers no mouse
+      // events to a disabled form control, so a disabled row could never
+      // open its menu — and it is exactly the row a user right-clicks to ask
+      // "where is this agent, and what can I do with it". `onSelect` already
+      // refuses the click, so the attribute only ever did presentation.
+      aria-disabled={disabled || undefined}
+      data-menu-open={menuOpen ? 'true' : undefined}
       title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
@@ -544,6 +592,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
         relative flex w-full items-stretch text-left border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
         ${disabled ? 'opacity-40 cursor-not-allowed' : ''}
+        ${menuOpen ? 'outline outline-1 -outline-offset-1 outline-accent' : ''}
       `}
     >
       {/* Linked-agent indent. A linked agent (row.depth > 0) renders

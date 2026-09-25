@@ -3,6 +3,7 @@ import type { PaletteMode } from '@renderer/features/command-palette/paletteMode
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
   PendingCommandInvocation,
+  SessionMenuRequest,
   UiShellState,
 } from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
@@ -39,6 +40,9 @@ export type UiShellSlice = UiShellState & {
    */
   requestCommandInvocation: (id: string, source: PendingCommandInvocation['source'], target?: SessionId) => void
   clearCommandInvocation: () => void
+  requestSessionMenu: (request: SessionMenuRequest) => void
+  clearSessionMenuRequest: () => void
+  setSessionMenuOpenFor: (sessionId: SessionId | null) => void
   openCommandPalette: () => void
   closeCommandPalette: () => void
   /** Enter a palette sub-mode and make the palette visible. */

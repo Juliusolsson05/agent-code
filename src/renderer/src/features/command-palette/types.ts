@@ -205,7 +205,7 @@ export type CommandContext = {
    * directly: a command that resolves focus while `target` is set acts on the
    * wrong agent, silently. A command may carry `contextMenu` metadata only
    * once every path in its `when` and `run` uses `commandTarget(ctx)`
-   * (sessionContextMenu.test.ts enforces this for every opted-in command).
+   * (commandTarget.renderer.test.ts enforces this for every opted-in command).
    */
   target?: SessionId
   ui: {
