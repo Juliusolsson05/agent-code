@@ -412,6 +412,9 @@ PR fully fixed but did not name, and update this ledger.
   - #103 Close the "general optimization" umbrella in favour of its children?
   - #102 Typed logger / console consolidation: steps 1-2 only, or close?
   - #97 Is the current pin behaviour still wrong (and what should pin do), or close?
+  - #290 item 1: are duplicate `providerSessionId` rows illegal, legal only with lineage, or legal but excluded from resume lookup?
+- **Decided 2026-09-25:** remove the on-disk ghost log (PR #1235; #1227 closed).
+- **B18's UI-pass defaults** (ask-2; B6 agreed, marked UNCONFIRMED in #1221): Title Case per the HIG, "folder", "Agents" (kept accurate where terminals are listed), and the dictation chip moved to the toast band.
 - #1199: should v3 have a parked-note surface?
 - #1160: confirm the "harness orchestrator" positioning once it is live.
 - Batched visual checklist from Stage 4.
