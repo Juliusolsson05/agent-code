@@ -5,7 +5,8 @@ import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/
 
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
-import type { AgentScreenSnapshotWire } from '@shared/types/session.js'
+import type { AgentScreenSnapshot, AgentScreenSnapshotWire } from '@shared/types/session.js'
+import type { ScreenTailSample } from '@shared/debug/screenTail.js'
 import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/types/terminalForeground.js'
 import type {
   SessionExitEvent,
@@ -128,6 +129,19 @@ export const sessionApi = {
 
   detachAgentPty: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke('session:agent-pty-detach', sessionId),
+
+  // #762: live `session:screen` frames are forwarded only while a lease is
+  // held (debug surfaces). Acquire also sends the current screen as one
+  // ordinary session:screen event.
+  acquireScreenLease: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:screen-lease', sessionId),
+
+  releaseScreenLease: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:screen-release', sessionId),
+
+  /** The latest screen and main's screen-tail history, for debug bundles. */
+  getScreenDebug: (sessionId: string): Promise<{ screen: AgentScreenSnapshot | null; samples: ScreenTailSample[] }> =>
+    ipcRenderer.invoke('session:get-screen-debug', sessionId),
 
   // --- Per-session I/O ---
   //

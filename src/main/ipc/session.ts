@@ -32,6 +32,9 @@ import {
   windowIdFor,
 } from '@main/window/windowRegistry.js'
 import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
+import { screenInterest, screenTailHistory } from '@main/sessions/screenInterest.js'
+import type { AgentScreenSnapshot } from '@shared/types/session.js'
+import type { ScreenTailSample } from '@shared/debug/screenTail.js'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -248,6 +251,47 @@ export function registerSessionIpc(
   ipcMain.handle('session:agent-pty-detach', (_evt, sessionId: string) => {
     manager.detachAgentPty(sessionId)
   })
+
+  // #762. Live `session:screen` frames are forwarded only while a renderer
+  // holds a lease for that session (see sessions/screenInterest.ts for why
+  // nothing else needs them). The acquire also pushes the current screen down
+  // the ordinary `session:screen` path, the same seed `session:recover` sends,
+  // so an opening debug panel is correct at once even for an idle backend that
+  // emits no further frame, and the renderer needs no second way to apply a
+  // screen. Leases are owned by the calling webContents and
+  // dropped when it navigates (reload) or is destroyed, because a renderer
+  // that dies never runs its cleanup.
+  const leaseOwnersWatched = new Set<number>()
+  ipcMain.handle('session:screen-lease', (evt, sessionId: string): void => {
+    const sender = evt.sender
+    const owner = sender.id
+    if (!leaseOwnersWatched.has(owner)) {
+      leaseOwnersWatched.add(owner)
+      const drop = () => screenInterest.dropOwner(owner)
+      sender.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
+        if (isMainFrame) drop()
+      })
+      sender.once('destroyed', () => {
+        drop()
+        leaseOwnersWatched.delete(owner)
+      })
+    }
+    screenInterest.acquire(owner, sessionId)
+    const screen = manager.getScreenSnapshot(sessionId)
+    if (screen) sendToSessionWindow(sessionId, 'session:screen', aliasScreenSnapshotForWire({ sessionId, ...screen }))
+  })
+  ipcMain.handle('session:screen-release', (evt, sessionId: string) => {
+    screenInterest.release(evt.sender.id, sessionId)
+  })
+  // Debug bundles read the screen on demand instead of holding a lease: the
+  // latest raw snapshot plus the tail history main records from every frame.
+  ipcMain.handle('session:get-screen-debug', (_evt, sessionId: string): {
+    screen: AgentScreenSnapshot | null
+    samples: ScreenTailSample[]
+  } => ({
+    screen: manager.getScreenSnapshot(sessionId),
+    samples: screenTailHistory.samples(sessionId),
+  }))
 
   ipcMain.handle(
     'session:input',

@@ -1209,7 +1209,6 @@ export function useSessionActions(
       // Live-window bookkeeping follows the seen-uuid lifecycle (see
       // liveEntryWindow.ts: trimmed ⊆ ever-seen must hold).
       clearLiveEntryWindowSession(sessionId)
-      delete refs.latestScreenRef.current[sessionId]
       // If a bootstrap debounce was in flight for this session,
       // cancel it — the session is gone; firing the deferred
       // bootstrapping→false flip later would be a no-op against a
@@ -1221,7 +1220,7 @@ export function useSessionActions(
         refs.bootstrapTimersRef.current.delete(sessionId)
       }
     },
-    [refs.bootstrapTimersRef, refs.latestScreenRef, refs.seenUuidsRef, setRuntimes, setState],
+    [refs.bootstrapTimersRef, refs.seenUuidsRef, setRuntimes, setState],
   )
 
   // Kills the current session in the focused leaf and spawns a new
@@ -1532,7 +1531,6 @@ export function useSessionActions(
         })
         delete refs.seenUuidsRef.current[oldId]
         clearLiveEntryWindowSession(oldId)
-        delete refs.latestScreenRef.current[oldId]
 
         return newId
       } finally {
@@ -1541,7 +1539,6 @@ export function useSessionActions(
     },
     [
       refs.latestRuntimesRef,
-      refs.latestScreenRef,
       refs.seenUuidsRef,
       refs.stateRef,
       setRuntimes,
@@ -1613,7 +1610,6 @@ export function useSessionActions(
 
         delete refs.seenUuidsRef.current[oldId]
         clearLiveEntryWindowSession(oldId)
-        delete refs.latestScreenRef.current[oldId]
 
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
@@ -1743,7 +1739,6 @@ export function useSessionActions(
     [
       refs.dangerousAgentsRef,
       refs.latestRuntimesRef,
-      refs.latestScreenRef,
       refs.seenUuidsRef,
       refs.stateRef,
       refs.useProxyStreamingRef,
@@ -1806,7 +1801,6 @@ export function useSessionActions(
       // on the live path while older-history kept releasing them — the
       // trimmed ⊆ ever-seen invariant (liveEntryWindow.ts) would be gone.
       clearLiveEntryWindowSession(sessionId)
-      delete refs.latestScreenRef.current[sessionId]
 
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
@@ -1829,7 +1823,6 @@ export function useSessionActions(
     },
     [
       refs.bootstrapTimersRef,
-      refs.latestScreenRef,
       refs.seenUuidsRef,
       refs.stateRef,
       setRuntimes,

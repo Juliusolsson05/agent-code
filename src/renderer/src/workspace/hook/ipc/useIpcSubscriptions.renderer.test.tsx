@@ -890,6 +890,23 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
 
     expect(runtimes.s1?.screen).toBe('hello world')
     expect(runtimes.s1?.recentScreen).toBe('hello world')
+
+    // #762: the picker a screen frame carries is NOT applied. The conditions
+    // channel owns runtime.picker (see the first case in this file); a second
+    // writer could re-show a picker the conditions had just cleared, and
+    // frames now arrive only while a debug surface holds a lease.
+    act(() => {
+      fake.emitScreen({
+        sessionId: 's1',
+        plain: 'hello again',
+        markdown: 'hello again',
+        recent: 'hello again',
+        recentMarkdown: 'hello again',
+        picker: { visible: true, items: [{ name: '/help', description: 'stale' }] },
+      } as never)
+    })
+    expect(runtimes.s1?.screen).toBe('hello again')
+    expect(runtimes.s1?.picker.visible).toBe(false)
   })
 
   it('treats provider readiness as versioned state, never as process activity', () => {
@@ -978,14 +995,12 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       draftInput: 'renderer-local draft survives',
     }
     let runtimes: Record<SessionId, SessionRuntime> = { s1: conflictedRuntime }
-    let refsForAssertion: WorkspaceRefs | null = null
 
     function Harness(): React.JSX.Element {
       const refs = useRef<WorkspaceRefs | null>(null)
       if (refs.current === null) {
         refs.current = makeRefs(state)
         refs.current.latestRuntimesRef.current = runtimes
-        refsForAssertion = refs.current
       }
       useIpcSubscriptions(
         fake,
@@ -1033,7 +1048,6 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     // workspace's text and mutate hidden semantic/debug state. Quarantine must
     // return before every state/ref write until matching ownership is proven.
     expect(runtimes.s1).toBe(conflictedRuntime)
-    expect(refsForAssertion!.latestScreenRef.current.s1).toBeUndefined()
   })
 
   it('retains the retired run across exit and replaces it only on the next started event', () => {

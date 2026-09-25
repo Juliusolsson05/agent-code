@@ -71,7 +71,6 @@ describe('renderer session replacement handoff', () => {
       seenUuidsRef: ref({}),
     historyWindowsRef: { current: {} } as never,
     historyAwaitingTurnStartRef: { current: new Set<string>() } as never,
-      latestScreenRef: ref({}),
       undoStackRef: ref(new UndoCloseStack()),
       bootstrapTimersRef: ref(new Map()),
       persistedFeedDebugIdRef: ref({}),

@@ -9,7 +9,7 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 // stable across providers so historical dumps stay comparable. The
 // actual submit routing moved to the provider composerSubmit
 // capability (#394 phase 2c-4).
-import { CLAUDE_PASTE_THRESHOLD } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
+import { CLAUDE_PASTE_THRESHOLD } from '@shared/claude/pasteConfirm'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
@@ -357,7 +357,6 @@ export function useComposerKeybinds({
             () => workspace.ensureSessionLive(sessionId, 'tile-leaf.deliver-retry'),
           ),
         pasteId,
-        getScreen: () => workspace.latestScreenRef.current[sessionId],
       })
       // Accepted: the sent prompt leaves the draft, keeping anything another
       // writer added during the send (draftAfterAcceptance).

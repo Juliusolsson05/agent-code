@@ -149,3 +149,34 @@ describe('session input transcript observations', () => {
     expect(append).toHaveBeenCalledTimes(3)
   })
 })
+
+describe('screen leases (#762)', () => {
+  it('seeds the current screen on acquire, and drops a renderer\'s leases when it reloads or dies', async () => {
+    const { screenInterest } = await import('@main/sessions/screenInterest.js')
+    const manager = new EventEmitter()
+    Object.assign(manager, {
+      getScreenSnapshot: () => ({ plain: 'now', markdown: 'now', recent: 'now', recentMarkdown: 'now' }),
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    harness.routed.mockClear()
+    const sender = Object.assign(new EventEmitter(), { id: 4242 })
+    const lease = harness.handlers.get('session:screen-lease')!
+
+    // An opening debug panel is right at once, even for an idle backend:
+    // the current screen goes down the ordinary session:screen path.
+    lease({ sender }, 'pane')
+    expect(screenInterest.wants('pane')).toBe(true)
+    expect(harness.routed).toHaveBeenCalledWith('pane', 'session:screen', expect.objectContaining({ sessionId: 'pane', plain: 'now' }))
+
+    // A reload never runs the renderer's cleanup. A sub-frame navigation is
+    // not a reload and must not drop it.
+    sender.emit('did-start-navigation', {}, 'about:blank', false, false)
+    expect(screenInterest.wants('pane')).toBe(true)
+    sender.emit('did-start-navigation', {}, 'app://index.html', false, true)
+    expect(screenInterest.wants('pane')).toBe(false)
+
+    lease({ sender }, 'pane')
+    sender.emit('destroyed')
+    expect(screenInterest.wants('pane')).toBe(false)
+  })
+})

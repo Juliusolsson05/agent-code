@@ -38,13 +38,20 @@ vi.mock('@main/subagents/index.js', () => ({
 
 import * as registry from './windowRegistry.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
+import { screenInterest } from '@main/sessions/screenInterest.js'
 import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerSessionRoutingIpc } from '@main/ipc/sessionRouting.js'
 import { abandonPendingBequest, recordPendingBequest, registerWindowIpc } from '@main/ipc/window.js'
 
 let manager: SessionManager & EventEmitter
 let forwarder: ReturnType<typeof wireSessionForwarder>
+// These cases are about ROUTING (which window may see a session's frames), so
+// every session here holds a screen lease: since #762 an unleased session's
+// frames never leave main, which would make "nothing was sent" true for the
+// wrong reason. The lease owner id is not a real webContents.
+const TEST_SCREEN_OWNER = -1
 beforeEach(() => {
+  for (const sessionId of ['pane', 'refused-close', 'admission-pane']) screenInterest.acquire(TEST_SCREEN_OWNER, sessionId)
   registry.resetWindowRegistryForTests()
   harness.handlers.clear()
   harness.built.length = 0
@@ -73,6 +80,7 @@ beforeEach(() => {
   registerSessionRoutingIpc(manager, forwarder)
 })
 afterEach(() => {
+  screenInterest.dropOwner(TEST_SCREEN_OWNER)
   forwarder.flush()
   manager.removeAllListeners()
   registry.resetWindowRegistryForTests()

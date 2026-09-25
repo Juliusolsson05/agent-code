@@ -42,7 +42,6 @@ export type WorkspaceRefs = {
    *  semantic suffixes must be dropped until a fresh turn_started (the pure
    *  owner's awaiting gate; api_error passes because it is diagnostic). */
   historyAwaitingTurnStartRef: MutableRefObject<Set<SessionId>>
-  latestScreenRef: MutableRefObject<Record<SessionId, string>>
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
   persistedFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
@@ -105,7 +104,6 @@ export function useWorkspaceRefs(
   const seenUuidsRef = useRef<Record<SessionId, Set<string>>>({})
   const historyWindowsRef = useRef<Record<SessionId, HistoryWindow>>({})
   const historyAwaitingTurnStartRef = useRef<Set<SessionId>>(new Set())
-  const latestScreenRef = useRef<Record<SessionId, string>>({})
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
   const pendingAdoptionWindowIdsRef = useRef<string[]>([])
@@ -147,7 +145,6 @@ export function useWorkspaceRefs(
     // Latest screen per session — mirrored from state into a ref so
     // the Enter handler in TileLeaf can capture a baseline
     // synchronously.
-    latestScreenRef,
 
     // Undo-close stack — mutable ref because the stack is imperative
     // (push/pop) and we don't want React re-renders on every close.

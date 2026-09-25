@@ -22,7 +22,6 @@ describe('opencodeComposerSubmit', () => {
       send: vi.fn(),
       deliverPrompt: vi.fn(async () => delivery),
       pasteId: 'paste-1',
-      getScreen: () => undefined,
     }
 
     await expect(opencodeComposerSubmit(io)).rejects.toMatchObject({
@@ -44,7 +43,6 @@ describe('opencodeComposerSubmit acceptance', () => {
       send: vi.fn(),
       deliverPrompt: vi.fn(async () => ({ ok: true as const, acceptance })),
       pasteId: 'paste-1',
-      getScreen: () => undefined,
     }
 
     await expect(opencodeComposerSubmit(io)).resolves.toEqual(acceptance)
