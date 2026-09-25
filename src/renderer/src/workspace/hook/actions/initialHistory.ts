@@ -24,6 +24,8 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import { hasDurableProviderSession } from '@renderer/workspace/providerSessionIdentity'
 import { reportLifecycle } from '@renderer/lifecycle/report'
+import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 
 const INITIAL_HISTORY_CONCURRENCY = 2
 let activeInitialHistoryLoads = 0
@@ -281,7 +283,7 @@ export async function loadInitialHistoryForSession({
   setRuntimes,
   limit = 120,
   meta: metaOverride,
-  readHistory,
+  feed = ipcSessionFeed,
   preserveStatusUntilLoaded = false,
 }: {
   sessionId: SessionId
@@ -289,9 +291,23 @@ export async function loadInitialHistoryForSession({
   setRuntimes: WorkspaceSetRuntimes
   limit?: number
   meta?: SessionMeta
-  // A scoped recovery can supply an owner/source-validated read while retaining
-  // the existing mapper, UUID ledger, tool pairing and optimistic reconciliation.
-  readHistory?: typeof window.api.loadInitialHistory
+  // Where the chunk is read from: the SessionFeed contract (#1177), not a raw
+  // `window.api` call, so the history read goes through the same seam as
+  // every other session read and a shared ingest core can later drive it
+  // over either transport.
+  //
+  // WHY a default rather than a required argument: this loader runs from a
+  // dozen places outside React (session actions, rehydrate, adoption,
+  // hydrateTranscript, routing recovery) that hold `refs` but no feed, and
+  // the desktop has exactly one feed — the `ipcSessionFeed` module constant
+  // main.tsx hands to SessionFeedProvider. Defaulting to that same instance
+  // is reading through the feed; threading it through every caller would add
+  // a parameter that can only ever hold one value.
+  //
+  // A scoped recovery overrides it with an owner/source-validated read while
+  // retaining the existing mapper, UUID ledger, tool pairing and optimistic
+  // reconciliation (this used to be the `readHistory` injection point).
+  feed?: Pick<SessionFeed, 'loadHistory'>
   // Routing repair owns its own warning. A denied/stale repair read is not
   // evidence that the provider's committed transcript channel has failed.
   preserveStatusUntilLoaded?: boolean
@@ -438,19 +454,18 @@ export async function loadInitialHistoryForSession({
 
   try {
     const releaseHistorySlot = await acquireInitialHistorySlot()
-    // WHY an async wrapper instead of `.finally()` on the IPC promise: if the
-    // bridge call throws before returning a promise (a missing or broken
-    // `window.api` method), `.finally` is never attached and the slot is
+    // WHY an async wrapper instead of `.finally()` on the read's promise: if
+    // the feed call throws before returning a promise (a missing or broken
+    // `window.api` method behind it, or an override), `.finally` is never attached and the slot is
     // never released. With two module-level slots, two such throws stall
     // every later history load in the window, and nothing reports it. The
     // slot still frees as soon as the history read settles, not after
     // `gitWorktrees`.
     const historyRead = (async () => {
       try {
-        return await (readHistory ?? window.api.loadInitialHistory)({
-          kind,
-          cwd: meta.cwd,
-          providerSessionId: meta.providerSessionId,
+        return await feed.loadHistory({
+          sessionId,
+          transcript: { kind, cwd: meta.cwd, providerSessionId: meta.providerSessionId },
           limit,
         })
       } finally {

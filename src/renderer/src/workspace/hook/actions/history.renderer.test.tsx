@@ -6,6 +6,8 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import { sessionActivity } from '@renderer/session-runtime/activity'
 import { useHistoryActions } from './history'
+// The desktop feed, which reads through the `window.api` stubs installed below.
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 
 // The mapper's filtering/marker contract is the boundary under test: cursor
 // selection must not assume marker uniqueness or that every raw line renders.
@@ -59,7 +61,7 @@ describe('older history position cursor', () => {
     Object.defineProperty(window, 'api', { configurable: true, value: {
       loadOlderHistory, gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
     } })
-    const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime))
+    const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
     await act(async () => { await result.current.loadOlderHistory('session') })
     expect(runtimes.session).toMatchObject({ historyOldestMarker: 'anchor', historyOldestOffset: expectedOffset, loadingOlderHistory: false })
     await act(async () => { await result.current.loadOlderHistory('session') })
@@ -113,7 +115,7 @@ describe('older history and the ingest watermark (#915)', () => {
       }),
       gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
     } })
-    const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime))
+    const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
     await act(async () => { await result.current.loadOlderHistory('session') })
 
     expect(runtimes.session?.entries).toHaveLength(1)

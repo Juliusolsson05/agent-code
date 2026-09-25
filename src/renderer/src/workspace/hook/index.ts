@@ -915,7 +915,14 @@ export function useWorkspace(
     [paneActions.closeSession, refs, showToast],
   )
 
-  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
+  // Session events AND history reads arrive through whichever SessionFeed the
+  // app root mounted (desktop: ipcSessionFeed in app/main.tsx; remote client:
+  // its WebSocket feed; tests: FakeSessionFeed). The provider value is a
+  // module const, so identity is stable — which the subscription effect's dep
+  // array requires; see the WHY on useIpcSubscriptions. Read here, before the
+  // history actions, because older-history paging reads through it (#1177).
+  const sessionFeed = useSessionFeed()
+  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime, sessionFeed)
 
   const { undoClose, undoCloseCount } = useUndoCloseAction(
     state,
@@ -933,12 +940,7 @@ export function useWorkspace(
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
-  // Session events arrive through whichever SessionFeed the app root mounted
-  // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
-  // feed; tests: FakeSessionFeed). The provider value is a module const, so
-  // identity is stable — which the subscription effect's dep array requires;
-  // see the WHY on useIpcSubscriptions.
-  const sessionFeed = useSessionFeed()
+  // `sessionFeed` is read above, next to the history actions.
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   useTerminalForeground(restoreStatus, setRuntimes)
   useSessionRoutingRecovery(refs, setRuntimes, state.sessions)

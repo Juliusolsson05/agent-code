@@ -15,6 +15,8 @@ import type {
   SessionSubAgentsEvent,
   SessionHistoryBoundaryEvent,
   SessionProviderSessionChangedEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -406,23 +408,28 @@ export class WebSocketSessionFeed implements SessionFeed {
     }
   }
 
-  /** Transcript backfill (client-specific, beyond SessionFeed — the desktop
-   *  loads history through its own IPC path). beforeMarker absent = initial
-   *  newest-N chunk; present = the page immediately before it. */
-  async getHistory(
-    sessionId: string,
-    opts: { beforeMarker?: string; beforeOffset?: number; limit?: number } = {},
-  ): Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }> {
+  /**
+   * SessionFeed.loadHistory over the one `get-history` message. Replaced the
+   * phone-only `getHistory` extra (#1177) so the desktop and the phone page
+   * history through the same contract.
+   *
+   * `request.transcript` is deliberately NOT sent: the server resolves the
+   * transcript from the live session and must never read a path a client
+   * names. The `{ ok:false, error }` reply becomes a rejection carrying the
+   * server's exact message, because callers match on it (the benign "no
+   * transcript yet" case, REMOTE_HISTORY_TOO_LARGE); see SessionHistoryPage
+   * for why failure is a rejection on every transport.
+   */
+  async loadHistory(request: SessionHistoryRequest): Promise<SessionHistoryPage> {
     const reply = await this.request({
       type: 'get-history',
-      sessionId,
-      beforeMarker: opts.beforeMarker,
-      beforeOffset: opts.beforeOffset,
-      limit: opts.limit,
+      sessionId: request.sessionId,
+      beforeMarker: request.beforeMarker,
+      beforeOffset: request.beforeOffset,
+      limit: request.limit,
     })
-    return reply.ok
-      ? { ok: true, chunk: reply.result as HistoryChunkResult }
-      : { ok: false, error: reply.error ?? 'history unavailable' }
+    if (!reply.ok) throw new Error(reply.error ?? 'history unavailable')
+    return reply.result as HistoryChunkResult
   }
 
   /** pty actions ride the same permission-reply message; exposed for the

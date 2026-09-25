@@ -4,6 +4,8 @@ import type {
   SessionConditionsEvent,
   SessionExitEvent,
   SessionHistoryBoundaryEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
   SessionProviderSessionChangedEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
@@ -67,7 +69,10 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 // trust / question dialogs). Session lifecycle (spawn/kill), raw terminal
 // I/O, and provider switching are deliberately ABSENT so a remote transport
 // cannot express them; scope is enforced by the contract's shape, not by
-// runtime checks. Desktop-only surfaces (ghost journal, git worktrees,
+// runtime checks. The one READ beside them, loadHistory (#1177), exposes
+// only transcript content the listeners already stream; it was an ad-hoc
+// extra on the phone's transport and a pair of raw `window.api` calls on the
+// desktop until both moved onto the contract. Desktop-only surfaces (ghost journal, git worktrees,
 // feed-debug, LSP, editor FS) stay on `window.api` — they are not session
 // I/O and the phone must never need them.
 export interface SessionFeed {
@@ -112,4 +117,11 @@ export interface SessionFeed {
     sessionId: string,
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult>
+
+  // --- Reads ---
+
+  /** Transcript backfill: the initial newest-N page, or the page before a
+   *  cursor. Rejects with the host's message on failure. See
+   *  SessionHistoryRequest for why one call covers both pages. */
+  loadHistory(request: SessionHistoryRequest): Promise<SessionHistoryPage>
 }

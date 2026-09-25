@@ -1,3 +1,4 @@
+import type { SessionHistoryRequest } from '@shared/sessionFeed/types'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -75,15 +76,21 @@ function setup() {
   return { refs, setRuntimes, runtime: () => runtimes[PANE]!, oldFile, oldPrompts, followPiIntoNewSession, gate, release: () => release() }
 }
 
+/** The loader's feed request, as the Pi history source takes it: the desktop
+ *  always names the durable transcript identity (see SessionHistoryRequest). */
+function piRequest(request: SessionHistoryRequest): Parameters<typeof loadPiHistoryChunk>[0] {
+  return { ...request.transcript!, limit: request.limit ?? 120 }
+}
+
 describe('an initial-history load that the pane outlived', () => {
   it('does not merge the old session’s conversation into the one pi moved to', async () => {
     const { refs, setRuntimes, runtime, oldFile, oldPrompts, followPiIntoNewSession, gate, release } = setup()
     const load = loadInitialHistoryForSession({
       sessionId: PANE, refs, setRuntimes: setRuntimes as never,
-      readHistory: (async (request: Parameters<typeof loadPiHistoryChunk>[0]) => {
+      feed: { loadHistory: async request => {
         await gate
-        return loadPiHistoryChunk(request, { resolveFile: async () => oldFile })
-      }) as never,
+        return loadPiHistoryChunk(piRequest(request), { resolveFile: async () => oldFile })
+      } },
     })
     followPiIntoNewSession()
     release()
@@ -98,10 +105,10 @@ describe('an initial-history load that the pane outlived', () => {
     const { refs, setRuntimes, runtime, followPiIntoNewSession, gate, release } = setup()
     const load = loadInitialHistoryForSession({
       sessionId: PANE, refs, setRuntimes: setRuntimes as never,
-      readHistory: (async () => {
+      feed: { loadHistory: async () => {
         await gate
         throw new Error('not_a_session: old.jsonl')
-      }) as never,
+      } },
     })
     followPiIntoNewSession()
     release()
@@ -114,7 +121,7 @@ describe('an initial-history load that the pane outlived', () => {
     release()
     await expect(loadInitialHistoryForSession({
       sessionId: PANE, refs, setRuntimes: setRuntimes as never,
-      readHistory: ((request: Parameters<typeof loadPiHistoryChunk>[0]) => loadPiHistoryChunk(request, { resolveFile: async () => oldFile })) as never,
+      feed: { loadHistory: request => loadPiHistoryChunk(piRequest(request), { resolveFile: async () => oldFile }) },
     })).resolves.toBe(true)
     const shown = runtime().entries.map(entry => entryTextContent(entry))
     for (const prompt of oldPrompts) expect(shown).toContain(prompt)

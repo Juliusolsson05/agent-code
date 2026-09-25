@@ -135,7 +135,7 @@ it('connected remote SessionView replaces raw fallback with a no-turn notice on 
   const methods = {
     getSessionList: () => [{ sessionId: 'remote-cap', kind: 'codex', alive: true, cwd: '/synthetic', lastActivityAt: 0 }],
     getSttAvailability: () => false,
-    getHistory: async () => ({ ok: false, error: 'No transcript yet' }),
+    loadHistory: async () => { throw new Error('No transcript yet') },
   }
   const feed = new Proxy(methods, { get(target, key: string) {
     if (key in target) return target[key as keyof typeof target]

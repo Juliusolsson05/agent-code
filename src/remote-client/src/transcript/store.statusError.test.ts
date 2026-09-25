@@ -15,11 +15,8 @@ const EPOCH = Date.parse('2026-01-01T00:00:00Z')
 function fixture() {
   const listeners = new Map<string, Set<(value: unknown) => void>>()
   const list = [{ sessionId: 'a', kind: 'opencode', alive: true, cwd: '/synthetic', lastActivityAt: 0 }]
-  const getHistory = vi.fn().mockResolvedValue({
-    ok: true,
-    chunk: { entries: [], file: FILE, hasMore: false } satisfies HistoryChunkResult,
-  })
-  const methods = { getHistory, getSessionList: () => list }
+  const loadHistory = vi.fn().mockResolvedValue({ entries: [], file: FILE, hasMore: false } satisfies HistoryChunkResult)
+  const methods = { loadHistory, getSessionList: () => list }
   const feed = new Proxy(methods, {
     get(target, key: string) {
       if (key in target) return target[key as keyof typeof target]

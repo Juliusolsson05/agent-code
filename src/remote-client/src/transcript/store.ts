@@ -18,7 +18,7 @@ import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
-import type { SubAgentState } from '@shared/sessionFeed/types'
+import type { SessionHistoryPage, SessionHistoryRequest, SubAgentState } from '@shared/sessionFeed/types'
 import { asRecord } from '@shared/lib/asRecord'
 
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
@@ -366,7 +366,7 @@ export class TranscriptStore {
     if (state.historyLoaded || state.historyLoading || state.transcript.historyError === REMOTE_HISTORY_TOO_LARGE) return
     state.historyLoading = true
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true, bootstrapping: true }))
-    const result = await this.feed.getHistory(sessionId, { limit: 120 })
+    const result = await this.readHistory({ sessionId, limit: 120 })
     // Disconnect, transcript roll, removal or disposal may replace this state
     // while the network request is pending. Its reply has no authority over
     // the new window, even when it names the same transcript file.
@@ -434,7 +434,8 @@ export class TranscriptStore {
       return
     }
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
-    const result = await this.feed.getHistory(sessionId, {
+    const result = await this.readHistory({
+      sessionId,
       beforeMarker,
       ...(state.historyOldestOffset === undefined ? {} : { beforeOffset: state.historyOldestOffset }),
       limit: 200,
@@ -472,6 +473,24 @@ export class TranscriptStore {
   }
 
   // --- internals ---
+
+  /**
+   * SessionFeed.loadHistory reports failure as a rejection (the contract's
+   * shape on every transport); this store's backfill logic branches on the
+   * failure TEXT (benign "no transcript yet", REMOTE_HISTORY_TOO_LARGE) and
+   * on success/failure as data. Folding the rejection back into a result
+   * here keeps that logic, and every guard written against it, unchanged by
+   * the move onto the contract (#1177).
+   */
+  private async readHistory(
+    request: SessionHistoryRequest,
+  ): Promise<{ ok: true; chunk: SessionHistoryPage } | { ok: false; error: string }> {
+    try {
+      return { ok: true, chunk: await this.feed.loadHistory(request) }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
 
   private state(sessionId: string): SessionState {
     let state = this.sessions.get(sessionId)

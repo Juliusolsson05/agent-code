@@ -21,6 +21,7 @@ import {
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
+import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.
@@ -34,6 +35,11 @@ export function useHistoryActions(
   setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
   updateRuntime: (sessionId: SessionId, patch: Partial<SessionRuntime>) => void,
+  // The SessionFeed the workspace mounted (#1177): older pages are read through
+  // the contract, like every other session read, instead of `window.api`.
+  // Required here, unlike the initial loader's default, because this is a hook
+  // and its one caller already holds the feed from context.
+  feed: Pick<SessionFeed, 'loadHistory'>,
 ): {
   loadOlderHistory: (sessionId: SessionId) => Promise<void>
 } {
@@ -73,10 +79,9 @@ export function useHistoryActions(
       updateRuntime(sessionId, { loadingOlderHistory: true })
 
       try {
-        const chunk = await window.api.loadOlderHistory({
-          kind,
-          cwd: meta.cwd,
-          providerSessionId: meta.providerSessionId,
+        const chunk = await feed.loadHistory({
+          sessionId,
+          transcript: { kind, cwd: meta.cwd, providerSessionId: meta.providerSessionId },
           beforeMarker: runtime.historyOldestMarker,
           // The byte position of that marker's line when we have it — the
           // loader anchors exactly there instead of hunting the marker,
@@ -247,7 +252,7 @@ export function useHistoryActions(
         updateRuntime(sessionId, { loadingOlderHistory: false })
       }
     },
-    [refs.latestRuntimesRef, refs.seenUuidsRef, refs.stateRef, setRuntimes, updateRuntime],
+    [refs.latestRuntimesRef, refs.seenUuidsRef, refs.stateRef, setRuntimes, updateRuntime, feed],
   )
 
   return { loadOlderHistory }
