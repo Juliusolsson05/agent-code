@@ -1,9 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
+import wrapAnsi from 'wrap-ansi'
 
 import {
   extractActiveClaudeComposer,
   imagePlaceholderCount,
   pasteAbsorbedVia,
+  pasteTailNeedle,
   placeholderCount,
 } from './pasteConfirm.js'
 import { isPasteLike } from './pasteConfirm.js'
@@ -105,5 +110,61 @@ describe('Claude collapsed-paste placeholder counting', () => {
 
   it('does not count prompt prose that merely mentions a paste', () => {
     expect(placeholderCount('❯ explain what [Pasted text means')).toBe(0)
+  })
+})
+
+describe('inline paste tail through a HARD wrap (#1118)', () => {
+  // The chrome around the composer comes from a real recorded frame
+  // (testing/fixtures/image-absorption, Claude Code 2.1.278): the dividers,
+  // the `❯ ` first-line prefix and the two-space continuation indent. Only the
+  // composer body is re-rendered, at each width, with the wrap Claude's Ink
+  // actually applies: `wrapAnsi(text, width, { trim: false, hard: true })`
+  // (vendor/claude-code-src/full/ink/wrap-text.ts). Ink binds Bun.wrapAnsi when
+  // it exists and the npm wrap-ansi otherwise; both honour `hard`, which is the
+  // property that matters: a token longer than the line is cut mid-token.
+  const fixture = JSON.parse(readFileSync(
+    fileURLToPath(new URL('../../../testing/fixtures/image-absorption/wrapped-image-pill-2026-09-21.json', import.meta.url)),
+    'utf8',
+  )) as { deliveries: { wrapped: { after: { screen: string } } } }
+  const recorded = fixture.deliveries.wrapped.after.screen.split('\n')
+  const isDivider = (line: string): boolean => /^─{10,}$/u.test(line)
+  const top = recorded.findIndex(isDivider)
+  const bottom = recorded.findIndex((line, i) => i > top && isDivider(line))
+
+  function screenAt(cols: number, composerText: string): string {
+    const body = composerText.length === 0
+      ? ['❯ ']
+      : wrapAnsi(composerText, cols - 2, { trim: false, hard: true })
+        .split('\n')
+        .map((line, i) => (i === 0 ? '❯ ' : '  ') + line)
+    const divider = '─'.repeat(cols)
+    return [...recorded.slice(0, top), divider, ...body, divider, ...recorded.slice(bottom + 1)].join('\n')
+  }
+
+  // The issue's repro: a prompt ending in an absolute path, long enough to be
+  // paste-like but too short for Claude to collapse, so the inline tail is the
+  // only signal. Absorption was never detected at 14 of 81 widths.
+  const prompt = 'please review /Users/juliusolsson/Desktop/Development/agent-code/src/providers/claude/runtime/promptDelivery.ts'
+
+  it('confirms absorption at every pane width from 20 to 140 columns', () => {
+    const tail = pasteTailNeedle(prompt)
+    const missed: number[] = []
+    for (let cols = 20; cols <= 140; cols += 1) {
+      const baseline = extractActiveClaudeComposer(screenAt(cols, ''))
+      const baseCount = placeholderCount(baseline)
+      const after = extractActiveClaudeComposer(screenAt(cols, prompt))
+      if (pasteAbsorbedVia(after, tail, baseCount, false) !== 'inline') missed.push(cols)
+    }
+    expect(missed).toEqual([])
+  })
+
+  it('still refuses a composer that holds only the start of the prompt', () => {
+    // The tail is what proves the WHOLE paste landed. A composer still
+    // receiving the paste shows its head, and must not confirm.
+    const tail = pasteTailNeedle(prompt)
+    for (const cols of [48, 94]) {
+      const partial = extractActiveClaudeComposer(screenAt(cols, prompt.slice(0, prompt.length - 30)))
+      expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
+    }
   })
 })
