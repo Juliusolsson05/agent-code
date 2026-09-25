@@ -63,7 +63,19 @@ it('commits a prompt delivered the moment the pane starts (#877)', async context
   writeFileSync(join(project, 'README.md'), '# live delivery test\n')
   await execFileAsync('git', ['init', '-q'], { cwd: project })
 
+  // WHY every inherited OpenCode, Agent Code and provider variable is
+  // cleared first (#1237 review A): the session copies the WHOLE parent
+  // environment and applies these as overrides, so a user's OPENCODE_CONFIG
+  // or OPENCODE_CONFIG_DIR would reach the child despite the throwaway HOME
+  // (verified: an isolated HOME still read `permission.read: deny` from an
+  // OPENCODE_CONFIG file), and so would this process's own AGENT_CODE_MCP_*
+  // bearer variables. `undefined` deletes a key in the session's merge.
+  const inherited: Record<string, undefined> = {}
+  for (const key of Object.keys(process.env)) {
+    if (/^(OPENCODE_|AGENT_CODE_|ANTHROPIC_|OPENAI_|XDG_)/.test(key)) inherited[key] = undefined
+  }
   const env: Record<string, string | undefined> = {
+    ...inherited,
     PATH: `${dirname(binary)}:/usr/bin:/bin:/usr/sbin:/sbin`,
     HOME: home,
     XDG_DATA_HOME: join(home, '.local/share'),
@@ -85,8 +97,13 @@ it('commits a prompt delivered the moment the pane starts (#877)', async context
   )
   cleanup.push(() => session.stop())
   const roles: string[] = []
-  session.on('jsonl-entry', (record: { info?: { role?: string } }) => {
-    if (record.info?.role) roles.push(record.info.role)
+  const userTexts: string[] = []
+  session.on('jsonl-entry', (record: { info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }) => {
+    if (!record.info?.role) return
+    roles.push(record.info.role)
+    if (record.info.role === 'user') {
+      userTexts.push((record.parts ?? []).filter(part => part.type === 'text').map(part => part.text ?? '').join(''))
+    }
   })
   const exits: unknown[] = []
   session.on('exit', code => { exits.push(code) })
@@ -94,9 +111,13 @@ it('commits a prompt delivered the moment the pane starts (#877)', async context
   await session.start()
   // No grace, no wait for first paint: this is the call that used to be
   // acknowledged and then silently dropped by a booting TUI.
-  await session.deliverPromptText('Reply with exactly the word pong and nothing else.')
+  const prompt = 'Reply with exactly the word pong and nothing else.'
+  await session.deliverPromptText(prompt)
 
   await waitUntil(() => roles.includes('user'), 120_000, 'the prompt to commit as a user record')
+  // THIS prompt, not any exchange (#1237 review A: a delivery that sent
+  // different text passed a roles-only check).
+  await waitUntil(() => userTexts.some(text => text.includes(prompt)), 30_000, 'the committed user record to carry the submitted text')
   await waitUntil(() => roles.includes('assistant'), 180_000, 'an assistant reply')
   expect(exits).toEqual([])
 }, 360_000)
