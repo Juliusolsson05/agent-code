@@ -241,7 +241,12 @@ export function migrateWorkspaceToStage(
   // envelope sitting beside it (the intermediate #992 builds wrote both).
   const sourceStage = persisted.stage ?? persisted.dispatchMode?.tiled
   let stage: TiledDispatchState
-  if (sourceStage) {
+  // A stage whose `lanes` is not a list carries no usable layout at all; it
+  // takes the seeded default below like a file with no stage (#1245). Only
+  // layout is lost: every session lives in the pool, not in a lane. Unlike a
+  // malformed `projects`/`tabs` (rule 8), nothing the next autosave writes
+  // can destroy data the file still held.
+  if (sourceStage && Array.isArray(sourceStage.lanes)) {
     // Compose the same durability chain autosave uses, so a lane pointing at
     // a session the pool dropped cannot survive the migration (the
     // "selected-but-unresolvable lane" bug class), and row metadata naming

@@ -73,3 +73,42 @@ it('keeps the live terminal\'s tmuxName, the reference startup recovery matches 
   const stage = migrateWorkspaceToStage(v2)
   for (const [id, meta] of terminals) expect((stage.sessions[id] as { tmuxName?: string }).tmuxName).toBe(meta.tmuxName)
 })
+
+// #1245: one malformed stage entry used to throw inside the migration
+// (`Cannot read properties of null (reading 'selectedSessionId')`), which put
+// startup into the locked single-tab recovery shell with none of the user's
+// agents shown. Verified on the owner's real v3 workspace below. A lane or row
+// holds layout only, never a session, so it is repaired per entry instead.
+const liveV3Workspace = (): PersistedWorkspace =>
+  (JSON.parse(readFileSync(resolve(root, 'testing/fixtures/workspace-v3/2026-09-20-live-workspace.sanitized.json'), 'utf8')) as { windows: { workspace: PersistedWorkspace }[] }).windows[0]!.workspace
+
+describe('malformed stage entries in a real v3 workspace (#1245)', () => {
+  it('keeps every agent and the other lane when one lane is null', () => {
+    const workspace = liveV3Workspace()
+    const stage = workspace.stage as unknown as { lanes: unknown[] }
+    const survivor = (stage.lanes[1] as { selectedSessionId: string }).selectedSessionId
+    stage.lanes[0] = null
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(Object.keys(migrated.sessions).sort()).toEqual(Object.keys(workspace.sessions ?? {}).sort())
+    // The slot stays (lane indices, weights and focus keep their meaning),
+    // empty, and the other lane keeps its agent.
+    expect(migrated.stage.lanes).toEqual([{}, { selectedSessionId: survivor }])
+  })
+
+  it('keeps every agent and both lanes when a row is null', () => {
+    const workspace = liveV3Workspace()
+    ;(workspace.stage as unknown as { rows: unknown[] }).rows[0] = null
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(Object.keys(migrated.sessions)).toHaveLength(Object.keys(workspace.sessions ?? {}).length)
+    expect(migrated.stage.lanes).toHaveLength(2)
+    expect((migrated.stage.rows ?? []).reduce((sum, row) => sum + row.length, 0)).toBe(2)
+  })
+
+  it('keeps every agent when the lanes container itself is not a list', () => {
+    const workspace = liveV3Workspace()
+    ;(workspace.stage as unknown as { lanes: unknown }).lanes = 5
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(Object.keys(migrated.sessions)).toHaveLength(Object.keys(workspace.sessions ?? {}).length)
+    expect(migrated.stage.lanes.length).toBeGreaterThan(0)
+  })
+})

@@ -107,9 +107,9 @@ export type NormalizedGrid = {
  * rejecting one.
  */
 export function normalizeGridShape(tiled: TiledDispatchState): NormalizedGrid {
-  const lanes = tiled.lanes ?? []
+  const lanes = usableLanes(tiled.lanes)
   const rows = withMigratedIndexFraction(
-    repairRowLengths(tiled.rows, lanes.length),
+    repairRowLengths(usableRows(tiled.rows), lanes.length),
     tiled,
   )
 
@@ -125,6 +125,35 @@ export function normalizeGridShape(tiled: TiledDispatchState): NormalizedGrid {
         ? Math.min(tiled.focusedLane, Math.max(0, lanes.length - 1))
         : 0,
   }
+}
+
+/**
+ * Non-object lane entries (a `null` from a hand edit or a torn write) become
+ * EMPTY slots rather than being removed (#1245). A lane only ever holds a
+ * selection, never a session, so nothing is lost; keeping the slot keeps every
+ * other lane's index, weight and focus meaning what it meant. Before this, the
+ * first reader of `lane.selectedSessionId` threw during rehydrate and startup
+ * fell back to the locked recovery shell with none of the user's agents shown.
+ * Returns the SAME array when every entry is usable (see repairRowLengths on
+ * why reference stability matters here).
+ */
+function usableLanes(lanes: TiledDispatchState['lanes'] | undefined): TiledDispatchState['lanes'] {
+  if (!Array.isArray(lanes)) return []
+  if (lanes.every(lane => lane !== null && typeof lane === 'object')) return lanes
+  const repaired = lanes.map(lane => (lane !== null && typeof lane === 'object' ? lane : {}))
+  console.warn('[workspace] replaced malformed stage lanes with empty slots', { count: lanes.length - lanes.filter(lane => lane !== null && typeof lane === 'object').length })
+  return repaired
+}
+
+/** Non-object row entries are dropped; repairRowLengths then absorbs the lane
+ *  count they carried into the last row, the same way it absorbs a corrupt
+ *  length (#1245). Same array when every entry is usable. */
+function usableRows(rows: DispatchGridRow[] | undefined): DispatchGridRow[] | undefined {
+  if (!Array.isArray(rows)) return undefined
+  if (rows.every(row => row !== null && typeof row === 'object')) return rows
+  const kept = rows.filter(row => row !== null && typeof row === 'object')
+  console.warn('[workspace] dropped malformed stage rows', { count: rows.length - kept.length })
+  return kept
 }
 
 /**
