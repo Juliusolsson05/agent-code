@@ -169,6 +169,33 @@ describe('PiSession over the recordings', () => {
     expect(result).toMatchObject({ ok: false, code: 'not-ready', retrySafe: true, promptWritten: false })
   })
 
+  // #1315: orchestration delivers a child's bootstrap prompt right after
+  // spawn, before the bridge extension has connected. It used to fail at
+  // once with "the Pi bridge is not connected" (5 of 5 Pi children on
+  // 2026-09-25); a retry seconds later always worked.
+  it('a prompt sent before the bridge connects waits for it instead of failing', async () => {
+    const fixture = loadLiveFixture('plain')
+    const sandbox: ReplaySandbox = createReplaySandbox(fixture)
+    cleanups.push(() => sandbox.cleanup())
+    const session = new PiSession({ cwd: sandbox.launch.cwd }, {
+      spawnPty: (() => new AdapterPty()) as never,
+      prepareLaunch: (async () => sandbox.launch) as never,
+      bridgeScriptPath: '/staged/bridge.ts',
+      newSessionId: () => fixture.sessionIdLaunched!,
+      headlessOptions: { heartbeatMs: 0, fastPollMs: 20, slowPollMs: 200, discoverPollMs: 20, bridgeConnectDeadlineMs: 5_000 },
+    })
+    cleanups.push(() => session.stop())
+    await session.start()
+    const delivery = session.deliverPromptText('hi').then(() => null, (error: Error) => error)
+    // The bridge connects only now. The replay rig answers every request
+    // with a refusal, so reaching it is exactly what a non-"not connected"
+    // outcome proves.
+    await playReplay(fixture, sandbox)
+    const error = await delivery
+    expect(error?.message ?? '').not.toContain('not connected')
+    expect(error).toMatchObject({ code: 'pi-terminal-rejected' })
+  })
+
   it('a prompt pi refused before it was sent (e.g. mid-compaction) is safe to retry; an unknown outcome is not', async () => {
     const refusing = { deliverPromptText: async () => { throw Object.assign(new Error('pi is compacting this session'), { code: 'pi-terminal-rejected' }) } }
     expect(await deliverPiPrompt({ session: refusing, sessionId: 'pane', prompt: 'hi' } as never))
