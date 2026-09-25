@@ -1,6 +1,25 @@
 # Release Readiness: Tie Up Every Loose End, Then Ship — Stage Decomposition
 
-> **Status:** LIVING LEDGER, driven by a goal loop that started 2026-09-19.
+> **Status: ARCHIVED 2026-09-25.** This was the living ledger of the
+> release-readiness goal loop (2026-09-19 → 2026-09-20). The loop is over:
+> 0.1.0 shipped on 2026-09-20, and 0.1.1–0.1.3 followed. Nothing below is a
+> live plan. The checkboxes and "running" notes are frozen where the loop
+> stopped, and GitHub is the source of truth for anything still open.
+>
+> It is kept for its evidence: which review findings were valid and which
+> were withdrawn, which product calls were the owner's, and the lessons in
+> the progress log (for example, that a batched mutation harness once
+> reported a live mutation as dead).
+>
+> Items that were still open and tracked nowhere else were filed when this
+> was archived:
+> - T16 "make `/model` work" → #1197
+> - T17 test-suite audit → #1198
+> - #1030 item 1 (v2 bury notes) → #1199
+>
+> Its successor is the quality loop, planned in `docs/plans/`.
+
+> **Original status, while live:** LIVING LEDGER, driven by a goal loop that started 2026-09-19.
 > Branch `docs/release-readiness`, worktree `.worktrees/release-readiness`.
 > Update the checkboxes and the ledger in the SAME loop iteration that changes
 > reality, then commit and push. This file is the memory that survives

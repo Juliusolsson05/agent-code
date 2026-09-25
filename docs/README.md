@@ -42,3 +42,4 @@ live.
 - **`codex-rewrite-render/`** — the pre-rewrite rendering notebook (superseded).
 - **`issue-investigations/`** — investigations for issues now closed.
 - **`audit-plans/`** — the deep-audit roadmap and its completed execution logs.
+- **`release-readiness-2026-09.md`** — the ledger of the 2026-09-19 release-readiness goal loop that shipped 0.1.0 (#1106). Frozen; its still-open items were filed as issues.
