@@ -529,6 +529,18 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — **Owner approved removing the on-disk ghost log.**
+  - #1227 closed unmerged; #1225 and #1232 closed. #1231 was re-scoped to live ghosts.
+  - **#1235 opened (Fixes #731):** removes the journal, IPC, preload and retention bucket, cleans the old directory on launch, and updates the design doc. It has merged main (kept `sweepGhosts`); reviewers are A Claude and B Pi.
+  - **#1228 MERGED** (Fixes #730).
+  - **#1234 opened (Fixes #678):** notification twins resolved by body, then by a unique id. It corrects two corpus tests that had blessed the misattribution. Reviewers: A Codex, B Pi.
+  - **#1091:** labelled needs-evidence (a transport change needs a recorded drop first).
+  - **Next: #762.** An explorer mapped every `session:screen` consumer:
+    - main and prompt delivery never need the renderer's screen;
+    - picker is already owned by conditions;
+    - `latestScreenRef` and `claudePaste` are dead;
+    - only debug surfaces need frames.
+  - **Local env note:** `workflows/control.system.test.ts` times out locally on origin/main too, while CI is green.
 - 2026-09-25 — **#1224 MERGED** (Fixes #1138, after steering q5: a partly unreadable report is unknown). **#1226 MERGED** (Fixes #1119; follow-up #1230).
   - **#1227 (restore reads ghost logs):**
     - Blocker from reviewer A: stale ghosts repainted as duplicates. Fixed with a last-content-update clock and response identity.
