@@ -107,7 +107,6 @@ describe('renderer session replacement handoff', () => {
       value: {
         spawnSession,
         killOwnedSession,
-        ghostRead: vi.fn(async () => []),
       },
     })
 

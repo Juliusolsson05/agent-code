@@ -49,7 +49,7 @@ import { windowLifecycleControlCapabilities } from '@main/window/lifecycleContro
 import { installApplicationShutdown } from '@main/applicationShutdown.js'
 import { presentQuitFailure } from '@main/quitFailureDialog.js'
 import { LspManager } from '@main/lspManager.js'
-import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
+import { removeLegacyGhostLogs } from '@main/storage/legacyGhostLogs.js'
 import {
   DictationDebugJournalRegistry,
   pruneOldDictationDebugLogs,
@@ -81,8 +81,6 @@ import {
   scheduleDebugStoragePrune,
   setDebugRetentionJournal,
   setLiveRecordingDirsProvider,
-  setGhostLogOwnersProvider,
-  ghostLogOwnersFrom,
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import {
@@ -170,8 +168,8 @@ import { WorkflowServiceError, type WorkflowService } from 'workflow-mcp'
 //
 // Responsibilities kept here (anything that isn't a domain concern of
 // its own lives in these few lines):
-//   1. Construct the long-lived service singletons (LspManager,
-//      GhostJournalRegistry) before anything else needs them.
+//   1. Construct the long-lived service singletons (LspManager) before
+//      anything else needs them.
 //   2. Detect tmux availability and reconcile persisted terminal
 //      sessions BEFORE SessionManager is built — spawn recovery
 //      needs to know which tmux sessions are already alive.
@@ -191,11 +189,6 @@ import { WorkflowServiceError, type WorkflowService } from 'workflow-mcp'
 // a "tab" or a "split" is. It just manages PTYs and shuffles bytes.
 
 const lspManager = new LspManager()
-// Ghost log writer — one queue per session. Writes are batched at
-// 100 ms and persisted under `<userData>/ghost-logs/<sessionId>.ghost.jsonl`.
-// See `./ghostJournal.ts` for the full rationale; see
-// `src/renderer/src/session-runtime/ghosts.ts` for the renderer side.
-const ghostJournals = new GhostJournalRegistry()
 // Session recorder — one folder per recording under session-recordings/.
 // Constructed and installed as the outbound-IPC observer whenever the
 // dev-debug CAPABILITY is on (AGENT_CODE_DEV_DEBUG=1), so a normal build with
@@ -231,11 +224,10 @@ const sessionRecorders = isSessionRecordingEnabled()
     )
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
-// Per-dictation-session debug-dump registry. Mirrors `ghostJournals`:
-// constructed before IPC handlers register, flushed after committed shutdown. See
-// `src/main/dictationJournal.ts` for the on-disk shape and the
-// rationale for cloning the ghost-journal pattern instead of refactoring
-// them into a single shared writer.
+// Per-dictation-session debug-dump registry: constructed before IPC handlers
+// register, flushed after committed shutdown. See
+// `src/main/dictationJournal.ts` for the on-disk shape and why it is its own
+// writer rather than a shared one.
 const dictationDebugJournals = new DictationDebugJournalRegistry()
 // Per-paste debug-dump registry. Same lifecycle as dictationDebugJournals:
 // constructed before IPC handlers register, flushed after committed shutdown,
@@ -872,16 +864,9 @@ async function startApp(): Promise<void> {
   void pruneOldDictationDebugLogs().catch(err => {
     console.warn('[dictation] prune failed (non-fatal):', err)
   })
-  // Ghost-log reads are now streaming, but a years-long append-only
-  // file still makes every future restore pay O(file-size) parse CPU.
-  // Startup compaction is conservative because this sweep is async:
-  // a resumed session may create its writer while the directory pass is
-  // still reading a large file. The registry check is repeated inside
-  // the compactor before rename so a newly-live session keeps append-only
-  // safety and can compact on dispose instead.
-  void compactAllGhostLogs(sessionId => ghostJournals.has(sessionId)).catch(err => {
-    console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
-  })
+  // The on-disk ghost log is gone; clear what older builds left behind
+  // (see storage/legacyGhostLogs.ts for why the feature was removed).
+  void removeLegacyGhostLogs(app.getPath('userData'))
   scheduleDebugStoragePrune('startup')
   appRunJournal.record({ area: 'setup.toolchain', name: 'toolchain.start' })
   try {
@@ -1395,11 +1380,6 @@ async function startApp(): Promise<void> {
   // renderer, which requires a window.
   const workspaceFileStore = await WorkspaceFileStore.open()
   shutdownWorkspaceStore = workspaceFileStore
-  // Ghost logs stay protected from retention only while their session exists
-  // somewhere: in any window's committed workspace, or running in the
-  // manager (a brand-new pane can run before its first save). Before this
-  // line runs, retention treats every ghost log as protected (#732).
-  setGhostLogOwnersProvider(() => ghostLogOwnersFrom(workspaceFileStore, manager?.list() ?? []))
   assertStartupOpen()
   // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
   // projection of every window's sessions keyed by native id, so the picker
@@ -1553,7 +1533,6 @@ async function startApp(): Promise<void> {
     updates: { updateService, updateChecks, app: { version: app.getVersion(), isPackaged: app.isPackaged } },
     remoteController,
     lspManager,
-    ghostJournals,
     dictationDebugJournals,
     pasteDebugJournals,
     sessionRecorders,
@@ -1732,7 +1711,6 @@ const sessionShutdownGate = installApplicationShutdown({
     stopDetachedTmuxSweep: () => { detachedTmuxSweep?.stop(); detachedTmuxSweep = null },
     drainWorkspace: () => shutdownWorkspaceStore?.drainAdmittedWrites(),
     drainDictationHistory: flushHistoryWrites,
-    flushGhosts: () => ghostJournals.flushAll(),
     flushRecordings: () => sessionRecorders?.flushAll(),
     flushDictationDebug: () => dictationDebugJournals.flushAll(),
     flushPasteDebug: () => pasteDebugJournals.flushAll(),

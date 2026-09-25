@@ -796,8 +796,8 @@ export type SessionRuntime = {
    *
    *  The Map is opaque to most code — Feed reads merged entries
    *  via the selector `selectMergedEntries`, and only the ghost
-   *  reducer functions mutate this field. Disk persistence lives
-   *  in `src/main/ghostJournal.ts`. */
+   *  reducer functions mutate this field. In memory only; it does
+   *  not survive a reload. */
   ghosts: Map<string, GhostEntry>
   /** Task-tool subagents spawned by this session's work, keyed by the parent
    *  `Agent` tool_use id. Folded from the `session:sub-agents` IPC push (which
