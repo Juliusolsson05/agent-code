@@ -525,6 +525,17 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — **#1219 MERGED** (#1118 closed): the composer text is reconstructed
+  from recorded geometry. #1160 MERGED. #1222 (#290 marker slice): 2 Codex + 1
+  Pi, two rounds, all MERGE-READY; waiting on CI. #1223 (#732 orphan ghost
+  logs): round 1 found missing/empty/partial workspace.json must mean unknown
+  owners (fixed with the parser's completeness, as tmuxRecovery does) and that
+  **nothing has read a ghost log on restore since 0cb71e99** (filed #1225,
+  C2 P2); round 2 running. #1224 (#1138 goal loop waits for background work):
+  evidence captured on the wire from Claude 2.1.282 (`background_tasks` on
+  the Stop payload), reviewers Pi + Grok + Pi. #731 measured 0 duplicates, so
+  needs-evidence (explained by #1225). 18 partly-fixed issues rewritten; the
+  needs-owner list is in §10.
 - 2026-09-25 — #1219 round 2: the pattern matcher was withdrawn (it matched an
   earlier part of the same paste); the composer text is now reconstructed from
   the recorded geometry (full line = divider - 1, calibrated by the Pi
