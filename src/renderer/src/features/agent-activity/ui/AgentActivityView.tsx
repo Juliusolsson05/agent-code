@@ -24,7 +24,8 @@ import { useFleetNotes } from '../model/useFleetNotes'
 // ---------------------------------------------------------------------------
 // Agent Activity (#1170, Stages 3–5; modal since #1189).
 //
-// Replaces the 760px AgentActivityModal. The owner's verdict on that one was
+// Replaces the old AgentActivityModal (a flat 760px-wide list; the size was
+// never its problem, see below). The owner's verdict on that one was
 // "ages and just shit across the board", and the decomposition's evidence says
 // why: at 33–48 agents it could not say which agent needed the user, its rows
 // all read as the folder name, and it listed panes rather than agents.

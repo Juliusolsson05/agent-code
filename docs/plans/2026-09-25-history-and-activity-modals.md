@@ -1,6 +1,6 @@
 # History and Agent Activity modals
 
-Status: in progress · Issues #1188 (bug), #1189 (refactor), #1190 (feat) · Short plan
+Status: built, reviewed (one round), PR open · Issues #1188 (bug), #1189 (refactor), #1190 (feat) · Short plan
 
 Size: short plan. One bug with a known root cause, one sizing change, and one
 command that reuses an existing store and dialog. No staged decomposition is
@@ -86,10 +86,25 @@ needed: nothing here reconciles multiple sources of truth.
   control reference.
 - Ruling: **the catalog arithmetic test raises its subtracted term (61 → 62),
   not the baseline.** That test's own comment requires it.
-- Ruling: **commits are split fix → refactor → feat.** The layout fix is
-  committed against the original `TldrHistoryModal.tsx`, and the rename to
-  `ReportHistoryModal.tsx` comes with the feature. That keeps the bug fix
-  reviewable on its own.
+- Ruling: **one coherent commit per issue, in the order refactor (#1189) →
+  fix (#1188) → feat (#1190).** The layout fix is committed against the
+  original `TldrHistoryModal.tsx`, and the rename to `ReportHistoryModal.tsx`
+  comes with the feature. That keeps the bug fix reviewable on its own.
+
+## Review (one round: Codex correctness, Claude contracts/tests)
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| A1: an open history whose session is replaced (reload/provider switch) says "never been enabled" | valid. Existed before for TLDR History, and the new path has it too | fixed: the identity is held while the requested session is gone. Regression test |
+| A2/B2: a changed or reopened request renders the previous result for one commit (statuses under "Goal History", unchipped) | valid | fixed: results carry `kind:identity`, and render only on a match. Regression test |
+| B1: no test covers kind store → surface → dialog (M14/M15 survived) | valid | fixed: a surface test on the real app store |
+| B-M13: the goal "never enabled" copy is untested | valid, small | test added |
+| B3: the TLDR control reference `commandIds` is unpinned by tests | valid, but it is how the harness already works | declined: no enforcement scaffolding in this PR |
+| B4: plan's commit order wording, stale decomposition decision, "760px" comment | valid | fixed |
+| Layout mutations survive (padding, text size, full-screen classes) | by design | declined: only visual, and a class assertion would restate the markup (see Tests) |
+
+Each fix was mutation-checked: reverting it makes exactly its regression test
+fail.
 
 ## Tests
 
