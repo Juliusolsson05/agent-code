@@ -5,6 +5,7 @@ import { GOAL_LOOP_CONTROL_ACTIONS, GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '
 import type { GoalLoopService } from './GoalLoopService.js'
 
 const sessionIdList = z.array(z.string().min(1)).max(10_000)
+const carryRequest = z.object({ from: z.string().min(1), to: z.string().min(1) })
 const controlRequest = z.object({
   sessionId: z.string().min(1),
   action: z.enum(GOAL_LOOP_CONTROL_ACTIONS),
@@ -33,6 +34,14 @@ export function registerGoalLoopIpc(service: GoalLoopService): void {
     assertApplicationWindow(event)
     const request = controlRequest.parse(raw)
     return service.control(request.sessionId, request)
+  })
+  // #1279: the renderer commits every replacement (old pane id -> new), so it
+  // is the one that can say which loop follows which pane. Same trust level
+  // as control above: an application window may already steer any loop.
+  ipcMain.handle('goal-loop:carry', (event, raw: unknown) => {
+    assertApplicationWindow(event)
+    const request = carryRequest.parse(raw)
+    return service.carry(request.from, request.to)
   })
   // Fan-out is a dumb invalidation ping (no payload): the renderer re-reads
   // per pane, so a broadcast body would only duplicate state across panes and

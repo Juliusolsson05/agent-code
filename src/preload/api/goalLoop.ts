@@ -13,6 +13,9 @@ export const goalLoopApi = {
     ipcRenderer.invoke('goal-loop:read', sessionIds),
   controlGoalLoop: (request: GoalLoopControlRequest): Promise<GoalLoopState | null> =>
     ipcRenderer.invoke('goal-loop:control', request),
+  /** #1279: a replaced pane's loop follows it to the successor's id. */
+  carryGoalLoop: (from: string, to: string): Promise<GoalLoopState | null> =>
+    ipcRenderer.invoke('goal-loop:carry', { from, to }),
   // Shared (#1015): every mounted GoalLoopPane subscribes.
   onGoalLoopChanged: (listener: () => void): (() => void) =>
     subscribeShared('goal-loop:changed', () => listener()),
