@@ -614,12 +614,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     // Same reason as runSwitch: a Return must not start under an in-flight
     // /model fan-out.
     if (lockedRef.current) return
+    stopRequestedRef.current = false
+    setStopRequested(false)
     setBusy(true)
     try {
       // Intentionally NOT closing the modal: the banner clears itself when
       // workspace state updates, giving the user visible confirmation the batch
       // was returned without yanking the modal out from under them.
-      await workspace.returnLastProviderSwitchBatch()
+      await workspace.returnLastProviderSwitchBatch({ shouldStop: () => stopRequestedRef.current })
     } finally {
       setBusy(false)
     }

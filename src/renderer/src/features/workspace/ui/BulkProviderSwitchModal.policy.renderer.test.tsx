@@ -303,5 +303,45 @@ describe('BulkProviderSwitchModal policy', () => {
     await screen.findByRole('button', { name: 'Cancel' })
     expect(deliverPrompt).toHaveBeenCalledTimes(1)
   })
+
+  // #1312 review B: the stop's other entry points and the idle Cancel.
+  function runningBatch() {
+    usage.snapshot = healthySnapshot()
+    let seenStop: (() => boolean) | undefined
+    const workspace = workspaceFixture()
+    ;(workspace.switchAgentsToProvider as ReturnType<typeof vi.fn>).mockImplementation(
+      (_ids: unknown, _target: unknown, _policy: unknown, control?: { shouldStop?: () => boolean }) => {
+        seenStop = control?.shouldStop
+        return new Promise<void>(() => {})
+      },
+    )
+    const onClose = vi.fn()
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: /Switch 1 agent to Claude/i }))
+    return { onClose, stopRequested: () => seenStop?.() }
+  }
+
+  it('Escape during a running batch asks to stop, and keeps the modal open', async () => {
+    const run = runningBatch()
+    await screen.findByRole('button', { name: 'Stop after this agent' })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(run.stopRequested()).toBe(true)
+    expect(run.onClose).not.toHaveBeenCalled()
+  })
+
+  it('the stop button does not close the modal while the agent in flight finishes', async () => {
+    const run = runningBatch()
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop after this agent' }))
+    expect(run.stopRequested()).toBe(true)
+    expect(run.onClose).not.toHaveBeenCalled()
+  })
+
+  it('Cancel closes the modal when nothing is running', () => {
+    usage.snapshot = healthySnapshot()
+    const onClose = vi.fn()
+    render(<BulkProviderSwitchModal open workspace={workspaceFixture()} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onClose).toHaveBeenCalled()
+  })
 })
 

@@ -117,7 +117,7 @@ export function useBulkProviderSwitchActions(
     policy: BulkSwitchPolicy,
     control?: { shouldStop?: () => boolean },
   ) => Promise<void>
-  returnLastProviderSwitchBatch: () => Promise<void>
+  returnLastProviderSwitchBatch: (control?: { shouldStop?: () => boolean }) => Promise<void>
 } {
   const switchAgentsToProvider = useCallback(
     async (
@@ -262,7 +262,7 @@ export function useBulkProviderSwitchActions(
     [refs, sessionActions, setRuntimes, setState, showToast],
   )
 
-  const returnLastProviderSwitchBatch = useCallback(async () => {
+  const returnLastProviderSwitchBatch = useCallback(async (control?: { shouldStop?: () => boolean }) => {
     const batch = refs.stateRef.current.lastProviderSwitchBatch
     if (!batch) {
       showToast('No switched batch to return')
@@ -277,7 +277,17 @@ export function useBulkProviderSwitchActions(
     // these have to survive: this modal is the only return affordance there is.
     const unreturned: typeof batch.agents = []
 
-    for (const agent of batch.agents) {
+    // Same stop as the forward switch (#1312 review A): Return runs under the
+    // same modal lock. Agents after the stop are NOT attempted and stay in
+    // the remembered batch, so a later Return finishes them.
+    let notAttempted = 0
+    for (const [index, agent] of batch.agents.entries()) {
+      if (control?.shouldStop?.()) {
+        const rest = batch.agents.slice(index)
+        notAttempted = rest.length
+        unreturned.push(...rest)
+        break
+      }
       const meta = refs.stateRef.current.sessions[agent.sessionId]
       // Only return agents still sitting where the forward switch left them.
       // Closed (no meta) or manually-moved (kind changed) agents are skipped so
@@ -353,7 +363,8 @@ export function useBulkProviderSwitchActions(
     })
 
     const base = `Returned ${pluralAgents(returned)} to ${providerLabel(batch.sourceKind)}`
-    showToast(summarize(base, { skipped, failed }, notes), notes.size > 0 ? LOSSY_SWITCH_TOAST_MS : undefined)
+    const stopped = notAttempted > 0 ? `Stopped: ${pluralAgents(notAttempted)} not returned yet. ` : ''
+    showToast(stopped + summarize(base, { skipped, failed }, notes), notes.size > 0 || stopped ? LOSSY_SWITCH_TOAST_MS : undefined)
   }, [refs, sessionActions, setRuntimes, setState, showToast])
 
   return { switchAgentsToProvider, returnLastProviderSwitchBatch }
