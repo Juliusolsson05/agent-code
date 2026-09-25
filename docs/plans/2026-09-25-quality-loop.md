@@ -397,13 +397,122 @@ PR fully fixed but did not name, and update this ledger.
 
 ## 11. Ledger: open-issue audit (Stage 1 output)
 
-_Empty until Stage 1 starts. One row per issue:_
-`| # | title | outcome | class | sev | evidence / PR |`
+**Stage 1 pass 1 (2026-09-25):** 89 open issues audited against origin/main
+`e3579837` by three read-only research agents, and labelled on GitHub
+(type/class/sev/provider plus needs-owner or needs-evidence). The full
+per-issue evidence is in the agents' reports (session transcript). The
+labels hold the state (decision 15). Closed: #700 (duplicate), and
+#922/#923/#924 (fixed by #1108). No issue was closed on a FIXED claim without
+a merged PR: the audit found **no stale-but-fixed issue** that was not
+already covered. Today's own filings (#1197–#1208) are labelled too.
+
+Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
+14), and put the NEEDS-OWNER list in section 10.
+
+| # | outcome | sev | class |
+|---|---|---|---|
+| #1217 | NEEDS-EVIDENCE | P3 | C9 |
+| #1215 | FEATURE | — | C7 |
+| #1214 | VALID (in open PR #1216) | P3 | C2 |
+| #1213 | FEATURE | — | C2 |
+| #1212 | VALID | P3 | C9 |
+| #1210 | FEATURE (PR #1216) | — | C7 |
+| #1187 | VALID (test counts the lane-port probe) | P3 | C9 |
+| #1171 | VALID | P2 | C9 |
+| #1157 | NEEDS-OWNER | — | — |
+| #1138 | VALID | P2 | C1 |
+| #1127 | VALID chore | — | — |
+| #1119 | VALID | P2 | C1 |
+| #1118 | VALID → PR #1219 | P2 | C1 |
+| #1117 | VALID | P2 | C3 |
+| #1114 | PARTLY-FIXED (spawn still waits on db path) | P3 | C3 |
+| #1107 | PARTLY-FIXED | P3 | C9 |
+| #1098 | NEEDS-OWNER | P3 | C2 |
+| #1097 | VALID | P2 | C3 |
+| #1091 | VALID | P2 | C3 |
+| #1031 | NEEDS-OWNER (item 1) | P2 | — |
+| #1009 | VALID | P2 | C9 |
+| #944 | PARTLY-FIXED (qualification run) | — | C7 |
+| #934 | FEATURE | — | C7 |
+| #927 | VALID | P3 | C3 |
+| #924 | FIXED by #1108 (closed) | — | — |
+| #923 | FIXED by #1108 (closed) | — | — |
+| #922 | FIXED by #1108 (closed) | — | — |
+| #919 | PARTLY-FIXED | P2 | — |
+| #918 | PARTLY-FIXED (umbrella) | — | C2 |
+| #896 | FEATURE | — | C7 |
+| #894 | PARTLY-FIXED (only Pi emits) | — | C2 |
+| #877 | PARTLY-FIXED (live test not on prod path) | P1 | C1 |
+| #833 | NEEDS-EVIDENCE | — | C9 |
+| #800 | PARTLY-FIXED (Codex draft unknown) | P2 | C4 |
+| #797 | NEEDS-EVIDENCE | P2 | — |
+| #784 | VALID | P3 | — |
+| #775 | PARTLY-FIXED | P2 | — |
+| #769 | VALID | P2 | C6 |
+| #768 | PARTLY-FIXED | P3 | — |
+| #767 | PARTLY-FIXED | P2 | C6 |
+| #766 | NEEDS-OWNER | P3 | — |
+| #764 | FEATURE | — | C7 |
+| #762 | VALID | P2 | C6 |
+| #760 | FEATURE | — | C8 |
+| #739 | NEEDS-OWNER | — | C7 |
+| #736 | FEATURE (step C may be a live /compact bug) | — | C7 |
+| #732 | VALID | P2 | C6 |
+| #731 | VALID | P3 | C6 |
+| #730 | VALID | P2 | C8 |
+| #713 | VALID (keyboard side → B18) | P2 | C4 |
+| #711 | PARTLY-FIXED (item 2) | P3 | C3 |
+| #700 | DUPLICATE of #1107 (closed) | — | C9 |
+| #686 | NEEDS-EVIDENCE | P3 | C9 |
+| #678 | VALID | P3 | C2 |
+| #677 | VALID | P3 | C8 |
+| #676 | VALID | P3 | C6 |
+| #675 | VALID | P3 | C2 |
+| #646 | VALID chore | — | C8 |
+| #645 | VALID | P3 | C8 |
+| #644 | NEEDS-EVIDENCE | P3 | C8 |
+| #643 | VALID | P3 | C3 |
+| #601 | FEATURE | — | C7 |
+| #518 | FEATURE | — | C7 |
+| #512 | PARTLY-FIXED | P3 | — |
+| #496 | FEATURE | — | C7 |
+| #372 | PARTLY-FIXED | P2 | C6 |
+| #370 | PARTLY-FIXED | — | C3 |
+| #369 | PARTLY-FIXED (no counters/evidence) | P1 | C6 |
+| #365 | NEEDS-EVIDENCE | P2 | C6 |
+| #340 | NEEDS-EVIDENCE | P2 | — |
+| #339 | NEEDS-EVIDENCE | P1 | C1 |
+| #327 | NEEDS-EVIDENCE (no OOM in 50 runs) | P0 | C6 |
+| #290 | PARTLY-FIXED (marker cannot fire) | P1 | C2 |
+| #259 | FEATURE | — | C7 |
+| #244 | PARTLY-FIXED | — | C7 |
+| #243 | PARTLY-FIXED | P2 | C3 |
+| #240 | FEATURE | — | C7 |
+| #234 | VALID chore | P3 | — |
+| #233 | VALID chore | — | — |
+| #210 | FEATURE | — | C7 |
+| #193 | NEEDS-EVIDENCE (replay says guard was right) | P3 | C2 |
+| #179 | FEATURE | — | C7 |
+| #117 | FEATURE | — | C7 |
+| #115 | NEEDS-OWNER | — | — |
+| #103 | NEEDS-OWNER (close umbrella?) | — | — |
+| #102 | NEEDS-OWNER | — | — |
+| #100 | PARTLY-FIXED | — | — |
+| #99 | FEATURE | — | C7 |
+| #97 | NEEDS-OWNER | P3 | — |
 
 ---
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — Stage 1 pass 1 done: 89 issues audited and labelled; #700
+  closed as a duplicate. #1108 merged, and #922/#923/#924 closed. #1219 opened
+  (#1118, C1 paste tail through a hard wrap), under review by 2 Codex + 1 Pi.
+  #1160 re-running the flaky #1171 job. The owner added a **steering
+  reviewer** (session 0c009320-b047-4fe1-9242-9c73ad200871, brief
+  `temp/steering-loop/BRIEF.md`) that reviews both loops and may send batched
+  notes. The keyboard loop opened draft #1221 (tracking #1220); its
+  second-opinion #1 was answered (agree on all 5, with notes).
 - 2026-09-25 — Owner accepted the recommended decisions and started the loops.
   Stage 4 is delegated to B18 (keyboard-first, one PR, owner merges). Merged
   #1195, #1111, #1106; #1108 has all review findings fixed (the Pi round
