@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -616,6 +617,46 @@ describe('GoalLoopService', () => {
     expect(await readFile(store.quarantineFile, 'utf8')).toBe('{broken')
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, loops: {} })
   })
+  it('never writes over the only copy when an unreadable loop cannot be preserved (#1258 review, q18)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const file = join(directory, 'goal-loop.json')
+    const fixture = JSON.parse(await readFile(join(import.meta.dirname,
+      '../../../testing/fixtures/goal-loop/real-loops-2026-09-25.json'), 'utf8')) as { document: { version: 1; loops: Record<string, { phase: string }> } }
+    const [newer] = Object.keys(fixture.document.loops)
+    fixture.document.loops[newer!]!.phase = 'waiting-on-review'
+    const source = JSON.stringify(fixture.document)
+    await writeFile(file, source)
+    // The preserved copy cannot be written: something already occupies its
+    // name (here a directory), as any unwritable location would.
+    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
+    await mkdir(join(directory, `goal-loop.json.invalid-${digest}.json`))
+    // And the whole-file quarantine name too (review A, sequence B): a failed
+    // copy must never fall through to moving or overwriting the live file.
+    await mkdir(join(directory, 'goal-loop.json.corrupt'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const store = new GoalLoopStore(file)
+    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store })
+    await svc.start()
+    warn.mockRestore()
+    // start() persists immediately; without a preserved copy that write must
+    // not happen, or the unreadable loop (and here every loop) is gone.
+    expect(await readFile(file, 'utf8')).toBe(source)
+  })
+
+  it('keeps a malformed file in place when its quarantine name cannot take it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const file = join(directory, 'goal-loop.json')
+    await writeFile(file, '{broken')
+    await mkdir(join(directory, 'goal-loop.json.corrupt'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store: new GoalLoopStore(file) })
+    await svc.start()
+    warn.mockRestore()
+    expect(await readFile(file, 'utf8')).toBe('{broken')
+  })
+
   it('rejects a second concurrent loop and a complete with no loop', async () => {
     const { svc } = await service()
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })

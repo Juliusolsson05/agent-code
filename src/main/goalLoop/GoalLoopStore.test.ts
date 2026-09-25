@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { GoalLoopState } from '@shared/types/goalLoop.js'
 import { GoalLoopStore } from './GoalLoopStore.js'
@@ -12,6 +13,12 @@ async function makeStore(): Promise<{ store: GoalLoopStore; file: string }> {
   directories.push(directory)
   const file = join(directory, 'goal-loop.json')
   return { store: new GoalLoopStore(file), file }
+}
+// Set-aside copies are digest-named beside the file (never the whole-file
+// `.corrupt` name, which a copy must not replace).
+async function preservedCopies(file: string): Promise<string[]> {
+  const names = (await readdir(dirname(file))).filter(name => name.startsWith('goal-loop.json.invalid-'))
+  return Promise.all(names.map(name => readFile(join(dirname(file), name), 'utf8')))
 }
 const loop = (overrides: Partial<GoalLoopState> = {}): GoalLoopState => ({
   sessionId: 's1', goal: 'Ship it.', loopPrompt: 'Keep shipping.', phase: 'active',
@@ -49,7 +56,7 @@ describe('GoalLoopStore', () => {
     const source = JSON.stringify({ version: 1, loops: { s1: { phase: 'zooming' } } })
     await writeFile(file, source)
     expect(await store.read()).toEqual({})
-    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
+    expect(await preservedCopies(file)).toEqual([source])
   })
 })
 
@@ -75,11 +82,32 @@ describe('one unreadable loop in a real store (#1248)', () => {
     expect(Object.keys(loops)).toEqual([kept])
     expect(loops[kept!]).toEqual(document.loops[kept!])
     // Copied, not moved: the file still holds the loops that were read.
-    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
+    expect(await preservedCopies(file)).toEqual([source])
     expect(await readFile(file, 'utf8')).toBe(source)
 
     await store.write(loops)
     expect(Object.keys(await new GoalLoopStore(file).read())).toEqual([kept])
-    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
+    expect(await preservedCopies(file)).toEqual([source])
+  })
+
+  it('counts only readable loops against the size limit', async () => {
+    // 200 readable loops plus one this build cannot read: the unreadable one
+    // must not push a trustworthy document over the limit and wipe it.
+    const { store, file } = await makeStore()
+    const loops: Record<string, unknown> = {}
+    for (let index = 0; index < 200; index++) loops[`s${index}`] = loop({ sessionId: `s${index}`, phase: 'paused', pauseReason: 'user' })
+    loops.newer = { ...loop({ sessionId: 'newer' }), phase: 'waiting-on-review' }
+    await writeFile(file, JSON.stringify({ version: 1, loops }))
+    expect(Object.keys(await store.read())).toHaveLength(200)
+  })
+
+  it('does not trust a partial copy a crash left under the final name', async () => {
+    const { store, file } = await makeStore()
+    const source = JSON.stringify({ version: 1, loops: { s1: loop(), newer: { ...loop({ sessionId: 'newer' }), phase: 'waiting-on-review' } } })
+    await writeFile(file, source)
+    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
+    await writeFile(join(dirname(file), `goal-loop.json.invalid-${digest}.json`), '')
+    expect(Object.keys(await store.read())).toEqual(['s1'])
+    expect(await preservedCopies(file)).toContain(source)
   })
 })
