@@ -41,7 +41,7 @@ const RANGES: ReadonlyArray<{ id: AgentActivityRange; label: string }> = [
   { id: '24h', label: '24 hours' },
   { id: '7d', label: '7 days' },
   { id: '30d', label: '30 days' },
-  { id: 'all', label: 'All time' },
+  { id: 'all', label: 'All Time' },
 ]
 
 function totalAgents(counts: AgentCounts): number {

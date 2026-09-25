@@ -14,10 +14,10 @@ import { dismissKey, useCliUpdateStore } from '@renderer/features/cli-updates/st
 //
 // Rendering rules (per CLI, folded together into one banner row):
 //   - `updating`: subtle info tone ("Updating <cli>…"). One line.
-//   - `failed`: sticky warning tone with a [View log] action AND an
+//   - `failed`: sticky warning tone with a [View Log] action AND an
 //     inline info button that expands common-cause hints (double
 //     installs, PATH shadowing) without leaving the app.
-//   - `notify`: info tone with an [Update now] action that dispatches
+//   - `notify`: info tone with an [Update Now] action that dispatches
 //     cliUpdatesUpdateNow — a one-shot update that leaves the persisted
 //     behavior preference untouched.
 //   - `updated`: momentary success (up to a few seconds), only for
@@ -100,7 +100,7 @@ function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry |
         tone: 'warning',
         text: `${label} auto-update failed${methodHint} — ${reasonHint}. Wanted ${state.wantedLatest}, still at ${state.from}.`,
         action: {
-          label: 'View log',
+          label: 'View Log',
           onClick: () => {
             void window.api.cliUpdatesOpenLog(state.logPath)
           },
@@ -113,7 +113,7 @@ function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry |
         tone: 'info',
         text: `${label} ${state.installed} → ${state.latest} available.`,
         action: {
-          label: 'Update now',
+          label: 'Update Now',
           onClick: () => {
             // One-shot update: bypasses the automatic/notify/off
             // preference for this click only, leaving the persisted

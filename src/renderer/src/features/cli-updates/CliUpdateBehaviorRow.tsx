@@ -29,7 +29,7 @@ const OPTIONS: Array<{ value: CliUpdateBehavior; label: string; description: str
   },
   {
     value: 'notify',
-    label: 'Notify only',
+    label: 'Notify Only',
     description: 'Check versions on launch and show a banner, but do not run the update automatically.',
   },
   {

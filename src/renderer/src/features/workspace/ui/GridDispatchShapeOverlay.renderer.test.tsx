@@ -42,12 +42,12 @@ describe('Grid Dispatch shape editor', () => {
     expect(screen.getByRole('button', { name: 'Simple' })).toHaveAttribute('aria-pressed', 'false')
     const group = screen.getByRole('radiogroup', { name: 'Row 1 nested agents' })
     expect(group).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: /Show all/ })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: /Show All/ })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('makes the nested-agents pair one Tab stop whose arrows choose (ledger N5, steering k9)', () => {
     const { setDispatchGridShape } = harness(false)
-    const showAll = screen.getByRole('radio', { name: /Show all/ })
+    const showAll = screen.getByRole('radio', { name: /Show All/ })
     const cap = screen.getByRole('radio', { name: /Cap/ })
     // The checked one is the stop; a radio group is one Tab, not two.
     expect([showAll.tabIndex, cap.tabIndex]).toEqual([0, -1])

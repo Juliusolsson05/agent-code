@@ -106,7 +106,7 @@ describe('WorkflowViewSelector', () => {
 
   it('keeps Show all out of the tablist but after it in Tab order', () => {
     render(<SelectionHarness />)
-    const showAll = screen.getByRole('button', { name: 'Show all' })
+    const showAll = screen.getByRole('button', { name: 'Show All' })
     // tablist owns only tabs; the dialog opener used to sit between them.
     expect(screen.getByRole('tablist').contains(showAll)).toBe(false)
     const tabbables = [...document.querySelectorAll<HTMLElement>('button')].filter(el => el.tabIndex >= 0)
@@ -169,7 +169,7 @@ describe('WorkflowViewSelector', () => {
       </WorkflowClientProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     expect(await screen.findByRole('dialog', { name: 'Workflow History' })).toBeInTheDocument()
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(5))
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
@@ -238,7 +238,7 @@ describe('WorkflowViewSelector', () => {
       </WorkflowClientProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
     const historyList = screen.getByRole('list', { name: 'Previous workflow runs' })
     const missingRow = within(historyList).getByText('missing')
@@ -295,7 +295,7 @@ describe('WorkflowViewSelector', () => {
       </WorkflowClientProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(8))
     expect(maxActive).toBe(8)
     expect(screen.getAllByRole('listitem')).toHaveLength(50)

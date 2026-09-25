@@ -60,7 +60,7 @@ export function WorkflowViewSelector({
   return (
     <nav
       aria-label="Session views"
-      // `relative` anchors "Show all", which sits OUTSIDE the tablist (see
+      // `relative` anchors "Show All", which sits OUTSIDE the tablist (see
       // below) but is drawn over the Main row's right end.
       className="relative flex flex-shrink-0 flex-col border-t border-border bg-surface"
     >
@@ -77,7 +77,7 @@ export function WorkflowViewSelector({
         className="flex flex-col"
         onKeyDown={onTabListKeyDown}
       >
-          {/* h-8 is pinned (not py-2) so "Show all", positioned over this row
+          {/* h-8 is pinned (not py-2) so "Show All", positioned over this row
               from outside the tablist, is exactly as tall as the row it sits
               on. pr-20 keeps the label clear of it. */}
           <button
@@ -147,7 +147,7 @@ export function WorkflowViewSelector({
           )
         })}
       </div>
-      {/* "Show all" is a dialog opener, not a view, so it must not live inside
+      {/* "Show All" is a dialog opener, not a view, so it must not live inside
           the tablist: a plain button among tabs is invalid ARIA (tablist owns
           only tabs) and would be skipped by the arrow keys while still
           sitting between tabs in DOM order. It is last in DOM order (Tab
@@ -159,7 +159,7 @@ export function WorkflowViewSelector({
         onClick={() => setHistoryOpen(true)}
         className="absolute right-0 top-0 flex h-8 items-center px-3 font-code text-[10px] text-muted underline-offset-2 hover:bg-control-hover-bg hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
       >
-        Show all
+        Show All
       </button>
       <WorkflowHistoryDialog
         open={historyOpen}

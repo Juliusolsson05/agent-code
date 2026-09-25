@@ -114,7 +114,7 @@ function PocketAttachment(props: {
         </div>
         <div className="flex h-5 shrink-0 items-center justify-between gap-1 border-t border-border px-2 font-code text-[10px] text-muted" title="Page viewport in CSS pixels; device previews scale to fit the available pane">
           <span className="truncate">{Math.round(fit.width)} × {Math.round(fit.height)}{viewport ? ` · ${Math.round(fit.scale * 100)}% preview` : ''}</span>
-          {viewport && <button type="button" className="shrink-0 rounded-control outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring" onClick={() => props.workspace.updateBrowserPocket(s => setPocketViewport(s, props.sessionId, { mode: 'fill' }))}>Fit pane</button>}
+          {viewport && <button type="button" className="shrink-0 rounded-control outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring" onClick={() => props.workspace.updateBrowserPocket(s => setPocketViewport(s, props.sessionId, { mode: 'fill' }))}>Fit Pane</button>}
         </div>
         <PocketDrivingStatus pocketId={pocket.pocketId} />
       </div>

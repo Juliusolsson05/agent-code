@@ -594,6 +594,7 @@ feeds the rows below G-1.
 | G-28 | Settings bar controls | Usage square chip with no focus ring + accent hover, Appearance 28px box, performance / caff ~22px lowercase chips (N18 deferred the "caff" name here) | `buttonVariants` outline xs | done (all four on outline xs, 24px; toggles keep the accent on-fill with hover pinned; labels Title Case: Usage, Performance, Caffeinate; unsupported Caffeinate keeps its why-tooltip on hover) |
 | G-29 | Feed pager / disclosure controls | a scan for lowercase button labels found only feed inline disclosures ("previous", "next", "collapse", "view paged content", "(show all)"); multi-edit's pager was the one pair without `feedDisclosureClass` | `feedDisclosureClass` | done (multi-edit converged: 44px phone hit area like its siblings). Ruling: feed inline disclosures stay lowercase. They are the transcript's voice, text-weight links inside tool output rather than chrome buttons, and they are consistent across all 15 uses. Cost if wrong: one sweep of the 15 labels |
 | G-30 | Editor toolbar (Files / Full / Close) | hand-rolled `px-1.5 py-0.5` buttons beside Save / Save All ghost xs Buttons in the same strip | ghost xs | done (`buttonVariants` ghost xs, muted, like Save) |
+| G-31 | Casing in labels defined as data | G-23 scanned JSX text, so `label:` props slipped: the browser pocket's native menus (all sentence case, while the app menu and session menu are Title Case), Skills row menu, CLI banner actions, Notify Only / All Limits choices, and the segmented options All Projects / Selected Projects, Show All, All Time (their siblings, e.g. This Folder / Repository, were already Title Case) | the casing ruling | done (18 pocket menu labels, 3 Skills items, 2 banner actions, 2 choices, 4 segmented options, Workflows' Show All, the pocket's Fit Pane). Kept: persisted data labels ("System default" is stored as the device label), feed tool labels (G-29 voice), key/value field labels in Agent Status |
 
 ## Owner visual checklist
 
@@ -879,9 +880,9 @@ Sharp corners and one light theme.
   under the corner × ⎋ (Queued Prompt's could). Extension windows are the
   exception: the extension draws its own header, and the × ⎋ sits over its
   top-right corner as before.
-- **G-10 Segmented choices:** one connected-pill look ("All projects |
-  Selected projects", "LAN | Tunnel", "This Folder | Repository |
-  Everywhere", "Split | Browser | Agent", Grid Dispatch "Show all | Cap").
+- **G-10 Segmented choices:** one connected-pill look ("All Projects |
+  Selected Projects", "LAN | Tunnel", "This Folder | Repository |
+  Everywhere", "Split | Browser | Agent", Grid Dispatch "Show All | Cap").
   The selected half uses the settings "on" colour. Remote's LAN/Tunnel still
   needs a click/Enter (arrows do not switch it); Spotlight's layout and
   Grid Dispatch's nested agents switch on arrows.

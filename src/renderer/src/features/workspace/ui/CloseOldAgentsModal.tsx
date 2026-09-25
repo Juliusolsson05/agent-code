@@ -551,7 +551,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 label="Project scope"
                 value={scopeMode}
                 onChange={setScopeMode}
-                options={[{ value: 'all', label: 'All projects' }, { value: 'selected', label: 'Selected projects' }] as const}
+                options={[{ value: 'all', label: 'All Projects' }, { value: 'selected', label: 'Selected Projects' }] as const}
               />
               <label className="mt-3 flex items-center gap-2 text-[11px] text-ink-dim">
                 <input

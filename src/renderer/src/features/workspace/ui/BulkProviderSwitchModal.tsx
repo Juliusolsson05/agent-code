@@ -736,7 +736,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 label="Project scope"
                 value={scopeMode}
                 onChange={changeScopeMode}
-                options={[{ value: 'all', label: 'All projects' }, { value: 'selected', label: 'Selected projects' }] as const}
+                options={[{ value: 'all', label: 'All Projects' }, { value: 'selected', label: 'Selected Projects' }] as const}
               />
             </div>
           </div>

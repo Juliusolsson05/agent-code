@@ -345,13 +345,13 @@ export function SkillsGrid({ settings, onChange }: Props) {
               <SkillMenu
                 label={skill.name}
                 items={[
-                  { label: 'Check for update', onSelect: () => void checkSkillForUpdates(skill.id) },
-                  { label: 'Reveal source', onSelect: () => void window.api.revealAgentCodeInstalledSkillSource(skill.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal the source.') }) },
+                  { label: 'Check for Update', onSelect: () => void checkSkillForUpdates(skill.id) },
+                  { label: 'Reveal Source', onSelect: () => void window.api.revealAgentCodeInstalledSkillSource(skill.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal the source.') }) },
                   ...skill.targets.filter(target => target.state === 'installed' || target.state === 'conflict').map(target => ({
                     label: `Reveal in ${target.displayPath}`,
                     onSelect: () => void window.api.revealAgentCodeInstalledSkillTarget(skill.id, target.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal that folder.') }),
                   })),
-                  { label: 'Copy install command', onSelect: () => void navigator.clipboard?.writeText(installCommandFor(skill)) },
+                  { label: 'Copy Install Command', onSelect: () => void navigator.clipboard?.writeText(installCommandFor(skill)) },
                   { label: 'Remove…', danger: true, onSelect: () => void removeInstalled(skill) },
                 ]}
               />

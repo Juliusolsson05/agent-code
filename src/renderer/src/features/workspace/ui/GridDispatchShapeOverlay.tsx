@@ -309,7 +309,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                     value={draft.capChildren === false ? 'all' : 'cap'}
                     onChange={next => setRowCap(index, next === 'cap')}
                     options={[
-                      { value: 'all', label: 'Show all' },
+                      { value: 'all', label: 'Show All' },
                       { value: 'cap', label: 'Cap' },
                     ]}
                   />

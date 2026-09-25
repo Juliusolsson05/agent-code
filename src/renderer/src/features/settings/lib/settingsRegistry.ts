@@ -667,7 +667,7 @@ export function getSettingsRegistry(
         options: [
           { value: 'minimal', label: 'Minimal', description: 'Single worst-case percentage across both providers.' },
           { value: 'providers', label: 'Providers', description: 'One chip per provider showing its most constrained limit.' },
-          { value: 'all', label: 'All limits', description: 'Every active limit row per provider, compact labels.' },
+          { value: 'all', label: 'All Limits', description: 'Every active limit row per provider, compact labels.' },
           { value: 'detailed', label: 'Detailed', description: 'All limits plus severity bars and reset countdowns.' },
         ],
         onSelect: (ctx, value) =>
