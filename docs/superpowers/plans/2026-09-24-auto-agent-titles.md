@@ -64,7 +64,7 @@ Run focused tests for each stage, then typecheck, lint, build and the project's 
 - [x] Stage 1: land provenance, reducers, setting, and managed skill; hand title state and `auto_title` domain to Stage 2.
 - [x] Stage 2: land authenticated title tool and exact-session renderer bridge; hand current-title observation to Stage 3.
 - [x] Stage 3: land provider guidance/hooks, resume UI, and user docs; verify provider-specific limits.
-- [ ] Finish: full checks, plan-versus-built audit, one PR review, and open PR without merging.
+- [x] Finish: full checks, plan-versus-built audit, one PR review, and open PR without merging. Local full-check failures and the remaining CI gate are recorded below.
 
 ## Execution notes
 
@@ -72,6 +72,7 @@ Run focused tests for each stage, then typecheck, lint, build and the project's 
 - 2026-09-24: Stages 1–3 implemented. Fail-first tests captured missing reducer, control capability, MCP tool, and hook behavior before the implementation. The real two-window Electron control test confirmed exact owner routing and manual precedence; undo/replacement tests confirmed durable title locks. Stage 3 provider verdict is in the decomposition: Claude/Codex have turn reminders; OpenCode/Grok/Pi currently use the tool and managed skill without a turn reminder.
 - 2026-09-24: Typecheck, package build/output verification, and 133 focused tests across 12 files passed. `npm run check` reached the full suite: 6,633 passed, two failed. The command-history storage failure reproduces on clean `origin/main` under Node 25.5.0 (filed as #1212). A legacy settings hydration test timed out only in the feature branch's full parallel run; it passed alone on both branches and in clean main's full run, so its cause remains unresolved. Clean main's full run had a separate extension-frame failure that did not appear on this branch. No production change was inferred from those failures.
 - 2026-09-24: One independent review round (ownership and provider integration) found a stalled-hook path, all-window title routing, old automatic title carryover for unrelated conversations, false Grok skill wording, inherited subagent title access, and a pre-revocation in-flight write. Commit `351a0c53` fixes the first three and covers the real Resume Auto Title surface. All 137 focused tests in 13 files, typecheck, and package build/output verification pass after the fixes; reverting each of the three fixes made its regression test fail. Grok wording is corrected here and in README. Transport-level subagent exclusion and in-flight write ordering require provider/retirement contracts beyond this feature and are tracked in #1213 and #1214; Grok skill/hook delivery is #1215. Rebasing onto `origin/main` at `e2768246` applied cleanly; typecheck and all 137 focused tests passed again.
+- 2026-09-24: PR #1216 opened from the clean rebased branch. GitHub reports it mergeable; CI is queued/running. Merge remains explicitly reserved for the user.
 
 ## Review disposition
 
