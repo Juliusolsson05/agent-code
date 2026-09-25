@@ -586,7 +586,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                   type="text"
                   value={projectFilter}
                   onChange={e => setProjectFilter(e.target.value)}
-                  placeholder="Filter projects"
+                  placeholder="Filter projects…"
                   aria-label="Filter projects"
                   className="mt-2"
                 />

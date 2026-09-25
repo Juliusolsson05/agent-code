@@ -350,7 +350,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
             ref={filterRef}
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="Type to filter by name, goal, project or provider"
+            placeholder="Type to filter by name, goal, project or provider…"
             aria-label="Filter agents"
             // While the filter has focus the arrows still move the highlight,
             // so it is a combobox that carries the active descendant.

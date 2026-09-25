@@ -842,7 +842,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   type="text"
                   value={projectFilter}
                   onChange={e => changeProjectFilter(e.target.value)}
-                  placeholder="Filter projects"
+                  placeholder="Filter projects…"
                   aria-label="Filter projects"
                   className="mt-2"
                 />
