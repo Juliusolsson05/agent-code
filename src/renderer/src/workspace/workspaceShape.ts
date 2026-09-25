@@ -136,12 +136,31 @@ export function migrateWorkspaceToStage(
   // here, and the throw is what put bootstrap into its locked fallback with
   // the disk file untouched. `undefined` is not corruption: a v2 file has no
   // `projects`, and a v3 file has no `tabs`.
-  for (const [field, value] of [['projects', persisted.projects], ['tabs', persisted.tabs]] as const) {
+  //
+  // `buried` and `sessions` join the rule for the same reason (#1245): v2
+  // buried records carry their own `sessionMeta`, and `sessions` is the pool,
+  // so a PRESENT-but-malformed one may still hold the only copy of an agent.
+  // Migrating it to empty would let the next autosave erase that copy; the
+  // typed throw keeps the file untouched behind the locked fallback. An
+  // ABSENT `sessions` holds nothing and migrates as an empty pool.
+  for (const [field, value] of [['projects', persisted.projects], ['tabs', persisted.tabs], ['buried', persisted.buried]] as const) {
     if (value !== undefined && !Array.isArray(value)) {
       throw new MalformedWorkspaceContainerError(
         `workspace.json has a malformed \`${field}\`; refusing to migrate it to an empty pool`,
       )
     }
+  }
+  if (persisted.sessions !== undefined
+    && (persisted.sessions === null || typeof persisted.sessions !== 'object' || Array.isArray(persisted.sessions))) {
+    throw new MalformedWorkspaceContainerError('workspace.json has a malformed `sessions`; refusing to migrate it to an empty pool')
+  }
+  // A null or id-less v2 tab ENTRY holds nothing (sessions are listed by id
+  // under `sessions`), so it is dropped like a null project entry rather than
+  // throwing every agent into the recovery shell (#1245).
+  const legacyInput = {
+    ...persisted,
+    tabs: persisted.tabs?.filter(tab => tab !== null && typeof tab === 'object' && typeof tab.id === 'string'),
+    sessions: persisted.sessions ?? {},
   }
   // --- Rule 1.
   const projects: ProjectRef[] = Array.isArray(persisted.projects)
@@ -152,7 +171,7 @@ export function migrateWorkspaceToStage(
           title: typeof project.title === 'string' ? project.title : '',
           ...(typeof project.cwd === 'string' ? { cwd: project.cwd } : {}),
         }))
-    : (persisted.tabs ?? []).map(tab => ({ id: tab.id, title: tab.title }))
+    : (legacyInput.tabs ?? []).map(tab => ({ id: tab.id, title: tab.title }))
   const projectIds = new Set<TabId>(projects.map(project => project.id))
   // Degenerate guard: every writer keeps >=1 project (rehydrate mints one), but
   // a hand-emptied file must still migrate to something renderable. '' is
@@ -163,7 +182,7 @@ export function migrateWorkspaceToStage(
     : (projects[0]?.id ?? '')
 
   // --- Rules 2, 3, 7.
-  const legacy = legacyMemberships(persisted)
+  const legacy = legacyMemberships(legacyInput)
   // Rule 9 (#1030 item 2): a v2 file with zero tabs still carried its buried
   // panes — burial was independent of tabs there. Here every session needs a
   // project to live in, so with none left the re-parent target was '' and
@@ -269,7 +288,7 @@ export function migrateWorkspaceToStage(
       ...(durable.laneWeights ? { laneWeights: durable.laneWeights } : {}),
     }
   } else {
-    const seed = legacyEntrySeed(persisted)
+    const seed = legacyEntrySeed(legacyInput)
     stage = defaultSeededStage(seed !== null && poolIds.has(seed) ? seed : null)
   }
 

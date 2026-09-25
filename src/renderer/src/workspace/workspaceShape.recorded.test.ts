@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
-import { migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
+import { MalformedWorkspaceContainerError, migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
 
 // v2→v3 migration on REAL persisted workspaces (#992 review A).
 //
@@ -110,5 +110,34 @@ describe('malformed stage entries in a real v3 workspace (#1245)', () => {
     const migrated = migrateWorkspaceToStage(workspace)
     expect(Object.keys(migrated.sessions)).toHaveLength(Object.keys(workspace.sessions ?? {}).length)
     expect(migrated.stage.lanes.length).toBeGreaterThan(0)
+  })
+})
+
+// The same issue's v2 shapes, on the owner's real v2 workspace (steering q16).
+// An ENTRY that holds nothing is repaired; a present-but-malformed CONTAINER
+// that may hold the only copy of an agent keeps rule 8's deliberate lock.
+describe('malformed entries and containers in a real v2 workspace (#1245)', () => {
+  it('keeps every agent when a tab entry is null', () => {
+    const workspace = liveWorkspace()
+    const expected = Object.keys(migrateWorkspaceToStage(liveWorkspace()).sessions).sort()
+    ;(workspace.tabs as unknown[]).push(null)
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(Object.keys(migrated.sessions).sort()).toEqual(expected)
+    expect(migrated.projects).toHaveLength((workspace.tabs as unknown[]).length - 1)
+  })
+
+  it('migrates a file with no sessions map at all instead of throwing', () => {
+    const workspace = liveWorkspace()
+    delete (workspace as { sessions?: unknown }).sessions
+    expect(() => migrateWorkspaceToStage(workspace)).not.toThrow()
+  })
+
+  it.each([
+    ['buried', (workspace: Record<string, unknown>) => { workspace.buried = {} }],
+    ['sessions', (workspace: Record<string, unknown>) => { workspace.sessions = 5 }],
+  ])('refuses a present-but-malformed %s container with the typed lock, never an empty pool', (_field, damage) => {
+    const workspace = liveWorkspace() as unknown as Record<string, unknown>
+    damage(workspace)
+    expect(() => migrateWorkspaceToStage(workspace as unknown as PersistedWorkspace)).toThrow(MalformedWorkspaceContainerError)
   })
 })
