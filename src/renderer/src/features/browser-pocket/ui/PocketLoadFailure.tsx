@@ -1,4 +1,5 @@
 import { useAppStore } from '@renderer/app-state/hooks'
+import { Button } from '@renderer/components/ui/button'
 import type { Workspace } from '@renderer/workspace/hook'
 import type { SessionId } from '@renderer/workspace/types'
 import { setPocketView } from '../actions'
@@ -9,7 +10,6 @@ import { requestPocket } from '../state/pocketBus'
 import { usePocketLive } from '../state/pocketLiveStore'
 import { useSpotlightPocketMode } from '../state/spotlightPocketMode'
 
-const BUTTON = 'rounded-control border border-border px-2 py-1 hover:border-border-hi hover:text-ink disabled:cursor-default disabled:opacity-60'
 
 export function PocketLoadFailure({ pocketId, sessionId, getWorkspace }: {
   pocketId: string
@@ -37,7 +37,7 @@ export function PocketLoadFailure({ pocketId, sessionId, getWorkspace }: {
   }
   return <div className="absolute inset-0 overflow-auto bg-canvas p-4 text-center text-[12px] text-ink-dim">
     <div className="flex min-h-full flex-col items-center justify-center gap-3">
-      <div className="max-w-full break-words text-[14px] text-ink">Can't connect to {hostOf(failure.url)}</div>
+      <div className="max-w-full break-words text-[13px] text-ink">Can't connect to {hostOf(failure.url)}</div>
       <div className="max-w-full break-words font-code text-muted">{failure.description}</div>
       {eligible && <p>Ask this agent to start or restart the local server.</p>}
       <div role="status" aria-live="polite">
@@ -46,14 +46,14 @@ export function PocketLoadFailure({ pocketId, sessionId, getWorkspace }: {
         {status && ['sending', 'queued', 'sent'].includes(status.kind) && label}
       </div>
       <div className="flex flex-wrap justify-center gap-2">
-        {eligible && (maySend || status?.kind === 'sending') && <button type="button" className={BUTTON} disabled={!maySend} onClick={() => void requestServerRestart(getWorkspace, sessionId, pocketId)}>{label}</button>}
-        <button type="button" className={BUTTON} onClick={() => {
+        {eligible && (maySend || status?.kind === 'sending') && <Button type="button" variant="outline" size="sm" disabled={!maySend} onClick={() => void requestServerRestart(getWorkspace, sessionId, pocketId)}>{label}</Button>}
+        <Button type="button" variant="outline" size="sm" onClick={() => {
           // getURL()/reload() can still refer to the previous committed page
           // when this destination failed before commit. Retry the attempted
           // URL through the host's existing native navigation path instead.
           requestPocket(pocketId, { type: 'navigate', url: failure.url })
-        }}>Reload page</button>
-        {owner && <button type="button" className={BUTTON} onClick={viewAgent}>View agent</button>}
+        }}>Reload page</Button>
+        {owner && <Button type="button" variant="outline" size="sm" onClick={viewAgent}>View agent</Button>}
       </div>
     </div>
   </div>

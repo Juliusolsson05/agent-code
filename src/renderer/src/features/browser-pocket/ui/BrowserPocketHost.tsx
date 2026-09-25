@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
 
 import { viewportSize } from '@shared/browserPocket/devices'
 import { isAllowedTopLevelUrl } from '@shared/browserPocket/url'
@@ -434,8 +435,8 @@ function GuestOverlays({ pocketId, sessionId, getWorkspace }: { pocketId: string
       <PocketLoadFailure pocketId={pocketId} sessionId={sessionId} getWorkspace={getWorkspace} />
       {live.crashedOut && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas p-6 text-center text-[12px] text-ink-dim">
-          <div className="text-[14px] text-ink">This page crashed repeatedly</div>
-          <button type="button" className="rounded-control border border-border px-2 py-1 hover:border-border-hi hover:text-ink" onClick={() => patchLive(pocketId, { crashedOut: false, crashes: [], generation: live.generation + 1 })}>Reload</button>
+          <div className="text-[13px] text-ink">This page crashed repeatedly</div>
+          <Button type="button" variant="outline" size="sm" onClick={() => patchLive(pocketId, { crashedOut: false, crashes: [], generation: live.generation + 1 })}>Reload</Button>
         </div>
       )}
     </>

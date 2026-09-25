@@ -13,7 +13,9 @@ import { useLanePorts } from '../state/lanePortsStore'
 import { useSpotlightPocketMode } from '../state/spotlightPocketMode'
 import { PocketMenu } from './PocketMenu'
 
-const BTN = 'flex h-7 min-w-7 items-center justify-center rounded-control shrink-0 px-1 text-ink-dim hover:bg-canvas hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent'
+// The shared control hover + focus ring (UI pass, G-9): these icon buttons
+// hovered to the canvas colour and had no focus indicator.
+const BTN = 'flex h-7 min-w-7 items-center justify-center rounded-control shrink-0 px-1 text-ink-dim hover:bg-control-hover-bg hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-focus-ring'
 
 /** Keep the address usable in narrow lanes: secondary actions live in the
  * native menu. Closing the visible pane preserves cookies and history. */
