@@ -970,7 +970,7 @@ export function usePaneActions(
           builtInMcpOverrides,
         })
       } catch (err) {
-        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err))
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))
         return
       }
 
@@ -1134,7 +1134,7 @@ export function usePaneActions(
       try {
         sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
-        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err))
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))
         return null
       }
 
@@ -1239,7 +1239,7 @@ export function usePaneActions(
       try {
         sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind, providerRuntime })
       } catch (err) {
-        showToast(spawnFailureToast('linked agent', err))
+        showToast(spawnFailureToast('linked agent', err, rootParentMeta.cwd))
         return
       }
 
@@ -1930,7 +1930,7 @@ export function usePaneActions(
  *  File › Setup… (#1286 review C1). `spawn` has already mapped its rejection
  *  through sessionSpawnErrorMessage; this re-reads it with the same
  *  recognizer, so anything else is still the generic sentence. */
-function spawnFailureToast(what: string, err: unknown): string {
-  const curated = err instanceof Error ? curatedSpawnMessage(err.message) : null
+function spawnFailureToast(what: string, err: unknown, cwd: string): string {
+  const curated = err instanceof Error ? curatedSpawnMessage(err.message, cwd) : null
   return `Could not create ${what}: ${curated ?? SESSION_START_FAILED_MESSAGE}`
 }

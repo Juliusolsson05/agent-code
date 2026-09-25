@@ -196,11 +196,17 @@ it('shows the curated spawn failures a create can act on', async () => {
     'codex CLI not found. Open Setup (File › Setup…) to install it or enter its path.',
   ]
   for (const message of curated) {
-    const harness = mountPaneActions(state(), { spawn: vi.fn().mockRejectedValue(new Error(message)) })
+    const spawn = vi.fn().mockRejectedValue(new Error(message))
+    const harness = mountPaneActions(state(), { spawn })
     await act(async () => {
       expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' })).toBeNull()
     })
-    expect(harness.showToast).toHaveBeenCalledWith(`Could not create agent: ${message}`)
+    // The folder named is the one this create asked for, never the error's
+    // own text (#1286 review C round 2).
+    const expected = message.startsWith('Workspace folder is missing: ')
+      ? `Workspace folder is missing: ${spawn.mock.calls[0]![0] as string}`
+      : message
+    expect(harness.showToast).toHaveBeenCalledWith(`Could not create agent: ${expected}`)
     harness.mounted.unmount()
   }
 })
