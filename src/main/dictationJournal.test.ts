@@ -239,3 +239,23 @@ it.each(['A lands first', 'B lands first'] as const)('keeps the budget across tw
   expect(text).not.toContain('"event":"main:received"')
 })
 
+// Round 2 of #1301 review C: a writer re-created for an evicted press kept
+// the byte budget but restarted the clock at tMs 0 and wrote a second marker.
+it('keeps the press clock across eviction', async () => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-dictation-user-'))
+  dirs.push(userData.dir)
+  const registry = new DictationDebugJournalRegistry()
+  const press = registry.get('press-0')
+  press.append({ layer: 'IPC', event: 'big', data: { pad: 'x'.repeat(16 * 1024 * 1024) } })
+  press.append(sample())
+  await registry.flushAll()
+  for (let i = 1; i <= 64; i++) registry.get(`press-${i}`)
+  await registry.flushAll()
+  clock += 2 * 3600_000
+  registry.get('press-0').append(sample())
+  await registry.flushAll()
+  const events = await lines(dictationDebugLogPath('press-0'))
+  expect(events.some(line => line.event === 'sample')).toBe(false)
+  expect(events.at(-1)!.tMs).toBeGreaterThanOrEqual(2 * 3600_000)
+})
+

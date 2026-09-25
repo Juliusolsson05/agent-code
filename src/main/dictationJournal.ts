@@ -42,7 +42,7 @@
 // investigations, so 14 days is the explicit floor unless we add an
 // in-app viewer that lets users grow the budget consciously.
 
-import { statSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
@@ -161,11 +161,21 @@ export class DictationDebugJournal {
     private readonly options: {
       maxBytes?: number
       initialBytes?: number
+      /** The press's original `ts` anchor, when re-created for a press whose
+       *  file already exists; see the registry's get(). */
+      initialStartedAtMs?: number | null
       /** Test seam for a slow or blocked disk; production uses appendFile. */
       appendFile?: typeof appendFile
     } = {},
   ) {
     this.bytesQueued = options.initialBytes ?? 0
+    // A writer re-created for an evicted press keeps that press's clock
+    // (#1301 review C, round 2): otherwise its tMs restarted at 0, placing
+    // hours-late summaries at the start of the press for any reader ordering
+    // by tMs. It may announce suppression once more; whether the old writer
+    // already did is not knowable without scanning a 16 MiB file, and a
+    // repeated marker misleads nobody.
+    this.sessionStartedAtMs = options.initialStartedAtMs ?? null
   }
 
   /**
@@ -310,7 +320,11 @@ export class DictationDebugJournalRegistry {
       // can be smaller than what that writer accounted for; take the larger.
       const inFlight = this.evictedBytes.get(debugSessionId)
       const evicted = inFlight ? Math.max(0, ...inFlight.values()) : 0
-      j = new DictationDebugJournal(path, { initialBytes: Math.max(existingSize(path), evicted), appendFile: this.options.appendFile })
+      j = new DictationDebugJournal(path, {
+        initialBytes: Math.max(existingSize(path), evicted),
+        initialStartedAtMs: existingStartedAt(path),
+        appendFile: this.options.appendFile,
+      })
       this.journals.set(debugSessionId, j)
       // Insertion order is age: evict the oldest press (flushing it first),
       // never the one just asked for. See MAX_OPEN_JOURNALS.
@@ -424,6 +438,28 @@ function existingSize(path: string): number {
     return statSync(path).size
   } catch {
     return 0
+  }
+}
+
+/** The `ts` of the file's first event: the press's clock anchor (tMs 0).
+ *  Reads only the first line; null when the file is absent or unreadable,
+ *  in which case the next event starts the clock as before. */
+function existingStartedAt(path: string): number | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(path, 'r')
+    // Only the prefix: every event is serialized `{"ts":…,"tMs":…,…}` (see
+    // append), and a first line can be far longer than any fixed read.
+    const head = Buffer.alloc(64)
+    const read = readSync(fd, head, 0, head.length, 0)
+    const match = /^\{"ts":(\d+),"tMs":(\d+)/.exec(head.subarray(0, read).toString('utf8'))
+    return match ? Number(match[1]) - Number(match[2]) : null
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* nothing to release */ }
+    }
   }
 }
 
