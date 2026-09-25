@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Kbd } from '@renderer/components/ui/kbd'
 import {
   Dialog,
   DialogContent,
@@ -97,14 +98,18 @@ export function DictationGuideModal() {
             screenshotAlt="Screenshot: Deepgram signup page with the sign-up form highlighted"
           />
 
+          {/* On-screen names (Deepgram's buttons, our own Settings rows) are
+              EMPHASIS, not code: they were font-mono spans, which ignored the
+              App Font setting and read as something to type (plan T6). Keys
+              in the hotkey note below are Kbd chips instead. */}
           <GuideStep
             number={2}
             title="Create a project API key"
             body={
               <>
-                From the console, open <span className="font-mono">API Keys</span>{' '}
-                in the sidebar, click <span className="font-mono">Create a New API Key</span>,
-                give it the scope <span className="font-mono">Member</span> or
+                From the console, open <span className="font-semibold text-ink">API Keys</span>{' '}
+                in the sidebar, click <span className="font-semibold text-ink">Create a New API Key</span>,
+                give it the scope <span className="font-semibold text-ink">Member</span> or
                 broader, copy the string that appears once (Deepgram will never
                 show it again).
               </>
@@ -118,9 +123,9 @@ export function DictationGuideModal() {
             body={
               <>
                 In Agent Code, open{' '}
-                <span className="font-mono">Settings → Voice Dictation</span>,
-                paste the key into the <span className="font-mono">Deepgram API Key</span>{' '}
-                row, and press <span className="font-mono">Save</span>. Your key
+                <span className="font-semibold text-ink">Settings → Voice Dictation</span>,
+                paste the key into the <span className="font-semibold text-ink">Deepgram API Key</span>{' '}
+                row, and press <span className="font-semibold text-ink">Save</span>. Your key
                 is encrypted with your system keyring — Agent Code never writes
                 it to disk in plaintext.
               </>
@@ -132,9 +137,9 @@ export function DictationGuideModal() {
             <p className="mb-1 font-semibold text-ink">A note on the hotkey.</p>
             <p>
               Dictation is triggered with{' '}
-              <span className="font-mono">Cmd+Shift+D</span> by default: press once
+              <Kbd aria-hidden={false} binding="Cmd+Shift+D" /> by default: press once
               to record and again to finish, with no OS permission required. If
-              you prefer holding <span className="font-mono">Fn</span>{' '}
+              you prefer holding <Kbd aria-hidden={false}>fn</Kbd>{' '}
               like macOS system dictation, switch the shortcut in Settings; macOS
               will then prompt for Accessibility permission the first time you
               enable dictation.

@@ -510,7 +510,7 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 | # | Item | Status |
 |---|---|---|
 | X1 | #713 condition modal scoped to its pane (keyboard side; tell B7) | todo |
-| X2 | `font-mono` → `font-code` sweep (T6) | todo |
+| X2 | `font-mono` → `font-code` sweep (T6) | done (0 class uses left: Dictation guide names → emphasis, keys → Kbd; debug table → font-code) |
 | X3 | `focus:border-accent` / `outline-none` sweep (T4) | done (4 `focus:border-accent` inputs → control focus form; Apps settings raw controls → Button/Input; exemptions recorded in Execution notes) |
 | X4 | Stale comments (`defaults.ts` dictation) | done |
 | X5 | Undefined theme tokens (`text-fg`, `bg-surface-raised`) outside the S-rows — found in S10/S11 | done (N2/N3) |
@@ -828,6 +828,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **X2 Dictation guide (Settings › Voice Dictation › guide):** Deepgram and
+  Settings names are bold text in the app font (were monospace); ⌘⇧D and fn
+  are key chips.
 - **N13 Conversation scroller:** Tab (or Shift+Tab from the composer, after
   the feed's own controls) reaches the conversation, which then shows an
   inset focus ring. ↑/↓/PgUp/PgDn/Home scroll it and End jumps to the
