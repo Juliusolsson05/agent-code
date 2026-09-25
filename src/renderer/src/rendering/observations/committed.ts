@@ -121,21 +121,21 @@ function textOf(e: RawCommittedEntry): string | null {
 }
 
 /**
- * The #338 synthetic-Claude-user predicate, centralized. Claude writes
- * local-command scaffolding as NON-meta user rows — `<command-name>`,
- * `<local-command-stdout>`, `<environment_context>` — which rendered as if
- * the user typed them ("we are so often spitting out commands into the user
- * prompts"). The stronger predicate already existed in latestUserPrompts.ts
- * and the prompt folder but feed visibility never adopted it; this collector
- * is now the single home. Claude-only: other providers don't emit
- * angle-bracket scaffolding as user rows, and a codex/opencode user message
- * legitimately starting with '<' (pasted HTML) must not be hidden.
+ * The #338 synthetic-user predicate, centralized. A provider that writes
+ * local-command scaffolding as NON-meta user rows (Claude: `<command-name>`,
+ * `<local-command-stdout>`, `<environment_context>`) rendered it as if the
+ * user typed it. The stronger predicate already existed in
+ * latestUserPrompts.ts and the prompt folder but feed visibility never
+ * adopted it; this collector is now the single home. WHICH providers write
+ * such rows is the provider's own declaration (ledgerPolicy, #1177) — it
+ * was a `provider !== 'claude'` literal here — because for everyone else a
+ * user message starting with '<' (pasted HTML) is real and must not hide.
  */
-function isSyntheticClaudeUserRow(
+function isScaffoldingUserRow(
   e: RawCommittedEntry,
   provider: AgentProviderKind,
 ): boolean {
-  if (provider !== 'claude') return false
+  if (!getRendererProviderCapabilities(provider).ledgerPolicy.angleBracketUserRowsAreScaffolding) return false
   if (e.type !== 'user' || e.message?.role !== 'user') return false
   if (e.permissionMode !== undefined) return false
   const text = textOf(e)
@@ -351,7 +351,7 @@ export function collectCommittedCandidates(
       })
       return
     }
-    if (isSyntheticClaudeUserRow(e, provider)) {
+    if (isScaffoldingUserRow(e, provider)) {
       decisions.push({
         candidateId: id,
         selected: false,

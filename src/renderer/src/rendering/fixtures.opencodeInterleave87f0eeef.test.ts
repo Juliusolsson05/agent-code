@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { collectCommittedCandidates } from '@renderer/rendering/observations/committed'
 import { collectSemanticCandidates } from '@renderer/rendering/observations/semantic'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // FIXTURE: opencode-interleave-87f0eeef — concurrent assistant messages on
@@ -66,6 +67,7 @@ describe('fixture: opencode-interleave-87f0eeef', () => {
     const semantic = collectSemanticCandidates(null, history, 'opencode', 's1')
     return createSessionLedger()({
       provider: 'opencode',
+      policy: getRendererProviderCapabilities('opencode').ledgerPolicy.suppression,
       committed: committed.candidates,
       live: semantic.candidates,
       statics: [],

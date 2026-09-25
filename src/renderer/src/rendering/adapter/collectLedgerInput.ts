@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { collectProviderNotices } from '@renderer/rendering/observations/providerNotices'
 import type { SemanticErrorEntry } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
@@ -457,6 +458,11 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
 
     const input: LedgerInput = {
       provider,
+      // Resolved here, at the one boundary that holds real provider identity,
+      // so the pure model receives the provider's declared policy instead of
+      // looking one up by name (#1177). A stable object per provider, so the
+      // bundle reuse check above stays a reference comparison on provider.
+      policy: getRendererProviderCapabilities(provider).ledgerPolicy.suppression,
       committed: committedCache.committed,
       notices: noticeCache.candidates,
       live,
