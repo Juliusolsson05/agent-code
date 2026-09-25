@@ -1234,6 +1234,18 @@ body,
   outline-offset: 1px;
 }
 
+/* ---------- Native checkboxes and radios take the theme accent ----------
+   ONE rule for every native choice control (UI pass, G-17). The sweep found
+   three looks: `accent-current` (the surrounding TEXT colour, so a muted
+   label drew a grey checkmark), `accent-accent`, and no class at all, which
+   falls back to the browser's own blue and ignores the theme entirely.
+   Native controls keep the platform keyboard and screen-reader behaviour for
+   free; only their colour needed one source. */
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--theme-accent);
+}
+
 /* ---------- Custom scrollbars: thin, quiet ---------- */
 *::-webkit-scrollbar {
   width: 8px;

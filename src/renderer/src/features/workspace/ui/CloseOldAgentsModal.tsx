@@ -558,7 +558,6 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                   type="checkbox"
                   checked={includeLive}
                   onChange={e => setIncludeLive(e.target.checked)}
-                  className="accent-current"
                 />
                 Include agents that are currently running
               </label>
@@ -615,7 +614,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                         disabled={disabled}
                         checked={scopeMode === 'all' || selected}
                         onChange={() => toggleProject(project.tabId)}
-                        className="mt-0.5 accent-current disabled:opacity-50"
+                        className="mt-0.5 disabled:opacity-50"
                       />
                       <span className="min-w-0 flex-1">
                         {/* The Dispatch vocabulary (A · title), so this picker

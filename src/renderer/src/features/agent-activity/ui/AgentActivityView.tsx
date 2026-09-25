@@ -495,7 +495,7 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
         onMouseDown={event => event.preventDefault()}
         onClick={event => event.stopPropagation()}
         onChange={onToggle}
-        className="flex-shrink-0 accent-accent"
+        className="flex-shrink-0"
       />
       <span className={cn('w-4 flex-shrink-0 text-center', row.section === 'working' ? 'text-success' : 'text-muted')}>
         {providerGlyph(row.kind)}

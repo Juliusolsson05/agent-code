@@ -207,7 +207,6 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
                 type="checkbox"
                 checked={removeLanes}
                 onChange={event => setRemoveLanes(event.target.checked)}
-                className="accent-current"
               />
               Also remove their lanes
             </label>
@@ -244,7 +243,7 @@ function CompletedRow({ row, checked, onToggle }: { row: CompletedGoalRow; check
         disabled={row.blocked !== null}
         onChange={() => onToggle(row)}
         aria-label={`Close ${row.title}`}
-        className="mt-0.5 accent-current disabled:opacity-50"
+        className="mt-0.5 disabled:opacity-50"
       />
       <span className="min-w-0 flex-1">
         {/* Escaped like every other bulk-close row: title, goal and note all

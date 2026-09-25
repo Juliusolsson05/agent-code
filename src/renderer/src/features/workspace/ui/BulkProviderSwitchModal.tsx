@@ -748,7 +748,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   type="checkbox"
                   checked={compactOnArrival}
                   onChange={e => setCompactOnArrivalChoice(e.target.checked)}
-                  className="mt-0.5 accent-current"
+                  className="mt-0.5"
                 />
                 <span>
                   Compact on arrival with {targetLabel}
@@ -775,7 +775,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   setSourceConfirmArmed(false)
                   setConfirmedSessionIds(null)
                 }}
-                className="mt-0.5 accent-current disabled:opacity-50"
+                className="mt-0.5 disabled:opacity-50"
               />
               <span className={sourceExhausted ? 'text-muted' : undefined}>
                 Compact on source first (uses {sourceLabel} quota)
@@ -870,7 +870,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                         disabled={disabled}
                         checked={scopeMode === 'all' || selected}
                         onChange={() => toggleProject(project.tabId)}
-                        className="mt-0.5 accent-current disabled:opacity-50"
+                        className="mt-0.5 disabled:opacity-50"
                       />
                       <span className="min-w-0 flex-1">
                         {/* The Dispatch vocabulary (A · title), so this picker

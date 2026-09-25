@@ -699,7 +699,6 @@ function PaletteToggle({
         checked={state.kind === 'editable' ? state.visible : false}
         disabled={suppressed}
         onChange={event => onChange(event.target.checked)}
-        className="accent-accent"
       />
     </label>
   )
