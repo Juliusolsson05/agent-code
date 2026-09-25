@@ -733,6 +733,10 @@ export class ClaudeSession extends EventEmitter {
     return this.headless?.getScreen() ?? ''
   }
 
+  getComposerState(): 'empty' | 'drafted' | 'unpainted' | null {
+    return this.headless?.getComposerState() ?? null
+  }
+
   snapshotScreenAsMarkdown(): string {
     return this.headless?.getScreenMarkdown() ?? ''
   }

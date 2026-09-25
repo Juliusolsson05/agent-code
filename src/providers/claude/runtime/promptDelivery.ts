@@ -453,12 +453,19 @@ async function rollbackWrittenPrompt(
   io: PromptDeliveryIo,
 ): Promise<'cleared' | 'restored' | 'unrecoverable'> {
   const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
-    // Classified WITHOUT cell attributes, which is the fail-closed path: with
-    // no attributes an unrecognised row is reported as 'drafted'. That error
-    // direction is the safe one here — a false 'drafted' aborts and restores,
-    // whereas a false 'empty' would let us report success over a composer still
-    // holding half a prompt.
-    parseClaudeComposerState(io.session.snapshotScreen?.() ?? '', null)
+    // #1291: the session's ATTRIBUTE-AWARE reading first — the same one the
+    // prompt gate trusts. After a kill empties the composer, Claude repaints
+    // placeholder text into it (a prompt suggestion, a hint), and only cell
+    // attributes tell that dim text from typing. The text-only read called it
+    // a draft, so all 64 kills "failed" and the prompt was yanked back and
+    // stranded: 4 of 5 recorded rollbacks ended that way.
+    //
+    // The text-only read stays as the fallback for sessions without the
+    // capability. It fails closed (an unrecognised row is 'drafted'), and that
+    // error direction is the safe one: a false 'drafted' aborts and restores,
+    // whereas a false 'empty' would report success over half a prompt.
+    io.session.getComposerState?.()
+      ?? parseClaudeComposerState(io.session.snapshotScreen?.() ?? '', null)
 
   // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
   //

@@ -592,6 +592,12 @@ export interface AgentSession extends AgentSessionEmitter {
    *  headless instance isn't up yet. */
   snapshotScreen?(): string
 
+  /** Optional (Claude today): the composer's state as classified WITH cell
+   *  attributes, so dim placeholder text (prompt suggestions, hints) reads
+   *  `empty`. The prompt gate uses the same reading; the delivery rollback
+   *  needs it too (#1291). Null when the headless instance isn't up. */
+  getComposerState?(): 'empty' | 'drafted' | 'unpainted' | null
+
   /**
    * Optional (Claude today): arm an authoritative prompt-acceptance waiter
    * BEFORE Enter is written. Claude acknowledges a finished prompt through
