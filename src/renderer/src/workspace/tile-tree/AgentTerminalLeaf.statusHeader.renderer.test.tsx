@@ -183,6 +183,25 @@ describe('AgentTerminalLeaf status header', () => {
     expect(container.querySelector('[data-terminal-transcript-error="true"]')).toBeNull()
   })
 
+  it('warns in terminal view when a finished turn never committed a transcript', () => {
+    // #290 via #1222 review (A): terminal view is where a Claude pane is most
+    // often watched, and it never mounts TileLeaf's readiness text, so the
+    // disconnected marker was invisible here. It is a lifetime state (it lasts
+    // until a committed record arrives), so it earns the pane's banner, unlike
+    // the transient transcriptError diagnostics excluded above.
+    const disconnected = {
+      ...withStatus('idle'),
+      transcriptStatus: 'disconnected' as const,
+      transcriptError: 'Claude finished a turn, but no committed JSONL transcript has arrived. This conversation may not resume.',
+    }
+    const { container, rerender } = render(leaf(disconnected, true))
+    expect(container.querySelector('[data-terminal-transcript-error="true"]')?.textContent)
+      .toContain('may not resume')
+    // The first committed record resets the status to 'ready'; the banner goes.
+    rerender(leaf({ ...disconnected, transcriptStatus: 'ready' as const }, true))
+    expect(container.querySelector('[data-terminal-transcript-error="true"]')).toBeNull()
+  })
+
   it('leaves the header unlit while running when Status Mode is off', () => {
     // Status Mode is a user setting. Terminal view must honor it the same
     // way rendered panes do, rather than lighting unconditionally.

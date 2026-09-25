@@ -1,0 +1,22 @@
+{
+  "source": "debug bundle 2026-06-17T11-50-56-053-a6c70f19 (issue #290)",
+  "note": "Recorded Claude pane that streamed live turns while no committed JSONL ever arrived. state-snapshot at capture: totalEntries 0, lastJsonlEntryAt null, transcriptStatus 'ready'. The provider session id is the proxy's x-claude-code-session-id; no matching root JSONL existed under ~/.claude/projects.",
+  "providerSessionId": "184505cc-570f-4d45-8015-2145e839217c",
+  "turnEvents": [
+    {
+      "type": "turn_started",
+      "turnId": "msg_01ENrwPGCqexzduzJnKcWJ2h",
+      "role": "assistant",
+      "source": "proxy",
+      "confidence": "high",
+      "ts": 1781696730879
+    },
+    {
+      "type": "turn_completed",
+      "turnId": "msg_01ENrwPGCqexzduzJnKcWJ2h",
+      "source": "proxy",
+      "confidence": "high",
+      "ts": 1781696731077
+    }
+  ]
+}
