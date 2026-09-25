@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
+import { KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
+
 import type { EditorFsSearchMatch } from '@shared/types/editorFs'
 import type { EditorFsSearchStopReason } from '@shared/types/editorFs'
 import {
@@ -61,7 +64,6 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [state, setState] = useState<SearchState>(INITIAL_STATE)
-  const [selectedIndex, setSelectedIndex] = useState(0)
   const [openError, setOpenError] = useState<string | null>(null)
   const [openingMatch, setOpeningMatch] = useState<string | null>(null)
   const generationRef = useRef(0)
@@ -123,7 +125,6 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
     // actionable immediately; generation checks alone only protect the final
     // state write, not Enter pressed while the replacement scan is running.
     setState({ ...INITIAL_STATE, searching: true, resultKey })
-    setSelectedIndex(0)
     const timer = window.setTimeout(() => {
       void window.api
         .editorSearchContent({
@@ -151,7 +152,6 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
             stopReason: result.stopReason,
             resultKey,
           })
-          setSelectedIndex(0)
         })
         .catch(err => {
           if (generation !== generationRef.current) return
@@ -195,15 +195,17 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
     [recoverableBuffers],
   )
 
-  useEffect(() => {
-    setSelectedIndex(index => Math.max(0, Math.min(index, displayedMatches.length - 1)))
-  }, [displayedMatches.length])
-
-  useEffect(() => {
-    listRef.current
-      ?.querySelector<HTMLElement>(`[data-content-search-index="${selectedIndex}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [selectedIndex])
+  // The shared list keys (plan K5/S23). The highlight resets to the top when
+  // a search STARTS and again when its results LAND (the two setState calls
+  // that used to reset it by hand), clamps as matches shrink, and scrolls
+  // into view. Home/End stay with the input's caret.
+  const nav = useListNavigation({
+    count: displayedMatches.length,
+    resetKey: `${state.resultKey}\u0000${state.searching}`,
+    onActivate: index => void openMatch(displayedMatches[index]),
+    idPrefix: 'content-search-option',
+  })
+  const selectedIndex = nav.index
 
   // Group by file for display; keep a flat list for keyboard navigation.
   const grouped = useMemo(() => {
@@ -216,7 +218,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
     return [...byFile.entries()]
   }, [displayedMatches])
 
-  const openMatch = async (match: EditorFsSearchMatch | undefined) => {
+  async function openMatch(match: EditorFsSearchMatch | undefined) {
     if (!match || state.searching || openingMatch) return
     const matchKey = `${match.path}:${match.line}:${match.column}`
     setOpeningMatch(matchKey)
@@ -284,7 +286,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="top-[10vh] flex w-[640px] max-w-[92vw] -translate-y-0 flex-col overflow-hidden p-0 font-code">
+      <DialogContent size="md" className="top-[10vh] flex -translate-y-0 flex-col overflow-hidden p-0 font-code">
         <DialogTitle className="sr-only">Search in project files</DialogTitle>
         <DialogDescription className="sr-only">
           Enter text to search, then use the arrow keys and Enter to open a result.
@@ -298,30 +300,11 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
             aria-autocomplete="list"
             aria-expanded="true"
             aria-controls="content-search-results"
-            aria-activedescendant={
-              displayedMatches[selectedIndex]
-                ? `content-search-option-${selectedIndex}`
-                : undefined
-            }
+            aria-activedescendant={displayedMatches[selectedIndex] ? nav.activeId : undefined}
             value={query}
             onChange={event => setQuery(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                onClose()
-              } else if (event.key === 'ArrowDown') {
-                event.preventDefault()
-                if (displayedMatches.length > 0) {
-                  setSelectedIndex(prev => Math.min(prev + 1, displayedMatches.length - 1))
-                }
-              } else if (event.key === 'ArrowUp') {
-                event.preventDefault()
-                setSelectedIndex(prev => Math.max(prev - 1, 0))
-              } else if (event.key === 'Enter') {
-                event.preventDefault()
-                void openMatch(displayedMatches[selectedIndex])
-              }
-            }}
+            // No Escape branch: it duplicated Radix's dismissal (README).
+            onKeyDown={event => { nav.onKeyDown(event) }}
             placeholder="Search in files…"
             className="min-w-0 flex-1 bg-transparent py-2 text-[13px] text-ink outline-none placeholder:text-muted"
           />
@@ -334,7 +317,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
               setCaseSensitive(prev => !prev)
               inputRef.current?.focus()
             }}
-            className={`flex-shrink-0 rounded-control border px-1.5 py-0.5 text-[10px] ${
+            className={`flex-shrink-0 rounded-control border px-1.5 py-0.5 text-[10px] outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
               caseSensitive ? 'border-accent text-ink' : 'border-border text-muted hover:text-ink'
             }`}
           >
@@ -367,7 +350,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                   <span className="truncate">{path}</span>
                   <span className="text-muted">({matches.length})</span>
                   {recoverableBuffersByPath.has(path) && (
-                    <span className="rounded-chip bg-accent-soft px-1 text-[9px] text-ink-dim">
+                    <span className="rounded-chip bg-accent-soft px-1 text-[10px] text-ink-dim">
                       {recoverableBuffersByPath.get(path)?.dirty ? 'unsaved' : 'in memory'}
                     </span>
                   )}
@@ -379,8 +362,8 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                   return (
                     <button
                       key={`${match.path}:${match.line}:${match.column}`}
-                      id={`content-search-option-${index}`}
                       type="button"
+                      {...nav.getItemProps(index)}
                       tabIndex={-1}
                       role="option"
                       aria-selected={selected}
@@ -388,11 +371,8 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                         openingMatch === `${match.path}:${match.line}:${match.column}` || undefined
                       }
                       data-content-search-index={index}
-                      onClick={() => void openMatch(match)}
-                      onMouseDown={event => event.preventDefault()}
-                      onMouseEnter={() => setSelectedIndex(index)}
-                      className={`flex w-full items-center gap-2 py-0.5 pl-9 pr-3 text-left text-[11px] ${
-                        selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'
+                      className={`flex w-full items-center gap-2 border-l-2 py-0.5 pl-9 pr-3 text-left text-[11px] ${
+                        selected ? 'border-l-accent bg-row-selected-bg text-ink' : 'border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                       } ${openingMatch ? 'opacity-60' : ''}`}
                     >
                       <span className="w-8 flex-shrink-0 text-right text-[10px] text-muted">
@@ -436,6 +416,8 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
           )}
           {state.stopReason === 'bytes' && <span>64 MB scan budget reached</span>}
           {state.stopReason === 'deadline' && <span>5 second scan budget reached</span>}
+          {/* The keys were only in an sr-only description (plan H3). */}
+          <KbdLegend className="ml-auto" items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'open' }]} />
         </div>
       </DialogContent>
     </Dialog>

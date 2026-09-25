@@ -427,8 +427,8 @@ entry when it lands.
 | S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | done |
 | S20 | ConversationsPicker | ↑↓ Enter; "esc" label + prose | useListNavigation; legend; T4 input | done |
 | S21 | AgentActivityView | richest keys; legend row; pt-4, 15px title | legend → DialogActions/footer legend; D3; T3/T5 | done (D3 exception kept: Esc clears the filter first) |
-| S22 | QuickOpenOverlay | ↑↓ Enter; sr-only hint; outline-none input | useListNavigation; legend; T4 | todo |
-| S23 | ContentSearchOverlay | ↑↓ Enter; sr-only hint | as S22 | todo |
+| S22 | QuickOpenOverlay | ↑↓ Enter; sr-only hint; outline-none input | useListNavigation; legend; T4 | done |
+| S23 | ContentSearchOverlay | ↑↓ Enter; sr-only hint | as S22 | done |
 | S24 | ConfirmCloseDialog (editor) | autoFocus Save&Close | DialogActions-like 3-button footer with chips; K1 | todo |
 | S25 | ConfirmDeleteDialog (editor) | autoFocus Cancel | DialogActions danger | todo |
 | S26 | KeyboardShortcutsModal | search focus; no arrows; font-mono chips | Kbd chips; ↑↓ over results; Close ⎋ | todo |
@@ -670,6 +670,14 @@ Sharp corners and one light theme.
   in the filter still clears it first (a recorded exception to D3 because
   type-to-filter can put text there by accident) — say if you want one-press
   close here too.
+- **S22/S23 Quick Open (⌘P) / Search in Files (⌘⇧F):** a thin bottom strip
+  now shows `↑ ↓ move  ↩ open  ⎋ close` (Quick Open) / the status line ends
+  with `↑ ↓ move  ↩ open` (Search); the highlighted row uses the row
+  highlight + a 2px accent bar (was accent-soft); ⌃N/⌃P and PgUp/PgDn move;
+  Home/End still move the caret; the Aa match-case toggle shows a focus
+  ring; Quick Open is 520 wide (default), Search 640 (md). The search inputs
+  keep their borderless look with the caret as the focus signal (T4
+  exception, as the palette).
 
 ## Tasks
 
@@ -744,6 +752,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S22/S23: Quick Open + Search in Files on useListNavigation
+  (positional: a new query replaces the ranking; Search resets on search
+  start and on results landing), duplicate input-level Escape handlers
+  removed (Radix owns it), chip legends, T7 rows. Confirm-red: 2/3 Quick
+  Open tests and the Search test fail on the pre-change files (Home/End
+  caret test is a guard).
 - 2026-09-25 S21: Agent Activity keeps its own handler (type-to-filter,
   Tab-from-filter, Space/⌘A/⌫ layered on keydown, session-keyed highlight)
   and gains K5 movement, listbox/combobox focus owners with row ids, the
