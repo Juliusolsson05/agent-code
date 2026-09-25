@@ -60,6 +60,17 @@ type Props = {
 // xterm. This component is a temporary view over an agent session whose normal
 // owner remains the structured feed; toggling back remounts TileLeaf against
 // the same SessionRuntime and provider process.
+/** The one warning a terminal-view pane stands over its terminal: a fault
+ *  that lasts until something real changes. Transient transcriptError
+ *  diagnostics are deliberately NOT here (see the banner's comment). */
+function terminalLifetimeWarning(
+  runtime: Pick<SessionRuntime, 'transcriptChannelError' | 'liveChannelWarning' | 'transcriptStatus' | 'transcriptError'>,
+): string | null {
+  return runtime.transcriptChannelError
+    ?? runtime.liveChannelWarning
+    ?? (runtime.transcriptStatus === 'disconnected' ? runtime.transcriptError : null)
+}
+
 export function AgentTerminalLeaf({
   sessionId,
   paneLabel,
@@ -712,7 +723,11 @@ export function AgentTerminalLeaf({
           another session. Both stay true until something real changes. */}
       {/* liveChannelWarning is the same lifetime class for a live channel
           that never connected while the transcript works (Pi's bridge). */}
-      {(runtime.transcriptChannelError ?? runtime.liveChannelWarning) ? (
+      {/* A 'disconnected' transcript is the same lifetime class (#290): it
+          lasts until a committed record arrives and says this conversation
+          may not resume. Terminal view never mounts TileLeaf's readiness
+          text, so without this line the marker was invisible here. */}
+      {terminalLifetimeWarning(runtime) ? (
         <div
           data-terminal-transcript-error="true"
           role="status"
@@ -721,7 +736,7 @@ export function AgentTerminalLeaf({
             bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
           "
         >
-          {runtime.transcriptChannelError ?? runtime.liveChannelWarning}
+          {terminalLifetimeWarning(runtime)}
         </div>
       ) : null}
 

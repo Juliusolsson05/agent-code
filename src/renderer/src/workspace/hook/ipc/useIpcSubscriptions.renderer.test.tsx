@@ -6,6 +6,7 @@ import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rende
 import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
 import recordedCodexWorktreeWindow from '../../../../../../testing/fixtures/worktree-live-attribution/codex-0151-worktree-window.json'
 import recordedGitWorktrees from '../../../../../../testing/fixtures/worktree-live-attribution/git-worktree-identities.json'
+import recordedDisconnectedClaude from '../../../../../../testing/fixtures/transcript-disconnect/claude-2026-06-17-a6c70f19.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -1663,5 +1664,167 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       })
     })
     expect(runtimes[sessionId]?.limitHit).toEqual({ at: resetTs + 500, source: 'api_error' })
+  })
+
+  describe('a Claude pane whose committed transcript never arrives (#290)', () => {
+    // Recorded: debug bundle 2026-06-17T11-50-56-053-a6c70f19. The pane
+    // streamed live turns while zero JSONL entries arrived, and it sat at
+    // transcriptStatus 'ready' the whole time. The disconnect marker only ran
+    // when the provider id was first seen, where zero entries is normal, and
+    // was built never to fire from 'ready'. So it could not fire at all.
+    const sessionId = 'claude-290' as SessionId
+
+    function mount(meta: Record<string, unknown>) {
+      vi.useFakeTimers()
+      const fake = createFakeSessionFeed()
+      const state = {
+        sessions: { [sessionId]: { cwd: '/repo', kind: 'claude', ...meta } },
+      } as unknown as WorkspaceState
+      let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: emptyRuntime() }
+      Object.defineProperty(window, 'api', { configurable: true, value: { ghostAppend: vi.fn(), gitWorktrees: vi.fn(async () => ({ ok: false })) } })
+      function Harness(): React.JSX.Element {
+        const refs = useRef<WorkspaceRefs | null>(null)
+        if (refs.current === null) refs.current = makeRefs(state)
+        refs.current.latestRuntimesRef.current = runtimes
+        useIpcSubscriptions(
+          fake,
+          refs.current,
+          () => {},
+          updater => {
+            runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+            refs.current!.latestRuntimesRef.current = runtimes
+          },
+          () => {},
+          () => {},
+        )
+        return <div />
+      }
+      const mounted = render(<Harness />)
+      const playRecordedTurn = () => act(() => {
+        for (const event of recordedDisconnectedClaude.turnEvents) fake.emitSemantic({ sessionId, event: event as never })
+      })
+      const playRecordedStartOnly = () => act(() => {
+        fake.emitSemantic({ sessionId, event: recordedDisconnectedClaude.turnEvents[0] as never })
+      })
+      return {
+        fake,
+        state,
+        runtime: () => runtimes[sessionId]!,
+        setRuntime: (next: SessionRuntime) => { runtimes = { ...runtimes, [sessionId]: next } },
+        playRecordedTurn,
+        playRecordedStartOnly,
+        unmount: mounted.unmount,
+      }
+    }
+
+    const provisional = {
+      providerSessionId: recordedDisconnectedClaude.providerSessionId,
+      providerSessionIdSource: 'proxy-header',
+    }
+
+    it('says so once a finished turn has had time to commit and nothing has', () => {
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      // Inside the grace period Claude may still be flushing: no alarm yet.
+      act(() => { vi.advanceTimersByTime(14_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(pane.runtime().transcriptStatus).toBe('disconnected')
+      expect(pane.runtime().transcriptError).toContain(recordedDisconnectedClaude.providerSessionId)
+    })
+
+    it('stays quiet when the transcript lands within the grace period', () => {
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      act(() => {
+        pane.fake.emitJsonlEntries({
+          sessionId,
+          entries: [{ entry: { type: 'user', uuid: 'u1', message: { role: 'user', content: 'hi' } } as never, file: '/p/x.jsonl' }],
+        })
+      })
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('keeps the first turn\'s deadline when more turns complete inside the grace', () => {
+      // One pending check per session (#1222 review): a busy pane completing
+      // a turn every few seconds must not push the verdict back forever, and
+      // must not stack a timer per turn.
+      const pane = mount(provisional)
+      const setTimeoutSpy = vi.spyOn(window, 'setTimeout')
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(10_000) })
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(5_000) })
+      expect(pane.runtime().transcriptStatus).toBe('disconnected')
+      // Only the commit checks use the 15 s grace; the hook's other timers do not.
+      expect(setTimeoutSpy.mock.calls.filter(call => call[1] === 15_000)).toHaveLength(1)
+    })
+
+    it('cancels a pending check when the subscriptions unmount', () => {
+      // A torn-down window must not keep a timer that later writes into
+      // state it no longer owns (#1222 review).
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      pane.unmount()
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('does not judge a turn that is still running', () => {
+      // #1222 review (Pi F1): the premise is "a healthy pane has entries by
+      // the END of a turn". A long first turn can run past 15 s before the
+      // tail watcher delivers the user row, so starting the clock at
+      // turn_started would alarm mid-turn on a pane that commits normally.
+      const pane = mount(provisional)
+      pane.playRecordedStartOnly()
+      act(() => { vi.advanceTimersByTime(60_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('clears the warning when the transcript finally arrives', () => {
+      // #1222 review (Pi F4): the design leans on the record handler resetting
+      // the status, so a slow transcript clears the banner instead of leaving
+      // it stuck. Pin that here, against the real hook.
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('disconnected')
+      act(() => {
+        pane.fake.emitJsonlEntries({
+          sessionId,
+          entries: [{ entry: { type: 'user', uuid: 'late-1', message: { role: 'user', content: 'hi' } } as never, file: '/p/x.jsonl' }],
+        })
+      })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('does not warn the pane a provider switch put in its place', () => {
+      // #1222 review (Pi F2): a switch keeps the session id and resets the
+      // runtime. A Claude turn's pending check must not land a Claude-worded
+      // warning on the Codex pane that replaced it.
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      ;(pane.state.sessions as Record<string, { kind?: string }>)[sessionId]!.kind = 'codex'
+      pane.setRuntime(emptyRuntime())
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('leaves other providers alone', () => {
+      // The provisional proxy-header identity is a Claude mechanism; other
+      // providers commit on their own schedules and have their own faults.
+      const pane = mount({ ...provisional, kind: 'codex' })
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('never marks a pane whose transcript identity is durable', () => {
+      const pane = mount({ providerSessionId: recordedDisconnectedClaude.providerSessionId })
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
   })
 })
