@@ -135,7 +135,7 @@ export function WorkflowAgentDetails({
             </div>
           </div>
         ) : (
-          <div className="text-[11px] italic text-muted">
+          <div role="status" className="text-[11px] text-muted">
             {agent.status === 'running' || agent.status === 'queued'
               ? 'Waiting for provider activity…'
               : 'No activity was recorded.'}

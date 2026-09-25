@@ -52,8 +52,8 @@ export function PocketLoadFailure({ pocketId, sessionId, getWorkspace }: {
           // when this destination failed before commit. Retry the attempted
           // URL through the host's existing native navigation path instead.
           requestPocket(pocketId, { type: 'navigate', url: failure.url })
-        }}>Reload page</Button>
-        {owner && <Button type="button" variant="outline" size="sm" onClick={viewAgent}>View agent</Button>}
+        }}>Reload Page</Button>
+        {owner && <Button type="button" variant="outline" size="sm" onClick={viewAgent}>View Agent</Button>}
       </div>
     </div>
   </div>

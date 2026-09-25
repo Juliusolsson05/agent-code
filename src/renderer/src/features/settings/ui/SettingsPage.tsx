@@ -298,7 +298,7 @@ export function ThemeEditorModal({
         <div className="flex items-center gap-3 border-b border-border px-4 py-3">
           <label
             htmlFor="theme-name"
-            className="text-[11px] uppercase tracking-wider text-muted"
+            className="text-[10px] uppercase tracking-wider text-muted"
           >
             Name
           </label>

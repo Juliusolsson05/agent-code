@@ -29,7 +29,7 @@ export function TrustDialogModal({ state, onAccept, onDecline }: Props) {
   const decline = () => { void onDecline() }
 
   // The app's dialog grammar (UI pass): DialogHeader, a px-4 body, and the
-  // shared DialogActions footer with sentence-case labels and key chips.
+  // shared DialogActions footer with Title Case labels (the ask-2 ruling) and key chips.
   // It was a hand-laid card with an 18px "!" glyph, 14px title, pl-6 body
   // indent and lowercase "cancel" / "trust this folder", unlike any other
   // dialog. The focus choice is unchanged: the TRUST button, as since #705.

@@ -256,7 +256,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
           ) : (
             grouped.map(group => (
               <div key={group.category} className="flex flex-col gap-0.5">
-                <div className="text-[10px] uppercase tracking-wider text-ink-dim">
+                <div className="text-[10px] uppercase tracking-wider text-muted">
                   {CATEGORY_LABELS[group.category]}
                 </div>
                 {group.rows.map(row => (

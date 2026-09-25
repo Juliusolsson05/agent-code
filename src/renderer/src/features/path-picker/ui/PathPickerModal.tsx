@@ -1,4 +1,5 @@
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -547,9 +548,8 @@ function ResumeSection({
       </div>
 
       {sessions.length === 0 && !loading ? (
-        <div className="text-[11px] text-muted italic py-2">
-          no previous sessions recorded in this directory
-        </div>
+        // The shared empty state (G-14): it was italic, lowercase, no period.
+        <EmptyState size="inline" className="px-0">No previous sessions recorded in this folder.</EmptyState>
       ) : (
         <div
           className={`flex-1 min-h-0 overflow-auto -mx-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring ${disabled ? 'pointer-events-none opacity-50' : ''}`}

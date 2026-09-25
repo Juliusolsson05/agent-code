@@ -383,7 +383,8 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
               <section key={section} role="group" aria-label={SECTION_TITLES[section]} className="mb-4">
                 <div className="sticky top-0 z-10 flex items-center justify-between bg-surface py-1.5">
                   <h3 className={cn(
-                    'text-[11px] font-medium uppercase tracking-wider',
+                    // The canonical section label (10px, tracking-wider, no weight: G-15).
+                    'text-[10px] uppercase tracking-wider',
                     section === 'needs-you' && sectionRows.length > 0 ? 'text-warning' : 'text-muted',
                   )}>
                     {SECTION_TITLES[section]} <span className="tabular-nums">{sectionRows.length}</span>

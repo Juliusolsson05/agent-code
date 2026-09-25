@@ -75,7 +75,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
                 key={mode.id}
                 value={mode.id}
                 onSelect={keepOpen}
-                className="justify-center border border-border px-3 py-1.5 text-[11px] uppercase tracking-wider data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]: data-[state=checked]:text-accent-fg data-[highlighted]:border-border-hi"
+                className="justify-center border border-border px-3 py-1.5 text-[11px] uppercase tracking-wider data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]:text-accent-fg data-[highlighted]:border-border-hi"
               >
                 {mode.label}
               </DropdownMenuRadioItem>

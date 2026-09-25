@@ -500,7 +500,7 @@ export function CommandKeybindingsRow() {
             `bg-canvas`, the page colour the rows sit on: it was `bg-bg`, an
             UNDEFINED token, so the "sticky" header was transparent and rows
             scrolled visibly through it (UI pass, G-4). */}
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border/40 bg-canvas px-2 pb-1 text-[10px] uppercase tracking-wider text-ink-dim">
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border/40 bg-canvas px-2 pb-1 text-[10px] uppercase tracking-wider text-muted">
           <span className="min-w-0 flex-1">Command</span>
           <span className="shrink-0">Shortcut</span>
           <span
@@ -513,7 +513,7 @@ export function CommandKeybindingsRow() {
 
         {grouped.map(group => (
           <div key={group.category} className="flex flex-col gap-0.5">
-            <div className="text-[10px] uppercase tracking-wider text-ink-dim">
+            <div className="text-[10px] uppercase tracking-wider text-muted">
               {CATEGORY_LABELS[group.category]}
             </div>
             {/* Why some Palette boxes are locked, as visible text (K2-17). The

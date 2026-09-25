@@ -29,7 +29,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
   const title = state.title ?? 'Claude is requesting permission'
 
   // The app's dialog grammar (UI pass), like TrustDialogModal: header, px-4
-  // body, shared footer with sentence-case labels ("deny" / "approve" were
+  // body, shared footer with Title Case labels ("deny" / "approve" were
   // lowercase) and key chips. Approve keeps initial focus, as before.
   return (
     <Dialog

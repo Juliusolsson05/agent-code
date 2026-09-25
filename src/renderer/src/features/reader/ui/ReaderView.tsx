@@ -10,6 +10,7 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { Button } from '@renderer/components/ui/button'
 import { Kbd } from '@renderer/components/ui/kbd'
 import { eventMatchesKeybinding } from '@shared/keybindings'
 import { DEFAULT_PROVIDER, isAgentProviderKind, isAgentSessionKind } from '@shared/types/providerKind'
@@ -475,36 +476,38 @@ function ReaderHeader({
           Reader
         </span>
         <div className="flex items-center gap-1">
-          <button
+          {/* Plain actions, so the shared outline Button (review C10 on
+              PR #1221). They were a hand-rolled bordered style whose hover
+              only moved the border, beside `Button outline` everywhere else.
+              xs height with the strip's 11px text keeps them level with the
+              session pills to the right, which stay bespoke because they are
+              toggles (G-9's exception list). */}
+          <Button
             type="button"
+            variant="outline"
+            size="xs"
+            className="gap-1.5 text-[11px]"
             onClick={onSelectOlder}
             disabled={!canSelectOlder}
-            className={`inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-[11px] font-code border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-              canSelectOlder
-                ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
-                : 'bg-canvas text-muted border-border opacity-50 cursor-default'
-            }`}
             aria-label="Show older assistant message"
             aria-keyshortcuts="Alt+ArrowUp"
           >
             Older
             <Kbd binding={READER_OLDER_KEY} />
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="xs"
+            className="gap-1.5 text-[11px]"
             onClick={onSelectNewer}
             disabled={!canSelectNewer}
-            className={`inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-[11px] font-code border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-              canSelectNewer
-                ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
-                : 'bg-canvas text-muted border-border opacity-50 cursor-default'
-            }`}
             aria-label="Show newer assistant message"
             aria-keyshortcuts="Alt+ArrowDown"
           >
             Newer
             <Kbd binding={READER_NEWER_KEY} />
-          </button>
+          </Button>
           <span className="px-2 text-[10px] font-code uppercase tracking-wider text-muted select-none">
             {position}
           </span>
