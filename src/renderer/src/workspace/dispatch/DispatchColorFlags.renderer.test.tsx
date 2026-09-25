@@ -72,6 +72,33 @@ afterEach(() => {
   appState.setDispatchColorFlag.mockClear()
 })
 
+// Plan N2 — kept beside the other rendered-row tests because they share the
+// mocked store and fixtures: ↑/↓ walk FOCUS between session rows (Enter still
+// selects; ⌥↑↓ still moves the selection), and the lane's agent is announced.
+describe('Dispatch sessions list keyboard', () => {
+  it('moves focus between session rows with ↑/↓ and marks the lane agent aria-current', () => {
+    const focusSessionInTab = vi.fn()
+    render(
+      <DispatchAgentList
+        groups={[group()]}
+        pinnedRows={[]}
+        activeSessionId={FLAGGED_SESSION_ID}
+        focusSessionInTab={focusSessionInTab}
+        showWorktreeBadges={false}
+      />,
+    )
+    const rowsEls = [...document.querySelectorAll<HTMLElement>('[data-dispatch-session-row="true"]')]
+    expect(rowsEls).toHaveLength(2)
+    expect(rowsEls[0]).toHaveAttribute('aria-current', 'true')
+    rowsEls[0]!.focus()
+    fireEvent.keyDown(rowsEls[0]!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rowsEls[1])
+    expect(focusSessionInTab).not.toHaveBeenCalled() // focus moved, selection did not
+    fireEvent.keyDown(rowsEls[1]!, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(rowsEls[0])
+  })
+})
+
 describe('Dispatch color-flag layout', () => {
   it('gives every rich Dispatch row a real trailing column and fills only the flagged one', () => {
     setColorFlags({ [FLAGGED_SESSION_ID]: 'red' })

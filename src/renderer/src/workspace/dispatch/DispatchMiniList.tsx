@@ -82,7 +82,10 @@ export const DispatchMiniList = memo(function DispatchMiniList({
               ? `Show ${item.hidden} more orchestrated agents`
               : 'Show fewer orchestrated agents'}
             data-dispatch-row="true"
-            className="flex w-full items-center justify-center border-t border-border py-1 text-[10px] font-semibold text-muted hover:text-fg hover:ring-1 hover:ring-inset hover:ring-accent/40"
+            // `text-fg` was an undefined token (plan X5); the hover ring is
+            // mirrored on keyboard focus (plan N3), which had no indicator
+            // beyond the global outline clipped by the strip's overflow.
+            className="flex w-full items-center justify-center border-t border-border py-1 text-[10px] font-semibold text-muted outline-none hover:text-ink hover:ring-1 hover:ring-inset hover:ring-accent/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
             {item.kind === 'more' ? `+${item.hidden}` : '−'}
           </button>
@@ -134,6 +137,8 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
       onClick={onClick}
       title={`${row.label} · ${title}`}
       data-dispatch-mini-active={active ? 'true' : undefined}
+      // The lane's agent, announced (plan N3) — shown by colour only before.
+      aria-current={active ? 'true' : undefined}
       // WHY tiled Dispatch carries the same marker as the full index row: a
       // mini-chip click also lands DOM focus on this <button>, so without it
       // the bare-Enter composer router (composerEnterRegistry) would bail on
@@ -143,8 +148,9 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
       data-dispatch-row="true"
       className={`
         flex w-full items-stretch border-t border-border
-        text-[10px] font-semibold tabular-nums
+        text-[10px] font-semibold tabular-nums outline-none
         hover:ring-1 hover:ring-inset hover:ring-accent/40
+        focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring
         ${chipClasses}
       `}
     >

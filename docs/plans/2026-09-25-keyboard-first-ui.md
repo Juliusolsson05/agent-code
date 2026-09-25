@@ -474,8 +474,8 @@ entry when it lands.
 | # | Surface | Keys today | Fix | Status |
 |---|---|---|---|---|
 | N1 | TabBar (`workspace/tile-tree/TabBar.tsx`) | tab is `div onClick`, no role/tabIndex (L78); close ✕ hover-only, no aria-label | `tablist`/`tab` roving tabindex like EditorTabs (←→ Home End, Delete closes); ✕ revealed on focus-within + aria-label; title chord live (F6) | done |
-| N2 | DispatchAgentList (sessions sidebar) | rows are buttons in Tab order; no arrows in list; no `aria-current`; cap toggle/project button no focus style | ↑↓ within the focused list (moves selection like ⌥↑↓), `aria-current` on active row, T4 on header controls | todo |
-| N3 | DispatchMiniList | buttons, hover ring only | T4 focus ring; `aria-current` | todo |
+| N2 | DispatchAgentList (sessions sidebar) | rows are buttons in Tab order; no arrows in list; no `aria-current`; cap toggle/project button no focus style | ↑↓ within the focused list (moves selection like ⌥↑↓), `aria-current` on active row, T4 on header controls | done (↑↓ move focus, not selection — see ruling) |
+| N3 | DispatchMiniList | buttons, hover ring only | T4 focus ring; `aria-current` | done |
 | N4 | TiledDispatch SplitHandles ×3 (L214/347/567) | mouse only, not focusable | `onKeyboardDelta` + `label` like GlobalEditorShell L1213 | todo |
 | N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | todo |
 | N6 | Reader strip | no aria-pressed | aria-current | todo |
@@ -513,7 +513,7 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 | X2 | `font-mono` → `font-code` sweep (T6) | todo |
 | X3 | `focus:border-accent` / `outline-none` sweep (T4) | todo |
 | X4 | Stale comments (`defaults.ts` dictation) | done |
-| X5 | Undefined theme tokens (`text-fg`, `bg-surface-raised`) outside the S-rows — found in S10/S11 | todo |
+| X5 | Undefined theme tokens (`text-fg`, `bg-surface-raised`) outside the S-rows — found in S10/S11 | done (N2/N3) |
 
 ## Owner visual checklist
 
@@ -778,6 +778,12 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **N2/N3 Dispatch sessions list + lane mini strip:** with a session row
+  focused, ↑/↓ move the focus ring to the next/previous row (Enter still
+  picks it; ⌥↑/⌥↓ still move the lane's selection); the header's cap toggle
+  and project button, the "N more" rows and the mini-strip chips show a
+  focus ring and a working hover (the `text-fg`/`bg-surface-raised` tokens
+  did not exist).
 - **N1 Window tab strip:** Tab lands on the active tab (inset focus ring);
   ←/→ switch tabs, Home/End jump, Delete closes the focused tab; the ×
   appears on keyboard focus as well as hover; the "+" shows a focus ring;
@@ -897,6 +903,16 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 N2/N3: sessions list — ↑↓ move FOCUS between session rows
+  (ruling: not the selection, which ⌥↑↓ already owns, and a focus walk keeps
+  the #236 Enter-to-composer routing untouched), aria-current on the lane's
+  agent, undefined tokens replaced (closes X5), focus rings on header
+  controls and mini-strip chips. Confirm-red: the new test fails on the
+  pre-change file. Also: GlobalToast's always-mounted live region added a
+  second `status` role, which broke 3 BrowserPocketHost tests using an
+  unscoped getByRole('status') — the region is tagged data-global-toast and
+  those tests select the pocket's own status (full renderer suite under
+  Node 24: 1694/1697 before the fix, all green after).
 - 2026-09-25 N1: TabBar → tablist (roving, automatic activation, wrap —
   tabs are a cycle), Delete closes, × on focus-within + named + out of the
   Tab order, live close chord in its tooltip. Confirm-red: both tests fail

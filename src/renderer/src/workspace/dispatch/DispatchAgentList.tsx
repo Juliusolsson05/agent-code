@@ -207,7 +207,8 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   ? 'Cap orchestrated agents'
                   : 'Show all orchestrated agents'
               }
-              className="px-1 leading-none text-[11px] text-muted hover:text-fg"
+              // `text-fg` was an undefined token (plan X5): hover did nothing.
+              className="rounded-control px-1 leading-none text-[11px] text-muted outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
             >
               {gridRow?.capChildren === false ? '⊟' : '⊞'}
             </button>
@@ -224,7 +225,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
               onClick={onPickRowProject}
               data-dispatch-row="true"
               title={rowProjectTitle}
-              className="max-w-[9rem] truncate uppercase hover:text-fg"
+              className="rounded-control max-w-[9rem] truncate uppercase outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
             >
               {rowProjectLabel ?? 'Any project'}
             </button>
@@ -361,7 +362,7 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
       type="button"
       onClick={onToggle}
       data-dispatch-row="true"
-      className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
+      className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted outline-none hover:text-ink hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
     >
       {label}
       {hidesNew && (
@@ -540,6 +541,23 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     openMenu()
   }, [openMenu])
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    // ↑/↓ on a FOCUSED row move focus to the neighbouring row (plan N2) —
+    // focus only, like walking a menu: Enter still selects, and ⌥↑/⌥↓ (the
+    // lane grammar) still move the SELECTION without touching focus. Rows that
+    // refuse selection (shown in another lane) are skipped, as Tab skips
+    // them. Before, the only way down the list from the keyboard was Tab
+    // through every row AND every header control between groups.
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      const list = event.currentTarget.closest('aside')
+      if (!list) return
+      const rows = [...list.querySelectorAll<HTMLButtonElement>('[data-dispatch-session-row="true"]:not([aria-disabled="true"])')]
+      const index = rows.indexOf(event.currentTarget)
+      const next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]
+      if (!next) return
+      event.preventDefault()
+      next.focus()
+      return
+    }
     // The platform keys for "this item's menu", as in the file explorer
     // (editor.context-menu). Anchored to the row, not the pointer: the mouse
     // may be resting anywhere while the user is on the keyboard.
@@ -581,6 +599,10 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // (which need focus) stay limited to rows you can select, as before.
       tabIndex={disabled ? -1 : undefined}
       data-menu-open={menuOpen ? 'true' : undefined}
+      data-dispatch-session-row="true"
+      // The agent this row's lane is showing, announced (plan N2) — it was
+      // shown by colour only.
+      aria-current={active ? 'true' : undefined}
       title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this

@@ -143,7 +143,7 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
           and dismissable with Enter/Space, where it was a click-only div.
           text-accent-fg, not text-white: the accent's own foreground token,
           which is what keeps it readable on light themes and custom accents. */}
-      <div role="status" aria-live="polite" className="fixed top-3 right-3 z-[1200]">
+      <div role="status" aria-live="polite" data-global-toast="" className="fixed top-3 right-3 z-[1200]">
         {toast && (
           <button
             type="button"
