@@ -162,7 +162,7 @@ describe('Goal MCP', () => {
   it('writes only the authenticated agent’s goal, kept apart from its TLDR and TLDR history', async () => {
     const { client, tldr, goal, directory } = await goalSetup(['tldr', 'goal'])
     const tools = (await client.listTools()).tools
-    expect(tools.map(tool => tool.name).sort()).toEqual(['goal_set', 'tldr_update'])
+    expect(tools.map(tool => tool.name).sort()).toEqual(['goal_complete', 'goal_set', 'tldr_update'])
     expect(tools.find(tool => tool.name === 'goal_set')!.inputSchema.properties).toEqual({ text: expect.any(Object) })
     await client.callTool({ name: 'goal_set', arguments: { text: 'Make reloads lossless.', identity: 'victim' } })
     await client.callTool({ name: 'tldr_update', arguments: { text: 'Reading the reload path.' } })
@@ -189,7 +189,7 @@ describe('Goal MCP', () => {
 
   it('offers and teaches only the capabilities the scope carries', async () => {
     const goalOnly = await goalSetup(['goal'])
-    expect((await goalOnly.client.listTools()).tools.map(tool => tool.name)).toEqual(['goal_set'])
+    expect((await goalOnly.client.listTools()).tools.map(tool => tool.name).sort()).toEqual(['goal_complete', 'goal_set'])
     expect(goalOnly.client.getInstructions()).toContain(GOAL_INSTRUCTIONS)
     expect(goalOnly.client.getInstructions()).not.toContain(TLDR_INSTRUCTIONS)
 
@@ -200,5 +200,68 @@ describe('Goal MCP', () => {
     expect((await tldrOnly.client.callTool({ name: 'goal_set', arguments: { text: 'Must not be saved.' } })).isError).toBe(true)
     expect(tldrOnly.client.getInstructions()).not.toContain(GOAL_INSTRUCTIONS)
     expect(await tldrOnly.goal.read(['agent-1'])).toEqual({})
+  })
+
+  // #1182. The user closes agents from this record, so the contract under test
+  // is: completion needs a goal, sticks to that goal across a restart, and is
+  // cleared only by the agent setting a NEW goal.
+  it('completes the caller’s own goal, keeps it across a restart, and clears it on the next goal_set', async () => {
+    const { client, goal, directory } = await goalSetup(['goal'])
+    const early = await client.callTool({ name: 'goal_complete', arguments: { summary: 'Nothing to complete yet.' } })
+    expect(early.isError).toBe(true)
+    expect(JSON.stringify(early.content)).toContain('Set a goal with goal_set before completing it.')
+    expect(await goal.read(['agent-1'])).toEqual({})
+
+    await client.callTool({ name: 'goal_set', arguments: { text: 'Ship goal completion.' } })
+    const done = await client.callTool({ name: 'goal_complete', arguments: { summary: 'PR merged into main.', identity: 'victim' } })
+    expect(done.isError).toBeFalsy()
+    const completed = (await goal.read(['agent-1', 'victim']))
+    // The goal text and its "set" time are untouched; only the completion pair
+    // and the revision move, and nothing leaked to a model-supplied identity.
+    expect(completed).toEqual({ 'agent-1': {
+      text: 'Ship goal completion.', updatedAt: expect.any(String), revision: 2,
+      completedAt: expect.any(String), completionNote: 'PR merged into main.',
+    } })
+
+    // A second process reading the same files: the pair is durable.
+    const reopened = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    expect((await reopened.read(['agent-1']))['agent-1']).toMatchObject({ completionNote: 'PR merged into main.', revision: 2 })
+    expect((await reopened.history('agent-1')).map(entry => [entry.text, entry.completed ?? false])).toEqual([
+      ['PR merged into main.', true],
+      ['Ship goal completion.', false],
+    ])
+
+    // Re-setting the SAME goal after completing it reopens the work: the
+    // completion is gone and the history records the transition.
+    await client.callTool({ name: 'goal_set', arguments: { text: 'Ship goal completion.' } })
+    const reset = (await goal.read(['agent-1']))['agent-1']!
+    expect(reset).toMatchObject({ text: 'Ship goal completion.', revision: 3 })
+    expect(reset).not.toHaveProperty('completedAt')
+    expect(reset).not.toHaveProperty('completionNote')
+    expect((await goal.history('agent-1')).map(entry => entry.completed ?? false)).toEqual([false, true, false])
+  })
+
+  it('refuses a revoked caller’s completion after the store I/O', async () => {
+    const { client, goal, revoke } = await goalSetup(['goal'])
+    await client.callTool({ name: 'goal_set', arguments: { text: 'Ship Goal.' } })
+    revoke()
+    const stale = await client.callTool({ name: 'goal_complete', arguments: { summary: 'Done.' } })
+    expect(stale.isError).toBe(true)
+    expect(JSON.stringify(stale.content)).toContain('This Goal session is no longer active.')
+    expect((await goal.read(['agent-1']))['agent-1']).not.toHaveProperty('completedAt')
+  })
+
+  it('loads pre-completion records unchanged and preserves a half-written completion instead of guessing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-'))
+    directories.push(directory)
+    const file = join(directory, 'goal.json')
+    const legacy = { version: 1, records: { 'agent-1': { text: 'Old goal.', updatedAt: '2026-09-01T00:00:00.000Z', revision: 4 } } }
+    await writeFile(file, JSON.stringify(legacy))
+    expect(await new TldrStore(file).read(['agent-1'])).toEqual(legacy.records)
+
+    const broken = JSON.stringify({ version: 1, records: { 'agent-1': { ...legacy.records['agent-1'], completedAt: '2026-09-02T00:00:00.000Z' } } })
+    await writeFile(file, broken)
+    await expect(new TldrStore(file).read(['agent-1'])).rejects.toThrow('storage is invalid')
+    expect(await readFile(file, 'utf8')).toBe(broken)
   })
 })

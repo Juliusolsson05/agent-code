@@ -124,6 +124,34 @@ export function createBuiltInMcpServer(
         return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal update failed.' }), isError: true }
       }
     })
+
+    // #1182. Registered with `goal` rather than as its own domain: it only
+    // records a flag on the caller's own goal, and the user's bulk close still
+    // asks before anything closes, so a separate toggle would add a setting
+    // without adding safety. Same authority model as goal_set.
+    //
+    // The description carries the WHEN rule as well as the instructions do,
+    // for the same reason the close tool repeats its authorization rule:
+    // clients differ in how prominently they surface server instructions, and
+    // an early completion is exactly what would put a still-needed agent in
+    // the user's close list.
+    server.registerTool('goal_complete', {
+      title: 'Complete goal',
+      description: 'Mark your goal as achieved, with one plain sentence saying what was delivered. Call it only after the user has accepted the result (for example the PR is merged or the user said it is done) — never while a PR, review, CI or any requested work is still open. Setting a new goal with goal_set clears it.',
+      inputSchema: { summary: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ summary }) => {
+      try {
+        if (!dependencies.goalStore) throw new Error('Goal is unavailable.')
+        const record = await dependencies.goalStore.complete(
+          scope.tldrIdentity ?? scope.sessionId, summary,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal completion failed.' }), isError: true }
+      }
+    })
   }
 
   if (scope.domains.includes('goal_loop')) {
