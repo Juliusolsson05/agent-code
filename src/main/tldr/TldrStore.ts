@@ -116,6 +116,16 @@ export class TldrStore extends EventEmitter {
     })
   }
 
+  /** When this identity's current record was marked complete (#1182), for the
+   * prompt-time nudge that asks a completed agent given more work to set a new
+   * goal. Undefined for an incomplete or missing record. */
+  completedAt(identity: string): Promise<string | undefined> {
+    return this.serialize(async () => {
+      if (!validTldrIdentity(identity)) throw new Error('Invalid TLDR identity.')
+      return (await this.load())[identity]?.completedAt
+    })
+  }
+
   /** Newest first. An unreadable history file reports failure instead of
    * pretending the agent never reported, which would read as a missed update. */
   history(identity: string): Promise<TldrHistoryEntry[]> {
@@ -158,9 +168,10 @@ export class TldrStore extends EventEmitter {
     const previous = existed ? await this.readHistory(identity).catch(() => []) : []
     // An agent re-posting an unchanged status is not a new moment in the task;
     // keeping it would bury real transitions under identical rows. The KIND
-    // matters too (#1182): re-setting the goal it had just completed, with the
-    // same words, is a real transition (the work reopened) even though the
-    // text matches a row further back.
+    // matters too (#1182), for the one case where a completion row and a goal
+    // row carry identical text: an agent completing with its goal's own words
+    // as the note, or setting a goal worded exactly like the note it just
+    // completed with. Comparing text alone would swallow that transition.
     if (previous[0]?.text === entry.text && Boolean(previous[0]?.completed) === Boolean(entry.completed)) return
     const entries = [entry, ...previous].slice(0, TLDR_HISTORY_LIMIT)
     await mkdir(this.historyDirectory, { recursive: true })

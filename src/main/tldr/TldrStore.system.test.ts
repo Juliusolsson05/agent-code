@@ -264,4 +264,49 @@ describe('Goal MCP', () => {
     await expect(new TldrStore(file).read(['agent-1'])).rejects.toThrow('storage is invalid')
     expect(await readFile(file, 'utf8')).toBe(broken)
   })
+
+  // Review of #1182: behaviours only a direct store test can pin.
+  it('stores the note normalized, leaves the goal’s set time alone, and announces the completion', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-'))
+    directories.push(directory)
+    const file = join(directory, 'goal.json')
+    const goal = new TldrStore(file, undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    const set = await goal.update('agent-1', 'Ship it.', () => true)
+    const events: unknown[] = []
+    goal.on('changed', update => events.push(update))
+
+    // An unnormalized note would fail validCompletion on the NEXT load and make
+    // the whole goal file unreadable for every agent.
+    const done = await goal.complete('agent-1', '  PR   merged.\n', () => true)
+    expect(done).toMatchObject({ completionNote: 'PR merged.', updatedAt: set.updatedAt, revision: 2 })
+    expect(await new TldrStore(file).read(['agent-1'])).toEqual({ 'agent-1': done })
+    // Every live reader (peek, close menu, history, phone) depends on this event.
+    expect(events).toEqual([{ identity: 'agent-1', record: done }])
+    expect(await goal.completedAt('agent-1')).toBe(done.completedAt)
+  })
+
+  it('records a completion whose note repeats the goal’s words as its own history row', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-'))
+    directories.push(directory)
+    const goal = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    await goal.update('agent-1', 'Ship it.', () => true)
+    await goal.complete('agent-1', 'Ship it.', () => true)
+    await goal.update('agent-1', 'Ship it.', () => true)
+    expect((await goal.history('agent-1')).map(entry => entry.completed ?? false)).toEqual([false, true, false])
+  })
+
+  it('treats a malformed completion marker in history as damage', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-'))
+    directories.push(directory)
+    const goal = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    await goal.update('agent-1', 'Ship it.', () => true)
+    const historyDirectory = join(directory, 'goal-history')
+    const [name] = await readdir(historyDirectory)
+    const path = join(historyDirectory, name!)
+    const document = JSON.parse(await readFile(path, 'utf8'))
+    document.entries[0].completed = 'yes'
+    await writeFile(path, JSON.stringify(document))
+    await expect(goal.history('agent-1')).rejects.toThrow('history is invalid')
+  })
 })
+
