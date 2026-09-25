@@ -17,6 +17,7 @@ import {
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
+  GHOST_ORPHAN_TTL_MS,
   ghostsToPersist,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
@@ -99,44 +100,78 @@ function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
  * Non-fatal on purpose: a missing or unreadable log only loses provisional
  * rows, never the committed history this loader exists to load.
  *
- * WHY each restored ghost is re-dated to its own `createdAt`, orphaned
- * (#1227 review): what a ghost PAINTS is decided by render rule 4, "an orphan
- * newer than the committed tail". Its logged `updatedAt` is not when its turn
- * happened. For an orphaned ghost it is the renderer clock when it gave up
- * (last delta + 30 s TTL), which lands after the turn's own final commit on
- * any agent that then went idle. For a ghost the log never saw orphaned (the
- * app reloaded inside the TTL) the first sweep after this restore orphans it
- * at restore time, the newest thing in the pane. Both painted committed turns
- * a second time at the bottom of real restored feeds: every Codex text ghost
- * (its response-id turnId never matches the rollout, so reconcile cannot
- * supersede it) and Claude tool calls committed above the loaded window.
+ * WHY each restored ghost is re-dated to its LAST CONTENT UPDATE, orphaned
+ * (#1227 review + steering note q6): what a ghost PAINTS is decided by render
+ * rule 4, "an orphan newer than the committed tail", and the `updatedAt` in
+ * its final log record is not when its content last changed:
+ *   - an orphaned record carries the renderer clock when it GAVE UP (last
+ *     update + the 30 s TTL), which lands after the turn's own commit on any
+ *     agent that then went idle;
+ *   - a record the log never saw orphaned (the app reloaded inside the TTL)
+ *     is orphaned by the first sweep after this restore, at restore time.
+ * Both painted committed turns a second time at the bottom of real restored
+ * feeds.
  *
- * `createdAt` is when the proxy first saw the turn. A crash-mid-turn ghost
- * was created after the last thing the transcript committed (the turn never
- * got that far), so it still passes rule 4 and paints — the one case the
- * log exists for. A ghost of any turn that DID commit was created before its
- * own commit, so the tail passes it and rule 4 hides it. Rule 5 (sidecar
- * shape) is untouched. The ghost is marked orphaned now because the process
- * that could have committed it is gone; the in-memory map wins the merge, so
- * a live pane re-reading its log keeps its live ghosts' real state.
+ * The first fix used `createdAt`, and steering q6 showed why that loses data:
+ * a scan of 7,128 Codex ghosts against their rollouts found 7 created BEFORE
+ * a different item's commit (the rollout write lags the proxy; one by 34 ms)
+ * that kept streaming for seconds after it. A crash after that commit leaves
+ * the ghost as the only copy, and createdAt hid it.
+ *
+ * So the clock is the last time the ghost's CONTENT changed: the newest
+ * `updatedAt` among its records that are neither orphaned nor superseded
+ * (Claude logs every update). A Codex log holds only the orphan record, so
+ * there the best evidence is `orphanedAt - TTL`, an UPPER bound (the sweep
+ * orphans once `updatedAt + TTL < now`): in doubt the ghost paints. What
+ * that bound lets through — a Codex turn that DID commit — is removed by
+ * identity in the loader instead (committedCodexResponses). A ghost is
+ * marked orphaned now because the process that could have committed it is
+ * gone; the in-memory map wins the merge, so a live pane re-reading its log
+ * keeps its live ghosts' real state.
  *
  * Nothing is written back: ghostsToPersist diffs against these values, and
  * the next restore re-derives them from the unchanged log.
  */
+/**
+ * Response ids the loaded chunk proves finished and committed. Codex writes
+ * a `token_usage_record` carrying the `response_id` right after each
+ * response's items (recorded: the final answer's message at 04:17:40.104,
+ * its usage record at .150). It is the only rollout line that names the id
+ * a Codex ghost is keyed by. Claude chunks have none, so this is empty there
+ * and Claude keeps its message-id reconcile.
+ */
+function committedCodexResponses(raw: readonly unknown[]): Set<string> {
+  const ids = new Set<string>()
+  for (const record of raw) {
+    const rec = record as { type?: unknown; payload?: { response_id?: unknown } } | null
+    if (rec?.type !== 'token_usage_record') continue
+    if (typeof rec.payload?.response_id === 'string') ids.add(rec.payload.response_id)
+  }
+  return ids
+}
+
 async function readPersistedGhosts(sessionId: SessionId): Promise<Map<string, GhostEntry>> {
   try {
     const raw = await window.api.ghostRead?.(sessionId)
     if (!Array.isArray(raw) || raw.length === 0) return new Map()
+    const lastContentAt = new Map<string, number>()
+    for (const record of raw as GhostEntry[]) {
+      const atp = record?._atp
+      if (!atp || typeof record.uuid !== 'string') continue
+      if (atp.orphanedAt !== undefined || atp.supersededBy !== undefined) continue
+      if (typeof atp.updatedAt !== 'number') continue
+      lastContentAt.set(record.uuid, Math.max(lastContentAt.get(record.uuid) ?? 0, atp.updatedAt))
+    }
     const reduced = reduceGhostLogSansSuperseded(raw as never[]) as Map<string, GhostEntry>
     const restored = new Map<string, GhostEntry>()
     for (const [uuid, ghost] of reduced) {
-      // A log line with no usable createdAt (never written by ghosts.ts, but
-      // the log is a file) keeps its own updatedAt: no worse than before.
-      const createdAt = typeof ghost._atp.createdAt === 'number' ? ghost._atp.createdAt : ghost._atp.updatedAt
-      restored.set(uuid, {
-        ...ghost,
-        _atp: { ...ghost._atp, updatedAt: createdAt, orphanedAt: createdAt },
-      })
+      const atp = ghost._atp
+      const logged = lastContentAt.get(uuid)
+      const bound = typeof atp.orphanedAt === 'number' ? atp.orphanedAt - GHOST_ORPHAN_TTL_MS : atp.updatedAt
+      // Never earlier than the ghost's own creation: a log line with an odd
+      // clock must not push a ghost behind the moment it demonstrably existed.
+      const at = Math.max(logged ?? bound, typeof atp.createdAt === 'number' ? atp.createdAt : 0)
+      restored.set(uuid, { ...ghost, _atp: { ...atp, updatedAt: at, orphanedAt: at } })
     }
     return restored
   } catch (err) {
@@ -421,8 +456,16 @@ export async function loadInitialHistoryForSession({
       let loadedGhosts = current.ghosts
       if (persistedGhosts.size > 0) {
         const merged = new Map(current.ghosts)
+        const committedResponses = committedCodexResponses(chunk.entries)
         for (const [uuid, ghost] of persistedGhosts) {
-          if (!merged.has(uuid)) merged.set(uuid, ghost)
+          if (merged.has(uuid)) continue
+          // A Codex response this chunk shows as finished and committed. Its
+          // ghosts cannot be superseded the ordinary way (their response-id
+          // turnId never matches the rollout's turn id, #1231), and the
+          // upper-bound clock above would otherwise paint its last block
+          // again under the committed copy.
+          if (committedResponses.has(ghost._atp.turnId)) continue
+          merged.set(uuid, ghost)
         }
         loadedGhosts = merged
       }

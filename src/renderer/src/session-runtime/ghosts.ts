@@ -484,6 +484,13 @@ export function reconcileUpstream(
  * a reasonable default for normal streaming (past that we're almost
  * certainly in a failure mode, not just batching latency).
  */
+/** How long a ghost may go without an update before the periodic sweep
+ * marks it orphaned. The rationale for 30 s is at the sweep in
+ * useIpcSubscriptions.ts; it lives here because the restore path inverts it
+ * (a log that holds only the orphan record puts the ghost's last update at
+ * `orphanedAt - GHOST_ORPHAN_TTL_MS` at most), and the two must agree. */
+export const GHOST_ORPHAN_TTL_MS = 30_000
+
 export function orphanStale(
   prev: ReadonlyMap<string, GhostEntry>,
   now: number,

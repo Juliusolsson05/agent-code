@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { orphanStale } from '@renderer/session-runtime/ghosts'
+import { GHOST_ORPHAN_TTL_MS, orphanStale } from '@renderer/session-runtime/ghosts'
 import { selectMergedEntries } from '@renderer/session-runtime/mergedEntries'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -121,22 +121,22 @@ describe('a restored pane reads its own ghost log (#1225)', () => {
 // The fixture is real (see its `source`). The assertion is on the merged feed
 // the pane renders, not on ghost internals.
 
-// Mirrors useIpcSubscriptions.ts's GHOST_ORPHAN_TTL_MS (not exported; the
-// sweep is the only production caller). Any value under the ghosts' age works.
-const GHOST_ORPHAN_TTL_MS = 30_000
-
 const stale = JSON.parse(readFileSync(
   join(import.meta.dirname, '../../../../../../testing/fixtures/ghost-restore/stale-ghosts-after-restore.json'),
   'utf8',
-)) as Record<'claude' | 'codex', {
+)) as Record<'claude' | 'codex' | 'codexStraddle', {
   sessionId: string
   providerSessionId: string
   ghosts: Array<{ uuid: string; _atp: { createdAt: number; turnId: string } }>
   transcriptTail: Array<{ timestamp?: string }>
 }>
 
-async function restoreCase(kind: 'claude' | 'codex', records: Array<{ timestamp?: string }>) {
-  const data = stale[kind]
+async function restoreCase(
+  which: 'claude' | 'codex' | 'codexStraddle',
+  records: Array<{ timestamp?: string }> = stale[which].transcriptTail,
+) {
+  const data = stale[which]
+  const kind = which === 'claude' ? 'claude' : 'codex'
   const sessionId = data.sessionId as SessionId
   const state = {
     sessions: { [sessionId]: { cwd: '/repo', kind, providerSessionId: data.providerSessionId } },
@@ -175,8 +175,7 @@ async function restoreCase(kind: 'claude' | 'codex', records: Array<{ timestamp?
 
 describe('what a restored pane paints from its ghost log (#1227 review)', () => {
   it.each(['claude', 'codex'] as const)('paints no %s ghost whose turn predates the committed tail', async kind => {
-    const { runtime, painted } = await restoreCase(kind, stale[kind].transcriptTail)
-    expect(runtime.ghosts.size).toBe(stale[kind].ghosts.length)
+    const { painted } = await restoreCase(kind, stale[kind].transcriptTail)
     expect(painted).toEqual([])
   })
 
@@ -191,5 +190,16 @@ describe('what a restored pane paints from its ghost log (#1227 review)', () => 
     expect(before.length).toBeGreaterThan(0)
     const { painted } = await restoreCase('codex', before)
     expect(painted).toEqual([last.uuid])
+  })
+
+  it('still paints a ghost that began BEFORE the last commit but kept streaming after it (steering q6)', async () => {
+    // Recorded (see the fixture's codexStraddle.note): a tool-call ghost was
+    // created 34 ms BEFORE a different assistant message was committed (the
+    // rollout write lags the proxy), then kept streaming for seconds. Crash
+    // right after that commit and the transcript ends past the ghost's
+    // creation while the tool call exists only in the ghost. Judging it by
+    // createdAt hid the only copy; its LAST content update is what decides.
+    const { painted } = await restoreCase('codexStraddle')
+    expect(painted).toEqual([stale.codexStraddle.ghosts.at(-1)!.uuid])
   })
 })

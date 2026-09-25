@@ -65,6 +65,7 @@ import {
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
+  GHOST_ORPHAN_TTL_MS,
   gcHiddenOrphanGhosts,
   gcSupersededGhosts,
   ghostsFromSemanticTurn,
@@ -336,7 +337,9 @@ function providerSessionObservedEvent(event: unknown): {
 // threshold.
 //
 // See docs/design/ghost-system.md for the canonical explanation.
-const GHOST_ORPHAN_TTL_MS = 30000
+// GHOST_ORPHAN_TTL_MS itself lives in session-runtime/ghosts.ts: the restore
+// path derives a ghost's last content update from `orphanedAt - TTL`, so the
+// sweep and that inverse must share one value (#1227).
 const GHOST_ORPHAN_SWEEP_MS = 1000
 const GHOST_SUPERSEDED_GC_MS = 5000
 
