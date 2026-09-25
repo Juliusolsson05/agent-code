@@ -548,9 +548,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
   const runModelSwitch = useCallback(async () => {
     if (matchingRows.length === 0 || lockedRef.current) return
+    stopRequestedRef.current = false
+    setStopRequested(false)
     setSwitchingModel(true)
     let delivered = 0
     let failed = 0
+    // #1271 (steering q32): this fan-out holds the same modal lock as a
+    // provider batch, so it gets the same way out. Checked between agents,
+    // never during a delivery.
+    let notAttempted = 0
     // The provider's own words for the FIRST failure. A count alone ("2
     // failed") is unactionable — prompt delivery fails for reasons the user can
     // usually fix (the pane is mid-turn, the process died, a dialog is up), and
@@ -562,7 +568,11 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       // independent prompt deliveries, but a burst of PTY writes across many
       // panes is exactly the shape that has produced delivery races before.
       // A handful of agents is not worth the risk of parallelism.
-      for (const row of matchingRows) {
+      for (const [index, row] of matchingRows.entries()) {
+        if (stopRequestedRef.current) {
+          notAttempted = matchingRows.length - index
+          break
+        }
         const result = await window.api.deliverPrompt(row.sessionId, CLAUDE_MODEL_SWITCH_PROMPT)
         if (result.ok) {
           delivered += 1
@@ -595,7 +605,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       const failureNote = failed > 0
         ? ` (${failed} failed${firstFailure ? `: ${firstFailure}` : ''})`
         : ''
-      showToast(`Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}${failureNote}`)
+      const stopped = notAttempted > 0 ? `Stopped: ${pluralAgents(notAttempted)} not attempted. ` : ''
+      showToast(`${stopped}Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}${failureNote}`)
     }
   }, [busy, matchingRows, showToast, switchingModel])
 
@@ -651,9 +662,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden"
         onEscapeKeyDown={event => {
           if (locked) event.preventDefault()
-          // During a provider batch Escape asks to stop after the agent in
-          // flight (#1271), the one exit a locked batch can safely offer.
-          if (busy) requestStop()
+          // During a provider batch or the /model fan-out, Escape asks to stop
+          // after the agent in flight (#1271), the one exit a locked batch can
+          // safely offer.
+          if (locked) requestStop()
         }}
         onPointerDownOutside={event => {
           // WHY an in-flight batch cannot be dismissed: the old overlay kept
@@ -998,14 +1010,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              // While a provider batch runs, Cancel is the way out (#1271): it
+              // While a provider batch or the /model fan-out runs, Cancel is the
+              // way out (#1271): it
               // stops the batch after the agent in flight instead of closing
               // a modal whose loop would keep running unseen.
-              onClick={busy ? requestStop : requestClose}
-              disabled={busy ? stopRequested : locked}
+              onClick={locked ? requestStop : requestClose}
+              disabled={locked && stopRequested}
               className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
-              {busy ? (stopRequested ? 'Stopping after this agent…' : 'Stop after this agent') : 'Cancel'}
+              {locked ? (stopRequested ? 'Stopping after this agent…' : 'Stop after this agent') : 'Cancel'}
             </button>
             <button
               type="button"

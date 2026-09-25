@@ -274,5 +274,34 @@ describe('BulkProviderSwitchModal policy', () => {
     expect(screen.getByRole('button', { name: 'Stopping after this agent…' })).toBeDisabled()
     finish()
   })
+
+  // #1271 / steering q32: the /model fan-out holds the same lock, so it needs
+  // the same way out.
+  it('lets the user stop a /model fan-out after the agent in flight', async () => {
+    usage.snapshot = exhaustedSnapshot('claude', 'model-family')
+    let finishFirst!: (value: { ok: true }) => void
+    const deliverPrompt = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+      .mockResolvedValue({ ok: true })
+    Object.defineProperty(window, 'api', { configurable: true, value: { deliverPrompt } })
+    const base = claudeWorkspaceFixture()
+    const agent = base.state.sessions.agent!
+    const workspace = {
+      ...base,
+      state: {
+        ...base.state,
+        sessions: { agent, second: { ...agent, joinedAt: 1 } },
+        stage: { lanes: [{ selectedSessionId: 'agent' }, { selectedSessionId: 'second' }], rows: [{ length: 2 }], focusedLane: 0 },
+      },
+      runtimes: { ...base.runtimes, second: base.runtimes.agent },
+    } as unknown as Workspace
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /Switch 2 agents to another Claude model/i }))
+    await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this agent' }))
+    finishFirst({ ok: true })
+    await screen.findByRole('button', { name: 'Cancel' })
+    expect(deliverPrompt).toHaveBeenCalledTimes(1)
+  })
 })
 
