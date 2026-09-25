@@ -1547,3 +1547,16 @@ Sharp corners and one light theme.
 - 2026-09-25 K2-17: per-category visible note (suppression is per group, so a
   per-row line would repeat 20+ times). Confirm-red: the note test fails on
   the pre-change row.
+- 2026-09-25 CI run 36112657294 failed ONE test: ContentSearchOverlay "⌃N /
+  PageDown" landed on option 10, not 11 (⌃N lost). It passes locally,
+  including 12 runs under 6-core CPU load. Hypothesis: the hook's reset
+  (resetKey) ran in a PASSIVE effect, which can be queued behind a key update
+  when results land through the real scheduler (Testing Library's waitFor) and
+  the key is dispatched inside act. That is NOT reproduced: native and
+  act-dispatched keys in the commit→effect gap both survive on the old hook, so
+  the repro test was deleted rather than kept as a test that proves nothing.
+  Change made anyway: useListNavigation's reset / follow / clamp moved from
+  effects to render-phase "adjust state on prop change" (state trackers, not
+  refs), which removes any dependence on effect ordering and is React's
+  recommended pattern. Full renderer suite green (1738). If that test fails
+  again, the cause is something else. Treat it as a new bug, never rerun.

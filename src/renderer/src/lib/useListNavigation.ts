@@ -135,44 +135,60 @@ export function useListNavigation({
   idPrefix,
   keys,
 }: UseListNavigationOptions): UseListNavigationResult {
-  const [index, setIndexState] = useState(initialIndex)
-  // The key under the highlight as of the last render, so a list change can
-  // re-find it. Written during render from the current (index, keys) pair —
-  // a ref, because it is bookkeeping for the effect below, not display state.
-  const highlightedKey = useRef<string | undefined>(undefined)
+  const [storedIndex, setIndexState] = useState(initialIndex)
   const keySignature = keys ? keys.join('\u0000') : undefined
-  const previousSignature = useRef(keySignature)
   const elements = useRef(new Map<number, HTMLElement>())
   // Only scroll when the KEYBOARD moved the highlight. Scrolling on hover
   // would drag the list under a stationary pointer, which then hovers the
   // next row, which scrolls again — the classic runaway-list bug.
   const scrollOnNextIndex = useRef(false)
 
-  useEffect(() => {
-    setIndexState(initialIndex)
-    // initialIndex intentionally not a dep: it is the reset TARGET, read when
-    // resetKey changes; a parent recomputing it each render must not reset
-    // the highlight under the user's arrows.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey])
-
-  // Follow the highlighted ITEM across a live list change (see `keys`). Runs
-  // before the clamp below, so a vanished item falls through to clamping.
-  useEffect(() => {
-    if (!keys || keySignature === previousSignature.current) return
-    previousSignature.current = keySignature
-    const key = highlightedKey.current
-    if (key === undefined) return
-    const moved = keys.indexOf(key)
-    if (moved >= 0) setIndexState(moved)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keySignature IS keys' content
-  }, [keySignature])
-
+  // RESET, FOLLOW and CLAMP happen DURING RENDER, with React's "adjust state
+  // when a prop changes" pattern, not in effects.
+  //
+  // WHY (found by a CI-only failure of the Search in Files test): as passive
+  // effects they ran after the commit that delivered a new list, and React
+  // may flush them only when the NEXT update starts. A key pressed in that
+  // gap (results land, the user presses ↓ at once) queued its move first,
+  // and the pending reset then ran and threw it away, so ⌃N + PageDown
+  // landed on row 10 instead of 11 on a slower machine. In render the
+  // adjustment exists before any handler can read `index`, so no key can
+  // race it. Each tracker is STATE, not a ref, because React may discard a
+  // render: a ref written in a discarded render would be wrong for the next.
+  const [seenResetKey, setSeenResetKey] = useState<unknown>(resetKey)
+  const [seenKeys, setSeenKeys] = useState<readonly string[] | undefined>(keys)
+  const [seenSignature, setSeenSignature] = useState(keySignature)
+  let index = storedIndex
+  if (!Object.is(seenResetKey, resetKey)) {
+    // A reset means "start over" (the dialog re-opened, a new search), so it
+    // wins over following an item. initialIndex is read only here: a parent
+    // recomputing it each render must not move the highlight under the
+    // user's arrows.
+    setSeenResetKey(resetKey)
+    setSeenKeys(keys)
+    setSeenSignature(keySignature)
+    index = initialIndex
+    setIndexState(index)
+  } else if (keys && keySignature !== seenSignature) {
+    // Follow the highlighted ITEM across a live list change (see `keys`): the
+    // key under the highlight in the PREVIOUS list, found in the new one. A
+    // vanished item falls through to the clamp below.
+    const key = seenKeys?.[storedIndex]
+    const moved = key === undefined ? -1 : keys.indexOf(key)
+    setSeenKeys(keys)
+    setSeenSignature(keySignature)
+    if (moved >= 0 && moved !== storedIndex) {
+      index = moved
+      setIndexState(moved)
+    }
+  }
   // Clamp when the list shrinks under the highlight (a row closed, the filter
   // narrowed). Without it Enter would activate an index that no longer exists.
-  useEffect(() => {
-    setIndexState(prev => (count === 0 ? 0 : Math.min(prev, count - 1)))
-  }, [count])
+  const clamped = count === 0 ? 0 : Math.min(index, count - 1)
+  if (clamped !== index) {
+    index = clamped
+    setIndexState(clamped)
+  }
 
   useEffect(() => {
     if (!scrollOnNextIndex.current) return
@@ -298,12 +314,6 @@ export function useListNavigation({
     }),
     [disabled, idPrefix, index, onActivate, onItemClick],
   )
-
-  // Record the key under the highlight for the NEXT list change. Only when the
-  // signature is the one the follow-effect has already processed — otherwise
-  // this render still shows the old index against the NEW keys, and recording
-  // now would overwrite the item we are about to re-find.
-  if (keys && keySignature === previousSignature.current) highlightedKey.current = keys[index]
 
   return {
     index,
