@@ -1,5 +1,6 @@
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
@@ -135,7 +136,7 @@ export function useUndoCloseAction(
   setState: WorkspaceSetState,
   refs: WorkspaceRefs,
   sessionActions: SessionActions,
-  showToast: (message: string) => void = () => undefined,
+  showToast: (message: string, durationMs?: number) => void = () => undefined,
 ): {
   undoClose: () => Promise<void>
   undoCloseCount: number
@@ -316,6 +317,12 @@ export function useUndoCloseAction(
       }
       // Nothing came back: the entry is still good, the provider is not.
       if (idMap.size === 0) return 'retryable-failure'
+      // Some came back: the rest are gone (#992's best-effort rule), and the
+      // user must be told which part of the project is missing (#1264 review).
+      const missing = entry.sessions.length - idMap.size
+      if (missing > 0) {
+        showToast(`Could not restore ${missing} of ${entry.sessions.length} agents in project "${entry.tab.title}": ${SESSION_START_FAILED_MESSAGE}`, RESTORE_FAILURE_TOAST_MS)
+      }
 
       setState(prev => {
         const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
@@ -355,7 +362,7 @@ export function useUndoCloseAction(
       })
       return 'restored'
     },
-    [respawn, setState],
+    [respawn, setState, showToast],
   )
 
   const restoreSingleEntry = useCallback(
@@ -401,7 +408,7 @@ export function useUndoCloseAction(
           const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
           refs.undoStackRef.current.push(leftover)
           // Part of the group came back; say what did not (#1242).
-          showToast(restoreFailureMessage(leftover))
+          showToast(restoreFailureMessage(leftover), RESTORE_FAILURE_TOAST_MS)
           return 'restored'
         }
       }
@@ -440,7 +447,7 @@ export function useUndoCloseAction(
         // WHY a toast (#1242): keeping the entry is right (the provider, not
         // the entry, is broken), but without saying so, every Cmd+Shift+T
         // after a CLI broke looked like a dead key.
-        showToast(restoreFailureMessage(entry))
+        showToast(restoreFailureMessage(entry), RESTORE_FAILURE_TOAST_MS)
         if (staleEntryConsumed) {
           bumpUndoCloseVersion(version => version + 1)
         }
@@ -457,13 +464,17 @@ export function useUndoCloseAction(
   return { undoClose, undoCloseCount }
 }
 
+/** Warning-grade toasts elsewhere use 6-10 s; the default 2.5 s vanished
+ *  before the sentence could be read (#1264 review). */
+const RESTORE_FAILURE_TOAST_MS = 8000
+
 /** What a failed Undo Close tells the user: which close could not come back,
  *  and the same safe, actionable sentence main's recovery and the reload
  *  path show for a provider that would not start. Never the spawn's own
  *  text (steering q22). */
 function restoreFailureMessage(entry: ClosedEntry): string {
   const what = entry.type === 'session'
-    ? `"${entry.sessionMeta.title ?? entry.sessionMeta.cwd.split('/').pop() ?? 'agent'}"`
+    ? `"${sessionDisplayTitle(entry.sessionMeta)}"`
     : entry.type === 'tab'
       ? `project "${entry.tab.title}"`
       : `${entry.entries.length} closed item${entry.entries.length === 1 ? '' : 's'}`
