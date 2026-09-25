@@ -1614,42 +1614,42 @@ function OpenCommandPalette({
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
           {mode === 'prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              template &rsaquo;
+              Template &rsaquo;
             </span>
           )}
           {mode === 'manage-prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              manage templates &rsaquo;
+              Manage Templates &rsaquo;
             </span>
           )}
           {mode === 'fill-prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              fill template &rsaquo;
+              Fill Template &rsaquo;
             </span>
           )}
           {mode === 'save-prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              save template &rsaquo;
+              Save Template &rsaquo;
             </span>
           )}
           {mode === 'edit-prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              edit template &rsaquo;
+              Edit Template &rsaquo;
             </span>
           )}
           {mode === 'ai-workspace-open' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              open AI workspace &rsaquo;
+              Open AI Workspace &rsaquo;
             </span>
           )}
           {mode === 'ai-workspace-create' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              create AI workspace &rsaquo;
+              Create AI Workspace &rsaquo;
             </span>
           )}
           {mode === 'ai-workspace-clear' && (
             <span className="text-danger text-[11px] flex-shrink-0 select-none">
-              clear AI workspace &rsaquo;
+              Clear AI Workspace &rsaquo;
             </span>
           )}
           <input

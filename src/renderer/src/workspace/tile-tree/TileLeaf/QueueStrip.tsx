@@ -262,7 +262,7 @@ export function QueueStrip({
             {staleCount > 0 ? ` · ${staleCount} unconfirmed` : ''}
           </span>
           <span className="shrink-0 normal-case tracking-normal" aria-hidden="true">
-            {collapsed ? '▴ show' : '▾ hide'}
+            {collapsed ? '▴ Show' : '▾ Hide'}
           </span>
         </button>
 

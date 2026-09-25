@@ -52,7 +52,7 @@ function EntryRow({ entry }: { entry: ProviderEnablementEntry }) {
                 disabled={pending}
                 onClick={() => void reset()}
               >
-                reset to detection
+                Reset to Detection
               </button>
             </>
           ) : null}
