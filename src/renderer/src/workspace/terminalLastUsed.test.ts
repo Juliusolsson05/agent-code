@@ -4,7 +4,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 
 import {
   TERMINAL_LAST_USED_RESOLUTION_MS,
-  terminalLastUsedAt,
+  terminalLastUsedUpperBound,
   withTerminalLastUsed,
   withTerminalLastUsedFloor,
 } from './terminalLastUsed'
@@ -59,9 +59,9 @@ describe('withTerminalLastUsedFloor', () => {
 })
 
 it('reads a missing or malformed record as unknown', () => {
-  expect(terminalLastUsedAt(undefined)).toBeNull()
-  expect(terminalLastUsedAt({})).toBeNull()
-  expect(terminalLastUsedAt({ lastUsedAt: Number.NaN })).toBeNull()
+  expect(terminalLastUsedUpperBound(undefined)).toBeNull()
+  expect(terminalLastUsedUpperBound({})).toBeNull()
+  expect(terminalLastUsedUpperBound({ lastUsedAt: Number.NaN })).toBeNull()
 })
 
 it('reads the latest the shell can have been used, never the throttled record itself', () => {
@@ -70,5 +70,5 @@ it('reads the latest the shell can have been used, never the throttled record it
   // #1179); every dropped use is under one resolution after the record.
   const record = withTerminalLastUsed(withTerminalLastUsed(state(), 'shell', 0 + 1), 'shell', 59_000)
   expect(record.sessions.shell!.lastUsedAt).toBe(1)
-  expect(terminalLastUsedAt(record.sessions.shell)).toBeGreaterThan(59_000)
+  expect(terminalLastUsedUpperBound(record.sessions.shell)).toBeGreaterThan(59_000)
 })

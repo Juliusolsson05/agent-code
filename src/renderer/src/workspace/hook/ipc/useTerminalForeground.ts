@@ -41,6 +41,10 @@ export function useTerminalForeground(
     // runtime's observations are foreign, so they are not this shell's use.
     if (live?.recoveryFailureCode === 'ownership-conflict') return
     const previous = live?.terminalForeground ?? null
+    // Known imprecision, on the safe side (Pi review of #1179): a same-id
+    // respawn whose first sample differs from a runtime the exit path did not
+    // clear reads as a 'use' with no user action. That only makes a shell look
+    // younger — it can delay a close, never cause one.
     if (previous === null) recordUsage(sessionId, 'floor')
     else if (previous.busy !== state.busy || previous.command !== state.command || previous.cwd !== state.cwd) {
       recordUsage(sessionId, 'use')

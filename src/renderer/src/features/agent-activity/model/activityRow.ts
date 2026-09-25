@@ -14,7 +14,7 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 import { terminalProviderFailure } from '@renderer/workspace/orchestrationMcp'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { cwdBasename, sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
-import { terminalLastUsedAt } from '@renderer/workspace/terminalLastUsed'
+import { terminalLastUsedUpperBound } from '@renderer/workspace/terminalLastUsed'
 import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 // ---------------------------------------------------------------------------
@@ -322,7 +322,7 @@ export function buildActivityRows(
       // (#1178) is the same one Close Old Agents ages it by, so the two
       // surfaces cannot disagree about how long a terminal has sat unused.
       lastActiveAt: terminal
-        ? terminalLastUsedAt(meta)
+        ? terminalLastUsedUpperBound(meta)
         : sessionActivity(runtime).timestamp,
     })
   }

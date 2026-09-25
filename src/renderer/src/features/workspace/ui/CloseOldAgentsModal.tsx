@@ -25,7 +25,7 @@ import {
 import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
-import { terminalLastUsedAt } from '@renderer/workspace/terminalLastUsed'
+import { terminalLastUsedUpperBound } from '@renderer/workspace/terminalLastUsed'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -96,7 +96,7 @@ function agentRowFor(
   // so no terminal could ever be old after a restart. The record lives on the
   // metadata, so a parked shell whose runtime was never rebuilt ages too.
   const lastActiveAt = kind === 'terminal'
-    ? terminalLastUsedAt(meta)
+    ? terminalLastUsedUpperBound(meta)
     : runtime ? latestAgentActivityAt(runtime) : null
 
   return {

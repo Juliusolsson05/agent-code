@@ -94,7 +94,7 @@ export function withTerminalLastUsedFloor(
  * upper bound. Reading the upper bound errs the safe way for a destructive
  * filter: an idle shell shows as idle one minute less than it is.
  */
-export function terminalLastUsedAt(meta: Pick<SessionMeta, 'lastUsedAt'> | undefined): number | null {
+export function terminalLastUsedUpperBound(meta: Pick<SessionMeta, 'lastUsedAt'> | undefined): number | null {
   const at = meta?.lastUsedAt
   return typeof at === 'number' && Number.isFinite(at) ? at + TERMINAL_LAST_USED_RESOLUTION_MS : null
 }
