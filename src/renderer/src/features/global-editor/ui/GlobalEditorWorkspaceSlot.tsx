@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 
+import { WorkspaceSurfaceHiddenContext, useWorkspaceSurfaceHidden } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { AgentTerminalOwnerVisibilityProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
 type Props = {
@@ -26,20 +27,30 @@ export function GlobalEditorWorkspaceSlot({
   splitWorkspaceWidth,
   children,
 }: Props) {
+  // WHY this slot also says "hidden" through the retained-surface context
+  // (#1269): it is the same retained-under-display:none situation as a
+  // takeover, and input owners inside (the New Agent overlay) must stand down
+  // here too. OR'ed with the outer value so a takeover over a split editor
+  // still reads hidden. GlobalEditorShell, the context's other reader, reads
+  // it from OUTSIDE this slot, so its own Escape gate is unchanged.
+  const outerHidden = useWorkspaceSurfaceHidden()
+  const hidden = outerHidden || (open && editorFullscreen)
   return (
-    <AgentTerminalOwnerVisibilityProvider visible={!open || !editorFullscreen}>
-      <div
-        className="flex flex-col min-h-0 overflow-hidden"
-        style={
-          !open
-            ? { width: '100%' }
-            : editorFullscreen
-              ? { display: 'none' }
-              : { width: splitWorkspaceWidth }
-        }
-      >
-        {children}
-      </div>
-    </AgentTerminalOwnerVisibilityProvider>
+    <WorkspaceSurfaceHiddenContext.Provider value={hidden}>
+      <AgentTerminalOwnerVisibilityProvider visible={!open || !editorFullscreen}>
+        <div
+          className="flex flex-col min-h-0 overflow-hidden"
+          style={
+            !open
+              ? { width: '100%' }
+              : editorFullscreen
+                ? { display: 'none' }
+                : { width: splitWorkspaceWidth }
+          }
+        >
+          {children}
+        </div>
+      </AgentTerminalOwnerVisibilityProvider>
+    </WorkspaceSurfaceHiddenContext.Provider>
   )
 }

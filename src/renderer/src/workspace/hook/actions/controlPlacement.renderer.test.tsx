@@ -1,5 +1,7 @@
 import { act } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { expect, it, vi } from 'vitest'
 import { mountPaneActions } from './testing/paneActionsHarness'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { WorkspaceState } from '@renderer/workspace/types'
@@ -150,5 +152,21 @@ it.each([true, false])('creation selectCreated=%s fills or preserves the focused
     .toEqual(['anchor', selectCreated ? 'new-agent' : undefined])
   expect(next.sessions['new-agent']?.projectId).toBe('project')
   expect(harness.sessionActions.killSession).not.toHaveBeenCalled()
+  harness.mounted.unmount()
+})
+
+// #1270 / steering q22: a create whose spawn rejects used to toast the
+// rejection verbatim. The fixture is the real IPC rejection recorded in the
+// incident journal; the class of text it stands for can carry environment
+// values or scoped MCP tokens.
+it('never toasts the raw spawn rejection when a create fails', async () => {
+  const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+  const harness = mountPaneActions(state(), { spawn: vi.fn().mockRejectedValue(new Error(recorded)) })
+  await act(async () => {
+    expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' })).toBeNull()
+  })
+  expect(harness.showToast).toHaveBeenCalledWith('Could not create agent: Session failed to start. Check provider setup and retry.')
+  expect(JSON.stringify(vi.mocked(harness.showToast).mock.calls)).not.toContain('posix_spawnp')
   harness.mounted.unmount()
 })

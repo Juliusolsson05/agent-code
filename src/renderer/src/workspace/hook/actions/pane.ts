@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
@@ -967,14 +968,8 @@ export function usePaneActions(
           resumeSessionId,
           builtInMcpOverrides,
         })
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : kind === 'terminal'
-              ? 'Failed to create dispatch terminal'
-              : 'Failed to create dispatch agent',
-        )
+      } catch {
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent'))
         return
       }
 
@@ -1139,12 +1134,8 @@ export function usePaneActions(
       let sessionId: SessionId
       try {
         sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create dispatch agent',
-        )
+      } catch {
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent'))
         return null
       }
 
@@ -1245,12 +1236,8 @@ export function usePaneActions(
       let sessionId: SessionId
       try {
         sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind, providerRuntime })
-      } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create linked agent',
-        )
+      } catch {
+        showToast(spawnFailureToast('linked agent'))
         return
       }
 
@@ -1929,3 +1916,15 @@ export function usePaneActions(
 // (U2, #681) — refilling it with a neighbour is precisely the displacement
 // #681 removed. So the whole helper reduced to `clearTiledLaneSessions`, which
 // the three close commits now call directly.
+
+/** What the user sees when creating an agent or terminal fails to spawn.
+ *
+ *  WHY never the rejection's own text (steering q22, #1270): it is the raw
+ *  provider exception relayed through IPC and can carry environment values,
+ *  proxy URLs or scoped MCP tokens. Main journals the raw error before it
+ *  rethrows, so nothing is lost for debugging; the safe sentence is the one
+ *  main's recovery and the reload path already show. (A missing workspace
+ *  folder, whose text main curates as safe, is #1267's to carry through.) */
+function spawnFailureToast(what: string): string {
+  return `Could not create ${what}: ${SESSION_START_FAILED_MESSAGE}`
+}
