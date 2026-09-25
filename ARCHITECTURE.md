@@ -745,7 +745,7 @@ Unknown records stay opaque; they are never guessed into plausible assistant tex
 
 The parser's fixtures are 104 redacted observed-wire records and sequences from a local corpus census, each with a manifest stating what it proves (wire shape and classification, not native resume). At this revision the application reads only projected values; it ignores classification diagnostics and `ProjectionReport` contents. The Claude decoder does not filter sidechain turns or walk parent chains; those are analysis diagnostics only.
 
-Consumers: [transcript engine](src/main/providerSwitch/transcriptEngine.ts), [provider switch](src/main/providerSwitch/switchProvider.ts), [rewind](src/main/providerSwitch/rewindSession.ts), [renderer ghost reducer](src/renderer/src/session-runtime/ghosts.ts), [ghost journal](src/main/ghostJournal.ts).
+Consumers: [transcript engine](src/main/providerSwitch/transcriptEngine.ts), [provider switch](src/main/providerSwitch/switchProvider.ts), [rewind](src/main/providerSwitch/rewindSession.ts), [renderer ghost reducer](src/renderer/src/session-runtime/ghosts.ts).
 
 ### 5.4 Renderer state and composition
 
@@ -2231,7 +2231,7 @@ Sources: [Claude](src/providers/claude/renderer/semanticFoldPolicy.ts), [Codex](
 
 **Stream phase.** [`reduceStreamPhase`](src/renderer/src/session-runtime/semantic/streamPhaseMachine.ts) runs beside the semantic fold rather than inside it, because phase lives on `SessionRuntime`, not on semantic state. It drives the single work indicator (8.3.14).
 
-**Ghost plane.** [`session-runtime/ghosts.ts`](src/renderer/src/session-runtime/ghosts.ts) mints provisional transcript-shaped records from semantic blocks through `agent-transcript-parser/ghost`. When the committed row lands, `reconcileUpstream` supersedes the ghost: Claude matches `message.id` to the turn id, Codex matches turn id plus block index, and both fall back to tool-use or call id. A one-second sweep marks a ghost orphaned when it finds no committed match within the orphan TTL (30 seconds), and collects superseded ghosts. Main appends ghost records to a per-session journal under `ghost-logs/`, so a crash mid-turn can recover the partial turn on resume. Most ticks, ghosts paint nothing; they are bookkeeping for the one case where committed truth stalled behind the live stream (8.3.7).
+**Ghost plane.** [`session-runtime/ghosts.ts`](src/renderer/src/session-runtime/ghosts.ts) mints provisional transcript-shaped records from semantic blocks through `agent-transcript-parser/ghost`. When the committed row lands, `reconcileUpstream` supersedes the ghost: Claude matches `message.id` to the turn id, Codex matches turn id plus block index, and both fall back to tool-use or call id. A one-second sweep marks a ghost orphaned when it finds no committed match within the orphan TTL (30 seconds), and collects superseded ghosts. Ghosts are in memory only: the on-disk ghost log was removed on 2026-09-25, so a turn lost to a crash is not restored after a restart (see `docs/design/ghost-system.md`). Most ticks, ghosts paint nothing; they are bookkeeping for the one case where committed truth stalled behind the live stream (8.3.7).
 
 <!-- architecture-diagram: runtime-ingest -->
 
@@ -2587,7 +2587,7 @@ Note over RT,L: history msg_02 claude-whole-turn-suppressed, msg_03 selected bel
 
 </details>
 
-If the committed write for `msg_02` never arrives (the committed channel died), tick 3 never happens. The live blocks remain `selected`, are archived into history at tick 4, and keep painting in chronological order because nothing owns them. After 30 seconds the ghosts orphan; rule 3 still rejects them while the history turn represents the content. After a crash and resume, the journal restores the ghosts without a live turn, and rules 4 and 5 decide whether they fill the gap.
+If the committed write for `msg_02` never arrives (the committed channel died), tick 3 never happens. The live blocks remain `selected`, are archived into history at tick 4, and keep painting in chronological order because nothing owns them. After 30 seconds the ghosts orphan; rule 3 still rejects them while the history turn represents the content. Nothing restores ghosts after a crash; they do not survive a restart.
 
 #### 8.3.10 From the sanitized object to rows
 
@@ -2876,7 +2876,7 @@ Neither mechanism proves a hard total renderer heap limit. Provider caches, indi
 | External operator settings | `STATE_DIR/external-control.json` | Desired enablement, port and private bearer token |
 | Control history | `STATE_DIR/control-history/` | Invocation receipts, results and task/history records |
 | Workflow state | Electron `userData/workflows/` | Run source, manifests, events, results, approval state and isolated Codex home |
-| Ghost journals | Normally Electron `userData/ghost-logs/` | Provisional rendering evidence; helper can fall back to `STATE_DIR` when userData is unavailable |
+| Legacy ghost logs | Electron `userData/ghost-logs/` | No longer written; deleted on launch by `src/main/storage/legacyGhostLogs.ts` (removed 2026-09-25) |
 | Dictation/paste journals | Historical Electron userData debug roots | Interaction diagnostics, distinct from settings and provider history |
 | Renderer settings | Chromium localStorage through Zustand persistence | Versioned/coerced settings subset |
 | Global editor persistence | Chromium localStorage | Open paths and geometry, excluding unsaved file text |

@@ -54,7 +54,6 @@ beforeEach(() => {
   Object.defineProperty(window, 'api', { configurable: true, value: {
     onOrchestrationRequest: () => () => undefined,
     onAgentManagementRequest: () => () => undefined,
-    ghostRead: async () => [],
     reportSessionLifecycle: vi.fn(),
     appendFeedDebugLog: async () => undefined,
   } })

@@ -67,7 +67,6 @@ import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/i
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   ghostsFromSemanticTurn,
-  ghostsToPersist,
   sweepGhosts,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
@@ -353,7 +352,7 @@ const MEMORY_GAUGE_INTERVAL_MS = 30_000
 // that advantage away: four busy agents produced 100+ React/ghost/debug/perf
 // pipelines per second, and the input/paint queue then sat behind seconds (or
 // minutes) of obsolete work even while JS heap stayed flat. A 100 ms preview
-// cadence matches the existing transcript and ghost journal batches, remains
+// cadence matches the existing transcript batch interval, remains
 // visually live for text, and puts a hard per-owner ceiling on renderer work.
 // Structural semantic events bypass this delay and first flush the latest
 // queued snapshots, preserving block/turn completion ordering.
@@ -399,7 +398,7 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 // pass FakeSessionFeed, and the remote client will pass its WebSocket feed.
 // Do NOT reintroduce a direct `window.api.onSession*` call for a feed-covered
 // event — that would silently exclude non-IPC transports from that event.
-// Desktop-only side channels (ghostAppend, gitWorktrees, feed-debug, perf)
+// Desktop-only side channels (gitWorktrees, feed-debug, perf)
 // intentionally STAY on window.api below: they are not session I/O, the
 // remote client must never need them, and abstracting them would widen the
 // SessionFeed contract for no consumer.
@@ -521,9 +520,6 @@ export function useIpcSubscriptions(
               gcMs: GHOST_SUPERSEDED_GC_MS,
             })
             if (nextGhosts !== runtime.ghosts) {
-              for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
-                window.api.ghostAppend(sessionId, ghost)
-              }
               working = appendFeedDebugLog(
                 { ...working, ghosts: nextGhosts },
                 {
@@ -1367,25 +1363,14 @@ export function useIpcSubscriptions(
         //   sub-slice and knows nothing about sessionId or the
         //   outer runtime. The ghost map lives on SessionRuntime
         //   because it needs to survive across semantic history
-        //   archival (when `currentTurn` flips to null) and because
-        //   the ghost journal persists it to disk with session-
-        //   scoped file names. Calling the ghost reducer at this
+        //   archival (when `currentTurn` flips to null). Calling the
+        //   ghost reducer at this
         //   outer boundary keeps the layering clean.
         const nextGhosts = ghostsFromSemanticTurn(
           nextSemantic.currentTurn,
           sessionId,
           current.ghosts,
         )
-
-        // Persist each changed ghost to disk (append-only JSONL
-        // under <userData>/ghost-logs). Fire-and-forget from the
-        // renderer; the main-side queue drains every 100 ms. See
-        // `src/main/ghostJournal.ts` for the writer and
-        // `../ghosts.ts` `ghostsToPersist` for why this diff is
-        // safe.
-        for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
-          window.api.ghostAppend(sessionId, ghost)
-        }
 
         // Full no-op short-circuit. foldSemanticEvent now returns
         // `state` unchanged for events that didn't mutate semantic
@@ -2365,15 +2350,6 @@ export function useIpcSubscriptions(
         let nextGhosts = current.ghosts
         for (const entry of appended) {
           nextGhosts = reconcileUpstream(entry, nextGhosts)
-        }
-
-        // Persist supersede records. When an upstream entry
-        // matched a ghost, `reconcileUpstream` produced a new ghost
-        // snapshot with `supersededBy` set; appending that to disk
-        // is how crash-recovered state knows "this ghost is no
-        // longer live."
-        for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
-          window.api.ghostAppend(sessionId, ghost)
         }
 
         // Persist the codex mapper's rolling turn cursor across bursts.
