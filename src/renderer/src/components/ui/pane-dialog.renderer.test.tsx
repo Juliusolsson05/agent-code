@@ -67,6 +67,43 @@ function TwoPanes({ trustActive, promptUp = true, onDecline }: {
   )
 }
 
+// Two prompts stacked in one pane (round-2 review A-P1). ConditionOutlet
+// renders every visible condition, so this is a supported, if uncommon, stack.
+function StackedPrompts({ second }: { second: boolean }) {
+  const [pane, setPane] = useState<HTMLDivElement | null>(null)
+  return (
+    <div ref={setPane} data-pane-id="pane-a" className="relative">
+      <textarea aria-label="composer A" />
+      <PaneDialogHostProvider container={pane} active restoreFocus={() => pane?.querySelector('textarea')?.focus()}>
+        <TrustDialogModal state={{ workspace: '/Users/me/first' }} onAccept={async () => {}} onDecline={async () => {}} />
+        <TrustDialogModal state={second ? { workspace: '/Users/me/second' } : null} onAccept={async () => {}} onDecline={async () => {}} />
+      </PaneDialogHostProvider>
+    </div>
+  )
+}
+
+describe('stacked pane prompts (round-2 review A-P1)', () => {
+  it('keeps only the newest prompt live, then hands focus to the one beneath when it closes', () => {
+    const { rerender } = render(<StackedPrompts second={false} />)
+    rerender(<StackedPrompts second />)
+    const [older, newer] = screen.getAllByRole('dialog')
+    // The older prompt sits under the newer one's scrim: Tab must not reach it.
+    expect(older!.closest('[inert]')).not.toBeNull()
+    expect(newer!.closest('[inert]')).toBeNull()
+    expect(screen.getByLabelText('composer A').closest('[inert]')).not.toBeNull()
+
+    // Answer the newer one while it holds focus: focus goes to the older
+    // prompt, not to the composer that is still inert under it.
+    const newerButton = newer!.querySelector('button')!
+    newerButton.focus()
+    rerender(<StackedPrompts second={false} />)
+    const remaining = screen.getByRole('dialog')
+    expect(remaining.closest('[inert]')).toBeNull()
+    expect(remaining.contains(document.activeElement)).toBe(true)
+    expect(screen.getByLabelText('composer A').closest('[inert]')).not.toBeNull()
+  })
+})
+
 describe('pane-scoped condition dialogs (#713)', () => {
   it('stays inside its own pane and blocks nothing outside it', () => {
     const onDecline = vi.fn(async () => {})

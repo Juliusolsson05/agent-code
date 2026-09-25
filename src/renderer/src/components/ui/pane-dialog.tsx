@@ -123,6 +123,7 @@ type PaneDialogContentProps = React.HTMLAttributes<HTMLDivElement> & {
 export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogContentProps>(
   function PaneDialogContent({ host, pane, sizeClassName, className, children, onKeyDown, ...props }, forwardedRef) {
     const contentRef = React.useRef<HTMLDivElement | null>(null)
+    const scrimRef = React.useRef<HTMLDivElement | null>(null)
     const setRef = React.useCallback((node: HTMLDivElement | null) => {
       contentRef.current = node
       if (typeof forwardedRef === 'function') forwardedRef(node)
@@ -163,12 +164,19 @@ export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogCont
     // prompts can stack in one pane: the first to close must not wake the
     // pane under the second. Declared BEFORE the focus-restore effect below,
     // so on close `inert` is removed first and focus can land on the composer.
+    //
+    // WHY it skips only THIS dialog's own two nodes, not every pane dialog
+    // (round-2 review A-P1): with two prompts stacked, the older one used to
+    // stay live under the newer one's scrim. Shift+Tab walked into it, and
+    // Enter answered a question the user could not see. The newest prompt
+    // now makes everything else in the pane inert, older prompts included,
+    // and the counter hands them back as it closes.
     React.useEffect(() => {
       const container = host.container
       if (!container) return
       const marked: Element[] = []
       for (const child of Array.from(container.children)) {
-        if (child.hasAttribute('data-pane-dialog') || child.getAttribute('data-slot') === 'pane-dialog-scrim') continue
+        if (child === contentRef.current || child === scrimRef.current) continue
         const count = Number(child.getAttribute(PANE_INERT_COUNT) ?? '0')
         child.setAttribute(PANE_INERT_COUNT, String(count + 1))
         child.setAttribute('inert', '')
@@ -194,11 +202,21 @@ export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogCont
     // restored anything). Browsers fire no blur when a focused node is
     // removed, so the flag still says true at that point.
     const holdsFocusRef = React.useRef(false)
+    const containerRef = React.useRef(host.container)
+    containerRef.current = host.container
     React.useEffect(() => () => {
       // Unmount while holding focus (the prompt was answered): hand focus to
       // the pane instead of letting it fall to <body>, where the next Tab
       // restarts from the top of the window.
-      if (holdsFocusRef.current) restoreRef.current?.()
+      if (!holdsFocusRef.current) return
+      // A prompt still stacked under this one comes first (round-2 review
+      // A-P1). The composer is still inert under it, so restoring there
+      // dropped focus to <body> with a visible question unanswered. The
+      // inert cleanup above has already run, so the newest survivor is live.
+      const survivors = containerRef.current?.querySelectorAll<HTMLElement>('[data-pane-dialog]:not([inert])')
+      const next = survivors && survivors.length > 0 ? survivors[survivors.length - 1] : null
+      if (next) focusInitial(next)
+      else restoreRef.current?.()
     }, [])
 
     if (!host.container) return null
@@ -206,6 +224,7 @@ export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogCont
     return createPortal(
       <>
         <div
+          ref={scrimRef}
           aria-hidden="true"
           data-slot="pane-dialog-scrim"
           // Inside the pane only. It sits over the composer so the prompt
