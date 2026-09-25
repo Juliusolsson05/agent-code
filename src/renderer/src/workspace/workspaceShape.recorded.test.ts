@@ -130,16 +130,15 @@ describe('malformed stage entries in a real v3 workspace (#1245)', () => {
 // An ENTRY that holds nothing is repaired; a present-but-malformed CONTAINER
 // that may hold the only copy of an agent keeps rule 8's deliberate lock.
 describe('malformed entries and containers in a real v2 workspace (#1245)', () => {
+  // Steering q21 / review A: a damaged entry REPLACING a real tab or project
+  // is the shape where agents are at stake (their placement names its id).
   it.each([
-    ['null', null],
-    ['id-less', { title: 'no id' }],
-  ])('keeps every agent when a tab entry is %s', (_label, entry) => {
-    const workspace = liveWorkspace()
-    const expected = Object.keys(migrateWorkspaceToStage(liveWorkspace()).sessions).sort()
-    ;(workspace.tabs as unknown[]).push(entry)
-    const migrated = migrateWorkspaceToStage(workspace)
-    expect(Object.keys(migrated.sessions).sort()).toEqual(expected)
-    expect(migrated.projects).toHaveLength((workspace.tabs as unknown[]).length - 1)
+    ['v2 tab replaced by null', () => { const w = liveWorkspace(); (w.tabs as unknown[])[1] = null; return w }],
+    ['v2 tab with its id removed', () => { const w = liveWorkspace(); delete (w.tabs as Array<{ id?: string }>)[1]!.id; return w }],
+    ['v2 extra null tab', () => { const w = liveWorkspace(); (w.tabs as unknown[]).push(null); return w }],
+    ['v3 project replaced by null', () => { const w = liveV3Workspace(); (w.projects as unknown[])[1] = null; return w }],
+  ])('locks instead of dropping agents when a %s', (_label, damaged) => {
+    expect(() => migrateWorkspaceToStage(damaged())).toThrow(MalformedWorkspaceContainerError)
   })
 
   it('migrates a file with no sessions map at all instead of throwing', () => {

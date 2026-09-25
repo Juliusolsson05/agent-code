@@ -255,4 +255,20 @@ describe('bootstrap stage guarantee', () => {
     expect(setBootstrapComplete).toHaveBeenLastCalledWith(true)
     unmount()
   })
+
+  it('keeps autosave LOCKED when a real v2 tab entry is replaced by null (steering q21)', async () => {
+    const recorded = JSON.parse(readFileSync(join(import.meta.dirname,
+      '../../../../../../testing/fixtures/workspace-v2/2026-09-19-live-workspace.sanitized.json'), 'utf8')) as { windows: { workspace: Record<string, any> }[] }
+    const workspace = recorded.windows[0]!.workspace
+    workspace.tabs[1] = null
+    const harness = makeHarness(workspace as unknown as PersistedWorkspace)
+    const { unmount, setBootstrapComplete, setRestoreStatus } = renderBootstrap(harness)
+    // setRestoreStatus is published on every path, after the autosave decision.
+    await vi.waitFor(() => expect(setRestoreStatus).toHaveBeenCalled())
+    // The recovery shell, never a restore: a restore here would autosave 6
+    // of the file's 27 agents over it.
+    expect(setRestoreStatus).toHaveBeenLastCalledWith('persisted-fallback')
+    expect(setBootstrapComplete).not.toHaveBeenCalledWith(true)
+    unmount()
+  })
 })

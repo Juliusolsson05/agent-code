@@ -160,14 +160,23 @@ export function migrateWorkspaceToStage(
       throw new MalformedWorkspaceContainerError(`workspace.json has a malformed \`${field}\`; refusing to migrate it to an empty pool`)
     }
   }
-  // A null or id-less v2 tab ENTRY holds nothing (sessions are listed by id
-  // under `sessions`), so it is dropped like a null project entry rather than
-  // throwing every agent into the recovery shell (#1245).
-  const legacyInput = {
-    ...persisted,
-    tabs: persisted.tabs?.filter(tab => tab !== null && typeof tab === 'object' && typeof tab.id === 'string'),
-    sessions: persisted.sessions ?? {},
+  // A damaged project or tab ENTRY (null, or no string id) is container
+  // corruption too (#1256 review A, steering q21). It is not empty: it WAS a
+  // real project, and with its id gone, every agent placed in it (v3
+  // `projectId` stamps; v2 tile trees and detached records naming the tab)
+  // silently became unowned and was dropped, and rehydrate then unlocked
+  // autosave. Measured on the owner's real files: one null v2 tab kept 6 of
+  // 27 agents, one null v3 project 3 of 13. Nothing can prove which agents
+  // the lost entry held, so it locks like a malformed container.
+  for (const [field, list] of [['projects', persisted.projects], ['tabs', persisted.tabs]] as const) {
+    if (Array.isArray(list) && (list as unknown[]).some(entry => entry === null || typeof entry !== 'object'
+      || typeof (entry as { id?: unknown }).id !== 'string' || (entry as { id: string }).id.length === 0)) {
+      throw new MalformedWorkspaceContainerError(
+        `workspace.json has a damaged \`${field}\` entry; the agents it held cannot be placed, so it is not migrated`,
+      )
+    }
   }
+  const legacyInput = { ...persisted, sessions: persisted.sessions ?? {} }
   // --- Rule 1.
   const projects: ProjectRef[] = Array.isArray(persisted.projects)
     ? persisted.projects

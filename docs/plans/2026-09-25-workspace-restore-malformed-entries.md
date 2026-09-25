@@ -8,7 +8,7 @@ I damaged the owner's real v3 workspace (`testing/fixtures/workspace-v3/2026-09-
 | `stage.lanes[0] = null` | throws `Cannot read properties of null (reading 'selectedSessionId')` |
 | `stage.rows[0] = null` | throws `Cannot read properties of null (reading 'length')` |
 | `stage.lanes = 5` | throws `stage.lanes.map is not a function` |
-| a `null` entry in `projects` | handled (filtered) |
+| a `null` entry in `projects` | ~~handled (filtered)~~ WRONG: filtered silently, dropping every agent stamped with its id (3 of 13 kept on the real v3 file); see round-2 amendment |
 | `sessions` missing | handled (empty pool; nothing to lose) |
 
 A throw in rehydrate sends startup to the locked single-tab recovery shell (`useBootstrap.ts`), with none of the user's agents shown.
@@ -40,6 +40,10 @@ Lanes and rows hold layout only; sessions live in the pool. So these are repaire
   - A damaged detached ENTRY dropped its agent. Its key is still the session id, so the agent is now re-homed to the active project.
   - A null row now becomes an UNBOUND row of exactly the lanes no valid row covers, at its own index. Before, its lanes were absorbed into the last row and inherited that row's project binding.
   - A stage with unusable `lanes` falls through to an intact v2 `dispatchMode.tiled` before the default.
+
+- **Round 2 amendment (review A, steering q21).** A damaged project or tab ENTRY that REPLACES a real one is not empty: every agent placed in it (v3 `projectId` stamps; v2 tile trees and detached records naming its id) became unowned and was dropped, and rehydrate unlocked autosave.
+  - Measured on the real files: one null v2 tab kept 6 of 27 agents; one null v3 project kept 3 of 13.
+  - Nothing can prove which agents the lost entry held, so any null or id-less entry in `projects`/`tabs` now gets rule 8's typed lock. This reverses the earlier "drop a null tab entry".
 
 ## Tests
 Real-workspace cases for every row of both tables, red on main, each guard mutation-checked, plus two end-to-end bootstrap cases (a null lane, missing sessions) asserting a restore with autosave unlocked, not the locked recovery shell.
