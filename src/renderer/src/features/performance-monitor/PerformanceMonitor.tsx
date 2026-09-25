@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { PerformancePanelRequest } from '@renderer/app-state/uiShell/types'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Button } from '@renderer/components/ui/button'
+import { sectionCycleTarget } from '@renderer/lib/sectionCycle'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
 import type { MonitorReportPreview, MonitorTraceMode, MonitorTraceStatus } from '@shared/performance/monitorHistory.js'
 import type { MonitorProcessPage } from '@shared/performance/processSnapshot.js'
@@ -14,6 +15,7 @@ import { useMonitor } from './useMonitor'
 const bytes = (value: number | null | undefined) => value == null ? '—' : value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GiB` : `${(value / 1024 ** 2).toFixed(1)} MiB`
 const number = (value: number | null | undefined, suffix = '') => value == null ? '—' : `${value.toFixed(1)}${suffix}`
 type View = 'overview' | 'timeline' | 'processes' | 'operations' | 'recordings'
+const VIEWS: readonly View[] = ['overview', 'timeline', 'processes', 'operations', 'recordings']
 // Module scope, not a ref: StrictMode and a close/reopen both remount the
 // component, and a replayed request would open a second native dialog.
 let lastHandledRequest = 0
@@ -23,8 +25,20 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
   const [view, setView] = useState<View>(request?.view ?? 'overview')
   useEffect(() => { if (request) setView(request.view) }, [request])
   return <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-    <DialogContent className="w-[min(1360px,96vw)] h-[min(920px,94vh)] grid-rows-[auto_auto_minmax(0,1fr)]" showCloseButton>
-      <DialogHeader>
+    {/* Sized to the WINDOW, not to content: a deliberate non-preset width
+        (plan T2 exception for full-viewport tools). ⌘[ / ⌘] step through the
+        five views from anywhere in the dialog (plan D5). */}
+    <DialogContent
+      className="w-[min(1360px,96vw)] h-[min(920px,94vh)] grid-rows-[auto_auto_minmax(0,1fr)]"
+      showCloseButton
+      onKeyDown={event => {
+        const next = sectionCycleTarget(event, VIEWS.indexOf(view), VIEWS.length)
+        if (next === null) return
+        event.preventDefault()
+        setView(VIEWS[next]!)
+      }}
+    >
+      <DialogHeader className="pr-16">
         <DialogTitle>Performance Monitor</DialogTitle>
         <DialogDescription>Live health and local performance evidence for Agent Code and your agents.</DialogDescription>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted">
@@ -39,11 +53,11 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
         </div>
       </DialogHeader>
       <nav aria-label="Performance views" className="flex gap-2 border-b border-border px-4 py-2">
-        {(['overview', 'timeline', 'processes', 'operations', 'recordings'] as const).map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
+        {VIEWS.map(tab => <Button key={tab} size="sm" variant={view === tab ? 'default' : 'ghost'} aria-pressed={view === tab} onClick={() => setView(tab)}>
           {tab[0].toUpperCase() + tab.slice(1)}
         </Button>)}
       </nav>
-      <div className="overflow-auto p-4 text-[12px] min-h-[min(400px,50vh)]">
+      <div className="overflow-auto px-4 py-3 text-[12px] min-h-[min(400px,50vh)]">
         {!snapshot ? <p className="text-muted" role="status">{error ? 'Performance readings are unavailable. Collection will reconnect automatically.' : 'Waiting for the first sample…'}</p>
           : view === 'overview' ? <Overview snapshot={snapshot} onClose={onClose} />
             : view === 'timeline' ? <Timeline incidents={snapshot.incidents ?? []} />
