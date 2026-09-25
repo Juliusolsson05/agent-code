@@ -101,16 +101,62 @@ describe('GoalLoopPane control focus (ledger G-41)', () => {
     await waitFor(() => expect(inOverlay('Pause')).toBeTruthy())
     const pause = inOverlay('Pause')!
     pause.focus()
+    // Main answers a Pause with the paused state (GoalLoopService.control).
+    api.controlGoalLoop.mockResolvedValueOnce(loop({ phase: 'paused', pauseReason: 'user' }))
     pause.click()
     await pingThenRead(loop({ phase: 'paused', pauseReason: 'user' }))
     await waitFor(() => expect(inOverlay('Resume')).toBeTruthy())
     expect(document.activeElement).toBe(inOverlay('Resume'))
+    // One press carries once. Focus later falls to <body>, and the next
+    // unrelated phase change must not carry it again.
+    ;(document.activeElement as HTMLElement).blur()
+    await pingThenRead(loop({ phase: 'active' }))
+    await waitFor(() => expect(inOverlay('Pause')).toBeTruthy())
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('disarms the carry when main rejects, so a much later pause cannot take focus (round-2 review A-P2)', async () => {
+    render(<GoalLoopPane sessionId="s1" />)
+    const pause = await screen.findByRole('button', { name: 'Pause' })
+    pause.focus()
+    api.controlGoalLoop.mockRejectedValueOnce(new Error('main refused'))
+    pause.click()
+    await waitFor(() => expect(api.controlGoalLoop).toHaveBeenCalled())
+    await Promise.resolve()
+    // The user moves on, and focus later falls to <body> (their pane closed).
+    const elsewhere = document.createElement('textarea')
+    document.body.appendChild(elsewhere)
+    elsewhere.focus()
+    elsewhere.remove()
+    expect(document.activeElement).toBe(document.body)
+    // Much later the loop pauses itself at its cap: an unrelated phase change.
+    await pingThenRead(loop({ phase: 'paused', pauseReason: 'cap' }))
+    await screen.findByRole('button', { name: 'Resume' })
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('disarms the carry when main answers without a phase change (Raise Cap)', async () => {
+    api.readGoalLoops.mockResolvedValue({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 25, continuationsDelivered: 25 }) })
+    render(<GoalLoopPane sessionId="s1" />)
+    const raise = await screen.findByRole('button', { name: 'Raise Cap' })
+    raise.focus()
+    api.controlGoalLoop.mockResolvedValueOnce(loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 50, continuationsDelivered: 25 }))
+    raise.click()
+    await waitFor(() => expect(api.controlGoalLoop).toHaveBeenCalled())
+    await Promise.resolve()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(document.activeElement).toBe(document.body)
+    // Later, the user's resume from another surface flips the phase.
+    await pingThenRead(loop({ phase: 'active' }))
+    await screen.findByRole('button', { name: 'Pause' })
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('does not take focus back if the user moved on before main answered', async () => {
     render(<GoalLoopPane sessionId="s1" />)
     const pause = await screen.findByRole('button', { name: 'Pause' })
     pause.focus()
+    api.controlGoalLoop.mockResolvedValueOnce(loop({ phase: 'paused', pauseReason: 'user' }))
     pause.click()
     const elsewhere = document.createElement('textarea')
     document.body.appendChild(elsewhere)

@@ -28,6 +28,12 @@ import { useLayoutEffect, useRef } from 'react'
  * meantime, their new focus wins. For a synchronous swap the pressed control
  * has just been removed, so focus is always unowned at that point.
  *
+ * An async caller must `cancel()` when the swap will not come, for example
+ * when the request failed or main answered without changing the key.
+ * Otherwise the pending carry stays armed, and a much later, unrelated change
+ * of the same key (the loop pausing itself at its cap an hour on) would pull
+ * focus back to this surface while it is unowned (round-2 review A-P2).
+ *
  * `counterpartRef` may point at a CONTAINER when the next control depends on
  * the new state (the goal-loop strip's controls). Its first enabled button
  * or tab stop then takes focus.
@@ -58,5 +64,7 @@ export function useSwapFocus<T extends HTMLElement = HTMLButtonElement>(swapKey:
     target?.focus(options)
   }, [swapKey])
 
-  return { counterpartRef, beforeSwap }
+  const cancel = () => { pending.current = null }
+
+  return { counterpartRef, beforeSwap, cancel }
 }

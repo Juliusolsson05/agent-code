@@ -171,14 +171,24 @@ export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string;
   // Dismiss removes the strip itself, so there is nothing to carry to, and
   // type-to-focus reclaims the pane.
   const control = (action: GoalLoopControlAction, surface: 'strip' | 'overlay' = 'strip') => (event: ReactMouseEvent<HTMLButtonElement>) => {
-    ;(surface === 'strip' ? stripFocus : overlayFocus).beforeSwap(event.currentTarget)
+    const carrier = surface === 'strip' ? stripFocus : overlayFocus
+    const phaseAtPress = loop.phase
+    carrier.beforeSwap(event.currentTarget)
     // A rejected control call changes nothing in main, and the next changed
     // ping re-reads the truth; the catch only keeps a rejection from becoming
     // an unhandled one in the renderer.
+    //
+    // Either way the focus carry must be disarmed when no swap is coming:
+    // after a rejection, or when main answers with the phase unchanged (Raise
+    // Cap keeps the phase). Otherwise a much later unrelated phase change
+    // would take focus back to this pane (round-2 review A-P2). If the change
+    // ping landed first, the carry has already happened and cancel is a no-op.
     void window.api.controlGoalLoop({
       sessionId, action,
       value: action === 'raise-cap' ? raisedCap : undefined,
-    }).catch(() => {})
+    }).then(next => {
+      if (!next || next.phase === phaseAtPress) carrier.cancel()
+    }).catch(() => { carrier.cancel() })
   }
   // NO interaction-ownership marker here, deliberately: the strip is passive
   // status chrome that stays mounted for the loop's whole life (and ended
