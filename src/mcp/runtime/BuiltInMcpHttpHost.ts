@@ -41,6 +41,10 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // 256 KiB (#1028 re-review). An overflow destroys the socket, and the goal
 // loop cannot then tell whether the hook came from a subagent.
 const TLDR_HOOK_MAX_BODY_BYTES = 16 * 1024 * 1024
+// Provider hooks give the whole handler ten seconds. A renderer control read
+// may wait thirty, so title guidance gets only a small slice of that budget;
+// TLDR/Goal decisions and Goal Loop turn observation must still reach the CLI.
+const AUTO_TITLE_HOOK_READ_TIMEOUT_MS = 750
 const TLDR_HOOK_PATH_PREFIX = '/hooks/tldr/'
 
 function readBody(req: IncomingMessage, limit: number): Promise<string> {
@@ -588,9 +592,19 @@ export class BuiltInMcpHttpHost {
     // the user just renamed. A failed owner read simply omits the reminder.
     let autoTitleMissing = false
     if (domains.includes('auto_title') && !fromSubagent && event !== 'post-tool-use' && this.dependencies.getOwnAutoTitleState) {
+      let deadline: ReturnType<typeof setTimeout> | undefined
       try {
-        autoTitleMissing = (await this.dependencies.getOwnAutoTitleState(registration.scope.sessionId)).missing
+        const state = this.dependencies.getOwnAutoTitleState(registration.scope.sessionId)
+        const bounded = await Promise.race([
+          state,
+          new Promise<{ missing: false }>(resolve => {
+            deadline = setTimeout(() => resolve({ missing: false }), AUTO_TITLE_HOOK_READ_TIMEOUT_MS)
+            deadline.unref?.()
+          }),
+        ])
+        autoTitleMissing = bounded.missing
       } catch { /* title guidance is best effort when the renderer is unavailable */ }
+      finally { if (deadline) clearTimeout(deadline) }
     }
     // Tell the goal loop about every main-agent turn hook, AFTER enforcement
     // has decided, because a Stop that enforcement blocks does not end the

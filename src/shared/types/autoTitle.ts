@@ -6,4 +6,4 @@ export const AUTO_TITLE_INSTRUCTIONS = `When Auto Title MCP is available in this
 
 Examples: “Repair queued prompt delivery”; “Review workspace recovery”; “Design automatic agent titles”.
 
-Only title your own session with the available tool. A manual title or a manual clear pauses automatic changes; the tool will refuse those writes until the user resumes Auto Title. If the capability is unavailable, do not edit files or provider session names as a substitute.`
+Only the main pane agent should call title_set. If you are running as a subagent or delegated worker, do not call it: provider subagents may inherit their parent pane's MCP bearer, so the tool would rename the parent rather than give you a separate title. A manual title or a manual clear pauses automatic changes; the tool will refuse those writes until the user resumes Auto Title. If the capability is unavailable, do not edit files or provider session names as a substitute.`

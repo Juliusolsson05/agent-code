@@ -397,7 +397,10 @@ describe('useSessionActions recovery retry', () => {
     expect(optOut.killOwnedSession).not.toHaveBeenCalled()
   })
 
-  it('carries the latest pane title across a delayed session replacement', async () => {
+  it.each([
+    { scenario: 'the latest manual title on a continued pane', newConversation: false, auto: false },
+    { scenario: 'no old automatic title into an unrelated conversation', newConversation: true, auto: true },
+  ])('carries $scenario across a delayed session replacement', async ({ newConversation, auto }) => {
     const sessionId = 'source-session'
     let state = {
       tabs: [{
@@ -410,6 +413,7 @@ describe('useSessionActions recovery retry', () => {
           cwd: '/tmp/project',
           kind: 'claude' as const,
           title: 'Initial title',
+          ...(auto ? { titleMode: 'auto' as const, builtInMcpDomains: ['auto_title' as const] } : {}),
           projectId: 'tab-1',
           joinedAt: 0,
         },
@@ -426,7 +430,7 @@ describe('useSessionActions recovery retry', () => {
       latestRuntimesRef: ref(runtimes),
       dangerousAgentsRef: ref(false),
       useProxyStreamingRef: ref(false),
-      defaultBuiltInMcpDomainsRef: ref([]),
+      defaultBuiltInMcpDomainsRef: ref(auto ? ['auto_title'] : []),
       seenUuidsRef: ref({}),
       latestScreenRef: ref({}),
     } as unknown as WorkspaceRefs
@@ -467,9 +471,10 @@ describe('useSessionActions recovery retry', () => {
       replacement = result.current.replaceSession('/tmp/project', {
         kind: 'codex',
         targetSessionId: sessionId,
+        newConversation,
       })
     })
-    act(() => {
+    if (!auto) act(() => {
       // WHY edit while spawn is unresolved: provider switches and rewinds can
       // wait on backend work. Reading the pre-await snapshot would make a Save
       // that visibly succeeded disappear when that delayed replacement lands.
@@ -480,12 +485,12 @@ describe('useSessionActions recovery retry', () => {
       await replacement
     })
 
-    expect(state.sessions[sessionId]).toBeUndefined()
-    expect(state.sessions['replacement-session']?.title).toBe('Edited during switch')
-    expect(state.sessions['replacement-session']?.titleMode).toBe('manual')
     // `spawn` intentionally defers ghost bootstrap by one timer tick. Let that
     // owned task finish before afterEach removes the API mock, or this test can
     // leak an irrelevant unhandled rejection into a later full-suite worker.
     await vi.waitFor(() => expect(ghostRead).toHaveBeenCalledWith('replacement-session'))
+    expect(state.sessions[sessionId]).toBeUndefined()
+    expect(state.sessions['replacement-session']?.title).toBe(auto ? undefined : 'Edited during switch')
+    expect(state.sessions['replacement-session']?.titleMode).toBe(auto ? undefined : 'manual')
   })
 })

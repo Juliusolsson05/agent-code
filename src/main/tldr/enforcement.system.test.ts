@@ -56,6 +56,19 @@ async function setup(titleState?: (sessionId: string) => Promise<{ missing: bool
 }
 
 describe('TLDR turn hooks through the real MCP host', () => {
+  it('keeps TLDR enforcement responsive when the optional title owner read stalls', async () => {
+    const { register, hook } = await setup(() => new Promise(() => {}))
+    const agent = register('stalled-title', ['tldr', 'auto_title'])
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      const response = await Promise.race([
+        hook(agent, agent.bearerToken, 'stop'),
+        new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('Title lookup held the hook past its budget')), 2_000) }),
+      ])
+      expect(response.body).toEqual({ decision: 'block', reason: TLDR_NEVER_WRITTEN_REASON })
+    } finally { if (deadline) clearTimeout(deadline) }
+  })
+
   it('reminds an Auto Title-only agent from the renderer state and stops after one continuation', async () => {
     let missing = true
     const state = vi.fn(async () => ({ missing }))

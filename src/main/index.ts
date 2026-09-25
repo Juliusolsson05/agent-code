@@ -15,6 +15,7 @@ import { PORT_SCAN_SUPPORTED, listListeners, listProcesses, probe as probePort }
 import { registerBrowserPocketIpc } from '@main/ipc/browserPocket.js'
 import type { LanePort } from '@shared/browserPocket/types.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { createAutoTitleControlPort } from '@main/tldr/autoTitleControlPort.js'
 import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
 import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
 import { registerGoalLoopIpc } from '@main/goalLoop/ipc.js'
@@ -1293,33 +1294,13 @@ async function startApp(): Promise<void> {
     applyEmulation: (pocketId, emulation) => browserPockets.applyEmulation(pocketId, emulation),
     setWatchedSessions: sessions => browserPockets.setWatchedSessions(browserPockets.isEnabled() ? sessions : []),
   })
+  const autoTitleControl = createAutoTitleControlPort(controlHost, windowForSession)
   builtInMcpHost.setDependencies({
     browserPockets,
     tldrStore,
     goalStore,
-    setOwnAutoTitle: async (sessionId, title, authorized) => {
-      // The caller identity is minted here, never parsed from the MCP input.
-      // The renderer capability is application-only and rechecks the exact
-      // live SessionMeta before writing through workspace autosave.
-      if (!authorized()) throw new Error('Auto Title session is no longer active.')
-      const result = await controlHost.forCaller({ kind: 'application', id: 'auto-title' }).invoke({
-        capabilityId: 'agents.autoTitleSet', input: { sessionId, title },
-      })
-      if (!authorized()) throw new Error('Auto Title session is no longer active.')
-      if (!result.ok) throw new Error(result.error.message)
-      const value = result.value as { title?: unknown }
-      if (typeof value.title !== 'string') throw new Error('Auto Title write returned no title.')
-      return value.title
-    },
-    getOwnAutoTitleState: async sessionId => {
-      const result = await controlHost.forCaller({ kind: 'application', id: 'auto-title' }).invoke({
-        capabilityId: 'agents.autoTitleState', input: { sessionId },
-      })
-      if (!result.ok) throw new Error(result.error.message)
-      const value = result.value as { missing?: unknown }
-      if (typeof value.missing !== 'boolean') throw new Error('Auto Title state is unavailable.')
-      return { missing: value.missing }
-    },
+    setOwnAutoTitle: autoTitleControl.set,
+    getOwnAutoTitleState: autoTitleControl.state,
     tldrEnforcement,
     goalLoopService,
     orchestrationBridge,

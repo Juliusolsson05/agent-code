@@ -1,13 +1,21 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentTitlePrompt } from '@renderer/features/workspace/ui/AgentTitlePrompt'
+import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
+import { useAppStore } from '@renderer/app-state/store'
+import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { AGENT_TITLE_MAX_LENGTH } from '@renderer/workspace/agentTitle'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import type { Entry } from '@shared/types/transcript'
 
 describe('Agent title prompt', () => {
+  const initialWorkspace = useAppStore.getState().workspaceState
+  afterEach(() => {
+    useAppStore.setState({ workspaceState: initialWorkspace, agentTitlePromptSessionId: null })
+  })
+
   it('prefills and saves the edited title', () => {
     const onSave = vi.fn()
     render(
@@ -68,6 +76,24 @@ describe('Agent title prompt', () => {
     expect(screen.getByText(/Saving or clearing pauses Auto Title/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Resume Auto Title' }))
     expect(onResumeAutoTitle).toHaveBeenCalledOnce()
+  })
+
+  it('wires Resume Auto Title through the real surface and clears the manual lock', () => {
+    const workspaceState = {
+      ...initialWorkspace,
+      sessions: {
+        ...initialWorkspace.sessions,
+        agent: { cwd: '/work/project', kind: 'codex' as const, title: 'Human label', titleMode: 'manual' as const,
+          builtInMcpDomains: ['auto_title' as const] },
+      },
+    }
+    useAppStore.setState({ workspaceState })
+    useAppStore.getState().openAgentTitlePrompt('agent')
+    render(<WorkspaceProvider workspace={{ state: workspaceState } as never}><AgentTitlePromptSurface /></WorkspaceProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Resume Auto Title' }))
+    expect(useAppStore.getState().workspaceState.sessions.agent?.title).toBeUndefined()
+    expect(useAppStore.getState().workspaceState.sessions.agent?.titleMode).toBeUndefined()
+    expect(useAppStore.getState().agentTitlePromptSessionId).toBeNull()
   })
 })
 

@@ -161,7 +161,7 @@ export function createBuiltInMcpServer(
     // exact target) and makes the tool safe to offer to ordinary agents.
     server.registerTool('title_set', {
       title: 'Set own agent title',
-      description: 'Set your own short current-job title in 3–7 words, at most 60 characters. Call when you understand new substantive work or its direction changes; leave it alone for routine progress. Manual titles and clears are protected.',
+      description: 'Main pane agent only: set your own short current-job title in 3–7 words, at most 60 characters. Subagents must not call this inherited tool because it targets their parent pane. Call when you understand new substantive work or its direction changes; leave it alone for routine progress. Manual titles and clears are protected.',
       inputSchema: { title: z.string().min(1).max(120) },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }, async ({ title }) => {
