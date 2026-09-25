@@ -379,7 +379,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
       <button
         type="button"
         onClick={() => setExternalOpen(open => !open)}
-        className="flex w-full items-center justify-between border-t border-border px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted hover:text-ink"
+        className="flex w-full items-center justify-between border-t border-border px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         aria-expanded={externalOpen}
       >
         <span>{externalOpen ? '▾' : '▸'} Also found on this machine (not managed by Agent Code)</span>
@@ -387,7 +387,11 @@ export function SkillsGrid({ settings, onChange }: Props) {
       </button>
       {externalOpen ? (
         <>
-          {shownExternal.length === 0 ? <Empty>No other personal skills found.</Empty> : null}
+          {shownExternal.length === 0 ? <Empty>No other personal skills found.</Empty> : (
+            // The ● / — cells explained themselves only in hover titles on
+            // non-focusable cells (K2-18). One visible key for the whole list.
+            <div className="px-3 pb-1 text-[10px] text-muted">● agents of that provider load it · — not in a folder that provider reads</div>
+          )}
           {shownExternal.map(skill => (
             <ExternalRow
               key={skill.name}
@@ -495,7 +499,9 @@ function SkillRow({
                 onChange={on => onProvider(kind, on)}
               />
               {sharedOnly ? (
-                <span className="text-[9px] text-muted" title={`${shortLabel} reads a folder this skill is installed in`}>shared</span>
+                // "shared" meant nothing without its hover title (K2-18); the
+                // explanation is now its accessible name as well.
+                <span className="text-[9px] text-muted" title={`${shortLabel} reads a folder this skill is installed in`} aria-label={`shared: ${shortLabel} reads a folder this skill is installed in`}>shared</span>
               ) : null}
             </div>
           )
@@ -584,7 +590,10 @@ function ExternalRow({
         </div>
         {columns.map(kind => (
           <div key={kind} className="text-center text-muted" title={visible.has(kind) ? 'Agents of this provider can load it' : 'Not in a folder this provider reads'}>
-            {visible.has(kind) ? '●' : '—'}
+            {/* The glyph is decoration for assistive tech; the words are the
+                cell's content (K2-18). */}
+            <span aria-hidden="true">{visible.has(kind) ? '●' : '—'}</span>
+            <span className="sr-only">{visible.has(kind) ? 'loaded by' : 'not read by'} {getRendererProviderCapabilities(kind).shortLabel}</span>
           </div>
         ))}
         <div className="flex justify-end">

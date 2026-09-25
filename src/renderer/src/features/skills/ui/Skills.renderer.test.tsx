@@ -190,6 +190,14 @@ describe('Settings → Skills grid (#1161)', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ hiddenExternalSkills: ['claude-personal-skills:grill-me'] }))
   })
 
+  it('says in words what the ● / — provider cells mean (K2-18)', () => {
+    // They explained themselves only in hover titles on non-focusable cells.
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))
+    expect(screen.getByText('● agents of that provider load it · — not in a folder that provider reads')).toBeVisible()
+    expect(screen.getAllByText(/^(loaded by|not read by) /).length).toBeGreaterThan(0)
+  })
+
   it('closes the ⋯ menu on Escape and puts focus back on ⋯', async () => {
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))

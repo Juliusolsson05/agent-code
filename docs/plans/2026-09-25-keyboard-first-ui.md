@@ -527,7 +527,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | done (hover counts only if the pointer moved after the focused pane last changed) |
 | K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | done (+ T4 ring on the three header icon buttons) |
 | K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
-| K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
+| K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | deferred to Task 8 (G): making pane toasts persist on hover/focus with Copy is a toast-model change, not a keyboard fix; full text is in the DOM for AT |
 | K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | done (wraps, ~4-line cap that scrolls; role=alert; Buttons, Overwrite destructive-outline) |
 | K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | no change needed (verified: arrowing onto a tab activates it, and the active file's error shows in full in the save banner, an alert since K2-6) |
 | K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | done (one details popover on hover OR focus-within) |
@@ -536,17 +536,17 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | done (UnsupportedProviderNotes under the provider row, both dialog modes) |
 | K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | no change needed (verified: Agent Status, opened by command, shows the full title and Cwd) |
 | K2-13 | Worktree badge (`TileLeaf/SessionBadges.tsx:56`) | branch/touched files title-only | reveal on focus / Agent Status | done (Agent Status Identity gains a Worktree field chosen by the badge's own rule) |
-| K2-14 | Provider tool rows (CommandView, CodeEditView, Claude read/web/agent, Codex embedded-op/plan/tool-result) | truncated full command/path title-only | show full text when expanded | todo |
-| K2-15 | PocketedLeaf viewport note (`PocketedLeaf.tsx:115`) | title-only | visible helper / menu | todo |
+| K2-14 | Provider tool rows (CommandView, CodeEditView, Claude read/web/agent, Codex embedded-op/plan/tool-result) | truncated full command/path title-only | show full text when expanded | no change needed (verified: adapters cap the headline at 160 chars / 2 lines, and the `title` is that same capped string, so it hides nothing the row does not show) |
+| K2-15 | PocketedLeaf viewport note (`PocketedLeaf.tsx:115`) | title-only | visible helper / menu | kept as title (secondary detail per the family ruling; numbers are visible); "Fit pane" got a focus ring |
 | K2-16 | McpServersRow summary + Unsupported reason (`McpServersRow.tsx:183,252`) | title-only | inline reason | done (per-server reasons on the row's second line; one footer key for the provider-wide “—”; Copy in reason inline; switch + expander rings) |
 | K2-17 | Keybindings palette checkbox suppressed reason (`CommandKeybindingsRow.tsx` PaletteToggle) | reason title-only for sighted keyboard users | visible "Hidden while X is off" | done (one note per category heading; suppressed title removed) |
-| K2-18 | SkillsGrid "shared" chip + ●/— cells (`skills/ui/SkillsGrid.tsx:498,586`) | meaning title-only | column legend | todo |
-| K2-19 | Dictation history WPM caveat (`DictationHistoryRow.tsx:106`) | title-only | footnote | todo |
+| K2-18 | SkillsGrid "shared" chip + ●/— cells (`skills/ui/SkillsGrid.tsx:498,586`) | meaning title-only | column legend | done (one visible key on the external list; sr-only words per cell; "shared" named) |
+| K2-19 | Dictation history WPM caveat (`DictationHistoryRow.tsx:106`) | title-only | footnote | kept as title (secondary caveat on a stat, per the family ruling) |
 | K2-20 | Close Old "not observed yet" (`CloseOldAgentsModal.tsx:712`) | guidance title-only | visible second line | done |
 | K2-21 | Bulk switch exhausted source (`BulkProviderSwitchModal.tsx:777`) | disabled reason title-only | inline reason | no change needed (verified: "— X is exhausted" is already visible beside the checkbox; the sweep read only the title) |
-| K2-22 | Perf Overview incident markers (`ResourceCharts.tsx:84` → `TimeSeriesChart.tsx:184`) | marker label only in SVG title | include in keyboard readout | todo |
-| K2-23 | WorktreesBar category (`worktrees/ui/WorktreesBar.tsx:338,345`) | meaning title-only | visible/expandable | todo |
-| K2-24 | TopConsumers caveats (`performance-monitor/overview/TopConsumers.tsx:95,105`) | title-only | visible marker ("≥") | todo |
+| K2-22 | Perf Overview incident markers (`ResourceCharts.tsx:84` → `TimeSeriesChart.tsx:184`) | marker label only in SVG title | include in keyboard readout | deferred (charts are pointer-first by an earlier ruling; low impact) |
+| K2-23 | WorktreesBar category (`worktrees/ui/WorktreesBar.tsx:338,345`) | meaning title-only | visible/expandable | kept as title (the visible label carries the state; the explanation is detail) |
+| K2-24 | TopConsumers caveats (`performance-monitor/overview/TopConsumers.tsx:95,105`) | title-only | visible marker ("≥") | no change needed (the ≥ marker is already visible; "—" for not placed is detail) |
 
 Ruling for the title-only family (K2-5…K2-24): one pattern, not 20 local
 fixes. Where information matters for a decision (K2-5/6/11/17/20/21), it
@@ -828,6 +828,8 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-18 Settings › Skills › "Also found on this machine":** one grey key
+  line under the heading explains ● and —.
 - **K2-13 Agent Status (command "Agent Status"):** Identity now lists the
   agent's Worktree (branch · path · active), the same one the pane's
   worktree badge shows, so its details no longer need a hover.
@@ -1584,3 +1586,6 @@ Sharp corners and one light theme.
   (see rows). K2-13: `displayedWorktreeContext` extracted to
   `TileLeaf/displayedWorktree.ts`, shared by the badge and the Agent Status
   model, so the two cannot disagree about which worktree is current.
+- 2026-09-25 K2 sweep closed: every row is done, verified as no-change, or
+  kept/deferred with a recorded reason (the title-only family ruling: decision
+  information becomes visible, detail stays a title).
