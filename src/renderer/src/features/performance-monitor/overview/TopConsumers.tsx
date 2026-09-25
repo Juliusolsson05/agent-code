@@ -115,7 +115,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
                           <span className="w-[30px] flex-shrink-0 text-right text-[10px] text-muted">{(shareOfApp * 100).toFixed(0)}%</span>
                         </div>
                       </td>
-                      <td className={`px-2 py-1.5 text-right ${change.tone === 'up' ? 'text-warning-fg' : change.tone === 'down' ? 'text-success-fg' : 'text-muted'}`}>{change.text}</td>
+                      <td className={`px-2 py-1.5 text-right ${change.tone === 'up' ? 'text-warning' : change.tone === 'down' ? 'text-success' : 'text-muted'}`}>{change.text}</td>
                       <td className="px-2 py-1.5 text-right text-ink-dim">{formatCpu(session.cpuPercent)}</td>
                       <td className="px-2 py-1.5 text-right text-ink-dim">{session.processCount}</td>
                       <td className="px-2 py-1.5">

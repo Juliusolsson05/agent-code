@@ -6,7 +6,11 @@ import { formatByteDelta, formatBytes, formatCpu, formatMs } from '../format'
 
 export type Tone = 'ok' | 'warning' | 'danger' | 'neutral'
 const TONE_BAR: Record<Tone, string> = { ok: 'bg-success', warning: 'bg-warning', danger: 'bg-danger', neutral: 'bg-border-hi' }
-const TONE_TEXT: Record<Tone, string> = { ok: 'text-ink', warning: 'text-warning-fg', danger: 'text-danger-fg', neutral: 'text-ink' }
+// Plain tone tokens, never the `*-fg` ones (review finding C1): `*-fg` is the
+// foreground FOR a solid `bg-*` fill (near-black on Nord's pale warning), so
+// as text on a surface it was 1.11:1 and the warning value vanished exactly
+// when it warned.
+const TONE_TEXT: Record<Tone, string> = { ok: 'text-ink', warning: 'text-warning', danger: 'text-danger', neutral: 'text-ink' }
 
 /** Largest measured memory among live sessions, independent of array order. */
 function heaviestSession(sessions: readonly MonitorSessionUsage[] | undefined): MonitorSessionUsage | null {
@@ -66,7 +70,7 @@ export function HealthTiles({ snapshot, usage, identities }: { snapshot: Monitor
   return (
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
       <Tile label="App memory" value={formatBytes(memory)} tone={share === null ? 'neutral' : share >= 0.75 ? 'danger' : share >= 0.5 ? 'warning' : 'ok'}
-        detail={<>{share === null ? 'All Agent Code processes' : `${(share * 100).toFixed(0)}% of ${formatBytes(usage!.systemMemoryBytes)} RAM`}{change ? <> · <span className={change.tone === 'up' ? 'text-warning-fg' : ''}>{change.text}</span> in {minutes} min</> : null}</>} />
+        detail={<>{share === null ? 'All Agent Code processes' : `${(share * 100).toFixed(0)}% of ${formatBytes(usage!.systemMemoryBytes)} RAM`}{change ? <> · <span className={change.tone === 'up' ? 'text-warning' : ''}>{change.text}</span> in {minutes} min</> : null}</>} />
       <Tile label="App CPU" value={formatCpu(cpu)} tone={cpu === null ? 'neutral' : cores && cpu >= cores * 80 ? 'danger' : cores && cpu >= cores * 50 ? 'warning' : 'ok'}
         detail={cores ? `100% = one core · ${cores} cores` : '100% = one core'} />
       <Tile label="Heaviest agent" value={heaviest ? formatBytes(heaviest.memoryBytes) : '—'}
