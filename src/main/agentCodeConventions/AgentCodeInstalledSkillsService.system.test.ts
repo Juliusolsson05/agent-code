@@ -146,7 +146,6 @@ async function harness(
   const pathSafety = new SkillPathSafety(root)
   const service = new AgentCodeConventionsService({
     stateFilePath: join(root, 'state', 'conventions.json'),
-    installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
     homeDirectory: root,
     resolveTargets: async () => {
       if (options.discovery?.fail) throw new Error('Could not read provider configuration')
@@ -376,8 +375,7 @@ describe('AgentCode installed skills service', () => {
 
     const reloaded = new AgentCodeConventionsService({
       stateFilePath: join(root, 'state', 'conventions.json'),
-      installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
-      homeDirectory: root,
+        homeDirectory: root,
       resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
     })
     await reloaded.initialize()
@@ -428,7 +426,6 @@ describe('AgentCode installed skills service', () => {
 
     const service = new AgentCodeConventionsService({
       stateFilePath: join(root, 'state', 'conventions.json'),
-      installedSkillSnapshotRoot: snapshots,
       homeDirectory: root,
       resolveTargets: async () => ({ targets: [target(root)], unsupportedProviders: [] }),
     })
@@ -444,16 +441,16 @@ describe('AgentCode installed skills service', () => {
   })
 
   // Regression for #1206. Two system test files built the service with a temp
-  // `stateFilePath` and no snapshot root, so the startup sweep ran their EMPTY
-  // journal against the developer's real ~/.config store and deleted every
+  // `stateFilePath` but no snapshot root (a separate option at the time), so
+  // the startup sweep ran their EMPTY journal against the developer's real ~/.config store and deleted every
   // installed skill's snapshot. The contract under test is that a journal only
   // ever sweeps the store beside it. WHY assert through the sweep and not by
   // reading a path getter: the sweep is the destructive consumer that
-  // actually broke. If the root ever silently falls back to a global default
-  // again, the orphan below survives and this fails. Proving it red against
+  // actually broke. If the store is ever resolved anywhere but beside the
+  // journal again, the orphan below survives and this fails. Proving it red against
   // the unfixed code must be done with HOME pointed at a scratch directory,
   // because the unfixed code deletes the real store as a side effect.
-  it('keeps the snapshot store beside its journal when no snapshot root is given', async () => {
+  it('keeps the snapshot store beside its journal', async () => {
     const root = await temporaryDirectory()
     const stateDirectory = join(root, 'state')
     const orphan = stagedPackage({ commit: 'c'.repeat(40), files: [{ path: 'SKILL.md', content: 'orphan' }] })

@@ -23,8 +23,10 @@ emptied it.
    is `STATE_DIR`, so the path is byte-identical and no migration is needed.
    The service was the only reader of the absolute
    `AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR`, so it is replaced by a
-   directory NAME constant. Nothing can pair a journal with a store it does
-   not own.
+   directory NAME constant. The separate `installedSkillSnapshotRoot` option
+   is removed too (review finding: an explicit override could still pair a
+   journal with a foreign store, and the reviewer reproduced the deletion
+   through it). Nothing can pair a journal with a store it does not own.
 2. **Readable failure:** when `verify`/`readFile` find the recorded snapshot
    missing, they report "Agent Code's reviewed copy of this skill is
    missing …" instead of the raw `lstat` errno. That covers the digest

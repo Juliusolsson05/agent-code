@@ -288,8 +288,11 @@ export class InstalledSkillPackageStore {
    * `ENOENT … lstat '<64-hex path>'` made a healthy provider copy look broken
    * while naming a path the user had never heard of. Whether the snapshot
    * directory, the whole store or its parent is gone, the meaning is the
-   * same: the provider copy may be fine, but Agent Code can no longer prove,
-   * update or cleanly remove it. WHY only for these reads and not inside
+   * same: the provider copy may be fine, but Agent Code can no longer prove
+   * it matches what was reviewed. WHY the message makes no claim about
+   * recovery: applying a reviewed update re-stores the snapshot and heals the
+   * skill (review of PR #1211 verified that), so an earlier "cannot be
+   * updated" wording steered users away from the one working fix. WHY only for these reads and not inside
    * `assertSnapshotDirectory`: that one also guards nested directories and
    * quarantines mid-cleanup, where "missing from the store" would be false.
    * Other errnos (EACCES, ELOOP…) stay raw because they are environment
@@ -305,7 +308,7 @@ export class InstalledSkillPackageStore {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       throw new Error(
         `Agent Code's reviewed copy of this skill is missing from ${basename(this.root)}, `
-        + 'so this copy can no longer be verified or updated',
+        + 'so this copy cannot be verified',
       )
     }
     return directory
