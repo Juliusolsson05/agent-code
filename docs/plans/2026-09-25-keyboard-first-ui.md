@@ -389,7 +389,7 @@ entry when it lands.
 | F1 | `Kbd` primitive + test | done |
 | F2 | `DialogActions` chips + `legend` + `confirmKey` + `escapeCancels` + tests | done |
 | F3 | `useListNavigation` + test | done |
-| F4 | `DialogContent size` presets + close button convergence | todo |
+| F4 | `DialogContent size` presets + close button convergence | done (presets exist; call sites migrate in their S-rows) |
 | F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | todo |
 | F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | todo |
 | F7 | `ConfirmDialog` + replace `window.confirm` ×17 | todo |
@@ -517,6 +517,10 @@ Sharp corners and one light theme.
   the chip on the filled confirm reads as part of the button (translucent
   frame on accent, not a dark sticker), and in Sharp corners the chip is
   square, in Round it is a capsule.
+- **F4 corner close (Queued Prompt, Workflow History, Performance, extension
+  app host):** the corner reads `× ⎋`, sits vertically centred on the header
+  line (top-2.5, h-6), hover fills with the control hover colour, and Tab
+  shows the ring (it used the plate radius before).
 
 ## Tasks
 

@@ -1,6 +1,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import * as React from 'react'
 
+import { Kbd } from '@renderer/components/ui/kbd'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import { cn } from '@renderer/lib/utils'
 
@@ -34,16 +35,39 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+// WHY width presets (keyboard-first plan T2): the sweep found ~20 distinct
+// dialog widths (360, 380, 420, 440, 460, 500, 520, 560, 620, 640, 672, 720,
+// 760, 780, 860, 880, 1040, 1240, 1360 px) plus `max-w-md/lg/xl/2xl` classes
+// that silently did NOTHING against the base width — McpServerDialog asked
+// for max-w-2xl and rendered at 520. Nobody chose twenty widths; each author
+// picked a number. Four presets cover every real need:
+//   sm      a question or a short form (confirmations, title prompt)
+//   default the historical 520 — single-column pickers and forms
+//   md      a list with detail (switch provider, history, prompt lists)
+//   lg      a wide list/table (close old agents, bulk switch, skills)
+//   xl      a workspace-sized surface (conversations, analytics)
+// Full-viewport takeovers (Settings, Performance) still pass an explicit
+// width with a WHY at the call site — they are sized to the window, not to
+// content. The `92vw` cap keeps every preset inside a narrow window.
+const dialogSizes = {
+  sm: 'w-[min(440px,92vw)]',
+  default: 'w-[min(520px,92vw)]',
+  md: 'w-[min(640px,92vw)]',
+  lg: 'w-[min(860px,94vw)]',
+  xl: 'w-[min(1240px,96vw)]',
+} as const
+
 type DialogContentProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Content
 > & {
   showCloseButton?: boolean
+  size?: keyof typeof dialogSizes
 }
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, showCloseButton = false, ...props }, ref) => (
+>(({ className, children, showCloseButton = false, size = 'default', ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -63,16 +87,23 @@ const DialogContent = React.forwardRef<
       // the TRACK minimum lets the child shrink first; each child still owns
       // whether its content truncates, wraps, or scrolls.
       className={cn(
-        'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+        'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+        dialogSizes[size],
         className,
       )}
     >
       {children}
       {showCloseButton ? (
+        // WHY `× ⎋` and not a bare ×: the corner button is the mouse exit and
+        // the chip tells a keyboard user the same exit is one key away — the
+        // hint rule (plan H2) applied to the one close affordance every
+        // corner-close dialog shares. rounded-control + the Button focus ring
+        // (it used rounded-slab, the PLATE radius, and a hand-copied ring).
         <DialogPrimitive.Close
-          className="rounded-slab absolute right-3 top-3 border border-transparent px-1.5 py-0.5 text-[14px] leading-none text-muted outline-none hover:border-border hover:text-ink focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
+          className="rounded-control absolute right-3 top-2.5 inline-flex h-6 items-center gap-1.5 border border-transparent px-1.5 text-[14px] leading-none text-control-fg outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           <span aria-hidden="true">×</span>
+          <Kbd binding="Escape" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
       ) : null}
