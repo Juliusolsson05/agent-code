@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import type { Conversation, ConversationListResponse } from '@shared/conversations/types'
@@ -71,7 +71,15 @@ describe('ConversationsPicker', () => {
     const onClose = vi.fn()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
     await screen.findByText('break down this project')
+    // findByText resolves when the rows PAINT, but the picker resets the
+    // highlight in a passive effect keyed on the list head, and that effect
+    // can still be pending. In CI (run for #1266, 0c962aaa) it flushed after
+    // the ArrowDown below, so Enter resumed row 0. Flush it first, and
+    // confirm the arrow landed before pressing Enter. (Ordering, not a wider
+    // timeout: the 1 s waitFor never had a chance to see the right call.)
+    await act(async () => {})
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     // `newConversation` is part of this call's meaning, not a detail (#1090):
     // the picker swaps a STRANGER's conversation into the pane, so the
