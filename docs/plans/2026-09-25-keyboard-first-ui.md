@@ -478,7 +478,7 @@ entry when it lands.
 | N3 | DispatchMiniList | buttons, hover ring only | T4 focus ring; `aria-current` | done |
 | N4 | TiledDispatch SplitHandles ×3 (L214/347/567) | mouse only, not focusable | `onKeyboardDelta` + `label` like GlobalEditorShell L1213 | done (2% step, shared clamp with drag) |
 | N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | done (pills `aria-current`; layout radios roving + shared `radioGroupKeyDown`; also swept into Grid Dispatch nested agents, Settings, Color flag) |
-| N6 | Reader strip | no aria-pressed | aria-current | todo |
+| N6 | Reader strip | no aria-pressed | aria-current | done (+ Older/Newer said ↑/↓ but only ⌥↑/⌥↓ acted → one binding drives chip + listener) |
 | N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | todo |
 | N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
 | N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | done (Tab stop + shared list keys) |
@@ -778,6 +778,9 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **N6 Reader header:** the buttons now read "Older ⌥↑" / "Newer ⌥↓" (they
+  said "↑ Older" / "↓ Newer", but plain arrows never did that); agent pills
+  and both buttons show a focus ring.
 - **N5 Spotlight header:** Tab reaches each agent pill (focus ring); the
   Split | Browser | Agent control is ONE Tab stop on the chosen layout, ←/→
   move between the three and Space/Enter choose (arrows never switch the
@@ -1236,3 +1239,7 @@ Sharp corners and one light theme.
   choose. Confirm-red: both SpotlightView tests and the nested-agents test fail
   on the pre-change components; removing the modifier guard fails the ⌥-arrow
   assertion.
+- 2026-09-25 N6: `READER_OLDER_KEY`/`READER_NEWER_KEY` feed both
+  `eventMatchesKeybinding` in the listener and `<Kbd binding>` on the buttons.
+  Confirm-red: both new ReaderView tests fail on the pre-change view; the
+  existing ⌥-arrow and modal-yield tests stay green as the listener regression.

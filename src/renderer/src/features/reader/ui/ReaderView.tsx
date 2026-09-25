@@ -10,6 +10,8 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { Kbd } from '@renderer/components/ui/kbd'
+import { eventMatchesKeybinding } from '@shared/keybindings'
 import { DEFAULT_PROVIDER, isAgentProviderKind, isAgentSessionKind } from '@shared/types/providerKind'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 import {
@@ -41,6 +43,16 @@ import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 // which session they're reading without leaving Reader Mode.
 
 const REMARK_PLUGINS = [remarkGfm]
+
+// Reader's history keys, as canonical bindings. ONE definition drives both the
+// document listener and the chips on the Older/Newer buttons (plan H2: a chip
+// appears only where its key really acts). The buttons used to read "↑ Older"
+// / "↓ Newer" while the listener needed ⌥↑/⌥↓, so the hint taught a key that
+// did nothing; a plain arrow belongs to the scroller. These are Reader-local,
+// not commands in the keybinding catalog, so they are not rebindable and a
+// literal is the source of truth.
+const READER_OLDER_KEY = 'Alt+Up'
+const READER_NEWER_KEY = 'Alt+Down'
 
 // Markdown renderer pieces — mirrored from Feed.tsx so the typography
 // in Reader matches an assistant message in the normal feed exactly.
@@ -330,13 +342,14 @@ function ReaderBody({
       // cannot protect the dialog from Reader. The mounted interaction-owner
       // marker is the shared synchronous source of truth for that priority.
       if (hasAppInteractionOwner()) return
-      if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
-      if (event.key === 'ArrowUp') {
+      // eventMatchesKeybinding requires the EXACT modifier set, so ⌥⇧↑ or
+      // ⌘⌥↑ still pass through to whatever else binds them.
+      if (eventMatchesKeybinding(event, READER_OLDER_KEY)) {
         event.preventDefault()
         selectOlder()
         return
       }
-      if (event.key === 'ArrowDown') {
+      if (eventMatchesKeybinding(event, READER_NEWER_KEY)) {
         event.preventDefault()
         selectNewer()
       }
@@ -466,27 +479,31 @@ function ReaderHeader({
             type="button"
             onClick={onSelectOlder}
             disabled={!canSelectOlder}
-            className={`rounded-control px-2 py-1 text-[11px] font-code border ${
+            className={`inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-[11px] font-code border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
               canSelectOlder
                 ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
                 : 'bg-canvas text-muted border-border opacity-50 cursor-default'
             }`}
             aria-label="Show older assistant message"
+            aria-keyshortcuts="Alt+ArrowUp"
           >
-            ↑ Older
+            Older
+            <Kbd binding={READER_OLDER_KEY} />
           </button>
           <button
             type="button"
             onClick={onSelectNewer}
             disabled={!canSelectNewer}
-            className={`rounded-control px-2 py-1 text-[11px] font-code border ${
+            className={`inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-[11px] font-code border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
               canSelectNewer
                 ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
                 : 'bg-canvas text-muted border-border opacity-50 cursor-default'
             }`}
             aria-label="Show newer assistant message"
+            aria-keyshortcuts="Alt+ArrowDown"
           >
-            ↓ Newer
+            Newer
+            <Kbd binding={READER_NEWER_KEY} />
           </button>
           <span className="px-2 text-[10px] font-code uppercase tracking-wider text-muted select-none">
             {position}
@@ -502,8 +519,11 @@ function ReaderHeader({
                 <button
                   key={sessionId}
                   type="button"
+                  // Same as Spotlight's pills (N5): one pill is the agent being
+                  // read, which the accent fill alone never announced.
+                  aria-current={active ? 'true' : undefined}
                   onClick={() => workspace.setReaderModeSession(sessionId)}
-                  className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                  className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                     active
                       ? 'bg-accent text-accent-fg border-accent'
                       : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'

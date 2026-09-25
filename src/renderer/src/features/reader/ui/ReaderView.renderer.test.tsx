@@ -202,6 +202,28 @@ describe('Reader history keyboard ownership', () => {
     expect(screen.getByText('Newer answer')).toBeTruthy()
     expect(screen.queryByText('Older answer')).toBeNull()
   })
+
+  it('labels Older/Newer with the keys that actually move history (ledger N6)', () => {
+    // The buttons used to read "↑ Older" / "↓ Newer" while only ⌥↑/⌥↓ acted.
+    // The chip and the listener now share one binding, so this pins both
+    // halves: the chip says ⌥↑, and pressing a plain ↑ still does nothing.
+    render(<ReaderView workspace={makeReaderWorkspace()} />)
+    const older = screen.getByRole('button', { name: 'Show older assistant message' })
+    const newer = screen.getByRole('button', { name: 'Show newer assistant message' })
+    expect(older.querySelector('[data-slot="kbd"]')?.textContent).toBe('⌥↑')
+    expect(newer.querySelector('[data-slot="kbd"]')?.textContent).toBe('⌥↓')
+
+    fireEvent.keyDown(document, { code: 'ArrowUp', key: 'ArrowUp' })
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'ArrowUp', key: 'ArrowUp' })
+    expect(screen.queryByText('Older answer')).toBeNull()
+  })
+
+  it('marks the agent being read as the current pill', () => {
+    render(<ReaderView workspace={makeReaderWorkspace()} />)
+    const current = document.querySelectorAll('[aria-current="true"]')
+    expect(current).toHaveLength(1)
+    expect(current[0]!.textContent).toBe('Agent')
+  })
 })
 
 describe('Reader content source', () => {
