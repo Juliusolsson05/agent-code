@@ -274,7 +274,7 @@ function buildRenderDiagnostics(runtime: SessionRuntime, kind: string): Record<s
 //     Tail-truncated to SCREEN_TAIL_LINES. Taken from MAIN's latest snapshot
 //     when available (#762): the renderer's copy only moves while a debug
 //     surface holds a screen lease, so it is usually stale or empty.
-function buildStateSnapshot(runtime: SessionRuntime, mainScreen: AgentScreenSnapshot | null): Record<string, unknown> {
+export function buildStateSnapshot(runtime: SessionRuntime, mainScreen: AgentScreenSnapshot | null): Record<string, unknown> {
   const {
     entries: _entries,
     toolUseIndex: _toolUseIndex,

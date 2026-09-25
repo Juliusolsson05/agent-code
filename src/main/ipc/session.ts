@@ -268,8 +268,12 @@ export function registerSessionIpc(
     if (!leaseOwnersWatched.has(owner)) {
       leaseOwnersWatched.add(owner)
       const drop = () => screenInterest.dropOwner(owner)
-      sender.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
-        if (isMainFrame) drop()
+      // A reload is a main-frame navigation to a new document. Same-document
+      // hash/history navigation keeps the JavaScript context and its live
+      // leases, as workflows.ts's identical per-renderer lease contract
+      // already rules (#1236 review C).
+      sender.on('did-start-navigation', details => {
+        if (details.isMainFrame && !details.isSameDocument) drop()
       })
       sender.once('destroyed', () => {
         drop()
@@ -297,7 +301,7 @@ export function registerSessionIpc(
     'session:input',
     (_evt, sessionId: string, data: string, pasteId?: string) => {
       // Optional pasteId journals THIS write into the per-paste debug
-      // dump. Only set by the Agent Code paste flow (claudePaste.ts) —
+      // dump. Only set by the composer's paste flow (useComposerKeybinds) —
       // never set on keystrokes, agent-pty bridging, or other normal
       // I/O. Pairs against the renderer's IPC:write:* events by sha8
       // + byte count, same way dictation pairs renderer-produced
@@ -321,7 +325,7 @@ export function registerSessionIpc(
       // between and reports the wrong cause — the same misdiagnosis this
       // replaces, just narrower.
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
-      // `pasteId` is set only by the Agent Code paste flow (claudePaste.ts) and
+      // `pasteId` is set only by the composer's paste flow (useComposerKeybinds) and
       // never by keystrokes, so it is also the exact renderer-side attribution
       // signal required by SessionManager's prompt-delivery ownership fence.
       const attributedPasteId = typeof pasteId === 'string' && pasteId.length > 0
@@ -439,25 +443,6 @@ export function registerSessionIpc(
     'session:resize',
     (_evt, sessionId: string, cols: number, rows: number) => {
       manager.resize(sessionId, cols, rows)
-    },
-  )
-
-  // Event-driven paste-submit (Track C of the paste-submit harness PR).
-  // Renderer's claudePaste.ts invokes this AFTER writing the bracketed
-  // paste payload but BEFORE writing `\r`. We resolve as soon as
-  // Claude's TUI renders `[Pasted text #N]`, falling back to a 2 s
-  // timeout if the placeholder never appears (future Claude UI rename
-  // insurance). See `claudePaste.ts` and
-  // `packages/claude-code-headless/src/ClaudeCodeHeadless.ts:awaitPastePlaceholder`
-  // for the full rationale chain.
-  ipcMain.handle(
-    'claude:await-paste-placeholder',
-    async (
-      _evt,
-      sessionId: string,
-      opts?: { timeoutMs?: number; pollIntervalMs?: number },
-    ) => {
-      return manager.awaitClaudePastePlaceholder(sessionId, opts)
     },
   )
 

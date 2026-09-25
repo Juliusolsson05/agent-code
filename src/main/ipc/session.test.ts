@@ -166,17 +166,43 @@ describe('screen leases (#762)', () => {
     // the current screen goes down the ordinary session:screen path.
     lease({ sender }, 'pane')
     expect(screenInterest.wants('pane')).toBe(true)
-    expect(harness.routed).toHaveBeenCalledWith('pane', 'session:screen', expect.objectContaining({ sessionId: 'pane', plain: 'now' }))
+    // The same aliased wire payload the recover seed sends (recent/markdown
+    // equal to plain/markdown are dropped on the wire, #746).
+    expect(harness.routed).toHaveBeenCalledWith('pane', 'session:screen', { sessionId: 'pane', plain: 'now', markdown: 'now' })
 
-    // A reload never runs the renderer's cleanup. A sub-frame navigation is
-    // not a reload and must not drop it.
-    sender.emit('did-start-navigation', {}, 'about:blank', false, false)
+    // A reload never runs the renderer's cleanup. A sub-frame navigation and a
+    // same-document (hash/history) navigation are not reloads and keep it.
+    sender.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false })
     expect(screenInterest.wants('pane')).toBe(true)
-    sender.emit('did-start-navigation', {}, 'app://index.html', false, true)
+    sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true })
+    expect(screenInterest.wants('pane')).toBe(true)
+    sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
     expect(screenInterest.wants('pane')).toBe(false)
 
     lease({ sender }, 'pane')
     sender.emit('destroyed')
     expect(screenInterest.wants('pane')).toBe(false)
+  })
+})
+
+describe('session:get-screen-debug (#762)', () => {
+  it('answers with main\'s latest raw screen and the recorded tail history', async () => {
+    const { screenTailHistory } = await import('@main/sessions/screenInterest.js')
+    const manager = new EventEmitter()
+    Object.assign(manager, {
+      getScreenSnapshot: () => ({ plain: 'latest', markdown: 'latest', recent: 'latest\nmore', recentMarkdown: 'latest\nmore' }),
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    screenTailHistory.record('debug-pane', 'first frame')
+    screenTailHistory.record('debug-pane', 'second frame')
+    try {
+      const answer = await harness.handlers.get('session:get-screen-debug')!({}, 'debug-pane') as {
+        screen: { recent: string } | null; samples: Array<{ content: string }>
+      }
+      expect(answer.screen?.recent).toBe('latest\nmore')
+      expect(answer.samples.map(sample => sample.content)).toEqual(['first frame', 'second frame'])
+    } finally {
+      screenTailHistory.forget('debug-pane')
+    }
   })
 })

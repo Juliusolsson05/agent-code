@@ -123,7 +123,9 @@ it('forwards screen frames only to a leased session, and records every frame for
   )) as { deliveries: { wrapped: { baseline: { screen: string }; after: { screen: string } } } }
   const idle = recorded.deliveries.wrapped.baseline.screen
   const drafted = recorded.deliveries.wrapped.after.screen
-  const frame = (screen: string) => ({ sessionId: 'pane', plain: screen, markdown: screen, recent: screen, recentMarkdown: screen })
+  // `recent` is the wider window (Codex scrollback) and is what the history
+  // must record, so it differs from `plain` here to pin that (#1236 review C).
+  const frame = (screen: string) => ({ sessionId: 'pane', plain: screen.slice(-200), markdown: screen, recent: screen, recentMarkdown: screen })
   try {
     manager.emit('screen', frame(idle))
     forwarder.flush()
@@ -132,16 +134,17 @@ it('forwards screen frames only to a leased session, and records every frame for
     screenInterest.acquire(7, 'pane')
     manager.emit('screen', frame(drafted))
     forwarder.flush()
-    expect(sent).toEqual([drafted])
+    expect(sent).toEqual([drafted.slice(-200)])
 
     screenInterest.release(7, 'pane')
     manager.emit('screen', frame(idle))
     forwarder.flush()
-    expect(sent).toEqual([drafted])
+    expect(sent).toEqual([drafted.slice(-200)])
 
     // Every frame reached the tail history, forwarded or not (idle, drafted,
     // idle again: the dedupe only collapses consecutive repeats).
     expect(screenTailHistory.samples('pane')).toHaveLength(3)
+    expect(screenTailHistory.samples('pane')[1]!.content.length).toBeGreaterThan(drafted.slice(-200).trimEnd().length)
     manager.emit('removed', { sessionId: 'pane' })
     forwarder.flush()
     expect(screenTailHistory.samples('pane')).toEqual([])

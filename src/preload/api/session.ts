@@ -181,23 +181,6 @@ export const sessionApi = {
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('session:resize', sessionId, cols, rows),
 
-  // Event-driven paste-submit primitive. See
-  // src/renderer/.../claudePaste.ts and
-  // packages/claude-code-headless/src/ClaudeCodeHeadless.ts.
-  // Resolves when Claude's TUI renders `[Pasted text #N]`, or after
-  // the configured timeout. Renderer treats every non-'appeared'
-  // outcome as "fall through to the wall-clock submit path."
-  awaitClaudePastePlaceholder: (
-    sessionId: string,
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'appeared'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-    | { kind: 'no-session' }
-  > =>
-    ipcRenderer.invoke('claude:await-paste-placeholder', sessionId, opts),
-
   loadOlderHistory: (params: {
     kind: AgentProviderKind
     cwd: string

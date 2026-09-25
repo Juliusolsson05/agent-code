@@ -906,6 +906,18 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     })
     expect(runtimes.s1?.screen).toBe('hello again')
     expect(runtimes.s1?.picker.visible).toBe(false)
+
+    // A frame whose visible screen is unchanged but whose scrollback grew
+    // must still apply (#1236 review C: the no-op bail on `screen` alone
+    // survived).
+    act(() => {
+      fake.emitScreen({
+        sessionId: 's1', plain: 'hello again', markdown: 'hello again',
+        recent: 'earlier line\nhello again', recentMarkdown: 'earlier line\nhello again',
+        picker: { visible: false, items: [] },
+      })
+    })
+    expect(runtimes.s1?.recentScreen).toBe('earlier line\nhello again')
   })
 
   it('treats provider readiness as versioned state, never as process activity', () => {

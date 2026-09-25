@@ -35,7 +35,8 @@ import { reportLifecycle } from '@renderer/lifecycle/report'
 //      Escape forwards, Shift+Enter inserts a literal newline.
 //      The submit path forks by provider because Claude and
 //      Codex have DIFFERENT paste + submit timing requirements
-//      (see claudePaste.ts for the debounce story).
+//      (see @shared/claude/pasteConfirm and main's
+//      providers/claude/runtime/promptDelivery.ts for the paste story).
 //   3. Bash-style prompt history — Up/Down cycle through previous
 //      prompts when the composer is empty. Modifier combos fall
 //      through to the PTY-forward path so OS line navigation
