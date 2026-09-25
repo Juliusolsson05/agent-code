@@ -168,8 +168,7 @@ export function SessionView({
   // this view is honestly typed — the old `as unknown as SessionRuntime`
   // cast over a fabricated partial object is gone; `semantic` is the store's
   // REAL fold state. Only entries + semantic + phase differ across renders;
-  // ghosts is the frozen empty map (no optimistic plane on the phone) and
-  // lastJsonlEntryAt is irrelevant with no ghosts to invalidate.
+  // ghosts is the frozen empty map (no optimistic plane on the phone).
   //
   // Memo deps stay the turn mirrors plus bounded errors, NOT
   // transcript.semantic: the fold object also changes reference on
@@ -183,7 +182,9 @@ export function SessionView({
       streamPhase: transcript.phase.streamPhase,
       streamPhasePendingToolName: transcript.phase.streamPhasePendingToolName,
       streamPhasePendingToolUseId: transcript.phase.streamPhasePendingToolUseId,
-      lastJsonlEntryAt: 0,
+      // The store's real producer-time cursor since #1177; a constant 0 kept
+      // the ledger's collapsed-running rule from ever firing on the phone.
+      lastJsonlEntryAt: transcript.lastJsonlEntryAt,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
     [
@@ -194,6 +195,7 @@ export function SessionView({
       transcript.phase.streamPhase,
       transcript.phase.streamPhasePendingToolName,
       transcript.phase.streamPhasePendingToolUseId,
+      transcript.lastJsonlEntryAt,
     ],
   )
   const ledgerFeedPlan = useLedgerFeedItems(runtimeView, provider, sessionId, {

@@ -1,9 +1,17 @@
 import { REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
-import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { stepLiveSemantic } from '@renderer/session-runtime/ingest/liveSemantic'
 import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
-import { historyMarkerOf, stampHistoryMarker, planLiveEntryTrim, OLDER_PREPEND_TRIM_GRACE_MS } from '@renderer/session-runtime/liveEntryWindow'
+import { historyMarkerOf, planLiveEntryTrim, OLDER_PREPEND_TRIM_GRACE_MS } from '@renderer/session-runtime/liveEntryWindow'
+import {
+  admitMappedEntries,
+  isPaginationAnchor,
+  latestCommittedTimestamp,
+  reindexToolsAfterMerge,
+  type CommittedAdmissionMode,
+  type CommittedSeenLedger,
+} from '@renderer/session-runtime/ingest/committedRecords'
+import { placeHistoryEntries, type HistoryPlacement } from '@renderer/session-runtime/ingest/historyPlacement'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import { emptySemanticRuntime } from '@renderer/session-runtime/state'
 import {
@@ -24,22 +32,20 @@ import { asRecord } from '@shared/lib/asRecord'
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 
 // The phone's per-session transcript model — the MINIMAL SessionRuntime
-// that drives the desktop Feed (the field list comes from the TileLeaf →
-// Feed prop map, TileLeaf.tsx:475-573; see the semantic-rendering design
-// doc's "Client state model" for what is deliberately skipped and why).
+// that drives the desktop Feed (see the semantic-rendering design doc's
+// "Client state model" for what is deliberately skipped and why: ghosts,
+// optimistic echoes, queue attribution, worktree evidence).
 //
-// This store deliberately reuses the desktop's OWN reducers and mappers —
-// foldSemanticEvent, reduceStreamPhase, the registry transcript mappers,
-// indexEntryIntoMaps — so the phone's model can only diverge from the
-// desktop's where this file visibly chooses to (skipped subsystems), never
-// silently in shared logic.
-//
-// Ingest discipline (mirrors useIpcSubscriptions Pass B + the desktop
-// history actions; every rule here traces to a desktop counterpart):
-//   - ONE seen-uuid Set per session gates BOTH backfill and live entries.
-//   - History PREPENDS, live APPENDS.
-//   - The pagination anchor is the first chunk-raw that yielded KEPT
-//     entries' historyMarker (desktop gates on mapped.length > 0).
+// Since #1177 the ingest RULES are not mirrored here — they are called. The
+// committed-record admission (dedupe, trimmed tombstones, marker stamping,
+// tool indexing), the initial-history placement and the live semantic step
+// live in session-runtime/ingest/, and the desktop's live burst, initial
+// loader and older pager run the very same functions. Mirroring had drifted
+// in visible ways (blind history prepend, a constant lastJsonlEntryAt, a
+// different tool-index policy for history), each fixed on one side only. What
+// remains in this file is phone STORAGE and phone LIFECYCLE:
+//   - ONE seen-uuid Set and one tombstone Set per session, dying with the
+//     view (the desktop keeps its tombstones in a module registry instead).
 //   - LIVE entries flow through one session-lifetime mapper (the codex
 //     rolling turn cursor must survive across bursts); HISTORY chunks each
 //     get a FRESH chunk-scoped mapper (the codex mapper's documented
@@ -48,6 +54,7 @@ import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 //   - A transcript ROLL (/clear, resume onto a new provider session) is
 //     detected by comparing the `file` riding live frames and history
 //     chunks; state resets so the old conversation cannot pollute the new.
+//   - View-scoped retention: only viewed sessions hold a transcript.
 
 export type SessionTranscript = {
   entries: Entry[]
@@ -102,6 +109,11 @@ export type SessionTranscript = {
    *  bootstrapping is for replay bursts, not interactive paging. */
   bootstrapping: boolean
   totalEntries: number
+  /** Producer time of the newest committed row this view admitted (see
+   *  latestCommittedTimestamp). The ownership ledger's collapsed-running
+   *  rule reads it; the phone handed the ledger a constant 0 until #1177, so
+   *  that rule could never fire here. */
+  lastJsonlEntryAt: number | null
 }
 
 type SessionState = {
@@ -169,6 +181,7 @@ function emptyTranscript(): SessionTranscript {
     loadingOlderHistory: false,
     bootstrapping: false,
     totalEntries: 0,
+    lastJsonlEntryAt: null,
   }
 }
 
@@ -397,15 +410,19 @@ export class TranscriptStore {
     if (state.transcriptFile === null && typeof result.chunk.file === 'string') {
       state.transcriptFile = result.chunk.file
     }
-    const marker = this.ingestRawEntries(
+    const ingested = this.ingestRawEntries(
       sessionId,
       result.chunk.entries as Array<Record<string, unknown>>,
-      'prepend',
+      'tail',
       result.chunk.offsets,
     )
-    if (marker) {
-      state.historyOldestMarker = marker.marker
-      state.historyOldestOffset = marker.offset
+    // The cursor names the oldest entry the view holds (desktop #910 item
+    // 3): it moves to the chunk's anchor only when the placement changed
+    // which row is first. A chunk placed AFTER the window, or one that added
+    // nothing, must leave it where live ingest and earlier pages put it.
+    if (ingested.anchor && !ingested.keptWindowHead) {
+      state.historyOldestMarker = ingested.anchor.marker
+      state.historyOldestOffset = ingested.anchor.offset
     }
     this.mutate(sessionId, t => ({
       ...t,
@@ -451,15 +468,15 @@ export class TranscriptStore {
       return
     }
     state.olderPrependAt = this.now()
-    const marker = this.ingestRawEntries(
+    const { anchor } = this.ingestRawEntries(
       sessionId,
       result.chunk.entries as Array<Record<string, unknown>>,
-      'prepend',
+      'older',
       result.chunk.offsets,
     )
-    if (marker) {
-      state.historyOldestMarker = marker.marker
-      state.historyOldestOffset = marker.offset
+    if (anchor) {
+      state.historyOldestMarker = anchor.marker
+      state.historyOldestOffset = anchor.offset
     }
     this.mutate(sessionId, t => ({
       ...t,
@@ -603,11 +620,18 @@ export class TranscriptStore {
 
     if (!this.isViewed(sessionId)) return
 
-    this.ingestRawEntries(
+    const { anchor } = this.ingestRawEntries(
       sessionId,
       items.map(x => x.entry as Record<string, unknown>),
-      'append',
+      'live',
     )
+    // The desktop's live rule: a burst anchors pagination only while the
+    // view has no cursor yet (a trim or a history load moves it after that).
+    // Without it, a view whose first rows arrived live, and whose backfill
+    // was then placed AFTER them (#910), had no cursor at all and could
+    // never page back.
+    const live = this.state(sessionId)
+    if (live.historyOldestMarker === null && anchor) live.historyOldestMarker = anchor.marker
 
     // Live-entry arrival is also the backfill retry trigger for sessions
     // whose initial get-history failed with "no transcript on disk yet".
@@ -675,79 +699,95 @@ export class TranscriptStore {
     if (set) for (const cb of [...set]) cb()
   }
 
-  /** Map + dedupe + index a batch of raw records. Returns the pagination
-   *  marker for prepend chunks (first raw that yielded KEPT entries —
-   *  desktop's initialHistory.ts:178 gate). */
+  /**
+   * Map + admit a batch of raw records under the SHARED committed-record rules
+   * (session-runtime/ingest/committedRecords.ts, #1177) — the same dedupe,
+   * marker stamping, tool indexing and placement the desktop's three ingest
+   * sites run, so the phone can no longer drift from them. What stays here is
+   * only phone storage: its tombstone Set, and the per-line cursor group that
+   * keeps a trim from splitting one raw line's fanned-out entries.
+   *
+   * `tail` is the initial newest-N chunk: its entries are PLACED against the
+   * live window by the #910 rule rather than blindly prepended (the phone
+   * prepended until #1177 — a live burst that landed before the backfill, or
+   * a durable read that trailed the live stream, put newer turns above older
+   * ones, permanently, because their uuids were then seen). `older` is a page
+   * strictly before the oldest marker, so a plain prepend is exact there.
+   *
+   * Returns the chunk's pagination anchor (first record that mapped to an
+   * entry and carries a marker) and whether the window's first row is still
+   * first — the desktop's #910 item 3 test for whether the cursor may move.
+   */
   private ingestRawEntries(
     sessionId: string,
     raws: Array<Record<string, unknown>>,
-    mode: 'append' | 'prepend',
+    mode: CommittedAdmissionMode,
     offsets?: number[],
-  ): { marker: string; offset?: number } | null {
-    if (raws.length === 0) return null
+  ): { anchor: { marker: string; offset?: number } | null; keptWindowHead: boolean } {
     const state = this.state(sessionId)
-    const mapper = mode === 'append' ? this.liveMapperOf(sessionId) : this.chunkMapper(sessionId)
+    const before = state.transcript.entries
+    if (raws.length === 0) return { anchor: null, keptWindowHead: before.length > 0 }
+    const mapper = mode === 'live' ? this.liveMapperOf(sessionId) : this.chunkMapper(sessionId)
+    const ledger: CommittedSeenLedger = {
+      seen: state.seen,
+      isTrimmed: uuid => state.trimmed.has(uuid),
+      releaseTrimmed: uuid => { state.trimmed.delete(uuid) },
+    }
+    const indexes = { toolUseIndex: state.transcript.toolUseIndex, toolResultIndex: state.transcript.toolResultIndex }
+    const placement: HistoryPlacement[] | undefined = mode === 'tail' ? [] : undefined
 
     const kept: Entry[] = []
-    let firstKeptMarker: { marker: string; offset?: number } | null = null
+    let anchor: { marker: string; offset?: number } | null = null
     let toolIndexChanged = false
 
     for (const [rawIndex, raw] of raws.entries()) {
       const mapped = mapper.map(raw)
       const cursor = { group: {}, offset: offsets?.[rawIndex] }
-      if (
-        mode === 'prepend' &&
-        firstKeptMarker === null &&
-        mapped.entries.length > 0 &&
-        mapped.historyMarker
-      ) {
-        firstKeptMarker = { marker: mapped.historyMarker, offset: cursor.offset }
+      if (anchor === null && isPaginationAnchor(mapped.entries, mapped.historyMarker)) {
+        anchor = { marker: mapped.historyMarker, offset: cursor.offset }
       }
-      for (const entry of mapped.entries) {
-        const uuid = typeof entry.uuid === 'string' ? entry.uuid : null
-        if (uuid) {
-          if (state.seen.has(uuid) && !(mode === 'prepend' && state.trimmed.has(uuid))) continue
-          state.seen.add(uuid)
-          state.trimmed.delete(uuid)
-        }
-        stampHistoryMarker(entry, mapped.historyMarker)
+      // Only a live burst indexes as it admits (its rows are the newest, so
+      // admission order is window order); history reindexes after merging.
+      const admission = admitMappedEntries(mapped.entries, mapped.historyMarker, mode, ledger, {
+        indexes: mode === 'live' ? indexes : undefined,
+        placement,
+      })
+      for (const entry of admission.admitted) {
         entryCursors.set(entry, cursor)
         kept.push(entry)
-        if (
-          indexEntryIntoMaps(
-            entry,
-            state.transcript.toolUseIndex,
-            state.transcript.toolResultIndex,
-          )
-        ) {
-          toolIndexChanged = true
-        }
       }
+      if (admission.toolIndexChanged) toolIndexChanged = true
     }
 
-    if (kept.length === 0 && !toolIndexChanged) return firstKeptMarker
+    if (kept.length === 0 && !toolIndexChanged) return { anchor, keptWindowHead: before.length > 0 }
 
-    const entries = mode === 'append' ? [...state.transcript.entries, ...kept] : [...kept, ...state.transcript.entries]
-    if (mode === 'prepend' && toolIndexChanged) {
-      // Older pages may repeat a tool id with an earlier body. Replaying the
-      // complete retained order keeps the newest block authoritative instead
-      // of letting a prepended historical result overwrite a live result.
+    let entries: Entry[]
+    if (mode === 'live') {
+      entries = [...before, ...kept]
+    } else {
+      entries = mode === 'tail' && kept.length > 0
+        ? placeHistoryEntries(placement!, before).entries
+        : [...kept, ...before]
       // Finish this before notifying subscribers: a snapshot's version must
       // never advertise indexes that still contain historical winners.
-      state.transcript.toolUseIndex.clear()
-      state.transcript.toolResultIndex.clear()
-      for (const entry of entries) {
-        indexEntryIntoMaps(entry, state.transcript.toolUseIndex, state.transcript.toolResultIndex)
-      }
+      if (reindexToolsAfterMerge(kept, entries, indexes)) toolIndexChanged = true
     }
+    // Observed, as the desktop's placement reports it: is the window's first
+    // row still first? That, not "did this batch add anything", decides
+    // whether the pagination cursor may move.
+    const keptWindowHead = before.length > 0 && entries[0] === before[0]
     this.mutate(sessionId, t => ({
       ...t,
       entries,
-      totalEntries: t.totalEntries + (mode === 'append' ? kept.length : 0),
+      totalEntries: t.totalEntries + (mode === 'live' ? kept.length : 0),
       toolIndexVersion: toolIndexChanged ? t.toolIndexVersion + 1 : t.toolIndexVersion,
+      // Producer-time cursor of the newest COMMITTED row, the ledger's input
+      // for the collapsed-running rule and the desktop's ghost gate. An older
+      // page cannot move it forward, so only live and tail batches fold it.
+      lastJsonlEntryAt: mode === 'older' ? t.lastJsonlEntryAt : latestCommittedTimestamp(t.lastJsonlEntryAt, kept),
     }))
-    if (mode === 'append') this.trimLiveWindow(sessionId)
-    return firstKeptMarker
+    if (mode === 'live') this.trimLiveWindow(sessionId)
+    return { anchor, keptWindowHead }
   }
 
   private isViewed(sessionId: string): boolean {
@@ -806,15 +846,15 @@ export class TranscriptStore {
       if (record.type === 'turn_started') state.awaitingSemanticStart = false
     }
 
-    // Desktop order: fold first, then the shared phase machine over the
-    // POST-fold turn (reduceStreamPhase's caller contract).
+    // The desktop's own step (session-runtime/ingest/liveSemantic.ts): fold,
+    // then the shared phase machine over the POST-fold turn, with
+    // prompt_suggestion routed around both. The phone has no suggestion chip,
+    // so an out-of-band event is simply dropped here.
     const kind = this.kindOf(sessionId) ?? 'claude'
-    const nextSemantic = foldSemanticEvent(state.semantic, record, kind)
-    const nextPhase = reduceStreamPhase(
-      state.transcript.phase,
-      record,
-      nextSemantic.currentTurn,
-    )
+    const step = stepLiveSemantic(state.semantic, state.transcript.phase, record, kind)
+    if (step.kind === 'out-of-band') return
+    const nextSemantic = step.semantic
+    const nextPhase = step.phase
 
     const semanticChanged = nextSemantic !== state.semantic
     const t = state.transcript
