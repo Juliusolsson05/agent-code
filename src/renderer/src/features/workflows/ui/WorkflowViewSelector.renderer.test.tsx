@@ -263,7 +263,7 @@ describe('WorkflowViewSelector', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(50)
     expect(screen.getByText('Showing 50 of 500')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show 50 more' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show 50 More' }))
     expect(screen.getAllByRole('listitem')).toHaveLength(100)
     pending.splice(0, 8).forEach(resolve => resolve())
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(16))

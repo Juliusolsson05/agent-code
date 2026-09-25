@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Button } from '@renderer/components/ui/button'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
@@ -158,7 +159,8 @@ export function WorkflowHistoryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton
-        className="flex max-h-[82vh] w-[min(640px,calc(100vw-2rem))] flex-col overflow-hidden"
+        size="md"
+        className="flex max-h-[82vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
           // The history rows are read-only, so without an explicit focus target Radix can only
           // focus Close. Focusing the labeled scroll region lets PageUp/PageDown and arrow keys
@@ -179,7 +181,7 @@ export function WorkflowHistoryDialog({
           role="region"
           aria-label="Workflow history entries"
           tabIndex={0}
-          className="rounded-b-float overflow-y-auto p-3 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+          className="rounded-b-float overflow-y-auto px-4 py-3 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         >
           <div role="list" aria-label="Previous workflow runs" className="space-y-2">
             {visibleReferences.map(reference => {
@@ -258,13 +260,16 @@ export function WorkflowHistoryDialog({
           {visibleCount < newestFirst.length ? (
             <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3 text-[10px] text-muted">
               <span>Showing {visibleReferences.length} of {newestFirst.length}</span>
-              <button
+              {/* The shared outline Button (plan T8) — this was its hand-copied
+                  recipe on the generic border token. */}
+              <Button
                 type="button"
+                variant="outline"
+                size="xs"
                 onClick={() => setVisibleCount(current => current + HISTORY_PAGE_SIZE)}
-                className="rounded-control border border-border px-2 py-1 text-ink hover:border-border-hi hover:bg-surface-hi focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
               >
-                Show {Math.min(HISTORY_PAGE_SIZE, newestFirst.length - visibleCount)} more
-              </button>
+                Show {Math.min(HISTORY_PAGE_SIZE, newestFirst.length - visibleCount)} More
+              </Button>
             </div>
           ) : null}
         </div>

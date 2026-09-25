@@ -438,7 +438,7 @@ entry when it lands.
 | S30 | AgentMcpServersModal | no Enter; `max-w-xl` no-op | size preset; Close ⎋ | done |
 | S31 | McpServerDialog | textarea autoFocus; `max-w-2xl` no-op (renders 520) | size md; ⌘↵ confirm chip | done |
 | S32 | AddSkillDialog | Enter = find; square inputs/cards | T1 tokens; legend (↵ find); DialogActions | done |
-| S33 | ReportHistoryModal | no keys; outline Close | Close ⎋ ghost; scroller focus T4 | todo |
+| S33 | ReportHistoryModal | no keys; outline Close | Close ⎋ ghost; scroller focus T4 | done |
 | S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | todo |
 | S35 | AgentAnalyticsModal | "close" button; p-4 | as S34 | todo |
 | S36 | KeyVaultModal | Enter in inputs; window.confirm; prose footer | ConfirmDialog; Close ⎋ | todo |
@@ -446,7 +446,7 @@ entry when it lands.
 | S38 | PerformanceMonitor | showCloseButton; p-4 sections | D5 sections; Close ⎋ | todo |
 | S39 | SetupGate | px-5 py-4; raw buttons; blocked Esc | T3/T8; legend when Esc blocked | todo |
 | S40 | DictationGuideModal | DialogActions Done | chips (automatic from F2); T3 | todo |
-| S41 | WorkflowHistoryDialog | showCloseButton; p-3 | Close ⎋; T3 | todo |
+| S41 | WorkflowHistoryDialog | showCloseButton; p-3 | Close ⎋; T3 | done |
 | S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | todo |
 | S43 | CommandPalette | input ↑↓ Enter; sub-modes; px-3 py-2 header; raw sub-form buttons; plain-text chords | Kbd chords on rows; legend; T8 sub-form | todo |
 | S44 | PathPickerModal | Tab/↑↓/⇧↵/two-phase Esc; p-6; lowercase prose + "cancel" | T3 anatomy; legend with Kbd; DialogActions | todo |
@@ -721,6 +721,11 @@ Sharp corners and one light theme.
   field runs it); repo/notice/candidate boxes have the plate radius and
   candidates a hover; footer `Cancel ⎋` + `Install N Skills` with no chip;
   while finding/installing, Cancel disables and Escape waits; 860 wide.
+- **S33 TLDR / Goal History:** opens with the history focused (inset ring on
+  Tab) so ↑↓/PgDn scroll at once; footer one ghost `Close ⎋` (was outline).
+- **S41 Workflow History:** body inset px-4 (was p-3); "Show 50 More" is the
+  standard outline button; corner `× ⎋` (this dialog has no footer — the
+  rule: a corner close only where no footer exists).
 
 ## Tasks
 
@@ -795,6 +800,11 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S33/S41: history viewers — Report History focuses a tabbable
+  scroller + close-only footer; Workflow History anatomy padding, md
+  preset, Button for Show More (label title-cased; test updated). Rule
+  recorded: corner `× ⎋` only where a dialog has no footer. Confirm-red:
+  the Report History focus/Close test fails on the pre-change file.
 - 2026-09-25 S32: Add Skills — Input primitive, Kbd on Find, DialogActions
   (Install: no key — it writes a repository's files into provider
   folders), busy guards on every close path. Confirm-red: the new test
