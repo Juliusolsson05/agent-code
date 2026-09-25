@@ -1218,9 +1218,19 @@ body,
 }
 .toast-enter { animation: cc-toast-in 150ms ease-out forwards; }
 
-/* ---------- Focus ring ---------- */
+/* ---------- Focus ring ----------
+   WHY `--theme-focus-ring` and not `--theme-accent`: the Custom Appearance
+   editor exposes Focus Ring as its own user-editable token
+   (customAppearance.ts `focusRing`), and every primitive's ring class
+   (`ring-focus-ring`) already honours it. This global outline — the ONLY
+   focus indicator for every element without its own ring class — read the
+   accent directly, so a user who set a distinct focus colour saw it on
+   buttons and inputs and the old accent everywhere else. The alias
+   `--theme-focus-ring: var(--theme-accent)` keeps built-in themes looking
+   exactly as before; only an explicit override changes anything.
+   (keyboard-first plan T4.) */
 :focus-visible {
-  outline: 1px solid var(--theme-accent);
+  outline: 1px solid var(--theme-focus-ring);
   outline-offset: 1px;
 }
 
@@ -1288,8 +1298,13 @@ body,
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
+  /* WHY theme tokens: this read `var(--border)` / `var(--accent)`, which no
+     stylesheet defines (the theme's names are `--theme-*`; Tailwind's
+     `@theme inline` emits no bare aliases). An undefined var makes the
+     declaration invalid at computed-value time, so the spinner rendered
+     with NO border at all — an invisible loading state. */
+  border: 2px solid var(--theme-border-hi);
+  border-top-color: var(--theme-accent);
   animation: cc-extension-spin 0.9s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {

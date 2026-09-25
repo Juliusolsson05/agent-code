@@ -390,7 +390,7 @@ entry when it lands.
 | F2 | `DialogActions` chips + `legend` + `confirmKey` + `escapeCancels` + tests | done |
 | F3 | `useListNavigation` + test | done |
 | F4 | `DialogContent size` presets + close button convergence | done (presets exist; call sites migrate in their S-rows) |
-| F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | todo |
+| F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | done |
 | F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | todo |
 | F7 | `ConfirmDialog` + replace `window.confirm` ×17 | todo |
 | F8 | `dropdown-menu` primitive (D9) | todo |
@@ -503,7 +503,7 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 | X1 | #713 condition modal scoped to its pane (keyboard side; tell B7) | todo |
 | X2 | `font-mono` → `font-code` sweep (T6) | todo |
 | X3 | `focus:border-accent` / `outline-none` sweep (T4) | todo |
-| X4 | Stale comments (`defaults.ts` dictation) | todo |
+| X4 | Stale comments (`defaults.ts` dictation) | done |
 
 ## Owner visual checklist
 
@@ -521,6 +521,11 @@ Sharp corners and one light theme.
   app host):** the corner reads `× ⎋`, sits vertically centred on the header
   line (top-2.5, h-6), hover fills with the control hover colour, and Tab
   shows the ring (it used the plate radius before).
+- **F5 focus + spinner:** in Settings → Appearance → Custom, set Focus Ring to
+  a colour clearly different from the accent, then Tab through any dialog,
+  the sidebar and the tab bar — EVERY focus indicator (outline and ring)
+  shows the new colour. Open an extension app while it loads: the spinner
+  ring is now visible (border-hi track, accent arc).
 
 ## Tasks
 
