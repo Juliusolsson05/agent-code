@@ -303,4 +303,26 @@ describe('ConversationsPicker', () => {
     await screen.findByText('a different conversation')
     expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
   })
+
+  // #1297 round 2: a loadMore across a filter change appended new-scope rows
+  // to old-scope rows and marked the mix fresh, reopening Enter on them.
+  it('does not page old rows after the scope changed', async () => {
+    const list = install(vi.fn(async (request: { scope?: string; cursor?: string | null }) => {
+      if (request.scope === 'everywhere' && !request.cursor) return new Promise<never>(() => {})
+      return response({ nextCursor: 'next-page' })
+    }))
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    // Scrolling the old list asks for more while the new scope loads.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await act(async () => {})
+    expect(list.mock.calls.some(([request]) => (request as { cursor?: string | null }).cursor === 'next-page')).toBe(false)
+    expect(screen.getByText(/^loading…/)).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await act(async () => {})
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+  })
 })
+

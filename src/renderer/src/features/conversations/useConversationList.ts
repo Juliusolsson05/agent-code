@@ -86,9 +86,15 @@ export function useConversationList(params: ConversationListParams): {
     return () => clearTimeout(timer)
   }, [open, run])
 
+  const stale = response !== null && responseKey !== paramsKey
   const loadMore = useCallback(() => {
+    // Never page rows fetched for OTHER parameters (#1297 round 2): the old
+    // cursor with the new scope appended new-scope rows to old ones and then
+    // labelled the mix as the new scope, so `stale` cleared and Enter could
+    // resume an out-of-scope row. The new first page is on its way anyway.
+    if (stale) return
     if (response?.nextCursor && !loading) void run(response.nextCursor)
-  }, [response, loading, run])
+  }, [response, loading, run, stale])
 
-  return { response, loading, error, needsPane, loadMore, stale: response !== null && responseKey !== paramsKey }
+  return { response, loading, error, needsPane, loadMore, stale }
 }

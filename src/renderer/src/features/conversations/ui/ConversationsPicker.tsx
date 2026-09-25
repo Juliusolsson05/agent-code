@@ -250,7 +250,10 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             </button>
           )}
           <span className="font-code opacity-80">
-            {loading
+            {/* Stale rows are on screen and the keyboard ignores them until the
+                new page lands (#1297 round 2): say so at once, including the
+                debounce before the request starts. */}
+            {loading || stale
               ? 'loading…'
               : response
                 ? query.trim()
