@@ -1098,13 +1098,11 @@ export function usePaneActions(
         // should be unreachable; it stays because the next stale target must be
         // visible rather than silent.
         //
-        // WHY it also CLOSES the overlay, and unconditionally: a toast alone
-        // left the user in the dead end it was describing. The overlay only
-        // closes on a successful spawn, and `NewAgentPlacementOverlay` latches
-        // `committingRef` before calling this and clears it only in its `open`
-        // effect — so after a failure the overlay is still up with every
-        // gesture latched off, and Escape is the only way out. Advice the user
-        // cannot act on is worse than silence, not better.
+        // WHY it also CLOSES the overlay: the project the user was creating
+        // into is gone, so a retry from this overlay cannot succeed, and
+        // advice the user cannot act on is worse than silence. (Since #1270
+        // the overlay's latch does reopen after a failed create, so this is
+        // no longer the only way out; it is still the right outcome here.)
         //
         // The copy splits on `projectOverride` because the callers are not
         // alike: without one the project came from the focused LANE (Dispatch
@@ -1179,6 +1177,9 @@ export function usePaneActions(
       // process instead of leaving an unowned live session behind.
       if (!placed) {
         await sessionActions.killSession(sessionId, 'spawn.unplaced', { cwd, kind, providerRuntime })
+        // Say why nothing appeared (#1286 review A3): the overlay stays open
+        // and Enter works again, and without this a retry looked arbitrary.
+        showToast('Could not create agent: its project was closed while it was starting')
         return null
       }
       if (placement?.selectCreated !== false) closeNewAgentPlacement()

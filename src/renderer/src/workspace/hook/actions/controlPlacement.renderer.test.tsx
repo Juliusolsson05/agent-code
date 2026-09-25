@@ -170,3 +170,19 @@ it('never toasts the raw spawn rejection when a create fails', async () => {
   expect(JSON.stringify(vi.mocked(harness.showToast).mock.calls)).not.toContain('posix_spawnp')
   harness.mounted.unmount()
 })
+
+// #1286 review B2: the other two spawn catches in pane.ts.
+it('never toasts the raw spawn rejection from splitFocused or createLinkedAgent', async () => {
+  const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+  const harness = mountPaneActions(state(), { spawn: vi.fn().mockRejectedValue(new Error(recorded)) })
+  await act(async () => { await harness.actions.splitFocused('codex') })
+  await act(async () => { await harness.actions.createLinkedAgent({ kind: 'codex' }, 'anchor' as never) })
+  const calls = vi.mocked(harness.showToast).mock.calls.map(call => call[0])
+  expect(calls).toEqual([
+    'Could not create agent: Session failed to start. Check provider setup and retry.',
+    'Could not create linked agent: Session failed to start. Check provider setup and retry.',
+  ])
+  harness.mounted.unmount()
+})
+

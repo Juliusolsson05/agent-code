@@ -31,7 +31,7 @@ export function GlobalEditorWorkspaceSlot({
   // (#1269): it is the same retained-under-display:none situation as a
   // takeover, and input owners inside (the New Agent overlay) must stand down
   // here too. OR'ed with the outer value so a takeover over a split editor
-  // still reads hidden. GlobalEditorShell, the context's other reader, reads
+  // still reads hidden. GlobalEditorShell, one of the context's readers, reads
   // it from OUTSIDE this slot, so its own Escape gate is unchanged.
   const outerHidden = useWorkspaceSurfaceHidden()
   const hidden = outerHidden || (open && editorFullscreen)

@@ -76,6 +76,10 @@ export function NewAgentPlacementOverlay({
   // spawn a second unwanted agent. A ref (not state) because the latch needs
   // to gate the synchronous keydown handler path, not trigger a re-render.
   const committingRef = useRef(false)
+  // Which create owns the latch (#1286 review A2). The open effect resets the
+  // latch on every reopen, so an OLD create settling late must not reopen it
+  // for a NEW one still in flight; that let a third Enter start a duplicate.
+  const commitGenerationRef = useRef(0)
 
   // Linked mode offers agent providers only: createLinkedAgent's signature
   // refuses 'terminal' (a shell cannot be an orchestration/linked child).
@@ -128,13 +132,17 @@ export function NewAgentPlacementOverlay({
     // leaves the overlay open, which is right: the user may retry or pick
     // another kind. The latch must then open again, or Enter stays dead
     // while the overlay's owner marker blocks every app shortcut.
+    const generation = ++commitGenerationRef.current
+    const release = () => releaseCommitLatch(generation)
     void Promise.resolve(workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined))
-      .then(sessionId => { if (!sessionId) releaseCommitLatch() }, releaseCommitLatch)
+      .then(sessionId => { if (!sessionId) release() }, release)
   }
 
-  // Only a create that did NOT produce a session reopens the latch; a
-  // success closes the overlay, and re-opening resets it (effect below).
-  function releaseCommitLatch(): void {
+  // Only a create that did NOT produce a session reopens the latch, and only
+  // if it is still the latest create; a success closes the overlay, and
+  // re-opening resets it (effect below).
+  function releaseCommitLatch(generation: number): void {
+    if (generation !== commitGenerationRef.current) return
     committingRef.current = false
   }
 
@@ -194,6 +202,9 @@ export function NewAgentPlacementOverlay({
   return (
     <div
       data-agent-code-interaction-owner="app"
+      // Read by useKeybinds' placement gate: the store flag alone does not
+      // mean this overlay is on screen (#1286 review A).
+      data-new-agent-overlay=""
       className="absolute inset-0 z-40 bg-black/20"
       // The backdrop is the mouse exit. Only a click on the backdrop ITSELF
       // dismisses: a click that bubbled up from the picker must not.

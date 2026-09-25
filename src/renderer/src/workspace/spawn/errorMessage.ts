@@ -1,4 +1,5 @@
 import type { SessionKind } from '@renderer/workspace/types'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 
 // Normalize spawn errors so the user-facing toast/showToast has a
 // single string to print. When the Claude proxy startup path is the
@@ -38,5 +39,21 @@ export function sessionSpawnErrorMessage(
   ) {
     return 'Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment.'
   }
-  return raw
+  // Main's one curated, actionable start failure (workspaceDirectory.ts):
+  // its text is a path the pane header already shows. Kept from the prefix
+  // on, so the IPC wrapper does not reach the user either.
+  const missingFolder = raw.indexOf(MISSING_WORKSPACE_FOLDER_PREFIX)
+  if (missingFolder >= 0) return raw.slice(missingFolder)
+  // Everything else is the raw provider exception relayed through IPC, which
+  // can carry environment values, proxy URLs or scoped MCP tokens (steering
+  // q22). This string reaches newTab, reload, provider-switch, rewind and
+  // capability-reload toasts and the orchestration tool error (#1286 review
+  // B), so it is flattened HERE, once, instead of at each of them. Main
+  // journals the raw error before it rethrows.
+  return SESSION_START_FAILED_MESSAGE
 }
+
+// Mirrors main's MissingWorkspaceDirectoryError message. #1264 moves this to
+// a shared constant (MISSING_WORKSPACE_FOLDER_PREFIX in @shared/types/session);
+// this file switches to it when that lands.
+const MISSING_WORKSPACE_FOLDER_PREFIX = 'Workspace folder is missing: '

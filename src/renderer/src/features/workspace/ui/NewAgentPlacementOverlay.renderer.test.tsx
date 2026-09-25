@@ -157,4 +157,88 @@ describe('NewAgentPlacementOverlay input ownership (C4 hunt)', () => {
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2))
     mounted.unmount()
   })
+
+  // #1286 review B1: pin the slot's composition both ways. A takeover over a
+  // SPLIT editor must still read hidden (the slot must not override the outer
+  // value), and a split editor on its own must not hide the overlay.
+  it('stands down under a takeover even when the editor is only split', async () => {
+    const { RetainedWorkspaceSurface } = await import('@renderer/app/shell/RetainedWorkspaceSurface')
+    const { GlobalEditorWorkspaceSlot } = await import('@renderer/features/global-editor/ui/GlobalEditorWorkspaceSlot')
+    const create = vi.fn(async () => 'new-session')
+    const onClose = vi.fn()
+    const mounted = render(
+      <RetainedWorkspaceSurface hidden>
+        <GlobalEditorWorkspaceSlot open editorFullscreen={false} splitWorkspaceWidth="60%">
+          <NewAgentPlacementOverlay open workspace={stubWorkspace(create)} onClose={onClose} linkedAgentParentId={null} projectIntent={null} />
+        </GlobalEditorWorkspaceSlot>
+      </RetainedWorkspaceSurface>,
+    )
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(create).not.toHaveBeenCalled()
+    // The request is kept for when the surface returns, not dismissed.
+    expect(onClose).not.toHaveBeenCalled()
+    mounted.unmount()
+  })
+
+  it('works beside a split editor with the workspace on screen', async () => {
+    const { GlobalEditorWorkspaceSlot } = await import('@renderer/features/global-editor/ui/GlobalEditorWorkspaceSlot')
+    const create = vi.fn(async () => 'new-session')
+    const mounted = render(
+      <GlobalEditorWorkspaceSlot open editorFullscreen={false} splitWorkspaceWidth="60%">
+        <NewAgentPlacementOverlay open workspace={stubWorkspace(create)} onClose={vi.fn()} linkedAgentParentId={null} projectIntent={null} />
+      </GlobalEditorWorkspaceSlot>,
+    )
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    mounted.unmount()
+  })
+
+  // #1286 review B4: the latch's other outcomes.
+  it('keeps the latch after a create that produced a session', async () => {
+    const create = vi.fn(async () => 'new-session')
+    const mounted = render(<NewAgentPlacementOverlay open workspace={stubWorkspace(create)} onClose={vi.fn()} linkedAgentParentId={null} projectIntent={null} />)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await Promise.resolve(); await Promise.resolve()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await Promise.resolve(); await Promise.resolve()
+    expect(create).toHaveBeenCalledTimes(1)
+    mounted.unmount()
+  })
+
+  it('reopens the latch after a create that rejected', async () => {
+    const create = vi.fn().mockRejectedValueOnce(new Error('spawn failed')).mockResolvedValueOnce('new-session')
+    const mounted = render(<NewAgentPlacementOverlay open workspace={stubWorkspace(create)} onClose={vi.fn()} linkedAgentParentId={null} projectIntent={null} />)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    await Promise.resolve(); await Promise.resolve()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    mounted.unmount()
+  })
+
+  // #1286 review A2: an OLD create settling late must not reopen the latch
+  // for a NEW create still in flight.
+  it('does not let a stale create reopen the latch for a newer one', async () => {
+    let failFirst!: () => void
+    const first = new Promise<null>(resolve => { failFirst = () => resolve(null) })
+    const create = vi.fn().mockReturnValueOnce(first).mockReturnValue(new Promise(() => {}))
+    const workspace = stubWorkspace(create)
+    const onClose = vi.fn()
+    const mounted = render(<NewAgentPlacementOverlay open workspace={workspace} onClose={onClose} linkedAgentParentId={null} projectIntent={null} />)
+    const enter = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    enter()
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    // Close and reopen: the open effect resets the latch.
+    mounted.rerender(<NewAgentPlacementOverlay open={false} workspace={workspace} onClose={onClose} linkedAgentParentId={null} projectIntent={null} />)
+    mounted.rerender(<NewAgentPlacementOverlay open workspace={workspace} onClose={onClose} linkedAgentParentId={null} projectIntent={null} />)
+    enter()
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    failFirst()
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    enter()
+    await Promise.resolve(); await Promise.resolve()
+    expect(create).toHaveBeenCalledTimes(2)
+    mounted.unmount()
+  })
 })
