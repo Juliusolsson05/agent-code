@@ -569,7 +569,7 @@ feeds the rows below G-1.
 | G-3 | Prose key hints (audit of literal ↵ / "Press Enter" / ⌘ in UI text) | Command palette AI Workspace: "Press Enter or click again to confirm…" and "Press Enter to create…" (the buttons already carry the chips) | chip inline (`Confirm metadata deletion: ↩ or click again`); a what-happens sentence instead of the duplicate key prose. Remaining hits are code comments or terminal-behaviour prose (template pane), kept | done |
 | G-4 | Undefined tokens (rendering bugs) | `bg-bg` (CommandKeybindingsRow sticky header is see-through), `bg-panel/40` ×2 (DictationGuideModal), `decoration-ink-faint` (claude web-fetch), `text-red-400` (CodeEditView) | defined tokens (`bg-surface`, `bg-canvas`, `decoration-muted`, `text-danger`) | done (a whole-renderer scan of color utilities against the `--color-*` tokens found exactly these four; the rest were comments/identifiers) |
 | G-5 | Composer action strip | Send is a raw ~20px button beside Stop `Button sm` (h-7); terminal says "Submit"; Stop overrides hover by className | `Button sm` for Send, one verb (Send), Stop on a real variant | done (Send + terminal Send on `Button sm` with ↩; Stop gets ⎋; Stop's hover-only danger kept, a documented choice) |
-| G-6 | Composer textarea | `bg-canvas border-border`; focus is a JS-toggled `border-accent`, not the ring | input tokens + T4 ring (keep the focused-pane accent as a PANE signal only if it is one) | todo |
+| G-6 | Composer textarea | `bg-canvas border-border`; focus is a JS-toggled `border-accent`, not the ring | input tokens + T4 ring (keep the focused-pane accent as a PANE signal only if it is one) | done (border follows DOM focus via input tokens + ring; the pane border remains the pane signal; placeholders sentence case with ↩ / ⇧↩) |
 | G-7 | Row hover | 34 `hover:bg-surface-hi` (16 files) vs 35 `hover:bg-row-hover-bg` | rows `hover:bg-row-hover-bg`, controls `hover:bg-control-hover-bg` | done (29 sites classified row vs control; AskUserQuestion option cards keep their card hover; both tokens default to surface-hi, so the default themes look the same and custom themes now style rows and controls separately) |
 | G-8 | Selected rows | ~13 selected rows lack the accent rail (palette ×4, Conversations, AgentActivity, KeyVault, PathInput, Usage ×2); Explorer active = `bg-accent-soft`; WorkflowViewSelector ●; Incidents card | done (palette ×4 + danger rail on AI-workspace clear, Conversations, Agent Activity, Key Vault providers, PathInput, Usage rail, Explorer active file; the unselected rows keep a transparent rail slot. Kept: WorkflowViewSelector's ● + activity tints, Incidents card; both carry an activity dimension the plain recipe does not) |
 | G-9 | Hand-rolled bordered buttons (~80) | CustomSkillsRow ×8, browser pocket ×8, CLI banner ×3, palette row actions, ThemePicker, AgentActivity Close, AI workspace, EditorTabs Save/Save All, viewBridge Retry, feed/condition buttons | `Button` variants | todo |
@@ -866,6 +866,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-6 Composer:** its accent border now means "the caret is in here"
+  (real focus), not "this pane is selected", so it goes plain when you Tab
+  or click into the feed. The pane's own outline still marks the active
+  pane. **Check this reads well:** an active pane with focus in the feed
+  should show the pane outline but a plain composer. The placeholder reads
+  "Type a prompt — ↩ sends, ⇧↩ adds a line".
 - **G-8 Selected rows:** the command palette, Conversations, Agent Activity,
   Key Vault providers, the path picker's list, Usage's provider rail and the
   Explorer's active file all show the same selection: the row fill plus a

@@ -241,9 +241,16 @@ export function ComposerInput({
           // draft. We intentionally don't set overflow-hidden in the
           // className anymore — that used to win against the inline
           // style and trap long pastes invisibly.
+          // Input tokens + the real focus indicator (UI pass, G-6). The
+          // border used to follow the PANE's `focused` prop, not DOM focus,
+          // so it stayed accent while the keyboard was in the feed or on a
+          // row, a second, lying focus indicator. The pane's own border
+          // already says which pane is active; this now says only "the
+          // caret is here". The defaults (canvas / border / accent) are the
+          // colours it had, so nothing changes while it really has focus.
           className={`rounded-control
-            w-full bg-canvas border
-            ${focused ? 'border-accent' : 'border-border'}
+            w-full bg-input-bg border border-input-border
+            focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring
             ${locked ? 'opacity-60 cursor-default' : ''}
             text-ink text-[12px]
             pl-6 ${showDictationActivity ? 'pr-16' : 'pr-2'} py-2 outline-none
@@ -312,17 +319,20 @@ export function ComposerInput({
             onUserEngagement()
           }}
           onFocus={onFocusRequest}
+          // Sentence case, and the keys in the app's glyphs (UI pass): these
+          // read "type and press enter… (shift+enter for newline)", the one
+          // all-lowercase key hint left in the app.
           placeholder={
             slashMode
               ? undefined
               : providerSwitchMessage
-                ? 'provider switch in progress…'
+                ? 'Provider switch in progress…'
                 : locked
-                ? 'sending…'
+                ? 'Sending…'
                 : showDictationPlaceholder
-                ? 'listening…'
+                ? 'Listening…'
                 : focused
-                ? 'type and press enter… (shift+enter for newline)'
+                ? 'Type a prompt — ↩ sends, ⇧↩ adds a line'
                 : ''
           }
           spellCheck={false}
