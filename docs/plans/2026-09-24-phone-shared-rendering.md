@@ -301,11 +301,7 @@ What the build decided that the plan did not say, or said differently.
     - Codex writes its own one-line paste.
   - The existing import-boundary test gained the reverse rule instead:
     `src/providers/**` never imports `@renderer/workspace/**`.
-- **Local verification caveats.**
-  - `npx tsc -b` reports errors in `src/main/browserPocket/*` because
-    `playwright-core` is missing from the local `node_modules`. The package
-    is declared, just not installed here; nothing on this branch touches
-    those files.
-  - The timeouts in `store.test.ts` and `ProviderEnablementRow` also fail on
-    an untouched `main` checkout.
-
+- **Local verification caveat.** The timeouts in `store.test.ts` and
+  `ProviderEnablementRow` show up on some local runs, and the same happens on
+  an untouched `main` checkout. The final full `npm run check` after merging
+  `origin/main` passed with no failures.
