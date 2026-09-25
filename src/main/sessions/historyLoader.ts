@@ -123,7 +123,8 @@ function extractClaudeHistoryMarker(entry: Record<string, unknown>): string | nu
 }
 
 // The renderer's marker rule, shared so the two cannot drift (#1288).
-function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
+// Exported for the parity test that pins it to the renderer's marker.
+export function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
   return codexRolloutIdentity(entry)
 }
 

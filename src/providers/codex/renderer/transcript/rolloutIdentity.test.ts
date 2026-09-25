@@ -3,7 +3,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { admitMappedEntries, type CommittedSeenLedger } from '@renderer/session-runtime/ingest/committedRecords'
+import { extractCodexHistoryMarker } from '@main/sessions/historyLoader'
 import { createCodexTranscriptEntryMapper } from './mapper'
+import { codexHistoryMarker } from './rollout'
 
 // #1288: the recorded same-millisecond shapes (minimal, redacted). Before the
 // shared identity, the second item of each pair mapped to the first's uuid
@@ -12,6 +14,7 @@ import { createCodexTranscriptEntryMapper } from './mapper'
 const fixture = JSON.parse(readFileSync(join(import.meta.dirname,
   '../../../../../testing/fixtures/codex-identity/same-millisecond-2026-04.json'), 'utf8')) as {
   callAndOutput: Record<string, unknown>[]
+  twoOutputs: Record<string, unknown>[]
   messages: Record<string, unknown>[]
 }
 
@@ -54,5 +57,19 @@ describe('Codex rollout identity (#1288)', () => {
     await new Promise(resolve => setTimeout(resolve, 2))
     expect(a).toBeDefined()
     expect(uuidOf()).toBe(a)
+  })
+
+  // #1298 review A: one call, two different outputs in the same millisecond.
+  it('admits two different outputs of one call that share a millisecond', () => {
+    expect(admitAll(fixture.twoOutputs)).toHaveLength(2)
+  })
+
+  // #1298 review B: the whole point of the shared rule is that main's marker
+  // and the renderer's cannot drift; a re-inlined old rule broke older-page
+  // anchoring silently. Pin them equal on every recorded shape.
+  it('computes the same marker in main as in the renderer', () => {
+    for (const line of [...fixture.callAndOutput, ...fixture.twoOutputs, ...fixture.messages]) {
+      expect(extractCodexHistoryMarker(line)).toBe(codexHistoryMarker(line))
+    }
   })
 })

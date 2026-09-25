@@ -20,7 +20,10 @@
  * The rule, weakest id last:
  *   - a payload `id` is unique on its own: `ts:id` (unchanged);
  *   - a `call_id` item keeps `ts:call_id`; its output (`*_output`) gets
- *     `:output`, because the pair shares the call id by design;
+ *     `:output:<hash>` — the pair shares the call id by design, and one call
+ *     can record two DIFFERENT outputs in one millisecond (a real rollout:
+ *     two custom_tool_call_output lines, session_id 88325 then 39977;
+ *     #1298 review A);
  *   - anything else is identified by type alone, so the payload's content
  *     decides: `ts:type:<hash>`. Two different items differ; the SAME line
  *     read twice (chunk overlap, a tail re-read) still maps to the same
@@ -38,7 +41,9 @@ export function codexRolloutIdentity(entry: Record<string, unknown>): string {
   const callId = payload?.call_id
   if (callId !== undefined && callId !== null) {
     const isOutput = typeof payload?.type === 'string' && payload.type.endsWith('_output')
-    return `${timestamp}:${String(callId)}${isOutput ? ':output' : ''}`
+    return isOutput
+      ? `${timestamp}:${String(callId)}:output:${fnv1a32(JSON.stringify(payload))}`
+      : `${timestamp}:${String(callId)}`
   }
   const type = String(payload?.type ?? entry.type)
   return `${timestamp}:${type}:${fnv1a32(JSON.stringify(payload ?? entry))}`
