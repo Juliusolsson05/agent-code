@@ -38,7 +38,7 @@ import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLed
 //     `unit` vitest project, which is `environment: 'node'` and EXCLUDES
 //     `*.renderer.test.ts`. The fold is a React hook that only runs under the
 //     `renderer` project (happy-dom + @testing-library). It is also entangled
-//     with `window.api.ghostAppend`, a 1000ms `setInterval` orphan sweep,
+//     with a 1000ms `setInterval` orphan sweep,
 //     module-level session maps, and direct `Date.now()` reads with no
 //     injection seam. Driving it faithfully in a node unit test is not
 //     possible without adding a clock seam to runtime code (which the task

@@ -81,7 +81,6 @@ describe('useSessionActions recovery retry', () => {
       configurable: true,
       value: {
         spawnSession,
-        ghostRead: vi.fn(async () => []),
         loadInitialHistory,
         gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
       },
@@ -209,7 +208,7 @@ describe('useSessionActions recovery retry', () => {
     }))
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { recoverSession, ghostRead: vi.fn(async () => []) },
+      value: { recoverSession },
     })
 
     const { result } = renderHook(() => useSessionActions(
@@ -304,7 +303,7 @@ describe('useSessionActions recovery retry', () => {
     const killOwnedSession = vi.fn(async () => true)
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { recoverSession, killOwnedSession, ghostRead: vi.fn(async () => []) },
+      value: { recoverSession, killOwnedSession },
     })
     const { result } = renderHook(() => useSessionActions(state, setState, setRuntimes, refs))
     return { result, recoverSession, killOwnedSession, runtimes: () => runtimes, setRuntimes }
@@ -445,13 +444,11 @@ describe('useSessionActions recovery retry', () => {
     const spawnSession = vi.fn(() => new Promise<{ sessionId: string }>(resolve => {
       finishSpawn = resolve
     }))
-    const ghostRead = vi.fn(async () => [])
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
         spawnSession,
         killOwnedSession: vi.fn(async () => true),
-        ghostRead,
       },
     })
     const { result } = renderHook(() => useSessionActions(
@@ -487,9 +484,5 @@ describe('useSessionActions recovery retry', () => {
 
     expect(state.sessions[sessionId]).toBeUndefined()
     expect(state.sessions['replacement-session']?.title).toBe('Edited during switch')
-    // `spawn` intentionally defers ghost bootstrap by one timer tick. Let that
-    // owned task finish before afterEach removes the API mock, or this test can
-    // leak an irrelevant unhandled rejection into a later full-suite worker.
-    await vi.waitFor(() => expect(ghostRead).toHaveBeenCalledWith('replacement-session'))
   })
 })

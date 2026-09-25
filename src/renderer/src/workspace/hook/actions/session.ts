@@ -35,11 +35,6 @@ import {
   reserveIdentityCarry,
 } from '@renderer/workspace/agentNames/pendingIdentityCarry'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
-import {
-  ghostsToPersist,
-  reconcileUpstream,
-} from '@renderer/session-runtime/ghosts'
-import { reduceGhostLogSansSuperseded as reduceGhostLog } from 'agent-transcript-parser/ghost'
 
 import type {
   WorkspaceSetRuntimes,
@@ -578,75 +573,6 @@ export function useSessionActions(
             setRuntimes,
           })
         }
-
-        // Ghost log bootstrap — fire-and-forget, no await. If a prior
-        // run of Agent Code persisted ghosts for this sessionId, replay
-        // them through the atp reducer and merge into the runtime's
-        // ghost map. The renderer then sees the same merged feed after
-        // reload as it saw before. A missing file is not an error.
-        //
-        // WHY behind a setTimeout 0: spawnSession above set the fresh
-        // runtime via setRuntimes(prev => ...) — that update is queued
-        // and will land on the next tick. Reading the ghost log and
-        // applying it synchronously would run against the PREVIOUS
-        // runtime snapshot and its setRuntimes would clobber the
-        // fresh empty runtime. Deferring by one tick lets the empty
-        // runtime land first, then the bootstrap merge runs on top.
-        setTimeout(() => {
-          void window.api
-            .ghostRead(sessionId)
-            .then(rawEntries => {
-              if (!rawEntries || rawEntries.length === 0) return
-              const bootstrapped = reduceGhostLog(rawEntries as never[])
-              if (bootstrapped.size === 0) return
-              setRuntimes(prev => {
-                const current = prev[sessionId]
-                if (!current) return prev
-                // Merge — disk ghosts only fill slots the runtime
-                // hasn't already produced in this session. If a ghost
-                // for the same uuid exists in-memory (rare; would mean
-                // a live event beat the bootstrap read), prefer the
-                // in-memory one because it's strictly fresher.
-                let merged = new Map(current.ghosts)
-                for (const [uuid, ghost] of bootstrapped) {
-                  if (!merged.has(uuid)) merged.set(uuid, ghost)
-                }
-                // Reconcile against whatever JSONL entries already
-                // landed during the initial bootstrap burst. Without
-                // this, ghosts for turns that already have committed
-                // entries in `current.entries` would stay
-                // un-superseded forever: the live JSONL ingest already
-                // ran `reconcileUpstream` against the PREVIOUS (empty)
-                // ghost map and found no matches; now that the real
-                // ghosts are landing, nothing re-checks the
-                // already-ingested entries. This pass fixes the
-                // "crashed mid-turn, resumed with an orphan ghost that
-                // actually got committed" case. See Task 7 of the
-                // 2026-04-20 rendering-fixes plan.
-                for (const entry of current.entries) {
-                  merged = reconcileUpstream(entry, merged)
-                }
-                // Persist any supersedes we just produced so the next
-                // resume reads the ghosts already in their reconciled
-                // state. `ghostsToPersist` diffs by updatedAt so it
-                // only emits ghosts whose state actually changed in
-                // this pass.
-                for (const ghost of ghostsToPersist(current.ghosts, merged)) {
-                  window.api.ghostAppend(sessionId, ghost)
-                }
-                return {
-                  ...prev,
-                  [sessionId]: { ...current, ghosts: merged },
-                }
-              })
-            })
-            .catch(err => {
-              // Ghost bootstrap failures are non-fatal — the session
-              // still works, we just lose crash-recovered provisional
-              // state. Log and move on.
-              console.warn('[ghost] bootstrap read failed:', err)
-            })
-        }, 0)
 
         return sessionId
       } catch (error) {

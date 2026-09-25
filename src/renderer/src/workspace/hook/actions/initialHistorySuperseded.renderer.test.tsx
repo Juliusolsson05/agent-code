@@ -71,7 +71,6 @@ function setup() {
   Object.defineProperty(window, 'api', { configurable: true, value: {
     gitWorktrees: vi.fn(async () => ({ ok: false })),
     reportSessionLifecycle: vi.fn(),
-    ghostAppend: vi.fn(),
   } })
   return { refs, setRuntimes, runtime: () => runtimes[PANE]!, oldFile, oldPrompts, followPiIntoNewSession, gate, release: () => release() }
 }

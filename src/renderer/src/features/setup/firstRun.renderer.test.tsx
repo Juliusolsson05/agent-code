@@ -74,7 +74,6 @@ function mountMachine(checks: SetupCheckResult[], options: { failKinds?: string[
     spawnSession,
     onOrchestrationRequest: () => () => undefined,
     onAgentManagementRequest: () => () => undefined,
-    ghostRead: async () => [],
     reportSessionLifecycle: vi.fn(),
     appendFeedDebugLog: async () => undefined,
   } })
