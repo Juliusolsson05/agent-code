@@ -152,6 +152,17 @@ export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
   recoveryToken: string
 }
 
+/** The one message a renderer shows for a provider that would not start.
+ *
+ *  WHY a fixed string and never the exception's own text: binary launch
+ *  errors can carry environment values, proxy URLs or scoped MCP tokens, and
+ *  the pane renders whatever lands in `processError`. Main's recovery path
+ *  (SessionManager.recoverSession) and the renderer's reload path
+ *  (reloadAgentSessions, #1239) both reach a failed provider start; sharing
+ *  the constant keeps the two from drifting into one safe and one leaky
+ *  surface. The raw error stays in main's performance journal. */
+export const SESSION_START_FAILED_MESSAGE = 'Session failed to start. Check provider setup and retry.'
+
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
   | 'cancelled'
