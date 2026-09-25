@@ -206,7 +206,7 @@ describe('Agent Activity rows keep the keys on the highlighted row (#867 review)
     const workspace = replaceRuntime(workspaceFixture(), false)
     const mounted = render(<AgentActivityView open workspace={workspace} onClose={vi.fn()} />)
 
-    const close = screen.getByRole('button', { name: 'Close' })
+    const close = screen.getByRole('button', { name: 'Close terminal-perf' })
     expect(close.getAttribute('tabindex')).toBe('-1')
     // `false` = the default was prevented, which is what stops a real browser
     // moving focus to the button on click.

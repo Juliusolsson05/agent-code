@@ -426,7 +426,7 @@ entry when it lands.
 | S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | done |
 | S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | done |
 | S20 | ConversationsPicker | ↑↓ Enter; "esc" label + prose | useListNavigation; legend; T4 input | done |
-| S21 | AgentActivityView | richest keys; legend row; pt-4, 15px title | legend → DialogActions/footer legend; D3; T3/T5 | todo |
+| S21 | AgentActivityView | richest keys; legend row; pt-4, 15px title | legend → DialogActions/footer legend; D3; T3/T5 | done (D3 exception kept: Esc clears the filter first) |
 | S22 | QuickOpenOverlay | ↑↓ Enter; sr-only hint; outline-none input | useListNavigation; legend; T4 | todo |
 | S23 | ContentSearchOverlay | ↑↓ Enter; sr-only hint | as S22 | todo |
 | S24 | ConfirmCloseDialog (editor) | autoFocus Save&Close | DialogActions-like 3-button footer with chips; K1 | todo |
@@ -661,6 +661,15 @@ Sharp corners and one light theme.
   opens in the box, Resume on the list (ring on the list when tabbed back
   to); the list/preview divider takes focus (turns the focus colour) and
   ←/→ resize it; 1240 wide (xl).
+- **S21 Agent Activity:** header py-3 with a 13px title (was pt-4 + 15px);
+  filter uses input colours + keyboard ring; highlighted row uses the row
+  highlight (was accent/15); footer: chip legend `↑ ↓ move  ↩ open  ␣ select
+  ⌘A all  ⌫ close` (truncates on a narrow window — check it reads at 960px),
+  a red-outline `Close N Selected ⌫` when rows are ticked, and a ghost
+  `Close ⎋` for the view; Home/End/PgUp/PgDn move. **Owner call:** Escape
+  in the filter still clears it first (a recorded exception to D3 because
+  type-to-filter can put text there by accident) — say if you want one-press
+  close here too.
 
 ## Tasks
 
@@ -735,6 +744,15 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S21: Agent Activity keeps its own handler (type-to-filter,
+  Tab-from-filter, Space/⌘A/⌫ layered on keydown, session-keyed highlight)
+  and gains K5 movement, listbox/combobox focus owners with row ids, the
+  standard header, chip legend + Close ⎋ via DialogActions. Ruling: D3
+  exception — Esc clears the filter first here (type-to-filter lands text
+  without the user choosing the field; #1105 review asked for it) — cost if
+  wrong: one extra Escape; flagged for the owner. The per-row Close button
+  is now named "Close <agent>" (the footer's Close closes the view).
+  Confirm-red: 3 new tests fail on the pre-change file.
 - 2026-09-25 S20: Conversations on useListNavigation (keyed by
   provider:nativeId, reset on head/query/filter change, loadMore near the
   end), input = combobox focus owner in Search mode, listbox in Resume mode;
