@@ -154,7 +154,7 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
               toast-enter
               cursor-pointer text-left
               bg-accent/80 border border-accent/40 rounded-float
-              shadow-lg shadow-black/20
+              shadow-[0_8px_24px_var(--theme-shadow-color)]
               px-4 py-2
               max-w-[420px]
               text-[12px] font-code text-accent-fg font-semibold
