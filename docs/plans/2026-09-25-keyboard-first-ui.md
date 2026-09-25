@@ -1099,6 +1099,31 @@ Sharp corners and one light theme.
   show — press Escape (or have none) and Tab moves on to the Resume list
   (legend reads `⇥ complete / next`); 640 wide.
 
+## Review record (round 1: 2 Codex + 1 Pi, own detached worktrees at `2409875a`)
+
+Reviewer focus: A = keyboard, focus and failure paths (Codex). B = tests and integration, with mutation checks (Codex). C = visual and copy consistency, plus an audit of the checklist against the code (Pi). All three returned FIX-BEFORE-MERGE, and every valid finding is fixed. One round only, and no re-review.
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| A1 — with two panes visible, the goal-loop overlay focuses the last-mounted pane, so Enter controls the wrong agent | valid (reproduced by the reviewer's two-pane probe) | fixed in `fb9f6876`: only the focused pane's overlay takes focus; two-pane test |
+| A2 / B1 — Tab can reach the covered composer behind a pane prompt, and typing edits a hidden draft | valid | fixed in `fb9f6876`: the rest of the pane is `inert` (counted, so stacked prompts nest); test |
+| B2 — the hovered branch's `blocked` check was untested (mutation survived) | valid | fixed in `fb9f6876`: hovered-blocked Enter test, mutation now caught |
+| A — the paste and type-to-focus pane-owner guards were untested (mutation survived) | valid | fixed in `fb9f6876`: router harness tests |
+| A — `if (!host.active)` in the pane-dialog focus effect is redundant (mutation survived) | overstated | declined: the later `activeRef` check covers it, as the reviewer noted |
+| A (suspicion) — Update Channel radio arrows can issue overlapping IPC writes | overstated | declined for now: speculative. Neither the reviewer nor I established a mismatched final state; main-process write ordering is unverified |
+| B — `radioGroupKeyDown` skipping an already-checked radio is redundant | overstated | declined: no user-facing effect; both consumers also guard |
+| C1 — `text-*-fg` used as text on plain surfaces in Performance, near-black in dark themes | valid | fixed in `1e9f5363` |
+| C2 — the checklist claims the extension host reserves header room | valid | fixed in `1910944d`: the checklist is corrected; the host is deliberately unpadded, because viewBridge owns the frame's size |
+| C3 — "Reload page" / "View agent" are not Title Case | valid | fixed in `1910944d` |
+| C4 — the busy confirm collapses to a bare "…" | valid | fixed in `dc67b56d`: "Working…", with a test that the chip is hidden |
+| C5 — Grok/OpenCode prompts show no key chips | overstated | declined: those shells do not handle Escape or a dialog-level Enter, so chips would promise keys that do nothing (H2). Stale "sentence-case" comments fixed in `1910944d` |
+| C6 — G-15/G-21 over-claims (Agent Activity labels, theme Name label, 9px text in debug panels) | valid | fixed in `1910944d`: labels normalized; ruling that debug panels are exempt, recorded in the ledger |
+| C7 — Path picker empty state and workflow "Waiting…" lines are still italic and hand-rolled | valid | fixed in `1910944d` |
+| C8 — dead class fragment in AppearanceMenu | valid | fixed in `1910944d` |
+| C9 — shortcut category labels use `text-ink-dim` | valid | fixed in `1910944d` |
+| C10 — Reader Older/Newer are hand-rolled buttons | valid | fixed in `1910944d`: outline `Button`; the session pills stay bespoke as toggles (G-9) |
+| C mutations — busy chip and `tabFills` wiring survived | valid | fixed in `dc67b56d`: tests; each `tabFills` clause is now caught |
+
 ## Tasks
 
 - [x] 1. Plan committed, draft PR open, B7 told — hands the ledger to task 2.
@@ -1131,7 +1156,7 @@ Sharp corners and one light theme.
       UI/UX inconsistencies, one surface per commit, each with ledger rows
       (`G-*`). The review round (Task 10) runs at a natural checkpoint and
       again whenever the owner asks. It is not a stop sign.
-- [ ] 10. Plan-vs-built, full checks, review round (2 Codex + 1 Pi, own
+- [x] 10. Plan-vs-built, full checks, review round (2 Codex + 1 Pi, own
       detached worktrees), at most one verification round. Leave the PR
       open, green, reviewed.
 
