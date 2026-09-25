@@ -488,7 +488,7 @@ entry when it lands.
 | N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
 | N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | done (in S45) |
 | N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | todo |
-| N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | todo |
+| N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | done (verified: keys already reach the agent; added shared `ConditionOptionList` listbox + legend, Tab-reachable) |
 | N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | done (in M8) |
 | N18 | SettingsBar | caff toggle no aria-pressed | aria-pressed; T4 | done (+ accessible name; T4 ring on caff + performance) |
 | N19 | Chart markers (TimeSeriesChart L184) | pointer shortcut by design | leave; note in checklist | done (no change — see ruling) |
@@ -789,6 +789,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **N16 Claude resume prompt / Codex command approval (inline strip above
+  the composer):** the prose "Press enter to confirm or esc to cancel" is
+  now the standard key legend (↑↓ move · ↩ confirm · ⎋ cancel). Codex's
+  "(y)" "(p)" "(esc)" hints are key chips (Y, P, ⎋). The option list shows
+  a focus ring and can be reached again with Tab after focus leaves it.
+  The ❯ / › TUI markers are kept.
 - **N18 Settings bar:** `caff` and `performance` show the thin focus ring.
   No visual change otherwise. (Whether "caff" should read as something
   clearer belongs to the general UI pass, Task 8.)
@@ -1329,3 +1335,12 @@ Sharp corners and one light theme.
 - 2026-09-25 N18: caff toggle `aria-pressed` + accessible name "Keep the
   machine awake (caffeinate)". Confirm-red: the SettingsBar test fails on the
   pre-change bar.
+- 2026-09-25 N16: verified first. Both strips already forward ↑↓↩⎋ (+ Codex
+  y/p/n) to the PTY and were pane-local, so the gap was semantics and
+  reachability, not routing. `providers/shared/renderer/conditions/
+  ConditionOptionList.tsx` is the focused listbox (k2 focus owner,
+  aria-activedescendant follows the parser's selectedIndex), rows are
+  `option`s, and the strip stays the labelled group (it also holds the
+  title/reason/command). Confirm-red: both new tests fail on the pre-change
+  strips; the existing pane-ownership tests stay green (keys fired on the
+  strip and on the list both route).
