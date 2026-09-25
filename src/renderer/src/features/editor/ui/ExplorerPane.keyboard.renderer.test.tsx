@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe('Explorer new-item menu', () => {
   it('opens under its button when activated from the keyboard', async () => {
-    render(<ExplorerPane root="/repo" activeFilePath={null} onOpenFile={() => {}} />)
+    render(<ExplorerPane root="/repo" activeFilePath={null} onOpenFile={async () => ({ ok: true as const })} />)
     const plus = screen.getByRole('button', { name: 'New file or folder' })
     plus.getBoundingClientRect = () => ({ left: 300, top: 40, right: 320, bottom: 60, width: 20, height: 20, x: 300, y: 40, toJSON: () => ({}) })
     // detail 0 is what the browser reports for an Enter/Space activation.
@@ -39,7 +39,7 @@ describe('Explorer new-item menu', () => {
   })
 
   it('still opens at the pointer for a mouse click', async () => {
-    render(<ExplorerPane root="/repo" activeFilePath={null} onOpenFile={() => {}} />)
+    render(<ExplorerPane root="/repo" activeFilePath={null} onOpenFile={async () => ({ ok: true as const })} />)
     const plus = screen.getByRole('button', { name: 'New file or folder' })
     await act(async () => { fireEvent.click(plus, { detail: 1, clientX: 210, clientY: 90 }) })
     const menu = screen.getByRole('menu', { name: 'Explorer actions' })
