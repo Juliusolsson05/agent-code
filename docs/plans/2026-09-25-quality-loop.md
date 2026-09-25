@@ -536,6 +536,21 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (08:40) — **Merged #1262** (`0198af02`, closes #1241).
+  - **Stage 3 hunts done: C1, C2, C3, C4, C5, C6, C8, C9.** Only C7 (new-feature clusters) and the second sweeps remain. Findings files are `temp/quality-loop/hunt-c{1,8,9}.md`.
+    - C1 filed #1291–#1294. #1291 has journal evidence: 4 of 5 rollbacks are `rollback-exhausted`.
+    - C8 filed **P1 #1288**, plus #1289 and #1290, with comments on #644 and #1231. The loop re-counted #1288: 270 of 2,212 rollouts have 1,232 colliding keys.
+    - C9 filed #1295 and #1296, and commented the #1261 root cause (a modal palette focus/ordering race, not the activation log line).
+  - **New PRs:**
+    - #1287 fixes #1279: a goal loop follows its pane through a replace.
+    - #1298 fixes P1 #1288: a shared Codex rollout identity.
+    - #1297 is the picker test race. Steering q27 found a real product bug behind it: an enablement refresh reset the highlight, so Enter resumed the wrong conversation. It is fixed fail-first.
+  - **#1284 / package #62:**
+    - Round 1 fixes: the newest body is kept in a sidecar for bundles, and a zero budget writes no body.
+    - Steering q26 fix: zero now means no sidecar either.
+    - The trailer is `Refs #1273` (steering q24).
+  - **Steering q25:** don't init `vendor/*` submodules in fix worktrees; only `packages/*` are needed for tsc.
+
 - 2026-09-25 (07:45) — **Merged #1260** (`d525d457`, closes #1246).
   - **Disposition correction (steering q24):** reviewer B's writeFile residual was not fixed. It is filed as #1285 and noted on #1260.
   - **Stage 3 hunts C2, C4 and C6 are done:** `temp/quality-loop/hunt-c2.md`, `hunt-c4.md` and `hunt-c6.md`. Only C1, C7, C8 and C9 remain, then the C3/C5 second sweeps.
