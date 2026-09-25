@@ -414,7 +414,7 @@ entry when it lands.
 | S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | done |
 | S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | done |
 | S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | done |
-| S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | todo |
+| S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | done |
 | S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | todo |
 | S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | todo |
 | S12 | AgentTitlePrompt | form submit | DialogActions chips; T3 | todo |
@@ -600,6 +600,12 @@ Sharp corners and one light theme.
   list takes focus once prompts load; View Prompts: one ghost `Close ⎋`
   (was outline), the scroller shows an inset ring when tabbed to; both 860
   wide (lg preset; were 760).
+- **S9 Color Flag:** opens with the focus outline on the CURRENT colour;
+  the set colour has an ink ring and the focused one a focus-colour outline
+  (they were the same ring before — check both are visible at once when
+  they differ); ←/→ walk and wrap, Home/End jump, Enter picks and closes;
+  footer `← → move  ↩ pick` · `Clear Flag` · `Close ⎋` (was outline "Clear
+  flag" + filled "Done"); 440 wide.
 
 ## Tasks
 
@@ -674,6 +680,13 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S9: Color Flag swatches → radiogroup with roving tabindex
+  (arrows linear + wrap, Home/End); current vs focus visually distinct;
+  close-only footer + Clear Flag. Ruling: roving focus (not
+  activedescendant) because each swatch is an independently activatable
+  button and there is no commit key — the EditorTabs pattern. Confirm-red:
+  3 tests fail on the pre-change file (one is the updated radio-semantics
+  assertion).
 - 2026-09-25 S7/S8: PromptList has read-only (list/listitem) and
   interactive (listbox/option + aria-activedescendant, focus owner) modes;
   flat rows. Rewind on useListNavigation with an effect that moves focus to

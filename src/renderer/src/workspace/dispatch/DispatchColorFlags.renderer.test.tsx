@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ColorFlagPickerModal } from '@renderer/features/workspace/ui/ColorFlagPickerModal'
@@ -167,8 +167,31 @@ describe('Dispatch color-flag layout', () => {
 
     const swatches = document.querySelector<HTMLElement>('[data-color-flag-swatches="true"]')
     expect(swatches).toHaveClass('flex-wrap', 'justify-center', 'px-4')
-    expect(screen.getByRole('button', { name: 'Green' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Purple' })).toHaveAttribute('aria-pressed', 'false')
+    // Radio semantics now (plan S9): one choice among peers, not toggles.
+    expect(screen.getByRole('radio', { name: 'Green' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: 'Purple' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('is one Tab stop that opens on the current flag, and arrows walk the swatches', () => {
+    // Before: every swatch was its own Tab stop and no arrow key moved.
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'green' })
+    render(<ColorFlagPickerModal open sessionId={FLAGGED_SESSION_ID} onClose={vi.fn()} />)
+    const radios = screen.getAllByRole('radio')
+    const green = screen.getByRole('radio', { name: 'Green' })
+    expect(document.activeElement).toBe(green)
+    expect(radios.filter(radio => radio.getAttribute('tabindex') === '0')).toEqual([green])
+    fireEvent.keyDown(green, { key: 'ArrowRight' })
+    const next = radios[radios.indexOf(green) + 1] ?? radios[0]!
+    expect(document.activeElement).toBe(next)
+    fireEvent.keyDown(next, { key: 'End' })
+    expect(document.activeElement).toBe(radios[radios.length - 1])
+  })
+
+  it('closes from one Close ⎋, with Clear Flag beside it', () => {
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'green' })
+    render(<ColorFlagPickerModal open sessionId={FLAGGED_SESSION_ID} onClose={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Close' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getByRole('button', { name: 'Clear Flag' })).toBeEnabled()
   })
 })
 
