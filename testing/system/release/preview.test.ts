@@ -1,4 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -27,6 +29,14 @@ import { NOTES_MAX_COMMITS, PREVIEW_KEEP_DAYS, PREVIEW_KEEP_MIN, datedCollision,
 //     only difference between the two workflows' rolling releases.
 
 const repoRoot = resolve(__dirname, '../../..')
+// Version ORDER is judged by the very semver copy electron-updater resolves,
+// because its `gt(latest, current)` is what decides whether a preview is
+// offered (AppUpdater.isUpdateAvailable).
+const require = createRequire(__filename)
+const updaterSemver = createRequire(dirname(require.resolve('electron-updater')) + '/')('semver') as {
+  compare(left: string, right: string): number
+}
+const semverCompare = (left: string, right: string) => updaterSemver.compare(left, right)
 const script = join(repoRoot, 'scripts/release/preview.mjs')
 const fixtures = join(repoRoot, 'testing/fixtures/release-preview')
 // Real commits from this repo's history (#1019's merge, and main just before
@@ -44,13 +54,17 @@ const recordedReleases = () => readFileSync(join(fixtures, 'gh-api-releases-list
   .split('\n').filter(Boolean).map(line => JSON.parse(line) as { tag: string, published: string })
 
 /** DERIVED: the recorded complete `nightly` release as the rolling preview.
- * Only the fixed asset names differ between the two rolling releases. */
+ * Two differences, both visible here: the fixed asset names, and the
+ * preview feed (#1168), modelled on the recorded arm64 zip asset (same
+ * uploader and state) since the nightly never published one. */
 function asRollingPreview(release: Release, sha = RECORDED_NIGHTLY_SHA, newline = '\n'): Release {
   const body = (release.body ?? '').replace(/^built-from: [0-9a-f]{40}\r?\n/, '')
+  const assets = release.assets.map(asset => ({ ...asset, name: asset.name.replace('Agent.Code-nightly-', 'Agent.Code-preview-') }))
+  const zip = assets.find(asset => asset.name === 'Agent.Code-preview-arm64.zip')!
   return {
     ...release,
     body: `built-from: ${sha}${newline}${body}`,
-    assets: release.assets.map(asset => ({ ...asset, name: asset.name.replace('Agent.Code-nightly-', 'Agent.Code-preview-') })),
+    assets: [...assets, { ...zip, name: 'preview-mac.yml' }],
   }
 }
 
@@ -119,30 +133,40 @@ describe('preview version', () => {
   const now = new Date('2026-09-24T09:46:43Z')
 
   it('previews the next PATCH of the stable version, dated by UTC day', () => {
-    expect(previewVersion({ stableVersion: '0.1.3', now, dispatched: false })).toBe('0.1.4-preview.20260924')
+    expect(previewVersion({ stableVersion: '0.1.3', now })).toBe('0.1.4-preview.20260924.946')
   })
 
-  it('a manual run adds the UTC time so it never collides with that night\'s tag', () => {
+  it('versions sort in BUILD order, including a manual run before that day\'s scheduled one', () => {
     // 09:46 → 946: semver forbids leading zeros in numeric identifiers, and
-    // numeric comparison still orders 946 before 1415.
-    expect(previewVersion({ stableVersion: '0.1.3', now, dispatched: true })).toBe('0.1.4-preview.20260924.946')
+    // numeric comparison still orders 946 before 1025. Review round 1 of
+    // #1168: a bare date for scheduled runs sorted a 09:00 manual build above
+    // the 10:25 scheduled one, stranding Preview-channel users on it.
+    const manual = previewVersion({ stableVersion: '0.1.3', now: new Date('2026-09-24T09:00:00Z') })
+    const scheduled = previewVersion({ stableVersion: '0.1.3', now: new Date('2026-09-24T10:25:00Z') })
+    const tomorrow = previewVersion({ stableVersion: '0.1.3', now: new Date('2026-09-25T00:05:00Z') })
+    expect([manual, scheduled, tomorrow]).toEqual([
+      '0.1.4-preview.20260924.900', '0.1.4-preview.20260924.1025', '0.1.4-preview.20260925.5',
+    ])
+    const order = (left: string, right: string) => semverCompare(left, right)
+    expect(order(manual, scheduled)).toBeLessThan(0)
+    expect(order(scheduled, tomorrow)).toBeLessThan(0)
   })
 
   it('can target the next MINOR while a minor release is being prepared', () => {
-    expect(previewVersion({ stableVersion: '0.1.3', target: 'minor', now, dispatched: true })).toBe('0.2.0-preview.20260924.946')
+    expect(previewVersion({ stableVersion: '0.1.3', target: 'minor', now })).toBe('0.2.0-preview.20260924.946')
   })
 
   it('patch numbers go past 9', () => {
-    expect(previewVersion({ stableVersion: '0.1.9', now, dispatched: false })).toBe('0.1.10-preview.20260924')
+    expect(previewVersion({ stableVersion: '0.1.9', now })).toBe('0.1.10-preview.20260924.946')
   })
 
   it('a prerelease left in package.json previews its own core instead of skipping a version', () => {
-    expect(previewVersion({ stableVersion: '0.0.2-beta.1', now, dispatched: false })).toBe('0.0.2-preview.20260924')
+    expect(previewVersion({ stableVersion: '0.0.2-beta.1', now })).toBe('0.0.2-preview.20260924.946')
   })
 
   it('refuses a version that is not MAJOR.MINOR.PATCH, and an unknown target', () => {
-    expect(() => previewVersion({ stableVersion: '1.1', now, dispatched: false })).toThrow(/MAJOR\.MINOR\.PATCH/)
-    expect(() => previewVersion({ stableVersion: '0.1.3', target: 'major', now, dispatched: false })).toThrow(/patch or minor/)
+    expect(() => previewVersion({ stableVersion: '1.1', now })).toThrow(/MAJOR\.MINOR\.PATCH/)
+    expect(() => previewVersion({ stableVersion: '0.1.3', target: 'major', now })).toThrow(/patch or minor/)
   })
 })
 
@@ -153,17 +177,17 @@ describe('preview decide: should this run build, and as which version?', () => {
     // The rolling release, then the dated tag it is about to create.
     expect(result.calls).toEqual([
       'api repos/Juliusolsson05/agent-code/releases/tags/preview',
-      'api repos/Juliusolsson05/agent-code/releases/tags/v0.1.4-preview.20260924',
+      'api repos/Juliusolsson05/agent-code/releases/tags/v0.1.4-preview.20260924.946',
     ])
     expect(result.outputs).toMatchObject({
       changed: 'true', 'head-sha': HEAD, 'prev-sha': '',
-      version: '0.1.4-preview.20260924', tag: 'v0.1.4-preview.20260924',
+      version: '0.1.4-preview.20260924.946', tag: 'v0.1.4-preview.20260924.946', rolling: 'true',
     })
   })
 
   it('a dispatched minor run gets a minor, time-stamped version', () => {
     const result = decide(recorded('gh-api-nightly-404'), { GITHUB_EVENT_NAME: 'workflow_dispatch', TARGET: 'minor' })
-    expect(result.outputs).toMatchObject({ version: '0.2.0-preview.20260924.946', tag: 'v0.2.0-preview.20260924.946' })
+    expect(result.outputs).toMatchObject({ version: '0.2.0-preview.20260924.946', tag: 'v0.2.0-preview.20260924.946', rolling: 'false' })
   })
 
   it('fails loudly on any non-404 API error (recorded 401) instead of rebuilding under a false "first preview"', () => {
@@ -180,6 +204,16 @@ describe('preview decide: should this run build, and as which version?', () => {
   it('skips when this commit already has a complete rolling preview (the recorded nightly, as the preview)', () => {
     const result = decide({ stdout: JSON.stringify(asRollingPreview(recordedNightly(), HEAD)) })
     expect(result.outputs).toMatchObject({ changed: 'false', 'prev-sha': HEAD })
+  })
+
+  it('rebuilds a rolling preview that has its binaries but no update feed', () => {
+    // A preview without preview-mac.yml downloads fine by hand but updates
+    // nobody on the Preview channel (#1168).
+    const release = asRollingPreview(recordedNightly(), HEAD)
+    release.assets = release.assets.filter(asset => asset.name !== 'preview-mac.yml')
+    const result = decide({ stdout: JSON.stringify(release) })
+    expect(result.outputs.changed).toBe('true')
+    expect(result.stdout).toContain('preview-mac.yml')
   })
 
   it('does NOT take the old nightly\'s assets as a complete preview', () => {
@@ -231,10 +265,10 @@ describe('preview decide: should this run build, and as which version?', () => {
     // target_commitish holds the SHA it was built from (7feda947), exactly as
     // the dated preview's publish step creates it. Here it is today's dated
     // preview, and this run (a re-run of yesterday's) is for another commit.
-    const todaysDated = { ...recordedNightly(), tag_name: 'v0.1.4-preview.20260924' }
+    const todaysDated = { ...recordedNightly(), tag_name: 'v0.1.4-preview.20260924.946' }
     const result = decide(recorded('gh-api-nightly-404'), {}, { stdout: JSON.stringify(todaysDated) })
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toMatch(/v0\.1\.4-preview\.20260924 already exists for commit 7feda94767c6/)
+    expect(result.stderr).toMatch(/v0\.1\.4-preview\.20260924\.946 already exists for commit 7feda94767c6/)
     expect(result.outputs.changed).toBeUndefined()
   })
 
@@ -256,54 +290,100 @@ describe('preview decide: should this run build, and as which version?', () => {
   })
 })
 
-describe('preview rename: dated assets plus fixed-name rolling copies', () => {
-  /** A release/ folder named like the real beta artifacts, spelled the way
-   * electron-builder writes them locally since #1129 ("Agent-Code-…"). Each
-   * file's content is its original name, so the test can prove which file
-   * went where. */
-  function seedFromRecordedBeta(filter: (name: string) => boolean = () => true) {
+describe('preview rename: dated assets, rolling copies and the preview feed', () => {
+  const recordedFeed = () => readFileSync(join(fixtures, 'latest-mac-v0.1.3.yml'), 'utf8')
+  const feedNames = (text: string) => text.split('\n')
+    .map(line => /^\s*(?:-\s+)?(?:url|path):\s*(.+?)\s*$/.exec(line)?.[1])
+    .filter((name): name is string => Boolean(name))
+
+  /** A release/ folder exactly as package-macos leaves it for v0.1.3: the
+   * REAL electron-builder feed, every file it names, a blockmap per file and
+   * builder-debug.yml (all in the recorded v0.1.3 and beta payloads). Each
+   * binary's content is its own name, so the test can prove which file went
+   * where. */
+  function seedFromRecordedFeed(filter: (name: string) => boolean = () => true) {
     const dir = temp('preview-rename-')
-    for (const { name } of recordedBeta().assets) {
-      const local = name.replace(/^Agent\.Code-/, 'Agent-Code-')
-      if (filter(local)) writeFileSync(join(dir, local), local)
+    writeFileSync(join(dir, 'latest-mac.yml'), recordedFeed())
+    writeFileSync(join(dir, 'builder-debug.yml'), 'x64: {}\n')
+    for (const name of new Set(feedNames(recordedFeed()))) {
+      if (!filter(name)) continue
+      writeFileSync(join(dir, name), name)
+      writeFileSync(join(dir, `${name}.blockmap`), `${name}.blockmap`)
     }
     return dir
   }
   const rename = (dir: string) => spawnSync(process.execPath, [script, 'rename', dir], { encoding: 'utf8' })
+  const verify = (dir: string) => spawnSync(process.execPath, [join(repoRoot, 'scripts/release/verify-update-feed.mjs'), dir, 'preview-mac.yml'], { encoding: 'utf8' })
 
-  it('keeps the versioned dmg/zip for the dated release, copies them to the rolling names, and drops updater metadata', () => {
-    const dir = seedFromRecordedBeta()
-    const result = rename(dir)
-    expect(result.status).toBe(0)
+  it('keeps the versioned files for the dated release and copies them to the rolling names', () => {
+    const dir = seedFromRecordedFeed()
+    expect(rename(dir).status).toBe(0)
     for (const arch of ['arm64', 'x64']) {
       for (const ext of ['dmg', 'zip']) {
-        const versioned = `Agent-Code-0.0.2-beta.1-${arch}.${ext}`
+        const versioned = `Agent-Code-0.1.3-${arch}.${ext}`
         expect(readFileSync(join(dir, versioned), 'utf8')).toBe(versioned)
         expect(readFileSync(join(dir, `Agent.Code-preview-${arch}.${ext}`), 'utf8')).toBe(versioned)
       }
     }
-    // The recorded payload carries latest-mac.yml AND builder-debug.yml;
-    // neither may reach a preview release.
-    expect(readdirSync(dir).filter(name => name.endsWith('.blockmap') || name.endsWith('.yml'))).toEqual([])
+    // Blockmaps (differential download cannot work with fixed names) and
+    // every other yml are gone; only the preview feed remains.
+    expect(readdirSync(dir).filter(name => name.endsWith('.blockmap'))).toEqual([])
+    expect(readdirSync(dir).filter(name => name.endsWith('.yml'))).toEqual(['preview-mac.yml'])
+  })
+
+  it('writes preview-mac.yml naming the rolling copies, with the recorded version and checksums untouched', () => {
+    const dir = seedFromRecordedFeed()
+    expect(rename(dir).status).toBe(0)
+    const feed = readFileSync(join(dir, 'preview-mac.yml'), 'utf8')
+    expect(new Set(feedNames(feed))).toEqual(new Set([
+      'Agent.Code-preview-x64.zip', 'Agent.Code-preview-arm64.zip',
+      'Agent.Code-preview-x64.dmg', 'Agent.Code-preview-arm64.dmg',
+    ]))
+    // Only the file names changed: every other line is the recorded feed's.
+    const strip = (text: string) => text.split('\n').filter(line => !/(?:url|path):/.test(line))
+    expect(strip(feed)).toEqual(strip(recordedFeed()))
+    expect(feed).toContain('version: 0.1.3')
+    // And the #1129 verifier accepts it against the files being published.
+    const verified = verify(dir)
+    expect(verified.status).toBe(0)
+    expect(verified.stdout).toContain('OK')
+  })
+
+  it('the verifier rejects a preview feed naming a file that is not there', () => {
+    const dir = seedFromRecordedFeed()
+    expect(rename(dir).status).toBe(0)
+    rmSync(join(dir, 'Agent.Code-preview-arm64.zip'))
+    const verified = verify(dir)
+    expect(verified.status).toBe(1)
+    expect(verified.stderr).toMatch(/preview-mac\.yml names files that are not in .*Agent\.Code-preview-arm64\.zip/s)
+  })
+
+  it('refuses when the feed names a file with no rolling copy', () => {
+    const dir = seedFromRecordedFeed()
+    const feed = recordedFeed().replace('path: Agent-Code-0.1.3-x64.zip', 'path: Agent-Code-0.1.3-universal.zip')
+    writeFileSync(join(dir, 'latest-mac.yml'), feed)
+    const result = rename(dir)
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('Agent-Code-0.1.3-universal.zip, which has no rolling copy')
+  })
+
+  it('refuses when there is no update feed at all', () => {
+    const dir = seedFromRecordedFeed()
+    rmSync(join(dir, 'latest-mac.yml'))
+    expect(rename(dir).stderr).toMatch(/exactly one update feed/)
   })
 
   it('refuses when an architecture is missing, naming what it found', () => {
-    const dir = seedFromRecordedBeta(name => name !== 'Agent-Code-0.0.2-beta.1-x64.zip')
+    const dir = seedFromRecordedFeed(name => name !== 'Agent-Code-0.1.3-x64.zip')
     const result = rename(dir)
     expect(result.status).not.toBe(0)
     expect(result.stderr).toMatch(/Expected exactly one x64 \.zip, found 0/)
   })
 
   it('refuses when an architecture has two candidate dmgs rather than guessing', () => {
-    const dir = seedFromRecordedBeta()
+    const dir = seedFromRecordedFeed()
     writeFileSync(join(dir, 'Agent-Code-0.0.3-arm64.dmg'), 'second')
     expect(rename(dir).status).not.toBe(0)
-  })
-
-  it('a rerun over its own output is not confused by the rolling copies', () => {
-    const dir = seedFromRecordedBeta()
-    expect(rename(dir).status).toBe(0)
-    expect(rename(dir).status).toBe(0)
   })
 })
 
@@ -392,7 +472,7 @@ describe('preview notes: release bodies from a real git history', () => {
     const out = temp('preview-notes-out-')
     const result = spawnSync(process.execPath, [script, 'notes', out], {
       cwd, encoding: 'utf8',
-      env: { ...process.env, HEAD_SHA: head, PREV_SHA: prev, VERSION: '0.1.4-preview.20260924', GITHUB_REPOSITORY: 'Juliusolsson05/agent-code', GITHUB_SERVER_URL: 'https://github.com' },
+      env: { ...process.env, HEAD_SHA: head, PREV_SHA: prev, VERSION: '0.1.4-preview.20260924.946', GITHUB_REPOSITORY: 'Juliusolsson05/agent-code', GITHUB_SERVER_URL: 'https://github.com' },
     })
     const read = (name: string) => existsSync(join(out, name)) ? readFileSync(join(out, name), 'utf8') : ''
     return { status: result.status, stderr: result.stderr, publishing: read('preview-body-publishing.md'), final: read('preview-body.md'), dated: read('preview-dated-body.md') }
@@ -407,10 +487,11 @@ describe('preview notes: release bodies from a real git history', () => {
     expect(result.final).not.toContain('feat: first')
     expect(result.dated).toContain('fix: second')
     expect(result.dated).not.toContain('feat: first')
-    // The dated body names the version it previews and says it is never
-    // offered by the updater; it carries no skip marker.
+    // The dated body names the version it previews and how to get previews
+    // as updates (#1168); it carries no skip marker.
     expect(result.dated).toMatch(/^Preview of Agent Code 0\.1\.4,/)
-    expect(result.dated).toContain('never offered by the in-app updater')
+    expect(result.dated).toContain('Update channel → Preview')
+    expect(result.dated).not.toContain('never offered')
     expect(result.dated).not.toMatch(/^built-from:/m)
   })
 

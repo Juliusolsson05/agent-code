@@ -317,6 +317,19 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // Update channel (#1168). Marker row: the value lives in main's
+      // updates.json, which the updater reads before any window exists.
+      control: {
+        type: 'update-channel'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Settings → Skills (#1161): installed, written-here and external
       // skills in one grid with a column per provider. Marker row for the
       // same reason as the MCP grid: the collection lives in main's managed
@@ -648,6 +661,16 @@ export function getSettingsRegistry(
         onSelect: (ctx, value) =>
           ctx.onChange({ usageHeaderLevel: value as Settings['usageHeaderLevel'] }),
       },
+    },
+    {
+      id: 'update-channel',
+      category: 'workspace',
+      title: 'Update channel',
+      description:
+        'Which updates Agent Code installs. Stable gets tested releases. Preview gets each night\'s build of the next version, so fixes arrive days earlier but may have bugs.',
+      keywords: ['update', 'updates', 'channel', 'preview', 'nightly', 'beta', 'stable', 'release', 'version', 'check for updates'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'update-channel' },
     },
     {
       id: 'auto-send-prompt-suggestion',

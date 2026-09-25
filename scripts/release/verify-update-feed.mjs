@@ -22,13 +22,18 @@
 // electron-builder output; the two fields read here (`url` entries under
 // `files`, and the top-level `path`) are all the updater downloads by name.
 //
-// Usage: node scripts/release/verify-update-feed.mjs [releaseDir=release]
+// Usage: node scripts/release/verify-update-feed.mjs [releaseDir=release] [feed=latest-mac.yml]
+//
+// The feed name is an argument since #1168: the preview workflow publishes
+// `preview-mac.yml` on the rolling `preview` release, the Preview update
+// channel's feed, and it must pass the same two checks.
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const releaseDir = resolve(process.cwd(), process.argv[2] ?? 'release')
-const feedPath = join(releaseDir, 'latest-mac.yml')
+const feedName = process.argv[3] ?? 'latest-mac.yml'
+const feedPath = join(releaseDir, feedName)
 
 function fail(message) {
   process.stderr.write(`[verify-update-feed] ${message}\n`)
@@ -36,7 +41,7 @@ function fail(message) {
 }
 
 if (!existsSync(feedPath)) {
-  fail(`${feedPath} is missing. Without latest-mac.yml the updater cannot see this release; check the publish block in electron-builder.yml.`)
+  fail(`${feedPath} is missing. Without it the updater cannot see this release; check the publish block in electron-builder.yml.`)
 }
 
 const referenced = new Set()
@@ -51,7 +56,7 @@ if (referenced.size === 0) fail(`${feedPath} names no files; the updater would h
 const rewritten = [...referenced].filter(name => !/^[A-Za-z0-9._-]+$/.test(name))
 if (rewritten.length > 0) {
   fail(
-    `latest-mac.yml names files GitHub would rename on upload (only letters, digits, ".", "-" and "_" survive), so installed apps would get 404 when updating:\n`
+    `${feedName} names files GitHub would rename on upload (only letters, digits, ".", "-" and "_" survive), so installed apps would get 404 when updating:\n`
     + rewritten.map(name => `  - ${name}`).join('\n')
     + '\nChange artifactName in electron-builder.yml to use only those characters.',
   )
@@ -60,7 +65,7 @@ if (rewritten.length > 0) {
 const missing = [...referenced].filter(name => !existsSync(join(releaseDir, name)))
 if (missing.length > 0) {
   fail(
-    `latest-mac.yml names files that are not in ${releaseDir}, so installed apps would get 404 when updating:\n`
+    `${feedName} names files that are not in ${releaseDir}, so installed apps would get 404 when updating:\n`
     + missing.map(name => `  - ${name}`).join('\n')
     + '\nThe feed is written from artifactName in electron-builder.yml; the file names on disk must match it exactly.',
   )

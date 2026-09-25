@@ -64,8 +64,8 @@ Rules of thumb:
 
 | Channel | Tag | Who gets it | Created by |
 |---|---|---|---|
-| **Preview** | `vX.Y.Z-preview.YYYYMMDD` (dated), plus the rolling `preview` | Only people who download it by hand. Never offered by the updater. | `.github/workflows/preview.yml`, every night from `main`, automatically. |
-| **Stable** | `vX.Y.Z` | **Everyone**, through the updater. Becomes `releases/latest`, which the landing page's download button uses. | `.github/workflows/release.yml`, **by hand only**. |
+| **Preview** | `vX.Y.Z-preview.YYYYMMDD` (dated), plus the rolling `preview` | People who choose **Settings → Workspace → Update channel → Preview**, through the updater, and anyone who downloads one by hand. | `.github/workflows/preview.yml`, every night from `main`, automatically. |
+| **Stable** | `vX.Y.Z` | **Everyone else**, through the updater. Becomes `releases/latest`, which the landing page's download button uses. | `.github/workflows/release.yml`, **by hand only**. |
 
 **Every manual release is stable.** The release workflow has no channel
 option, and it refuses a `package.json` version with a `-suffix` before it
@@ -75,22 +75,37 @@ hand-made beta.
 
 On GitHub, "stable" means published, not marked pre-release, and marked
 **Latest**. Previews are pre-releases and never Latest. That is what keeps
-them away from the landing page and the updater.
+them away from the landing page and from the updater on the Stable channel.
 
 ## Previews
 
 A preview is `main`, built and signed as a preview of the **next** version.
 
-- **Version**: the next PATCH of `package.json`, plus the UTC build date.
-  After stable `0.1.3` the previews are `0.1.4-preview.20260924`,
-  `0.1.4-preview.20260925`, and so on. Once `0.1.4` ships and `package.json`
-  says `0.1.4`, the next night's preview becomes `0.1.5-preview.…` on its own.
+- **Version**: the next PATCH of `package.json`, plus the UTC build date and
+  time.
+  - After stable `0.1.3`, the previews are `0.1.4-preview.20260924.1025`,
+    `0.1.4-preview.20260925.1031`, and so on.
+  - The time is there so a later build always has a higher version, which
+    the Preview update channel needs: it only offers a newer version.
+  - Once `0.1.4` ships and `package.json` says `0.1.4`, the next preview
+    becomes `0.1.5-preview.…` on its own.
 - **The app knows it is a preview**: the version is stamped into the build,
-  so **About** and incident reports show `0.1.4-preview.20260924`, not the
-  stable version the code has already moved past.
-- **Updates**: a preview install is offered the next stable release when it
-  ships (`0.1.4` sorts above every `0.1.4-preview.*`), and never another
-  preview.
+  so **About** and incident reports show `0.1.4-preview.20260924.1025`, not
+  the stable version the code has already moved past.
+- **Getting previews through the updater (#1168)**: choose **Update
+  channel → Preview** in Settings → Workspace.
+  - **File → Check for Updates…** and the background checks then offer each
+    night's preview when it is newer than the running app. They read
+    `preview-mac.yml` on the rolling release.
+  - A preview installed by hand is on the Preview channel by default.
+  - Preview updates always download in full, because the rolling files have
+    fixed names, so differential download cannot work.
+  - When a stable release ships, Preview users get the next night's preview,
+    which contains it, not the stable build itself.
+- **Leaving Preview**: switching back to Stable never downgrades.
+  - The app stays on its preview until the next stable passes it: `0.1.4` sorts
+    above every `0.1.4-preview.*`, so 0.1.4 is offered when it ships.
+  - An update already found or downloaded on the old channel is dropped.
 - **Where to get one**:
   - each night's build is its own dated pre-release on the Releases page;
   - the rolling **Agent Code Preview (newest)** release always holds the
@@ -112,12 +127,15 @@ gh workflow run preview.yml --repo Juliusolsson05/agent-code --ref main
 - Manual runs build `main` only. A run from any other branch is refused,
   because it would replace the "newest preview" download with an unreviewed
   branch build.
-- A manual run adds the time to the version (`0.1.4-preview.20260924.1415`),
-  so it never collides with that night's build.
+- A manual run is versioned exactly like a scheduled one (date and time), so
+  it sorts in build order with the nightly builds.
 - `target=minor` builds ONE preview labelled for the next minor
   (`0.2.0-preview.…`), even if `main` has not moved since the last preview.
-  Scheduled nights keep previewing the next patch, so run it again whenever
-  you want a fresh minor-labelled build.
+  - It is published **only as a dated release**, never to the rolling
+    release. That keeps it off the Preview update channel: it would sort
+    above every later `0.1.4-preview.*`, so Preview users would be stuck on
+    it.
+  - Scheduled nights keep previewing the next patch.
 - `force=true` rebuilds a commit that already has a preview.
 - To retry a failed preview, start a **new** run. "Re-run all jobs" on an
   older run is refused once a newer dated preview exists: it would put the

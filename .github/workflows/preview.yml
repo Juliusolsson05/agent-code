@@ -45,7 +45,7 @@ on:
         # preview labelled for the next minor (0.2.0-preview.…) and always
         # builds, even when main has not moved (review round 1: the skip check
         # used to ignore the target, so the run was green and published nothing).
-        description: "Which version this previews: the next patch (0.1.3 → 0.1.4) or the next minor (0.1.3 → 0.2.0). Minor always builds; scheduled nights stay on patch."
+        description: "Which version this previews: the next patch (0.1.3 → 0.1.4) or the next minor (0.1.3 → 0.2.0). Minor always builds, is published as a dated release only, and never reaches the Preview update channel."
         type: choice
         default: patch
         options:
@@ -102,6 +102,7 @@ jobs:
       prev-sha: ${{ steps.decide.outputs.prev-sha }}
       version: ${{ steps.decide.outputs.version }}
       tag: ${{ steps.decide.outputs.tag }}
+      rolling: ${{ steps.decide.outputs.rolling }}
     steps:
       - name: Checkout the release scripts and package.json
         # scripts/release uses Node built-ins alone (the runner's Node, no
@@ -152,6 +153,7 @@ jobs:
       PREV_SHA: ${{ needs.check-for-changes.outputs.prev-sha }}
       VERSION: ${{ needs.check-for-changes.outputs.version }}
       TAG: ${{ needs.check-for-changes.outputs.tag }}
+      ROLLING: ${{ needs.check-for-changes.outputs.rolling }}
     steps:
       - name: Checkout full history
         # For the commit list in the release bodies.
@@ -168,12 +170,19 @@ jobs:
           # `macos-release` fails here rather than publishing unsigned bits.
           path: release
 
-      - name: Add the fixed-name rolling copies
-        # Exactly one dmg and one zip per architecture, or the run fails
-        # naming what it found. Publishing the wrong binary under a permanent
-        # URL is worse than a red run. Blockmaps and the update feed file are
-        # dropped: previews are never offered by the updater.
+      - name: Add the fixed-name rolling copies and the preview feed
+        # Exactly one dmg and one zip per architecture, and exactly one
+        # electron-builder feed, or the run fails naming what it found.
+        # Publishing the wrong binary under a permanent URL is worse than a
+        # red run. The feed becomes preview-mac.yml, naming the rolling copies
+        # (#1168: the Preview update channel reads it); blockmaps are dropped
+        # because that channel downloads in full.
         run: node scripts/release/preview.mjs rename release
+
+      - name: Verify the preview feed names only files being published
+        # The #1129 check, on the Preview channel's feed: a feed naming a file
+        # that is not uploaded makes every preview update 404.
+        run: node scripts/release/verify-update-feed.mjs release preview-mac.yml
 
       - name: Compose release bodies
         # If the previous SHA is not in this clone (force-pushed, deleted,
@@ -197,6 +206,10 @@ jobs:
             release/Agent-Code-*.zip
 
       - name: Publish the rolling preview
+        # Not for a target=minor build: `0.2.0-preview.…` would sort above
+        # every later nightly, so Preview-channel users who took it would be
+        # stuck on it. It stays a dated release (review round 1 of #1168).
+        if: env.ROLLING == 'true'
         # softprops updates the existing release when the tag already
         # exists, deleting and re-uploading each same-named asset
         # (overwrite_files defaults to true at this pinned v3.0.3) — that
@@ -213,13 +226,24 @@ jobs:
           prerelease: true
           make_latest: false
           body_path: preview-body-publishing.md
+          preserve_order: true
+          # Sequential, in this order: softprops uploads in PARALLEL unless
+          # preserve_order is set (src/run.ts at the pinned commit:
+          # Promise.all over the files), and preview-mac.yml must go LAST: the feed
+          # must not name a zip whose upload has not finished. During the
+          # upload the OLD feed still describes the old bytes, so a check in
+          # that minute can see a checksum mismatch; electron-updater verifies
+          # sha512, reports an error, installs nothing, and the next check
+          # succeeds (spec D2, accepted).
           files: |
             release/Agent.Code-preview-arm64.dmg
             release/Agent.Code-preview-arm64.zip
             release/Agent.Code-preview-x64.dmg
             release/Agent.Code-preview-x64.zip
+            release/preview-mac.yml
 
       - name: Record the built-from marker
+        if: env.ROLLING == 'true'
         # Last of the publishing steps on purpose: the marker is the skip
         # check's proof that THIS SHA has a complete preview, so it is written
         # only after both releases published with every asset uploaded.

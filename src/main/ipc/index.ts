@@ -8,6 +8,7 @@ import type { SessionRecorderManager } from '@main/recording/SessionRecorderMana
 import type { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 
 import { registerSessionIpc } from '@main/ipc/session.js'
+import { registerUpdatesIpc } from '@main/ipc/updates.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
@@ -74,6 +75,8 @@ import type { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspe
 // in isolation — they don't reach into module-scoped state.
 
 export type IpcDeps = {
+  /** Update channel (#1168); optional so harnesses without an updater still register. */
+  updates?: Parameters<typeof registerUpdatesIpc>[0]
   manager: SessionManager
   userMcpService: UserMcpService
   lspManager: LspManager
@@ -157,4 +160,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentSkillsIpc(deps.agentCodeConventionsService)
   registerSystemSuspensionIpc(deps.systemSuspension)
   registerAgentActivityIpc(deps.agentActivityRecorder)
+  if (deps.updates) registerUpdatesIpc(deps.updates)
 }
