@@ -549,7 +549,12 @@ export function classifyRollbackComposer(
 ): 'empty' | 'drafted' | 'unpainted' {
   // The rule (#1309 review):
   //  - the text-only read stays the base. It fails closed, and its 'empty'
-  //    (a bare prompt marker) is trustworthy;
+  //    is trustworthy for a bare prompt marker;
+  //  - but NOT for its allowlisted hints ("Press up to edit") when the live
+  //    cells show typed text (#1309 round 2, reviews A and B). A kill clears
+  //    only the current VISUAL row, so a prompt whose first row reads exactly
+  //    like a hint can leave that row behind, plain. Calling it cleared told
+  //    the caller a retry was safe, and the retry would append to it;
   //  - it is overruled to 'empty' only when the LIVE cell attributes show a
   //    painted placeholder: dim cells and no typed (plain) cells. A leftover
   //    character under the inverse cursor has no dim cells, so it stays
@@ -561,8 +566,9 @@ export function classifyRollbackComposer(
   // success over half a prompt, so every doubt resolves to 'drafted'.
   const screen = live?.screen ?? fallbackScreen
   const textOnly = parseClaudeComposerState(screen, null)
-  if (textOnly !== 'drafted') return textOnly
   const attributes = live?.attributes
+  if (textOnly === 'empty' && attributes && attributes.plain > 0) return 'drafted'
+  if (textOnly !== 'drafted') return textOnly
   if (attributes && attributes.plain === 0 && attributes.dim > 0
     && parseClaudeComposerState(screen, attributes) === 'empty') return 'empty'
   return 'drafted'

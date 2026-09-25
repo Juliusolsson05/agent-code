@@ -93,4 +93,25 @@ it('classifies real painted frames: a dim suggestion is empty, typed text is not
   expect(await paint('❯ \x1b[2myes fix all 9\x1b[22m')).toBe('empty')
   expect(await paint('❯ yes fix all 9')).toBe('drafted')
   expect(await paint('❯')).toBe('empty')
+  // #1309 round 2 (A and B): a known hint is empty only when it is PAINTED
+  // as one. The same words typed (a first visual row left behind by a kill
+  // of the row below) are a draft.
+  expect(await paint('❯ \x1b[2mPress up to edit\x1b[22m')).toBe('empty')
+  expect(await paint('❯ Press up to edit')).toBe('drafted')
+})
+
+// #1309 round 2: the rollback itself must not report that typed row cleared;
+// a retry would append to it and submit the fragment.
+it('does not call typed text that matches a known hint empty', async () => {
+  const { records, result } = await rollback({ screen: composer('❯ Press up to edit'), attributes: { dim: 0, inverse: 1, plain: 15 } })
+  expect(records.join(',')).not.toContain('rollback-cleared')
+  expect(result).not.toMatchObject({ retrySafe: true })
+})
+
+// #1309 round 2 B mutation: the attributes sample only the MARKER row, so a
+// dim marker row says nothing about typed text on a continuation row.
+it('does not call a dim marker row empty while a continuation row holds text', async () => {
+  const { classifyRollbackComposer } = await import('./promptDelivery.js')
+  const screen = [RULE, '❯ yes fix all 9', '  and the rest of a draft', RULE].join('\n')
+  expect(classifyRollbackComposer({ screen, attributes: { dim: 12, inverse: 1, plain: 0 } }, '')).toBe('drafted')
 })

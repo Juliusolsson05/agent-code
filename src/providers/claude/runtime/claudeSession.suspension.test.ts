@@ -35,3 +35,19 @@ describe('ClaudeSession.noteSystemSuspension', () => {
     })).not.toThrow()
   })
 })
+
+// #1309 round 2 B: the production adapter the rollback reads. Both halves
+// must come from the live headless at the same call, and a session without a
+// headless reports nothing rather than an empty (= "cleared") screen.
+describe('ClaudeSession.readComposer', () => {
+  it('reads screen and attributes from the live headless together', () => {
+    const session = new ClaudeSession()
+    expect(session.readComposer()).toBeNull()
+    const attributes = { dim: 0, inverse: 1, plain: 4 }
+    ;(session as unknown as { headless: unknown }).headless = {
+      getScreen: () => '❯ typed',
+      getComposerAttributes: () => attributes,
+    }
+    expect(session.readComposer()).toEqual({ screen: '❯ typed', attributes })
+  })
+})
