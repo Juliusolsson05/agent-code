@@ -831,7 +831,7 @@ export function ExplorerPane({
                 }}
               />
               <MenuItem
-                label={armedDelete === menu.entry.path ? 'Delete — click to confirm' : 'Delete'}
+                label={armedDelete === menu.entry.path ? 'Delete — press again to confirm' : 'Delete'}
                 danger
                 onClick={() => {
                   const entry = menu.entry

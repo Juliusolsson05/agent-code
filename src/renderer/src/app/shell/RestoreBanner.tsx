@@ -84,7 +84,7 @@ export function RestoreBanner() {
         type="button"
         onClick={() => setCollapsed(true)}
         className="text-warning/80 hover:text-warning"
-        title="Collapse into a corner chip (click the chip to re-expand)"
+        title="Collapse into a corner chip (press the chip to expand it again)"
         aria-label="Collapse autosave-off banner"
       >
         Hide

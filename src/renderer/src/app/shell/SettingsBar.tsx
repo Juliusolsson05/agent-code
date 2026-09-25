@@ -65,7 +65,7 @@ export function SettingsBar() {
             caffeinateStatus?.supported === false
               ? 'Caffeinate is only available on macOS.'
               : caffeinateStatus?.active
-                ? 'Caffeinate is active. Click to stop keeping the machine awake.'
+                ? 'Caffeinate is active. Press to stop keeping the machine awake.'
                 : 'Start caffeinate to prevent idle sleep during long-running agent work.'
           }
           className={`rounded-control

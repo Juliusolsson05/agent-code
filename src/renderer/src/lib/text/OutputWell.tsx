@@ -97,7 +97,7 @@ export const OutputWell = memo(function OutputWell({
             onClick={() => setExpanded(true)}
             className={`my-0.5 block ${feedDisclosureClass}`}
           >
-            … +{hiddenCount} {hiddenCount === 1 ? 'line' : 'lines'} (click to expand)
+            … +{hiddenCount} {hiddenCount === 1 ? 'line' : 'lines'} (show all)
           </button>
           <pre
             className={`

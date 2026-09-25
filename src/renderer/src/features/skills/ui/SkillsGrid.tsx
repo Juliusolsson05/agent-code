@@ -543,8 +543,10 @@ function UpdateLine({
   return (
     <div className="mt-1 flex flex-col gap-1">
       <div className="flex items-center gap-2 text-[10px] text-accent">
-        <span>⟳ Update available · {changed} file{changed === 1 ? '' : 's'} changed</span>
-        <Button size="xs" variant="outline" onClick={() => setOpen(value => !value)}>{open ? 'Hide review' : 'Review…'}</Button>
+        {/* ↑, not ⟳: ⟳ is the app's "loading" spinner (the pocket strip spins
+            it), so it read as "checking…" here (UI pass, G-25). */}
+        <span>↑ Update available · {changed} file{changed === 1 ? '' : 's'} changed</span>
+        <Button size="xs" variant="outline" onClick={() => setOpen(value => !value)}>{open ? 'Hide Review' : 'Review…'}</Button>
         <Button size="xs" variant="ghost" onClick={onDismiss}>Dismiss</Button>
       </div>
       {open ? (

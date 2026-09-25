@@ -640,7 +640,7 @@ export function getSettingsRegistry(
       category: 'workspace',
       title: 'Usage in Header',
       description:
-        'Show Claude and Codex quota usage in the header bar. Click the indicator to open the full Usage modal.',
+        'Show Claude and Codex quota usage in the header bar. Select the indicator to open the full Usage modal.',
       keywords: ['usage', 'quota', 'limits', 'header', 'tokens', 'claude', 'codex'],
       control: {
         type: 'toggle',

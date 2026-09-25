@@ -700,7 +700,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             // happened while I was away".
             <span
               data-dispatch-new-in-pool="true"
-              title="Spawned into the pool — click to place it in this row's focused lane"
+              title="Spawned into the pool — select it to place it in this row's focused lane"
               className="
                 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10
                 px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
