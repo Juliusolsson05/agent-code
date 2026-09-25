@@ -1079,4 +1079,17 @@ describe('#1208 — reopening a document after its server was lost', () => {
     expect(await ipcHandlers.get('lsp:reopen-document')!(evt, params)).toBe(true)
     expect(docsOf(manager).get('inmemory://ai')?.refs).toBe(1)
   })
+  // #1266 review C6: the same size guard as lsp:open-document, so a reopen
+  // cannot push oversized text past authorization into the manager.
+  it('refuses oversized text before authorizing anything', async () => {
+    const authorize = vi.fn(async () => '/repo')
+    const { manager, server, evt } = setup(authorize)
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    authorize.mockClear()
+    const huge = 'x'.repeat(8 * 1024 * 1024)
+    await expect(ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: huge })).rejects.toThrow('oversized')
+    expect(authorize).not.toHaveBeenCalled()
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
 })
