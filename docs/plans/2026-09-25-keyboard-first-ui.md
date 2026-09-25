@@ -528,7 +528,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | done (+ T4 ring on the three header icon buttons) |
 | K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
 | K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
-| K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | todo |
+| K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | done (wraps, ~4-line cap that scrolls; role=alert; Buttons, Overwrite destructive-outline) |
 | K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | todo |
 | K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | todo |
 | K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | todo |
@@ -828,6 +828,10 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-6 Editor save-conflict banner:** the whole message wraps (it was cut
+  to one line); very long ones scroll after ~4 lines. "Reload from disk" and
+  "Overwrite" are standard small buttons, and **Overwrite is red-outline**
+  (it replaces the file on disk).
 - **K2-3 Explorer header (editor sidebar):** Tab to "+", press Enter: the
   new file/folder menu opens right under the button (it opened in the
   window's top left corner). ↻, • and + show the thin focus ring.
@@ -1517,3 +1521,8 @@ Sharp corners and one light theme.
 - 2026-09-25 K2-3: keyboard click (`detail === 0`) anchors the menu at the
   button's bottom-left (+2px). Mouse path unchanged and pinned. Confirm-red:
   the keyboard test fails on the pre-change pane.
+- 2026-09-25 K2-6: EditorStatusBanner wraps (no truncate/title), role=alert.
+  Ruling: a scroll cap instead of a details toggle; a toggle needs overflow
+  measurement and adds a control to a two-button banner, and a capped
+  scroller is keyboard-reachable on Electron's Chromium. Confirm-red: the
+  banner test fails on the pre-change component.
