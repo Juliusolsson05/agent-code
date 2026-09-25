@@ -1219,37 +1219,19 @@ export function useIpcSubscriptions(
         })
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
-          const meta = refs.stateRef.current.sessions[sessionId] ?? null
-          // NOT evaluated here any more (#290). The first proxy header of a
+          // No disconnect verdict here (#290). The first proxy header of a
           // fresh pane arrives before Claude has written a single JSONL line,
-          // so "no committed entries yet" is the normal state at this moment.
-          // Marking it would alarm on every new pane, which is why the old
-          // predicate refused 'ready', and that made it unable to fire in the
-          // real broken state too. The decision moved to the end of a turn:
-          // see `scheduleTranscriptCommitCheck`.
-          void meta
-          const shouldMarkDisconnected = false
-          const next = appendFeedDebugLog(
-            {
-              ...current,
-              ...(shouldMarkDisconnected
-                ? {
-                    transcriptStatus: 'disconnected' as const,
-                    transcriptError:
-                      `Claude session ${observedProvider.providerSessionId} was observed in proxy traffic, ` +
-                      'but no committed JSONL transcript has arrived yet.',
-                  }
-                : {}),
-            },
-            {
-              layer: 'SEM',
-              kind: 'provider_session_observed',
-              summary: shouldMarkDisconnected
-                ? 'provider session observed · transcript not yet committed'
-                : 'provider session observed',
-              data: observedProvider,
-            },
-          )
+          // so "no committed entries yet" is the normal state at this moment;
+          // judging it here alarmed on every new pane, which is why the old
+          // predicate refused 'ready' and so could never fire in the real
+          // broken state either. The verdict is made after a completed turn
+          // plus a grace: see `scheduleTranscriptCommitCheck`.
+          const next = appendFeedDebugLog(current, {
+            layer: 'SEM',
+            kind: 'provider_session_observed',
+            summary: 'provider session observed',
+            data: observedProvider,
+          })
           return { ...prev, [sessionId]: next }
         })
         closeSpan({
@@ -1608,6 +1590,10 @@ export function useIpcSubscriptions(
         transcriptCommitChecks.delete(sessionId)
         const current = refs.latestRuntimesRef.current[sessionId]
         const latestMeta = refs.stateRef.current.sessions[sessionId]
+        // Re-checked at FIRE time too: a provider switch keeps the session id
+        // and resets the runtime, so a Claude turn's pending check must not
+        // put a Claude-worded warning on the Codex pane that replaced it.
+        if (!latestMeta || (latestMeta.kind ?? 'claude') !== 'claude') return
         if (!current || !shouldMarkProviderSessionDisconnected(current, latestMeta)) return
         setRuntimes(prev => {
           const runtime = prev[sessionId]

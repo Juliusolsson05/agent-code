@@ -1703,7 +1703,18 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       const playRecordedTurn = () => act(() => {
         for (const event of recordedDisconnectedClaude.turnEvents) fake.emitSemantic({ sessionId, event: event as never })
       })
-      return { fake, runtime: () => runtimes[sessionId]!, playRecordedTurn, unmount: mounted.unmount }
+      const playRecordedStartOnly = () => act(() => {
+        fake.emitSemantic({ sessionId, event: recordedDisconnectedClaude.turnEvents[0] as never })
+      })
+      return {
+        fake,
+        state,
+        runtime: () => runtimes[sessionId]!,
+        setRuntime: (next: SessionRuntime) => { runtimes = { ...runtimes, [sessionId]: next } },
+        playRecordedTurn,
+        playRecordedStartOnly,
+        unmount: mounted.unmount,
+      }
     }
 
     const provisional = {
@@ -1756,6 +1767,46 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       const pane = mount(provisional)
       pane.playRecordedTurn()
       pane.unmount()
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('does not judge a turn that is still running', () => {
+      // #1222 review (Pi F1): the premise is "a healthy pane has entries by
+      // the END of a turn". A long first turn can run past 15 s before the
+      // tail watcher delivers the user row, so starting the clock at
+      // turn_started would alarm mid-turn on a pane that commits normally.
+      const pane = mount(provisional)
+      pane.playRecordedStartOnly()
+      act(() => { vi.advanceTimersByTime(60_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('clears the warning when the transcript finally arrives', () => {
+      // #1222 review (Pi F4): the design leans on the record handler resetting
+      // the status, so a slow transcript clears the banner instead of leaving
+      // it stuck. Pin that here, against the real hook.
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('disconnected')
+      act(() => {
+        pane.fake.emitJsonlEntries({
+          sessionId,
+          entries: [{ entry: { type: 'user', uuid: 'late-1', message: { role: 'user', content: 'hi' } } as never, file: '/p/x.jsonl' }],
+        })
+      })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('does not warn the pane a provider switch put in its place', () => {
+      // #1222 review (Pi F2): a switch keeps the session id and resets the
+      // runtime. A Claude turn's pending check must not land a Claude-worded
+      // warning on the Codex pane that replaced it.
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      ;(pane.state.sessions as Record<string, { kind?: string }>)[sessionId]!.kind = 'codex'
+      pane.setRuntime(emptyRuntime())
       act(() => { vi.advanceTimersByTime(15_000) })
       expect(pane.runtime().transcriptStatus).toBe('ready')
     })
