@@ -590,7 +590,7 @@ feeds the rows below G-1.
 | G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | todo |
 | G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | todo |
 | G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | done (`PanelHeader` + `SectionLabel` primitives; Git, Worktrees, AI Workspace, Agent Status migrated; Title Case ghost actions; named closes; those files' row hovers + 9px text fixed too) |
-| G-27 | Dictation feedback layer | the dictation chip (z-40) is hidden under any dialog scrim (z-1100) | toast band, if dictation can target dialog fields (behaviour check) | todo |
+| G-27 | Dictation feedback layer | the dictation chip (z-40) is hidden under any dialog scrim (z-1100) | toast band, if dictation can target dialog fields (behaviour check) | done (z-[1200] per ask-2; the chip's status text is sentence case) |
 
 ## Owner visual checklist
 
@@ -866,6 +866,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-27 Dictation chip:** now visible above an open dialog (it was hidden
+  behind the dialog's scrim). Its text reads "Transcribing…", "Hold to
+  dictate · release to paste", "Press the shortcut again to finish".
 - **G-6 Composer:** its accent border now means "the caret is in here"
   (real focus), not "this pane is selected", so it goes plain when you Tab
   or click into the feed. The pane's own outline still marks the active
