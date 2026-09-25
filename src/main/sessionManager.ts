@@ -1087,8 +1087,14 @@ export class SessionManager extends EventEmitter {
       this.terminalForeground.untrack(sessionId)
     } else {
       this.agentPtyBuffers.delete(sessionId)
-      this.agentPtyAttachCounts.delete(sessionId)
-      this.agentPtyRestoreSizes.delete(sessionId)
+      // NOT agentPtyAttachCounts / agentPtyRestoreSizes (#1281): they describe
+      // the renderer's raw-terminal VIEW, which outlives the process. A pane
+      // stays mounted through a same-id wake (recover from a delivery, a
+      // control call, a server restart), and deleting its count here stopped
+      // forwarding to it: the xterm froze on the dead process while keystrokes
+      // reached the new one unseen. The view's own detachAgentPty (on unmount,
+      // pane close included) remains the only release, and detach deletes the
+      // key whether or not a process still exists.
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
       // Once the backend is gone its user-MCP launch facts must not outlive it
       // and be reported for a successor. Unconditional (review round 2):
