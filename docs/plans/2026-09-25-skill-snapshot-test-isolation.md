@@ -21,16 +21,23 @@ emptied it.
    references are one unit. A journal sweeping a store it does not own is
    exactly the bug. In production `dirname(AGENT_CODE_CONVENTIONS_STATE_FILE)`
    is `STATE_DIR`, so the path is byte-identical and no migration is needed.
-   The global constant stays for its other readers but is no longer the
-   service's fallback.
-2. **Readable failure:** a missing snapshot directory reports "Agent Code's
-   reviewed copy of this skill is missing …" instead of the raw `lstat` errno
-   string. Snapshot corruption (a link, not a directory) keeps its existing
-   message.
+   The service was the only reader of the absolute
+   `AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR`, so it is replaced by a
+   directory NAME constant. Nothing can pair a journal with a store it does
+   not own.
+2. **Readable failure:** when `verify`/`readFile` find the recorded snapshot
+   missing, they report "Agent Code's reviewed copy of this skill is
+   missing …" instead of the raw `lstat` errno. That covers the digest
+   directory, the whole store and its parent. Nested directories and
+   cleanup quarantines keep the raw error, because "missing from the store"
+   would be false there. Snapshot corruption (a link, not a directory) keeps
+   its existing message.
 3. **Regression test** (system, real filesystem, real `initialize()`): a
    service built with only a temp `stateFilePath` sweeps an unreferenced
-   snapshot beside that state file, and a referenced one survives. On the
-   unfixed code it fails because the sweep runs against the global root. The
+   snapshot beside that state file. The existing sweep tests already cover
+   referenced snapshots surviving. A second test covers the readable message
+   for both a missing digest directory and a missing store. On the unfixed
+   code it fails because the sweep runs against the global root. The
    red run is executed with `HOME` pointed at a scratch dir, so proving the
    test cannot itself destroy real data.
 
@@ -39,9 +46,12 @@ emptied it.
   is a real recovery feature, with trust questions of its own (provider copies
   are generated artifacts that are never imported back). If wanted, it gets
   its own issue.
-- Other test/real-state leaks the audit may find. Fixed here only when they
-  are the same pattern (a destructive default path) inside this blast radius.
-  Anything else gets its own issue.
+- Other test/real-state leaks. A read-only audit of every `storage/paths.ts`
+  constant against its tests found none that are live. Two are fragile but
+  non-destructive and are listed in the PR: the extension GitHub-auth
+  install tests stay off disk only because their stubbed API errors first,
+  and `AppRunJournal.completeness.test.ts` leaves the rename/writeFileSync
+  paths unmocked.
 
 ## Verification
 `npx tsc -b`, the agentCodeConventions system tests, then the full suite once.
