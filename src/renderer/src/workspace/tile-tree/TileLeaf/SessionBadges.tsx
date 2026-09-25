@@ -5,6 +5,7 @@ import type {
   WorktreeActivityState,
 } from '@shared/work-context/types'
 import { worktreeBadgeColor } from '@renderer/workspace/tile-tree/TileLeaf/worktreeBadgeColor'
+import { displayedWorktreeContext } from '@renderer/workspace/tile-tree/TileLeaf/displayedWorktree'
 
 export function WorktreeBadge({
   context,
@@ -15,15 +16,9 @@ export function WorktreeBadge({
   activity: WorktreeActivityState | null | undefined
   constrainToParent?: boolean
 }) {
-  // The badge is a "where is this agent working now?" signal, so
-  // prefer the latest active worktree over the longer-lived primary
-  // score winner. The primary context can lag badly in sessions that
-  // start on main and later move to a feature worktree: main has more
-  // cumulative events, while activity.active already reflects the
-  // most recent command cwd.
-  const displayContext = activity?.active?.worktreePath
-    ? activity.active
-    : context
+  // The badge is a "where is this agent working now?" signal; see
+  // displayedWorktreeContext for which worktree that is.
+  const displayContext = displayedWorktreeContext(context, activity)
   if (!displayContext?.worktreePath) return null
   const label = displayContext.branch ?? shortPath(displayContext.worktreePath)
   if (!label) return null

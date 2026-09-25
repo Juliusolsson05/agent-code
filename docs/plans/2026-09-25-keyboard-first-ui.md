@@ -529,13 +529,13 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
 | K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
 | K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | done (wraps, ~4-line cap that scrolls; role=alert; Buttons, Overwrite destructive-outline) |
-| K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | todo |
+| K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | no change needed (verified: arrowing onto a tab activates it, and the active file's error shows in full in the save banner, an alert since K2-6) |
 | K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | done (one details popover on hover OR focus-within) |
 | K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | done (status spelled out in the same popover; buttons aria-describedby it) |
 | K2-10 | Dispatch "new" / goal-loop chips (`dispatch/DispatchAgentList.tsx:369,378,670,697`) | explanation title-only | aria-describedby on the row | done (hidden sibling description on session rows + the child-collapse toggle) |
 | K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | done (UnsupportedProviderNotes under the provider row, both dialog modes) |
-| K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | todo |
-| K2-13 | Worktree badge (`TileLeaf/SessionBadges.tsx:56`) | branch/touched files title-only | reveal on focus / Agent Status | todo |
+| K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | no change needed (verified: Agent Status, opened by command, shows the full title and Cwd) |
+| K2-13 | Worktree badge (`TileLeaf/SessionBadges.tsx:56`) | branch/touched files title-only | reveal on focus / Agent Status | done (Agent Status Identity gains a Worktree field chosen by the badge's own rule) |
 | K2-14 | Provider tool rows (CommandView, CodeEditView, Claude read/web/agent, Codex embedded-op/plan/tool-result) | truncated full command/path title-only | show full text when expanded | todo |
 | K2-15 | PocketedLeaf viewport note (`PocketedLeaf.tsx:115`) | title-only | visible helper / menu | todo |
 | K2-16 | McpServersRow summary + Unsupported reason (`McpServersRow.tsx:183,252`) | title-only | inline reason | done (per-server reasons on the row's second line; one footer key for the provider-wide “—”; Copy in reason inline; switch + expander rings) |
@@ -828,6 +828,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-13 Agent Status (command "Agent Status"):** Identity now lists the
+  agent's Worktree (branch · path · active), the same one the pane's
+  worktree badge shows, so its details no longer need a hover.
 - **K2-8/9 Pocket strip (collapsed browser pocket at the bottom of a lane):**
   hovering OR tabbing into the strip opens one panel above it with the page
   thumbnail and the status spelled out (URL, what the agent is doing, why the
@@ -1577,3 +1580,7 @@ Sharp corners and one light theme.
   would double the list's height. Cost if wrong: a sighted keyboard user
   still cannot read "click to place it" (the chip's word "new" is visible).
   Confirm-red: the description test fails on the pre-change list.
+- 2026-09-25 K2-7, K2-12 verified as covered by existing keyboard paths
+  (see rows). K2-13: `displayedWorktreeContext` extracted to
+  `TileLeaf/displayedWorktree.ts`, shared by the badge and the Agent Status
+  model, so the two cannot disagree about which worktree is current.
