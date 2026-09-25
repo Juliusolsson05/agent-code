@@ -476,7 +476,7 @@ entry when it lands.
 | N1 | TabBar (`workspace/tile-tree/TabBar.tsx`) | tab is `div onClick`, no role/tabIndex (L78); close ✕ hover-only, no aria-label | `tablist`/`tab` roving tabindex like EditorTabs (←→ Home End, Delete closes); ✕ revealed on focus-within + aria-label; title chord live (F6) | done |
 | N2 | DispatchAgentList (sessions sidebar) | rows are buttons in Tab order; no arrows in list; no `aria-current`; cap toggle/project button no focus style | ↑↓ within the focused list (moves selection like ⌥↑↓), `aria-current` on active row, T4 on header controls | done (↑↓ move focus, not selection — see ruling) |
 | N3 | DispatchMiniList | buttons, hover ring only | T4 focus ring; `aria-current` | done |
-| N4 | TiledDispatch SplitHandles ×3 (L214/347/567) | mouse only, not focusable | `onKeyboardDelta` + `label` like GlobalEditorShell L1213 | todo |
+| N4 | TiledDispatch SplitHandles ×3 (L214/347/567) | mouse only, not focusable | `onKeyboardDelta` + `label` like GlobalEditorShell L1213 | done (2% step, shared clamp with drag) |
 | N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | todo |
 | N6 | Reader strip | no aria-pressed | aria-current | todo |
 | N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | todo |
@@ -778,6 +778,12 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **N4 Tiled Dispatch splitters:** Tab reaches the row divider, each row's
+  agent-list divider and each lane divider (thin focus ring on the hit
+  area); ←/→ move vertical dividers and ↑/↓ the row divider by 2% per press,
+  stopping at the same limits the drag stops at (lane 8%, row 12%, agent list
+  10–40%). Check the focus ring is visible against the 4px bar in both
+  themes.
 - **N2/N3 Dispatch sessions list + lane mini strip:** with a session row
   focused, ↑/↓ move the focus ring to the next/previous row (Enter still
   picks it; ⌥↑/⌥↓ still move the lane's selection); the header's cap toggle
@@ -1213,3 +1219,8 @@ Sharp corners and one light theme.
   resolved live or reworded. Confirm-red observed: WelcomeEmpty test fails
   on the pre-change component. Existing close-toast tests (default ⌘⇧T) stay
   green as the default-path regression.
+- 2026-09-25 N4: the three tiled SplitHandles take `onKeyboardDelta` +
+  labels + aria values. Drag and keys share `moveWeightBoundary` so the clamp
+  has one definition. The layout test's SplitHandle mock now wraps the real
+  handle. Confirm-red: 4/4 new tests fail on the pre-change layout; dropping
+  `clampIndexFraction` from the key path fails the max-clamp test.

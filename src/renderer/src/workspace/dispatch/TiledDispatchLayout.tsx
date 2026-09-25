@@ -18,6 +18,8 @@ import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSele
 import {
   clampIndexFraction,
   DEFAULT_INDEX_FRACTION,
+  INDEX_FRACTION_MAX,
+  INDEX_FRACTION_MIN,
   LANE_MIN_FRACTION,
   normalizeGridShape,
   ROW_MIN_FRACTION,
@@ -73,6 +75,40 @@ function normalizedWeights(raw: number[] | undefined, count: number): number[] {
   const sum = raw.reduce((a, b) => a + b, 0)
   if (sum <= 0) return Array.from({ length: count }, () => 1 / count)
   return raw.map(w => w / sum)
+}
+
+// One arrow press on a focused splitter moves its boundary by this share of
+// the space it divides. 2% matches the Global Editor splitter
+// (GlobalEditorShell's onKeyboardDelta), so every separator in the app answers
+// the arrow keys at the same speed: the owner should not have to learn a
+// different step per surface (plan K7 / N4).
+const KEYBOARD_SPLIT_STEP = 0.02
+
+/**
+ * Move the single boundary between `weights[left]` and `weights[left + 1]` so
+ * the left (or upper) one becomes `desiredLeft`, clamped so neither neighbour
+ * shrinks below `minFraction`. Every other entry is returned untouched.
+ *
+ * WHY one helper for drag AND keyboard: the clamp (including the "cap the
+ * minimum at half the pair" rule, which stops a high row count from inverting
+ * it and giving a neighbour a negative size) used to live inline in each drag
+ * handler. A keyboard path with its own copy would be the second definition
+ * that drifts: the arrows could then reach sizes the pointer cannot, or the
+ * reverse. Pointer and keys differ only in how they compute `desiredLeft`.
+ */
+function moveWeightBoundary(
+  weights: number[],
+  left: number,
+  desiredLeft: number,
+  minFraction: number,
+): number[] {
+  const pairTotal = weights[left]! + weights[left + 1]!
+  const min = Math.min(minFraction, pairTotal / 2)
+  const clamped = Math.max(min, Math.min(pairTotal - min, desiredLeft))
+  const next = weights.slice()
+  next[left] = clamped
+  next[left + 1] = pairTotal - clamped
+  return next
 }
 
 export function TiledDispatchLayout({
@@ -153,17 +189,22 @@ export function TiledDispatchLayout({
       const above = rowIndex - 1
       let before = 0
       for (let i = 0; i < above; i++) before += rowHeights[i]!
-      const pairTotal = rowHeights[above]! + rowHeights[rowIndex]!
-      // Cap the minimum at half the pair: at high row counts pairTotal can be
-      // below 2 * ROW_MIN_FRACTION, which would invert the clamp and give the
-      // lower row a negative height.
-      const min = Math.min(ROW_MIN_FRACTION, pairTotal / 2)
       const desired = (clientY - rect.top) / rect.height - before
-      const clamped = Math.max(min, Math.min(pairTotal - min, desired))
-      const next = rowHeights.slice()
-      next[above] = clamped
-      next[rowIndex] = pairTotal - clamped
-      setRowHeights(next)
+      setRowHeights(moveWeightBoundary(rowHeights, above, desired, ROW_MIN_FRACTION))
+    },
+    [rowHeights, setRowHeights],
+  )
+  // ↑ grows the lower row (the boundary moves up), ↓ grows the upper one: the
+  // separator moves the way the arrow points, like dragging it.
+  const nudgeRowBoundary = useCallback(
+    (rowIndex: number, direction: number) => {
+      const above = rowIndex - 1
+      setRowHeights(moveWeightBoundary(
+        rowHeights,
+        above,
+        rowHeights[above]! + direction * KEYBOARD_SPLIT_STEP,
+        ROW_MIN_FRACTION,
+      ))
     },
     [rowHeights, setRowHeights],
   )
@@ -173,7 +214,12 @@ export function TiledDispatchLayout({
       {grid.rows.map((gridRow, rowIndex) => (
         <Fragment key={rowIndex}>
           {rowIndex > 0 && (
-            <RowBoundary rowIndex={rowIndex} onDrag={onDragRowBoundary} />
+            <RowBoundary
+              rowIndex={rowIndex}
+              upperWeight={rowHeights[rowIndex - 1]!}
+              onDrag={onDragRowBoundary}
+              onNudge={nudgeRowBoundary}
+            />
           )}
           <GridRowView
             gridRow={gridRow}
@@ -201,10 +247,14 @@ export function TiledDispatchLayout({
 // owns one unconditional useResizableSplitter call.
 function RowBoundary({
   rowIndex,
+  upperWeight,
   onDrag,
+  onNudge,
 }: {
   rowIndex: number
+  upperWeight: number
   onDrag: (rowIndex: number, clientY: number) => void
+  onNudge: (rowIndex: number, direction: number) => void
 }) {
   const splitter = useResizableSplitter({
     axis: 'y',
@@ -218,6 +268,13 @@ function RowBoundary({
         hitSizePx={10}
         barSizePx={4}
         orientation="horizontal"
+        // Rows are counted from 1 in the label because "between rows 1 and 2"
+        // is what a screen reader user hears; the index is internal.
+        label={`Resize rows ${rowIndex} and ${rowIndex + 1}`}
+        valueNow={Math.round(upperWeight * 100)}
+        valueMin={0}
+        valueMax={100}
+        onKeyboardDelta={direction => onNudge(rowIndex, direction)}
       />
       {splitter.cursorLock}
     </>
@@ -353,6 +410,22 @@ function GridRowView({
         onMouseDown={indexSplitter.onMouseDown}
         hitSizePx={10}
         barSizePx={4}
+        label={`Resize row ${rowIndex + 1} agent list`}
+        // The bounds are the reducer's own (gridShape INDEX_FRACTION_*), so
+        // the value a screen reader announces as "max" is the one the write
+        // actually stops at.
+        valueNow={Math.round(indexFraction * 100)}
+        valueMin={Math.round(INDEX_FRACTION_MIN * 100)}
+        valueMax={Math.round(INDEX_FRACTION_MAX * 100)}
+        // Clamp here as well as in the reducer, so a held arrow at the bound
+        // writes the same value again instead of an out-of-range one the
+        // reducer has to repair.
+        onKeyboardDelta={direction =>
+          setIndexFraction(
+            rowIndex,
+            clampIndexFraction(indexFraction + direction * KEYBOARD_SPLIT_STEP),
+          )
+        }
       />
       {indexSplitter.cursorLock}
 
@@ -538,6 +611,23 @@ function LaneBoundary({
   workspace: Workspace
 }) {
   const setLaneWeights = workspace.setDispatchLaneWeights
+  // Shared by drag and arrow keys: both only decide where the LEFT lane should
+  // end, and this owns the clamp and the row-major write-back.
+  const writeRowWeights = useCallback(
+    (desiredLeft: number) => {
+      const row = moveWeightBoundary(laneWeights, column - 1, desiredLeft, LANE_MIN_FRACTION)
+      // Materialize the full row-major array. An absent `laneWeights` means
+      // "even everywhere", so the untouched rows have to be written out
+      // explicitly rather than left undefined — a partial array is dropped
+      // wholesale on read, which would silently discard this resize.
+      const next = allWeights && allWeights.length === laneCount
+        ? allWeights.slice()
+        : Array.from({ length: laneCount }, () => 1)
+      for (let i = 0; i < rowLength; i++) next[rowStart + i] = row[i]!
+      setLaneWeights(next)
+    },
+    [column, rowStart, rowLength, laneWeights, allWeights, laneCount, setLaneWeights],
+  )
   const splitter = useResizableSplitter({
     onDrag: useCallback(
       (clientX: number) => {
@@ -548,24 +638,9 @@ function LaneBoundary({
         const left = column - 1
         let before = 0
         for (let i = 0; i < left; i++) before += laneWeights[i]!
-        const pairTotal = laneWeights[left]! + laneWeights[column]!
-        const min = Math.min(LANE_MIN_FRACTION, pairTotal / 2)
-        const desired = (clientX - rect.left) / rect.width - before
-        const clamped = Math.max(min, Math.min(pairTotal - min, desired))
-
-        // Materialize the full row-major array. An absent `laneWeights` means
-        // "even everywhere", so the untouched rows have to be written out
-        // explicitly rather than left undefined — a partial array is dropped
-        // wholesale on read, which would silently discard this drag.
-        const next = allWeights && allWeights.length === laneCount
-          ? allWeights.slice()
-          : Array.from({ length: laneCount }, () => 1)
-        for (let i = 0; i < rowLength; i++) next[rowStart + i] = laneWeights[i]!
-        next[rowStart + left] = clamped
-        next[rowStart + column] = pairTotal - clamped
-        setLaneWeights(next)
+        writeRowWeights((clientX - rect.left) / rect.width - before)
       },
-      [column, rowStart, rowLength, laneWeights, allWeights, laneCount, regionRef, setLaneWeights],
+      [column, laneWeights, regionRef, writeRowWeights],
     ),
   })
   return (
@@ -575,6 +650,13 @@ function LaneBoundary({
         onMouseDown={splitter.onMouseDown}
         hitSizePx={10}
         barSizePx={4}
+        label={`Resize lanes ${rowStart + column} and ${rowStart + column + 1}`}
+        valueNow={Math.round(laneWeights[column - 1]! * 100)}
+        valueMin={0}
+        valueMax={100}
+        onKeyboardDelta={direction =>
+          writeRowWeights(laneWeights[column - 1]! + direction * KEYBOARD_SPLIT_STEP)
+        }
       />
       {splitter.cursorLock}
     </>
