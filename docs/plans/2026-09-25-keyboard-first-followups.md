@@ -56,3 +56,24 @@ Every behaviour fix gets a renderer test with real key or pointer events that fa
 ## Out of scope
 
 K2-5 (persistent toasts), and the #1221 UNCONFIRMED product calls.
+## Dispositions (Claude review round on #1221)
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| main: 9 renderer tests fail (stale accessible names) | valid | fixed in `e092232c` |
+| A-F1: an inline approval listbox disables Enter-to-send app-wide | valid, regression | fixed in `4915e869` |
+| A-F3: Enter inside a pane prompt sends another pane's hovered draft | valid | fixed in `4915e869` |
+| B-F1: two prompts mounting in one commit inert each other (deadlock) | valid | fixed in `73b7fae2` (one controller per pane) |
+| A-F2 / B-F3: pane children mounted after the prompt stay live | valid | fixed in `73b7fae2` (MutationObserver) |
+| B-F2: the pane toast is inert under a prompt, so it is silent | valid | fixed in `73b7fae2` (feedback layer exempt) |
+| A-F4: Raise Cap at the ceiling strands focus in the latched overlay | valid | fixed in `efdceaf1` |
+| C-F1: the focus ring is invisible on accent-filled controls | valid | fixed in `b9cb9f5d` |
+| C-F2: 8 owner-checklist lines contradict the code | valid | fixed in `90898a6c` (code or checklist, whichever was wrong) |
+| C-F4: casing, "Couldn't" and "directory" survivors | valid | fixed in `90898a6c`. Ruling: full-sentence titles (questions, "Grok is asking") are sentence case, and noun-phrase titles are Title Case. "Can't resume …" stays, because it is a refusal, not a failure |
+| C-F3: 11 raw-alpha danger/warning boxes | valid | fixed in `e1333b81` |
+| C-F5 / F6 / F8, B-F4: row recipe, bespoke widths, stale WHYs | valid | fixed in `c2c9e97a` |
+| C-F7: the Usage chip is font-normal beside font-medium | overstated | declined: its WHY documents the mixed weights; only "N/A" changed |
+| C-F7: Grok/OpenCode footers without chips | overstated | declined: already adjudicated in #1221 round 1 (C5). Those shells wire no Escape or dialog Enter, so chips would lie |
+| A survivors #4, #33 | valid | pinned in `14af9673` |
+| A survivors #13, #14, #20, #22, #37, #41, #44–45, #50, #51, #53; B partial battery | valid test gaps | follow-up: each needs a TileLeaf / useKeybinds / useListNavigation harness beyond this fix's scope |
+| B: firstRun timeout under full-suite load | suspicion | passes alone, and #1221 only recased that test; not treated as fixed |
