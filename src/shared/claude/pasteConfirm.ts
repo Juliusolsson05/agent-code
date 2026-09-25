@@ -148,8 +148,9 @@ function locateActiveClaudeComposer(screen: string): { lines: string[]; width: n
  *    the tail has none, again sending Enter before the tail arrived.
  * Both guessed where a wrap might be. This reconstructs where it IS.
  *
- * The rule: a line that fills the whole width (the divider's width) and whose
- * continuation does not start with a space was cut mid-token, so the two join
+ * The rule: a line that fills the whole composer width (one column less than
+ * the divider) and whose continuation does not start with a space was cut
+ * mid-token, so the two join
  * with nothing between them. Every other line break was a soft wrap at a space
  * and joins with one space. When the width is unknown (no divider on screen)
  * every break is treated as soft, which is the old behaviour. Misreading a
@@ -168,7 +169,11 @@ export function activeClaudeComposerText(screen: string): string {
     // Continuation lines carry a two-space indent; anything after it is text.
     const content = line.startsWith('  ') ? line.slice(2) : line.trimStart()
     const previous = (lines[i - 1] ?? '').trimEnd()
-    const hardCut = width !== null && previous.length >= width && content.length > 0 && !/^\s/u.test(content)
+    // A full composer line is ONE column shorter than the divider: Claude keeps
+    // the last column free (calibrated on the recorded 64-column frames, body
+    // 61 + the two-column prefix = 63). Comparing against the divider width
+    // itself never fired on a real screen (#1219 review, Pi F3).
+    const hardCut = width !== null && previous.length >= width - 1 && content.length > 0 && !/^\s/u.test(content)
     text = hardCut ? text.trimEnd() + content : `${text} ${content}`
   }
   return text

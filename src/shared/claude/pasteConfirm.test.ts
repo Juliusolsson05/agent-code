@@ -143,10 +143,15 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
 
   function screenAt(cols: number, composerText: string): string {
     const body = composerText.length === 0
-      ? ['❯ ']
-      : wrapAnsi(composerText, cols - 2, { trim: false, hard: true })
+      ? ['❯']
+      // Geometry calibrated against both recorded frames (#1219 review, Pi
+      // F3): the prompt marker is `❯` + NO-BREAK SPACE, continuation lines
+      // indent two spaces, and the body is the pane width MINUS THREE (61
+      // columns in the 64-column recording). So a full composer line is one
+      // column shorter than the divider. An earlier cols-2 geometry hid that.
+      : wrapAnsi(composerText, cols - 3, { trim: false, hard: true })
         .split('\n')
-        .map((line, i) => (i === 0 ? '❯ ' : '  ') + line)
+        .map((line, i) => (i === 0 ? '❯\u00a0' : '  ') + line)
     const divider = '─'.repeat(cols)
     return [...recorded.slice(0, top), divider, ...body, divider, ...recorded.slice(bottom + 1)].join('\n')
   }
