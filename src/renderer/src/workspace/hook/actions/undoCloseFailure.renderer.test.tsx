@@ -40,7 +40,9 @@ it('says why an undo-close restore failed, and keeps the entry for another try',
   }
   const mounted = render(<Harness />)
   await act(async () => { await actions.undoClose() })
-  expect(showToast).toHaveBeenCalledWith(`Could not restore "Fix the picker": ${recorded}`)
+  expect(showToast).toHaveBeenCalledWith('Could not restore "Fix the picker": Session failed to start. Check provider setup and retry.')
+  // Never the raw IPC rejection: it can carry environment values or tokens.
+  expect(JSON.stringify(showToast.mock.calls)).not.toContain('posix_spawnp')
   expect(refs.undoStackRef.current.length).toBe(1)
   mounted.unmount()
 })
@@ -63,6 +65,7 @@ it('says which part of a group could not come back when the rest did', async () 
   }
   const mounted = render(<Harness />)
   await act(async () => { await actions.undoClose() })
-  expect(showToast).toHaveBeenCalledWith(`Could not restore "Older": ${recorded}`)
+  expect(showToast).toHaveBeenCalledWith('Could not restore "Older": Session failed to start. Check provider setup and retry.')
+  expect(JSON.stringify(showToast.mock.calls)).not.toContain('posix_spawnp')
   mounted.unmount()
 })
