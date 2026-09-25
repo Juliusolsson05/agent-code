@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MutableRefObject } from 'react'
 import { renderHook } from '@testing-library/react'
@@ -222,6 +224,51 @@ describe('bootstrap stage guarantee', () => {
     // (the entry seed) here would be #681's auto-fill on every launch; the
     // seed applies only to a file that never had lanes.
     expect(harness.state().stage).toEqual(stage)
+    unmount()
+  })
+
+  // #1245 through the real bootstrap: a damaged but restorable file must not
+  // land in the locked recovery shell. Built on the owner's real v3 workspace.
+  const realV3 = (): Record<string, any> => (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/workspace-v3/2026-09-20-live-workspace.sanitized.json'), 'utf8')) as { windows: { workspace: Record<string, any> }[] }).windows[0]!.workspace
+
+  // WHY autosave is the signal: the recovery shell deliberately keeps autosave
+  // LOCKED to protect the file on disk, while a restore unlocks it.
+  it('restores every project instead of falling back to recovery when one lane is null', async () => {
+    const workspace = realV3()
+    workspace.stage.lanes[0] = null
+    const harness = makeHarness(workspace as unknown as PersistedWorkspace)
+    const { unmount, setBootstrapComplete } = renderBootstrap(harness)
+    await vi.waitFor(() => expect(setBootstrapComplete).toHaveBeenCalled())
+    expect(setBootstrapComplete).toHaveBeenLastCalledWith(true)
+    const restoredIds = harness.state().tabs.map(tab => tab.id)
+    for (const project of workspace.projects as Array<{ id: string }>) expect(restoredIds).toContain(project.id)
+    unmount()
+  })
+
+  it('restores (an empty pool) instead of falling back to recovery when the sessions map is missing', async () => {
+    const workspace = realV3()
+    delete workspace.sessions
+    const harness = makeHarness(workspace as unknown as PersistedWorkspace)
+    const { unmount, setBootstrapComplete } = renderBootstrap(harness)
+    await vi.waitFor(() => expect(setBootstrapComplete).toHaveBeenCalled())
+    expect(setBootstrapComplete).toHaveBeenLastCalledWith(true)
+    unmount()
+  })
+
+  it('keeps autosave LOCKED when a real v2 tab entry is replaced by null (steering q21)', async () => {
+    const recorded = JSON.parse(readFileSync(join(import.meta.dirname,
+      '../../../../../../testing/fixtures/workspace-v2/2026-09-19-live-workspace.sanitized.json'), 'utf8')) as { windows: { workspace: Record<string, any> }[] }
+    const workspace = recorded.windows[0]!.workspace
+    workspace.tabs[1] = null
+    const harness = makeHarness(workspace as unknown as PersistedWorkspace)
+    const { unmount, setBootstrapComplete, setRestoreStatus } = renderBootstrap(harness)
+    // setRestoreStatus is published on every path, after the autosave decision.
+    await vi.waitFor(() => expect(setRestoreStatus).toHaveBeenCalled())
+    // The recovery shell, never a restore: a restore here would autosave 6
+    // of the file's 27 agents over it.
+    expect(setRestoreStatus).toHaveBeenLastCalledWith('persisted-fallback')
+    expect(setBootstrapComplete).not.toHaveBeenCalledWith(true)
     unmount()
   })
 })
