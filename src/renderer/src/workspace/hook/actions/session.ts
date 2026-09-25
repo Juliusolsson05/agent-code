@@ -1373,6 +1373,7 @@ export function useSessionActions(
           // so its durable glance label must follow using the latest state rather
           // than being lost—or resurrected from a stale snapshot—on completion.
           const replacementTitle = prev.sessions[oldId]?.title
+          const replacementTitleMode = prev.sessions[oldId]?.titleMode
           // `prev.sessions[oldId]` is still readable here: only the local
           // `sessions` copy has had oldId deleted.
           const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
@@ -1420,6 +1421,7 @@ export function useSessionActions(
               : {}),
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
             ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
+            ...(replacementTitleMode !== undefined ? { titleMode: replacementTitleMode } : {}),
             // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
             // literal is the successor's OWN freshly-spawned metadata, so any
             // earlier position is overwritten by it — which is exactly how the

@@ -61,11 +61,13 @@ Run focused tests for each stage, then typecheck, lint, build and the project's 
 
 ## Tasks
 
-- [ ] Stage 1: land provenance, reducers, setting, and managed skill; hand title state and `auto_title` domain to Stage 2.
-- [ ] Stage 2: land authenticated title tool and exact-session renderer bridge; hand current-title observation to Stage 3.
-- [ ] Stage 3: land provider guidance/hooks, resume UI, and user docs; verify provider-specific limits.
+- [x] Stage 1: land provenance, reducers, setting, and managed skill; hand title state and `auto_title` domain to Stage 2.
+- [x] Stage 2: land authenticated title tool and exact-session renderer bridge; hand current-title observation to Stage 3.
+- [x] Stage 3: land provider guidance/hooks, resume UI, and user docs; verify provider-specific limits.
 - [ ] Finish: full checks, plan-versus-built audit, one PR review, and open PR without merging.
 
 ## Execution notes
 
 - 2026-09-24: Stage 0 source/corpus census recorded in decomposition. Fresh worktree from `origin/main`; unrelated root-worktree changes remain untouched.
+- 2026-09-24: Stages 1–3 implemented. Fail-first tests captured missing reducer, control capability, MCP tool, and hook behavior before the implementation. The real two-window Electron control test confirmed exact owner routing and manual precedence; undo/replacement tests confirmed durable title locks. Stage 3 provider verdict is in the decomposition: Claude/Codex have turn reminders; OpenCode/Grok/Pi currently use the tool and managed skill without a turn reminder.
+- 2026-09-24: Typecheck, package build/output verification, and 133 focused tests across 12 files passed. `npm run check` reached the full suite: 6,633 passed, two failed. The command-history storage failure reproduces on clean `origin/main` under Node 25.5.0 (filed as #1212). A legacy settings hydration test timed out only in the feature branch's full parallel run; it passed alone on both branches and in clean main's full run, so its cause remains unresolved. Clean main's full run had a separate extension-frame failure that did not appear on this branch. No production change was inferred from those failures.

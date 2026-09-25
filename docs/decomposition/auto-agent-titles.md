@@ -1,6 +1,6 @@
 # Auto agent titles decomposition
 
-Status: Stage 0 verified 2026-09-24; implementation pre-authorized by the user's “implement all of this” instruction.
+Status: Stages 0–3 built 2026-09-24; final checks and review in progress. Implementation pre-authorized by the user's “implement all of this” instruction.
 Approval mode: pre-authorized. Stop if recorded provider behavior contradicts the ownership design, if a native hook would require modifying user configuration, or if manual-title semantics cannot be preserved.
 
 ## Why this applies
@@ -73,6 +73,15 @@ The MCP runtime may not import renderer state. Provider adapters may not write w
 3. Cross-window delivery/replacement race — Stage 2 system test and exact owner check.
 
 Use recorded Claude/Codex hook vectors, the existing provider conversation corpus, and actual workspace replacement/control fixtures. Label a contract-only fixture as such; do not invent native transcripts. If a fixture disproves an invariant, revise this decomposition before adding a conditional.
+
+## Stage 3 provider verdict
+
+- Claude and Codex: `src/providers/claude/runtime/claudeSession.ts` and `src/providers/codex/runtime/codexSession.ts` already inject process-local turn hooks from the built-in MCP launch config. The new domain uses those same hooks and their single continuation policy. Real host tests cover a title-only registration and combined Goal/TLDR behavior.
+- Grok: the launched `grok-code-headless` control route in `src/providers/grok/runtime/grokSession.ts` seeds MCP servers but exposes no process-local hook configuration through Agent Code's current adapter. Grok 1.0.30 documents Stop hooks, but using a machine-wide configuration would cross the stop condition above. This provider receives the tool and skill without a turn reminder.
+- OpenCode: the app observes `session.idle` on its SSE bus, but the current launch path does not inject a process-local, block-capable turn hook. An idle event cannot provide the same bounded Stop continuation. This provider receives the tool and skill without a turn reminder.
+- Pi: the Agent Code bridge extension observes `turn_end`/`agent_settled` and exposes MCP tools, but it has no current title-specific continuation contract. This provider receives the tool and skill without a turn reminder.
+
+The guidance-only limit does not create a second title writer. Any future provider hook must preserve the renderer ownership and one-block-per-turn invariants before enabling a reminder.
 
 ## Graveyard
 

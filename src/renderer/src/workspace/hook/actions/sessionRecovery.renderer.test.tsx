@@ -6,6 +6,7 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 
 import { killSessionBackendIfOwned, useSessionActions } from './session'
 import { freshStage } from '@renderer/workspace/dispatch/gridShape'
@@ -472,13 +473,7 @@ describe('useSessionActions recovery retry', () => {
       // WHY edit while spawn is unresolved: provider switches and rewinds can
       // wait on backend work. Reading the pre-await snapshot would make a Save
       // that visibly succeeded disappear when that delayed replacement lands.
-      setState(prev => ({
-        ...prev,
-        sessions: {
-          ...prev.sessions,
-          [sessionId]: { ...prev.sessions[sessionId]!, title: 'Edited during switch' },
-        },
-      }))
+      setState(prev => setAgentTitleInWorkspace(prev, sessionId, 'Edited during switch'))
     })
     await act(async () => {
       finishSpawn({ sessionId: 'replacement-session' })
@@ -487,6 +482,7 @@ describe('useSessionActions recovery retry', () => {
 
     expect(state.sessions[sessionId]).toBeUndefined()
     expect(state.sessions['replacement-session']?.title).toBe('Edited during switch')
+    expect(state.sessions['replacement-session']?.titleMode).toBe('manual')
     // `spawn` intentionally defers ghost bootstrap by one timer tick. Let that
     // owned task finish before afterEach removes the API mock, or this test can
     // leak an irrelevant unhandled rejection into a later full-suite worker.

@@ -60,6 +60,15 @@ describe('Agent title prompt', () => {
     })
     expect(input).toHaveValue('🙂'.repeat(AGENT_TITLE_MAX_LENGTH))
   })
+
+  it('offers an explicit way to release a manual title when Auto Title is active', () => {
+    const onResumeAutoTitle = vi.fn()
+    render(<AgentTitlePrompt open initialTitle="Human label" description="/work/project"
+      autoTitleEnabled onResumeAutoTitle={onResumeAutoTitle} onCancel={vi.fn()} onSave={vi.fn()} />)
+    expect(screen.getByText(/Saving or clearing pauses Auto Title/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume Auto Title' }))
+    expect(onResumeAutoTitle).toHaveBeenCalledOnce()
+  })
 })
 
 describe('Agent title presentation', () => {

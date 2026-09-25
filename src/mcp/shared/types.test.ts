@@ -8,8 +8,18 @@ import {
   providerSupportsBuiltInMcpDomain,
   uniformBuiltInMcpDefaults,
 } from '@mcp/shared/types.js'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'
 
 describe('built-in MCP provider policy', () => {
+  it('offers Auto Title to every provider without silently enabling it on upgrade', () => {
+    // This is the opt-in boundary: the Settings grid can offer the domain,
+    // while an unchanged installation must retain exactly its old launch set.
+    expect(normalizeConfigurableBuiltInMcpDomains(['auto_title'])).toEqual(['auto_title'])
+    for (const provider of AGENT_PROVIDER_KINDS) {
+      expect(providerSupportsBuiltInMcpDomain(provider, 'auto_title')).toBe(true)
+    }
+  })
+
   it('coerces persisted defaults without admitting ping or garbage', () => {
     expect(normalizeConfigurableBuiltInMcpDomains([
       'orchestration',

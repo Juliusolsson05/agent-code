@@ -105,7 +105,11 @@ export function hasReportingDomain(domains: readonly string[] | undefined): bool
 /** The built-in MCP domains that come with a product-managed skill. Listed in a
  * fixed order so every warning names the skills in the same order, whatever
  * order the pre-spawn reconcile reported them in. */
-export const REPORTING_DOMAINS = ['tldr', 'goal'] as const
+// Auto Title also has a managed product skill and the same pre-spawn health
+// contract, though it stores its value in workspace metadata rather than the
+// reporting store. Keep it in this existing preparation/warning list so an
+// unavailable skill is visible instead of silently dropping its guidance.
+export const REPORTING_DOMAINS = ['tldr', 'goal', 'auto_title'] as const
 export type ReportingDomain = (typeof REPORTING_DOMAINS)[number]
 
 /** Main → renderer broadcast: one or more product skills could not be prepared
@@ -135,8 +139,9 @@ export type ManagedSkillsUnavailableEvent = { skills: ReportingDomain[] }
 export function managedSkillsUnavailableMessage(skills: readonly ReportingDomain[]): string {
   const labels = REPORTING_DOMAINS
     .filter(domain => skills.includes(domain))
-    .map(domain => (domain === 'tldr' ? 'TLDR' : 'Goal'))
-  const subject = labels.length > 1 ? `${labels.join(' and ')} skills` : `${labels[0] ?? 'Managed'} skill`
+    .map(domain => (domain === 'tldr' ? 'TLDR' : domain === 'goal' ? 'Goal' : 'Auto Title'))
+  const joined = labels.length > 2 ? `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}` : labels.join(' and ')
+  const subject = labels.length > 1 ? `${joined} skills` : `${labels[0] ?? 'Managed'} skill`
   return `${subject} could not be prepared, so agents started without ${labels.length > 1 ? 'them' : 'it'}. Review Settings › Agents › Custom Skills.`
 }
 

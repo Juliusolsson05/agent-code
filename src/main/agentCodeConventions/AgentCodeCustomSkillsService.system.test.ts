@@ -599,6 +599,22 @@ describe('product-owned Goal skill', () => {
   })
 })
 
+describe('product-owned Auto Title skill', () => {
+  it('prepares only for opted-in launches and protects the managed name', async () => {
+    const { service, targets } = await harness()
+    expect(await service.prepareForAgentSpawn(undefined)).toEqual([])
+    expect((await service.getCustomSkillsSnapshot()).skills).toEqual([])
+    expect(await service.prepareForAgentSpawn(['auto_title'])).toEqual([])
+    const snapshot = await service.getCustomSkillsSnapshot()
+    expect(snapshot.skills).toEqual([expect.objectContaining({ name: 'agent-code-auto-title', managedBy: 'auto_title', health: 'active' })])
+    for (const target of targets) {
+      expect(await readFile(customPath(target, 'agent-code-auto-title'), 'utf8')).toContain('title_set')
+    }
+    expect(await service.deleteCustomSkill({ expectedRevision: snapshot.revision, skillId: snapshot.skills[0]!.id }))
+      .toMatchObject({ ok: false, code: 'validation' })
+  })
+})
+
 describe('pre-spawn preparation (#1133)', () => {
   // The launcher used to chain audit → TLDR → Goal and let the first throw end
   // the chain, which was harmless only while any throw aborted the spawn.

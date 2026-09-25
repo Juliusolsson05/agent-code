@@ -77,6 +77,11 @@ export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDepende
   goalStore?: Pick<TldrStore, 'update' | 'complete'>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
+  /** The renderer owns SessionMeta. Main supplies only this exact-session port;
+   * a tool can never submit another session ID as part of its input. */
+  setOwnAutoTitle?: (sessionId: string, title: string, authorized: () => boolean) => Promise<string>
+  getOwnAutoTitleState?: (sessionId: string) => Promise<{ missing: boolean }>
+  isTitleWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
   agentManagementBridge?: AgentManagementBridge
   aiWorkspaceRegistry?: AiWorkspaceRegistry
@@ -282,7 +287,7 @@ export class BuiltInMcpHttpHost {
     // loop sessions. A loop's only reliable turn boundary is the provider's
     // Stop hook (#1024). Without it, the loop fell back to stream phases,
     // which go idle at every tool gap and delivered continuations mid-turn.
-    return [hasReportingDomain(domains) || domains.includes('goal_loop')
+    return [hasReportingDomain(domains) || domains.includes('auto_title') || domains.includes('goal_loop')
       ? { ...config, tldrHooks: { baseUrl: `http://127.0.0.1:${this.port}${TLDR_HOOK_PATH_PREFIX.slice(0, -1)}` } }
       : config]
   }
@@ -420,6 +425,7 @@ export class BuiltInMcpHttpHost {
     const server = this.createServerForScope(registration.scope, {
       ...this.dependencies,
       isTldrWriteAuthorized: () => !registration.revoked,
+      isTitleWriteAuthorized: () => !registration.revoked && this.tokensBySession.get(registration.scope.sessionId) === registration.token,
     })
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -551,9 +557,9 @@ export class BuiltInMcpHttpHost {
       return
     }
     const enforcement = this.dependencies.tldrEnforcement
-    const identity = registration.scope.tldrIdentity
+    const identity = registration.scope.tldrIdentity ?? registration.scope.sessionId
     const domains = registration.scope.domains
-    const enforcing = Boolean(enforcement && identity && hasReportingDomain(domains))
+    const enforcing = Boolean(enforcement && (hasReportingDomain(domains) || domains.includes('auto_title')))
     const loopReporting = domains.includes('goal_loop')
     if (!enforcing && !loopReporting) {
       this.writeJson(res, 200, {})
@@ -576,6 +582,16 @@ export class BuiltInMcpHttpHost {
     const fromSubagent = Boolean(input && typeof input === 'object'
       && typeof (input as { agent_id?: unknown }).agent_id === 'string'
       && (input as { agent_id: string }).agent_id.length > 0)
+    // The renderer's current metadata is the only authority for a missing
+    // title. The main process cannot infer manual clearing or replacement from
+    // the native transcript, and a stale cached answer would re-nudge a pane
+    // the user just renamed. A failed owner read simply omits the reminder.
+    let autoTitleMissing = false
+    if (domains.includes('auto_title') && !fromSubagent && event !== 'post-tool-use' && this.dependencies.getOwnAutoTitleState) {
+      try {
+        autoTitleMissing = (await this.dependencies.getOwnAutoTitleState(registration.scope.sessionId)).missing
+      } catch { /* title guidance is best effort when the renderer is unavailable */ }
+    }
     // Tell the goal loop about every main-agent turn hook, AFTER enforcement
     // has decided, because a Stop that enforcement blocks does not end the
     // turn (#1024). Only a loop-enabled registration reports, and only for its
@@ -599,7 +615,7 @@ export class BuiltInMcpHttpHost {
     }
     try {
       const output = await enforcement!.handle(registration.token, identity!, event, input, {
-        tldr: domains.includes('tldr'), goal: domains.includes('goal'),
+        tldr: domains.includes('tldr'), goal: domains.includes('goal'), autoTitleMissing,
       })
       // Re-check revocation after the async store read: an old process's Stop
       // must not block a turn in the process that just replaced it.

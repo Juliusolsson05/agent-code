@@ -126,6 +126,14 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   across projects and closes the ones you keep ticked, removing their lanes
   too if you want. Running agents stay open, and a new goal clears the
   completion.
+- **Auto Title** — opt in per provider under **Settings → MCP**, or for one
+  agent in **Agent MCP Servers…**. The agent sets a short title for its current
+  substantive job and changes it when the job changes; routine progress stays
+  in TLDR. Titles appear in the pane, Dispatch and conversation picker. A
+  manually saved or cleared title takes priority until **Resume Auto Title**
+  is chosen in **Set Title…**. Existing agents pick up the MCP tool and skill on
+  their next reload. Claude and Codex receive a missing-title turn reminder;
+  OpenCode, Grok and Pi receive the tool and managed skill without that reminder.
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates. Reader Mode gives a paginated, distraction-free view
   of long sessions for reviewing what an agent actually did.

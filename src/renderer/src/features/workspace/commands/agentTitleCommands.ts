@@ -30,7 +30,7 @@ export const agentTitleCommands: CommandDef[] = [
     title: 'Set Title…',
     description:
       '**What it does:** Sets or clears a persistent title for the focused agent or terminal. ' +
-      'The title appears directly below its pane header and in Dispatch.\n\n' +
+      'The title appears directly below its pane header and in Dispatch. For an agent with Auto Title enabled, a manual edit or clear pauses automatic changes; the dialog can resume them.\n\n' +
       '**Use when:** You have several agents and terminals open and want a short glance label for ' +
       'what each one is doing.',
     keywords: ['agent', 'terminal', 'shell', 'title', 'name', 'label', 'rename', 'dispatch', 'pane'],

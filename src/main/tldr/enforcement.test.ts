@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ReportingFeatures } from './enforcement'
 import {
+  AUTO_TITLE_MISSING_CONTEXT, AUTO_TITLE_MISSING_REASON,
   GOAL_COMPLETED_CONTEXT, GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON,
   TLDR_STATUS_NEVER_WRITTEN_REASON, TldrEnforcement,
 } from './enforcement'
@@ -30,6 +31,14 @@ function setup(features: ReportingFeatures = { tldr: true, goal: false }) {
 const block = (reason: string) => ({ decision: 'block', reason })
 
 describe('TLDR turn-end enforcement', () => {
+  it('reminds a missing Auto Title once and shares the existing one-block limit', async () => {
+    const t = setup({ tldr: true, goal: true, autoTitleMissing: true })
+    expect(await t.hook('user-prompt-submit')).toEqual({
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: `${GOAL_SET_CONTEXT}\n\n${AUTO_TITLE_MISSING_CONTEXT}` },
+    })
+    expect(await t.hook('stop')).toEqual(block(`${GOAL_NEVER_SET_REASON}\n\n${TLDR_STATUS_NEVER_WRITTEN_REASON}\n\n${AUTO_TITLE_MISSING_REASON}`))
+    expect(await t.hook('stop')).toEqual({})
+  })
   it('asks for the goal at the prompt only while the agent has never reported', async () => {
     const t = setup()
     expect(await t.hook('user-prompt-submit')).toEqual({

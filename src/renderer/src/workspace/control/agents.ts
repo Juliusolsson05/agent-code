@@ -7,7 +7,7 @@ import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspac
 import { observeWorkspace, workspaceObservationSchema } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
 import { AGENT_PROVIDER_KINDS, AGENT_PROVIDER_RUNTIMES, providerOffersTerminalRuntime } from '@shared/types/providerKind'
-import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
+import { normalizeAutoAgentTitle, setAgentTitleInWorkspace, setAutoAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
@@ -177,6 +177,51 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         requireReady(); requireSession(sessionId)
         setTitle(sessionId, title)
         return { sessionId, title: requireSession(sessionId).title }
+      },
+    }),
+    defineCapability({
+      id: 'agents.autoTitleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set the authenticated agent title',
+      visibility: 'application', execution: 'window', effect: 'mutation',
+      description: 'Application-owned route for the current agent to update its own short title.',
+      input: sessionInput.extend({ title: z.string().min(1).max(120) }),
+      output: z.object({ sessionId: z.string(), title: z.string() }),
+      handler: ({ sessionId, title }, context) => {
+        // The host's application-only descriptor is the first gate. Rechecking
+        // caller kind here keeps direct renderer invocation and future control
+        // adapters from accidentally turning this into an operator shortcut.
+        if (context.caller.kind !== 'application') throw new ControlError('unavailable', 'Auto Title is application-owned')
+        requireReady(); requireSession(sessionId)
+        if (!normalizeAutoAgentTitle(title)) throw new ControlError('unavailable', 'Auto Title must be one line of 1–60 characters')
+        const before = useAppStore.getState().workspaceState
+        const meta = before.sessions[sessionId]
+        if (!meta || meta.kind === 'terminal' || !meta.builtInMcpDomains?.includes('auto_title')) {
+          throw new ControlError('unavailable', 'Auto Title is not active for this agent')
+        }
+        if (meta.titleMode === 'manual' || meta.titleMode === 'paused' || (meta.title && meta.titleMode !== 'auto')) {
+          throw new ControlError('unavailable', 'Manual title is protected. Use Resume Auto Title in Set Title to release it')
+        }
+        useAppStore.getState().setWorkspaceState(state => setAutoAgentTitleInWorkspace(state, sessionId, title))
+        const after = useAppStore.getState().workspaceState.sessions[sessionId]
+        // A synchronous workspace mutation can still be refused by the pure
+        // reducer if a replacement landed between validation and setState.
+        if (!after || after.titleMode !== 'auto' || after.title !== normalizeAutoAgentTitle(title)) {
+          throw new ControlError('stale_owner', 'Agent changed before Auto Title was saved')
+        }
+        return { sessionId, title: after.title }
+      },
+    }),
+    defineCapability({
+      id: 'agents.autoTitleState', target: { kind: 'session', field: 'sessionId' }, title: 'Read the authenticated agent title state',
+      visibility: 'application', execution: 'window', effect: 'read',
+      description: 'Application-owned missing-title check for provider turn hooks.',
+      input: sessionInput,
+      output: z.object({ missing: z.boolean() }),
+      handler: ({ sessionId }, context) => {
+        if (context.caller.kind !== 'application') throw new ControlError('unavailable', 'Auto Title state is application-owned')
+        requireReady(); requireSession(sessionId)
+        const meta = useAppStore.getState().workspaceState.sessions[sessionId]
+        return { missing: Boolean(meta && meta.kind !== 'terminal' && meta.builtInMcpDomains?.includes('auto_title')
+          && !meta.title && !meta.titleMode) }
       },
     }),
     defineCapability({

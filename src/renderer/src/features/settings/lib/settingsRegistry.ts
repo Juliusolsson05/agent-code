@@ -759,7 +759,7 @@ export function getSettingsRegistry(
       keywords: [
         'mcp', 'server', 'servers', 'tools', 'add', 'install', 'custom', 'beeper', 'stdio', 'http', 'sse',
         'secret', 'token', 'oauth', 'claude', 'codex', 'default', 'reload', 'existing agents',
-        'tldr', 'summary', 'goal', 'loop', 'orchestration', 'ai workspace', 'review',
+        'tldr', 'summary', 'goal', 'auto title', 'automatic title', 'loop', 'orchestration', 'ai workspace', 'review',
         'transcript', 'transcripts', 'agent management', 'workflow', 'workflows',
         // #1142: the Browser Pocket MCP lives in this grid too.
         'browser', 'pocket',

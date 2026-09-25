@@ -18,4 +18,10 @@ describe('managedSkillsUnavailableMessage', () => {
       'TLDR and Goal skills could not be prepared, so agents started without them. Review Settings › Agents › Custom Skills.',
     )
   })
+
+  it('names Auto Title with the other managed skills', () => {
+    expect(managedSkillsUnavailableMessage(['auto_title', 'goal', 'tldr'])).toBe(
+      'TLDR, Goal and Auto Title skills could not be prepared, so agents started without them. Review Settings › Agents › Custom Skills.',
+    )
+  })
 })

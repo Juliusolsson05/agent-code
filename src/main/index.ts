@@ -1297,6 +1297,29 @@ async function startApp(): Promise<void> {
     browserPockets,
     tldrStore,
     goalStore,
+    setOwnAutoTitle: async (sessionId, title, authorized) => {
+      // The caller identity is minted here, never parsed from the MCP input.
+      // The renderer capability is application-only and rechecks the exact
+      // live SessionMeta before writing through workspace autosave.
+      if (!authorized()) throw new Error('Auto Title session is no longer active.')
+      const result = await controlHost.forCaller({ kind: 'application', id: 'auto-title' }).invoke({
+        capabilityId: 'agents.autoTitleSet', input: { sessionId, title },
+      })
+      if (!authorized()) throw new Error('Auto Title session is no longer active.')
+      if (!result.ok) throw new Error(result.error.message)
+      const value = result.value as { title?: unknown }
+      if (typeof value.title !== 'string') throw new Error('Auto Title write returned no title.')
+      return value.title
+    },
+    getOwnAutoTitleState: async sessionId => {
+      const result = await controlHost.forCaller({ kind: 'application', id: 'auto-title' }).invoke({
+        capabilityId: 'agents.autoTitleState', input: { sessionId },
+      })
+      if (!result.ok) throw new Error(result.error.message)
+      const value = result.value as { missing?: unknown }
+      if (typeof value.missing !== 'boolean') throw new Error('Auto Title state is unavailable.')
+      return { missing: value.missing }
+    },
     tldrEnforcement,
     goalLoopService,
     orchestrationBridge,

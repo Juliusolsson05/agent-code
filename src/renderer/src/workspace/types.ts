@@ -172,6 +172,15 @@ export type SessionMeta = {
    */
   title?: string
   /**
+   * The app title's authority, kept with the title across pane replacement.
+   * Absence plus a nonempty legacy title means manual: older workspaces never
+   * recorded provenance, and granting an agent permission to overwrite those
+   * titles would silently erase a person's chosen label. `paused` survives a
+   * manual clear so an empty pane is not immediately repopulated by the next
+   * agent turn. Only an explicit resume releases that pause.
+   */
+  titleMode?: 'auto' | 'manual' | 'paused'
+  /**
    * Durable identity for this agent's spoken name — NOT the name itself.
    *
    * WHY the name is not stored here: workspace.json is per-window and is
@@ -688,4 +697,3 @@ export type ReaderModeState = {
   tabId: TabId
   focusedSessionId: SessionId
 }
-
