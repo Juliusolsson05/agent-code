@@ -25,6 +25,7 @@ import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCod
 import { AgentCodeCustomSkillsRow } from '@renderer/features/settings/ui/AgentCodeCustomSkillsRow'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
+import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
 
 // Settings rows are full-width, left-aligned, and two-line-capable, so they
 // override Button's default size geometry. They do NOT override its colours —
@@ -205,20 +206,7 @@ function SettingRow({
               style={{
                 gridTemplateColumns: `repeat(${control.columns ?? 1}, minmax(0, 1fr))`,
               }}
-              onKeyDown={event => {
-                const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-                const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-                if (index < 0) return
-                const next =
-                  event.key === 'ArrowRight' || event.key === 'ArrowDown' ? index + 1
-                    : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? index - 1
-                      : event.key === 'Home' ? 0
-                        : event.key === 'End' ? buttons.length - 1
-                          : null
-                if (next === null) return
-                event.preventDefault()
-                buttons[(next + buttons.length) % buttons.length]?.focus()
-              }}
+              onKeyDown={radioGroupKeyDown}
             >
               {control.options.map((option, optionIndex) => {
                 const active = control.getValue(settings) === option.value

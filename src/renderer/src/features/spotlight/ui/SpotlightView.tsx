@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { setPocketView } from '@renderer/features/browser-pocket/actions'
 import { useSpotlightPocketMode } from '@renderer/features/browser-pocket/state/spotlightPocketMode'
@@ -54,8 +55,13 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
               <button
                 key={sessionId}
                 type="button"
+                // aria-current, not aria-pressed: exactly one pill is the
+                // spotlighted agent, so this is "which one is shown", not an
+                // on/off toggle per pill. The accent fill was the only signal,
+                // which a screen reader never hears (ledger N5).
+                aria-current={active ? 'true' : undefined}
                 onClick={() => workspace.setSpotlightSession(sessionId)}
-                className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                   active
                     ? 'bg-accent text-accent-fg border-accent'
                     : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
@@ -112,15 +118,28 @@ function SpotlightPocketModes({ sessionId, workspace }: { sessionId: SessionId; 
     workspace.updateBrowserPocket(s => setPocketView(s, sessionId, next === 'agent' ? 'collapsed' : 'open'))
   }
   return (
-    <div className="ml-auto flex flex-shrink-0 items-center rounded-control border border-border text-[10px]" role="radiogroup" aria-label="Spotlight layout">
+    <div
+      className="ml-auto flex flex-shrink-0 items-center rounded-control border border-border text-[10px]"
+      role="radiogroup"
+      aria-label="Spotlight layout"
+      // Arrows move between the three, Space/Enter choose (the shared radio
+      // rule, lib/radioGroupKeys). Before this the group announced itself as
+      // a radiogroup but was three separate Tab stops with no arrow keys.
+      onKeyDown={radioGroupKeyDown}
+    >
       {(['split', 'browser', 'agent'] as const).map(option => (
         <button
           key={option}
           type="button"
           role="radio"
           aria-checked={mode === option}
+          // Roving: the chosen layout is the group's one Tab stop.
+          tabIndex={mode === option ? 0 : -1}
           onClick={() => choose(option)}
-          className={`px-2 py-0.5 capitalize ${mode === option ? 'bg-accent text-accent-fg' : 'text-ink-dim hover:text-ink'}`}
+          // rounded-control on the option too, so the inset focus ring follows
+          // the group's rounded ends instead of drawing square corners over
+          // them.
+          className={`rounded-control px-2 py-0.5 capitalize outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring ${mode === option ? 'bg-accent text-accent-fg' : 'text-ink-dim hover:text-ink'}`}
         >
           {option}
         </button>

@@ -44,4 +44,18 @@ describe('Grid Dispatch shape editor', () => {
     expect(group).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: /Show all/ })).toHaveAttribute('aria-checked', 'true')
   })
+
+  it('makes the nested-agents pair one Tab stop that arrows walk (ledger N5 sweep)', () => {
+    const { setDispatchGridShape } = harness(false)
+    const showAll = screen.getByRole('radio', { name: /Show all/ })
+    const cap = screen.getByRole('radio', { name: /Cap/ })
+    // The checked one is the stop; a radio group is one Tab, not two.
+    expect([showAll.tabIndex, cap.tabIndex]).toEqual([0, -1])
+    showAll.focus()
+    fireEvent.keyDown(showAll, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(cap)
+    // Moving is not choosing, and the arrow never reached the dialog.
+    expect(showAll).toHaveAttribute('aria-checked', 'true')
+    expect(setDispatchGridShape).not.toHaveBeenCalled()
+  })
 })

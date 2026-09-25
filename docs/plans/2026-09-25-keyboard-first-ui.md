@@ -477,7 +477,7 @@ entry when it lands.
 | N2 | DispatchAgentList (sessions sidebar) | rows are buttons in Tab order; no arrows in list; no `aria-current`; cap toggle/project button no focus style | ↑↓ within the focused list (moves selection like ⌥↑↓), `aria-current` on active row, T4 on header controls | done (↑↓ move focus, not selection — see ruling) |
 | N3 | DispatchMiniList | buttons, hover ring only | T4 focus ring; `aria-current` | done |
 | N4 | TiledDispatch SplitHandles ×3 (L214/347/567) | mouse only, not focusable | `onKeyboardDelta` + `label` like GlobalEditorShell L1213 | done (2% step, shared clamp with drag) |
-| N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | todo |
+| N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | done (pills `aria-current`; layout radios roving + shared `radioGroupKeyDown`; also swept into Grid Dispatch nested agents, Settings, Color flag) |
 | N6 | Reader strip | no aria-pressed | aria-current | todo |
 | N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | todo |
 | N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
@@ -778,6 +778,11 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **N5 Spotlight header:** Tab reaches each agent pill (focus ring); the
+  Split | Browser | Agent control is ONE Tab stop on the chosen layout, ←/→
+  move between the three and Space/Enter choose (arrows never switch the
+  layout by themselves). The focus ring sits inside the control's rounded
+  ends. Same arrow behavior on Grid Dispatch's "Nested agents" pair.
 - **N4 Tiled Dispatch splitters:** Tab reaches the row divider, each row's
   agent-list divider and each lane divider (thin focus ring on the hit
   area); ←/→ move vertical dividers and ↑/↓ the row divider by 2% per press,
@@ -1224,3 +1229,10 @@ Sharp corners and one light theme.
   has one definition. The layout test's SplitHandle mock now wraps the real
   handle. Confirm-red: 4/4 new tests fail on the pre-change layout; dropping
   `clampIndexFraction` from the key path fails the max-clamp test.
+- 2026-09-25 N5: `lib/radioGroupKeys.ts` (`radioGroupKeyDown`) replaces the
+  inline copies in SettingsList and ColorFlagPickerModal and drives
+  Spotlight's layout radios and Grid Dispatch's nested-agents pair. Rule: arrows
+  move and wrap, Home/End jump, modified arrows pass through, Space/Enter
+  choose. Confirm-red: both SpotlightView tests and the nested-agents test fail
+  on the pre-change components; removing the modifier guard fails the ⌥-arrow
+  assertion.

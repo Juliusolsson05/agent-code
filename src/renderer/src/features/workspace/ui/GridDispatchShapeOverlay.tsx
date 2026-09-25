@@ -20,6 +20,7 @@ import {
 } from '@renderer/workspace/dispatch/gridShape'
 import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
 import type { DispatchGridRow, TabId } from '@renderer/workspace/types'
 
 // The Grid Dispatch shape editor.
@@ -295,12 +296,21 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                 {/* A real radio group: the "(•)" glyphs were the only signal of
                     which option was on, so assistive tech heard two plain
                     buttons. */}
-                <div role="radiogroup" aria-label={`Row ${index + 1} nested agents`} className="flex items-center gap-3 pl-12 text-[10px]">
+                <div
+                  role="radiogroup"
+                  aria-label={`Row ${index + 1} nested agents`}
+                  className="flex items-center gap-3 pl-12 text-[10px]"
+                  // Shared radio keys: arrows move, Space/Enter choose. The
+                  // Enter a native button eats never reaches the dialog's
+                  // Apply (K3: a focused control keeps its own Enter).
+                  onKeyDown={radioGroupKeyDown}
+                >
                   <span className="uppercase text-muted">Nested agents</span>
                   <button
                     type="button"
                     role="radio"
                     aria-checked={draft.capChildren === false}
+                    tabIndex={draft.capChildren === false ? 0 : -1}
                     onClick={() => setRowCap(index, false)}
                     className={`rounded-control outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${draft.capChildren === false ? 'text-accent' : 'text-muted hover:text-ink'}`}
                   >
@@ -310,6 +320,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                     type="button"
                     role="radio"
                     aria-checked={draft.capChildren !== false}
+                    tabIndex={draft.capChildren !== false ? 0 : -1}
                     onClick={() => setRowCap(index, true)}
                     className={`rounded-control outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${draft.capChildren !== false ? 'text-accent' : 'text-muted hover:text-ink'}`}
                   >

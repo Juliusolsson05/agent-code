@@ -10,6 +10,7 @@ import {
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Button } from '@renderer/components/ui/button'
 import { KbdLegend } from '@renderer/components/ui/kbd'
+import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
 import { useAppStore } from '@renderer/app-state/hooks'
 import {
   DISPATCH_COLOR_FLAGS,
@@ -62,13 +63,6 @@ export function ColorFlagPickerModal({
     onClose()
   }
 
-  const focusSwatch = (index: number) => {
-    const count = DISPATCH_COLOR_FLAGS.length
-    const next = ((index % count) + count) % count
-    setFocusIndex(next)
-    swatchRefs.current[next]?.focus()
-  }
-
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
       <DialogContent
@@ -98,22 +92,9 @@ export function ColorFlagPickerModal({
           role="radiogroup"
           aria-label="Color flag"
           className="flex flex-wrap justify-center gap-3 px-4 py-3"
-          onKeyDown={event => {
-            if (event.metaKey || event.ctrlKey || event.altKey) return
-            const step =
-              event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
-                : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1
-                  : 0
-            if (step !== 0) {
-              event.preventDefault()
-              focusSwatch(focusIndex + step)
-              return
-            }
-            if (event.key === 'Home' || event.key === 'End') {
-              event.preventDefault()
-              focusSwatch(event.key === 'Home' ? 0 : DISPATCH_COLOR_FLAGS.length - 1)
-            }
-          }}
+          // The swatches' onFocus keeps `focusIndex` (the roving Tab stop) in
+          // step with wherever the shared helper moves focus.
+          onKeyDown={radioGroupKeyDown}
         >
           {DISPATCH_COLOR_FLAGS.map((flag, index) => {
             const active = flag.id === currentFlagId
