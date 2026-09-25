@@ -338,9 +338,17 @@ export function useUndoCloseAction(
       }
       // Every member's folder is gone: no retry can bring any of them back,
       // so consume the entry rather than poison the stack head (#1264 R2-1).
-      // A project's agents usually share one cwd, so the first one names it.
+      // One shared cwd is named; several are not, because the owner's largest
+      // real project spans 22 cwds (21 of them worktrees) and naming the
+      // first implied a single folder (#1264 round-2 review).
       if (foldersMissing === entry.sessions.length) {
-        showToast(folderMissingMessage(`project "${entry.tab.title}"`, entry.sessions[0].meta.cwd), RESTORE_FAILURE_TOAST_MS)
+        const cwds = new Set(entry.sessions.map(member => member.meta.cwd))
+        showToast(
+          cwds.size === 1
+            ? folderMissingMessage(`project "${entry.tab.title}"`, entry.sessions[0].meta.cwd)
+            : `Could not restore project "${entry.tab.title}": their folders no longer exist`,
+          RESTORE_FAILURE_TOAST_MS,
+        )
         return 'stale'
       }
       // Nothing came back: the entry is still good, the provider is not. A
@@ -350,9 +358,18 @@ export function useUndoCloseAction(
       if (idMap.size === 0) return 'retryable-failure'
       // Some came back: the rest are gone (#992's best-effort rule), and the
       // user must be told which part of the project is missing (#1264 review).
+      // A deleted worktree is not a provider fault, so the reason follows
+      // what actually failed: all-folder, all-provider, or both (#1264
+      // round-2 review: "retry" advice for a member no retry can fix).
       const missing = entry.sessions.length - idMap.size
       if (missing > 0) {
-        showToast(`Could not restore ${missing} of ${entry.sessions.length} agents in project "${entry.tab.title}": ${SESSION_START_FAILED_MESSAGE}`, RESTORE_FAILURE_TOAST_MS)
+        const providerFailed = missing - foldersMissing
+        const reason = providerFailed === 0
+          ? 'their folders no longer exist'
+          : foldersMissing === 0
+            ? SESSION_START_FAILED_MESSAGE
+            : `${foldersMissing} folder${foldersMissing === 1 ? '' : 's'} no longer exist${foldersMissing === 1 ? 's' : ''}; ${SESSION_START_FAILED_MESSAGE}`
+        showToast(`Could not restore ${missing} of ${entry.sessions.length} agents in project "${entry.tab.title}": ${reason}`, RESTORE_FAILURE_TOAST_MS)
       }
 
       setState(prev => {
@@ -424,6 +441,13 @@ export function useUndoCloseAction(
     async (entry: ClosedGroup): Promise<RestoreResult> => {
       let remaining: SingleClosedEntry[] = [...entry.entries]
       let restoredAny = false
+      // A member consumed as stale (its project gone, or its folder deleted)
+      // must not come back with the group. Returning 'retryable-failure'
+      // pushes the ORIGINAL group back, so once one member was consumed the
+      // leftover is rebuilt instead, as for a partial restore (#1264 round-2
+      // review: a deleted-folder member was retried, and re-toasted, on
+      // every later ⌘⇧T).
+      let consumedAny = false
       while (remaining.length > 0) {
         const member = remaining[remaining.length - 1]
         remaining = remaining.slice(0, -1)
@@ -433,8 +457,10 @@ export function useUndoCloseAction(
         })
         if (result === 'restored') {
           restoredAny = true
+        } else if (result === 'stale') {
+          consumedAny = true
         } else if (result === 'retryable-failure') {
-          if (!restoredAny) return 'retryable-failure'
+          if (!restoredAny && !consumedAny) return 'retryable-failure'
           const rest = [...remaining, member]
           const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
           refs.undoStackRef.current.push(leftover)

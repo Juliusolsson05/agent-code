@@ -165,3 +165,65 @@ it('consumes a project whose every folder is gone instead of retrying it forever
   expect(refs.undoStackRef.current.length).toBe(0)
   harness.unmount()
 })
+
+// Round-2 review (both reviewers' surviving mutant): one deleted worktree must
+// not consume a project whose other agents can come back, and the toast must
+// not blame the provider for the deleted folder.
+it('restores the agents that can come back when only some folders are gone', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  const gone = '/projects/agent-code/.worktrees/merged-branch'
+  refs.undoStackRef.current.push({
+    type: 'tab', closedAt: Date.now(), tab: { id: 'closed-tab', title: 'agent-code' }, tabIndex: 0,
+    sessions: [
+      { sessionId: 'gone', meta: { cwd: gone, kind: 'claude', projectId: 'closed-tab', joinedAt: 1 } },
+      { sessionId: 'fine', meta: { cwd: '/projects/agent-code', kind: 'claude', projectId: 'closed-tab', joinedAt: 2 } },
+    ],
+  })
+  const relayed = `Error invoking remote method 'session:spawn': ${String(new MissingWorkspaceDirectoryError(gone))}`
+  const spawn = vi.fn().mockRejectedValueOnce(new Error(relayed)).mockResolvedValueOnce('restored-fine')
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  expect(Object.keys(refs.stateRef.current.sessions)).toContain('restored-fine')
+  expect(harness.showToast).toHaveBeenCalledWith('Could not restore 1 of 2 agents in project "agent-code": their folders no longer exist', 8000)
+  harness.unmount()
+})
+
+it('names no single folder when a gone project spanned several', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  const meta = (cwd: string) => ({ cwd, kind: 'claude' as const, projectId: 'closed-tab', joinedAt: 1 })
+  refs.undoStackRef.current.push({
+    type: 'tab', closedAt: Date.now(), tab: { id: 'closed-tab', title: 'agent-code' }, tabIndex: 0,
+    sessions: [{ sessionId: 'a', meta: meta('/gone/one') }, { sessionId: 'b', meta: meta('/gone/two') }],
+  })
+  const spawn = vi.fn(async (cwd: string) => {
+    throw new Error(`Error invoking remote method 'session:spawn': ${String(new MissingWorkspaceDirectoryError(cwd))}`)
+  })
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  expect(harness.showToast).toHaveBeenCalledWith('Could not restore project "agent-code": their folders no longer exist', 8000)
+  expect(refs.undoStackRef.current.length).toBe(0)
+  harness.unmount()
+})
+
+it('does not push a deleted-folder member back with its group when a sibling fails to start', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  const member = (id: string, title: string, cwd: string) => ({
+    type: 'session' as const, closedAt: Date.now(), sessionId: id,
+    sessionMeta: { cwd, kind: 'claude' as const, title, projectId: 'tab-parent', joinedAt: 1 },
+  })
+  const gone = '/projects/agent-code/.worktrees/merged-branch'
+  refs.undoStackRef.current.push({ type: 'group', closedAt: Date.now(), entries: [member('p', 'ProviderDown', '/projects/agent-code'), member('f', 'FolderGone', gone)] } as never)
+  const spawn = vi.fn()
+    .mockRejectedValueOnce(new Error(`Error invoking remote method 'session:spawn': ${String(new MissingWorkspaceDirectoryError(gone))}`))
+    .mockRejectedValueOnce(new Error(recorded))
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  const left = refs.undoStackRef.current.pop()
+  expect(left?.type).toBe('session')
+  expect(left?.type === 'session' ? left.sessionMeta.title : null).toBe('ProviderDown')
+  expect(harness.showToast).toHaveBeenLastCalledWith('Could not restore "ProviderDown": Session failed to start. Check provider setup and retry.', 8000)
+  harness.unmount()
+})
