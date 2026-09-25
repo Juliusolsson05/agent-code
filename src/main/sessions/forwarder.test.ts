@@ -131,12 +131,12 @@ it('forwards screen frames only to a leased session, and records every frame for
     forwarder.flush()
     expect(sent).toEqual([])
 
-    screenInterest.acquire(7, 'pane')
+    screenInterest.acquire(7, 'pane', 'doc')
     manager.emit('screen', frame(drafted))
     forwarder.flush()
     expect(sent).toEqual([drafted.slice(-200)])
 
-    screenInterest.release(7, 'pane')
+    screenInterest.release(7, 'pane', 'doc')
     manager.emit('screen', frame(idle))
     forwarder.flush()
     expect(sent).toEqual([drafted.slice(-200)])

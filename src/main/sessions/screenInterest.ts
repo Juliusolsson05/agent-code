@@ -21,15 +21,30 @@ import { ScreenTailHistory } from '@shared/debug/screenTail.js'
 // WHY leases are owned by a webContents and not just counted: a renderer that
 // reloads or crashes never runs its cleanup, and a bare counter would then
 // forward that session's frames forever. Dropping an owner's leases when its
-// webContents navigates or is destroyed keeps the count honest. (A leaked
-// lease would only cost bytes, never correctness, but the whole point here is
-// the bytes.)
+// webContents is destroyed, or when a NEW document in it starts taking leases,
+// keeps the count honest. (A leaked lease would only cost bytes, never
+// correctness, but the whole point here is the bytes.)
+//
+// WHY a document id and not a navigation event (#1236 review): the app window
+// blocks every main-frame `will-navigate` (appWindow.ts), and Chromium reports
+// `did-start-navigation` BEFORE the throttle that emits and blocks
+// `will-navigate`. Dropping on navigation start therefore also dropped every
+// lease when a stray link click was blocked and the page never changed, so an
+// open debug panel silently went stale. The preload mints one id per loaded
+// document and sends it with every lease; a lease from a different id proves
+// the old document is gone, whatever event order Electron uses. The cost: after
+// a reload, the dead document's leases survive until the new one takes its
+// first lease or the window closes, which is debug-surface bytes only.
 
 export class ScreenInterest {
   private readonly byOwner = new Map<number, Map<string, number>>()
   private readonly totals = new Map<string, number>()
+  private readonly documents = new Map<number, string>()
 
-  acquire(owner: number, sessionId: string): void {
+  acquire(owner: number, sessionId: string, document: string): void {
+    const current = this.documents.get(owner)
+    if (current !== undefined && current !== document) this.dropOwner(owner)
+    this.documents.set(owner, document)
     let leases = this.byOwner.get(owner)
     if (!leases) {
       leases = new Map()
@@ -39,7 +54,10 @@ export class ScreenInterest {
     this.totals.set(sessionId, (this.totals.get(sessionId) ?? 0) + 1)
   }
 
-  release(owner: number, sessionId: string): void {
+  release(owner: number, sessionId: string, document: string): void {
+    // A release from a document that no longer owns the leases has nothing
+    // of its own to release.
+    if (this.documents.get(owner) !== document) return
     const leases = this.byOwner.get(owner)
     const held = leases?.get(sessionId) ?? 0
     // A release the owner does not hold (double release, or one that raced
@@ -52,6 +70,7 @@ export class ScreenInterest {
   }
 
   dropOwner(owner: number): void {
+    this.documents.delete(owner)
     const leases = this.byOwner.get(owner)
     if (!leases) return
     this.byOwner.delete(owner)

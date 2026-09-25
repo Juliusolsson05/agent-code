@@ -258,34 +258,27 @@ export function registerSessionIpc(
   // the ordinary `session:screen` path, the same seed `session:recover` sends,
   // so an opening debug panel is correct at once even for an idle backend that
   // emits no further frame, and the renderer needs no second way to apply a
-  // screen. Leases are owned by the calling webContents and
-  // dropped when it navigates (reload) or is destroyed, because a renderer
-  // that dies never runs its cleanup.
+  // screen. Leases are owned by the calling webContents and document (see
+  // sessions/screenInterest.ts for why not a navigation event), and dropped
+  // when the webContents is destroyed, because a renderer that dies never
+  // runs its cleanup.
   const leaseOwnersWatched = new Set<number>()
-  ipcMain.handle('session:screen-lease', (evt, sessionId: string): void => {
+  ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
     const sender = evt.sender
     const owner = sender.id
     if (!leaseOwnersWatched.has(owner)) {
       leaseOwnersWatched.add(owner)
-      const drop = () => screenInterest.dropOwner(owner)
-      // A reload is a main-frame navigation to a new document. Same-document
-      // hash/history navigation keeps the JavaScript context and its live
-      // leases, as workflows.ts's identical per-renderer lease contract
-      // already rules (#1236 review C).
-      sender.on('did-start-navigation', details => {
-        if (details.isMainFrame && !details.isSameDocument) drop()
-      })
       sender.once('destroyed', () => {
-        drop()
+        screenInterest.dropOwner(owner)
         leaseOwnersWatched.delete(owner)
       })
     }
-    screenInterest.acquire(owner, sessionId)
+    screenInterest.acquire(owner, sessionId, document)
     const screen = manager.getScreenSnapshot(sessionId)
     if (screen) sendToSessionWindow(sessionId, 'session:screen', aliasScreenSnapshotForWire({ sessionId, ...screen }))
   })
-  ipcMain.handle('session:screen-release', (evt, sessionId: string) => {
-    screenInterest.release(evt.sender.id, sessionId)
+  ipcMain.handle('session:screen-release', (evt, sessionId: string, document: string) => {
+    screenInterest.release(evt.sender.id, sessionId, document)
   })
   // Debug bundles read the screen on demand instead of holding a lease: the
   // latest raw snapshot plus the tail history main records from every frame.

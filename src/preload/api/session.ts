@@ -9,6 +9,7 @@ import type { AgentScreenSnapshot, AgentScreenSnapshotWire } from '@shared/types
 import type { ScreenTailSample } from '@shared/debug/screenTail.js'
 import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/types/terminalForeground.js'
 import type {
+
   SessionExitEvent,
   SessionHistoryChunk,
   SessionKind,
@@ -38,6 +39,11 @@ import type {
   SessionHistoryBoundaryEvent,
   SessionProviderSessionChangedEvent,
 } from '@preload/api/types.js'
+
+// One id per loaded document: preload runs again on every reload, so a new id
+// tells main the previous document's screen leases are dead (#762, see
+// main/sessions/screenInterest.ts for why this replaced a navigation event).
+const screenLeaseDocument = globalThis.crypto.randomUUID()
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
 
@@ -134,10 +140,10 @@ export const sessionApi = {
   // held (debug surfaces). Acquire also sends the current screen as one
   // ordinary session:screen event.
   acquireScreenLease: (sessionId: string): Promise<void> =>
-    ipcRenderer.invoke('session:screen-lease', sessionId),
+    ipcRenderer.invoke('session:screen-lease', sessionId, screenLeaseDocument),
 
   releaseScreenLease: (sessionId: string): Promise<void> =>
-    ipcRenderer.invoke('session:screen-release', sessionId),
+    ipcRenderer.invoke('session:screen-release', sessionId, screenLeaseDocument),
 
   /** The latest screen and main's screen-tail history, for debug bundles. */
   getScreenDebug: (sessionId: string): Promise<{ screen: AgentScreenSnapshot | null; samples: ScreenTailSample[] }> =>

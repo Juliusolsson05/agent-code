@@ -18,7 +18,7 @@ All consumers were mapped (file:line in PR #1236's description):
 2. **Lease contract:**
    - `session:screen-lease` acquires a lease and seeds the current screen down the ordinary `session:screen` path, the same seed `session:recover` sends. An idle backend therefore still shows a correct panel.
    - `session:screen-release` releases a lease.
-   - Leases are owned by the calling webContents. A main-frame navigation (reload) or destruction drops all of that owner's leases, because a dying renderer never runs its cleanup. A release the owner does not hold is ignored.
+   - Leases are owned by the calling webContents and the document that took them (a per-load id minted in preload). A lease from a new document (a reload), or destruction, drops all of that owner's earlier leases, because a dying renderer never runs its cleanup. Review amendment: this replaced dropping on `did-start-navigation`, which Chromium fires before the throttle where this app blocks every `will-navigate`, so a blocked link click used to drop live leases. A release the owner does not hold is ignored.
 3. **Debug bundles** read `session:get-screen-debug`: main's latest raw snapshot plus the tail history.
 4. **Renderer:**
    - The screen handler applies only the screen strings.
@@ -32,7 +32,7 @@ All consumers were mapped (file:line in PR #1236's description):
 
 ## Tests (fail-first where the behaviour changes)
 - **Forwarder:** the recorded Claude 2.1.278 screen frame is not forwarded without a lease, is forwarded with one, and is recorded in the tail history either way. The first assertion is red on origin/main.
-- **Leases:** the IPC seed on acquire; dropping on a main-frame reload and on destroy, but not on a sub-frame navigation; counting across owners.
+- **Leases:** the IPC seed on acquire; dropping when a new document leases and on destroy, but never on a navigation event; counting across owners.
 - **Picker:** a screen frame carrying a picker no longer sets `runtime.picker`.
 - **Mutations:** removing the gate, recording only leased frames, dropping on sub-frames, removing the seed, and restoring the picker write each fail a test.
 

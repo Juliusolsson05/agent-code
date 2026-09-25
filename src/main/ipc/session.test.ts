@@ -151,7 +151,7 @@ describe('session input transcript observations', () => {
 })
 
 describe('screen leases (#762)', () => {
-  it('seeds the current screen on acquire, and drops a renderer\'s leases when it reloads or dies', async () => {
+  it('seeds the current screen on acquire, and drops a renderer\'s leases only when its document is replaced or it dies', async () => {
     const { screenInterest } = await import('@main/sessions/screenInterest.js')
     const manager = new EventEmitter()
     Object.assign(manager, {
@@ -164,24 +164,38 @@ describe('screen leases (#762)', () => {
 
     // An opening debug panel is right at once, even for an idle backend:
     // the current screen goes down the ordinary session:screen path.
-    lease({ sender }, 'pane')
+    lease({ sender }, 'pane', 'doc-1')
     expect(screenInterest.wants('pane')).toBe(true)
     // The same aliased wire payload the recover seed sends (recent/markdown
     // equal to plain/markdown are dropped on the wire, #746).
     expect(harness.routed).toHaveBeenCalledWith('pane', 'session:screen', { sessionId: 'pane', plain: 'now', markdown: 'now' })
 
-    // A reload never runs the renderer's cleanup. A sub-frame navigation and a
-    // same-document (hash/history) navigation are not reloads and keep it.
-    sender.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false })
-    expect(screenInterest.wants('pane')).toBe(true)
-    sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true })
-    expect(screenInterest.wants('pane')).toBe(true)
+    // Any navigation, including one the window blocks, leaves the page and
+    // its leases alone: only a new document's lease or death drops them.
     sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    expect(screenInterest.wants('pane')).toBe(true)
+    // The release is the caller's own (another webContents cannot end it).
+    const release = harness.handlers.get('session:screen-release')!
+    release({ sender: { id: 1 } }, 'pane', 'doc-1')
+    expect(screenInterest.wants('pane')).toBe(true)
+    release({ sender }, 'pane', 'doc-1')
     expect(screenInterest.wants('pane')).toBe(false)
 
-    lease({ sender }, 'pane')
+    // A reload: the new document's first lease drops what the old one held.
+    lease({ sender }, 'old-page', 'doc-1')
+    lease({ sender }, 'pane', 'doc-2')
+    expect(screenInterest.wants('old-page')).toBe(false)
     sender.emit('destroyed')
     expect(screenInterest.wants('pane')).toBe(false)
+  })
+
+  it('leases a session with no screen yet without sending an empty frame', async () => {
+    const manager = new EventEmitter()
+    Object.assign(manager, { getScreenSnapshot: () => null })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    harness.routed.mockClear()
+    harness.handlers.get('session:screen-lease')!({ sender: Object.assign(new EventEmitter(), { id: 77 }) }, 'fresh', 'doc')
+    expect(harness.routed).not.toHaveBeenCalledWith('fresh', 'session:screen', expect.anything())
   })
 })
 

@@ -51,7 +51,7 @@ let forwarder: ReturnType<typeof wireSessionForwarder>
 // wrong reason. The lease owner id is not a real webContents.
 const TEST_SCREEN_OWNER = -1
 beforeEach(() => {
-  for (const sessionId of ['pane', 'refused-close', 'admission-pane']) screenInterest.acquire(TEST_SCREEN_OWNER, sessionId)
+  for (const sessionId of ['pane', 'refused-close', 'admission-pane']) screenInterest.acquire(TEST_SCREEN_OWNER, sessionId, 'test-document')
   registry.resetWindowRegistryForTests()
   harness.handlers.clear()
   harness.built.length = 0
