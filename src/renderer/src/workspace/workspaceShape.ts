@@ -150,9 +150,15 @@ export function migrateWorkspaceToStage(
       )
     }
   }
-  if (persisted.sessions !== undefined
-    && (persisted.sessions === null || typeof persisted.sessions !== 'object' || Array.isArray(persisted.sessions))) {
-    throw new MalformedWorkspaceContainerError('workspace.json has a malformed `sessions`; refusing to migrate it to an empty pool')
+  // `detachedSessions` too: it is the ONLY owner of every parked v2 agent (24
+  // of 27 on the owner's real workspace). A malformed one silently migrated
+  // those agents as unowned and dropped them, and rehydrate then reported a
+  // complete restore, so autosave would have written a 3-agent file over the
+  // 27-agent one (#1245 review). It must lock like the pool itself.
+  for (const [field, value] of [['sessions', persisted.sessions], ['detachedSessions', persisted.detachedSessions]] as const) {
+    if (value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+      throw new MalformedWorkspaceContainerError(`workspace.json has a malformed \`${field}\`; refusing to migrate it to an empty pool`)
+    }
   }
   // A null or id-less v2 tab ENTRY holds nothing (sessions are listed by id
   // under `sessions`), so it is dropped like a null project entry rather than
@@ -258,14 +264,18 @@ export function migrateWorkspaceToStage(
 
   // --- Rule 4. A file that already carries a `stage` wins over a stale v2
   // envelope sitting beside it (the intermediate #992 builds wrote both).
-  const sourceStage = persisted.stage ?? persisted.dispatchMode?.tiled
+  // The first stage that has usable lanes: a hybrid file with a corrupt
+  // `stage.lanes` beside an intact v2 envelope keeps the envelope's layout
+  // instead of falling to the default (#1245 review).
+  const sourceStage = [persisted.stage, persisted.dispatchMode?.tiled]
+    .find(candidate => candidate && Array.isArray(candidate.lanes))
   let stage: TiledDispatchState
   // A stage whose `lanes` is not a list carries no usable layout at all; it
   // takes the seeded default below like a file with no stage (#1245). Only
   // layout is lost: every session lives in the pool, not in a lane. Unlike a
   // malformed `projects`/`tabs` (rule 8), nothing the next autosave writes
   // can destroy data the file still held.
-  if (sourceStage && Array.isArray(sourceStage.lanes)) {
+  if (sourceStage) {
     // Compose the same durability chain autosave uses, so a lane pointing at
     // a session the pool dropped cannot survive the migration (the
     // "selected-but-unresolvable lane" bug class), and row metadata naming

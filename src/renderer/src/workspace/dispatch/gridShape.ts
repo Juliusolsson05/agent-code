@@ -109,7 +109,7 @@ export type NormalizedGrid = {
 export function normalizeGridShape(tiled: TiledDispatchState): NormalizedGrid {
   const lanes = usableLanes(tiled.lanes)
   const rows = withMigratedIndexFraction(
-    repairRowLengths(usableRows(tiled.rows), lanes.length),
+    repairRowLengths(usableRows(tiled.rows, lanes.length), lanes.length),
     tiled,
   )
 
@@ -145,14 +145,31 @@ function usableLanes(lanes: TiledDispatchState['lanes'] | undefined): TiledDispa
   return repaired
 }
 
-/** Non-object row entries are dropped; repairRowLengths then absorbs the lane
- *  count they carried into the last row, the same way it absorbs a corrupt
- *  length (#1245). Same array when every entry is usable. */
-function usableRows(rows: DispatchGridRow[] | undefined): DispatchGridRow[] | undefined {
+/** A non-object row entry (#1245) is replaced, at its own index, by an
+ *  UNBOUND row covering exactly the lanes no valid row accounts for. Dropping
+ *  it instead let repairRowLengths hand its lanes to the LAST row, so the
+ *  user's first lanes silently moved under another row's project binding,
+ *  height and index width, and autosave made that permanent (#1256 review).
+ *  Any further bad entries are dropped. Same array when every entry is usable. */
+function usableRows(rows: DispatchGridRow[] | undefined, laneCount: number): DispatchGridRow[] | undefined {
   if (!Array.isArray(rows)) return undefined
-  if (rows.every(row => row !== null && typeof row === 'object')) return rows
-  const kept = rows.filter(row => row !== null && typeof row === 'object')
-  console.warn('[workspace] dropped malformed stage rows', { count: rows.length - kept.length })
+  const usable = (row: unknown): row is DispatchGridRow => row !== null && typeof row === 'object'
+  // Persisted JSON: the declared type is what a well-formed file holds.
+  const entries: unknown[] = rows
+  if (entries.every(usable)) return rows
+  const covered = entries.filter(usable)
+    .reduce((sum, row) => sum + (Number.isInteger(row.length) && row.length > 0 ? row.length : 0), 0)
+  const remainder = laneCount - covered
+  let replaced = false
+  const kept: DispatchGridRow[] = []
+  for (const row of entries) {
+    if (usable(row)) kept.push(row)
+    else if (!replaced && remainder > 0) {
+      kept.push({ length: remainder })
+      replaced = true
+    }
+  }
+  console.warn('[workspace] repaired malformed stage rows', { count: entries.filter(row => !usable(row)).length })
   return kept
 }
 

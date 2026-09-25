@@ -135,9 +135,43 @@ describe('malformed entries and containers in a real v2 workspace (#1245)', () =
   it.each([
     ['buried', (workspace: Record<string, unknown>) => { workspace.buried = {} }],
     ['sessions', (workspace: Record<string, unknown>) => { workspace.sessions = 5 }],
+    // The only owner of 24 of the 27 real agents: migrating it as empty
+    // dropped them all and reported a complete restore (#1256 review).
+    ['detachedSessions (a number)', (workspace: Record<string, unknown>) => { workspace.detachedSessions = 5 }],
+    ['detachedSessions (a list)', (workspace: Record<string, unknown>) => { workspace.detachedSessions = [null] }],
   ])('refuses a present-but-malformed %s container with the typed lock, never an empty pool', (_field, damage) => {
     const workspace = liveWorkspace() as unknown as Record<string, unknown>
     damage(workspace)
     expect(() => migrateWorkspaceToStage(workspace as unknown as PersistedWorkspace)).toThrow(MalformedWorkspaceContainerError)
+  })
+})
+
+describe('damaged v2 placements and v3 rows keep every agent where it was (#1256 review)', () => {
+  it('re-homes the agent of a damaged detached entry instead of dropping it', () => {
+    const workspace = liveWorkspace()
+    const detached = workspace.detachedSessions as Record<string, unknown>
+    const damaged = Object.keys(detached)[0]!
+    detached[damaged] = null
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(Object.keys(migrated.sessions)).toHaveLength(27)
+    expect(migrated.sessions[damaged]?.projectId).toBe(workspace.activeTabId)
+  })
+
+  it("gives a null row's lanes an unbound row of their own, not the next row's project", () => {
+    const workspace = liveV3Workspace()
+    const stage = workspace.stage as unknown as { lanes: unknown[]; rows: unknown[]; laneWeights?: unknown }
+    const second = (workspace.projects as Array<{ id: string }>)[1]!.id
+    stage.lanes.push({})
+    delete stage.laneWeights
+    stage.rows = [null, { length: 1, projectTabIds: [second] }]
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(migrated.stage.rows).toEqual([{ length: 2 }, { length: 1, projectTabIds: [second] }])
+  })
+
+  it("keeps an intact v2 envelope's layout when the v3 stage beside it has unusable lanes", () => {
+    const workspace = liveWorkspace()
+    const envelopeLanes = (workspace.dispatchMode as { tiled: { lanes: unknown[] } }).tiled.lanes.length
+    ;(workspace as { stage?: unknown }).stage = { lanes: 5, rows: [], focusedLane: 0 }
+    expect(migrateWorkspaceToStage(workspace).stage.lanes).toHaveLength(envelopeLanes)
   })
 })

@@ -35,5 +35,11 @@ Lanes and rows hold layout only; sessions live in the pool. So these are repaire
   - A present-but-malformed `buried` or `sessions` CONTAINER joins rule 8's typed `MalformedWorkspaceContainerError`: buried records carry their own `sessionMeta`, and `sessions` is the pool, so either may hold the only copy of an agent. Migrating it to empty would let the next autosave erase that copy.
   - An ABSENT `sessions` holds nothing and migrates as an empty pool, in v2 as it already did in v3. The bootstrap telemetry line gets `?? {}`.
 
+- **Review round 1 (A)**, verified on the real fixtures:
+  - A malformed `detachedSessions` container migrated 27 agents to 3 and reported a complete restore, so autosave would have written that. It now gets rule 8's typed lock.
+  - A damaged detached ENTRY dropped its agent. Its key is still the session id, so the agent is now re-homed to the active project.
+  - A null row now becomes an UNBOUND row of exactly the lanes no valid row covers, at its own index. Before, its lanes were absorbed into the last row and inherited that row's project binding.
+  - A stage with unusable `lanes` falls through to an intact v2 `dispatchMode.tiled` before the default.
+
 ## Tests
 Real-workspace cases for every row of both tables, red on main, each guard mutation-checked, plus two end-to-end bootstrap cases (a null lane, missing sessions) asserting a restore with autosave unlocked, not the locked recovery shell.
