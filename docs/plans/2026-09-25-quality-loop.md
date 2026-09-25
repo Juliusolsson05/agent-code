@@ -342,6 +342,12 @@ The surface list below is B18's starting inventory.
 - Disposition table in the PR body: finding | verdict | disposition.
 
 ### 7.4 Merge gate (all must hold)
+- **Owner decision, 2026-09-25 (~17:15 UTC), batch merges:** the owner rejected one-PR-per-CI-cycle ("can we not do the ci cd more efficiently … an integration branch we merge all prs in to then merge integration branch in to main"; then "merge a lot of the prs in to the integration pr only for the ci cd, and we can resolve all conflicts, not the ui ones"). Ready PRs are merged into one integration branch, CI runs once on it, and it merges to main with `--merge`, so each member's head lands in main and GitHub marks it merged. UI feature PRs (#1221, #1216) and Dependabot (#1218) are excluded. **Per-member gate before the batch merges (steering q39):** for every member,
+  1. three reviews complete, with no unfixed blocker or major;
+  2. a public final disposition on the member PR;
+  3. an accurate body;
+  4. `closingIssuesReferences` checked.
+  The batch head must contain current main, and its green CI stands in for each member's own run. The batch PR stays a draft until every member passes; a member that fails is removed and the batch rebuilt.
 - **Public final disposition** comment on the PR (tested head, green run, material fixes, caveats) and a PR body that describes the behaviour being merged, posted BEFORE `gh pr merge` (steering q35).
 1. CI green (`quality-gate` and `minimum-node-fixture-gate`).
 2. `origin/main` merged in shortly before that CI run; `mergeStateStatus` clean.
