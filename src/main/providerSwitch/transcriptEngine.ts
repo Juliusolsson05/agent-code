@@ -2,12 +2,15 @@
 // that projection model metadata must match capacity planning metadata.
 import { readFile } from 'fs/promises'
 import { homedir } from 'node:os'
-import { join , dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
+import { attachmentOnlyLabel, rewindAttachments } from '@main/providerSwitch/rewindAttachments.js'
+import type { RewindAttachment } from '@main/providerSwitch/rewindAttachments.js'
 import type {
   RewindPrompt,
   RewindPromptAddress,
@@ -28,6 +31,7 @@ import {
   resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
   projectGrokNativeResume,
+  projectPiNativeResume,
 } from 'agent-transcript-parser'
 import type {
   ConversationContent,
@@ -44,6 +48,8 @@ import {
   exportOpencodeSession,
   importOpencodeSession,
   listOpencodeModels,
+  readOpencodeModelState,
+  selectOpencodeTargetModel,
   opencodeExportSessionId,
   readResolvedOpencodeConfig,
 } from '@providers/opencode/runtime/opencodeCliSessions.js'
@@ -61,6 +67,13 @@ import {
   writeProjectedGrokSession,
 } from './grokTranscript.js'
 import { listAllGrokSessions, parseGrokSummary, resolveGrokTranscriptPath } from 'grok-code-headless'
+import { piProcessCwd, resolvePiAgentDir } from 'pi-terminal-headless'
+import {
+  loadPiSnapshot,
+  loadPiSnapshotAt,
+  locatePiTranscript,
+  writeProjectedPiSession,
+} from './piTranscript.js'
 
 export interface TranscriptProjectionContext {
   cwd: string
@@ -72,13 +85,29 @@ export interface TranscriptProjectionContext {
 export interface TranscriptTargetProfile {
   model: string
   modelProvider?: string
+  /** OpenCode only: the reasoning variant saved for this model, stamped on
+   *  the projected session so opening it does not reset the user's effort. */
+  modelVariant?: string
   budgetCharacters: number
 }
 
 export interface RewindDraft {
   promptText: string
   promptMode: 'prompt' | 'bash'
+  /**
+   * The images the composer will actually be prefilled with: exactly the
+   * `restored` image attachments below. Kept as its own field because that is
+   * what the renderer consumes, and derived rather than collected separately
+   * so the two can never disagree.
+   */
   promptImages: Array<{ mediaType: string; data: string }>
+  /**
+   * EVERY attachment the prompt had, including the ones that cannot come back
+   * (#929). A prompt that carried only an unavailable attachment is still a
+   * prompt, and reporting the loss is the difference between the picker saying
+   * so and the turn disappearing.
+   */
+  promptAttachments: RewindAttachment[]
 }
 
 interface TranscriptSnapshot {
@@ -112,6 +141,19 @@ export interface HostTranscriptAdapter {
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
   targetProfile(cwd?: string): Promise<TranscriptTargetProfile>
+  /**
+   * The profile the SOURCE session actually ran on, when the provider records
+   * it on its own messages (#1038).
+   *
+   * WHY Duplicate and Rewind need this and a provider SWITCH does not: a
+   * switch is a move to another provider, so the destination's own default is
+   * the only sensible model. A duplicate or a rewind is the same conversation
+   * continuing, and stamping the machine's current default on it silently
+   * moves that conversation to whatever model the user picked most recently
+   * somewhere else. Absent (or null) means "the provider does not record it",
+   * and the caller falls back to `targetProfile`.
+   */
+  sourceProfile?(cwd: string, providerSessionId: string): Promise<TranscriptTargetProfile | null>
   projectNativeResume(
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
@@ -216,6 +258,22 @@ const opencodeAdapter: HostTranscriptAdapter = {
   },
   draft: plainDraft,
   targetProfile: resolveOpencodeTargetProfile,
+  async sourceProfile(cwd, providerSessionId) {
+    const binary = getToolPath('opencode', 'opencode')
+    const exported = await exportOpencodeSession(
+      { binary, cwd, timeoutMs: OPENCODE_TRANSFORM_TIMEOUT_MS },
+      providerSessionId,
+    )
+    const recorded = opencodeProfileFromExport(exported)
+    if (!recorded) return null
+    // The budget is a property of THIS machine's catalog, not of the recorded
+    // conversation, so it still comes from the target profile. Only the model
+    // identity is inherited.
+    const target = await resolveOpencodeTargetProfile(cwd).catch(() => null)
+    // 128k matches every other OpenCode budget in this file: it is the
+    // conservative floor used when the catalog cannot be probed.
+    return { ...recorded, budgetCharacters: target?.budgetCharacters ?? budgetCharactersForContextTokens(128_000) }
+  },
   async projectNativeResume(conversation, context) {
     const targetProfile = context.targetProfile ?? await resolveOpencodeTargetProfile(context.cwd)
     return opencodeNativeResumeProjector.projectNativeResume(conversation, {
@@ -223,6 +281,7 @@ const opencodeAdapter: HostTranscriptAdapter = {
       cliVersion: await installedVersion('opencode'),
       modelProvider: targetProfile.modelProvider ?? 'opencode',
       model: targetProfile.model,
+      modelVariant: targetProfile.modelVariant,
     })
   },
   async write(cwd, { values }) {
@@ -276,18 +335,70 @@ async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
   }
 }
 
+/** The default agent's own `model` from the resolved config. OpenCode ranks
+ *  it above the global `model` (server `input.model ?? agent.model ?? …`, TUI
+ *  agent model before config). Imported sessions run as `build` unless the
+ *  config names another default agent. */
+function opencodeDefaultAgentModel(config: Record<string, unknown>): string | null {
+  const agentName = typeof config.default_agent === 'string' && config.default_agent.length > 0 ? config.default_agent : 'build'
+  const agents = config.agent && typeof config.agent === 'object' ? config.agent as Record<string, unknown> : {}
+  const agent = agents[agentName] && typeof agents[agentName] === 'object' ? agents[agentName] as Record<string, unknown> : {}
+  return typeof agent.model === 'string' && agent.model.length > 0 ? agent.model : null
+}
+
+/**
+ * The model an OpenCode export was last run with, read from its LAST user
+ * message (#1038).
+ *
+ * WHY the last user message and not the session row or the first message: the
+ * session row carries the selection OpenCode would use next, which a later
+ * switch elsewhere can move; each user message carries the model that
+ * message actually ran under, and the last one is what the conversation was
+ * on when it stopped. It is also exactly the field the projector stamps, so
+ * this reads back what a previous duplicate wrote.
+ */
+export function opencodeProfileFromExport(
+  exported: Record<string, unknown>,
+): Omit<TranscriptTargetProfile, 'budgetCharacters'> | null {
+  const messages = Array.isArray(exported.messages) ? exported.messages : []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    const info = isRecord(message) && isRecord(message.info) ? message.info : null
+    if (!info || info.role !== 'user' || !isRecord(info.model)) continue
+    const { providerID, modelID, variant } = info.model
+    if (typeof modelID !== 'string' || modelID.length === 0) continue
+    return {
+      model: modelID,
+      ...(typeof providerID === 'string' && providerID.length > 0 ? { modelProvider: providerID } : {}),
+      ...(typeof variant === 'string' && variant.length > 0 ? { modelVariant: variant } : {}),
+    }
+  }
+  return null
+}
+
 async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<TranscriptTargetProfile> {
   const binary = getToolPath('opencode', 'opencode')
   const options = { binary, cwd }
-  const configuredModel = await readResolvedOpencodeConfig(options)
-    .then(config => typeof config.model === 'string' ? config.model : null)
-    .catch(() => null)
-  const selectedModel = configuredModel ?? await listOpencodeModels(options)
-    .then(models => models[0] ?? null)
-    .catch(() => null)
+  const config = await readResolvedOpencodeConfig(options).catch(() => ({} as Record<string, unknown>))
+  const [state, available] = await Promise.all([
+    readOpencodeModelState(),
+    listOpencodeModels(options).catch(() => null),
+  ])
+  // B18: the fallback used to be `listOpencodeModels()[0]` whenever config
+  // had no model, i.e. the catalog's first row (`opencode/big-pickle` here),
+  // even for a user who had picked another model many times. The projector
+  // stamps the model on EVERY imported message, and OpenCode's lastModel()
+  // keeps it, so the switched agent ran on a model the user never chose.
+  // selectOpencodeTargetModel follows OpenCode's own order instead.
+  const selectedModel = selectOpencodeTargetModel({
+    agentModel: opencodeDefaultAgentModel(config),
+    configuredModel: typeof config.model === 'string' ? config.model : null,
+    recent: state.recent,
+    available,
+  })
   if (!selectedModel) {
     throw new Error(
-      'OpenCode did not report a configured or available model; select a model in OpenCode before switching.',
+      'OpenCode did not report a configured or available model; select a model in OpenCode first.',
     )
   }
   const separator = selectedModel.indexOf('/')
@@ -299,6 +410,7 @@ async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<Transc
   return {
     modelProvider: selectedModel.slice(0, separator),
     model: selectedModel.slice(separator + 1),
+    modelVariant: state.variants[selectedModel],
     // OpenCode can front models with very different windows and its resolved
     // config does not expose a reliable context size. A conservative 128k
     // window prevents an imported session from failing only after the source
@@ -384,6 +496,67 @@ const grokAdapter: HostTranscriptAdapter = {
   },
 }
 
+// Pi's target profile only sizes the imported conversation. Pi runs whatever
+// model its own settings choose at launch (Agent Code passes no --model, and
+// the projected file carries no model_change row), so the model named here is
+// informational: settings.json's defaultProvider/defaultModel when readable.
+// Pi fronts every provider's models and records no context window Agent Code
+// can read, so the budget is the same conservative 128k floor OpenCode and
+// Grok use. An unknown window must fail BEFORE the source pane is retired, not
+// after.
+async function resolvePiTargetProfile(): Promise<TranscriptTargetProfile> {
+  const settings = await readFile(join(resolvePiAgentDir({ env: process.env }), 'settings.json'), 'utf8')
+    .then(value => JSON.parse(value) as unknown)
+    .catch(() => null)
+  const model = isRecord(settings) && typeof settings.defaultModel === 'string' && settings.defaultModel ? settings.defaultModel : 'default'
+  const provider = isRecord(settings) && typeof settings.defaultProvider === 'string' && settings.defaultProvider ? settings.defaultProvider : undefined
+  return {
+    model,
+    ...(provider ? { modelProvider: provider } : {}),
+    budgetCharacters: budgetCharactersForContextTokens(128_000),
+  }
+}
+
+const piAdapter: HostTranscriptAdapter = {
+  provider: 'pi',
+  async read(cwd, providerSessionId) {
+    return (await loadPiSnapshot(cwd, providerSessionId)).conversation
+  },
+  async locate(cwd, providerSessionId) {
+    // Only the compaction wait locates, and it only runs against a live
+    // session with history. A missing file there is a real failure.
+    const path = await locatePiTranscript(cwd, providerSessionId)
+    if (!path) throw new Error(`Pi session ${providerSessionId} has no transcript file yet.`)
+    return path
+  },
+  async readAt(path) {
+    return (await loadPiSnapshotAt(path)).conversation
+  },
+  async listPrompts(cwd, providerSessionId) {
+    return promptsFromSnapshot(await loadPiSnapshot(cwd, providerSessionId), plainDraft)
+  },
+  // Pi user rows carry text and base64 images, and the decoder hands both over
+  // in the neutral carriers plainDraft already reads.
+  draft: plainDraft,
+  targetProfile: resolvePiTargetProfile,
+  async projectNativeResume(conversation, context) {
+    // The header cwd must be the cwd pi itself will report (process.cwd(),
+    // the real path): pi compares the two when sessions of several projects
+    // share a custom session dir.
+    return projectPiNativeResume(conversation, {
+      cwd: await piProcessCwd(context.cwd),
+      targetSessionId: context.targetSessionId,
+      now: context.now,
+    })
+  },
+  write: (cwd, publication) => writeProjectedPiSession(cwd, publication),
+  sessionId({ values }) {
+    const header = values[0]
+    if (header?.type !== 'session' || typeof header.id !== 'string') throw new Error('Projected Pi session has no header id.')
+    return header.id
+  },
+}
+
 // WHY a registry rather than source/target pair branches: each provider owns
 // one decoder, one native projector, and its storage policy. Switching composes
 // any installed source and target adapters through ConversationDocument, so a
@@ -394,6 +567,7 @@ const transcriptAdapters = new Map<string, HostTranscriptAdapter>([
   [codexAdapter.provider, codexAdapter],
   [opencodeAdapter.provider, opencodeAdapter],
   [grokAdapter.provider, grokAdapter],
+  [piAdapter.provider, piAdapter],
 ])
 
 export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTranscriptAdapter {
@@ -552,11 +726,12 @@ function promptsFromSnapshot(
     if (!hasResumablePrefix) continue
 
     const promptDraft = draft(message.content)
+    // A prompt whose only content was an attachment still happened, and used
+    // to be dropped here — not just hiding the image, but removing the whole
+    // turn from the picker so it could not be rewound to (#929).
     const text = promptDraft.promptText.trim().length > 0
       ? promptDraft.promptText
-      : promptDraft.promptImages.length > 0
-        ? '[Image prompt]'
-        : ''
+      : attachmentOnlyLabel(promptDraft.promptAttachments) ?? ''
     if (text.length === 0) continue
     prompts.push({
       address: ipcPromptAddress(reference.address),
@@ -568,9 +743,9 @@ function promptsFromSnapshot(
 }
 
 function ipcPromptAddress(address: PromptAddress): RewindPromptAddress {
-  // Grok joins the rewind boundary in Stage 6: its addresses are the plain
-  // (provider, line, sessionId) shape the boundary already serializes.
-  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode' && address.provider !== 'grok') {
+  // Grok joined the rewind boundary in Stage 6, and Pi joins it with the same
+  // plain (provider, line, sessionId) shape the boundary already serializes.
+  if (address.provider !== 'claude' && address.provider !== 'codex' && address.provider !== 'opencode' && address.provider !== 'grok' && address.provider !== 'pi') {
     throw new Error(`Provider "${address.provider}" cannot cross the Agent Code rewind IPC boundary.`)
   }
   return {
@@ -584,47 +759,151 @@ function ipcPromptAddress(address: PromptAddress): RewindPromptAddress {
 }
 
 function plainDraft(content: readonly ConversationContent[]): RewindDraft {
+  // WHY attachments are collected HERE and not per provider: this is the draft
+  // Codex, OpenCode and Grok all use, and it used to return `promptImages: []`
+  // unconditionally. Only Claude looked at attachments at all, and it did so
+  // with its own inline loop — so every Codex and OpenCode attachment was
+  // invisible to Rewind, and an image-only prompt vanished from the picker
+  // because `promptsFromSnapshot` drops a prompt with no text and no images.
+  const promptAttachments = rewindAttachments(content)
   return {
     promptText: content
       .filter((item): item is Extract<ConversationContent, { kind: 'text' }> => item.kind === 'text')
       .map(item => item.text)
       .join('\n'),
     promptMode: 'prompt',
-    promptImages: [],
+    promptImages: restoredImages(promptAttachments),
+    promptAttachments,
   }
+}
+
+/** The subset of attachments the composer can be prefilled with. */
+function restoredImages(attachments: readonly RewindAttachment[]): RewindDraft['promptImages'] {
+  return attachments
+    .filter((attachment): attachment is Extract<RewindAttachment, { status: 'restored' }> =>
+      attachment.status === 'restored')
+    .map(attachment => ({ mediaType: attachment.mediaType, data: attachment.data }))
 }
 
 function claudeDraft(content: readonly ConversationContent[]): RewindDraft {
   const plain = plainDraft(content)
-  const images: RewindDraft['promptImages'] = []
-  for (const item of content) {
-    if (item.kind !== 'image' || !isRecord(item.value)) continue
-    const source = isRecord(item.value.source) ? item.value.source : null
-    if (source?.type !== 'base64' || typeof source.data !== 'string') continue
-    images.push({
-      mediaType: typeof source.media_type === 'string' ? source.media_type : 'image/png',
-      data: source.data,
-    })
-  }
+  // The same extractor every other provider uses. It used to be a loop here
+  // that silently skipped anything that was not inline base64, which is why
+  // Claude's own url-sourced attachments were as invisible as Codex's (#929).
+  const attachments = plain.promptAttachments
+  const images = plain.promptImages
 
-  const bash = extractTagBody(plain.promptText, 'bash-input')
-  if (bash !== null) {
-    return { promptText: bash, promptMode: 'bash', promptImages: images }
-  }
-  const command = extractTagBody(plain.promptText, 'command-name')
-  if (command !== null) {
-    const args = extractTagBody(plain.promptText, 'command-args') ?? ''
-    return {
-      promptText: args.length > 0 ? `${command} ${args}` : command,
-      promptMode: 'prompt',
-      promptImages: images,
+  // ── PROVENANCE: A WRAPPER MUST OPEN THE MESSAGE CLAUDE WROTE (#930) ──
+  // `<bash-input>` and `<command-name>` are not content, they are Claude
+  // Code's record of HOW a turn was entered, and acting on them changes what
+  // the rewound composer will do. So they may only be believed where Claude
+  // Code actually writes them, and nowhere else.
+  //
+  // It used to be enough that the tag appeared ANYWHERE in the prompt, because
+  // `extractTagBody`'s regex is unanchored. Two things then went wrong at
+  // once, because extracting a tag body DISCARDS everything around it:
+  //
+  //   "How do I use <bash-input>ls</bash-input> in Claude Code?"
+  //     → promptText 'ls', promptMode 'bash'
+  //
+  // The question is gone, and the composer is armed to EXECUTE. Rewind and
+  // press enter and you run a command you were only ever asking about. Asking
+  // about `<command-name>` lost the surrounding prose the same way.
+  //
+  // The rule comes from upstream, not from taste. `processBashCommand.tsx`
+  // builds the message as `<bash-input>${inputString}</bash-input>` — the
+  // wrapper IS the whole input string, never a fragment inside prose — and
+  // `prepareUserContent` puts that string in the LAST content block, after any
+  // pasted images. Claude Code's own title heuristic (REPL.tsx) discriminates
+  // these same tags with `text.startsWith('<' + TAG + '>')`, so this matches
+  // the producer's own test rather than inventing a second one.
+  //
+  // Checked against the LAST TEXT BLOCK rather than the joined prompt text:
+  // that is exactly the block upstream wraps, so the check survives preceding
+  // blocks, and it is the RAW recorded bytes. That last part is what makes the
+  // rule safe against a paste: a user who pastes the text `<bash-input>rm -rf /`
+  // is handed a `<pasted_content>` envelope by Claude Code, and reading
+  // provenance from an already-unwrapped string would leave something that
+  // starts with `<bash-input>` and arm the composer to run it. Reading the
+  // content array means no later unwrapping can reach this decision.
+  const wrapped = claudeWrappedInput(content)
+
+  if (wrapped?.startsWith('<bash-input>')) {
+    const bash = extractTagBody(wrapped, 'bash-input')
+    // The BODY is still unwrapped: pasting into bash mode nests a real
+    // envelope inside a real wrapper, and the composer must be prefilled with
+    // the command, not with the scaffolding around it.
+    if (bash !== null) {
+      return { promptText: unwrapClaudePastedContent(bash) ?? bash, promptMode: 'bash', promptImages: images, promptAttachments: attachments }
     }
   }
+  // ── BOTH COMMAND BREADCRUMBS, NOT JUST ONE (#1071 review, finding 1) ──
+  // Upstream has TWO formatters and they open with different tags:
+  //
+  //   formatCommandInputTags          (utils/messages.ts)
+  //     <command-name> first — local/JSX commands: /model, /login
+  //   formatSlashCommandLoadingMetadata (processSlashCommand.tsx)
+  //     <command-message> first — every PROMPT-type command: /loop,
+  //     /simplify, plugin and user-invocable skills
+  //
+  // The second is written by `getMessagesForPromptSlashCommand` as an ordinary
+  // non-meta user turn, so it reaches the picker like any other prompt — and it
+  // is the MAJORITY shape in the local corpus (136 turns against 105). An
+  // earlier version of this fix only knew `<command-name>`, which turned every
+  // /loop and /simplify row in the Rewind picker into raw XML and prefilled the
+  // composer with the breadcrumb. REPL.tsx checks four prefixes for exactly
+  // this reason, and its own comment names `<command-message>` as the
+  // prompt-skill case.
+  //
+  // The BODY is still read by tag, not by position: `<command-name>` carries
+  // the command either way, and `<command-message>` holds the bare name
+  // without its slash.
+  if (wrapped?.startsWith('<command-name>') || wrapped?.startsWith('<command-message>')) {
+    const command = extractTagBody(wrapped, 'command-name')
+    if (command !== null) {
+      const args = extractTagBody(wrapped, 'command-args') ?? ''
+      return {
+        promptText: args.length > 0 ? `${command} ${args}` : command,
+        promptMode: 'prompt',
+        promptImages: images,
+        promptAttachments: attachments,
+      }
+    }
+  }
+
+  // Claude's PASTE envelope is the same kind of scaffolding: a wrapper Claude
+  // Code put around what the user typed (#1059). This draft is used TWICE — as
+  // the Rewind picker's row text and as the composer prefill of the rewound
+  // session — so leaving it on both showed the user `<pasted_content id="…">`
+  // in the picker and, worse, RE-SENT the envelope when they rewound and hit
+  // enter, which makes Claude wrap the already-wrapped text.
+  const unwrapped = unwrapClaudePastedContent(plain.promptText)
+  if (unwrapped !== null) plain.promptText = unwrapped
+
   return {
     promptText: stripClaudeContext(plain.promptText),
     promptMode: 'prompt',
     promptImages: images,
+    promptAttachments: attachments,
   }
+}
+
+/**
+ * The text block Claude Code would have wrapped, raw.
+ *
+ * `processUserInput` takes the LAST content block when it is text as the
+ * turn's input string, keeps everything before it as `precedingInputBlocks`,
+ * and hands only that input string to the bash/command wrappers. So the last
+ * text block is the one place a provider-authored wrapper can legitimately
+ * open, and checking the joined prompt text instead would answer the wrong
+ * question whenever another text block precedes it.
+ *
+ * Returns null when the message ends in something other than text — there is
+ * then no wrapped input at all, and no wrapper may be believed.
+ */
+function claudeWrappedInput(content: readonly ConversationContent[]): string | null {
+  const last = content[content.length - 1]
+  return last?.kind === 'text' ? last.text : null
 }
 
 function extractTagBody(source: string, tag: string): string | null {
@@ -633,21 +912,50 @@ function extractTagBody(source: string, tag: string): string | null {
 }
 
 function stripClaudeContext(source: string): string {
-  // These are Claude-authored transport wrappers, not arbitrary XML. Keeping
-  // the list closed prevents a user-authored tag from silently disappearing.
-  const wrappers = [
-    'ide_selection',
-    'ide_diagnostics',
-    'ide_opened_files',
-    'local-command-caveat',
-    'local-command-stdout',
-    'system-reminder',
-  ]
-  let result = source
-  for (const tag of wrappers) {
-    result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '')
+  // Claude-authored transport wrappers, not arbitrary XML. Keeping the list
+  // closed prevents a user-authored tag from silently disappearing.
+  //
+  // They are split by WHO WROTE THE MESSAGE, which is the only thing that
+  // decides what to do when stripping empties it (#1071 review, finding 2).
+  //
+  // PROVIDER OUTPUT: Claude Code composes the whole message itself —
+  // `createUserMessage({ content: '<local-command-stdout>…' })`. A user never
+  // types one, and 87 such turns are visible (non-meta) in the local corpus,
+  // several carrying raw ANSI escapes. If one of these is all there is, the
+  // right answer is an empty draft: the turn is not a prompt.
+  const providerOutput = ['local-command-caveat', 'local-command-stdout']
+  // INJECTED CONTEXT: appended BESIDE what the user typed. These can be the
+  // whole message only when the user wrote the markup themselves — asking
+  // about it — which is the #930 case.
+  const injectedContext = ['ide_selection', 'ide_diagnostics', 'ide_opened_files', 'system-reminder']
+
+  const strip = (text: string, tags: string[]): string => {
+    let result = text
+    for (const tag of tags) {
+      result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '')
+    }
+    return result
   }
-  return result.trim()
+
+  // Provider output comes off unconditionally, and is not eligible for the
+  // restore below — that is the whole point of the split.
+  const withoutOutput = strip(source, providerOutput)
+  const result = strip(withoutOutput, injectedContext).trim()
+  if (result.length > 0) return result
+
+  // ── NEVER STRIP A USER'S PROMPT DOWN TO NOTHING (#930) ──
+  // Injected context really is embedded mid-message, so unlike the anchored
+  // wrappers above it cannot be given provenance. That leaves one ambiguous
+  // case: a prompt that is ONLY this markup, because the user was asking about
+  // it. `promptsFromSnapshot` drops prompts with no text and no images, so
+  // stripping it makes the turn vanish from the Rewind picker and become
+  // unreachable. Showing the markup is a strictly smaller harm than losing the
+  // prompt.
+  //
+  // Restored only when Claude Code wrote NONE of this message. If any provider
+  // output was present, the turn is scaffolding rather than a user's literal
+  // example, and the ambiguity the restore exists to resolve does not arise.
+  return withoutOutput === source ? source.trim() : ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

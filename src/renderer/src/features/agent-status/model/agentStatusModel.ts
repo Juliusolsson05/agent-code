@@ -5,7 +5,6 @@ import {
   isPinned,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import type {
   SessionId,
@@ -39,8 +38,20 @@ export type AgentStatusModel = {
     transcriptError: string | null
   }
   placement: {
-    bucket: 'grid' | 'detached-dispatch' | 'pinned-dispatch' | 'unknown'
-    physical: 'grid' | 'detached' | 'unknown'
+    /**
+     * Where the agent is, in stage terms (#992):
+     *   'pinned'  — in the Pinned section of every index;
+     *   'pool'    — an ordinary row of its project's index;
+     *   'unknown' — no row lists it (its project is gone, or it is mid-spawn).
+     * Until the unified layout this was 'grid' | 'detached-dispatch' |
+     * 'pinned-dispatch' with a separate `physical: 'grid' | 'detached'` — which
+     * of v2's owner structures held the session. There is one owner now, so
+     * that axis is gone and the useful one took its place: `lanes`.
+     */
+    bucket: 'pool' | 'pinned' | 'unknown'
+    /** Flat, row-major indices of every lane showing this agent. Empty means
+     *  parked: alive in the pool, on no lane. */
+    lanes: number[]
     dispatchLabel: string | null
     tabId: TabId | null
     tabTitle: string | null
@@ -131,69 +142,34 @@ function derivePlacement(
   const pinned = isPinned(state, sessionId)
   const row = buildVisibleDispatchRows(state).find(item => item.sessionId === sessionId) ?? null
   const commandTargetId = commandTargetSessionIdForState(state)
-  const activeTabId = state.activeTabId
+  const lanes = state.stage.lanes.flatMap((lane, index) =>
+    lane.selectedSessionId === sessionId ? [index] : [])
 
+  // The index row is the whole answer: it already carries the project the
+  // session is filed under, and a session with no row is one nothing can show.
+  //
+  // Until #992 two fallbacks followed — a scan of every tab's tile tree, and a
+  // scan of the detached bucket — for sessions the row selector did not list,
+  // and the result distinguished 'grid' from 'detached' placement. Both scans
+  // read structures that no longer exist, and every owned session now has a
+  // row, so they could only ever have found nothing.
   if (row) {
-    const physical = row.placement === 'detached' ? 'detached' : 'grid'
     return {
-      bucket: pinned
-        ? 'pinned-dispatch'
-        : physical === 'detached'
-          ? 'detached-dispatch'
-          : 'grid',
-      physical,
+      bucket: pinned ? 'pinned' : 'pool',
+      lanes,
       dispatchLabel: row.label,
       tabId: row.tabId,
       tabTitle: row.tabTitle,
       tabIndex: row.tabIndex,
-      activeTab: row.tabId === activeTabId,
-      focused: commandTargetId === sessionId,
-      pinned,
-    }
-  }
-
-  const gridOwner = findGridOwner(state, sessionId)
-  if (gridOwner) {
-    return {
-      bucket: pinned ? 'pinned-dispatch' : 'grid',
-      physical: 'grid',
-      dispatchLabel: null,
-      tabId: gridOwner.id,
-      tabTitle: gridOwner.title,
-      tabIndex: gridOwner.index,
-      activeTab: gridOwner.id === activeTabId,
-      focused: commandTargetId === sessionId,
-      pinned,
-    }
-  }
-
-  // WHY this fallback is intentionally narrow:
-  // `Show Agent Status` is command-target driven, so normal callers should
-  // arrive here only for a visible grid or Dispatch row. We still surface
-  // detached ownership when the model is used in tests or future inspectors,
-  // but we do not walk `state.buried` or invent hidden-session UI in v1. Buried
-  // panes are not command targets; showing them here would quietly broaden this
-  // feature into a workspace debugger instead of the compact focused-agent
-  // status view requested in #209.
-  const detached = Object.values(state.detachedSessions)
-    .find(entry => entry.sessionId === sessionId) ?? null
-  if (detached) {
-    return {
-      bucket: pinned ? 'pinned-dispatch' : 'detached-dispatch',
-      physical: 'detached',
-      dispatchLabel: null,
-      tabId: detached.projectTabId,
-      tabTitle: detached.projectTabTitle,
-      tabIndex: detached.projectTabIndex,
-      activeTab: detached.projectTabId === activeTabId,
+      activeTab: row.tabId === state.activeTabId,
       focused: commandTargetId === sessionId,
       pinned,
     }
   }
 
   return {
-    bucket: pinned ? 'pinned-dispatch' : 'unknown',
-    physical: 'unknown',
+    bucket: pinned ? 'pinned' : 'unknown',
+    lanes,
     dispatchLabel: null,
     tabId: null,
     tabTitle: null,
@@ -202,27 +178,6 @@ function derivePlacement(
     focused: commandTargetId === sessionId,
     pinned,
   }
-}
-
-function findGridOwner(
-  state: WorkspaceState,
-  sessionId: SessionId,
-): { id: TabId; title: string; index: number } | null {
-  // WHY this scans tile leaves directly instead of `resolveTabSessions`:
-  // status placement needs to distinguish physical grid placement from
-  // detached Dispatch ownership. `resolveTabSessions` deliberately returns the
-  // union of both buckets for membership questions, which would erase the
-  // difference this panel exists to explain. Keeping this scan private to the
-  // status model, after trying the Dispatch row selector first, prevents each
-  // UI surface from re-learning the grid-vs-detached split independently.
-  for (let index = 0; index < state.tabs.length; index += 1) {
-    const tab = state.tabs[index]
-    if (!tab) continue
-    if (collectLeaves(tab.root).includes(sessionId)) {
-      return { id: tab.id, title: tab.title, index }
-    }
-  }
-  return null
 }
 
 function normalizeOptionalString(value: string | null | undefined): string | null {

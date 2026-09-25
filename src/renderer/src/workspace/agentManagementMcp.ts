@@ -3,17 +3,62 @@ import type {
   ManagedAgentMessage,
   ManagedAgentProject,
   ManagedAgentRecord,
+  ManagedAgentRendererActivitySource,
   ManagedAgentRendererDescriptor,
   ManagedAgentRendererOutput,
+  ManagedAgentTarget,
   ManagedAgentTranscriptOutput,
 } from '@mcp/shared/agentManagementTypes'
+import { normalizeAgentName } from '@shared/agentNames/names'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { entryTextContent } from '@renderer/session-runtime/entries'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { projectIdOf, resolveTabSessions } from '@renderer/workspace/queries'
 import { visibleMessageSummary } from '@renderer/workspace/orchestrationMcp'
 import type { SessionId, SessionMeta, Tab, WorkspaceState } from '@renderer/workspace/types'
+import { sessionActivity } from '@renderer/session-runtime/activity'
+import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { resolveAgentPaneLabel, sessionDisplayLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
+
+/**
+ * The Agent names setting and allocation map, read from the SAME store
+ * snapshot as the workspace state (#1145).
+ *
+ * WHY a parameter instead of reading the store here: every function in this
+ * module is a pure projection of an explicit snapshot, which is what lets the
+ * handler re-read state after an await and know exactly what it acted on.
+ * Omitted means "names are off": a caller that does not pass names must never
+ * see one, and must never resolve one.
+ */
+export type ManagedAgentNames = {
+  enabled: boolean
+  names: Record<string, string>
+}
+
+const NAMES_OFF: ManagedAgentNames = { enabled: false, names: {} }
+
+/**
+ * A refusal whose message is written for the calling model (#1145).
+ *
+ * WHY a class when the rest of this module throws `new Error('<code>')`: those
+ * codes carry no context worth repeating, so the handler replaces the message
+ * with a generic sentence. A label miss is different — the useful answer is
+ * "no agent shows B33; your project shows B5 (codex), B16 (codex) …", which
+ * lets the model ask the user instead of listing raw session ids (the
+ * 2026-09-23 session had to do exactly that). The handler forwards this
+ * message verbatim.
+ */
+export class ManagedAgentTargetError extends Error {
+  constructor(
+    readonly code: 'invalid_target' | 'label_not_found' | 'name_not_found' | 'name_ambiguous',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ManagedAgentTargetError'
+  }
+}
 
 const DEFAULT_MAX_MESSAGES = 20
 const DEFAULT_BULK_MAX_MESSAGES = 6
@@ -31,28 +76,24 @@ function projectForSession(
   state: WorkspaceState,
   sessionId: SessionId,
 ): ProjectMembership | null {
-  const matches: ProjectMembership[] = []
-  state.tabs.forEach((tab, tabIndex) => {
-    if (collectLeaves(tab.root).includes(sessionId)) {
-      matches.push({ tab, tabIndex, placement: 'grid' })
-    }
-  })
-  const detached = state.detachedSessions[sessionId]
-  if (detached) {
-    const tabIndex = state.tabs.findIndex(tab => tab.id === detached.projectTabId)
-    const tab = state.tabs[tabIndex]
-    if (tab) matches.push({ tab, tabIndex, placement: 'dispatch' })
-  }
-  for (const buried of state.buried) {
-    if (buried.sessionId !== sessionId) continue
-    const tabIndex = state.tabs.findIndex(tab => tab.id === buried.sourceTabId)
-    const tab = state.tabs[tabIndex]
-    if (tab) matches.push({ tab, tabIndex, placement: 'buried' })
-  }
-  // WHY ambiguous ownership fails closed: a corrupt save can put one local id
-  // in more than one placement bucket. Choosing the first would make project
-  // scope depend on iteration order and could authorize a cross-project target.
-  return matches.length === 1 ? matches[0]! : null
+  // The row says which project it belongs to. A session whose project is gone
+  // (or that was never filed) has no project scope and is refused — scope
+  // must never be guessed, because it is what authorizes a cross-agent read.
+  //
+  // Until #992 membership was searched across three owner structures (tile
+  // leaves, detached records, buried records) and a session found in more than
+  // one FAILED CLOSED: a corrupt save could make project scope depend on
+  // iteration order. One field cannot be ambiguous.
+  //
+  // `placement` stays 'dispatch' for every session: in this contract that
+  // value has always meant "a row in the project's agent index", which is what
+  // every pool session is. 'grid' and 'buried' named v2 owners that no longer
+  // exist; the enum is narrowed with the rest of the MCP surface in stage 7.
+  const projectId = projectIdOf(state, sessionId)
+  if (projectId === undefined) return null
+  const tabIndex = state.tabs.findIndex(tab => tab.id === projectId)
+  const tab = state.tabs[tabIndex]
+  return tab ? { tab, tabIndex, placement: 'dispatch' } : null
 }
 
 function managedProject(membership: ProjectMembership): ManagedAgentProject {
@@ -67,16 +108,9 @@ function orderedProjectSessionIds(
   state: WorkspaceState,
   tabId: string,
 ): SessionId[] {
-  const tab = state.tabs.find(candidate => candidate.id === tabId)
-  if (!tab) return []
-  const detached = Object.values(state.detachedSessions)
-    .filter(item => item.projectTabId === tabId)
-    .sort((a, b) => a.detachedAt - b.detachedAt)
-    .map(item => item.sessionId)
-  const buried = state.buried
-    .filter(item => item.sourceTabId === tabId)
-    .map(item => item.sessionId)
-  return [...new Set([...collectLeaves(tab.root), ...detached, ...buried])]
+  // Index order, from the one membership query. (Until #992 this concatenated
+  // tile leaves, detached rows by detachedAt, then buried panes.)
+  return resolveTabSessions(state, tabId)
 }
 
 function conditionSummary(runtime: SessionRuntime | undefined): {
@@ -90,14 +124,28 @@ function conditionSummary(runtime: SessionRuntime | undefined): {
   }
 }
 
-function runtimeActivityAt(runtime: SessionRuntime | undefined): number | undefined {
-  if (!runtime) return undefined
-  const values = [
-    runtime.phaseChangedAt,
-    runtime.turnStartedAt,
-    runtime.submittedAt,
-  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  return values.length > 0 ? Math.max(...values) : undefined
+/**
+ * The UNIFIED answer to "when was this agent last active" (#915), and which
+ * class of evidence produced it.
+ *
+ * Shared with the TLDR peek footer on purpose — see `sessionActivity`. The
+ * source travels WITH the value because only this side knows it: the bridge
+ * receives one number and, when it labelled that number by where it arrived
+ * from, published a JSONL watermark as `lastActivitySource: 'runtime'`.
+ *
+ * This replaces the raw `transcriptActivityAt`/`runtimeActivityAt` pair the
+ * descriptor used to carry. They were justified as evidence "an existing
+ * caller may read" — the descriptor is renderer-private and never reaches an
+ * MCP caller, and once the bridge stopped recombining them nothing read them
+ * at all.
+ */
+function lastActive(runtime: SessionRuntime | undefined): {
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
+} {
+  const { timestamp, source } = sessionActivity(runtime)
+  if (timestamp === null || source === null) return {}
+  return { lastActiveAt: timestamp, lastActiveSource: source }
 }
 
 function latestVisibleConversationRole(
@@ -175,17 +223,25 @@ function descriptorForSession(params: {
   callerSessionId: string
   sessionId: string
   membership: ProjectMembership
+  /** The caller's `buildVisibleDispatchRows(state)`; see sessionDisplayLabel. */
+  rows: ReturnType<typeof buildVisibleDispatchRows>
+  agentNames?: ManagedAgentNames
 }): ManagedAgentRendererDescriptor | null {
   const meta = params.state.sessions[params.sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   if (!meta || !isAgentProviderKind(kind)) return null
   const runtime = params.runtimes[params.sessionId]
-  const runtimeAt = runtimeActivityAt(runtime)
-  const transcriptAt = runtime?.lastJsonlEntryAt ?? latestVisibleTimestamp(runtime)
+  const activity = lastActive(runtime)
   const summary = statusSummary(runtime)
+  const agentName = managedAgentName(params.agentNames, meta)
   return {
     agent: {
       sessionId: params.sessionId,
+      // The same derivation workspace.observe publishes (#1145), so a label
+      // read from ac_agents_search, from this list, or off the screen is one
+      // string.
+      displayLabel: sessionDisplayLabel(params.state, params.sessionId, params.rows),
+      ...(agentName ? { agentName } : {}),
       kind,
       cwd: meta.cwd,
       ...(meta.title ? { title: meta.title } : {}),
@@ -216,23 +272,32 @@ function descriptorForSession(params: {
       ...(meta.orchestrationRole ? { orchestrationRole: meta.orchestrationRole } : {}),
     },
     ...(meta.providerSessionId ? { providerSessionId: meta.providerSessionId } : {}),
-    ...(transcriptAt ? { transcriptActivityAt: transcriptAt } : {}),
-    ...(runtimeAt ? { runtimeActivityAt: runtimeAt } : {}),
+    ...activity,
   }
+}
+
+function managedAgentName(
+  agentNames: ManagedAgentNames | undefined,
+  meta: SessionMeta | undefined,
+): string | null {
+  const { enabled, names } = agentNames ?? NAMES_OFF
+  return resolveAgentName({ enabled, meta, names })
 }
 
 export function listManagedAgentDescriptors(params: {
   state: WorkspaceState
   runtimes: RuntimeMap
   callerSessionId: string
+  agentNames?: ManagedAgentNames
 }): { project: ManagedAgentProject; agents: ManagedAgentRendererDescriptor[] } {
   const callerMembership = projectForSession(params.state, params.callerSessionId)
   if (!callerMembership) throw new Error('caller_not_found')
+  const rows = buildVisibleDispatchRows(params.state)
   const agents = orderedProjectSessionIds(params.state, callerMembership.tab.id)
     .map(sessionId => {
       const membership = projectForSession(params.state, sessionId)
       if (!membership || membership.tab.id !== callerMembership.tab.id) return null
-      return descriptorForSession({ ...params, sessionId, membership })
+      return descriptorForSession({ ...params, sessionId, membership, rows })
     })
     .filter((value): value is ManagedAgentRendererDescriptor => value !== null)
   return { project: managedProject(callerMembership), agents }
@@ -257,6 +322,113 @@ export function assertManagedTarget(params: {
   return target
 }
 
+/**
+ * Turn what the caller said — a session id, the label on screen, or a spoken
+ * name — into exactly one session id, or refuse (#1145).
+ *
+ * WHY this is the ONE resolver and every targeted request goes through it:
+ * labels and names are how users refer to agents ("prompt B28", "ask
+ * Apollo"), and each tool resolving them on its own would reintroduce the
+ * split the app already paid for once — the palette, agent-index navigation
+ * and `ac_agents_search` all agree because they share resolveAgentPaneLabel /
+ * displayLabel. This reuses the same two primitives rather than re-deriving
+ * label arithmetic:
+ *
+ *   - label → resolveAgentPaneLabel, which for `[A-Z]+N` returns X exactly
+ *     when sessionDisplayLabel(X) is that label, i.e. exactly the session
+ *     `ac_agents_search {label}` returns in this window;
+ *   - name → normalizeAgentName equality over resolveAgentName, the
+ *     comparison `ac_agents_search {name}` makes.
+ *
+ * WHY resolution happens here, at request time, against the snapshot the
+ * operation acts on: a label is a SCREEN COORDINATE. Closing, pinning or
+ * adding an earlier row renumbers every later one, so the only meaning "B28"
+ * can have is "the agent showing B28 now" — which is also what the user is
+ * looking at when they say it. Resolving from an older listing is how a
+ * prompt reaches the agent that inherited the number.
+ *
+ * The result is only a candidate id: callers still pass it through
+ * assertManagedTarget, so project authority (a label in another project, a
+ * label on a terminal, self-targeting) stays enforced in one place.
+ */
+export function resolveManagedTarget(params: {
+  state: WorkspaceState
+  callerSessionId: string
+  target: ManagedAgentTarget
+  agentNames?: ManagedAgentNames
+}): SessionId {
+  const { sessionId, label, name } = params.target
+  const given = [sessionId, label, name].filter(value => value !== undefined)
+  if (given.length !== 1) {
+    // The MCP handler refuses this before the bridge; repeated here because
+    // the renderer must not trust its only caller to have validated input.
+    throw new ManagedAgentTargetError(
+      'invalid_target',
+      'Name the target with exactly one of sessionId, label or name.',
+    )
+  }
+  if (sessionId !== undefined) return sessionId
+
+  if (label !== undefined) {
+    const resolved = resolveAgentPaneLabel(params.state, label)
+    if (resolved) return resolved.sessionId
+    throw new ManagedAgentTargetError(
+      'label_not_found',
+      `No agent shows the label ${label.trim().toUpperCase()} right now. Labels renumber when earlier rows close, move or are pinned. ${visibleProjectLabels(params)}`,
+    )
+  }
+
+  const wanted = normalizeAgentName(name!)
+  const matches = Object.keys(params.state.sessions).filter(candidate => {
+    const resolved = managedAgentName(params.agentNames, params.state.sessions[candidate])
+    return resolved !== null && normalizeAgentName(resolved) === wanted
+  })
+  if (matches.length === 1) return matches[0]!
+  if (matches.length === 0) {
+    throw new ManagedAgentTargetError(
+      'name_not_found',
+      params.agentNames?.enabled
+        ? `No agent is named "${name!.trim()}". ${visibleProjectLabels(params)}`
+        : 'Agent names are turned off in Settings, so no agent has a spoken name. Target it by label or sessionId.',
+    )
+  }
+  // Names are allocated uniquely, but a reload carries the identity to the
+  // replacement session, so two rows can briefly share one. Guessing would
+  // pick by map order; say so instead.
+  throw new ManagedAgentTargetError(
+    'name_ambiguous',
+    `The name "${name!.trim()}" matches ${matches.length} sessions (${matches.join(', ')}). Target one by label or sessionId.`,
+  )
+}
+
+/**
+ * The labels the caller's project shows, for a refusal the model can act on.
+ * Agents only: a terminal's label is not a valid Agent Management target, and
+ * offering it would invite a second refusal.
+ */
+function visibleProjectLabels(params: {
+  state: WorkspaceState
+  callerSessionId: string
+  agentNames?: ManagedAgentNames
+}): string {
+  const projectId = projectIdOf(params.state, params.callerSessionId)
+  if (projectId === undefined) return ''
+  const rows = buildVisibleDispatchRows(params.state)
+  const shown = resolveTabSessions(params.state, projectId).flatMap(sessionId => {
+    const meta = params.state.sessions[sessionId]
+    const kind = meta?.kind ?? DEFAULT_PROVIDER
+    if (!isAgentProviderKind(kind)) return []
+    const label = sessionDisplayLabel(params.state, sessionId, rows)
+    if (!label) return []
+    const agentName = managedAgentName(params.agentNames, meta)
+    const title = meta?.title ? ` "${meta.title}"` : ''
+    return [`${label} (${kind}${agentName ? `, ${agentName}` : ''}${title}${sessionId === params.callerSessionId ? ', you' : ''})`]
+  })
+  return shown.length > 0
+    ? `Agents in your project now: ${shown.join(', ')}.`
+    : 'Your project shows no labelled agents.'
+}
+
 export function readManagedAgentOutput(params: {
   state: WorkspaceState
   runtimes: RuntimeMap
@@ -265,9 +437,14 @@ export function readManagedAgentOutput(params: {
   maxMessages?: number
   maxCharsPerMessage?: number
   maxCharsPerAgent?: number
+  agentNames?: ManagedAgentNames
 }): ManagedAgentRendererOutput {
   const membership = assertManagedTarget({ ...params, allowSelf: true })
-  const descriptor = descriptorForSession({ ...params, membership })
+  const descriptor = descriptorForSession({
+    ...params,
+    membership,
+    rows: buildVisibleDispatchRows(params.state),
+  })
   if (!descriptor) throw new Error('agent_not_found')
   const runtime = params.runtimes[params.sessionId] ?? null
   const summary = visibleMessageSummary(
@@ -291,10 +468,24 @@ export function readManagedAgentOutput(params: {
   return {
     output,
     ...(descriptor.providerSessionId ? { providerSessionId: descriptor.providerSessionId } : {}),
-    ...(descriptor.transcriptActivityAt
-      ? { transcriptActivityAt: descriptor.transcriptActivityAt }
-      : {}),
-    ...(descriptor.runtimeActivityAt ? { runtimeActivityAt: descriptor.runtimeActivityAt } : {}),
+    ...forwardedActivity(descriptor),
+  }
+}
+
+/**
+ * Carry the descriptor's activity answer onto an output record.
+ *
+ * WHY a helper rather than two spreads at each site: both read paths forward
+ * it, and a site that forgets is invisible — the bridge just falls back to the
+ * weakest candidate it has and the agent still gets A number.
+ */
+function forwardedActivity(descriptor: ManagedAgentRendererDescriptor): {
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
+} {
+  return {
+    ...(descriptor.lastActiveAt ? { lastActiveAt: descriptor.lastActiveAt } : {}),
+    ...(descriptor.lastActiveSource ? { lastActiveSource: descriptor.lastActiveSource } : {}),
   }
 }
 
@@ -308,6 +499,7 @@ export function readManagedAgentOutputs(params: {
   maxCharsPerMessage?: number
   maxCharsPerAgent?: number
   maxTotalChars?: number
+  agentNames?: ManagedAgentNames
 }): {
   project: ManagedAgentProject
   agents: ManagedAgentRendererDescriptor[]
@@ -360,12 +552,7 @@ export function readManagedAgentOutputs(params: {
         ...(descriptor.providerSessionId
           ? { providerSessionId: descriptor.providerSessionId }
           : {}),
-        ...(descriptor.transcriptActivityAt
-          ? { transcriptActivityAt: descriptor.transcriptActivityAt }
-          : {}),
-        ...(descriptor.runtimeActivityAt
-          ? { runtimeActivityAt: descriptor.runtimeActivityAt }
-          : {}),
+        ...forwardedActivity(descriptor),
       })
       truncated = true
       return
@@ -417,20 +604,6 @@ export function additionalCloseImpact(params: {
   // calling model that sessions would die which would not — data it acts on.
   // Linked descendants still count: the session-scoped close still ends them.
   return [...affected]
-}
-
-function latestVisibleTimestamp(runtime: SessionRuntime | undefined): number | undefined {
-  if (!runtime) return undefined
-  for (let index = runtime.entries.length - 1; index >= 0; index -= 1) {
-    const entry = runtime.entries[index]
-    if (entry.type !== 'user' && entry.type !== 'assistant') continue
-    if (!entryTextContent(entry)?.trim()) continue
-    const raw = (entry as { timestamp?: unknown }).timestamp
-    if (typeof raw !== 'string') continue
-    const parsed = Date.parse(raw)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  return undefined
 }
 
 function bounded(

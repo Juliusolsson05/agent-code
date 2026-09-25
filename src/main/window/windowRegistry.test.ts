@@ -46,6 +46,18 @@ describe('window registry routing', () => {
     built.length = 0
   })
 
+  it('rejects every window factory call after committed shutdown before allocating native chrome', () => {
+    let committed = false
+    registry.setWindowCreationAdmission(() => !committed)
+    registry.createAppWindow()
+    expect(built).toHaveLength(1)
+    committed = true
+    expect(registry.isWindowCreationAllowed()).toBe(false)
+    expect(() => registry.createAppWindow()).toThrow('shutting down')
+    expect(() => registry.createAppWindow({ windowId: 'restored' })).toThrow('shutting down')
+    expect(built).toHaveLength(1)
+  })
+
   it('sends a session event only to the window that owns the session', () => {
     const left = registry.createAppWindow()
     const right = registry.createAppWindow()
@@ -58,18 +70,15 @@ describe('window registry routing', () => {
     expect(built[1]?.sent).toEqual([])
   })
 
-  it('broadcasts an unowned session rather than dropping it', () => {
+  it('quarantines unknown session metadata without sending content to either window', () => {
     registry.createAppWindow()
     registry.createAppWindow()
 
     registry.sendToSessionWindow('nobody', 'session:screen', { sessionId: 'nobody' })
 
-    // A dropped session event silently freezes a pane, which is the worst
-    // failure shape this codebase knows. Ownership should make this
-    // unreachable; the broadcast exists because that is an argument, not a
-    // guarantee.
-    expect(built[0]?.sent).toHaveLength(1)
-    expect(built[1]?.sent).toHaveLength(1)
+    expect(built[0]?.sent).toEqual([])
+    expect(built[1]?.sent).toEqual([])
+    expect(registry.getSessionRoutingDiagnostics()).toMatchObject({ pendingEvents: 0, gapRecords: 1 })
   })
 
   it('moves routing when sessions are transferred to a survivor', () => {
@@ -94,7 +103,7 @@ describe('window registry routing', () => {
     registry.sendToSessionWindow('agent-1', 'session:exit', { sessionId: 'agent-1' })
     expect(registry.windowForSession('agent-1')).toBe(window)
 
-    registry.releaseSession('agent-1')
+    registry.releaseSession(registry.captureSessionWindowLease('agent-1'))
     expect(registry.windowForSession('agent-1')).toBeNull()
   })
 
@@ -126,6 +135,31 @@ describe('window registry routing', () => {
     // Anything sent to a renderer being destroyed is at best wasted, and at
     // worst a message the sender believes reached a live workspace.
     expect(built[0]?.sent).toEqual([])
+  })
+
+  it('tells the sender when a closing window did NOT receive the message', () => {
+    // `windowForSession` deliberately ignores `closing`, so it hands back a
+    // window that delivery then skips. A caller that waits for an answer used
+    // to wait its full deadline for a message nobody received, and could not
+    // tell "never dispatched" from "dispatched, outcome unknown" — which is
+    // the distinction that decides whether retrying is safe (#926).
+    const window = registry.createAppWindow()
+    registry.claimSessionForWindow('agent-1', window)
+    expect(registry.sendToWindow(registry.windowForSession('agent-1'), 'orchestration:request', {}))
+      .toBe(true)
+
+    built[0]?.hooks.onClosing()
+    // Still resolvable…
+    expect(registry.windowForSession('agent-1')).toBe(window)
+    // …and still skipped, which the sender now learns.
+    expect(registry.sendToWindow(registry.windowForSession('agent-1'), 'orchestration:request', {}))
+      .toBe(false)
+    expect(built[0]?.sent).toHaveLength(1)
+  })
+
+  it('reports no delivery for an unknown window', () => {
+    expect(registry.sendToWindow(null, 'orchestration:request', {})).toBe(false)
+    expect(registry.sendToWindow('nobody', 'orchestration:request', {})).toBe(false)
   })
 
   it('reports a closed window only after it is gone from the registry', () => {
@@ -162,7 +196,9 @@ describe('window registry routing', () => {
 
     built[0]?.hooks.onCloseVetoed()
     registry.sendToSessionWindow('agent-1', 'session:screen', { sessionId: 'agent-1' })
-    expect(built[0]?.sent).toHaveLength(1)
+    // The pre-veto observation was held under this same claim; both it and
+    // the new observation reach the surviving renderer in order.
+    expect(built[0]?.sent).toHaveLength(2)
   })
 
   it('tells its observer when a close is vetoed', () => {

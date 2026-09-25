@@ -53,35 +53,18 @@ const working = (): SessionRuntime => answered({ sessionStatus: 'running', strea
  *   manual finished agent the user opened by hand
  */
 function mountRun(options: { busy?: string[] } = {}) {
-  const row = (sessionId: string, detachedAt: number) => ({
-    sessionId,
-    surface: 'dispatch' as const,
-    projectTabId: 'tab',
-    projectTabTitle: 'repo',
-    projectTabIndex: 0,
-    detachedAt,
-  })
   const state: WorkspaceState = {
-    tabs: [{ id: 'tab', title: 'repo', root: { type: 'leaf', sessionId: 'lead' }, focusedSessionId: 'lead' }],
+    tabs: [{ id: 'tab', title: 'repo' }],
     activeTabId: 'tab',
-    dispatchMode: { scope: 'project', focusedSessionId: 'lead' },
+    stage: { lanes: [{ selectedSessionId: 'lead' }], rows: [{ length: 1 }], focusedLane: 0 },
     sessions: {
-      lead: { cwd: '/repo', kind: 'claude', title: 'Lead' },
-      coord: { cwd: '/repo', kind: 'claude', title: 'Coordinator', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },
-      worker: { cwd: '/repo/.worktrees/a', kind: 'codex', title: 'Worker', orchestrationParentId: 'coord', orchestrationRootId: 'lead' },
-      done: { cwd: '/repo/.worktrees/b', kind: 'codex', title: 'Done', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },
-      busy: { cwd: '/repo/.worktrees/c', kind: 'codex', title: 'Busy', orchestrationParentId: 'lead', orchestrationRootId: 'lead' },
-      manual: { cwd: '/repo', kind: 'claude', title: 'Manual' },
+      lead: { cwd: '/repo', kind: 'claude', title: 'Lead', projectId: 'tab', joinedAt: 0 },
+      coord: { cwd: '/repo', kind: 'claude', title: 'Coordinator', orchestrationParentId: 'lead', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 1 },
+      worker: { cwd: '/repo/.worktrees/a', kind: 'codex', title: 'Worker', orchestrationParentId: 'coord', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 2 },
+      done: { cwd: '/repo/.worktrees/b', kind: 'codex', title: 'Done', orchestrationParentId: 'lead', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 3 },
+      busy: { cwd: '/repo/.worktrees/c', kind: 'codex', title: 'Busy', orchestrationParentId: 'lead', orchestrationRootId: 'lead', projectId: 'tab', joinedAt: 4 },
+      manual: { cwd: '/repo', kind: 'claude', title: 'Manual', projectId: 'tab', joinedAt: 5 },
     },
-    detachedSessions: {
-      coord: row('coord', 1),
-      worker: row('worker', 2),
-      done: row('done', 3),
-      busy: row('busy', 4),
-      manual: row('manual', 5),
-    },
-    gridRelatedSelections: {},
-    buried: [],
     pinnedSessionIds: [],
   }
   const refs = makeRefs(state)
@@ -118,6 +101,11 @@ describe('Close Idle Orchestration Agents', () => {
     // `worker` first: the coordinator is only judged once the worker it owns
     // is gone, otherwise the kill-boundary rule would keep it open.
     expect(killed()).toEqual(['worker', 'coord', 'done'])
+    // Every kill of the purge carries this surface's tag through the shared
+    // bulk loop (#1135); it is optional on closeSession, so only an
+    // end-to-end assertion catches the loop dropping it.
+    expect(killOwnedSession.mock.calls.map(([owner]) => (owner as { caller?: string }).caller))
+      .toEqual(['bulk.close-idle-orchestration', 'bulk.close-idle-orchestration', 'bulk.close-idle-orchestration'])
     expect(Object.keys(harness.getState().sessions).sort()).toEqual(['busy', 'lead', 'manual'])
     // A purge must not evict the user's own close history from the stack.
     expect(refs.undoStackRef.current.length).toBe(0)

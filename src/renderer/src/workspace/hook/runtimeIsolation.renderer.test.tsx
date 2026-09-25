@@ -1,23 +1,23 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { useEffect } from 'react'
+import { Fragment, useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
-import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
-import type { TileNode, WorkspaceState } from '@renderer/workspace/types'
+import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
+import type { WorkspaceState } from '@renderer/workspace/types'
 import { useWorkspace } from './index'
 import { useRenderedLeaseHygiene } from './effects/useRenderedLeaseHygiene'
 import { appendCodexTranscriptObservation } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 
 const counts = vi.hoisted(() => ({ controller: 0, panes: {} as Record<string, number>, chronology: [] as string[] }))
-vi.mock('@providers/registry.renderer', () => ({
-  getRendererProvider: () => ({ TileLeaf: ({ sessionId, runtime, onFocusRequest }: {
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
+  TileLeaf: ({ sessionId, runtime, onFocusRequest }: {
     sessionId: string; runtime: SessionRuntime; onFocusRequest: () => void
   }) => {
     counts.panes[sessionId] = (counts.panes[sessionId] ?? 0) + 1
     useEffect(() => { counts.chronology.push(`visible:${sessionId}`) }, [sessionId, runtime])
     return <button data-testid={sessionId} onClick={onFocusRequest}>{runtime.draftInput}</button>
-  } }),
+  },
 }))
 // No provider/IPC process is started by this test. The controller, store,
 // helpers, draft actions, autosave and real subscribed tile boundaries remain
@@ -28,7 +28,9 @@ vi.mock('@renderer/features/sessionFeed/SessionFeedContext', () => ({ useSession
 vi.mock('./persistence/useBootstrap', async () => {
   const { useEffect } = await import('react')
   return { useBootstrap: (...args: Parameters<typeof import('./persistence/useBootstrap').useBootstrap>) => {
-    useEffect(() => args[5](true), [args[5]])
+    // args[4] is setBootstrapComplete (it was [5] until #992 removed the
+    // setTileTabs parameter that sat before it).
+    useEffect(() => args[4](true), [args[4]])
   } }
 })
 
@@ -45,9 +47,22 @@ function Controller({ legacy = false }: { legacy?: boolean }) {
   current = useWorkspace(false)
   useRenderedLeaseHygiene(current)
   counts.controller += 1
-  return <>{current.runtimeServices}<TileTree tabId="tab" node={current.activeTab!.root}
-    focusedSessionId="one" workspace={current} agentViewMode="agent"
-    showStatusMode showWorktreeBadges /></>
+  // One subscribed leaf per LANE, mounted the way the stage mounts them (#992):
+  // the lane's occupant, focused when it is the focused lane, asking for focus
+  // by lane index. Deriving the list from live state is what lets the "lane
+  // changes session" case below observe a subscription MOVE rather than a
+  // fixed pair of panes. (This walked the active tab's tile tree until the
+  // tree was deleted.)
+  const stage = current.state.stage
+  const focusedSessionId = stage.lanes[stage.focusedLane]?.selectedSessionId ?? null
+  return <>{current.runtimeServices}
+    {stage.lanes.map((lane, laneIndex) => lane.selectedSessionId ? (
+      <Fragment key={lane.selectedSessionId}>
+        {renderWorkspaceLeaf(lane.selectedSessionId, focusedSessionId, current, 'tab', 'agent', true, true,
+          () => current.setTiledFocusedLane(laneIndex))}
+      </Fragment>
+    ) : null)}
+  </>
 }
 
 beforeEach(() => {
@@ -57,11 +72,13 @@ beforeEach(() => {
   counts.chronology = []
   saveWorkspace.mockClear()
   reportSessionLifecycle.mockClear()
-  const root: TileNode = { type: 'split', direction: 'vertical', ratio: 0.5,
-    a: { type: 'leaf', sessionId: 'one' }, b: { type: 'leaf', sessionId: 'two' } }
   const state: WorkspaceState = { ...original.workspaceState,
-    tabs: [{ id: 'tab', title: 'Test', focusedSessionId: 'one', root }], activeTabId: 'tab',
-    sessions: { one: { kind: 'claude', cwd: '/repo' }, two: { kind: 'claude', cwd: '/repo' } },
+    tabs: [{ id: 'tab', title: 'Test' }], activeTabId: 'tab',
+    sessions: {
+      one: { kind: 'claude', cwd: '/repo', projectId: 'tab', joinedAt: 0 },
+      two: { kind: 'claude', cwd: '/repo', projectId: 'tab', joinedAt: 1 },
+    },
+    stage: { lanes: [{ selectedSessionId: 'one' }, { selectedSessionId: 'two' }], rows: [{ length: 2 }], focusedLane: 0 },
   }
   useAppStore.setState({ workspaceState: state, workspaceRuntimes: { one: emptyRuntime(), two: emptyRuntime() } })
   Object.defineProperty(window, 'api', { configurable: true, value: {
@@ -88,13 +105,9 @@ describe('runtime updates below the workspace controller', () => {
     await act(async () => {
       useAppStore.getState().setWorkspaceState(prev => ({
         ...prev,
-        sessions: { ...prev.sessions, three: { cwd: '/repo', kind: 'claude' } },
-        detachedSessions: { ...prev.detachedSessions, three: {
-          sessionId: 'three', surface: 'dispatch', projectTabId: 'tab',
-          projectTabTitle: 'Test', projectTabIndex: 0, detachedAt: 1,
-        } },
+        sessions: { ...prev.sessions, three: { cwd: '/repo', kind: 'claude', projectId: 'tab', joinedAt: 2 } },
       }))
-      // This is the same timing as a prior cleanup changing root ownership.
+      // This is the same timing as a prior cleanup changing ownership.
       // A render-body mirror still sees the old set and silently skips/misroutes
       // the next close; the real store subscription must update it immediately.
       const closed = close('three', { preConfirmed: true, captureUndo: false, onlyIf: () => true })
@@ -137,16 +150,17 @@ describe('runtime updates below the workspace controller', () => {
     expect(counts.controller).toBe(before)
   })
 
-  it('keeps layout actions fresh and moves subscriptions when a leaf changes session', () => {
+  it('keeps layout actions fresh and moves subscriptions when a lane changes session', () => {
     const view = render(<Controller />)
     fireEvent.click(view.getByTestId('two'))
-    expect(current.activeTab?.focusedSessionId).toBe('two')
+    expect(current.state.stage.focusedLane).toBe(1)
     act(() => {
       const store = useAppStore.getState()
       store.setWorkspaceRuntimes(prev => ({ ...prev, three: emptyRuntime() }))
+      // Lane 0 is re-aimed from `one` to `three`; `one` stays in the pool.
       store.setWorkspaceState(prev => ({ ...prev,
-        sessions: { ...prev.sessions, three: { kind: 'claude', cwd: '/repo' } },
-        tabs: prev.tabs.map(tab => ({ ...tab, root: { type: 'leaf', sessionId: 'three' } })),
+        sessions: { ...prev.sessions, three: { kind: 'claude', cwd: '/repo', projectId: 'tab', joinedAt: 2 } },
+        stage: { ...prev.stage, lanes: [{ selectedSessionId: 'three' }, { selectedSessionId: 'two' }] },
       }))
     })
     expect(view.queryByTestId('one')).toBeNull()
@@ -156,7 +170,7 @@ describe('runtime updates below the workspace controller', () => {
     act(() => current.setDraftInput('three', 'new pane draft'))
     expect(view.getByTestId('three')).toHaveTextContent('new pane draft')
     fireEvent.click(view.getByTestId('three'))
-    expect(current.activeTab?.focusedSessionId).toBe('three')
+    expect(current.state.stage.focusedLane).toBe(0)
   })
 
   it('still clears a rendered-view lease acquired after terminal mode hid the feed', () => {

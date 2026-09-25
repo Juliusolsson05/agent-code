@@ -4,7 +4,14 @@ import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
 import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { DictationProvider } from '@shared/types/dictation'
 import type { MouseButtonBinding, MouseChordBinding } from '@renderer/lib/mouseBinding'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import { uniformBuiltInMcpDefaults } from '@mcp/shared/types'
+import type { BuiltInMcpDefaults, ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+
+/** The shipped per-provider default, before any user choice. Exported so
+ * coercion can fall back to it for a provider missing from a persisted map. */
+export const SHIPPED_BUILT_IN_MCP_DOMAINS: readonly ConfigurableBuiltInMcpDomain[] = [
+  'tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows',
+]
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 // Value import (not type-only): DEFAULT_SETTINGS.dictationShortcut shares ONE
 // source of truth with the HotkeyInput reset button and coerceHotkeyBinding's
@@ -76,12 +83,13 @@ export function isDarkThemeMode(mode: ThemeModeValue): boolean {
 
 export type AccentId =
   | 'frost'
+  | 'lime'
   | 'amber'
-  | 'sky'
   | 'magenta'
   | 'gold'
   | 'coral'
   | 'lavender'
+  | 'sky'
 
 export type AccentMeta = {
   id: AccentId
@@ -92,24 +100,43 @@ export type AccentMeta = {
   fgLight: string
 }
 
-// WHY Lime and Sage are gone rather than merely demoted: the public-release
-// audit (#973) asked for no green in any default, and the green accents WERE
-// the old identity — every marker, dot and focus ring wore Lime. Leaving them
-// selectable would keep two entries whose only purpose was the look we are
-// replacing. coerceSettings maps a persisted 'lime'/'sage' to Frost, so an
-// existing install lands on the new default rather than on garbage.
+// Order is the order both pickers render (the Appearance menu's 4-column grid
+// and the Settings accent choice), so it is a product decision, not an
+// alphabetisation:
+//
+// - Frost MUST stay first. It is the default, and `applyTheme` falls back to
+//   ACCENTS[0] for an id that resolves to nothing, so "first" and "default"
+//   have to be the same entry.
+// - Lime is second. #973 deleted it (along with Sage) to get green out of every
+//   DEFAULT, but the owner only wanted Nord added and made the default, not the
+//   green look taken away (#1173). "No green by default" is satisfied by Frost
+//   being the default; Lime being selectable does not break it. Lime keeps its
+//   original pre-Nord values so an install that had it looks exactly as before.
+// - Sage (the second, muted green #973 also deleted) is NOT restored: the ask
+//   was for "the green" back, and Lime is the one the app shipped with. Eight
+//   accents also fill the Appearance menu's 4-column grid evenly (4 × 2),
+//   where nine would leave a lone chip on a third row. A persisted 'sage'
+//   still lands on the default in coerceSettings.
+// - Sky is last because the owner asked for it there when Lime came back
+//   (#1173). Nothing depends on its position; it is a pure ordering choice.
 //
 // Frost is Nord's `nord8` (#88c0d0) on dark canvases and `nord10` (#5e81ac)
 // on the cream light canvases, where nord8 has too little contrast to carry
 // focus rings.
+//
+// Before re-adding a previously retired id here, check
+// migrateLegacyDefaultAppearance in persistence.ts. A migration keyed on an
+// id that "can no longer exist" is only safe while it really cannot, which is
+// exactly what went wrong when Lime came back.
 export const ACCENTS: AccentMeta[] = [
   { id: 'frost', name: 'Frost', dark: '#88c0d0', light: '#5e81ac', fgDark: '#171b21', fgLight: '#faf9f6' },
+  { id: 'lime', name: 'Lime', dark: '#7dd3a0', light: '#2f6f46', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'amber', name: 'Amber', dark: '#ff9f4a', light: '#8a470b', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'magenta', name: 'Magenta', dark: '#e66ed9', light: '#8b247f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'gold', name: 'Gold', dark: '#f5d64a', light: '#735905', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'coral', name: 'Coral', dark: '#ff6b6b', light: '#9f2929', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
   { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#5a43b4', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
 // WHY a separate type: this is the user-preference choice (a label)
@@ -120,17 +147,11 @@ export const ACCENTS: AccentMeta[] = [
 // of the two should we start in". Keeping this as a flat string union
 // keeps localStorage payload stable, makes coerceSettings trivial, and
 // avoids leaking workspace-internal shape into a global setting.
-export type WorkspaceModeId = 'grid' | 'dispatch'
-
-export type WorkspaceModeMeta = {
-  id: WorkspaceModeId
-  label: string
-}
-
-export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
-  { id: 'grid', label: 'Grid' },
-  { id: 'dispatch', label: 'Dispatch' },
-]
+// 'WorkspaceModeId' / 'WorkspaceModeMeta' / 'WORKSPACE_MODES' were deleted
+// with the unified layout (#992 stage 8): they named the two layout modes a
+// fresh install could choose between, and there is one layout now. The
+// persisted `defaultWorkspaceMode` value is ignored on read and dropped from
+// coercion; a stale localStorage key simply stops mattering.
 
 export type AgentViewMode = 'agent' | 'terminal' | 'hybrid'
 
@@ -376,6 +397,10 @@ export type Settings = {
    *  the modal validates before saving. */
   customAppearanceJson: string
   showStatusMode: boolean
+  /** Stripe an agent pane's header while it holds an unseen completion
+   *  (#1172). Gates the stripes only: when a completion counts as seen
+   *  (engagement, or dwelling on the pane) is the same with it off. */
+  showAgentCompletionIndicator: boolean
   showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
   /** Mode the app boots into on first launch / fresh install (no
@@ -385,7 +410,6 @@ export type Settings = {
    *  This intentional narrowness matches the "new workspaces only"
    *  semantic the user asked for: the setting seeds initial state and
    *  then gets out of the way. */
-  defaultWorkspaceMode: WorkspaceModeId
   /** App-wide default surface for provider panes that support both surfaces.
    *
    * WHY this is global settings instead of per-session metadata:
@@ -415,7 +439,7 @@ export type Settings = {
    * including reloads. Per-domain session overrides win; a running process's
    * captured capability list is an observation, never its preference source.
    * `ping` stays diagnostic-only. Provider filters run after resolution. */
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[]
+  defaultBuiltInMcpDomains: BuiltInMcpDefaults
   /** When true, agent sessions are spawned through a per-session proxy
    *  that Agent Code owns. Claude gets a mitmproxy that decrypts Anthropic
    *  `/v1/messages` SSE in real time; Codex gets an in-process Responses
@@ -508,6 +532,17 @@ export type Settings = {
    *  DOM, semantic, and feed-debug snapshots, so they are interval-
    *  based rather than emitted on every render. */
   aggressiveDebugPersistence: boolean
+  /** Experimental master switch for the lane browser pocket (#1142). Off ⇒
+   *  no guests, no port scans, no commands, and main registers no browser_*
+   *  tools even for agents whose MCP domains include `browser`. */
+  browserPocketDefaultsInitialized: boolean
+  browserPocketEnabled: boolean
+  /** Route loopback links clicked in an agent's output into that agent's
+   *  pocket instead of the system browser (⌘-click still goes external). */
+  browserPocketOpenLocalhostLinks: boolean
+  /** Registers `browser_evaluate` (arbitrary JS in the page). Off by default:
+   *  page content is untrusted and these agents also have shell access. */
+  browserPocketAllowEvaluate: boolean
   /** When on (default), clicking a prompt-suggestion chip immediately SENDS
    *  that suggestion as the next prompt; when off, clicking only prefills the
    *  composer draft so the user can edit before submitting. The chip is an
@@ -649,6 +684,13 @@ export type Settings = {
    * command a downgrade removed.
    */
   commandKeybindingOverrides: Record<string, string[]>
+  /**
+   * External skills (Settings → Skills → Also found on this machine) the user
+   * chose to hide, keyed `<targetId>:<folder>` (#1161). A per-viewer display
+   * choice only: hiding never touches the folder, and a skill that appears in
+   * a new root shows up again because that is a new key.
+   */
+  hiddenExternalSkills: string[]
   /** Ambient provider-quota indicator in the SettingsBar header row.
    *  On by default: quota headroom is a planning input for dispatching
    *  agent fleets, and the whole point of the feature is ambient
@@ -674,6 +716,7 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'frost',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   showStatusMode: true,
+  showAgentCompletionIndicator: true,
   showWorktreeBadges: true,
   // On by default for the public build — the owner's explicit call (#973):
   // Agent Code is a workspace for people who run many agents at once, and the
@@ -702,18 +745,21 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationMouseButton: 'Middle',
   paletteMouseChord: 'Middle+Right',
   aggressiveDebugPersistence: false,
+  browserPocketDefaultsInitialized: false,
+  browserPocketEnabled: false,
+  browserPocketOpenLocalhostLinks: true,
+  browserPocketAllowEvaluate: false,
   // Dispatch is the product's command-center view and the way the owner runs
   // the app all day; a public fresh install should open there (#973). The
   // setting still only seeds a workspace that has no workspace.json yet —
   // existing workspaces keep their last-used mode.
-  defaultWorkspaceMode: 'dispatch',
   agentNamesEnabled: false,
   agentViewMode: 'agent',
   // The owner's day-to-day set, shipped as the default (#973). TLDR and Goal
   // are the Cmd+L / Cmd+G peeks — with no domains on, a new user never sees
   // them do anything. AI Workspace and Agent Management stay opt-in. An
   // explicitly persisted list (including `[]`) always wins in coerceSettings.
-  defaultBuiltInMcpDomains: ['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'],
+  defaultBuiltInMcpDomains: uniformBuiltInMcpDefaults(SHIPPED_BUILT_IN_MCP_DOMAINS),
   // Off (#973): a click that immediately sends a prompt to an agent surprised
   // the owner enough to turn it off; fill-then-edit is the safer public default.
   autoSendPromptSuggestion: false,
@@ -750,6 +796,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Seeding this with today's defaults would pin every command to this
   // release's chords and make future default improvements invisible.
   commandKeybindingOverrides: {},
+  hiddenExternalSkills: [],
   // Off (#973): the header quota indicator is opt-in for the public build;
   // the Usage command and modal are unaffected.
   usageHeaderEnabled: false,

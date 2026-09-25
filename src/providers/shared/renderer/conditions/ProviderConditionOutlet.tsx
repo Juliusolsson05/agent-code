@@ -6,12 +6,13 @@
 // codex/.../views.tsx), and this component just picks the right view registry
 // and feeds the snapshot to the ONE generic ConditionOutlet.
 //
-// WHY keep accepting `onSend` (not a sessionId):
-// TileLeaf already passes `send`, an onSend(data) callback bound to the active
-// session. Re-threading a sessionId here just to re-bind sendInput would be
-// strictly more plumbing for the same effect. makeDispatchFromOnSend wraps the
-// existing onSend so the dispatch pty arm calls onSend(data) — byte-for-byte
-// the exact send path the old outlets used.
+// WHY the surface hands in `onPtyAction` (not a sessionId): the outlet has one
+// job — pick the provider's views and draw the snapshot — and a pty choice is
+// WRITTEN differently by each surface that mounts it (#1177). TileLeaf writes
+// the action's bytes through its own sendConditionKey; the phone sends the
+// whole action so the desktop can verify it against the live menu. Both now
+// mount this one outlet; makeOutletDispatch routes the pty arm to whichever
+// write the surface passed.
 //
 // WHY this imports the capability-only registry instead of accepting a registry
 // prop from TileLeaf:
@@ -25,8 +26,9 @@
 
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
-import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
-import type { ConditionCustomAction } from '@shared/conditions-core/contract'
+import { makeOutletDispatch } from '@shared/conditions-core/dispatch'
+import type { ConditionRefusalReporter } from '@shared/conditions-core/dispatch'
+import type { ConditionCustomAction, ConditionPtyAction } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
 import type { RenderOutcomeRoute } from '@shared/types/renderShapes'
@@ -35,8 +37,12 @@ import type { ConditionDestination } from '@providers/registry.renderer.capabili
 type Props = {
   sessionId: string
   conditions: ProviderConditionSnapshot | null
-  onSend: (data: string) => Promise<void>
+  onPtyAction: (action: ConditionPtyAction) => Promise<void>
   onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
+  /** Where a REFUSED custom action is told to the user (#1070). Optional so a
+   *  surface that has nowhere to put it still renders; without one the refusal
+   *  is silent, which is the bug. */
+  onConditionRefused?: ConditionRefusalReporter
   interactionActive: boolean
 }
 
@@ -71,15 +77,16 @@ export function conditionOutcomeForDestination(
 export function ProviderConditionOutlet({
   sessionId,
   conditions,
-  onSend,
+  onPtyAction,
   onResolveCustom,
+  onConditionRefused,
   interactionActive,
 }: Props) {
   if (!conditions) return null
 
   const capabilities = getRendererProviderCapabilities(conditions.provider)
   const { conditionViews: registry, conditionPolicy } = capabilities
-  const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
+  const dispatch = makeOutletDispatch(onPtyAction, onResolveCustom, onConditionRefused)
 
   for (const [kind, condition] of Object.entries(conditions.conditions)) {
     if (!condition) continue

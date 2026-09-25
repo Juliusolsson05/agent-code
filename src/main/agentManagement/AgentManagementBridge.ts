@@ -14,10 +14,12 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type {
   AgentManagementRendererRequest,
   AgentManagementRendererResponse,
+  ManagedAgentActivitySource,
   ManagedAgentProject,
   ManagedAgentRecord,
   ManagedAgentRendererDescriptor,
   ManagedAgentRendererOutput,
+  ManagedAgentTarget,
   ManagedAgentTranscriptOutput,
 } from '@mcp/shared/agentManagementTypes.js'
 
@@ -101,7 +103,7 @@ export class AgentManagementBridge {
 
   async readAgent(params: {
     callerSessionId: string
-    sessionId: string
+    target: ManagedAgentTarget
     maxMessages?: number
     maxCharsPerMessage?: number
     maxCharsPerAgent?: number
@@ -122,7 +124,7 @@ export class AgentManagementBridge {
       throw new AgentManagementBridgeError(
         'transcript_unavailable',
         'No readable transcript evidence is currently available for the target.',
-        { sessionId: params.sessionId },
+        { sessionId: output.agent.sessionId },
       )
     }
     return output
@@ -131,6 +133,8 @@ export class AgentManagementBridge {
   async readAgents(params: {
     callerSessionId: string
     sessionIds?: string[]
+    labels?: string[]
+    names?: string[]
     includeCaller?: boolean
     maxMessagesPerAgent?: number
     maxCharsPerMessage?: number
@@ -191,9 +195,12 @@ export class AgentManagementBridge {
 
   async sendPrompt(params: {
     callerSessionId: string
-    sessionId: string
+    target: ManagedAgentTarget
     prompt: string
-  }): Promise<Extract<AgentManagementRendererResponse, { ok: true; type: 'send-prompt' }>['delivery']> {
+  }): Promise<Pick<
+    Extract<AgentManagementRendererResponse, { ok: true; type: 'send-prompt' }>,
+    'sessionId' | 'displayLabel' | 'delivery'
+  >> {
     let response: AgentManagementRendererResponse
     try {
       response = await this.request({
@@ -225,13 +232,19 @@ export class AgentManagementBridge {
         },
       })
     }
-    return response.delivery
+    // The resolved identity travels back with the delivery (#1145): a caller
+    // that addressed "B28" must be able to tell the user which agent that was.
+    return {
+      sessionId: response.sessionId,
+      displayLabel: response.displayLabel,
+      delivery: response.delivery,
+    }
   }
 
   async closeAgent(params: {
     callerSessionId: string
-    sessionId: string
-  }): Promise<{ closedSessionId: string }> {
+    target: ManagedAgentTarget
+  }): Promise<{ closedSessionId: string; displayLabel: string | null }> {
     // AUTHORIZATION LIVES IN THE RENDERER, at the line that mutates.
     //
     // The rule used to be prose in this tool's description — several sentences
@@ -259,7 +272,7 @@ export class AgentManagementBridge {
       ...params,
     })
     this.assertOk(response, 'close-agent')
-    return { closedSessionId: response.closedSessionId }
+    return { closedSessionId: response.closedSessionId, displayLabel: response.displayLabel }
   }
 
   resolve(response: AgentManagementRendererResponse): void {
@@ -397,7 +410,7 @@ export class AgentManagementBridge {
         'prompt_delivery_uncertain',
         'Prompt delivery timed out after dispatch. The outcome is unknown; do not retry automatically.',
         {
-          sessionId: request.sessionId,
+          ...targetDetails(request.target),
           retrySafe: false,
           disposition: 'outcome-unknown',
           promptSubmission: 'uncertain',
@@ -407,7 +420,7 @@ export class AgentManagementBridge {
     return new AgentManagementBridgeError(
       'renderer_unresponsive',
       `Agent-management renderer request timed out: ${request.type}`,
-      'sessionId' in request ? { sessionId: request.sessionId } : {},
+      'target' in request ? targetDetails(request.target) : {},
     )
   }
 
@@ -417,9 +430,9 @@ export class AgentManagementBridge {
     return new AgentManagementBridgeError(
       'renderer_unresponsive',
       'Agent Management is waiting for a timed-out renderer operation to finish; this request was not dispatched.',
-      'sessionId' in request
+      'target' in request
         ? {
-            sessionId: request.sessionId,
+            ...targetDetails(request.target),
             ...(request.type === 'send-prompt'
               ? {
                   retrySafe: true,
@@ -469,10 +482,11 @@ export class AgentManagementBridge {
     const descriptor: ManagedAgentRendererDescriptor = {
       agent: item.output.agent,
       ...(item.providerSessionId ? { providerSessionId: item.providerSessionId } : {}),
-      ...(item.transcriptActivityAt
-        ? { transcriptActivityAt: item.transcriptActivityAt }
-        : {}),
-      ...(item.runtimeActivityAt ? { runtimeActivityAt: item.runtimeActivityAt } : {}),
+      // The renderer's activity answer has to survive this hop: dropping it
+      // here is invisible, because `enrichDescriptor` would simply fall back
+      // to whatever candidate it still has and publish A number.
+      ...(item.lastActiveAt ? { lastActiveAt: item.lastActiveAt } : {}),
+      ...(item.lastActiveSource ? { lastActiveSource: item.lastActiveSource } : {}),
     }
     const [agent] = await this.enrichDescriptors([descriptor], observedAt)
     if (!agent) throw new Error('Agent Management output lost its inventory record.')
@@ -519,11 +533,41 @@ export class AgentManagementBridge {
       if (modifiedAt === null) transcriptPath = null
       else transcriptLastModifiedAt = modifiedAt
     }
+    // ── ONE RENDERER ANSWER, NOT TWO RAW FIELDS (#915) ──
+    // This used to recombine `transcriptActivityAt` and `runtimeActivityAt`
+    // itself, with a rule that differed from the TLDR peek footer's — so the
+    // footer and this inventory could report different "last active" times for
+    // the same agent. They diverged when the newest transcript entry carried no
+    // visible text: the footer counted it, this did not.
+    //
+    // `descriptor.lastActiveAt` is now the renderer's single answer, shared
+    // with the footer through `sessionActivity`, and it brings its own source
+    // label. WHY the label travels instead of being assigned here: this side
+    // sees one number and can only say where it arrived from, so labelling it
+    // `'runtime'` published a JSONL watermark — a real transcript record — as
+    // though it were a clock. `lastActivitySource` is cited as evidence by an
+    // auditing agent, so the citation has to be true (review of #1080).
+    //
+    // The other two candidates are main-side clocks the renderer does not
+    // have. They are NOT both "evidence the renderer cannot see", as an
+    // earlier version of this comment claimed:
+    //   - `transcriptLastModifiedAt` is a real stat of the file, genuinely
+    //     out of the renderer's reach;
+    //   - `backendActivityAt` is `SessionManager.markActivity`, a wall-clock
+    //     `Date.now()` fired from pty-data, screen frames, jsonl entries,
+    //     process state and more — all of which are also relayed to the
+    //     renderer. It IS a second opinion about the same facts, and a weak
+    //     one: the screen stamp is taken BEFORE the frame gate that exists
+    //     because most consecutive frames differ only in spinner chrome. It
+    //     stays because it is the only signal for a pane whose renderer
+    //     runtime was never hydrated, and `lastActivitySource: 'backend'` is
+    //     what tells a reader the answer rests on it. Narrowing it to the
+    //     signals the design doc counts is its own change, not this one's.
     const activityCandidates = [
-      { value: transcriptLastModifiedAt ?? descriptor.transcriptActivityAt, source: 'transcript' as const },
-      { value: descriptor.runtimeActivityAt, source: 'runtime' as const },
+      { value: transcriptLastModifiedAt, source: 'transcript' as const },
+      { value: descriptor.lastActiveAt, source: descriptor.lastActiveSource ?? 'runtime' },
       { value: backendActivityAt, source: 'backend' as const },
-    ].filter((item): item is { value: number; source: 'transcript' | 'runtime' | 'backend' } => (
+    ].filter((item): item is { value: number; source: ManagedAgentActivitySource } => (
       typeof item.value === 'number' && Number.isFinite(item.value)
     ))
     activityCandidates.sort((a, b) => b.value - a.value)
@@ -570,4 +614,16 @@ export class AgentManagementBridge {
   ): string {
     return `${descriptor.agent.kind}\u0000${descriptor.agent.cwd}\u0000${providerSessionId}`
   }
+}
+
+/**
+ * What a main-side failure can say about the target (#1145).
+ *
+ * WHY only a sessionId is ever reported: main never resolves labels or names
+ * (only the renderer has the row stream), so when a request dies in transit
+ * the one identity main can vouch for is an id the caller passed itself.
+ * Echoing an unresolved "B28" as `sessionId` would be a fabricated identity.
+ */
+function targetDetails(target: ManagedAgentTarget): { sessionId?: string } {
+  return target.sessionId ? { sessionId: target.sessionId } : {}
 }

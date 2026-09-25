@@ -1,3 +1,4 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
@@ -5,41 +6,24 @@ import {
   isAgentSessionKind,
   isProcessSessionKind,
 } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { panel, toggle } from '@renderer/features/command-palette/commandState'
-import {
-  commandTargetSessionId,
-  commandTargetSessionIdForState,
-} from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { isDetached } from '@renderer/workspace/queries'
-import {
-  buildVisibleDispatchRows,
-  detachedDispatchSessionIdsForTab,
-  selectVisibleDispatchRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
-import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
-import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import { isWorkingAgent } from '@renderer/workspace/agentFollow'
 
-/**
- * Buried panes visible from the CURRENT tab.
- *
- * The buried picker is deliberately tab-scoped (see the note in
- * CommandPalette's `buried` memo: a buried Codex agent from project A listed
- * beside a buried Claude agent from project B mixes contexts and invites
- * revive-into-the-wrong-tab). Admission has to use the same scope, or the row
- * appears for a tab with nothing to revive.
- */
-function buriedInActiveTab(workspace: CommandContext['workspace']): number {
-  const activeTabId = workspace.state.activeTabId
-  return workspace.state.buried.filter(entry => entry.sourceTabId === activeTabId).length
-}
-
+// DELETED with the unified layout (#992) — see RETIRED_COMMAND_IDS in
+// catalog.test.ts for the ledger:
+//   bury-pane / revive-pane / kill-buried-pane — "hide but keep alive" is the
+//     pool's default state now, so there is nothing to bury into or revive
+//     from; a session not shown in a lane is simply unplaced.
+//   attach-detached-to-grid / attach-all-detached-for-tab /
+//   detach-to-dispatch — there is no grid to attach into or detach from;
+//     showing a pool session is a lane selection.
 export const paneCommands: CommandDef[] = [
   {
     id: 'new-agent',
@@ -52,9 +36,9 @@ export const paneCommands: CommandDef[] = [
     // are surface-gated out of Dispatch.
     surface: 'app',
     title: 'New Agent…',
-    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. In **Dispatch**, agents become detached rows.',
-    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'terminal'],
-    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. New agents land in the pool with a **new** badge in the index; the focused lane is filled only when it is empty.',
+    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'pi', 'terminal'],
+    when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
   {
@@ -69,64 +53,56 @@ export const paneCommands: CommandDef[] = [
     // `dispatch`, not `app`: in the grid a project is a tab one keystroke away,
     // and a detached agent spawned from the grid lands nowhere visible — the
     // grid has no lanes to fill and Dispatch rows are not on screen.
-    surface: 'dispatch',
+    surface: 'workspace',
     // Title per docs/command-style.md: "New X" for creation, and the ellipsis
     // because the command asks for more input (agent, then project).
     title: 'New Agent In…',
-    // The scope sentence is there because it surprised the reviewer: in
-    // project-scope Dispatch, spawning into another project makes it the active
-    // project (createDetachedDispatchAgent selects what it creates), so the
-    // other lanes read "Not in this scope" until you switch back. That is the
-    // scope contract working — the new agent has to be visible — not a bug.
-    description: '**What it does:** Starts a **new agent in a project you choose** — in the focused lane in Grid Dispatch, or as a new Dispatch row.\n\n**Use when:** You want an agent for a different project than the one you last selected, e.g. to fill an empty lane.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those. In project-scoped Dispatch, choosing another project switches to it.',
-    keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode'],
+    // The Notes used to end with a scope sentence ("In project-scoped Dispatch,
+    // choosing another project switches to it"), because spawning into another
+    // project blanked every other lane until you switched back. With no
+    // layout-wide scope (#992) nothing blanks, so the warning went with it.
+    description: '**What it does:** Starts a **new agent in a project you choose**, in the focused lane.\n\n**Use when:** You want an agent for a different project than the one you last selected, e.g. to fill an empty lane.\n\n**Notes:** Pick the agent, then the project. A row limited to certain projects only offers those.',
+    keywords: ['new', 'agent', 'project', 'lane', 'fill', 'empty', 'dispatch', 'claude', 'codex', 'opencode', 'pi'],
     // Same data gate as New Agent…. Tiled Tabs covers Dispatch, so the lane the
     // agent would fill is not the thing on screen.
-    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    when: ({ workspace }) => Boolean(workspace.activeTab),
     run: ({ ui }) => ui.openNewAgentIn(),
   },
-  {
-    // `grid` surface — applies to split-vertical, split-horizontal,
-    // codex-vertical, codex-horizontal, terminal-horizontal and
-    // terminal-vertical below.
-    //
-    // WHY hide these in Dispatch even though `splitFocused` still
-    // *works* there: the title encodes a grid direction (Right / Down /
-    // Below) and Dispatch has no visible grid for that direction to
-    // mean anything. Worse, `splitFocused` ignores the direction in
-    // Dispatch entirely (pane.ts) — it just creates a detached agent —
-    // so `Split Pane Right` and `Split Pane Down` would be two palette
-    // rows doing the identical thing. Dispatch users create with
-    // `New Agent…` (surface `app`), which is direction-free by design.
-    // Power-user keybinds (⌥D etc.) still fire in Dispatch; only the
-    // misleading palette rows are gated.
-    id: 'split-vertical',
-    category: 'create',
-    // `app`, NOT `grid`. `splitFocused` has a full Dispatch branch that spawns a
-    // DETACHED agent (see the `dispatchSnapshot.dispatchMode` path), which is
-    // what this command's own description promises. `grid` made
-    // `surfaceAvailable` return false in Dispatch, so admission refused a mode
-    // the action implements.
-    //
-    // That was invisible until keybinds started routing through the gateway.
-    // Before, ⌥D was a hard-coded branch in useKeybinds that bypassed admission
-    // entirely and fired in both modes; the surface only hid the palette row.
-    // Routing the chord through admission fused "don't show this row here" with
-    // "refuse to run this here" — the exact split the governance plan exists to
-    // maintain — and ⌥D silently stopped working in Dispatch.
-    surface: 'app',
-    title: 'Split Pane Right',
-    description: '**What it does:** Creates a **new agent pane on the right**.\n\n**Use when:** You want side-by-side work in the grid.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    run: ({ workspace }) => workspace.splitFocused('vertical'),
-  },
-  {
-    id: 'split-horizontal',
-    category: 'create',
-    surface: 'app',
-    title: 'Split Pane Down',
-    description: '**What it does:** Creates a **new agent pane below**.\n\n**Use when:** You want a stacked grid layout.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    run: ({ workspace }) => workspace.splitFocused('horizontal'),
-  },
+  // The split-family commands (split-vertical/-horizontal, terminal-*, the
+  // per-provider pairs) were grid-spatial: "Split Pane Right", the direction
+  // parameterized a tile-tree split. The tree is gone (#992), the direction
+  // argument with it, and every member of the family is the same action now:
+  // spawn a session (fill the focused lane if it is empty, else pool it).
+  //
+  // IDs AND CHORDS ARE KEPT (plan §5.4): ⌥D, ⌥⇧D, ⌥T, ⌥⇧T, ⌥C, ⌥⇧C keep
+  // firing what they always fired — a user's muscle memory and any persisted
+  // keybinding overrides key on the ids. Only the TITLES changed, because the
+  // old ones described a direction that no longer exists; a palette row whose
+  // title lies is worse than one whose id is historical.
+  //
+  // The "-horizontal" twins are palette-hidden ('advanced'): identical
+  // behavior to their "-vertical" sibling means two visible rows would be two
+  // names for one action, the exact confusion the old comment below this table
+  // used to describe. They stay RUNNABLE and rebindable for the ⌥⇧ chords.
+  ...[
+    {
+      id: 'split-vertical',
+      category: 'create' as const,
+      surface: 'app' as const,
+      title: `New ${getRendererProviderCapabilities(DEFAULT_PROVIDER).shortLabel}`,
+      description: `**What it does:** Starts a **${getRendererProviderCapabilities(DEFAULT_PROVIDER).shortLabel} agent** now, without opening a picker.\n\n**Use when:** You know which provider you want.\n\n**Notes:** Fills the focused lane when it is empty; otherwise the agent lands in the pool with a **new** badge in the index.`,
+      run: ({ workspace }: CommandContext) => workspace.splitFocused(),
+    },
+    {
+      id: 'split-horizontal',
+      category: 'create' as const,
+      surface: 'app' as const,
+      pickerVisibility: 'advanced' as const,
+      title: `New ${getRendererProviderCapabilities(DEFAULT_PROVIDER).shortLabel} (legacy id)`,
+      description: '**What it does:** Same as the **-vertical** command it predates.\n\n**Notes:** Kept runnable for the ⌥⇧ chord and old bindings; hidden from the default palette because it is a duplicate.',
+      run: ({ workspace }: CommandContext) => workspace.splitFocused(),
+    },
+  ],
   {
     id: 'close-pane',
     category: 'session',
@@ -136,18 +112,26 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Close Focused Session',
     keywords: ['pane', 'close pane'],
-    description: '**What it does:** Closes the **currently targeted pane or Dispatch row**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** In **Dispatch**, the highlighted row is the close target.',
-    run: ({ workspace }) => workspace.closeFocused(),
-  },
-  {
-    id: 'bury-pane',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    surface: 'session',
-    title: 'Bury Session',
-    keywords: ['pane'],
-    description: '**What it does:** Hides the pane but keeps the **session alive**.\n\n**Use when:** You want it out of the layout without killing it.\n\n**Notes:** Buried panes can be revived later.',
-    run: ({ workspace }) => workspace.requestBuryFocused(),
+    description: '**What it does:** Closes the **currently targeted session**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** The focused lane\'s agent is the close target.',
+    // No `when` for the palette (unchanged): closeFocused itself resolves the
+    // focused target and no-ops without one. With an explicit target (#1180)
+    // the command is offered only while that agent still exists.
+    when: ({ workspace, target }) => target === undefined || commandTarget({ workspace, target }) !== null,
+    run: ({ workspace, target }) => {
+      if (target === undefined) {
+        workspace.closeFocused()
+        return
+      }
+      // closeSession, not closeFocused: closeFocused re-resolves FOCUS, which
+      // would close the agent in the focused lane instead of the right-clicked
+      // row. closeSession is the one close path, so every safety rule still
+      // applies unchanged: an idle agent closes with Undo, a live agent or a
+      // linked cascade asks first. A menu click is not pre-confirmation.
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return
+      void workspace.closeSession(sessionId, { killCaller: 'close.context-menu' })
+    },
+    contextMenu: { group: 'close', order: 10, title: 'Close Agent' },
   },
   {
     id: 'linked-agent',
@@ -155,8 +139,8 @@ export const paneCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Linked Agent…',
-    description: '**What it does:** Starts a new agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is a normal Dispatch agent. It renders directly under the parent and closes automatically when the parent closes.',
-    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex', 'opencode'],
+    description: '**What it does:** Starts a new agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is an ordinary pool agent. It renders directly under the parent and closes automatically when the parent closes.',
+    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex', 'opencode', 'pi'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -169,36 +153,6 @@ export const paneCommands: CommandDef[] = [
       const kind = workspace.state.sessions[sessionId]?.kind
       if (!isAgentProviderKind(kind)) return
       ui.openLinkedAgent(sessionId)
-    },
-  },
-  {
-    // Promote the dispatch-focused detached session into the active
-    // tab's grid via the existing placement-target picker. Available
-    // only when Dispatch Mode is active AND its current focus is on a
-    // detached session (grid-focused rows in the dispatch list don't
-    // need attaching — they're already attached).
-    id: 'attach-detached-to-grid',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `dispatch` surface: the old `when` opened with
-    // `if (!workspace.dispatchMode) return false`. That mode check now
-    // lives in the registry's surface gate, so `when` only carries the
-    // data condition (the focused row is a detached session).
-    surface: 'dispatch',
-    title: 'Attach Detached Session to Grid…',
-    description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
-    keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
-    when: ({ workspace }) => {
-      const target = resolveDispatchAttachTarget(workspace.state)
-      if (!target) return false
-      return isDetached(workspace.state, target.sessionId)
-    },
-    run: ({ workspace, ui }) => {
-      if (!workspace.dispatchMode) return
-      const target = resolveDispatchAttachTarget(workspace.state)
-      if (!target) return
-      if (!isDetached(workspace.state, target.sessionId)) return
-      ui.openDispatchAttach(target)
     },
   },
   {
@@ -221,9 +175,9 @@ export const paneCommands: CommandDef[] = [
     // `dispatch` surface replaces the old `when: Boolean(dispatchMode)`
     // guard — pins are a Dispatch-list concept and the registry gate
     // now hides this in the grid.
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Pin Sessions…',
-    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
+    description: '**What it does:** Opens the multi-select Pin modal to choose which agents and terminals stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents or terminals to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive every project switch.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch', 'terminal'],
     getState: ({ flags }) => panel(flags.pinAgentsOpen),
     run: ({ ui, flags }) => {
@@ -233,6 +187,35 @@ export const paneCommands: CommandDef[] = [
       }
       ui.openPinAgents()
     },
+  },
+  {
+    // Pin ONE agent (#1180). The Pin Sessions… modal is a multi-select editor
+    // for the whole pinned list; this is its single-agent counterpart, added
+    // so the right-click menu and the palette offer the same actions (Unpin
+    // Session below was already single-agent). Appends to the end of the
+    // pinned order, which is where the modal would put a newly toggled pin.
+    id: 'pin-agent',
+    category: 'layout-dispatch',
+    surface: 'workspace',
+    title: 'Pin Session',
+    description: '**What it does:** Pins the targeted agent or terminal to the Pinned section at the top of the agent list.\n\n**Use when:** You want one agent always one keystroke away, regardless of project.\n\n**Notes:** Use **Pin Sessions…** to reorder or pin several at once.',
+    keywords: ['pin', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return false
+      // Mirrors pinSession's own guard (dispatch.ts): it silently keeps an
+      // extension view out of the pinned list, so offering Pin for one would
+      // be a menu item that does nothing.
+      const meta = workspace.state.sessions[sessionId]
+      if (!meta || !isProcessSessionKind(meta.kind)) return false
+      return !workspace.state.pinnedSessionIds.includes(sessionId)
+    },
+    run: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return
+      workspace.pinSession(sessionId)
+    },
+    contextMenu: { group: 'identity', order: 30 },
   },
   {
     // Quick-remove counterpart to pin-agents. Targets the currently
@@ -251,124 +234,42 @@ export const paneCommands: CommandDef[] = [
     category: 'layout-dispatch',
     // `dispatch` surface carries the mode gate; `when` keeps only the
     // data condition (the focused row is currently pinned).
-    surface: 'dispatch',
+    surface: 'workspace',
     title: 'Unpin Session',
-    description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
+    description: '**What it does:** Removes the currently focused row\'s agent from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused lane\'s agent is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       return workspace.state.pinnedSessionIds.includes(sessionId)
     },
-    run: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       workspace.unpinSession(sessionId)
     },
-  },
-  {
-    // Available in BOTH grid and Dispatch modes. The original gate was
-    // `dispatchCommandTabId`, which returned null whenever the workspace
-    // was not in Dispatch — that was the wrong shape for this command.
-    // Detached agents can outlive a Dispatch session (you can leave
-    // Dispatch with agents still parked), and the natural recovery flow
-    // is "from the regular grid, bring my parked agents back into this
-    // tab." Forcing the user to flip into Dispatch first was friction
-    // with no upside. In Dispatch we still delegate to the dispatch-
-    // aware resolver so global Dispatch can target the focused row's
-    // tab (which may differ from `activeTabId`).
-    id: 'attach-all-detached-for-tab',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `app`, NOT `dispatch`: this command deliberately works in both
-    // modes (see the comment above) — detached agents outlive Dispatch,
-    // and the recovery flow is "from the grid, bring my parked agents
-    // back." Surface-gating it to `dispatch` would break that. Its
-    // `when` already hides it when there is nothing to attach.
-    surface: 'app',
-    title: 'Attach All Dispatch Sessions for Tab',
-    description: '**What it does:** Moves all detached **Dispatch** sessions for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background work into view.\n\n**Notes:** Preserves the existing grid and adds the sessions beside it. Works in both Grid and Dispatch modes.',
-    keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
-    when: ({ workspace }) => {
-      const tabId = attachAllCommandTabId(workspace)
-      if (!tabId) return false
-      return detachedDispatchSessionIdsForTab(workspace.state, tabId).length > 0
-    },
-    run: ({ workspace }) => {
-      const tabId = attachAllCommandTabId(workspace)
-      if (!tabId) return
-      return workspace.attachAllDetachedForTab(tabId)
-    },
-  },
-  {
-    // The reverse of attach: take the focused grid pane out of the
-    // tile tree without killing it and add it to the dispatch
-    // detached bucket. The action side refuses the only-leaf-in-tab
-    // case; this `when` check gates on an actual grid leaf so the command
-    // does not show for a session that is already detached.
-    id: 'detach-to-dispatch',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `session`: works in both modes against the Dispatch-aware target
-    // (the `when` below requires that target to be a real grid leaf).
-    surface: 'session',
-    title: 'Detach Session to Dispatch',
-    description: '**What it does:** Moves a grid session into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** The last pane in a tab cannot be detached.',
-    keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
-    when: ({ workspace }) => {
-      // Use the Dispatch-aware target resolver, not tab.focusedSessionId.
-      // tab.focusedSessionId has a "must be a leaf in tab.root" invariant
-      // — i.e. it's grid-only. In Dispatch Mode the user has a row
-      // selected, not a grid focus, and reading tab.focusedSessionId
-      // silently misses that selection: the command would either gate
-      // off entirely or target a stale grid leaf. The action itself
-      // (`workspace.detachFocusedToDispatch`) already routes through
-      // the Dispatch-aware target; this gate must agree or the palette
-      // shows/hides the command for the wrong reason.
-      if (!workspace.activeTab) return false
-      const sessionId = commandTargetSessionIdForState(workspace.state)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const owner = workspace.state.tabs.find(tab => collectLeaves(tab.root).includes(sessionId))
-      return Boolean(meta && owner)
-    },
-    run: ({ workspace }) => workspace.detachFocusedToDispatch(),
+    contextMenu: { group: 'identity', order: 31 },
   },
   {
     id: 'terminal-horizontal',
     category: 'create',
-    // `app`, and the two reasons for that have accumulated:
-    //
-    // 1. This was originally `grid` because a terminal split from Dispatch
-    //    landed in a grid the user could not see immediately, so the "Right"
-    //    label pointed at nothing visible. The intent was to hide the palette
-    //    ROW while, as the old comment put it, "power-user keybinds still work
-    //    because they route through splitFocused". They stopped working:
-    //    keybinds now go through the execution gateway, which applies
-    //    `surfaceAvailable`, so `grid` refused ⌥T in Dispatch as well as hiding
-    //    it. Between a slightly odd palette row and a dead chord the user has
-    //    muscle memory for, the row is the cheaper cost — and `surface` is an
-    //    APPLICABILITY declaration, which this command genuinely satisfies in
-    //    both modes. Mode-conditional row hiding, if it is still wanted, needs
-    //    its own mechanism rather than borrowing this one.
-    //
-    // 2. The "points at nothing visible" premise is gone anyway (#671): a
-    //    Dispatch terminal is now a detached Dispatch row that lands in the
-    //    focused lane, so the command has a visible result in both modes. Only
-    //    the direction argument is inert under Dispatch — same as every other
-    //    creation command there.
+    // `app`: a terminal applies everywhere the workspace runs. The id keeps
+    // its historical "-horizontal" suffix (and the ⌥T chord) even though the
+    // direction died with the tile tree (#992) — see the split-family note
+    // above for why ids are frozen while titles stopped lying.
     surface: 'app',
-    title: 'New Terminal Right',
-    description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal becomes a Dispatch row in the focused row or lane’s project.',
-    run: ({ workspace }) => workspace.splitFocused('vertical', 'terminal'),
+    title: 'New Terminal',
+    description: '**What it does:** Starts a **plain shell** in the focused lane\'s project.\n\n**Use when:** You need a scratch shell beside your agents.\n\n**Notes:** Fills the focused lane when it is empty; otherwise it lands in the pool with a **new** badge in the index.',
+    run: ({ workspace }) => workspace.splitFocused('terminal'),
   },
   {
     id: 'terminal-vertical',
     category: 'create',
     surface: 'app',
-    title: 'New Terminal Below',
-    description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal becomes a Dispatch row in the focused row or lane’s project.',
-    run: ({ workspace }) => workspace.splitFocused('horizontal', 'terminal'),
+    pickerVisibility: 'advanced',
+    title: 'New Terminal (legacy id)',
+    description: '**What it does:** Same as **New Terminal**.\n\n**Notes:** Kept runnable for the ⌥⇧T chord and old bindings; hidden from the default palette because it is a duplicate.',
+    run: ({ workspace }) => workspace.splitFocused('terminal'),
   },
   // Per-provider split commands, generated for every registered agent
   // provider EXCEPT the default (#394 phase 4). The default provider
@@ -380,138 +281,49 @@ export const paneCommands: CommandDef[] = [
   // etc. so user keybinding overrides keyed on command ids survive).
   ...AGENT_PROVIDER_KINDS.filter(kind => kind !== DEFAULT_PROVIDER).flatMap(kind => {
     const caps = getRendererProviderCapabilities(kind)
-    const chord = caps.splitShortcutKey
     return [
       {
         id: `${kind}-vertical`,
-        // `app` for the same reason as split-vertical: splitFocused spawns a
-        // detached agent in Dispatch, so the command applies in both modes.
+        // `app` for the same reason as the generic create: one workspace, one
+        // spawn flow. Id keeps its historical "-vertical" suffix (plan §5.4).
         surface: 'app' as const,
-        // Same category/tier as the generic and terminal splits they sit
-        // beside: creating a named-provider pane is not a more advanced act
+        // Same category/tier as the generic and terminal creates they sit
+        // beside: creating a named-provider agent is not a more advanced act
         // than creating a default one, it just names the provider.
         category: 'create' as const,
-        title: `New ${caps.shortLabel} Right`,
-        description: `**What it does:** Opens a **${caps.shortLabel} agent on the right**.\n\n**Use when:** You want ${caps.shortLabel} beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
+        title: `New ${caps.shortLabel}`,
+        // #1102: a disabled provider keeps its chord (keybinding tables are
+        // static) but the command declines to run — the honest cheap
+        // behavior until command visibility becomes flag-driven.
+        when: () => enabledAgentProviderKindsSnapshot().has(kind),
+        description: `**What it does:** Starts a **${caps.shortLabel} agent** now, without opening a picker.\n\n**Use when:** You know which provider you want.\n\n**Notes:** Fills the focused lane when it is empty; otherwise the agent lands in the pool with a **new** badge in the index.`,
         run: ({ workspace }: CommandContext) =>
-          workspace.splitFocused('vertical', kind),
+          workspace.splitFocused(kind),
       },
       {
         id: `${kind}-horizontal`,
-        // `app` for the same reason as split-vertical: splitFocused spawns a
-        // detached agent in Dispatch, so the command applies in both modes.
         surface: 'app' as const,
         category: 'create' as const,
-        title: `New ${caps.shortLabel} Below`,
-        description: `**What it does:** Opens a **${caps.shortLabel} agent below**.\n\n**Use when:** You want ${caps.shortLabel} in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
+        pickerVisibility: 'advanced' as const,
+        title: `New ${caps.shortLabel} (legacy id)`,
+        when: () => enabledAgentProviderKindsSnapshot().has(kind),
+        description: `**What it does:** Same as **New ${caps.shortLabel}**.\n\n**Notes:** Kept runnable for the ⌥⇧ chord and old bindings; hidden from the default palette because it is a duplicate.`,
         run: ({ workspace }: CommandContext) =>
-          workspace.splitFocused('horizontal', kind),
+          workspace.splitFocused(kind),
       },
     ]
   }),
-  {
-    // `grid` surface — applies to nav-left/right/up/down below.
-    //
-    // WHY this is a real fix and not just a label tidy-up: in Dispatch
-    // `workspace.navigate()` walks `tab.root` grid focus, which Dispatch
-    // does not drive. When the Dispatch selection is a detached session
-    // it diverges from grid focus entirely and these commands were a
-    // SILENT NO-OP (issue #228). Dispatch row navigation is ⌥↑/⌥↓ (and,
-    // after this change, ⌥J/⌥K) — handled directly in useKeybinds.
-    id: 'nav-left',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Left',
-    description: '**What it does:** Focuses the pane to the **left**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('left'),
-  },
-  {
-    id: 'nav-right',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Right',
-    description: '**What it does:** Focuses the pane to the **right**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('right'),
-  },
-  {
-    id: 'nav-up',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Up',
-    description: '**What it does:** Focuses the pane **above**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('up'),
-  },
-  {
-    id: 'nav-down',
-    category: 'navigate',
-    commandGroup: 'navigation',
-    surface: 'grid',
-    title: 'Focus Pane Down',
-    description: '**What it does:** Focuses the pane **below**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    run: ({ workspace }) => workspace.navigate('down'),
-  },
+  // DELETED with the tile tree (#992): nav-left/right/up/down walked
+  // `tab.root` grid focus, and the tree no longer renders. Lane movement
+  // is ⌥←/⌥→ (focus within the row) and ⌥↑/⌥↓ (index walk), handled in
+  // useKeybinds and migrated into the command registry in stage 5.
   {
     id: 'undo-close',
     category: 'session',
     surface: 'app',
     title: 'Undo Close',
-    description: '**What it does:** Restores the most recent closed **pane, tab, or Dispatch row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored **Dispatch** terminal re-attaches its tmux session, so its scrollback comes back.',
+    description: '**What it does:** Restores the most recent closed **session, project, or pool row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored terminal re-attaches its tmux session, so its scrollback comes back.',
     run: ({ workspace }) => workspace.undoClose(),
-  },
-  {
-    id: 'revive-pane',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    // `app`: buried panes are mode-independent state, and a revived
-    // session re-enters the grid tree — which also makes it a Dispatch
-    // row — so the command is meaningful from either mode.
-    surface: 'app',
-    title: 'Revive Buried Session…',
-    keywords: ['pane'],
-    description: '**What it does:** Restores a **buried live pane**.\n\n**Use when:** You parked a session and want it back.\n\n**Notes:** Opens a picker when multiple buried panes exist.',
-    keepPaletteOpen: true,
-    // Scoped to the ACTIVE TAB, matching the list the picker actually renders.
-    //
-    // This read `state.buried.length > 0` — the whole workspace — while the
-    // picker filters by `sourceTabId`, so both buried commands could be
-    // admitted from a tab with nothing buried and land the user on an empty
-    // list. Admission has to agree with what the command will show, or the
-    // command is advertising something it cannot deliver.
-    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
-    run: ({ ui, flags }) => {
-      // Already showing this mode? Dismiss. A mode-entering command whose
-      // second press re-enters the mode it is already in reads as a dead key,
-      // which is the same complaint that started this whole change.
-      if (flags.paletteMode === 'buried') {
-        ui.closePalette()
-        return
-      }
-      ui.enterBuriedMode()
-    },
-  },
-  {
-    id: 'kill-buried-pane',
-    category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
-    surface: 'app',
-    title: 'Kill Buried Session…',
-    description: '**What it does:** Permanently kills a **buried session**.\n\n**Use when:** You no longer need hidden background work.\n\n**Notes:** This is destructive.',
-    keywords: ['kill', 'buried', 'hidden', 'pane', 'session', 'pane'],
-    keepPaletteOpen: true,
-    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
-    run: ({ ui, flags }) => {
-      // Already showing this mode? Dismiss. A mode-entering command whose
-      // second press re-enters the mode it is already in reads as a dead key,
-      // which is the same complaint that started this whole change.
-      if (flags.paletteMode === 'kill-buried') {
-        ui.closePalette()
-        return
-      }
-      ui.enterKillBuriedMode()
-    },
   },
   {
     id: 'toggle-tail',
@@ -519,7 +331,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Auto-follow Focused Agent',
     keywords: ['tail'],
-    description: '**What it does:** Toggles **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection. Works in both the rendered feed and raw agent terminal views — in a terminal view the TUI output stays pinned to the bottom.',
+    description: '**What it does:** Toggles **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including the focused lane. Works in both the rendered feed and raw agent terminal views — in a terminal view the TUI output stays pinned to the bottom.',
     // NO `renderedViewPolicy` — deliberately: this command owns follow
     // behavior on BOTH agent surfaces now (Feed's tailMode on the rendered
     // surface, useTerminalFollow on the raw terminal — and, since #865, on
@@ -572,7 +384,6 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'toggle-tail-all',
     category: 'layout-dispatch',
-    pickerVisibility: 'advanced',
     // WHY 'app' and not 'session': this acts on the workspace, not on the
     // resolved command target. Same reasoning recorded for
     // `switch-agents-provider` — the user is acting across the workspace, not
@@ -580,7 +391,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Auto-follow All Visible Agents',
     description:
-      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Enabling this switches off Auto-follow All Working Agents. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
+      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — every agent in a visible lane of the current project. Panes you open afterward tail too, until you toggle it off. Enabling this switches off Auto-follow All Working Agents. Plain terminals and raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
     // WHY no `renderedViewPolicy` — Tail All is a stance over whatever is
     // mounted, on either agent surface (rendered feed or raw terminal view,
@@ -613,7 +424,7 @@ export const paneCommands: CommandDef[] = [
     category: 'navigate',
     surface: 'session',
     title: 'Jump to Latest Message',
-    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Works in agent feeds, raw agent terminal views and plain terminals. In a raw terminal view this scrolls the xterm viewport, which works for providers that render inline (Claude, Codex). A TUI that owns its own transcript on the alternate screen (OpenCode Terminal) keeps its history outside the viewport, so there is nothing here to scroll — use that TUI\'s own scroll keys.',
+    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Works in agent feeds, raw agent terminal views and plain terminals. OpenCode Terminal keeps its transcript inside its own view, so for it Agent Code asks OpenCode to jump, through OpenCode\'s own command route rather than its keyboard shortcut, whatever that shortcut is bound to.',
     // NO `renderedViewPolicy` — the xterm viewport answers jump requests too
     // (useTerminalFollow); gating on a rendered feed would hide this on
     // the surface where returning to the bottom is most often needed.
@@ -632,8 +443,8 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Last Response',
     description: '**What it does:** Copies the **latest assistant response**.\n\n**Use when:** You want the most recent answer quickly.\n\n**Notes:** No picker; copies immediately.',
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       // WHY hide this on non-agent panes: terminal output is not an assistant
       // transcript, and extractLastAssistantText intentionally reads provider
@@ -643,8 +454,8 @@ export const paneCommands: CommandDef[] = [
       // its committed entries, so there is a real last response to copy.
       return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
-    run: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const runtime = workspace.getRuntime(sessionId)
       const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
@@ -652,8 +463,17 @@ export const paneCommands: CommandDef[] = [
       if (text) {
         void navigator.clipboard.writeText(text)
         workspace.showPaneToast(sessionId, 'Copied to clipboard')
+        return
       }
+      // WHY say so instead of the old silent no-op: from the Sessions list
+      // right-click menu (#1180) the target is usually an agent that is not
+      // in a lane, and an agent hibernated since the last restart has never
+      // loaded its transcript into `runtime.entries` — so "nothing to copy" is
+      // a normal outcome there, not an edge case, and a click that does
+      // nothing reads as a broken menu.
+      workspace.showPaneToast(sessionId, 'No response to copy yet — open this agent to load it')
     },
+    contextMenu: { group: 'copy', order: 20 },
   },
   {
     id: 'clear-composer',
@@ -762,31 +582,8 @@ export const paneCommands: CommandDef[] = [
   },
 ]
 
-function dispatchCommandTabId(
-  workspace: CommandContext['workspace'],
-): string | null {
-  if (!workspace.dispatchMode) return null
-  if (workspace.dispatchMode.scope !== 'global') {
-    return workspace.state.activeTabId || null
-  }
-  const activeTab = workspace.activeTab
-  const row = selectVisibleDispatchRow(
-    buildVisibleDispatchRows(workspace.state),
-    // tiled-aware focus so the resolved tab follows the focused lane.
-    dispatchFocusedSessionId(workspace.dispatchMode),
-    activeTab?.focusedSessionId,
-  )
-  return row?.tabId ?? workspace.state.activeTabId ?? null
-}
-
-// Resolver for "attach all dispatch agents for tab" that works in BOTH
-// modes. In Dispatch we delegate to `dispatchCommandTabId` so global
-// Dispatch can target the focused row's tab (potentially != activeTabId).
-// Outside Dispatch we use the active tab — there is no dispatch focus
-// to consult and the user's only reasonable target is "this tab."
-function attachAllCommandTabId(
-  workspace: CommandContext['workspace'],
-): string | null {
-  if (workspace.dispatchMode) return dispatchCommandTabId(workspace)
-  return workspace.state.activeTabId || null
-}
+// `dispatchCommandTabId` and an attach-all resolver lived below until #992.
+// They picked the project a Dispatch-only command should act on (the active
+// tab in project scope, the focused row's tab in global scope). Their last
+// caller — Attach All Dispatch Agents — died with the tile tree in stage 3a,
+// and the scope they branched on died in 3b, so the helpers went with them.

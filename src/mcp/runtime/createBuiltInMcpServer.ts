@@ -22,10 +22,13 @@ import {
 import type {
   OrchestrationAgentKind,
   OrchestrationAgentOutput,
+  OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
+import { BROWSER_INSTRUCTIONS, registerBrowserTools } from '@mcp/runtime/browserTools.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
-import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import { BUILT_IN_MCP_DOMAINS, PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
@@ -36,21 +39,23 @@ import {
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
+import { MCP_SERVERS_INSTRUCTIONS, registerUserMcpTools } from '@mcp/runtime/userMcpTools.js'
+import { registerSkillsTools, SKILLS_INSTRUCTIONS } from '@mcp/runtime/skillsTools.js'
 
-export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
+export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request. When the user names an agent by the label shown beside it (such as B28) or by its spoken agent name, pass that as \`label\` or \`name\` exactly as the user said it instead of translating it to a sessionId yourself: it is resolved against what the user sees at the moment of the call. Labels are screen positions that renumber when earlier agents close, move or are pinned, so never reuse a label or sessionId remembered from earlier in the conversation, and repeat the returned displayLabel to the user so they can confirm which agent you reached. Session IDs also change when an agent reloads.`
 
 /**
  * Instructions for a session whose user enabled Root Agent Code Management.
  *
  * WHY the caller's own session ID is spelled out: the `ac_*` catalog can
- * close, bury, detach, reload and provider-switch ANY session, and the model
+ * close, reload and provider-switch ANY session, and the model
  * only knows itself as "this conversation". Naming the ID is the one fact
  * that lets it keep its own pane out of a reorganization. The authorization
  * language mirrors Agent Management's, with a wider allowed surface (placement
  * and focus) because reorganizing the workspace is the feature's purpose.
  */
 export function rootManagementInstructions(sessionId: string): string {
-  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities; use stable session and tab IDs, never pane labels. Your own Agent Code session ID is ${sessionId}: never close, bury, detach, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, bury, restore, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
+  return `Root Agent Code Management is enabled for this agent by an explicit user action confirmed in a dialog; it is off for every other agent. The ac_* tools are the application-wide operator control surface: every window, project tab, agent, terminal and layout in Agent Code, not only the caller's project. Start with ac_app_describe, then ac_app_observe or ac_app_windows for identities. Act on session and tab IDs: when the user names an agent by its visible label (such as B28) or its spoken name, resolve it with ac_agents_search (label or name, scoped to the window) and act on the sessionId it returns. Labels are screen positions that renumber when earlier agents close, move or are pinned. Session IDs change whenever an agent reloads, including the reload that enabled this capability, so re-read IDs instead of reusing ones from earlier in the conversation. Your own Agent Code session ID is ${sessionId}: never close, reload, rewind or switch the provider of that session. Prefer reads, make the smallest layout change that satisfies the user's current request, and re-read the layout revision after every mutation. Never close, kill, switch providers for, or prompt another agent unless the user's current request names that agent or that outcome; a request to organize, tidy or focus the workspace authorizes placement, focus, pin and title changes only. The app's own confirmation dialogs still apply, and a declined dialog is a refusal, not a reason to retry. When you finish, say exactly what you changed and where.`
 }
 
 export function createBuiltInMcpServer(
@@ -119,6 +124,34 @@ export function createBuiltInMcpServer(
         return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal update failed.' }), isError: true }
       }
     })
+
+    // #1182. Registered with `goal` rather than as its own domain: it only
+    // records a flag on the caller's own goal, and the user's bulk close still
+    // asks before anything closes, so a separate toggle would add a setting
+    // without adding safety. Same authority model as goal_set.
+    //
+    // The description carries the WHEN rule as well as the instructions do,
+    // for the same reason the close tool repeats its authorization rule:
+    // clients differ in how prominently they surface server instructions, and
+    // an early completion is exactly what would put a still-needed agent in
+    // the user's close list.
+    server.registerTool('goal_complete', {
+      title: 'Complete goal',
+      description: 'Mark your goal as achieved, with one plain sentence saying what was delivered. Call it only after the user has accepted the result (for example the PR is merged or the user said it is done) — never while a PR, review, CI or any requested work is still open. Setting a new goal with goal_set clears it.',
+      inputSchema: { summary: z.string().min(1).max(TLDR_MAX_CHARACTERS * 2) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ summary }) => {
+      try {
+        if (!dependencies.goalStore) throw new Error('Goal is unavailable.')
+        const record = await dependencies.goalStore.complete(
+          scope.tldrIdentity ?? scope.sessionId, summary,
+          dependencies.isTldrWriteAuthorized ?? (() => false),
+        )
+        return toolText({ ok: true, ...record })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Goal completion failed.' }), isError: true }
+      }
+    })
   }
 
   if (scope.domains.includes('goal_loop')) {
@@ -184,8 +217,21 @@ export function createBuiltInMcpServer(
     registerAiWorkspaceTools(server, scope, dependencies)
   }
 
+  if (scope.domains.includes('mcp_servers')) {
+    registerUserMcpTools(server, scope, dependencies)
+  }
+
+  if (scope.domains.includes('skills')) {
+    registerSkillsTools(server, scope, dependencies)
+  }
+
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
+  }
+
+  if (scope.domains.includes('browser')) {
+    // Registers nothing while Browser Pocket is off; see registerBrowserTools.
+    registerBrowserTools(server, scope, dependencies.browserPockets)
   }
 
   if (scope.domains.includes('workflows')) {
@@ -227,6 +273,9 @@ function builtInInstructions(
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('browser') && dependencies.browserPockets ? [BROWSER_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('skills') ? [SKILLS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]
       : []),
@@ -281,6 +330,55 @@ function registerGoalLoopTools(
   })
 }
 
+/**
+ * How a model names ONE Agent Management target (#1145).
+ *
+ * WHY three optional fields rather than one polymorphic string: a UUID, "B28"
+ * and "Apollo" can't collide today, but a single field would make every
+ * handler sniff the shape, and a name that happened to look like a label would
+ * silently change meaning. Separate fields keep the caller's intent explicit
+ * and the resolver's branches honest.
+ *
+ * WHY "exactly one" is enforced in the handler (targetFromArgs), not in zod:
+ * the SDK publishes a raw shape as the tool's JSON Schema; a `.refine` turns
+ * it into an effects schema whose properties are not advertised, and the model
+ * would lose the very field descriptions that tell it labels are accepted.
+ *
+ * The label regex is the one `ac_agents_search` uses, so both surfaces accept
+ * the same strings. Pinned `★N` labels are outside it on both — target a
+ * pinned agent by sessionId or name.
+ */
+const MANAGED_TARGET_FIELDS = {
+  sessionId: z.string().min(1).optional()
+    .describe('Agent Code session ID from agent_management_list_agents. Give exactly one of sessionId, label or name.'),
+  label: z.string().trim().regex(/^[A-Za-z]+[1-9]\d*$/).optional()
+    .describe('The label shown beside the agent right now, e.g. B28 (case-insensitive). Resolved against the live screen at call time; labels renumber when earlier agents close, so pass what the user just said rather than one remembered from earlier.'),
+  name: z.string().trim().min(1).max(120).optional()
+    .describe('Exact spoken agent name, e.g. "Apollo" (case-insensitive, never a substring). Only resolves while the Agent names setting is on.'),
+}
+
+function targetFromArgs(args: {
+  sessionId?: string
+  label?: string
+  name?: string
+}): { sessionId?: string; label?: string; name?: string } {
+  const target = {
+    ...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
+    ...(args.label !== undefined ? { label: args.label } : {}),
+    ...(args.name !== undefined ? { name: args.name } : {}),
+  }
+  if (Object.keys(target).length !== 1) {
+    // Refused before the bridge: an ambiguous request must not reach the
+    // renderer, where the send path may already wake the agent.
+    const error = new Error(
+      'Name the target with exactly one of sessionId, label or name.',
+    ) as Error & { code: string }
+    error.code = 'invalid_target'
+    throw error
+  }
+  return target
+}
+
 function registerAgentManagementTools(
   server: McpServer,
   scope: McpSessionScope,
@@ -321,7 +419,7 @@ function registerAgentManagementTools(
     {
       title: 'List Project Agents',
       description:
-        'Lists every Agent Code agent in the caller\'s exact project tab, including visible panes, detached Dispatch agents, and buried agents. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
+        'Lists every Agent Code agent in the caller\'s exact project, including the ones that are not in a lane. Each agent carries displayLabel (the label the user sees beside it, e.g. B28, or null) and agentName when Agent names is on. Labels are screen positions, not identities: to act on one, pass it as `label` to the other tools. Also returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -339,9 +437,9 @@ function registerAgentManagementTools(
     {
       title: 'Read Project Agent',
       description:
-        'Reads bounded visible user/assistant transcript output for one agent in the caller\'s project. It may hydrate durable history but never wakes a parked agent.',
+        'Reads bounded visible user/assistant transcript output for one agent in the caller\'s project, named by sessionId, visible label or spoken name. It may hydrate durable history but never wakes a parked agent.',
       inputSchema: {
-        sessionId: z.string(),
+        ...MANAGED_TARGET_FIELDS,
         maxMessages: z.number().int().min(1).max(100).optional(),
         maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
         maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
@@ -355,7 +453,7 @@ function registerAgentManagementTools(
     async args => response(async () => ({
       output: await bridge!.readAgent({
         callerSessionId: scope.sessionId,
-        sessionId: args.sessionId,
+        target: targetFromArgs(args),
         maxMessages: args.maxMessages,
         maxCharsPerMessage: args.maxCharsPerMessage,
         maxCharsPerAgent: args.maxCharsPerAgent,
@@ -371,6 +469,10 @@ function registerAgentManagementTools(
         'Bulk-reads bounded transcript output and inventory facts for selected agents, or all agents in the caller\'s project. Intended for questions such as “read all agents and tell me what looks safe to clean up.” This only recommends; it never closes or wakes agents.',
       inputSchema: {
         sessionIds: z.array(z.string()).max(200).optional(),
+        labels: z.array(MANAGED_TARGET_FIELDS.label.unwrap()).max(200).optional()
+          .describe('Visible labels (e.g. B28), resolved against the live screen at call time. Combined with sessionIds and names; any given list makes this an explicit selection.'),
+        names: z.array(MANAGED_TARGET_FIELDS.name.unwrap()).max(200).optional()
+          .describe('Exact spoken agent names; only resolve while Agent names is on.'),
         includeCaller: z.boolean().optional(),
         maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
         maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
@@ -386,6 +488,8 @@ function registerAgentManagementTools(
     async args => response(async () => await bridge!.readAgents({
       callerSessionId: scope.sessionId,
       sessionIds: args.sessionIds,
+      labels: args.labels,
+      names: args.names,
       includeCaller: args.includeCaller,
       maxMessagesPerAgent: args.maxMessagesPerAgent,
       maxCharsPerMessage: args.maxCharsPerMessage,
@@ -399,9 +503,9 @@ function registerAgentManagementTools(
     {
       title: 'Send Prompt To Project Agent',
       description:
-        'Sends a prompt to one other agent in the caller\'s project. This may wake a parked target; it cannot target the caller itself.',
+        'Sends a prompt to one other agent in the caller\'s project, named by sessionId, visible label (e.g. B28) or spoken name. Returns the resolved sessionId and displayLabel so you can tell the user which agent received it. This may wake a parked target; it cannot target the caller itself.',
       inputSchema: {
-        sessionId: z.string(),
+        ...MANAGED_TARGET_FIELDS,
         prompt: z.string().trim().min(1).max(500_000),
       },
       annotations: {
@@ -411,9 +515,9 @@ function registerAgentManagementTools(
       },
     },
     async args => response(async () => {
-      const delivery = await bridge!.sendPrompt({
+      const { sessionId, displayLabel, delivery } = await bridge!.sendPrompt({
         callerSessionId: scope.sessionId,
-        sessionId: args.sessionId,
+        target: targetFromArgs(args),
         prompt: args.prompt,
       })
       if (!delivery.ok) {
@@ -427,7 +531,8 @@ function registerAgentManagementTools(
         }
         error.code = 'prompt_delivery_failed'
         error.details = {
-          sessionId: args.sessionId,
+          sessionId,
+          displayLabel,
           retrySafe: delivery.retrySafe,
           stage: delivery.stage,
           code: delivery.code,
@@ -438,7 +543,7 @@ function registerAgentManagementTools(
         }
         throw error
       }
-      return { sessionId: args.sessionId, delivery }
+      return { sessionId, displayLabel, delivery }
     }),
   )
 
@@ -447,9 +552,9 @@ function registerAgentManagementTools(
     {
       title: 'Close Project Agent',
       description:
-        'Destructive. Call only when the current user explicitly asks to close this specific agent. Never infer close permission from task completion, inactivity, a request to assess what looks safe to clean up, an error, or permission to list/read/prompt agents. Closes exactly one other Agent Code agent in the caller\'s project and refuses self-close or any multi-session cascade.',
+        'Destructive. Call only when the current user explicitly asks to close this specific agent. Never infer close permission from task completion, inactivity, a request to assess what looks safe to clean up, an error, or permission to list/read/prompt agents. Closes exactly one other Agent Code agent in the caller\'s project, named by sessionId, visible label or spoken name, and refuses self-close or any multi-session cascade.',
       inputSchema: {
-        sessionId: z.string(),
+        ...MANAGED_TARGET_FIELDS,
       },
       annotations: {
         readOnlyHint: false,
@@ -459,7 +564,7 @@ function registerAgentManagementTools(
     },
     async args => response(async () => await bridge!.closeAgent({
       callerSessionId: scope.sessionId,
-      sessionId: args.sessionId,
+      target: targetFromArgs(args),
     })),
   )
 }
@@ -502,7 +607,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Read Agent Transcript File',
       description:
-        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents).',
+        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude, Codex or Pi transcript JSONL path (a Pi session file is read as its active branch), or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents).',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -536,7 +641,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Search Agent Transcript File',
       description:
-        'Searches one agent transcript and returns bounded normalized matches with optional surrounding context. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
+        'Searches one agent transcript and returns bounded normalized matches with optional surrounding context. `path` is a Claude, Codex or Pi transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -568,7 +673,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Inspect Agent Transcript File',
       description:
-        'Inspects one agent transcript and returns provider, timestamp, and item-count metadata without dumping content. `path` is a Claude or Codex transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
+        'Inspects one agent transcript and returns provider, timestamp, and item-count metadata without dumping content. `path` is a Claude, Codex or Pi transcript JSONL path, or `opencode://session/<id>` for an OpenCode session.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
@@ -792,6 +897,80 @@ function registerOrchestrationTools(
   scope: McpSessionScope,
   dependencies: BuiltInMcpDependencies,
 ): void {
+/**
+ * The `orchestration_create_agent` argument schema, named so the duplicate-call
+ * key below can be made exhaustive over it at compile time (#952 review, 6).
+ */
+const ORCHESTRATION_CREATE_AGENT_INPUT = {
+  kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
+  providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(),
+  prompt: z.string().optional(),
+  cwd: z.string().optional(),
+  title: z.string().optional(),
+  role: z.string().optional(),
+  runId: z.string().optional(),
+  inheritParentContext: z.boolean().optional().describe(
+    [
+      'Temporarily ignored.',
+      'Agent Code currently disables orchestration context inheritance because transcript duplication/translation was not stable enough for production child-agent work.',
+      'Pass all required context in the prompt until the inheritance path is redesigned.',
+    ].join(' '),
+  ),
+  // WHY derive this from the registry: child capability grants are an
+  // authority boundary. A hand-maintained schema can silently reject a
+  // newly registered domain or keep accepting one the runtime removed.
+  builtInMcpDomains: z.array(z.enum(BUILT_IN_MCP_DOMAINS)).optional(),
+}
+
+type OrchestrationCreateAgentArgs = {
+  [K in keyof typeof ORCHESTRATION_CREATE_AGENT_INPUT]?:
+    z.infer<(typeof ORCHESTRATION_CREATE_AGENT_INPUT)[K]>
+}
+
+/**
+ * Identity of one `orchestration_create_agent` call: two calls with the same
+ * key ask for the same thing and only one of them should happen (#952).
+ *
+ * ── WHY THE `Record<keyof …>` ──
+ * The key must cover EVERY argument. A field left out does not fail loudly;
+ * it silently collapses two calls that differ only in that field, and the
+ * caller never learns their job was dropped. Review found five such fields in
+ * the first version (`cwd`, `providerRuntime`, `runId`, `role`,
+ * `builtInMcpDomains`) — dropping `cwd` from the key would have handed a
+ * caller a child working in the wrong repository. Typing the object as
+ * `Record<keyof OrchestrationCreateAgentArgs, unknown>` turns the next added
+ * schema field into a compile error here instead.
+ *
+ * ── NORMALIZATION ──
+ * `builtInMcpDomains` is a SET on the wire but an array in JSON, so it is
+ * sorted: `['orchestration','tldr']` and `['tldr','orchestration']` request
+ * the same child. Absent and `[]` both mean "no domains" downstream
+ * (`sessionManager` gates on `length > 0`), so they normalize together.
+ * `inheritParentContext` is keyed at the value actually USED — the handler
+ * forces `false` — because the key names the child that will be built, and
+ * two calls that differ only there build identical children.
+ */
+function orchestrationCreateAgentCallKey(
+  parentSessionId: string,
+  args: OrchestrationCreateAgentArgs,
+): string {
+  const fields: Record<keyof OrchestrationCreateAgentArgs, unknown> = {
+    kind: args.kind ?? null,
+    providerRuntime: args.providerRuntime ?? null,
+    prompt: args.prompt ?? null,
+    cwd: args.cwd ?? null,
+    title: args.title ?? null,
+    role: args.role ?? null,
+    runId: args.runId ?? null,
+    inheritParentContext: false,
+    builtInMcpDomains: [...(args.builtInMcpDomains ?? [])].sort(),
+  }
+  return JSON.stringify([
+    parentSessionId,
+    ...Object.keys(fields).sort().map(name => fields[name as keyof typeof fields]),
+  ])
+}
+
   server.registerTool(
     'orchestration_create_agent',
     {
@@ -803,28 +982,22 @@ function registerOrchestrationTools(
           'The child currently starts from a clean provider conversation; include any necessary parent context directly in the prompt.',
           'Choose providerRuntime: "terminal" when the owner or user wants the provider\'s native TUI in the pane; the provider must support that runtime. Omit providerRuntime for the default structured runtime.',
         ].join(' '),
-      inputSchema: {
-        kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
-        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(),
-        prompt: z.string().optional(),
-        cwd: z.string().optional(),
-        title: z.string().optional(),
-        role: z.string().optional(),
-        runId: z.string().optional(),
-        inheritParentContext: z.boolean().optional().describe(
-          [
-            'Temporarily ignored.',
-            'Agent Code currently disables orchestration context inheritance because transcript duplication/translation was not stable enough for production child-agent work.',
-            'Pass all required context in the prompt until the inheritance path is redesigned.',
-          ].join(' '),
-        ),
-        // WHY derive this from the registry: child capability grants are an
-        // authority boundary. A hand-maintained schema can silently reject a
-        // newly registered domain or keep accepting one the runtime removed.
-        builtInMcpDomains: z.array(z.enum(BUILT_IN_MCP_DOMAINS)).optional(),
-      },
+      inputSchema: ORCHESTRATION_CREATE_AGENT_INPUT,
     },
-    async args => {
+    async requested => {
+      // Review round 2 (#1143): a child may not be handed a privileged domain
+      // its parent does not hold itself. Orchestration is on by default, so
+      // without this any ordinary agent — or a prompt injection reaching one —
+      // could spawn a child with mcp_servers (and install a server every
+      // future agent runs) or root_management (skipping its confirmation
+      // dialog). Clamped here, at the one place a model-chosen list enters.
+      const args = {
+        ...requested,
+        ...(requested.builtInMcpDomains
+          ? { builtInMcpDomains: requested.builtInMcpDomains.filter(domain =>
+              !PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has(domain) || scope.domains.includes(domain)) }
+          : {}),
+      }
       const bridge = dependencies.orchestrationBridge
       const manager = dependencies.sessionManager
       if (!bridge || !manager) {
@@ -835,128 +1008,189 @@ function registerOrchestrationTools(
         })
       }
 
-      const agent = await bridge.createAgent({
-        parentSessionId: scope.sessionId,
-        kind: args.kind as OrchestrationAgentKind,
-        ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
-        cwd: args.cwd,
-        title: args.title,
-        role: args.role,
-        runId: args.runId,
-        // WHY force clean children even if an older tool caller passes true:
-        // the inheritance implementation is intentionally disabled in this PR.
-        // Keeping the schema field avoids breaking stale provider tool caches,
-        // but honoring it would re-enable the broken clone/translate path.
-        inheritParentContext: false,
-        builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
-      })
-
-      if (args.prompt && args.prompt.trim().length > 0) {
-        const prompt = buildOrchestrationBootstrapPrompt({
-          task: args.prompt,
+      // One identical call at a time (#952). The whole invocation is the unit:
+      // create, deliver the bootstrap prompt and mark it delivered are one
+      // operation from the caller's side, and a duplicate must receive this
+      // call's RESULT rather than start a second child or collide with the
+      // first one's prompt delivery. `OrchestrationBridge.createCallsInFlight`
+      // carries the full reasoning, including why the prompt is in the key.
+      return await bridge.createAgentCallOnce(
+        orchestrationCreateAgentCallKey(scope.sessionId, args),
+        async () => {
+        const agent = await bridge.createAgent({
+          parentSessionId: scope.sessionId,
+          kind: args.kind as OrchestrationAgentKind,
+          ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
+          cwd: args.cwd,
+          title: args.title,
+          role: args.role,
+          runId: args.runId,
+          // WHY force clean children even if an older tool caller passes true:
+          // the inheritance implementation is intentionally disabled in this PR.
+          // Keeping the schema field avoids breaking stale provider tool caches,
+          // but honoring it would re-enable the broken clone/translate path.
+          inheritParentContext: false,
+          builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
         })
-        const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
-        if (!delivery.ok) {
-          let cleanupAttempted = false
-          let agentClosed = false
-          let cleanupError: string | undefined
-          // Duplicate safety and child health are independent. A warming
-          // timeout or trust dialog is safe to retry after recovery but the
-          // child is still valuable; deleting every retry-safe child turned a
-          // transient startup delay into permanent session loss. Only an
-          // explicit provider verdict that this session cannot be used again
-          // authorizes cleanup.
-          if (delivery.disposition === 'session-unusable') {
-            try {
-              cleanupAttempted = true
-              const cleanup = await bridge.closeAgent({
-                parentSessionId: scope.sessionId,
-                sessionId: agent.sessionId,
-              })
-              agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
-            } catch (err) {
-              cleanupError = err instanceof Error && err.message.length > 0
-                ? err.message
-                : 'Unknown orchestration cleanup failure.'
-            }
+
+        if (args.prompt && args.prompt.trim().length > 0) {
+          const prompt = buildOrchestrationBootstrapPrompt({
+            task: args.prompt,
+          })
+          const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
+          // A child that is not ready YET is not a failed child (#854).
+          //
+          // The run journal is unambiguous about which failure this is: of 55
+          // recorded bootstrap failures, 26 were "blocked by
+          // claude.trust-dialog" — the first-launch prompt an orchestration
+          // child in a fresh worktree hits every time, answered by a human in
+          // their own time — and 21 were "still warming
+          // (composer-unpainted)". Both clear on their own. Only 5 ever
+          // reached the absorption stage, so the large prompts this was blamed
+          // on were not the cause.
+          //
+          // Reporting those as an error made the caller's situation strictly
+          // worse: the disposition said `retry-same-session`, the parent
+          // retried immediately into the same not-ready window, and THAT
+          // attempt is the one that writes prompt bytes without Enter and
+          // leaves an orphaned draft the parent can only escape by closing the
+          // child. So instead the prompt waits for the composer, and the reply
+          // says so — the child is created, the brief is coming, and the
+          // parent is told not to send it again.
+          //
+          // The gate checks, the arming and the landing bookkeeping live in
+          // `armPromptWhenReady`, shared with `orchestration_send_prompt`
+          // (#1134) so the two paths cannot drift on the parts that decide
+          // whether a promise to the parent is kept.
+          if (!delivery.ok && armPromptWhenReady({
+            dependencies,
+            bridge,
+            manager,
+            parentSessionId: scope.sessionId,
+            sessionId: agent.sessionId,
+            prompt,
+            delivery,
+            // A create_agent prompt is always the bootstrap.
+            markBootstrapOnLanding: true,
+            incidentReason: 'create_agent_bootstrap_pending',
+            // Nothing can be waiting yet for a child that did not exist a
+            // moment ago, and a refusal here would be a real double-arm.
+            supersedesPendingPrompt: false,
+          })) {
+            return toolText({
+              ok: true,
+              agent,
+              // Not submitted, and not lost: the distinction the old reply
+              // could not make.
+              promptSubmitted: false,
+              promptPending: true,
+              promptPendingReason: delivery.message,
+              message: `The child was created and its prompt is waiting for its composer (${delivery.message}). It will be delivered as soon as the child can accept it — do not send it again; use orchestration_read_agent to see when it lands.`,
+            })
           }
-          dependencies.appRunJournal?.recordIncident({
-            kind: 'orchestration.prompt_delivery_failed',
-            severity: 'error',
-            reason: 'create_agent_bootstrap',
-            context: {
-              sessionId: agent.sessionId,
+          if (!delivery.ok) {
+            let cleanupAttempted = false
+            let agentClosed = false
+            let cleanupError: string | undefined
+            // Duplicate safety and child health are independent. A warming
+            // timeout or trust dialog is safe to retry after recovery but the
+            // child is still valuable; deleting every retry-safe child turned a
+            // transient startup delay into permanent session loss. Only an
+            // explicit provider verdict that this session cannot be used again
+            // authorizes cleanup.
+            if (delivery.disposition === 'session-unusable') {
+              try {
+                cleanupAttempted = true
+                const cleanup = await bridge.closeAgent({
+                  parentSessionId: scope.sessionId,
+                  sessionId: agent.sessionId,
+                })
+                agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
+              } catch (err) {
+                cleanupError = err instanceof Error && err.message.length > 0
+                  ? err.message
+                  : 'Unknown orchestration cleanup failure.'
+              }
+            }
+            dependencies.appRunJournal?.recordIncident({
+              kind: 'orchestration.prompt_delivery_failed',
+              severity: 'error',
+              reason: 'create_agent_bootstrap',
+              context: {
+                sessionId: agent.sessionId,
+                message: delivery.message,
+                stage: delivery.stage,
+                code: delivery.code,
+                retrySafe: delivery.retrySafe,
+                disposition: delivery.disposition,
+                promptWritten: delivery.promptWritten,
+                enterWritten: delivery.enterWritten,
+                cleanupAttempted,
+                agentClosed,
+                cleanupError,
+              },
+            })
+            return toolText({
+              ok: false,
+              error: 'prompt_delivery_failed',
               message: delivery.message,
-              stage: delivery.stage,
-              code: delivery.code,
               retrySafe: delivery.retrySafe,
               disposition: delivery.disposition,
-              promptWritten: delivery.promptWritten,
-              enterWritten: delivery.enterWritten,
+              // WHY omit the live agent object on bootstrap failure:
+              // `create_agent` is a two-step operation. By this point the
+              // renderer has already created a real provider session with PTY,
+              // proxy, JSONL watchers, and scoped MCP registration, but the
+              // caller receives an error and usually abandons the handle. Returning
+              // the full agent here made that half-created child look usable while
+              // leaving cleanup to memory and luck. The failure result now reports
+              // the session id plus cleanup outcome, and the child is best-effort
+              // closed before the error crosses the MCP boundary only when no
+              // bytes were written and the provider explicitly says the session
+              // itself is unusable. Retry safety alone intentionally preserves
+              // warming and user-resolvable children.
+              sessionId: agent.sessionId,
               cleanupAttempted,
               agentClosed,
               cleanupError,
-            },
-          })
-          return toolText({
-            ok: false,
-            error: 'prompt_delivery_failed',
-            message: delivery.message,
-            retrySafe: delivery.retrySafe,
-            disposition: delivery.disposition,
-            // WHY omit the live agent object on bootstrap failure:
-            // `create_agent` is a two-step operation. By this point the
-            // renderer has already created a real provider session with PTY,
-            // proxy, JSONL watchers, and scoped MCP registration, but the
-            // caller receives an error and usually abandons the handle. Returning
-            // the full agent here made that half-created child look usable while
-            // leaving cleanup to memory and luck. The failure result now reports
-            // the session id plus cleanup outcome, and the child is best-effort
-            // closed before the error crosses the MCP boundary only when no
-            // bytes were written and the provider explicitly says the session
-            // itself is unusable. Retry safety alone intentionally preserves
-            // warming and user-resolvable children.
-            sessionId: agent.sessionId,
-            cleanupAttempted,
-            agentClosed,
-            cleanupError,
-            // `false` is only truthful when no bytes crossed the boundary.
-            // Omit it for uncertainty so an orchestrator cannot interpret a
-            // late acknowledgement as permission to duplicate the task.
-            ...(delivery.retrySafe
-              ? { promptSubmitted: false }
-              : { promptSubmission: 'uncertain' as const }),
-          })
+              // `false` is only truthful when no bytes crossed the boundary.
+              // Omit it for uncertainty so an orchestrator cannot interpret a
+              // late acknowledgement as permission to duplicate the task.
+              ...(delivery.retrySafe
+                ? { promptSubmitted: false }
+                : { promptSubmission: 'uncertain' as const }),
+            })
+          }
+          bridge.notePromptSubmitted(agent.sessionId)
+          try {
+            return toolText({
+              ok: true,
+              agent: await bridge.markBootstrapPromptDelivered({
+                parentSessionId: scope.sessionId,
+                sessionId: agent.sessionId,
+              }),
+              promptSubmitted: true,
+            })
+          } catch (err) {
+            return toolText({
+              ok: true,
+              agent,
+              promptSubmitted: true,
+              bootstrapPromptDelivered: true,
+              bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
+                ? err.message
+                : 'Could not persist orchestration bootstrap delivery state.',
+            })
+          }
         }
-        bridge.notePromptSubmitted(agent.sessionId)
-        try {
-          return toolText({
-            ok: true,
-            agent: await bridge.markBootstrapPromptDelivered({
-              parentSessionId: scope.sessionId,
-              sessionId: agent.sessionId,
-            }),
-            promptSubmitted: true,
-          })
-        } catch (err) {
-          return toolText({
-            ok: true,
-            agent,
-            promptSubmitted: true,
-            bootstrapPromptDelivered: true,
-            bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
-              ? err.message
-              : 'Could not persist orchestration bootstrap delivery state.',
-          })
-        }
-      }
 
-      return toolText({
-        ok: true,
-        agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
-          .find(item => item.sessionId === agent.sessionId) ?? agent,
-        promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
-      })
+        return toolText({
+          ok: true,
+          agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
+            .find(item => item.sessionId === agent.sessionId) ?? agent,
+          promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
+        })
+        },
+      )
     },
   )
 
@@ -964,8 +1198,17 @@ function registerOrchestrationTools(
     'orchestration_send_prompt',
     {
       title: 'Send Prompt To Orchestration Agent',
+      // WHY the pending contract is in the description (#1134): the reply's
+      // `message` says it too, but a model deciding whether to call this tool
+      // AGAIN reads the description first, and "a newer prompt replaces a
+      // waiting one" is the rule it must know before it sends a second one.
       description:
-        'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
+        [
+          'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
+          'If the agent cannot take a prompt yet (still starting, waiting on a dialog, or busy with a turn) and its provider supports waiting, the prompt waits and the reply says promptPending: true; it lands when the agent is ready (after the current turn, for a busy agent). Do not send it again; orchestration_wait_agents keeps waiting while it is pending.',
+          'Providers that cannot wait return prompt_delivery_failed instead, and that prompt was not sent.',
+          'Sending another prompt to the same agent while one is waiting replaces the waiting one, and the reply says supersededPendingPrompt: true.',
+        ].join(' '),
       inputSchema: {
         sessionId: z.string(),
         prompt: z.string().refine(value => value.trim().length > 0, {
@@ -1038,7 +1281,81 @@ function registerOrchestrationTools(
             task: args.prompt.trim(),
           })
         : args.prompt.trim()
-      const delivery = await manager.deliverPromptToAgent(args.sessionId, prompt)
+      // `supersedesPendingPrompt` (#854 review): THIS caller is sending the
+      // child's brief by hand, so a brief still waiting for the composer is
+      // the same task and must not arrive twice. Every other delivery path —
+      // a human typing in the pane, the phone, the goal loop, compaction — is
+      // writing something else and leaves the waiting brief alone.
+      //
+      // Since #1134 the waiting prompt can also be an EARLIER send_prompt
+      // that went pending, and the rule is the same: the newest orchestration
+      // prompt wins, and at most one waits per session. The alternatives were
+      // worse — refusing a second send while one waits leaves a parent unable
+      // to correct a brief stuck behind a trust dialog without closing the
+      // child (and contradicts the create_agent → send_prompt rule above),
+      // and queueing both hands the child two tasks back-to-back with no
+      // ordering contract. What "latest wins" costs is that a DIFFERENT
+      // follow-up replaces the earlier one, so the reply says when that
+      // happened (`supersededPendingPrompt`), detected from the manager's
+      // `pending-superseded` record — emitted only when a waiter was really
+      // cancelled, never for one that had already started delivering.
+      let supersededPendingPrompt = false
+      const delivery = await manager.deliverPromptToAgent(
+        args.sessionId, prompt, undefined,
+        event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
+        undefined,
+        { supersedesPendingPrompt: true },
+      )
+      const superseded = supersededPendingPrompt ? { supersededPendingPrompt: true } : {}
+      // A child that is not ready YET (#1134): the same wait create_agent got
+      // in #854, for the same reason. The recorded corpus's largest single
+      // failure group is 36 `send_prompt / before-write / not-ready /
+      // retry-same-session` — a child waking from park or sitting behind a
+      // first-launch trust dialog — and the old reply's `retry-same-session`
+      // sent the parent straight back into that window, which is the retry
+      // that orphans a half-written draft.
+      //
+      // `supersedesPendingPrompt: true` on the ARM as well as on the direct
+      // attempt: the direct attempt cancelled any earlier waiter, but that
+      // waiter leaves the map only when its loop unwinds, and a gate that
+      // answers "blocked" synchronously can bring us here first. Without it
+      // this waiter would be refused as a duplicate right after the reply
+      // below promised the parent `promptPending: true`.
+      const armed = delivery.ok ? null : armPromptWhenReady({
+        dependencies,
+        bridge,
+        manager,
+        parentSessionId: scope.sessionId,
+        sessionId: args.sessionId,
+        prompt,
+        delivery,
+        // Only a wrapped prompt is the bootstrap. Marking a follow-up would
+        // be a lie in the other direction for nobody's benefit, and marking
+        // BEFORE landing would make every later send_prompt skip the handoff
+        // wrapper for a child that never received one.
+        markBootstrapOnLanding: shouldWrap,
+        incidentReason: 'send_prompt_pending',
+        supersedesPendingPrompt: true,
+      })
+      if (armed && !delivery.ok) {
+        return toolText({
+          ok: true,
+          sessionId: args.sessionId,
+          promptSubmitted: false,
+          promptPending: true,
+          promptPendingReason: delivery.message,
+          // Either supersede counts: the direct attempt's, or the arm's
+          // (a waiter that armed while the direct attempt was in the provider).
+          ...(supersededPendingPrompt || armed.supersededPendingPrompt
+            ? { supersededPendingPrompt: true }
+            : {}),
+          // WHY the wording names "busy" (#1134 review): a Codex child
+          // mid-turn answers not-ready too, and for it the prompt lands after
+          // the current turn, not after a startup — a parent reading
+          // "starting" would misjudge how long it waits.
+          message: `The agent cannot take a prompt yet (${delivery.message}), so the prompt is waiting: it will be delivered as soon as the agent can accept it — after it finishes starting, after a dialog is answered, or after its current turn if it is busy. Do not send it again. orchestration_wait_agents treats the agent as working until the prompt lands and it answers; orchestration_read_agent shows promptSubmitted once it lands. Sending another prompt to this agent before then REPLACES this one.`,
+        })
+      }
       if (!delivery.ok) {
         dependencies.appRunJournal?.recordIncident({
           kind: 'orchestration.prompt_delivery_failed',
@@ -1067,6 +1384,10 @@ function registerOrchestrationTools(
           enterWritten: delivery.enterWritten,
           promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
           sessionId: args.sessionId,
+          // Even a failed send may have replaced a waiting prompt: the
+          // supersede runs before the provider attempt. The parent has to
+          // know the earlier one is gone before it decides what to resend.
+          ...superseded,
         })
       }
       bridge.notePromptSubmitted(args.sessionId)
@@ -1084,10 +1405,11 @@ function registerOrchestrationTools(
             bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
               ? err.message
               : 'Could not persist orchestration bootstrap delivery state.',
+            ...superseded,
           })
         }
       }
-      return toolText({ ok: true, sessionId: args.sessionId })
+      return toolText({ ok: true, sessionId: args.sessionId, ...superseded })
     },
   )
 
@@ -1210,11 +1532,12 @@ function registerOrchestrationTools(
     {
       title: 'Wait For Orchestration Agents',
       description:
-        'Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true. To recover a truncated agent, re-read it with orchestration_read_agent and explicit larger caps, or use agent_transcript_read_file on its transcript.',
+        `Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. ONE CALL STOPS WAITING AFTER ${WAIT_AGENTS_MAX_WAIT_MS / 1000} SECONDS whatever timeoutMs asks for, then reads outputs once and replies; when it is cut short the reply carries done=false and, if any of your budget is left, remainingMs — call this again with that value to keep waiting. A cut-short reply can also carry outputsUnavailable=true, meaning the agents are reported but their outputs were not read in time; get them with orchestration_read_run_outputs. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true. To recover a truncated agent, re-read it with orchestration_read_agent and explicit larger caps, or use agent_transcript_read_file on its transcript.`,
       inputSchema: {
         runId: z.string().optional(),
         sessionIds: z.array(z.string()).optional(),
-        timeoutMs: z.number().int().min(1000).max(600000).default(30000),
+        timeoutMs: z.number().int().min(1000).max(600000).default(30000)
+          .describe(`How long you want to wait in total. One call stops waiting after ${WAIT_AGENTS_MAX_WAIT_MS / 1000} s; a larger value returns done=false with remainingMs, which is what you pass to the next call.`),
         pollIntervalMs: z.number().int().min(250).max(10000).default(1000),
         maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
         maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
@@ -1231,46 +1554,169 @@ function registerOrchestrationTools(
           message: 'Agent Code orchestration services are not available.',
         })
       }
-      const deadline = Date.now() + args.timeoutMs
-      let agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
-      if (args.sessionIds && args.sessionIds.length > 0) {
-        const wanted = new Set(args.sessionIds)
-        agents = agents.filter(agent => wanted.has(agent.sessionId))
-      }
-      while (Date.now() < deadline && agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))) {
-        await sleep(args.pollIntervalMs)
-        agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
-        if (args.sessionIds && args.sessionIds.length > 0) {
-          const wanted = new Set(args.sessionIds)
-          agents = agents.filter(agent => wanted.has(agent.sessionId))
-        }
-      }
-      const agentIds = new Set(agents.map(agent => agent.sessionId))
-      const outputs = await bridge.readRunOutputs({
-        parentSessionId: scope.sessionId,
-        runId: args.runId,
-        maxMessagesPerAgent: args.maxMessagesPerAgent,
-        maxCharsPerMessage: args.maxCharsPerMessage,
-        maxCharsPerAgent: args.maxCharsPerAgent,
-      }).then(outputs => outputs.filter(output => agentIds.has(output.agent.sessionId)))
-      // The `agents` status array below is part of the same tool response, so
-      // its JSON size is charged against maxTotalChars as reservedChars —
-      // otherwise wait_agents' real payload would exceed the budget by
-      // exactly the part the budget was never told about (#510 review).
-      // Status records carry no message bodies, so this reservation is small
-      // and proportional to agent count, not output size.
-      const bounded = boundOutputsToTotalChars(
-        outputs,
-        args.maxTotalChars,
-        JSON.stringify(agents).length,
-      )
-      return toolText({
-        ok: true,
-        done: !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState)),
-        agents,
-        outputs: bounded.outputs,
-        ...(bounded.truncated ? { truncated: true } : {}),
+      // WHY one call never waits the full requested timeout (#827): a
+      // foreground MCP tool call whose transport stops listening loses its
+      // reply outright. The children are unaffected, so the work is fine; what
+      // is gone is the caller's only record of it, and the flow falls back to
+      // polling `orchestration_list_agents` with no idea that is what
+      // happened. See WAIT_AGENTS_MAX_WAIT_MS for which numbers here are
+      // measured and which hazard this does NOT close.
+      //
+      // The reply already carried `done`, so the polling shape existed. This
+      // keeps the reply inside a window it can still be received in, and says
+      // `remainingMs` so the caller knows to call again — with a budget it does
+      // not have to compute — rather than concluding the children are stuck.
+      const startedAt = Date.now()
+      const cappedTimeoutMs = Math.min(args.timeoutMs, WAIT_AGENTS_MAX_WAIT_MS)
+      // Before the first `listAgents`, deliberately: that call is a round trip
+      // through the bridge, which serializes every orchestration request
+      // app-wide behind one in-flight slot and puts NO timer on the queue wait
+      // (the bridge's 30 s `TIMEOUT_MS` starts only once dispatch is granted).
+      // Starting the clock after it would let that wait be added to the cap
+      // rather than spent inside it.
+      const deadline = startedAt + cappedTimeoutMs
+      // One deadline for the WHOLE call, raced against every bridge read —
+      // not a bound on the sleeps between them.
+      //
+      // WHY the clamped sleep is not enough (#1089 review, round 2): the loop
+      // checks the deadline before the sleep and never during an `await`, so
+      // clamping the sleep alone left each `listAgents` free to run past it.
+      // Measured, with a bridge under the contention its own comments describe
+      // ("with 20 orchestrated children it is common for several wait/list
+      // calls to poll the same parent/run during the same quarter-second"):
+      // one call took 87,250 ms against a 30 s promise — past the SDK's 60 s
+      // default request timeout, which is the reported bug reproduced by its
+      // own fix.
+      //
+      // This is the shape `observations.wait` already uses
+      // (`src/main/control/waits.ts`), including its accepted cost: losing the
+      // race leaves a read in flight, because the bridge has no cancellation.
+      // Nothing is retried and nothing is mutated by these reads, so a
+      // stranded one costs a slot for its own duration and no more.
+      let expired = false
+      let stopWaiting!: () => void
+      const expiry = new Promise<typeof EXPIRED>(resolve => {
+        stopWaiting = () => resolve(EXPIRED)
       })
+      const expiryTimer = setTimeout(() => { expired = true; stopWaiting() }, cappedTimeoutMs)
+      // The measured cost of a bridge round trip on THIS call, used as the
+      // reserve the poll loop leaves for the final `readRunOutputs`. A fixed
+      // reserve would be another invented number; the last read's own duration
+      // is the only honest estimate available, and it grows automatically
+      // exactly when the bridge is congested.
+      let bridgeCostMs = 0
+      const withDeadline = async <T>(operation: Promise<T>): Promise<T | typeof EXPIRED> => {
+        const calledAt = Date.now()
+        const result = await Promise.race([operation, expiry])
+        bridgeCostMs = Math.max(bridgeCostMs, Date.now() - calledAt)
+        return result
+      }
+      const scopeAgents = (list: OrchestrationAgentRecord[]): OrchestrationAgentRecord[] => {
+        if (!args.sessionIds || args.sessionIds.length === 0) return list
+        const wanted = new Set(args.sessionIds)
+        return list.filter(agent => wanted.has(agent.sessionId))
+      }
+
+      try {
+        // `null` means NO READ SUCCEEDED, which is not the same as "no agents
+        // matched" and must never be reported as `done`. An empty list from a
+        // real read still means the run is finished; an empty list because the
+        // read lost the race means we know nothing.
+        let agents: OrchestrationAgentRecord[] | null = null
+        const first = await withDeadline(bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }))
+        if (first !== EXPIRED) agents = scopeAgents(first)
+        while (
+          !expired
+          && agents !== null
+          && agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))
+          // Stop polling once what is left would not cover another round trip
+          // plus the final read. Without this the loop spends the entire
+          // budget on polling and the reply's outputs are always the thing
+          // that gets dropped.
+          && Date.now() + bridgeCostMs * 2 < deadline
+        ) {
+          // Clamped to what is LEFT, not the raw interval. `pollIntervalMs` is
+          // schema-legal up to 10 s, so an unclamped sleep overshot the cap by
+          // a whole interval: measured 90_010 ms against a 90_000 ms cap.
+          await sleep(Math.min(args.pollIntervalMs, Math.max(0, deadline - Date.now())))
+          const next = await withDeadline(bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }))
+          if (next === EXPIRED) break
+          // The scope is re-applied on EVERY poll, not only the first read: a
+          // child created after the call started would otherwise join the set
+          // the caller explicitly named, and its activity would keep a
+          // `sessionIds` wait running past the agents it asked about.
+          agents = scopeAgents(next)
+        }
+        const agentIds = new Set((agents ?? []).map(agent => agent.sessionId))
+        const read = agents === null
+          ? EXPIRED
+          : await withDeadline(bridge.readRunOutputs({
+            parentSessionId: scope.sessionId,
+            runId: args.runId,
+            maxMessagesPerAgent: args.maxMessagesPerAgent,
+            maxCharsPerMessage: args.maxCharsPerMessage,
+            maxCharsPerAgent: args.maxCharsPerAgent,
+          }))
+        const outputs = read === EXPIRED
+          ? []
+          : read.filter(output => agentIds.has(output.agent.sessionId))
+        // The `agents` status array below is part of the same tool response, so
+        // its JSON size is charged against maxTotalChars as reservedChars —
+        // otherwise wait_agents' real payload would exceed the budget by
+        // exactly the part the budget was never told about (#510 review).
+        // Status records carry no message bodies, so this reservation is small
+        // and proportional to agent count, not output size.
+        const bounded = boundOutputsToTotalChars(
+          outputs,
+          args.maxTotalChars,
+          JSON.stringify(agents ?? []).length,
+        )
+        // `done` requires a read that actually happened. A list we never got
+        // is empty, and an empty list otherwise means "the run has finished" —
+        // the exact shape that tells a parent every child is done while one is
+        // still working.
+        const done = agents !== null && !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))
+        const elapsedMs = Date.now() - startedAt
+        const remainingMs = Math.max(0, args.timeoutMs - elapsedMs)
+        return toolText({
+          ok: true,
+          done,
+          agents: agents ?? [],
+          outputs: bounded.outputs,
+          // Only when the cap actually cut the wait short, there is still
+          // something to wait for, and what is left is a LEGAL next
+          // `timeoutMs`. Reporting it on a completed run would tell the caller
+          // to call again for children that are already done.
+          //
+          // The caller's UNSPENT budget, not the cap: reporting the cap made
+          // the caller reconstruct "how much of what I asked for is left" from
+          // an argument it had to remember. It is computed from real elapsed
+          // time, so the final read's cost comes out of that budget instead of
+          // vanishing from it.
+          //
+          // WHY the schema minimum is the floor for reporting it (#1089
+          // review, round 2): `timeoutMs` is `min(1000)`, and the description
+          // tells the caller to pass this straight back. A remainder of 500 —
+          // reachable from any `timeoutMs` whose remainder mod the cap lands
+          // under a second — then walked the documented recovery path into a
+          // hard `-32602` validation error. Omitting it says the same thing
+          // the `timeoutMs <= cap` case already says: your budget is spent.
+          ...(!done && cappedTimeoutMs < args.timeoutMs && remainingMs >= MIN_WAIT_AGENTS_TIMEOUT_MS
+            ? { remainingMs }
+            : {}),
+          // The call hit its own deadline with reads still outstanding. Said
+          // out loud because the reply is PARTIAL: without this a caller
+          // cannot tell "no outputs, the children produced none" from "no
+          // outputs, we ran out of time before reading them".
+          ...(agents === null ? { agentsUnavailable: true } : {}),
+          ...(read === EXPIRED && agents !== null ? { outputsUnavailable: true } : {}),
+          ...(bounded.truncated ? { truncated: true } : {}),
+        })
+      } finally {
+        // Always: an early return or a throw would otherwise leave a 30 s
+        // timer holding the event loop open after the reply was sent.
+        clearTimeout(expiryTimer)
+      }
     },
   )
 
@@ -1327,6 +1773,212 @@ function registerOrchestrationTools(
       return toolText({ ok: true, ...result })
     },
   )
+}
+
+// WHY 30 s and not the schema's 600 s maximum (#827): a foreground MCP tool
+// call has to return while its transport is still listening.
+//
+// WHAT IS MEASURED, and what is not. The first version of this cap was 90 s,
+// justified by "Claude Code backgrounds a tool call at 120 s". Review could
+// not find that threshold anywhere, and the vendored source says the opposite:
+// `vendor/claude-code-src/full/services/mcp/client.ts:211` sets
+// `DEFAULT_MCP_TOOL_TIMEOUT_MS = 100_000_000` (~27.8 h) and passes it at the
+// `callTool` site; backgrounding there belongs to shell and agent tasks, not
+// to MCPTool. So that number was invented, and a cap derived from it was a
+// guess wearing a fact's clothing.
+//
+// These are the numbers that are real, each checked in the tree:
+//
+//   - `@modelcontextprotocol/sdk` … /shared/protocol.js:8 —
+//     `DEFAULT_REQUEST_TIMEOUT_MSEC = 60000`, applied as
+//     `options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MSEC`. ANY client that does
+//     not override it kills the request at 60 s. This is the binding
+//     constraint, and the 90 s cap sat ABOVE it: the old cap turned an
+//     occasional loss into a guaranteed one for such a client. Claude Code
+//     overrides (above) and Codex uses 300 s
+//     (`vendor/codex-src/codex-rs/codex-mcp/src/rmcp_client.rs`), but
+//     `opencode` and `grok` also receive the `orchestration` domain and their
+//     client timeouts are NOT known — a compiled binary, not readable source.
+//     So the cap has to assume the default.
+//   - This repo already bounds its other long-poll at 30 s
+//     (`workflow_run_events`' `waitMs: …max(30_000)`), and the control
+//     capability `observations.wait` at 10 s. 30 s is the house number for
+//     "a tool call that blocks while a transport listens".
+//
+// 30 s therefore leaves half the SDK's default budget for the final
+// `readRunOutputs` round trip, which the bridge bounds at its own 30 s
+// (`OrchestrationBridge` TIMEOUT_MS).
+//
+// WHAT THIS DOES NOT FIX, stated so nobody mistakes the cap for a cure: the
+// reported drop is not clock-triggered. Our POST replies are SSE streams
+// (`BuiltInMcpHttpHost` builds `StreamableHTTPServerTransport` with no
+// `eventStore` and no `enableJsonResponse`), that stream carries ZERO bytes
+// for the whole call, and with no event store it is not resumable — so when a
+// client's SSE reconnects are exhausted the reply is gone for good. A shorter
+// wait shortens the exposure window; it does not close it. The mechanism fixes
+// are progress notifications or `enableJsonResponse: true`, neither verified
+// here — see #1091. Progress extends a client's timer only when that client
+// OPTS IN (`resetTimeoutOnProgress`, default false in the SDK): OpenCode does,
+// Claude Code does not. So it is a partial mitigation, not the cure it first
+// looked like.
+//
+// It is a CAP, not a new maximum: `timeoutMs` still accepts up to 600 s
+// because the number the caller passes is what it wants in total, and the
+// reply says when a call was cut short. Lowering the schema bound instead
+// would make every existing caller's request invalid rather than shorter.
+const WAIT_AGENTS_MAX_WAIT_MS = 30_000
+
+/**
+ * The schema's own floor for `timeoutMs`, named once so the handler can refuse
+ * to hand a caller a `remainingMs` the schema would then reject (#1089 review).
+ */
+const MIN_WAIT_AGENTS_TIMEOUT_MS = 1_000
+
+/**
+ * "This read lost the race against the call's deadline."
+ *
+ * A unique symbol rather than null/undefined because a bridge read can
+ * legitimately resolve to an empty array, and the difference between "no
+ * agents" and "we never found out" is what decides whether the reply may say
+ * `done`.
+ */
+const EXPIRED = Symbol('wait-agents-expired')
+
+/**
+ * Is this delivery failure "not ready YET" — a state that clears without
+ * anyone acting on the orchestration side (#854)?
+ *
+ * `retry-same-session` is a warming composer; `retry-after-resolve` is a gate
+ * something else has to clear, which in the recorded corpus is almost always
+ * Claude's first-launch trust dialog. Both are the prompt arriving early.
+ *
+ * Everything else — a session the provider calls unusable, an absorption or
+ * acceptance failure — is a real failure about a real attempt and must keep
+ * failing loudly. The `stage` check is what excludes those.
+ *
+ * The bytes check in front of it is DEFENCE IN DEPTH and unreachable today:
+ * review enumerated every `ok: false` shape the four provider paths can
+ * produce and none carries `stage: 'before-write'` together with written
+ * bytes. It stays because the consequence of the two ever meeting is a second
+ * copy of the same prompt — the orphaned-draft half of #854 rather than a fix
+ * for it — and a future provider that writes before it decides it is not ready
+ * would otherwise inherit that silently.
+ */
+function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): boolean {
+  if (delivery.promptWritten || delivery.enterWritten) return false
+  // The stage check is also what keeps the RESERVATION refusal out (#1134
+  // review). `delivery-in-flight` carries `disposition: retry-same-session`
+  // too, but it means another delivery to this child is running right now —
+  // quite possibly a waiter delivering this very brief. Treating that as "not
+  // ready yet" would queue a second copy behind it; it must stay a failure
+  // the parent sees. It has `stage: 'reservation'`, so it stops here.
+  if (delivery.stage !== 'before-write') return false
+  return delivery.disposition === 'retry-same-session' || delivery.disposition === 'retry-after-resolve'
+}
+
+/**
+ * Hold an orchestration prompt for a child that is not ready YET, and keep the
+ * books when it lands (#854, shared with send_prompt in #1134).
+ *
+ * Returns an object when the prompt is now waiting — the caller then owes the
+ * parent a `promptPending: true` reply and must not report a failure, and
+ * `supersededPendingPrompt` says whether arming replaced a waiting prompt.
+ * Returns `null` when this is not a wait-able failure, and the caller replies
+ * exactly as it did before the wait existed.
+ *
+ * WHY one helper for both tools: create_agent and send_prompt differ in their
+ * REPLIES (create returns the agent, send returns the session id), but the
+ * parts that decide whether a promise to the parent is kept must be the same
+ * code — which failures count as "early", which providers can be waited on,
+ * when the bootstrap is marked, what is journaled. Two copies of that is how
+ * one of them ends up marking the bootstrap before it lands.
+ *
+ * WHY `canWaitForPromptReadiness` decides BEFORE anything is promised (#854
+ * review): only Claude and Codex have a readiness gate to subscribe to.
+ * OpenCode and Grok report not-readiness as an ordinary failure, so promising
+ * a wait there replaced a retry the parent could act on with a silent loss it
+ * could not. For them this returns `false` and the old failure reply stands.
+ */
+function armPromptWhenReady(input: {
+  dependencies: BuiltInMcpDependencies
+  bridge: NonNullable<BuiltInMcpDependencies['orchestrationBridge']>
+  manager: NonNullable<BuiltInMcpDependencies['sessionManager']>
+  parentSessionId: string
+  sessionId: string
+  prompt: string
+  delivery: Extract<PromptDeliveryResult, { ok: false }>
+  /**
+   * Mark `orchestrationBootstrapPromptDelivered` when the prompt lands. Only
+   * when the prompt IS the bootstrap (create_agent always; send_prompt when it
+   * wrapped). Never before landing: every later send_prompt reads that flag
+   * to decide whether to wrap, so an early mark means a child that never got
+   * its handoff never gets it.
+   */
+  markBootstrapOnLanding: boolean
+  /** Journal reason for a wait that ends without a delivery. */
+  incidentReason: 'create_agent_bootstrap_pending' | 'send_prompt_pending'
+  /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
+  supersedesPendingPrompt: boolean
+}): { supersededPendingPrompt: boolean } | null {
+  const { dependencies, bridge, manager, delivery, sessionId } = input
+  if (
+    !isNotReadyYet(delivery)
+    || typeof manager.deliverPromptWhenReady !== 'function'
+    || manager.canWaitForPromptReadiness?.(sessionId) !== true
+  ) {
+    return null
+  }
+  // The manager reports a replaced waiter synchronously, before its first
+  // await, so this is settled by the time the call below returns.
+  let supersededPendingPrompt = false
+  const pending = manager.deliverPromptWhenReady(
+    sessionId,
+    input.prompt,
+    event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
+    input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : undefined,
+  )
+  // Visible to `list_agents` / `wait_agents` as `prompt_sent` until it
+  // settles (#1134 review) — see `PromptDeliveryMetadata.pendingPrompt`.
+  const pendingToken = bridge.notePromptPending(sessionId)
+  // Deliberately not awaited: the wait outlives the MCP call by design, and
+  // its whole purpose is that the caller does not have to hold a transport
+  // open for it. What IS awaited, later, is the bookkeeping — nothing is
+  // counted as submitted, and no bootstrap is marked, until it really landed.
+  void pending.then(async result => {
+    // Whatever the outcome, THIS waiter is no longer pending. Token-scoped:
+    // a waiter replaced by a newer one settles after the newer one armed.
+    bridge.notePromptPendingSettled(sessionId, pendingToken)
+    if (result.ok) {
+      bridge.notePromptSubmitted(sessionId)
+      if (input.markBootstrapOnLanding) {
+        await bridge.markBootstrapPromptDelivered({
+          parentSessionId: input.parentSessionId,
+          sessionId,
+        }).catch(() => undefined)
+      }
+      return
+    }
+    // A superseded wait lands here too (its message names the cause). That is
+    // recorded deliberately rather than filtered: the journal is where "the
+    // parent was told pending and that prompt never arrived" has to be
+    // countable, whatever the reason.
+    dependencies.appRunJournal?.recordIncident({
+      kind: 'orchestration.prompt_delivery_failed',
+      severity: 'error',
+      reason: input.incidentReason,
+      context: {
+        sessionId,
+        message: result.message,
+        stage: result.stage,
+        code: result.code,
+        retrySafe: result.retrySafe,
+        disposition: result.disposition,
+        promptWritten: result.promptWritten,
+        enterWritten: result.enterWritten,
+      },
+    })
+  })
+  return { supersededPendingPrompt }
 }
 
 // Cross-agent total budget for read_run_outputs / wait_agents (#373).

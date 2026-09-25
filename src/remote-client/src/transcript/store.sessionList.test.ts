@@ -1,3 +1,4 @@
+import type { SessionHistoryRequest } from '@shared/sessionFeed/types'
 import { describe, expect, it, vi } from 'vitest'
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 import type { HistoryChunkResult } from '../wire'
@@ -18,9 +19,9 @@ const summary = (sessionId: string) => ({ sessionId, kind: 'claude', alive: true
 function fixture() {
   const listeners = new Map<string, Set<(value: unknown) => void>>()
   let list: Array<ReturnType<typeof summary>> = []
-  const getHistory = vi.fn<(...args: unknown[]) => Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }>>()
-    .mockResolvedValue({ ok: true, chunk: page([]) })
-  const methods = { getHistory, getSessionList: () => list }
+  const loadHistory = vi.fn<(request: SessionHistoryRequest) => Promise<HistoryChunkResult>>()
+    .mockResolvedValue(page([]))
+  const methods = { loadHistory, getSessionList: () => list }
   const feed = new Proxy(methods, {
     get(target, key: string) {
       if (key in target) return target[key as keyof typeof target]
@@ -35,7 +36,7 @@ function fixture() {
   const store = new TranscriptStore(feed)
   const emit = (name: string, value: unknown) => { for (const cb of listeners.get(name) ?? []) cb(value) }
   return {
-    store, getHistory,
+    store, loadHistory,
     sessionList: (ids: string[]) => { list = ids.map(summary); emit('onSessionList', list) },
     live: (sessionId: string, entries: Array<Record<string, unknown>>) =>
       emit('onSessionJsonlEntries', { sessionId, entries: entries.map(entry => ({ entry, file: FILE })) }),
@@ -46,7 +47,7 @@ function fixture() {
 describe('session-list frames against a mounted view (#847)', () => {
   it('keeps a subscribed session across an early empty list and backfills on the started patch', async () => {
     const f = fixture()
-    f.getHistory.mockResolvedValue({ ok: true, chunk: page([raw(0), raw(1), raw(2)]) })
+    f.loadHistory.mockResolvedValue(page([raw(0), raw(1), raw(2)]))
     const unsub = f.store.subscribe('s1', () => {})
     // The view reads its first snapshot before the handshake list lands, as
     // useSyncExternalStore does on mount and as the integration test does
@@ -57,8 +58,8 @@ describe('session-list frames against a mounted view (#847)', () => {
     f.sessionList(['s1'])
 
     // Pre-fix: the empty list deleted the state AND the listener set, so the
-    // started patch found nothing to backfill and getHistory was never called.
-    await vi.waitFor(() => expect(f.getHistory).toHaveBeenCalledTimes(1))
+    // started patch found nothing to backfill and loadHistory was never called.
+    await vi.waitFor(() => expect(f.loadHistory).toHaveBeenCalledTimes(1))
     await vi.waitFor(() => expect(f.store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual(['u-0', 'u-1', 'u-2']))
     unsub()
   })
@@ -79,11 +80,11 @@ describe('session-list frames against a mounted view (#847)', () => {
 
   it('backfills a view that subscribed before the session existed anywhere', async () => {
     const f = fixture()
-    f.getHistory.mockResolvedValue({ ok: true, chunk: page([raw(0)]) })
+    f.loadHistory.mockResolvedValue(page([raw(0)]))
     const unsub = f.store.subscribe('s1', () => {})
     // No getSnapshot call, so no state exists when the list names the session.
     f.sessionList(['s1'])
-    await vi.waitFor(() => expect(f.getHistory).toHaveBeenCalledWith('s1', expect.anything()))
+    await vi.waitFor(() => expect(f.loadHistory).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' })))
     await vi.waitFor(() => expect(f.store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual(['u-0']))
     unsub()
   })

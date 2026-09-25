@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
+import { sweepAbandonedScratch } from '@main/storage/scratchSweep.js'
 import {
   collectSessionIds,
   emptyWorkspaceFile,
@@ -11,6 +12,7 @@ import {
   serializeWorkspaceFile,
   withoutWindow,
   withWindowSlice,
+  WORKSPACE_FILE_VERSION,
 } from '@main/storage/workspaceFile.js'
 import type {
   PersistedWindow,
@@ -53,6 +55,18 @@ export class WorkspaceFileStore {
    */
   private readOnlyReason: string | null = null
 
+  /**
+   * The exact bytes of an older-version file this store loaded, held until
+   * the first write upgrades it.
+   *
+   * WHY a one-time backup (#992 review): writing version 3 is one-way. Older
+   * builds refuse the result by design, and the renderer's v2→v3 migration
+   * drops v2-only layout (tile trees, ghost records). The only way back to a
+   * pre-stage build's workspace is the untouched original, so it is written
+   * once, beside the file, before it is replaced, and never again.
+   */
+  private preUpgradeOriginal: { text: string, fromVersion: number } | null = null
+
   // WHY the whole save transaction is queued, not just writeFile: unique temp
   // names prevent scratch-path ENOENT races, but they do not order the final
   // renames. An older renderer save can be delayed, rename after a newer save,
@@ -84,6 +98,26 @@ export class WorkspaceFileStore {
 
   static async open(): Promise<WorkspaceFileStore> {
     const store = new WorkspaceFileStore()
+    // WHY here rather than a timer, and WHY awaited: this is the one place in
+    // app startup that already owns the state directory, and it runs once
+    // before any window exists. It is NOT ordered against `load()` — nothing
+    // reads a scratch file, and an earlier version of this comment claimed
+    // otherwise (#1085 review, finding 7). It is awaited because it is cheap
+    // at the size this can reach: measured at 3–22 ms cold and ~0.3 ms warm on
+    // a real 48-file profile, against a leak of "a few a week". If a profile
+    // ever reaches thousands it should become fire-and-forget, the way
+    // `performanceTraceController.sweep()` already is.
+    //
+    // All four of the app's atomic-save writers are swept in one `readdir`,
+    // because all four share the directory and the defect (#1085 review,
+    // finding 5) — two clean up only in a `catch`, and AiWorkspaceRegistry not
+    // at all.
+    await sweepAbandonedScratch([
+      STATE_FILE,
+      `${STATE_DIR}/setup.json`,
+      `${STATE_DIR}/worktree-activity-index.json`,
+      `${STATE_DIR}/ai-workspaces.json`,
+    ])
     await store.load()
     return store
   }
@@ -117,10 +151,21 @@ export class WorkspaceFileStore {
       return
     }
     this.file = parsed.file
+    if (parsed.sourceVersion < WORKSPACE_FILE_VERSION) this.preUpgradeOriginal = { text, fromVersion: parsed.sourceVersion }
     if (parsed.migratedFromV1) {
       // eslint-disable-next-line no-console
       console.info('[workspace] migrated single-window workspace.json to the window format')
     }
+  }
+
+  /**
+   * Join saves admitted before this call. Their individual IPC receipts still
+   * carry publication failures; this tail is settlement, not a new save or an
+   * fsync guarantee. Revision-bound final renderer saves need the B02 prepare
+   * protocol and must not be inferred merely from reaching will-quit.
+   */
+  async drainAdmittedWrites(): Promise<void> {
+    await this.saveTail
   }
 
   /** The windows to restore at startup, in file order. */
@@ -258,6 +303,30 @@ export class WorkspaceFileStore {
       const serializeStartedAt = performance.now()
       const json = serializeWorkspaceFile(next)
       mainOperations.observe('persistence.serialize', performance.now() - serializeStartedAt)
+      if (this.preUpgradeOriginal) {
+        const backup = `${STATE_FILE}.pre-v${WORKSPACE_FILE_VERSION}-${Date.now()}.bak`
+        try {
+          // `wx`: never overwrite an existing backup, even a same-millisecond one.
+          await writeFile(backup, this.preUpgradeOriginal.text, { encoding: 'utf8', flag: 'wx' })
+          // eslint-disable-next-line no-console
+          console.info(`[workspace] kept the v${this.preUpgradeOriginal.fromVersion} original at ${backup} before upgrading`)
+          this.preUpgradeOriginal = null
+        } catch (error) {
+          // A failed backup must not block saving. That would cost the
+          // user's current session to protect a copy. It retries on the next
+          // save and is warned about here, so it is not silently skipped.
+          //
+          // The partial file goes (#1013 verification review): a full disk
+          // fails the write AFTER `wx` created it, and each retry uses a new
+          // timestamp. The earliest "backup", the one a user would take as
+          // the original, was a 0-byte file. EEXIST is the exception: `wx`
+          // refused a file that already existed, which is someone's real
+          // backup and must stay.
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await unlink(backup).catch(() => undefined)
+          // eslint-disable-next-line no-console
+          console.warn('[workspace] could not write the pre-upgrade backup; will retry on next save', error)
+        }
+      }
       const finishWrite = mainOperations.begin('persistence.write')
       try {
         await writeFile(tmp, json, 'utf8')

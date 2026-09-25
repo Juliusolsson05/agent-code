@@ -81,7 +81,8 @@ type Draft = {
 
 const drafts: Draft[] = []
 let provider: string | null = null
-const PROVIDERS = new Set(['claude', 'codex', 'opencode', 'unknown'])
+// Every agent provider plus 'unknown' (Grok was missing; Pi added with it).
+const PROVIDERS = new Set(['claude', 'codex', 'opencode', 'grok', 'pi', 'unknown'])
 const MAX_RECORDINGS = 200
 const MAX_RECORDING_BYTES = 64 * 1024 * 1024
 const MAX_LINE_BYTES = 4 * 1024 * 1024

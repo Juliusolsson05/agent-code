@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
-import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
-import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
+import { AgentFeed } from '@renderer/features/feed/agent/AgentFeed'
+import { useAgentFeedModel } from '@renderer/features/feed/agent/useAgentFeedModel'
+import type { AgentFeedRuntime } from '@renderer/features/feed/agent/useAgentFeedModel'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
-import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
-import { conditionStateByKind } from '@shared/types/providerConditions'
-import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
-import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
-import type { ConditionAction, ConditionSnapshot } from '@shared/conditions-core/contract'
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
+import { phoneConditionHandlers } from './conditionDispatch'
 
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
@@ -57,16 +54,13 @@ export const EMPTY_MOBILE_COMPOSER_STATE: MobileComposerState = {
   error: null,
 }
 
-// One session, desktop-grade: this mounts the REAL desktop Feed component
-// (see the alias table in ../vite.config.ts — the phone renders the same
-// component tree the desktop does, with four documented stub
-// substitutions), driven by the TranscriptStore's minimal SessionRuntime.
-//
-// The prop mapping below mirrors TileLeaf.tsx:475-573, the desktop's own
-// runtime→Feed contract, minus the deliberately skipped subsystems
-// (ghosts, pickers, reader/tail modes — see the semantic-rendering design
-// doc). When TileLeaf's mapping changes, this file is the phone-side
-// mirror to revisit.
+// One session, desktop-grade. Since #1177 this mounts the desktop's OWN
+// agent feed: useAgentFeedModel (the runtime → paint mapping TileLeaf uses),
+// AgentFeed (the one place a runtime becomes Feed props) and the desktop's
+// ProviderConditionOutlet, fed by the TranscriptStore's runtime slice and
+// the phone's RendererHost. There is no longer a hand-kept mirror of
+// TileLeaf's prop map here to drift; what this file owns is the phone's
+// SHELL — header, reader mode, composer controller, dictation, peek.
 //
 // SessionFeedProvider wraps the tree because feed rows resolve their
 // session I/O through useSessionFeed (AskUserQuestionRow answers questions
@@ -159,30 +153,36 @@ export function SessionView({
 
   const provider = store.getKind(sessionId)
 
-  // Stage 3 cutover: the phone paints from the SAME ownership-ledger pipeline
-  // the desktop does. It used to rely on Feed's legacy deriveFeedRenderModel
-  // path (the only remaining consumer of it after the desktop flip); that
-  // path is deleted, so the phone must produce renderItemsOverride too. The
-  // ledger takes the DECLARED RuntimeRenderInput contract (#493 PR-2), so
-  // this view is honestly typed — the old `as unknown as SessionRuntime`
-  // cast over a fabricated partial object is gone; `semantic` is the store's
-  // REAL fold state. Only entries + semantic + phase differ across renders;
-  // ghosts is the frozen empty map (no optimistic plane on the phone) and
-  // lastJsonlEntryAt is irrelevant with no ghosts to invalidate.
+  // The desktop's own runtime → paint mapping (#1177, features/feed/agent):
+  // the same ledger rows, the same merged-entries fallback, the same
+  // provider-normalized conditions TileLeaf paints. The phone used to rebuild
+  // this by hand as a "mirror" of TileLeaf's prop map and had drifted from it.
+  // All the phone supplies is its runtime SLICE: a frozen empty ghost map
+  // (it has no optimistic plane), and the store's real fold state and
+  // producer-time cursor.
   //
   // Memo deps stay the turn mirrors plus bounded errors, NOT
   // transcript.semantic: the fold object also changes reference on
   // flows/log-only updates, and re-firing on those would recompute the
   // pipeline more often than the desktop does for the same stream.
-  const runtimeView = useMemo(
-    (): RuntimeRenderInput => ({
+  const feedRuntime = useMemo(
+    (): AgentFeedRuntime => ({
       entries: transcript.entries,
       semantic: transcript.semantic,
       ghosts: NO_GHOSTS,
       streamPhase: transcript.phase.streamPhase,
       streamPhasePendingToolName: transcript.phase.streamPhasePendingToolName,
       streamPhasePendingToolUseId: transcript.phase.streamPhasePendingToolUseId,
-      lastJsonlEntryAt: 0,
+      turnStartedAt: transcript.phase.turnStartedAt,
+      lastJsonlEntryAt: transcript.lastJsonlEntryAt,
+      toolUseIndex: transcript.toolUseIndex,
+      toolResultIndex: transcript.toolResultIndex,
+      toolIndexVersion: transcript.toolIndexVersion,
+      conditions: transcript.conditions,
+      subAgents: transcript.subAgents,
+      hasOlderHistory: transcript.hasOlderHistory,
+      loadingOlderHistory: transcript.loadingOlderHistory,
+      bootstrapping: transcript.bootstrapping,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
     [
@@ -193,24 +193,18 @@ export function SessionView({
       transcript.phase.streamPhase,
       transcript.phase.streamPhasePendingToolName,
       transcript.phase.streamPhasePendingToolUseId,
+      transcript.phase.turnStartedAt,
+      transcript.lastJsonlEntryAt,
+      transcript.toolIndexVersion,
+      transcript.conditions,
+      transcript.subAgents,
+      transcript.hasOlderHistory,
+      transcript.loadingOlderHistory,
+      transcript.bootstrapping,
     ],
   )
-  const ledgerFeedPlan = useLedgerFeedItems(runtimeView, provider, sessionId, {
-    toolUseIndex: transcript.toolUseIndex,
-    toolResultIndex: transcript.toolResultIndex,
-    version: transcript.toolIndexVersion,
-  })
-
-  const askUserQuestionState = useMemo(
-    () =>
-      transcript.conditions
-        ? (conditionStateByKind<ClaudeAskUserQuestionState>(
-            transcript.conditions,
-            'claude.ask-user-question',
-          ) ?? null)
-        : null,
-    [transcript.conditions],
-  )
+  const feedModel = useAgentFeedModel(feedRuntime, provider, sessionId)
+  const ledgerFeedPlan = feedModel.ledgerFeedPlan
 
   const sendPrompt = useCallback(() => {
     const submittedDraft = draft
@@ -299,29 +293,13 @@ export function SessionView({
     onError: setError,
   })
 
-  // The dispatch the generic ConditionOutlet drives. Same routing the old
-  // hand-rolled tap-bar used (pty -> structured replyWithPtyAction, custom ->
-  // resolveCondition), just expressed as the (action) => Promise<void> the
-  // core outlet expects. WHY the STRUCTURED replyWithPtyAction and not a raw
-  // sendInput: the phone wire refuses arbitrary bytes, and the pty reply must
-  // carry the action's own {id,label,data} so the desktop can verify it
-  // against the live condition menu — which is exactly why we mount the core
-  // ConditionOutlet directly and NOT ProviderConditionOutlet (its
-  // makeDispatchFromOnSend collapses the action to bytes and throws the id
-  // away). The error branches differ by result shape: pty replies carry
-  // `error`, custom resolutions carry `failedAtStep`.
-  const dispatch = useCallback(
-    async (action: ConditionAction): Promise<void> => {
-      setError(null)
-      if (action.kind === 'pty') {
-        const r = await feed.replyWithPtyAction(sessionId, action)
-        if (!r.ok) setError(r.error ?? 'Action failed — it may have expired.')
-      } else {
-        const r = await feed.resolveCondition(sessionId, action)
-        if (!r.ok) setError(r.failedAtStep ?? 'Action failed — it may have expired.')
-      }
-    },
-    [feed, sessionId],
+  // What the shared provider outlet needs from the phone: a pty choice goes
+  // out as the whole action for the desktop to verify, and every refusal
+  // lands on this screen's error line. Its own module so a test can drive it
+  // without mounting this screen — see the header of `conditionDispatch.ts`.
+  const conditionHandlers = useMemo(
+    () => phoneConditionHandlers(feed, sessionId, setError),
+    [feed, sessionId, setError],
   )
 
   const working = transcript.workingStatus
@@ -458,35 +436,12 @@ export function SessionView({
           </div>
         ) : (
         <div className="feed-host">
-          <Feed
+          <AgentFeed
             sessionId={sessionId}
             provider={provider}
-            renderItemsOverride={ledgerFeedPlan.items}
-            committedOperationDecisionOverride={ledgerFeedPlan.resolveOperation}
-            entries={transcript.entries}
-            streamPhase={transcript.phase.streamPhase}
-            streamPhasePendingToolName={transcript.phase.streamPhasePendingToolName}
-            streamPhasePendingToolUseId={transcript.phase.streamPhasePendingToolUseId}
-            turnStartedAt={transcript.phase.turnStartedAt}
-            semanticTurn={transcript.semanticTurn}
-            semanticHistory={transcript.semanticHistory}
-            toolUseIndex={transcript.toolUseIndex}
-            toolResultIndex={transcript.toolResultIndex}
-            toolIndexVersion={transcript.toolIndexVersion}
-            askUserQuestionState={askUserQuestionState}
-            // v2: the parent's live sub-agent fleet renders in-feed through
-            // the same SubAgentsContext the desktop uses — the channel was
-            // reserved on the wire since v1; the server now emits it.
-            subAgents={transcript.subAgents ?? undefined}
-            hasOlderHistory={transcript.hasOlderHistory}
-            loadingOlderHistory={transcript.loadingOlderHistory}
+            runtime={feedRuntime}
+            model={feedModel}
             onLoadOlderHistory={() => store.loadOlderHistory(sessionId)}
-            // Suspend per-append auto-scroll and the lazy-mount cascade
-            // while the initial backfill burst applies — the same contract
-            // the desktop's resume path uses. Without it the first 120
-            // entries paint per-append and jank exactly when the user
-            // opens a session.
-            bootstrapping={transcript.bootstrapping}
           />
         </div>
         ))}
@@ -509,12 +464,21 @@ export function SessionView({
             the feed's inline AskUserQuestionRow is mid-stream or malformed, the
             outlet still shows real, server-verified action buttons. The `.conditions`
             wrapper keeps the phone's sticky-above-composer placement. */}
-        {transcript.conditions && (
+        {/* The desktop's own condition outlet (#1177): the provider's
+            conditionViews registry (Claude/Codex permission, trust, approval,
+            AskUserQuestion views), fed the provider-NORMALIZED snapshot the
+            desktop draws. It is snapshot-driven, so even if the feed's inline
+            AskUserQuestionRow is mid-stream or malformed, the outlet still
+            shows real, server-verified action buttons. The `.conditions`
+            wrapper keeps the phone's sticky-above-composer placement. */}
+        {feedModel.normalizedConditions && (
           <div className="conditions">
-            <ConditionOutlet
-              snapshot={transcript.conditions as ConditionSnapshot}
-              registry={getRendererProviderCapabilities(transcript.conditions.provider).conditionViews}
-              dispatch={dispatch}
+            <ProviderConditionOutlet
+              sessionId={sessionId}
+              conditions={feedModel.normalizedConditions}
+              onPtyAction={conditionHandlers.onPtyAction}
+              onResolveCustom={conditionHandlers.onResolveCustom}
+              onConditionRefused={conditionHandlers.onConditionRefused}
               // The phone renders exactly one selected SessionView, unlike the
               // desktop's split-pane tree. Its inline condition is therefore
               // always the active keyboard owner while this view is mounted.

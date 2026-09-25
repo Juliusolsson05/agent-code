@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RemoteController } from './RemoteController.js'
 import type { RemoteSessionControl } from './RemoteServer.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 
 // RemoteController is what the desktop actually drives (via remote:* IPC):
 // one object owning the whole enable → pair → revoke → disable lifecycle.
@@ -34,13 +35,22 @@ function makeManager(): FakeManager {
   return emitter
 }
 
+/** A fake manager plus the tap main would build for it. The tap is left to
+ *  be collected with its throwaway emitter: it holds no timers or watchers
+ *  until an event arrives, and these tests emit none. */
+function managerDeps(): { manager: never; getFeedTap: () => SessionFeedTap } {
+  const manager = makeManager()
+  const tap = new SessionFeedTap(manager as never)
+  return { manager: manager as never, getFeedTap: () => tap }
+}
+
 let dir: string
 let controller: RemoteController
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'remote-controller-'))
   controller = new RemoteController({
-    manager: makeManager() as never,
+    ...managerDeps(),
     stateDir: dir,
   })
 })
@@ -51,6 +61,43 @@ afterEach(async () => {
 })
 
 describe('RemoteController lifecycle', () => {
+  it('joins an admitted slow enable and prevents publication after disposal', async () => {
+    let release!: () => void
+    const starting = new Promise<void>(resolve => { release = resolve })
+    const start = vi.fn(async () => { await starting; return { url: 'http://127.0.0.1:12345' } })
+    const stop = vi.fn(async () => undefined)
+    controller = new RemoteController({ ...managerDeps(), stateDir: dir,
+      createTransport: () => ({ start, stop }) })
+    const enabled = controller.enable().catch(error => error)
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    const settled = vi.fn()
+    const disposal = controller.dispose()
+    void disposal.then(settled)
+    expect(controller.dispose()).toBe(disposal)
+    await expect(controller.enable()).rejects.toThrow('shutting down')
+    expect(settled).not.toHaveBeenCalled()
+    release()
+    expect(await enabled).toBeInstanceOf(Error)
+    await disposal
+    expect(controller.getStatus()).toMatchObject({ enabled: false, url: null })
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('retains the exact failed transport owner for a later disposal retry', async () => {
+    const stop = vi.fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('transport release unconfirmed')).mockResolvedValue(undefined)
+    const createTransport = vi.fn(() => ({
+      start: async () => ({ url: 'http://127.0.0.1:12345' }), stop,
+    }))
+    controller = new RemoteController({ ...managerDeps(), stateDir: dir, createTransport })
+    await controller.enable()
+    await expect(controller.dispose()).rejects.toThrow('transport release unconfirmed')
+    await expect(controller.enable()).rejects.toThrow('shutting down')
+    await controller.dispose()
+    expect(stop).toHaveBeenCalledTimes(2)
+    expect(createTransport).toHaveBeenCalledOnce()
+  })
+
   it('starts disabled with no URL', () => {
     expect(controller.getStatus()).toMatchObject({ enabled: false, url: null })
   })

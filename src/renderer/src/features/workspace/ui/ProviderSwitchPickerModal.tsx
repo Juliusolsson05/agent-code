@@ -12,12 +12,15 @@ import {
 import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import {
   providerChoiceLabel,
-  providerSwitchChoices,
+  enabledProviderSwitchChoices,
   type AgentProviderChoice,
 } from '@renderer/workspace/providerChoices'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
+import { withVisibleControls } from '@shared/text/visibleControls'
+import { MISSING_PROVIDER_HINT, useMissingProviders } from '@renderer/features/setup/store'
 
 type Props = {
   open: boolean
@@ -37,11 +40,15 @@ export function ProviderSwitchPickerModal({
   const committingRef = useRef(false)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const sourceKind = isAgentProviderKind(meta?.kind) ? meta.kind : null
+  // #1102: enablement filter — a disabled provider is neither a valid
+  // destination nor (for a disabled source) worth offering escapes from.
+  const enabledKinds = useEnabledAgentProviderKinds()
   const choices = useMemo(
-    () => sourceKind ? providerSwitchChoices(sourceKind) : [],
-    [sourceKind],
+    () => sourceKind ? enabledProviderSwitchChoices(sourceKind, enabledKinds) : [],
+    [sourceKind, enabledKinds],
   )
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const missingProviders = useMissingProviders()
 
   useEffect(() => {
     if (!open) return
@@ -121,7 +128,9 @@ export function ProviderSwitchPickerModal({
           <DialogTitle>Switch Provider</DialogTitle>
           <DialogDescription asChild>
             <div>
-              <div>Current: {currentLabel}{cwdBase ? ` · ${cwdBase}` : ''}</div>
+              {/* Names the conversation being moved to another provider
+                  (#1049 re-review). */}
+              <div>Current: {withVisibleControls(currentLabel)}{cwdBase ? ` · ${withVisibleControls(cwdBase)}` : ''}</div>
               <div className="mt-0.5 text-[10px]">
                 Choose where this conversation should continue.
               </div>
@@ -157,7 +166,7 @@ export function ProviderSwitchPickerModal({
                 `}
               >
                 <div className="text-[12px] font-semibold text-ink">{choice.label}</div>
-                <div className="mt-0.5 text-[11px] text-muted">{choice.description}</div>
+                <div className="mt-0.5 text-[11px] text-muted">{missingProviders.has(choice.kind) ? MISSING_PROVIDER_HINT : choice.description}</div>
               </button>
             )
           })}

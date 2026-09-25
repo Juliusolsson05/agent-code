@@ -197,11 +197,32 @@ export type OpencodePermissionState = {
   metadata?: unknown
 }
 
+/** One question OpenCode is waiting on, parsed from the raw payload (#1025). */
+export type OpencodeQuestion = {
+  /** The question itself. */
+  question: string
+  /** Short heading OpenCode groups the question under; often absent. */
+  header?: string
+  /** What the user may choose. EMPTY means the provider offered nothing, in
+   *  which case the only honest action is Reject. */
+  options: { label: string; description?: string }[]
+}
+
 export type OpencodeQuestionState = {
   visible: boolean
   questionID?: string
   text?: string
   metadata?: unknown
+  /**
+   * The parsed questions, so the view renders from a typed field instead of
+   * re-reading `metadata` (#1025).
+   *
+   * WHY the runtime parses and the view does not: interpreting provider JSON is
+   * the runtime's job, and a second parser in the renderer would be the copy
+   * that drifts. `metadata` stays for diagnostics and for anything not yet
+   * modelled — the permission view still reads it that way.
+   */
+  questions?: OpencodeQuestion[]
 }
 
 export type OpencodeCondition =

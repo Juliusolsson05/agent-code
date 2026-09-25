@@ -23,6 +23,12 @@ import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/ex
 import { EventEmitter } from 'events'
 
 import { OpencodeHeadless } from 'opencode-headless'
+import {
+  OPENCODE_QUESTION_REJECT,
+  OPENCODE_QUESTION_REPLY,
+  parseOpencodeQuestions,
+  validateQuestionAnswers,
+} from './questionAnswers.js'
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 import type {
   CommittedEntryEvent,
@@ -53,8 +59,15 @@ import { mapOpenCodeSemanticEvent, OpenCodeBlockIndexTracker } from './semanticM
 // permission/question into the snapshot) and DISPATCHES (in
 // resolveCondition). Kept as constants so the two halves can never drift
 // — a rename that touches only one side is a compile error at the other.
+//
+// The two QUESTION names are imported rather than declared because since
+// #1025 a THIRD party knows them: the view composes a multi-question reply
+// and filters the runtime's per-option actions out of the footer by name. A
+// constant private to this file could not bind that half, so the names moved
+// to `questionAnswers.ts` — the one question module both processes import.
 const PERMISSION_REPLY = 'opencode.permission.reply'
-const QUESTION_REJECT = 'opencode.question.reject'
+const QUESTION_REJECT = OPENCODE_QUESTION_REJECT
+const QUESTION_REPLY = OPENCODE_QUESTION_REPLY
 
 // The three replies OpenCode's permission API accepts. Declared here so
 // resolveCondition can validate an inbound payload against it rather than
@@ -119,6 +132,8 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
   private readonly binary: string | undefined
   private readonly extraEnv: Record<string, string | undefined>
   private readonly resumeSessionId: string | null
+  /** See the assignment in start(). */
+  private liveSessionId: string | null = null
   private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
 
   constructor(options: SessionOptions) {
@@ -164,6 +179,18 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       sessionID: this.resumeSessionId ?? undefined,
     })
     this.headless = headless
+
+    // The live conversation's id. The package keeps its own copy private, and
+    // this is the only thing that can name the session row a prompt's model
+    // selection is read from (conversationSelection). A resume knows it up
+    // front; a fresh pane learns it when the server creates one.
+    this.liveSessionId = this.resumeSessionId ?? null
+    headless.on('ready', ({ sessionID }: { sessionID: string | null }) => {
+      if (sessionID) this.liveSessionId = sessionID
+    })
+    headless.on('session', (sessionID: string) => {
+      this.liveSessionId = sessionID
+    })
 
     headless.on('exit', ({ exitCode }) => {
       this.exited = true
@@ -349,32 +376,102 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       return
     }
     const questionID = state.questionID
+    const questions = parseOpencodeQuestions(state.metadata)
     const questionState: OpencodeQuestionState = {
       visible: true,
       questionID,
       text: state.text,
       metadata: state.metadata,
+      questions,
     }
-    // v1 is reject-only. opencode's question payload carries no parsed
-    // option list at this seam, so offering a real Reject that unblocks
-    // the turn beats guessing answer strings; structured answering
-    // (replyQuestion) is a follow-up that only touches this method and
-    // the QUESTION_* action names — the view already renders whatever
-    // actions arrive.
-    const actions: ConditionAction[] = [
-      {
-        kind: 'custom',
-        id: `${questionID}:reject`,
-        label: 'Reject',
-        name: QUESTION_REJECT,
-        payload: { questionID },
-      },
-    ]
+    // ── WHY ONE ACTION PER OPTION ONLY FOR A SINGLE QUESTION (#1025) ──
+    // `answers` is POSITIONAL — one entry per question, submitted once — so a
+    // multi-question prompt cannot be answered by a single click on one
+    // option. That case needs a selection per question and a submit, which is
+    // view state; the view composes a QUESTION_REPLY payload and
+    // `resolveConditionAction` validates it against these same options.
+    //
+    // The single-question case is the common one and stays a plain action, so
+    // the runtime remains the source of truth for what may be chosen and the
+    // view stays dumb for it.
+    const actions: ConditionAction[] = []
+    if (questions.length === 1) {
+      for (const option of questions[0]!.options) {
+        actions.push({
+          kind: 'custom',
+          id: `${questionID}:answer:${option.label}`,
+          label: option.label,
+          name: QUESTION_REPLY,
+          payload: { questionID, answers: [[option.label]] },
+        })
+      }
+    }
+    actions.push({
+      kind: 'custom',
+      id: `${questionID}:reject`,
+      label: 'Reject',
+      name: QUESTION_REJECT,
+      payload: { questionID },
+    })
     this.liveConditions.set('opencode.question', {
       kind: 'opencode.question',
       state: questionState,
       actions,
     })
+    this.emitConditionsSnapshot()
+  }
+
+  /**
+   * The live question, but ONLY if it is the one this payload is answering.
+   *
+   * ── WHY THE IDs MUST BE COMPARED (#1068 review, finding 2) ──
+   * An action carries the questionID it was BUILT with; `liveConditions`
+   * holds whatever question is current at RESOLVE time. Those are not the
+   * same thing, because `foldQuestion` overwrites the record in place when
+   * OpenCode replaces a question (`question.updated` and `question.asked`
+   * both land there), and a click can be in flight across that swap.
+   *
+   * Without this check the two halves came apart in the worst possible way:
+   * the answer was validated against the NEW question's options, sent to the
+   * OLD question's id, and then the new question's modal was torn down
+   * unanswered — so the user watched a prompt they were looking at vanish
+   * while a dead question received a reply they never gave it, and the agent
+   * waiting on the live one was left blocked with no UI to unblock it.
+   *
+   * A question that was fully CLEARED was already safe (no record → no
+   * options → the validator refuses). It is specifically replacement that
+   * slipped through, and only an id comparison catches it.
+   *
+   * Returning the record rather than a boolean is deliberate: the caller then
+   * physically cannot validate against one question and reply about another.
+   */
+  private liveQuestion(
+    payload: Record<string, unknown> | null,
+  ): { questionID: string; state: OpencodeQuestionState } | null {
+    const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
+    if (!questionID) return null
+    const live = this.liveConditions.get('opencode.question')
+    if (live?.kind !== 'opencode.question') return null
+    const state = live.state as OpencodeQuestionState
+    if (state.questionID !== questionID) return null
+    return { questionID, state }
+  }
+
+  /**
+   * Drop the question record, but only while it is still the one that was
+   * resolved.
+   *
+   * The old code deleted unconditionally. Between the `await` on the HTTP
+   * reply and this line OpenCode can publish a NEW question, and destroying
+   * that one leaves its agent blocked with nothing on screen to answer it.
+   * `liveQuestion` above guarantees the id matched when we started; this
+   * guarantees it still matches when we finish.
+   */
+  private clearResolvedQuestion(questionID: string): void {
+    const live = this.liveConditions.get('opencode.question')
+    if (live?.kind !== 'opencode.question') return
+    if ((live.state as OpencodeQuestionState).questionID !== questionID) return
+    this.liveConditions.delete('opencode.question')
     this.emitConditionsSnapshot()
   }
 
@@ -423,11 +520,37 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       return { ok: true }
     }
 
-    if (action.name === QUESTION_REJECT) {
-      const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
-      if (!questionID) return { ok: false, reason: 'invalid-payload' }
+    if (action.name === QUESTION_REPLY) {
+      // ── THE TRUST BOUNDARY (#1025) ──
+      // The view may COMPOSE a choice — it has to, because a multi-question
+      // prompt is answered as one positional set and that is selection state
+      // — but it must never INVENT one. `validateQuestionAnswers` checks every
+      // submitted label against the options THIS runtime published for that
+      // question, so a renderer cannot answer a question OpenCode did not ask
+      // or with a label it did not offer. It is a separate pure function so
+      // the boundary is testable without standing up a session.
+      const live = this.liveQuestion(payload)
+      if (!live) return { ok: false, reason: 'invalid-payload' }
+      const answers = validateQuestionAnswers(live.state.questions ?? [], payload?.answers)
+      if (!answers) return { ok: false, reason: 'invalid-payload' }
       try {
-        await this.headless.rejectQuestion(questionID)
+        await this.headless.replyQuestion(live.questionID, answers)
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'aborted',
+          failedAtStep: `question.reply: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+      this.clearResolvedQuestion(live.questionID)
+      return { ok: true }
+    }
+
+    if (action.name === QUESTION_REJECT) {
+      const live = this.liveQuestion(payload)
+      if (!live) return { ok: false, reason: 'invalid-payload' }
+      try {
+        await this.headless.rejectQuestion(live.questionID)
       } catch (err) {
         return {
           ok: false,
@@ -435,7 +558,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
           failedAtStep: `question.reject: ${err instanceof Error ? err.message : String(err)}`,
         }
       }
-      if (this.liveConditions.delete('opencode.question')) this.emitConditionsSnapshot()
+      this.clearResolvedQuestion(live.questionID)
       return { ok: true }
     }
 
@@ -457,7 +580,73 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // prompt() defaults sessionID to the active/ensured session, so a
     // fresh pane that never resumed still gets a session created on the
     // first prompt.
-    await this.headless.prompt({ prompt: text })
+    // The selection and the destination are ONE decision (#1038 re-review):
+    // the row read is async, and the live session can change while it is in
+    // flight — a reload, a switch, the TUI navigating away. Submitting with
+    // the default destination then sent session A's agent, model and variant
+    // to session B, which OpenCode persists onto B's row. Pin both together,
+    // or send neither.
+    const pinned = await this.conversationSelection()
+    await this.headless.prompt({ prompt: text, ...pinned })
+  }
+
+  /**
+   * The agent, model and variant THIS conversation runs on, read from its own
+   * session row immediately before a prompt.
+   *
+   * WHY the prompt has to carry them at all (#1038 review): OpenCode resolves
+   * a submission's model as `input.model ?? agent.model ?? session model`, so
+   * a machine-level `agent.build.model` outranks the session's own selection.
+   * A duplicated or rewound conversation therefore kept its model in every
+   * imported message and then answered the next prompt on whatever this
+   * machine's config named — which is the exact loss #1038 is about, one
+   * layer below the transcript. Reproduced against the 1.18.30 binary with
+   * `agent.build.model = opencode/big-pickle`.
+   *
+   * WHY agent AND model AND variant, never a subset: OpenCode persists what a
+   * prompt selects back onto the session row, so a partial selection MOVES
+   * the conversation — sending a model without an agent re-homes it to the
+   * default agent, permanently.
+   *
+   * WHY it is re-read per prompt instead of cached at start: the row is the
+   * source of truth and it changes underneath us — the TUI, another client or
+   * a model switch all write it. One local HTTP GET against a server on this
+   * machine is cheaper than a stale selection that silently re-homes the
+   * session. A failure or an unparseable row yields no selection at all,
+   * which is exactly the behaviour that shipped before this existed.
+   */
+  private async conversationSelection(): Promise<{
+    sessionID?: string
+    agent?: string
+    providerID?: string
+    modelID?: string
+    variant?: string
+  }> {
+    const sessionID = this.liveSessionId
+    if (!this.headless || !sessionID) return {}
+    const row = await this.headless.client.getSession(sessionID).catch(() => null)
+    // The session moved while the row was in flight. Its selection is not this
+    // session's to send, and sending it would write A's model onto B's row.
+    if (this.liveSessionId !== sessionID) return {}
+    if (!isRecord(row)) return {}
+    const model = isRecord(row.model) ? row.model : null
+    // The session row spells the model `id`, not `modelID` as a message does.
+    const text = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value : undefined
+    const modelID = text(model?.id)
+    const providerID = text(model?.providerID)
+    const variant = text(model?.variant)
+    const agent = text(row.agent)
+    // ALL FOUR or nothing (#1038 re-review found model+variant going without
+    // an agent, and agent+model going without a variant). OpenCode persists
+    // what a prompt selects back onto the row, so a partial selection does
+    // not merely under-specify this one submission — it REWRITES the
+    // conversation's own selection, permanently, to whatever the server fills
+    // the gaps with. A row that cannot answer all four is a row we do not
+    // act on; the server's own defaults then apply, exactly as they did
+    // before any of this existed.
+    if (!modelID || !providerID || !variant || !agent) return {}
+    return { sessionID, agent, modelID, providerID, variant }
   }
 
   async stop(): Promise<void> {
@@ -504,4 +693,9 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // / in attach mode.
     return this.headless?.processPid ?? null
   }
+}
+
+/** Narrow an unknown HTTP payload before reading fields off it. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }

@@ -3,6 +3,12 @@ import { join } from 'path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 import type { CliUpdateBehavior, CliUpdateKind } from '@shared/types/cliUpdate.js'
+import {
+  coerceOpencodeUsageSource,
+  coerceUserProviderOverrides,
+  type OpencodeUsageSource,
+  type UserProviderOverrides,
+} from '@shared/types/providerEnablement.js'
 import type { SetupToolId } from '@shared/types/setup.js'
 
 const SETUP_STATE_FILE = join(STATE_DIR, 'setup.json')
@@ -45,6 +51,18 @@ export type PersistedSetupState = {
   // version bump / migration is needed.
   manualToolPaths: Partial<Record<SetupToolId, string>>
   skippedOptionalTools: Partial<Record<SetupToolId, boolean>>
+  /**
+   * The user answered "continue without an agent provider" (#995).
+   *
+   * WHY this is persisted rather than a per-run flag: a deliberate
+   * terminal-only user answered the first-run panel once, and an in-memory
+   * flag made it reopen on every launch AND in every new window — each window
+   * is its own renderer process with its own store (#995 Codex review). The
+   * skipped-helper answer above is durable for exactly the same reason.
+   * Absent from setup.json files written before this field existed;
+   * loadSetupState defaults it, so no migration is needed.
+   */
+  acknowledgedNoProviders: boolean
   // Auto-updater behavior + cache. Same "additive, no version bump"
   // rationale as manualToolPaths: absent from older setup.json blobs,
   // loadSetupState defaults it, no migration path required. The
@@ -55,6 +73,14 @@ export type PersistedSetupState = {
   // for the behavior union.
   cliUpdateBehavior: CliUpdateBehavior
   cliUpdateCache: Partial<Record<CliUpdateKind, CliUpdateCacheEntry>>
+  // User's explicit provider on/off word (#1102). Only overrides persist —
+  // detection is recomputed, so these entries stay meaningful across
+  // installs/uninstalls. Same additive-field, no-version-bump rationale as
+  // manualToolPaths above; coerced defensively at load.
+  providerEnablementOverrides: UserProviderOverrides
+  // Which OpenCode-configured provider the usage surface should report
+  // (#1102/#1104). 'zai' has no reader until #1104 lands.
+  opencodeUsageSource: OpencodeUsageSource
   updatedAt: number
 }
 
@@ -63,8 +89,11 @@ const DEFAULT_SETUP_STATE: PersistedSetupState = {
   toolPaths: {},
   manualToolPaths: {},
   skippedOptionalTools: {},
+  acknowledgedNoProviders: false,
   cliUpdateBehavior: 'automatic',
   cliUpdateCache: {},
+  providerEnablementOverrides: {},
+  opencodeUsageSource: 'none',
   updatedAt: 0,
 }
 
@@ -81,6 +110,7 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
       toolPaths: parsed.toolPaths ?? {},
       manualToolPaths: parsed.manualToolPaths ?? {},
       skippedOptionalTools: parsed.skippedOptionalTools ?? {},
+      acknowledgedNoProviders: parsed.acknowledgedNoProviders === true,
       // Coerce the CLI-update fields defensively: a hand-edited setup.json
       // with a stray string for cliUpdateBehavior must not throw at load —
       // fall back to 'automatic'. Same discipline as customAppearance in
@@ -92,6 +122,10 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
           ? parsed.cliUpdateBehavior
           : 'automatic',
       cliUpdateCache: parsed.cliUpdateCache ?? {},
+      providerEnablementOverrides: coerceUserProviderOverrides(
+        parsed.providerEnablementOverrides,
+      ),
+      opencodeUsageSource: coerceOpencodeUsageSource(parsed.opencodeUsageSource),
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
     }
   } catch {
@@ -179,6 +213,12 @@ export async function markOptionalSkipped(
   })
 }
 
+/** Records that the user chose to continue with no provider installed. */
+export async function markNoProvidersAcknowledged(): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({ ...state, acknowledgedNoProviders: true })
+}
+
 /** Persist the user's CLI auto-update preference. Written by the setting
  *  row in the renderer via IPC — same shape as markOptionalSkipped:
  *  pure bookkeeping over the persisted state. */
@@ -187,6 +227,24 @@ export async function setCliUpdateBehavior(
 ): Promise<PersistedSetupState> {
   const state = await loadSetupState()
   return await saveSetupState({ ...state, cliUpdateBehavior: behavior })
+}
+
+/** Replace the provider-enablement override map (#1102). Whole-map write:
+ *  the caller (main's providerEnablement module) computed the next map from
+ *  the state it just loaded, so partial merges here would only re-race it. */
+export async function setProviderEnablementOverrides(
+  overrides: UserProviderOverrides,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({ ...state, providerEnablementOverrides: overrides })
+}
+
+/** Persist the selected OpenCode usage source (#1102/#1104). */
+export async function setOpencodeUsageSource(
+  opencodeUsageSource: OpencodeUsageSource,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({ ...state, opencodeUsageSource })
 }
 
 /** Persist a successful latest-version probe. Called after every non-error

@@ -30,14 +30,18 @@ Give the agent a concrete task, constraints and the desired completion evidence.
 For several tasks, create separate agents, title them by responsibility, and arrange or pin them. Read their progress before issuing dependent work. When one needs attention, reveal that existing session rather than creating another agent with a similar name.`,
   },
   {
-    id: 'layouts', title: 'Grid, tiled tabs and Dispatch',
-    markdown: `Grid uses split panes within each project tab. Splitting, resizing, normalizing and rotating change the layout. Tiled Tabs shows several project tabs at once; each retains its own pane layout and focus. Focusing a project tab is different from focusing an agent inside it.
+    // Retitled with #992: "Grid, tiled tabs and Dispatch" named three surfaces
+    // that no longer exist. There is one layout and its vocabulary is lanes,
+    // rows, the agent index and projects (§5.4 of the plan: no guide, diagram
+    // or heading may name a mode).
+    id: 'layouts', title: 'The workspace: lanes, rows and the agent index',
+    markdown: `The workspace is a stage: ragged rows of lanes over a pool of sessions grouped by project. There is one layout; nothing is entered or toggled.
 
-Dispatch separates the agent inventory from fixed grid placement. A detached session belongs to a project but does not occupy a grid leaf. Classic Dispatch shows the selected agent. Tiled Dispatch provides multiple rows and lanes: the same agent may legitimately be selected in more than one lane. Those are mirrored views of one session, not independent agents. Clicking a row’s shared index places that agent in its focused lane, or its first lane if focus is in another row; agents.show instead reuses an existing view. Agent creation selects the captured focused lane by default. To preserve all current assignments, pass selectCreated:false to agents.create, agents.resume or agents.duplicate, then read layout.read and use dispatch.configure with lane-select and the exact returned session ID.
+The workspace is a stage: ragged rows of lanes over a pool of sessions grouped by project. A session not shown in a lane is parked, not gone — it stays in its project’s index. The same agent may legitimately be selected in more than one lane; those are mirrored views of one session, not independent agents. Clicking a row’s index places that agent in that row’s focused lane; agents.show instead reuses an existing view. Agent creation fills the lane focused at creation ONLY when it is empty (context-places): an occupied lane is never displaced, so creations usually land in the pool and the index marks them new until placed. To keep every lane assignment untouched, pass selectCreated:false to agents.create, agents.resume or agents.duplicate, then read layout.read and use dispatch.configure with lane-select and the exact returned session ID.
 
-Related linked/orchestration children can be displayed inside a parent's grid pane without becoming new grid leaves. A navigation request should normally reuse an existing view of the target. Opening it in a specifically chosen lane is a different intent and can deliberately create another view. Cross-project navigation can change Dispatch scope when needed to keep selected work reachable.
+Linked and orchestration children nest under their parent in every index that lists them. A navigation request should normally reuse an existing view of the target; opening it in a specifically chosen lane is a different intent and deliberately creates another view.
 
-Buried sessions are hidden from normal placement and have a separate restore route. Detached, buried, off-screen, hibernated and closed are different states. Search the inventory and inspect placement before deciding to restore, wake or recreate anything.`,
+Parked, off-screen, hibernated and closed are different states. A parked agent with no backend wakes on selection or first send; reading its history does not wake it. Search the inventory and inspect placement before deciding to restore, wake or recreate anything.`,
   },
   {
     id: 'agent-lifecycle', title: 'Agent identity, runtime and lifecycle',
@@ -109,7 +113,7 @@ The operation history records retained MCP requests, arguments, steps, results a
 4. Read conversation depth incrementally for both agents. Expand to activity or full detail only when a question needs it.
 5. Find the session needing attention and show its existing view. Use the UI for a provider-specific dialog or visual inspection when appropriate.
 6. Observe again after computer use. Inspect diffs/results and ask for any missing verification before treating the work as finished.
-7. Retrieve operation history if any outcome is uncertain. Keep, detach, bury or close sessions according to the user's requested cleanup, respecting close impact.
+7. Retrieve operation history if any outcome is uncertain. Keep or close sessions according to the user's requested cleanup, respecting close impact. A session that should stay alive but off screen needs no action: select another session into its lane and it remains in the pool.
 
 For deeper instruction, request a section from this tool or page through full mode. The feature reference explains individual workflows; the command and interaction catalogs provide the exact names, descriptions and current shortcuts for this build.`,
   },

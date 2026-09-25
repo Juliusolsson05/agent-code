@@ -35,6 +35,10 @@ import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 // of tiles open.
 
 export type DictationTargetHandle = {
+  /** The session this target speaks into. See `pickTarget`: dictation follows
+   *  the workspace's focused session, and this is how a target is matched to
+   *  it. */
+  sessionId: string
   enabled: boolean
   // True iff this target's pane/input currently has focus.
   focused: boolean
@@ -215,15 +219,60 @@ const teardownDispatcherIfIdle = (): void => {
   dispatcherSubs = null
 }
 
+/**
+ * Which session the WORKSPACE says is focused, as three distinct states.
+ *
+ *   undefined — nobody has told us yet (startup, before the stage hydrates).
+ *   string    — that session's lane is focused.
+ *   null      — a lane is focused and it is EMPTY. The user is looking at
+ *               nothing, deliberately.
+ *
+ * The third state is the whole point (#1031 item 3). It cannot be collapsed
+ * into the first: "we don't know yet" must keep the launch fallback that this
+ * registry exists for, while "the focused lane is empty" must NOT fall back,
+ * because falling back means dictating into a DIFFERENT agent's composer.
+ */
+let focusedSessionId: string | null | undefined
+
+export const setDictationFocusedSession = (sessionId: string | null): void => {
+  focusedSessionId = sessionId
+}
+
+/** Startup state, for tests and for a stage that unmounts entirely. */
+export const clearDictationFocusedSession = (): void => {
+  focusedSessionId = undefined
+}
+
 const pickTarget = (): DictationTargetHandle | null => {
   let best: DictationTargetHandle | null = null
+  let focusedSessionTarget: DictationTargetHandle | null = null
   for (const t of targets) {
     if (!t.enabled) continue
     // Currently-focused target always wins. This matches user intent: if
     // they are typing into pane A, Fn should record there, full stop.
     if (t.focused) return t
+    if (focusedSessionId != null && t.sessionId === focusedSessionId) focusedSessionTarget = t
     if (!best || t.lastFocusedAt > best.lastFocusedAt) best = t
   }
+
+  // ── THE FOCUSED LANE IS THE BOUNDARY (#1031 item 3) ──
+  // With no DOM-focused input, this used to pick the most RECENTLY focused
+  // target anywhere. Clear Lane (⌥⌫) makes that trivially reachable: clear the
+  // lane you are looking at, hold Fn, speak — and the words appear in another
+  // lane's composer, which may then send them. The same crossing happens
+  // whenever the focused lane's occupant has no DOM focus but you last typed
+  // somewhere else.
+  //
+  // So once the workspace has told us what is focused, that answer is
+  // authoritative: dictate into the focused session, or into nothing. A
+  // focused session with no registered target (hibernated, or a pane that does
+  // not take dictation) is also "nothing" — refusing is the only answer that
+  // cannot put the user's words in front of the wrong agent.
+  if (focusedSessionId !== undefined) return focusedSessionTarget
+
+  // Nobody has told us yet: the launch case this registry was built for. On a
+  // fresh start no input has focus, and without this fallback Fn was a silent
+  // no-op until the user clicked a pane.
   return best
 }
 

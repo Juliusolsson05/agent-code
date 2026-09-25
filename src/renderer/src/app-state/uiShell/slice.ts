@@ -4,7 +4,8 @@ import type { StateCreator } from 'zustand'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 
 import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
-import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
+import type { PendingCommandInvocation, SessionMenuRequest } from '@renderer/app-state/uiShell/types'
+import type { SessionId } from '@renderer/workspace/types'
 
 // Last issued Performance Monitor command-request ID (see openPerformancePanel).
 let lastPerformancePanelRequestId = 0
@@ -19,15 +20,20 @@ export const createUiShellSlice: StateCreator<
   paletteMode: DEFAULT_PALETTE_MODE,
   pathPickerOpen: false,
   pathPickerDefault: '',
-  tileTabsModalOpen: false,
-  tileTabsInitialSelectedIds: [],
   reorderTabsOpen: false,
   mergeProjectTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
+  settingsPageCategory: null,
+  settingsPageRequest: 0,
+  mcpServerDialog: null,
+  addSkillDialog: null,
+  skillUpdateCheckRequest: 0,
+  agentMcpServersSessionId: null,
   agentTitlePromptSessionId: null,
-  buryPromptSessionId: null,
   rootManagementPromptSessionId: null,
+  rootManagementPromptOverrides: null,
+  rootManagementPromptStopGoalLoop: false,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
@@ -37,7 +43,6 @@ export const createUiShellSlice: StateCreator<
   newAgentInOpen: false,
   tiledDispatchPromptOpen: false,
   dispatchRowProjectPickerRow: null,
-  dispatchAttachIntent: null,
   linkedAgentParentId: null,
   gitBarOpen: false,
   worktreesBarOpen: false,
@@ -59,6 +64,7 @@ export const createUiShellSlice: StateCreator<
   agentActivityOpen: false,
   keyboardShortcutsOpen: false,
   closeOldAgentsOpen: false,
+  closeCompletedAgentsOpen: false,
   bulkProviderSwitchOpen: false,
   usageModalOpen: false,
   agentAnalyticsOpen: false,
@@ -81,6 +87,8 @@ export const createUiShellSlice: StateCreator<
   // sane bounds when the user actually drags the splitter.
   dispatchListRatio: 0.25,
   pendingCommandInvocation: null,
+  sessionMenuRequest: null,
+  sessionMenuOpenFor: null,
 
   // Records the request and opens the palette when it is closed, because the
   // palette component is what owns the live CommandContext. `closeAfterRun`
@@ -89,12 +97,26 @@ export const createUiShellSlice: StateCreator<
   // Deliberately does NOT open the palette. The command host mounts itself when
   // an invocation is pending (see CommandPalette), so the context gets built
   // without the palette becoming visible — a chord must not flash a modal.
-  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source']) =>
+  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source'], target?: SessionId) =>
     set(state => ({
-      pendingCommandInvocation: { id, source, closeAfterRun: !state.commandPaletteOpen },
+      // `target` is spread in only when present so a focus-targeted
+      // invocation keeps the exact shape it always had (tests and the
+      // electron harness compare it structurally).
+      pendingCommandInvocation: {
+        id,
+        source,
+        ...(target !== undefined ? { target } : {}),
+        closeAfterRun: !state.commandPaletteOpen,
+      },
     }), false, 'uiShell/requestCommandInvocation'),
   clearCommandInvocation: () =>
     set({ pendingCommandInvocation: null }, false, 'uiShell/clearCommandInvocation'),
+  requestSessionMenu: (request: SessionMenuRequest) =>
+    set({ sessionMenuRequest: request }, false, 'uiShell/requestSessionMenu'),
+  clearSessionMenuRequest: () =>
+    set({ sessionMenuRequest: null }, false, 'uiShell/clearSessionMenuRequest'),
+  setSessionMenuOpenFor: (sessionId: SessionId | null) =>
+    set({ sessionMenuOpenFor: sessionId }, false, 'uiShell/setSessionMenuOpenFor'),
 
   // Opening always lands in the command list. Reopening should never resume a
   // half-finished sub-flow the user abandoned.
@@ -125,14 +147,6 @@ export const createUiShellSlice: StateCreator<
   setPathPickerDefault: value =>
     set({ pathPickerDefault: value }, false, 'uiShell/setPathPickerDefault'),
 
-  openTileTabsModal: initialSelectedIds =>
-    set({
-      tileTabsModalOpen: true,
-      tileTabsInitialSelectedIds: initialSelectedIds,
-    }, false, 'uiShell/openTileTabsModal'),
-  closeTileTabsModal: () =>
-    set({ tileTabsModalOpen: false }, false, 'uiShell/closeTileTabsModal'),
-
   openReorderTabs: () =>
     set({ reorderTabsOpen: true }, false, 'uiShell/openReorderTabs'),
   closeReorderTabs: () =>
@@ -147,25 +161,46 @@ export const createUiShellSlice: StateCreator<
   closePinAgents: () =>
     set({ pinAgentsOpen: false }, false, 'uiShell/closePinAgents'),
 
-  openSettingsPage: () =>
-    set({ settingsPageOpen: true }, false, 'uiShell/openSettingsPage'),
+  openSettingsPage: category =>
+    set(state => ({
+      settingsPageOpen: true,
+      settingsPageCategory: category ?? null,
+      settingsPageRequest: state.settingsPageRequest + 1,
+    }), false, 'uiShell/openSettingsPage'),
   closeSettingsPage: () =>
-    set({ settingsPageOpen: false }, false, 'uiShell/closeSettingsPage'),
+    set({ settingsPageOpen: false, settingsPageCategory: null }, false, 'uiShell/closeSettingsPage'),
+  openMcpServerDialog: target =>
+    set({ mcpServerDialog: target }, false, 'uiShell/openMcpServerDialog'),
+  closeMcpServerDialog: () =>
+    set({ mcpServerDialog: null }, false, 'uiShell/closeMcpServerDialog'),
+  openAddSkillDialog: initialInput =>
+    set({ addSkillDialog: { initialInput: initialInput ?? '' } }, false, 'uiShell/openAddSkillDialog'),
+  closeAddSkillDialog: () =>
+    set({ addSkillDialog: null }, false, 'uiShell/closeAddSkillDialog'),
+  requestSkillUpdateCheck: () =>
+    set(state => ({ skillUpdateCheckRequest: state.skillUpdateCheckRequest + 1 }), false, 'uiShell/requestSkillUpdateCheck'),
+  openAgentMcpServers: sessionId =>
+    set({ agentMcpServersSessionId: sessionId }, false, 'uiShell/openAgentMcpServers'),
+  closeAgentMcpServers: () =>
+    set({ agentMcpServersSessionId: null }, false, 'uiShell/closeAgentMcpServers'),
 
   openAgentTitlePrompt: sessionId =>
     set({ agentTitlePromptSessionId: sessionId }, false, 'uiShell/openAgentTitlePrompt'),
   closeAgentTitlePrompt: () =>
     set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
 
-  openBuryPrompt: sessionId =>
-    set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
-  closeBuryPrompt: () =>
-    set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
-
-  openRootManagementPrompt: sessionId =>
-    set({ rootManagementPromptSessionId: sessionId }, false, 'uiShell/openRootManagementPrompt'),
+  openRootManagementPrompt: (sessionId, stagedOverrides, stopGoalLoop) =>
+    set({
+      rootManagementPromptSessionId: sessionId,
+      rootManagementPromptOverrides: stagedOverrides ?? null,
+      rootManagementPromptStopGoalLoop: stopGoalLoop === true,
+    }, false, 'uiShell/openRootManagementPrompt'),
   closeRootManagementPrompt: () =>
-    set({ rootManagementPromptSessionId: null }, false, 'uiShell/closeRootManagementPrompt'),
+    set({
+      rootManagementPromptSessionId: null,
+      rootManagementPromptOverrides: null,
+      rootManagementPromptStopGoalLoop: false,
+    }, false, 'uiShell/closeRootManagementPrompt'),
 
   openDebugBundleNotePrompt: payload =>
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),
@@ -222,11 +257,6 @@ export const createUiShellSlice: StateCreator<
     set({ dispatchRowProjectPickerRow: rowIndex }, false, 'uiShell/openDispatchRowProjectPicker'),
   closeDispatchRowProjectPicker: () =>
     set({ dispatchRowProjectPickerRow: null }, false, 'uiShell/closeDispatchRowProjectPicker'),
-
-  openDispatchAttach: intent =>
-    set({ dispatchAttachIntent: intent }, false, 'uiShell/openDispatchAttach'),
-  closeDispatchAttach: () =>
-    set({ dispatchAttachIntent: null }, false, 'uiShell/closeDispatchAttach'),
 
   openLinkedAgent: sessionId =>
     set({ linkedAgentParentId: sessionId }, false, 'uiShell/openLinkedAgent'),
@@ -377,6 +407,10 @@ export const createUiShellSlice: StateCreator<
     set({ closeOldAgentsOpen: true }, false, 'uiShell/openCloseOldAgents'),
   closeCloseOldAgents: () =>
     set({ closeOldAgentsOpen: false }, false, 'uiShell/closeCloseOldAgents'),
+  openCloseCompletedAgents: () =>
+    set({ closeCompletedAgentsOpen: true }, false, 'uiShell/openCloseCompletedAgents'),
+  closeCloseCompletedAgents: () =>
+    set({ closeCompletedAgentsOpen: false }, false, 'uiShell/closeCloseCompletedAgents'),
   openBulkProviderSwitch: () =>
     set({ bulkProviderSwitchOpen: true }, false, 'uiShell/openBulkProviderSwitch'),
   closeBulkProviderSwitch: () =>

@@ -10,6 +10,7 @@ import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
 import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'
 import { refreshToolchainFromState } from '@main/setup/toolchain.js'
+import { deriveReadiness } from '@shared/setup/readiness.js'
 
 // WHY this map exists: not every SetupToolId has a bundled artifact,
 // and the `tool === 'X'` shape doesn't compose well when more tools
@@ -28,18 +29,21 @@ const BUNDLED_TOOL_IDS: ReadonlySet<SetupToolId> = new Set<SetupToolId>([
 
 // Provider SetupGate rows derived from the plain-data setup registry
 // (cycle-safe — see registry.setup.ts's header for why it isn't
-// registry.main.ts). `installable: false` for all providers today:
-// the CLIs have their own install/sign-in stories the gate can't
-// automate.
+// registry.main.ts). `installable: false` for all providers: that flag means
+// "the gate can run the install for you" (Homebrew), and provider CLIs have
+// their own installers and sign-in the gate cannot automate. What the gate
+// CAN do is show the user the exact command, which is `installCommand`.
 const PROVIDER_TOOL_META = Object.fromEntries(
   listProviderSetupDescriptors().map(([kind, d]) => [
     kind,
     {
       id: kind,
       label: d.label,
-      required: d.required,
+      provider: true,
       installable: false,
       detail: d.detail,
+      installCommand: d.install.command,
+      docsUrl: d.install.docsUrl,
     },
   ]),
 ) as Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>>
@@ -58,14 +62,14 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
   brew: {
     id: 'brew',
     label: 'Homebrew',
-    required: false,
+    provider: false,
     installable: false,
     detail: 'Used in dev to install optional tools. Not required to launch.',
   },
   git: {
     id: 'git',
     label: 'Git',
-    required: false,
+    provider: false,
     installable: false,
     detail: 'Used by Git Bar, worktree badges, and repository metadata.',
   },
@@ -78,7 +82,7 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
   mitmdump: {
     id: 'mitmdump',
     label: 'Claude Proxy Helper',
-    required: false,
+    provider: false,
     installable: true,
     detail: 'Installed by Homebrew package mitmproxy; enables Claude proxy streaming.',
   },
@@ -162,11 +166,13 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
   )
   await refreshToolchainFromState()
 
-  const blocking = CHECK_ORDER.filter(tool => tools[tool].required && !tools[tool].found)
+  // No `ready`/`blocking` any more (#995): nothing blocks launch. The policy
+  // that replaced them is in readiness.ts, and it runs here so every
+  // consumer receives the same verdict instead of re-deriving it.
   return {
     checkedAt: Date.now(),
-    ready: blocking.length === 0,
-    blocking,
     tools,
+    noProvidersAcknowledged: state.acknowledgedNoProviders,
+    ...deriveReadiness(tools),
   }
 }

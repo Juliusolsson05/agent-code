@@ -1,6 +1,8 @@
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { MISSING_PROVIDER_HINT, preferredPickerProvider, useMissingProviders } from '@renderer/features/setup/store'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -16,6 +18,7 @@ import { ConversationRow } from '@renderer/features/conversations/ui/Conversatio
 // picker renders, so a session looks the same in both places and the label,
 // provenance and ordering decisions live in main, not here.
 import type { Conversation } from '@shared/conversations/types'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
@@ -89,8 +92,20 @@ export function PathPickerModal({
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Provider toggle: Claude (default) or Codex. Resets on modal open.
-  const [provider, setProvider] = useState<AgentProvider>(DEFAULT_PROVIDER)
+  // Provider toggle. Resets on modal open. Preselects the provider a fresh
+  // install would use (#995): the default when it is installed, otherwise the
+  // first one that is. It used to be Claude unconditionally, so on a Mac
+  // without Claude, ⌘T failed only after the user had chosen a directory.
+  const enabledKinds = useEnabledAgentProviderKinds()
+  // A disabled preselect would open the picker on a provider the user asked
+  // to hide (#1102); fall back to the first enabled kind, then the default.
+  const initialProvider = (): AgentProvider => {
+    const preferred = preferredPickerProvider()
+    if (enabledKinds.has(preferred)) return preferred
+    return AGENT_PROVIDER_KINDS.find(kind => enabledKinds.has(kind)) ?? DEFAULT_PROVIDER
+  }
+  const [provider, setProvider] = useState<AgentProvider>(initialProvider)
+  const missingProviders = useMissingProviders()
 
   // Resume list state. We eagerly refresh the list whenever the path
   // changes and resolves to a valid directory — gives the user live
@@ -139,7 +154,7 @@ export function PathPickerModal({
     setListingTarget(null)
     setResolvedPath(null)
     setPendingCreatePath(null)
-    setProvider(DEFAULT_PROVIDER)
+    setProvider(initialProvider())
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
@@ -313,7 +328,7 @@ export function PathPickerModal({
 
         {/* Provider toggle: Claude / Codex */}
         <div className="flex gap-2 mb-3 flex-shrink-0">
-          {AGENT_PROVIDER_KINDS.map(p => (
+          {AGENT_PROVIDER_KINDS.filter(p => enabledKinds.has(p)).map(p => (
             <button
               key={p}
               type="button"
@@ -321,12 +336,17 @@ export function PathPickerModal({
                 if (p !== provider) invalidateResumeListing()
                 setProvider(p)
               }}
+              // Still selectable when missing: the probe can be wrong, and
+              // the spawn re-resolves the CLI itself (see useMissingProviders).
+              title={missingProviders.has(p) ? MISSING_PROVIDER_HINT : undefined}
+              data-provider-missing={missingProviders.has(p) || undefined}
               className={`rounded-control
                 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider
                 border transition-colors duration-120
                 ${provider === p
                   ? 'bg-accent text-accent-fg border-accent'
                   : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
+                ${missingProviders.has(p) ? 'line-through decoration-muted' : ''}
               `}
             >
               {getRendererProviderCapabilities(p).shortLabel}
@@ -376,7 +396,8 @@ export function PathPickerModal({
           ) : pendingCreatePath ? (
             <span className="text-accent">
               Will create:{' '}
-              <span className="text-ink">{pendingCreatePath}</span>
+              {/* The directory this is about to make and then trust. */}
+              <span className="text-ink">{withVisibleControls(pendingCreatePath)}</span>
             </span>
           ) : (
             <span className="text-muted">

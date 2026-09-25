@@ -75,6 +75,8 @@ export function collectLifecycleCandidates(params: {
   /** The newest semantic turn, when it was sealed because the machine slept
    *  (#963) and no turn is live. Null or absent otherwise. */
   sleepInterruptedTurnId?: string | null
+  /** The same, for a turn whose stream died before it finished (#1040). */
+  transportInterruptedTurnId?: string | null
 }): RenderCandidate[] {
   const out: RenderCandidate[] = []
   if (!params.streamPhaseIdle) {
@@ -102,6 +104,21 @@ export function collectLifecycleCandidates(params: {
       sourcePlane: 'process',
       sessionId: params.sessionId,
       contentKind: 'sleep-interruption',
+      timestampMs: null,
+      sequence: 1,
+    })
+  } else if (params.transportInterruptedTurnId) {
+    // The same marker for a stream that died before its message finished
+    // (#1040). Sleep wins when both are somehow true: it is the more specific
+    // explanation, and the adapter only reports it for a turn that was
+    // already silent when the machine went down.
+    out.push({
+      id: `transport-interruption:${params.transportInterruptedTurnId}`,
+      owner: 'work',
+      provider: params.provider,
+      sourcePlane: 'process',
+      sessionId: params.sessionId,
+      contentKind: 'transport-interruption',
       timestampMs: null,
       sequence: 1,
     })

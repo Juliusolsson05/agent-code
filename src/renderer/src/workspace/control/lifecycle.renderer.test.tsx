@@ -13,9 +13,8 @@ afterEach(() => { cleanup(); useAppStore.setState(original, true); window.api = 
 const context = { requestId: 'original-call', operationId: 'original-call', caller: { kind: 'external' as const, id: 'operator' }, owner: { kind: 'window' as const, windowId: 'one', generation: 'current' } }
 function setup() {
   useAppStore.setState({ workspaceState: { ...original.workspaceState, activeTabId: 'project',
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'other' }, focusedSessionId: 'other' }],
-    sessions: { source: { kind: 'codex', cwd: '/source', providerSessionId: 'native-source' }, other: { kind: 'claude', cwd: '/other' } },
-    detachedSessions: { source: { sessionId: 'source', projectTabId: 'project', projectTabTitle: 'Project', projectTabIndex: 0, detachedAt: 1, surface: 'dispatch' } }, buried: [],
+    tabs: [{ id: 'project', title: 'Project' }],
+    sessions: { source: { kind: 'codex', cwd: '/source', providerSessionId: 'native-source', projectId: 'project', joinedAt: 1 }, other: { kind: 'claude', cwd: '/other', projectId: 'project', joinedAt: 0 } },
   }, workspaceRuntimes: { source: { ...emptyRuntime(), draftInput: 'Human draft' } } })
   const refs = makeRefs(useAppStore.getState().workspaceState)
   refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
@@ -67,7 +66,7 @@ it('reports a domain refusal instead of treating a resolved void transaction as 
 
 it('keeps draft edits made during native rewind recoverable by undo', async () => {
   const { invoke, revision, replaceSession, report, refs } = setup()
-  window.api.rewindToPrompt = vi.fn<typeof window.api.rewindToPrompt>().mockResolvedValue({ provider: 'codex', newProviderSessionId: 'rewound-native', newFilePath: '/recorded/rewound.jsonl', promptText: 'Historical prompt', promptImages: [], promptMode: 'prompt', promptTimestamp: null })
+  window.api.rewindToPrompt = vi.fn<typeof window.api.rewindToPrompt>().mockResolvedValue({ provider: 'codex', newProviderSessionId: 'rewound-native', newFilePath: '/recorded/rewound.jsonl', promptText: 'Historical prompt', promptImages: [], promptAttachments: [], promptMode: 'prompt', promptTimestamp: null })
   // The actual replacement contract is independently exercised in
   // sessionReplacementHandoff: this boundary returns its latest carried draft,
   // including edits made after the original lifecycle inspection.
@@ -79,4 +78,15 @@ it('keeps draft edits made during native rewind recoverable by undo', async () =
   await invoke('agents.rewind', { sessionId: 'source', revision: await revision(), address: { provider: 'codex', sessionId: 'native-source', line: 1 } })
   await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: 'operations.finish' })))
   expect(useAppStore.getState().workspaceRuntimes.replacement).toMatchObject({ draftInput: 'Historical prompt', pendingRewindUndo: { previousDraftInput: 'Edited during replacement' } })
+})
+
+it('refuses to rewind a native terminal agent (Pi), whose TUI has no composer for the rewound prompt', async () => {
+  const { invoke, revision, replaceSession } = setup()
+  // Restored kind-only, as the catalog and switches create Pi panes.
+  useAppStore.setState(state => ({ workspaceState: { ...state.workspaceState, sessions: { ...state.workspaceState.sessions, source: { ...state.workspaceState.sessions.source!, kind: 'pi' } } } }))
+  window.api.rewindToPrompt = vi.fn()
+  const result = await invoke('agents.rewind', { sessionId: 'source', revision: await revision(), address: { provider: 'pi', sessionId: 'native-source', line: 1 } })
+  expect(result).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(window.api.rewindToPrompt).not.toHaveBeenCalled()
+  expect(replaceSession).not.toHaveBeenCalled()
 })

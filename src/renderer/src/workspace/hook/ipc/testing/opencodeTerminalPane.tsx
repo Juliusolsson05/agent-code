@@ -128,12 +128,19 @@ export type PaneSurfaces = {
   copyLastResponse: string | null
 }
 
-export function surfacesOf(state: WorkspaceState, runtimes: Record<SessionId, SessionRuntime>): PaneSurfaces {
-  const runtime = runtimes[SESSION_ID] ?? emptyRuntime()
-  const kind = state.sessions[SESSION_ID]?.kind
-  const managed = listManagedAgentDescriptors({ state, runtimes, callerSessionId: PARENT_ID })
-    .agents.find(item => item.agent.sessionId === SESSION_ID)?.agent
-  const status = buildAgentStatusModel(state, runtime, SESSION_ID)
+// Shared with the Pi pane harness (piTerminalPane.tsx): the surfaces are the
+// same functions for every provider, and only the pane's ids differ.
+export function surfacesOf(
+  state: WorkspaceState,
+  runtimes: Record<SessionId, SessionRuntime>,
+  sessionId: SessionId = SESSION_ID,
+  parentId: SessionId = PARENT_ID,
+): PaneSurfaces {
+  const runtime = runtimes[sessionId] ?? emptyRuntime()
+  const kind = state.sessions[sessionId]?.kind
+  const managed = listManagedAgentDescriptors({ state, runtimes, callerSessionId: parentId })
+    .agents.find(item => item.agent.sessionId === sessionId)?.agent
+  const status = buildAgentStatusModel(state, runtime, sessionId)
   const fields = status ? [...identityFields(status), ...runtimeFields(status), ...errorFields(status)] : []
   return {
     sessionStatus: runtime.sessionStatus,
@@ -146,8 +153,8 @@ export function surfacesOf(state: WorkspaceState, runtimes: Record<SessionId, Se
     dispatchActivity: dispatchActivity(runtime),
     dispatchSubtitle: dispatchSubtitle(runtime, kind),
     dispatchBadge: dispatchUnreadBadge(runtime, kind)?.text ?? null,
-    lifecycle: listOrchestrationAgents({ state, runtimes, parentSessionId: PARENT_ID })
-      .find(record => record.sessionId === SESSION_ID)?.lifecycleState,
+    lifecycle: listOrchestrationAgents({ state, runtimes, parentSessionId: parentId })
+      .find(record => record.sessionId === sessionId)?.lifecycleState,
     managedBackend: managed?.backendState,
     managedActivity: managed?.activityState,
     agentStatus: Object.fromEntries(fields.map(field => [field.label, field.value])),
@@ -159,22 +166,35 @@ export function surfacesOf(state: WorkspaceState, runtimes: Record<SessionId, Se
 // passes each through untouched; this is that mapping. A channel with no feed
 // method (transcript diagnostics, raw PTY bytes) reaches no runtime in the app
 // either, so it is recorded and not delivered.
-function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown): boolean {
+export function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown): boolean {
   switch (channel) {
     case 'session:started': feed.emitStarted(payload as Parameters<FakeSessionFeed['emitStarted']>[0]); return true
     case 'session:input-readiness': feed.emitInputReadiness(payload as Parameters<FakeSessionFeed['emitInputReadiness']>[0]); return true
     case 'session:jsonl-entries': feed.emitJsonlEntries(payload as Parameters<FakeSessionFeed['emitJsonlEntries']>[0]); return true
     case 'session:jsonl-error': feed.emitJsonlError(payload as Parameters<FakeSessionFeed['emitJsonlError']>[0]); return true
+    // Delivered to the feed since #881: the renderer now acts on one of these
+    // (a live channel that connects after an unreachable verdict clears the
+    // banner it raised). The recording below still keeps every diagnostic,
+    // because tests assert on the whole sequence.
+    case 'session:transcript-diagnostic': feed.emitTranscriptDiagnostic(payload as Parameters<FakeSessionFeed['emitTranscriptDiagnostic']>[0]); return true
     case 'session:process-state': feed.emitProcessState(payload as Parameters<FakeSessionFeed['emitProcessState']>[0]); return true
     case 'session:conditions': feed.emitConditions(payload as Parameters<FakeSessionFeed['emitConditions']>[0]); return true
     case 'session:semantic-event': feed.emitSemantic(payload as Parameters<FakeSessionFeed['emitSemantic']>[0]); return true
     case 'session:sub-agents': feed.emitSubAgents(payload as Parameters<FakeSessionFeed['emitSubAgents']>[0]); return true
     case 'session:exit': feed.emitExit(payload as Parameters<FakeSessionFeed['emitExit']>[0]); return true
+    // Both are real preload channels with feed methods (IpcSessionFeed). Pi's
+    // pane depends on them: a session switch inside the TUI moves the pane's
+    // identity, and its history window resets.
+    case 'session:history-boundary': feed.emitHistoryBoundary(payload as Parameters<FakeSessionFeed['emitHistoryBoundary']>[0]); return true
+    case 'session:provider-session-changed': feed.emitProviderSessionChanged(payload as Parameters<FakeSessionFeed['emitProviderSessionChanged']>[0]); return true
     default: return false
   }
 }
 
 export type MountedPane = {
+  /** The feed the subscriptions are mounted on, for a test that needs to put
+   *  an event in directly rather than through a real backend. */
+  feed: FakeSessionFeed
   meta: SessionMeta
   refs: WorkspaceRefs
   state: () => WorkspaceState
@@ -186,7 +206,9 @@ export type MountedPane = {
   timeline: PaneSurfaces[]
   /** Every window message main sent for the pane, by channel, in order. */
   channels: string[]
-  /** `session:transcript-diagnostic` payloads (no SessionFeed method reads them). */
+  /** `session:transcript-diagnostic` payloads, in order. The renderer reads
+   *  one of them (#881); the rest are here because tests assert on the whole
+   *  sequence a pane produced. */
   diagnostics: Array<Record<string, unknown>>
 }
 
@@ -199,7 +221,7 @@ type PaneHarnessProps = {
 
 // The workspace hook's own wiring (hook/index.ts): useWorkspaceHelpers supplies
 // updateRuntime/appendFeedDebug, which useIpcSubscriptions writes through.
-function PaneHarness({ feed, refs, setState, setRuntimes }: PaneHarnessProps): null {
+export function PaneHarness({ feed, refs, setState, setRuntimes }: PaneHarnessProps): null {
   const { updateRuntime, appendFeedDebug } = useWorkspaceHelpers(setRuntimes, refs)
   useIpcSubscriptions(feed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   return null
@@ -213,9 +235,27 @@ export type RecordedPaneOptions = {
    * is, which is how `prepareOpencodeTerminalLaunch` reports it.
    */
   database?: string | { error: string }
+  /**
+   * Launch the pane into the recorded PORT CONFLICT (#881): the TUI's port was
+   * taken between the loopback probe and the bind, so something that is not
+   * OpenCode answers on it. `port-conflict.json` recorded a 418, the TUI never
+   * painted (`pty.bytes === 0`) and it never exited on its own.
+   *
+   * The ReplayServer plays the stranger by refusing `/event` with that status:
+   * the socket is live and answers, and what it answers is not an event
+   * stream. The connect deadline is shortened because the package's timer is
+   * what is under test, not its 25 s duration.
+   */
+  portConflict?: true
 }
 
 export type RecordedPane = MountedPane & {
+  /**
+   * End the port conflict: the stranger releases the port (or the TUI's server
+   * was simply late) and the live channel connects after the verdict. #881's
+   * recovery case.
+   */
+  endPortConflict: () => void
   manager: SessionManager
   pty: AdapterPty
   server: ReplayServer
@@ -245,6 +285,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       refs.latestRuntimesRef.current = runtimes
     }
     const pane: MountedPane = {
+      feed,
       meta,
       refs,
       state: () => state,
@@ -263,7 +304,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       act(() => {
         delivered = deliverToFeed(feed, channel, cloned)
       })
-      if (!delivered && channel === 'session:transcript-diagnostic') {
+      if (channel === 'session:transcript-diagnostic') {
         pane.diagnostics.push((cloned as { diagnostic: Record<string, unknown> }).diagnostic)
       }
       pane.timeline.push(pane.surfaces())
@@ -296,6 +337,14 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
     const server = new ReplayServer({ username: USERNAME, password: PASSWORD })
     await server.listen()
     scope.onCleanup(() => server.close())
+    // `setBlocking` rather than failing one route: in the recording a stranger
+    // owns the WHOLE port, and this helper exists for exactly that fixture —
+    // its own comment names it ("EVERY request answers 418 before auth is
+    // checked: the unrelated process that won the TUI's port in
+    // port-conflict.json"). Failing only `/event` leaves every other endpoint
+    // answering as OpenCode, which is a stranger that somehow speaks our
+    // protocol.
+    if (options.portConflict) server.setBlocking(true)
 
     const pty = new AdapterPty()
     mainStandIns.createTerminalSession = sessionOptions => new OpencodeTerminalSession(sessionOptions, {
@@ -311,7 +360,10 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       }),
       // Heartbeat off: its periodic activity re-publish is not in any
       // recording and would make the timeline depend on wall time.
-      headlessOptions: { fetch: nodeHttpFetch, heartbeatMs: 0, durablePollIntervalMs: 40, sseInitialBackoffMs: 20, sseMaxBackoffMs: 80 },
+      headlessOptions: {
+        fetch: nodeHttpFetch, heartbeatMs: 0, durablePollIntervalMs: 40, sseInitialBackoffMs: 20, sseMaxBackoffMs: 80,
+        ...(options.portConflict ? { liveConnectDeadlineMs: 250 } : {}),
+      },
     })
 
     const pane = mountPane(paneMeta(recording.sessionID))
@@ -335,19 +387,32 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
     })
     if (!recovered.ok) throw new Error(`recover failed: ${recovered.message}`)
 
-    // The TUI's first frame. The adapter treats first output plus a short
-    // grace as "composer ready"; nothing else in this harness paints.
-    pty.paint('\u001b[?1049h')
-    await waitFor(() => pane.diagnostics.some(diagnostic => diagnostic.connected === true), 'live channel connected')
-    // All three re-sync reads have reached the server. The package drops any
-    // part of a snapshot that live events overtook, so the replay may start
-    // while the answers are still in flight.
-    await waitFor(() => ['/session/status', '/permission', '/question'].every(path => server.calls.some(call => call.path === path)), 're-sync reads')
+    if (options.portConflict) {
+      // Nothing is painted, because the recorded TUI painted nothing: zero PTY
+      // bytes is the whole difficulty of this failure. Wait for the package's
+      // verdict instead of for a connection that never happens.
+      await waitFor(() => pane.diagnostics.some(diagnostic => diagnostic.reason === 'server-unreachable'), 'the unreachable verdict')
+    } else {
+      // The TUI's first frame. The adapter treats first output plus a short
+      // grace as "composer ready"; nothing else in this harness paints.
+      pty.paint('\u001b[?1049h')
+      await waitFor(() => pane.diagnostics.some(diagnostic => diagnostic.connected === true), 'live channel connected')
+      // All three re-sync reads have reached the server. The package drops any
+      // part of a snapshot that live events overtook, so the replay may start
+      // while the answers are still in flight.
+      await waitFor(() => ['/session/status', '/permission', '/question'].every(path => server.calls.some(call => call.path === path)), 're-sync reads')
+    }
 
     return {
       ...pane,
       manager,
       pty,
+      endPortConflict: () => {
+        server.setBlocking(false)
+        // The TUI paints its first frame, the way it would have if its server
+        // had come up on time.
+        pty.paint('\u001b[?1049h')
+      },
       server,
       writer,
       dbPath,

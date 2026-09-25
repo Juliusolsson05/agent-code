@@ -2,7 +2,6 @@ import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKin
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -70,12 +69,11 @@ export function useReaderActions(
 
   // Switch which session is being read inside ReaderMode.
   //
-  // WHY Dispatch mode is special here: detached sessions are not tile-tree
-  // leaves, and Tab.focusedSessionId is a grid-only invariant. The original
-  // Reader implementation wrote every selected reader session into
-  // Tab.focusedSessionId, which corrupts the tab whenever the selected row is
-  // detached. In Dispatch, keep focus on dispatchMode.focusedSessionId and
-  // activeTabId instead; outside Dispatch, preserve the older grid behavior.
+  // WHY this never writes a lane or a tree focus: Reader is a takeover with its
+  // own focusedSessionId. The original implementation mirrored every selection
+  // into Tab.focusedSessionId, which corrupted the tab whenever the selected
+  // row was not a tree leaf; the Dispatch-era fix moved the mirror to a classic
+  // focus field. Both fields are gone (#992) and nothing replaces them.
   const setReaderModeSession = useCallback(
     (sessionId: SessionId) => {
       const snapshot = refs.stateRef.current
@@ -104,9 +102,7 @@ export function useReaderActions(
       // reason; this guard must agree with its own command's own visibility
       // rule.
       if (!sessionHasTranscript(snapshot.sessions[sessionId])) return
-      const rows = snapshot.dispatchMode
-        ? buildVisibleDispatchRows(snapshot)
-        : []
+      const rows = buildVisibleDispatchRows(snapshot)
       const dispatchRow = rows.find(row => row.sessionId === sessionId) ?? null
       setReaderMode(prev => (
         prev
@@ -117,34 +113,14 @@ export function useReaderActions(
             }
           : prev
       ))
+      // Only the active PROJECT follows the Reader selection; see the matching
+      // note in spotlight.ts. Reader holds its own focusedSessionId, and
+      // paging through transcripts is not the user naming a lane occupant
+      // (U2, #681), so no lane — and no tree focus, which no longer exists —
+      // is written here.
       setState(prev => {
-        // Tab.focusedSessionId is a grid-only field (its invariant:
-        // must be a leaf in `tab.root`). Non-Dispatch Reader now
-        // surfaces detached agents in its session list (via
-        // resolveTabSessions), so a detached id can reach this
-        // handler. The pre-existing comment above already explained
-        // the Dispatch case; the same reasoning applies to detached
-        // sessions clicked from a non-Dispatch Reader view — only
-        // mirror to focusedSessionId when the id is actually a leaf.
-        // For a detached selection, Reader's own focusedSessionId
-        // holds the choice; we don't need to (and must not) mirror
-        // it to the grid-only field.
-        const activeTab = prev.tabs.find(t => t.id === prev.activeTabId) ?? null
-        const isGridLeaf = activeTab ? collectLeaves(activeTab.root).includes(sessionId) : false
-        return {
-          ...prev,
-          activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
-          dispatchMode: prev.dispatchMode && dispatchRow
-            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-            : prev.dispatchMode,
-          tabs: prev.dispatchMode
-            ? prev.tabs
-            : prev.tabs.map(t =>
-                t.id === prev.activeTabId && isGridLeaf
-                  ? { ...t, focusedSessionId: sessionId }
-                  : t,
-              ),
-        }
+        const activeTabId = dispatchRow?.tabId ?? prev.activeTabId
+        return activeTabId === prev.activeTabId ? prev : { ...prev, activeTabId }
       })
     },
     [refs.stateRef, setReaderMode, setState],

@@ -16,16 +16,21 @@ const base: CommandDef = {
 }
 
 describe('resolveCommandAvailability', () => {
-  it('hides a mode-irrelevant command without explaining', () => {
-    // Product decision: a grid-spatial command in Dispatch points at a layout
-    // the user cannot see. Explaining that on every mode switch is noise.
-    const command: CommandDef = { ...base, surface: 'grid' }
-    const ctx = makeTestCommandContext({ flags: { dispatchModeEnabled: true } })
-    expect(resolveCommandAvailability(command, ctx)).toEqual({
-      available: false,
-      reason: 'Not applicable in this layout',
-      presentation: 'hide',
+  it('lets every surviving surface reach its own when — no mode gate (#992)', () => {
+    // Unified layout: `grid`/`dispatch` surfaces died with the modes. A
+    // workspace command's availability is its own `when` (target exists?),
+    // never "which layout is active" — the old mode-hide test that lived
+    // here pinned behavior the merge deleted.
+    const command: CommandDef = { ...base, surface: 'workspace' }
+    expect(resolveCommandAvailability(command, makeTestCommandContext())).toEqual({
+      available: true,
     })
+    expect(
+      resolveCommandAvailability(
+        { ...command, when: () => false },
+        makeTestCommandContext(),
+      ),
+    ).toEqual({ available: false, reason: 'Not available right now', presentation: 'hide' })
   })
 
   it('lets a command upgrade a silent hide into an explained disable', () => {
@@ -57,17 +62,5 @@ describe('resolveCommandAvailability', () => {
 
   it('reports availability when nothing objects', () => {
     expect(resolveCommandAvailability(base, makeTestCommandContext())).toEqual({ available: true })
-  })
-
-  it('checks the surface before consulting an explicit reason', () => {
-    // Order is the product decision: a command must not be able to force
-    // itself visible in a layout where its concept does not exist.
-    const command: CommandDef = {
-      ...base,
-      surface: 'grid',
-      unavailableReason: () => ({ reason: 'should not win', presentation: 'disable' }),
-    }
-    const ctx = makeTestCommandContext({ flags: { dispatchModeEnabled: true } })
-    expect(resolveCommandAvailability(command, ctx)).toMatchObject({ presentation: 'hide' })
   })
 })

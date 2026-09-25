@@ -1,7 +1,25 @@
 appId: com.agentcode.app
+# The update feed declaration. electron-builder embeds resources/app-update.yml
+# from this, which is the ONLY thing electron-updater reads at runtime — the
+# GitHub workflow that actually uploads artifacts is separate and unchanged.
+# Publishing still requires an explicit --publish/-p flag, so local and CI
+# builds do not accidentally release anything.
+publish:
+  - provider: github
+    owner: Juliusolsson05
+    repo: agent-code
 productName: Agent Code
 copyright: "Copyright © 2026 Julius Olsson"
-artifactName: "${productName}-${version}-${arch}.${ext}"
+# WHY a literal "Agent-Code" and never ${productName} (#1129): productName
+# has a space, and the space gets rewritten twice, differently.
+# electron-builder writes latest-mac.yml assuming its own publisher turns it
+# into a dash (`Agent-Code-…`), but release.yml uploads with
+# softprops/action-gh-release and GitHub turns it into a dot (`Agent.Code-…`).
+# The feed then named files that did not exist, so every self-update from
+# v0.1.0–v0.1.2 got 404. With no space, the local file, the feed entry and
+# the uploaded asset are the same string.
+# scripts/release/verify-update-feed.mjs fails the release if they diverge.
+artifactName: "Agent-Code-${version}-${arch}.${ext}"
 directories:
   output: release
 afterPack: scripts/after-pack.mjs
@@ -72,6 +90,40 @@ mac:
   # regenerates one from build/icon.png at pack time via sips/iconutil —
   # fine on a provisioned Mac, non-deterministic and host-dependent
   # everywhere else. The committed artifact makes the icon reproducible.
+  #
+  # PAIRING RULE: build/icon.png and build/icon.icns change TOGETHER, always.
+  # README.md renders the PNG and the packaged app uses the .icns, so updating
+  # only one silently makes the repo and the product show different icons.
+  #
+  # THREE files, and the order matters (#1020):
+  #   build/icon-full-bleed-1024.png — the owner's Icon Composer export, kept
+  #     byte-for-byte as the source of truth for the ARTWORK.
+  #   build/icon.png — that export scaled to 824 and centred on a transparent
+  #     1024 canvas. This is Apple's macOS icon grid, and it is why the file is
+  #     not the export itself.
+  #   build/icon.icns — built from build/icon.png.
+  #
+  # WHY the padding exists: Icon Composer's export (both its iOS and its macOS
+  # targets) is a full-bleed tile — opaque from x=0 to x=1023, 5.97%
+  # transparent, all of it the rounded corners. macOS 26 insets such an icon
+  # itself, but 12 through 15, which are inside our minimumSystemVersion floor,
+  # draw an .icns exactly as given: the tile then renders about 24% larger than
+  # every neighbouring app in the Dock, with no shadow. Every reference app
+  # (Finder, Slack, Discord, Claude) ships the 100 px margin for this reason.
+  # Measured before: opaque bbox (0,0,1024,1024). After: (100,100,924,924).
+  #
+  # Recipe (byte-reproducible on macOS; verified 2026-09-19), from the export:
+  #   1. Pad: scale icon-full-bleed-1024.png to 824x824 (Lanczos) and paste it
+  #      at (100,100) on a transparent 1024x1024 RGBA canvas -> build/icon.png.
+  #      sips cannot do this step: its `-p` pad fills with an OPAQUE colour.
+  #      Pillow, one call each: Image.resize / Image.new / Image.paste.
+  #   2. For each size in 16 32 128 256 512, `sips -z` build/icon.png to that
+  #      size as icon_NxN.png AND to double that size as icon_NxN@2x.png, all
+  #      in AppIcon.iconset/.
+  #   3. `iconutil -c icns -o build/icon.icns AppIcon.iconset`.
+  # Why not ship the Icon Composer `.icon` document instead: electron-builder
+  # would compile it with `actool`, which needs Xcode 26 on the build host.
+  # That is the host dependence this committed file exists to avoid.
   icon: build/icon.icns
   # Electron 38+ follows Chromium in requiring Monterey. Stating the floor in
   # the bundle prevents an older Mac from downloading a build that the embedded
@@ -99,4 +151,5 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 dmg:
-  artifactName: "${productName}-${version}-${arch}.${ext}"
+  # Same name as the top-level artifactName; see the comment there (#1129).
+  artifactName: "Agent-Code-${version}-${arch}.${ext}"

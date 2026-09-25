@@ -22,8 +22,9 @@ type FrameDispatch = (commandId: string) => void
 // ── A STACK PER EXTENSION, NOT A SINGLE ENTRY ──
 // This was a `Map<extensionId, dispatch>` whose comment asserted "there is at most
 // one visible frame per extension". The pane path broke that assumption the moment
-// it landed: openExtensionViewInPane always splits a NEW leaf, and a pane and a
-// modal of the same extension are explicitly designed to coexist. So a second frame
+// it landed: openExtensionViewInPane opened a NEW pane on every call (it still
+// does, except for a legacy command's reveal), and a pane and a modal of the same
+// extension are explicitly designed to coexist. So a second frame
 // silently overwrote the first's dispatcher — and because clearFrameDispatch only
 // removes an entry still pointing at the disposing frame, closing the NEWER frame
 // deleted the entry outright while an older live frame was still on screen. The

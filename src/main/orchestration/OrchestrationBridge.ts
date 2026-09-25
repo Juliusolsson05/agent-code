@@ -21,6 +21,88 @@ type PendingRequest = {
   resolve: (response: OrchestrationRendererResponse) => void
   reject: (err: Error) => void
   timer: NodeJS.Timeout
+  /**
+   * Set once the caller has given up waiting but the request is still
+   * OUTSTANDING in the renderer (#926). The entry stays in `pending` so a late
+   * answer can still be reconciled instead of dropped on the floor.
+   */
+  abandoned?: boolean
+}
+
+/**
+ * Every renderer request that CHANGES the workspace.
+ *
+ * WHY the distinction has to exist: a timed-out read changed nothing, so
+ * failing it is the whole truth. A timed-out mutation may have happened, may
+ * be happening right now, and may complete a second after we gave up — so
+ * failing it the same way tells the caller something false.
+ *
+ * Listed explicitly rather than derived, so a request type added later has to
+ * be classified deliberately. The default for anything unlisted is "read",
+ * which is the safe side for THIS switch: a mis-classified read is merely a
+ * blunt error message, while a mis-classified mutation would hold a
+ * reservation nothing ever reconciles.
+ */
+const MUTATING_REQUEST_TYPES = new Set<OrchestrationRendererRequest['type']>([
+  'create-agent',
+  'close-agent',
+  'close-run',
+  'mark-bootstrap-prompt-delivered',
+  'ensure-agent-live',
+])
+
+/**
+ * A dispatched mutation whose outcome nobody knows (#926).
+ *
+ * ── WHY THIS IS NOT JUST A TIMEOUT ERROR ──
+ * By the time the timer fires, the request has been handed to the renderer and
+ * the renderer confirmed receipt of the send (see the delivery check in
+ * `dispatchRendererRequest` — an UNDELIVERED request never gets here, and is
+ * reported as safe to retry instead). What expired is our patience, not the
+ * operation. Rejecting with a plain "timed out" told the caller its create had
+ * failed, and the reasonable response to a failure is to try again — which is
+ * how one intended child becomes two, one of them invisible to the parent that
+ * asked for it.
+ *
+ * `outcome: 'unknown'` is the same vocabulary the control SDK uses for exactly
+ * this situation, and it means: do not retry, go and look.
+ *
+ * ── WHAT THIS DELIBERATELY DOES NOT DO ──
+ * It does not refuse a later identical create. A first version held a
+ * "reservation" keyed on the renderer request shape and refused any matching
+ * retry until reconciliation. Review showed that unsound in three ways, all
+ * proven against the real bridge:
+ *
+ *   - The renderer request has no `prompt` field — the prompt is delivered
+ *     separately — so two genuinely different fan-out jobs produce a
+ *     byte-identical shape, and the second was refused forever. That is the
+ *     same catastrophe `createCallsInFlight` above was written to prevent,
+ *     reintroduced one layer down.
+ *   - Nothing could ever clear it. Listing agents and closing the run both
+ *     left it in place, and the message told the agent to list its agents —
+ *     so a parent that did exactly as instructed looped with no legal exit.
+ *   - Its key disagreed with `orchestrationCreateAgentCallKey` on domain
+ *     ordering, so the same intent could miss the guard anyway.
+ *
+ * A sound guard has to key on something that can see the prompt, which means
+ * it belongs at the MCP call layer beside `createAgentCallOnce`, and it needs
+ * a terminating condition — a renderer-generation bump is proof the answer can
+ * never arrive. Neither is in this change, so #926's "retain scoped
+ * conflicting-mutation authority until reconciliation" is NOT delivered here.
+ */
+export class OrchestrationOutcomeUnknownError extends Error {
+  readonly outcome = 'unknown' as const
+  constructor(
+    readonly requestId: string,
+    readonly requestType: OrchestrationRendererRequest['type'],
+    readonly parentSessionId: string,
+  ) {
+    super(
+      `The renderer did not answer ${requestType} in time. It may still complete, so the outcome is UNKNOWN: `
+      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`,
+    )
+    this.name = 'OrchestrationOutcomeUnknownError'
+  }
 }
 
 type QueuedRendererRequest = {
@@ -34,6 +116,26 @@ type PromptDeliveryMetadata = {
   createdAt: number
   lastPromptSubmittedAt?: number
   promptSubmissionCount: number
+  /**
+   * An orchestration prompt is WAITING for this child's composer (#1134):
+   * armed by `create_agent`/`send_prompt` for a child that was not ready yet,
+   * not landed and not given up on.
+   *
+   * WHY main has to know: `lastPromptSubmittedAt` is written only when a
+   * prompt LANDS, and it is what turns a `completed` child back into
+   * `prompt_sent`. Without this, a follow-up waiting on an already-completed
+   * child — a parked child that is still warming after its wake, a composer
+   * holding a human draft, a Codex child between the end of its turn and the
+   * waiter's next re-arm — read as `completed`, and `wait_agents` returned
+   * `done` at once with the PREVIOUS turn's output, which the parent took as
+   * the answer to the prompt it had just been told was pending.
+   *
+   * `token` identifies WHICH waiter set it. Waiters replace each other (the
+   * newest orchestration prompt wins), and the replaced one settles after
+   * the new one armed; clearing by session id alone would wipe the new
+   * waiter's pending state with the old one's failure.
+   */
+  pendingPrompt?: { token: number; since: number }
 }
 
 type ClosedAgentRecord = {
@@ -42,7 +144,17 @@ type ClosedAgentRecord = {
 }
 
 type CachedValue<T> = {
-  expiresAt: number
+  /**
+   * When this value stops being fresh — or `null` while the read is still IN
+   * FLIGHT (#925).
+   *
+   * WHY the two states share one field: they are the same question asked at
+   * two moments. A pending entry is a DEDUP handle and has no freshness to
+   * lose; a settled one is a VALUE and starts ageing from the moment it
+   * arrived. Combining them as "expires 250 ms after the request was created"
+   * conflated the two and expired reads that had not answered yet.
+   */
+  expiresAt: number | null
   promise: Promise<T>
 }
 
@@ -75,6 +187,72 @@ export class OrchestrationBridge {
   private readonly rendererQueue: QueuedRendererRequest[] = []
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
+  /** Monotonic source for `PromptDeliveryMetadata.pendingPrompt.token`. */
+  private pendingPromptTokens = 0
+  /**
+   * Whole `orchestration_create_agent` TOOL CALLS that are still running,
+   * keyed by the call's arguments (#952).
+   *
+   * ── THE INCIDENT ──
+   * On 2026-09-12 one `orchestration_create_agent` call produced TWO children
+   * 0.9 s apart, with the same title, cwd, role and prompt, both bootstrapped,
+   * both working in the same worktree and writing the same report. Only one
+   * was returned, so the parent could not see or close the other and it ran
+   * unobserved.
+   *
+   * ── WHAT WAS RULED OUT, AND WHAT WAS NOT ──
+   * Not our retry: `request`/`dispatchRendererRequest` send exactly once,
+   * the only timeout is 30 s (which does not match a 0.9 s gap), and the
+   * renderer request is addressed to ONE window rather than broadcast — a
+   * decision made in `f7b4408a` (Refs #688) because answering an MCP mutation
+   * from the wrong window's workspace model is worse than not answering.
+   * Not a double renderer handling either: a second `resolveOrchestrationRequest`
+   * for an already-resolved requestId is dropped, so the extra child would
+   * carry no promptDeliveries entry and no delivered bootstrap prompt — and
+   * both children WERE bootstrapped.
+   *
+   * What that leaves is a second complete tool invocation, which points above
+   * this process. It is not, however, something anyone observed, so this does
+   * not claim a root cause. It makes the operation idempotent, because the
+   * damage is real whatever the cause: duplicate paid agent work, two writers
+   * racing on the same files, and side effects performed twice.
+   *
+   * ── WHY THE KEY IS THE WHOLE CALL, PROMPT INCLUDED ──
+   * A first version keyed on the child's SHAPE and deliberately left the
+   * prompt out, reasoning that the prompt is delivered after the child exists.
+   * Review found that catastrophic: every field but `kind` is optional, so a
+   * concurrent FAN-OUT of N workers differing only by prompt — which is the
+   * normal way this tool is used, and what "two reviewers per PR" does — all
+   * collapsed into one child, and N-1 tasks were silently never run.
+   * `MAX_ACTIVE_RENDERER_REQUESTS = 1` makes a burst of creates overlap by
+   * construction, so a fan-out was maximally exposed, not least.
+   *
+   * Two creates that differ by prompt are two different jobs. Only an
+   * identical call — same parent, same child shape, same prompt — is a
+   * duplicate, and that is what this collapses.
+   *
+   * ── WHY IT WRAPS THE WHOLE CALL AND NOT `createAgent` ──
+   * One invocation is create → deliver the bootstrap prompt → mark delivered,
+   * and the delivery is the slow, failure-prone part. Deduping only the create
+   * left a duplicate arriving during delivery to spawn a second child, and it
+   * handed the duplicate caller a `prompt_delivery_failed` from
+   * `deliverPromptToAgent`'s in-flight guard — complete with
+   * `retrySafe: true, disposition: 'retry-same-session'`, an instruction to
+   * re-send the prompt into the child already running it, plus a false
+   * incident in the always-on journal. Deduping the whole call means the
+   * duplicate waits and receives the first call's RESULT, which is the only
+   * answer that is true for it.
+   *
+   * ── WHY IN FLIGHT ONLY ──
+   * A window over COMPLETED calls would collapse a deliberate "run that exact
+   * task again", which is legitimate. Two identical calls overlapping in
+   * flight is not something a caller means.
+   *
+   * It lives on the bridge, not beside the tool handler, because
+   * `BuiltInMcpHttpHost` builds a FRESH server with a stateless transport for
+   * every POST — a map owned by the server would never see the duplicate.
+   */
+  private readonly createCallsInFlight = new Map<string, Promise<unknown>>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private readonly parentSessionByChildSession = new Map<string, string>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
@@ -107,11 +285,12 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
-    const response = await this.request({
+    const attempt: OrchestrationRendererRequest = {
       requestId: randomUUID(),
       type: 'create-agent',
       ...params,
-    })
+    }
+    const response = await this.request(attempt)
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'create-agent') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
@@ -124,6 +303,31 @@ export class OrchestrationBridge {
     this.closedAgents.delete(response.agent.sessionId)
     this.invalidateStatusCache(params.parentSessionId)
     return this.enrichAgent(response.agent)
+  }
+
+  /**
+   * Run one `orchestration_create_agent` tool call, or join an identical one
+   * that is already running and return ITS result. See `createCallsInFlight`
+   * for why this is the unit of deduplication.
+   *
+   * `key` is the caller's business: the tool handler owns the argument schema
+   * and is the only place that can be made to break the build when a new field
+   * appears. The bridge owns only the map, because it is the one object that
+   * outlives a per-POST MCP server.
+   */
+  async createAgentCallOnce<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const inFlight = this.createCallsInFlight.get(key)
+    if (inFlight) return await inFlight as T
+
+    const call = run()
+    this.createCallsInFlight.set(key, call)
+    try {
+      return await call
+    } finally {
+      // Cleared on rejection too: a call that threw left nothing behind, so
+      // the next identical one must really run rather than inherit the error.
+      this.createCallsInFlight.delete(key)
+    }
   }
 
   async listAgents(params: {
@@ -215,6 +419,18 @@ export class OrchestrationBridge {
     runId?: string
   }): Promise<OrchestrationCloseResult> {
     this.pruneCoordinationMetadata()
+    // WHY this stays on the CACHED read while `closeAgent` deliberately uses
+    // the uncached `readAgent` for the same job (#1101 review): the tombstone
+    // wants the run's outputs, and re-reading every child's transcript at close
+    // time is the most expensive round trip the bridge makes.
+    //
+    // What #925 changed here: the join window used to be 250 ms and is now
+    // "however long that read stays in flight", so this snapshot can join a
+    // read dispatched seconds earlier and the tombstone can miss the last few
+    // seconds of a child's output. It needs an MCP caller to have asked for
+    // exactly `maxMessagesPerAgent: MAX_CLOSED_AGENT_MESSAGES` with no char
+    // caps, so the key collides — narrow, and the alternative (an uncached read
+    // of every child at close) costs more than the seconds it recovers.
     const before = await this.readRunOutputs({
       parentSessionId: params.parentSessionId,
       runId: params.runId,
@@ -255,6 +471,41 @@ export class OrchestrationBridge {
     }
     this.promptDeliveries.delete(sessionId)
     this.promptDeliveries.set(sessionId, next)
+    this.invalidateStatusCacheForSession(sessionId)
+  }
+
+  /**
+   * Record that an orchestration prompt is now waiting for this child's
+   * composer (#1134). Returns the token `notePromptPendingSettled` needs. See
+   * `PromptDeliveryMetadata.pendingPrompt` for why this exists.
+   */
+  notePromptPending(sessionId: string): number {
+    this.pruneCoordinationMetadata()
+    const now = Date.now()
+    const token = ++this.pendingPromptTokens
+    const current = this.promptDeliveries.get(sessionId) ?? {
+      createdAt: now,
+      promptSubmissionCount: 0,
+    }
+    this.promptDeliveries.delete(sessionId)
+    this.promptDeliveries.set(sessionId, { ...current, pendingPrompt: { token, since: now } })
+    this.invalidateStatusCacheForSession(sessionId)
+    return token
+  }
+
+  /**
+   * The waiter that `token` names has settled — landed, failed, or been
+   * replaced. Clears the pending state only if no newer waiter owns it.
+   *
+   * Callers settle BEFORE `notePromptSubmitted` on landing so there is no
+   * instant in which the child is neither pending nor submitted (both happen
+   * in the same synchronous tick, but the order still states the intent).
+   */
+  notePromptPendingSettled(sessionId: string, token: number): void {
+    const current = this.promptDeliveries.get(sessionId)
+    if (!current?.pendingPrompt || current.pendingPrompt.token !== token) return
+    const { pendingPrompt: _settled, ...rest } = current
+    this.promptDeliveries.set(sessionId, rest)
     this.invalidateStatusCacheForSession(sessionId)
   }
 
@@ -303,7 +554,59 @@ export class OrchestrationBridge {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pending.delete(response.requestId)
+    if (pending.abandoned) {
+      // ── LATE RECONCILIATION (#926) ──
+      // The caller stopped waiting, but the renderer finished anyway. Dropping
+      // this used to be how a real child became an orphan: created, placed in
+      // the workspace, and unknown to the bridge, so the parent could neither
+      // see it in list_agents nor close it. Adopting it here is what makes
+      // "exactly one logical effect is discoverable" true.
+      this.adoptLateResponse(response)
+      return
+    }
     pending.resolve(response)
+  }
+
+  /**
+   * Take ownership of a response that arrived after its caller gave up.
+   *
+   * ── WHAT THIS IS AND IS NOT (#1077 review, 4) ──
+   * Only main's OWN bookkeeping. An earlier version claimed a late child was
+   * otherwise an "orphan the parent can neither see nor close"; review
+   * disproved that — visibility and closability are decided in the RENDERER
+   * from session metadata (`isVisibleToOrchestrationParent` over
+   * `orchestrationParentId`), and `mergeClosedAgents` only appends tombstones.
+   * A late child IS listable and closable without this.
+   *
+   * What is wrong without it is narrower and still worth fixing: main's
+   * `promptDeliveries` and `parentSessionByChildSession` never learn the child
+   * exists, so `enrichAgent` cannot report its delivery state and the parent's
+   * status cache keeps a stale answer.
+   */
+  private adoptLateResponse(response: OrchestrationRendererResponse): void {
+    if (!response.ok || response.type !== 'create-agent') return
+    const parentSessionId = response.agent.orchestrationParentId
+    this.promptDeliveries.set(response.agent.sessionId, {
+      createdAt: Date.now(),
+      promptSubmissionCount: 0,
+    })
+    this.parentSessionByChildSession.set(response.agent.sessionId, parentSessionId)
+    this.closedAgents.delete(response.agent.sessionId)
+    this.invalidateStatusCache(parentSessionId)
+    this.journal?.recordIncident({
+      kind: 'orchestration.late_response_adopted',
+      severity: 'warn',
+      reason: 'renderer_answered_after_timeout',
+      context: {
+        requestId: response.requestId,
+        sessionId: response.agent.sessionId,
+        parentSessionId,
+        // The child exists and was never handed to the caller, so it is
+        // running work nobody is waiting on. Worth an incident even though
+        // recovery succeeded.
+        bootstrapPromptDelivered: false,
+      },
+    })
   }
 
   private async cachedListAgents(params: {
@@ -314,7 +617,7 @@ export class OrchestrationBridge {
     const now = Date.now()
     this.pruneStatusCaches(now)
     const cached = this.listAgentsCache.get(key)
-    if (cached && cached.expiresAt > now) return await cached.promise
+    if (cached && (cached.expiresAt === null || cached.expiresAt > now)) return await cached.promise
 
     // WHY cache renderer-backed status reads at all:
     //
@@ -346,11 +649,8 @@ export class OrchestrationBridge {
       }
       throw err
     })
-    this.listAgentsCache.set(key, {
-      expiresAt: now + STATUS_CACHE_TTL_MS,
-      promise,
-    })
-    return await promise
+    this.listAgentsCache.set(key, { expiresAt: null, promise })
+    return await this.startFreshnessOnSettle(this.listAgentsCache, key, promise)
   }
 
   private async cachedReadRunOutputs(params: {
@@ -373,7 +673,7 @@ export class OrchestrationBridge {
     const now = Date.now()
     this.pruneStatusCaches(now)
     const cached = this.readRunOutputsCache.get(key)
-    if (cached && cached.expiresAt > now) return await cached.promise
+    if (cached && (cached.expiresAt === null || cached.expiresAt > now)) return await cached.promise
 
     const promise = this.request({
       requestId: randomUUID(),
@@ -398,11 +698,47 @@ export class OrchestrationBridge {
       }
       throw err
     })
-    this.readRunOutputsCache.set(key, {
-      expiresAt: now + STATUS_CACHE_TTL_MS,
-      promise,
+    this.readRunOutputsCache.set(key, { expiresAt: null, promise })
+    return await this.startFreshnessOnSettle(this.readRunOutputsCache, key, promise)
+  }
+
+  /**
+   * Start a cached read's freshness window when its VALUE arrives (#925).
+   *
+   * The window used to start when the request was created, which made every
+   * read that took longer than 250 ms stale before it existed. That is not an
+   * edge case: the bridge serialises every orchestration request behind one
+   * in-flight slot with no timer on the queue, and `wait_agents` polls these
+   * keys every 250 ms–1 s by design. So a read waiting its turn was pruned,
+   * the next identical poll enqueued a DUPLICATE behind it, and the cache
+   * built to prevent a thundering herd produced one.
+   *
+   * Republishing is deliberately conditional. If a mutation invalidated this
+   * key while the read was in flight, the entry is gone and MUST NOT come
+   * back: its answer describes the world before the change, and a caller that
+   * polls after the mutation has to see the renderer, not this.
+   *
+   * ONE observable this changes, named because `wait_agents` shows the error
+   * text to the model (#1101 review): a caller that joins an in-flight read
+   * inherits the ORIGINAL dispatch's 30 s deadline rather than getting a fresh
+   * one. A poll that joins at t=29 s fails one second later with "Timed out
+   * waiting for renderer orchestration response". That is better than what it
+   * replaces — the old duplicate could not dispatch until the first read timed
+   * out, so it failed at t≈60 s and burned a queue slot doing it — but it is
+   * a real difference in when a slow read gives up, and it is not a bug.
+   */
+  private startFreshnessOnSettle<T>(
+    cache: Map<string, CachedValue<T>>,
+    key: string,
+    promise: Promise<T>,
+  ): Promise<T> {
+    return promise.then(value => {
+      const current = cache.get(key)
+      if (current?.promise === promise) {
+        cache.set(key, { expiresAt: Date.now() + STATUS_CACHE_TTL_MS, promise })
+      }
+      return value
     })
-    return await promise
   }
 
   private statusCacheKey(params: { parentSessionId: string; runId?: string }): string {
@@ -450,11 +786,16 @@ export class OrchestrationBridge {
     // hold its last fulfilled output forever. Status reads are already the only
     // place these caches matter, so opportunistic pruning gives bounded growth
     // without a timer that wakes the desktop app just to clean a 250 ms cache.
+    // A PENDING entry (`expiresAt === null`) is never pruned: it is the dedup
+    // handle for a read that has not answered yet, and deleting it is what let
+    // the next poll enqueue a duplicate (#925). It leaves on settlement — as a
+    // value with a real window — or on failure, where the `.catch` above
+    // removes it so the next caller retries rather than joining a rejection.
     for (const [key, cached] of this.listAgentsCache) {
-      if (cached.expiresAt <= now) this.listAgentsCache.delete(key)
+      if (cached.expiresAt !== null && cached.expiresAt <= now) this.listAgentsCache.delete(key)
     }
     for (const [key, cached] of this.readRunOutputsCache) {
-      if (cached.expiresAt <= now) this.readRunOutputsCache.delete(key)
+      if (cached.expiresAt !== null && cached.expiresAt <= now) this.readRunOutputsCache.delete(key)
     }
   }
 
@@ -501,7 +842,7 @@ export class OrchestrationBridge {
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const TIMEOUT_MS = 30_000
       const timer = setTimeout(() => {
-        this.pending.delete(request.requestId)
+        const mutating = MUTATING_REQUEST_TYPES.has(request.type)
         // The renderer never answered an orchestration request — JS thread
         // blocked, dead, or crashing mid-handler. Durable evidence of a hang
         // that the renderer itself can't report.
@@ -509,9 +850,27 @@ export class OrchestrationBridge {
           kind: 'orchestration.request_timeout',
           severity: 'error',
           reason: 'renderer_no_response',
-          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS },
+          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS, requestType: request.type, mutating },
         })
-        reject(new Error('Timed out waiting for renderer orchestration response'))
+        if (!mutating) {
+          // A read changed nothing, so failing it is the whole truth and the
+          // caller may simply ask again.
+          this.pending.delete(request.requestId)
+          reject(new Error('Timed out waiting for renderer orchestration response'))
+          return
+        }
+        // ── A DISPATCHED MUTATION IS NOT A FAILED ONE (#926) ──
+        // The request is sent BEFORE this timer starts, so it has definitely
+        // crossed into the renderer. Keep the entry — marked abandoned — so a
+        // late answer can still be reconciled, and hold a reservation so an
+        // identical retry is refused rather than blindly duplicating.
+        const entry = this.pending.get(request.requestId)
+        if (entry) entry.abandoned = true
+        reject(new OrchestrationOutcomeUnknownError(
+          request.requestId,
+          request.type,
+          request.parentSessionId,
+        ))
       }, TIMEOUT_MS)
       this.pending.set(request.requestId, { resolve, reject, timer })
       // WHY main serializes renderer-backed orchestration requests:
@@ -543,7 +902,30 @@ export class OrchestrationBridge {
         ))
         return
       }
-      sendToWindow(target, 'orchestration:request', request)
+      // ── EXPIRED BEFORE DISPATCH IS NOT OUTCOME-UNKNOWN (#926) ──
+      // `windowForSession` resolves through a lease check that deliberately
+      // ignores `closing`, while delivery skips a closing window — so a
+      // request could be silently dropped and then waited on for the full 30 s
+      // before being reported as an unknown outcome. That is the worst
+      // possible answer for the one case we can be CERTAIN about: nothing was
+      // dispatched, so nothing happened, and retrying is not just safe but
+      // correct. Review found this; the fix is to ask whether it was actually
+      // delivered rather than assuming the send succeeded.
+      if (!sendToWindow(target, 'orchestration:request', request)) {
+        clearTimeout(timer)
+        this.pending.delete(request.requestId)
+        this.journal?.recordIncident({
+          kind: 'orchestration.request_timeout',
+          severity: 'warn',
+          reason: 'renderer_unavailable',
+          context: { requestId: request.requestId, requestType: request.type, dispatched: false },
+        })
+        reject(new Error(
+          `The Agent Code window owning orchestration parent session ${request.parentSessionId} `
+          + 'could not receive the request, so nothing was dispatched. It is safe to retry.',
+        ))
+        return
+      }
     })
   }
 
@@ -617,11 +999,30 @@ export class OrchestrationBridge {
     // STAGE 2 of 2: renderer state says what the child appears to be doing,
     // while main alone knows when orchestration submitted a prompt. Keep this
     // overlay paired with lifecycleStateForRuntime in orchestrationMcp.ts.
+    // A prompt WAITING for the composer is a prompt the parent was told is
+    // on its way (#1134), so the child is not done — whatever the renderer
+    // derives from its last visible assistant row. Checked first because the
+    // submission count may be 0 (a bootstrap that has not landed) and the
+    // previous turn's `completed` is exactly the stale state to override.
+    // `failed` is overridden too, for the #1018 reason below: a failed child
+    // the parent has prompted again is waiting on that prompt. Only `closed`
+    // is left alone — a closed child has nothing to wait for, and the
+    // waiter's own failure path settles the pending state for a session that
+    // went away.
+    if (delivery.pendingPrompt && agent.lifecycleState !== 'closed') {
+      return 'prompt_sent'
+    }
     if (delivery.promptSubmissionCount === 0) return agent.lifecycleState
     if (agent.lifecycleState === 'created' || agent.lifecycleState === 'waiting') {
       return 'prompt_sent'
     }
     const lastSubmittedAt = delivery.lastPromptSubmittedAt
+    // A failed child that the parent has prompted AGAIN is waiting on that new
+    // prompt, not failed (#1018): the stale failure would otherwise show until
+    // the provider picked the prompt up.
+    if (agent.lifecycleState === 'failed' && agent.failedAt && lastSubmittedAt && lastSubmittedAt > agent.failedAt) {
+      return 'prompt_sent'
+    }
     if (!lastSubmittedAt || agent.lifecycleState !== 'completed') return agent.lifecycleState
     const lastAgentActivityAt = Math.max(
       agent.completedAt ?? 0,
@@ -761,7 +1162,12 @@ export class OrchestrationBridge {
     // about recent children. Leaving those maps unbounded in a long-running
     // desktop app would retain old outputs indefinitely.
     for (const [sessionId, delivery] of this.promptDeliveries) {
-      const latest = delivery.lastPromptSubmittedAt ?? delivery.createdAt
+      // A pending prompt keeps the record alive as long as the prompt is
+      // recent — the same TTL, measured from when it started waiting.
+      const latest = Math.max(
+        delivery.lastPromptSubmittedAt ?? delivery.createdAt,
+        delivery.pendingPrompt?.since ?? 0,
+      )
       if (now - latest > ORCHESTRATION_METADATA_TTL_MS) {
         this.promptDeliveries.delete(sessionId)
         this.parentSessionByChildSession.delete(sessionId)

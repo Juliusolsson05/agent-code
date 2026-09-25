@@ -1,7 +1,9 @@
 import {
   CLAUDE_ATTENTION_CONDITION_KINDS,
   CODEX_ATTENTION_CONDITION_KINDS,
+  GROK_ATTENTION_CONDITION_KINDS,
   OPENCODE_ATTENTION_CONDITION_KINDS,
+  PI_ATTENTION_CONDITION_KINDS,
 } from '@shared/types/providerConditionAttention.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 
@@ -17,6 +19,8 @@ const ATTENTION_KINDS: Readonly<Record<string, ReadonlySet<string>>> = {
   claude: CLAUDE_ATTENTION_CONDITION_KINDS,
   codex: CODEX_ATTENTION_CONDITION_KINDS,
   opencode: OPENCODE_ATTENTION_CONDITION_KINDS,
+  grok: GROK_ATTENTION_CONDITION_KINDS,
+  pi: PI_ATTENTION_CONDITION_KINDS,
 }
 
 /** Same rule as the renderer's conditionRequiresAttention: an attention-kind

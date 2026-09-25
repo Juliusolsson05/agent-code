@@ -13,6 +13,8 @@ import {
 } from '@renderer/components/ui/dialog'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { useEffect, useId, useMemo, useState } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // The browsing surface must stay cheap even when somebody pastes a whole
 // design document as their next prompt. CSS clipping alone still leaves the
@@ -22,8 +24,23 @@ import { useEffect, useId, useMemo, useState } from 'react'
 const PREVIEW_SCAN_CHARACTERS = 320
 const PREVIEW_CHARACTERS = 180
 
-function queuedPromptPreview(content: string): string {
-  const scanned = content.slice(0, PREVIEW_SCAN_CHARACTERS)
+function queuedPromptPreview(content: string, provider: AgentProviderKind): string {
+  // Unwrap, then escape, then truncate — in that order.
+  //
+  // Claude stores a queued PASTE inside its own envelope (#1052), so the first
+  // 26 characters of a long queued prompt were `<pasted_content id="…"`: the
+  // two lines the lane can show, spent on provider scaffolding.
+  //
+  // Escaping BEFORE the slice (#1029, #1049 review): a queued prompt is text
+  // the user is about to send on their own authority, and a reordering control
+  // in it misrepresents what that is. Escaping first also means a marker
+  // cannot be cut in half by the slice.
+  // Through the provider capability, like every other display surface
+  // (#1059): the envelope is Claude's, and a direct call here would apply
+  // Claude's rule to a Codex or OpenCode prompt. Harmless today — the pattern
+  // is exact — but it is the copy that drifts.
+  const source = getRendererProviderCapabilities(provider).typedUserPromptText(content)
+  const scanned = withVisibleControls(source.slice(0, PREVIEW_SCAN_CHARACTERS))
   // Preserve line boundaries because they are the only cheap hint that a
   // queued item contains pasted instructions or code. Horizontal whitespace
   // is normalized so an indented block cannot make the compact lane look
@@ -38,7 +55,11 @@ function queuedPromptPreview(content: string): string {
     // in PagedTextViewer.
     .replace(/\n{2,}/g, '\n')
     .trim()
-  const scanContainsAllSource = scanned.length === content.length
+  // Measured on the SOURCE, not on `scanned`: escaping makes a marker longer
+  // than the character it replaces, so comparing the escaped length to the
+  // original always said "truncated" and added an ellipsis to previews that
+  // were complete.
+  const scanContainsAllSource = source.length <= PREVIEW_SCAN_CHARACTERS
   if (scanContainsAllSource && compact.length <= PREVIEW_CHARACTERS) {
     return compact
   }
@@ -96,7 +117,7 @@ function QueuedPromptDialog({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {message ? (
             <PagedTextViewer
-              source={message.content}
+              source={withVisibleControls(message.content)}
               className="text-ink [overflow-wrap:anywhere]"
             />
           ) : null}
@@ -175,7 +196,7 @@ export function QueueStrip({
     return {
       message,
       notification,
-      preview: notification ? null : queuedPromptPreview(message.content),
+      preview: notification ? null : queuedPromptPreview(message.content, provider),
     }
   }), [provider, queuedMessages])
   const staleCount = useMemo(

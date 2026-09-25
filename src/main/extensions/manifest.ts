@@ -114,6 +114,17 @@ const keybindingContribution = z.object({
   key: z.string().min(1).max(64),
 })
 
+// Services are native sidecar processes, so their entry is load-bearing in a way
+// view entries are not: a hostile path here is arbitrary code execution at the
+// user's privilege. The same ENTRY_PATH grammar plus install-time bundle
+// containment (verifyEntryInsideBundle) applies; requiring it in the schema (not
+// optionally like views) means a malformed service can never even parse.
+const serviceContribution = z.object({
+  id: CONTRIBUTION_ID,
+  title: z.string().trim().min(1).max(80).optional(),
+  entry: ENTRY_PATH,
+}).strict()
+
 // A closed capability set — like activationEvent, an unknown capability must fail
 // install with a message, not resolve to nothing. Kept in lockstep with
 // EXTENSION_CAPABILITIES in @shared/types/extensions (the schema wins on drift).
@@ -130,7 +141,7 @@ const capabilityName = z.enum(EXTENSION_CAPABILITIES, {
   // in the same shape as the apiVersion mismatch below.
   message:
     `unknown capability — this build implements only ${EXTENSION_CAPABILITIES.join(', ')}. ` +
-    `Transcript, git, prompt and network capabilities are not available yet.`,
+    `Transcript, git and prompt capabilities are not available yet.`,
 })
 
 // `.refine` validates but does not narrow, so the parsed type would be `string`
@@ -171,14 +182,26 @@ export const extensionManifestSchema = z.object({
         title: z.string().trim().min(1).max(80),
         colors: extensionThemeColorsSchema,
       }).strict()).max(16).optional(),
+      // Max four: each one is a native process the user consented to as a unit.
+      // A manifest needing more is a platform conversation, not a schema bump.
+      services: z.array(serviceContribution).max(4).optional(),
     })
     .optional(),
   permissions: z.array(capabilityName).max(16).optional(),
+  // Bounded shape only. The per-entry grammar (https, exact origin, DNS name)
+  // and the pairing with `net.origins` are checked after parsing, in
+  // assertContributionsAreCoherent: the ledger re-validates installed rows with
+  // THIS schema on every launch, and a rule tightened here in a later release
+  // would make an installed extension silently disappear instead of failing
+  // the next install with a message.
+  networkOrigins: z.array(z.string().min(1).max(256)).min(1).max(4).optional(),
 }).superRefine((manifest, context) => {
   const v2OnlyPermission = manifest.permissions?.find(permission =>
     permission === 'fs.read'
     || permission === 'fs.write'
-    || permission === 'notifications.show')
+    || permission === 'notifications.show'
+    || permission === 'service.run'
+    || permission === 'net.origins')
   if (manifest.apiVersion === 1 && v2OnlyPermission) {
     // v1 owns one isolated view-local activation and its public API is frozen.
     // Advertising a capability that only the v2 runtime/view contract exposes
@@ -187,6 +210,16 @@ export const extensionManifestSchema = z.object({
       code: 'custom',
       path: ['permissions'],
       message: `${v2OnlyPermission} requires Agent Code API v2`,
+    })
+  }
+  if (manifest.apiVersion === 1 && manifest.contributes?.services?.length) {
+    // Services exist only in the managed v2 world (brokered lifecycle, no legacy
+    // closure ABI). A v1 service would be consent-with-no-call-path: the dialog
+    // would promise native processes a transport that cannot start them.
+    context.addIssue({
+      code: 'custom',
+      path: ['contributes', 'services'],
+      message: 'contributes.services requires Agent Code API v2',
     })
   }
   if (manifest.apiVersion !== 2) return
@@ -267,13 +300,14 @@ function assertContributionsAreCoherent(manifest: ExtensionManifest): void {
   const settings = manifest.contributes?.settings ?? []
   const keybindings = manifest.contributes?.keybindings ?? []
   const themes = manifest.contributes?.themes ?? []
+  const services = manifest.contributes?.services ?? []
 
   // WHY namespacing is ENFORCED and not merely conventional: contributed command
   // ids land in one global registry beside ~95 first-party commands. An
   // extension declaring `session.kill` would collide with a real one, and the
   // resolution would be arbitrary. Install is the only moment where the user can
   // still act on it, so it fails here rather than resolving oddly forever.
-  const namespaced = [...commands, ...views, ...settings, ...themes]
+  const namespaced = [...commands, ...views, ...settings, ...themes, ...services]
   for (const contribution of namespaced) {
     if (!contribution.id.startsWith(prefix)) {
       throw new ManifestError(
@@ -292,6 +326,9 @@ function assertContributionsAreCoherent(manifest: ExtensionManifest): void {
   assertUnique(views.map(v => v.id), 'view')
   assertUnique(settings.map(s => s.id), 'setting')
   assertUnique(themes.map(theme => theme.id), 'theme')
+  assertUnique(services.map(service => service.id), 'service')
+
+  assertNetworkOriginsAreCoherent(manifest)
 
   // A contributed keybinding is consulted app-wide, including while the user
   // types into an agent composer or a terminal. A bare key ("a", "Enter") or a
@@ -342,6 +379,67 @@ function assertContributionsAreCoherent(manifest: ExtensionManifest): void {
       }
     }
   }
+}
+
+/**
+ * Why a declared origin must be EXACTLY `https://<dns-name>[:port]` and nothing
+ * looser — each rule closes a way for the consent dialog to under-state what
+ * the extension can reach (#1150):
+ *
+ *  - https only. Besides confidentiality for the credentials these calls carry
+ *    (an API key header), TLS is what makes the declared NAME the thing that
+ *    answers: a name that an attacker re-points at 192.168.1.1 (DNS rebinding)
+ *    cannot present a certificate for that name, so the request fails instead
+ *    of reaching a device on the user's LAN.
+ *  - exact origin, no wildcard. `*.example.com` would let the extension pick
+ *    any subdomain at runtime — including one a third party controls — after
+ *    the user approved a single name.
+ *  - no path/query/userinfo. Origins are the unit the broker compares; a path
+ *    in the manifest would look like a restriction the host never enforces.
+ *  - no IP literals, localhost or `.local`. Those are the private network,
+ *    which has its own capability (net.connect) and consent wording; letting
+ *    them in here would be a second, differently-worded door to the LAN.
+ *
+ * Returns the user-facing reason, or null when the entry is acceptable.
+ */
+export function invalidNetworkOrigin(entry: string): string | null {
+  if (entry.includes('*')) return 'wildcards are not allowed; list each exact origin'
+  let url: URL
+  try { url = new URL(entry) } catch { return 'is not an absolute URL' }
+  if (url.protocol !== 'https:') return 'must use https'
+  if (url.username || url.password) return 'must not contain credentials'
+  if (url.origin !== entry) return `must be exactly an origin such as "${url.origin}" (no path, query, fragment or trailing slash)`
+  const host = url.hostname.toLowerCase()
+  // A trailing dot is the fully-qualified form of the SAME name, and WHATWG
+  // URL keeps it as written: `https://localhost.` passed every suffix check
+  // below while resolving to loopback, and `https://api.example.com.` would be
+  // a second spelling the broker's exact-origin match treats as a different
+  // origin from the one the user read. One spelling per name (#1151 review).
+  if (host.endsWith('.')) return 'must not end with "." (write the name without the trailing dot)'
+  if (host.startsWith('[') || /^\d+(\.\d+){3}$/.test(host)) return 'must be a DNS name, not an IP address (use net.connect for local-network addresses)'
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || !host.includes('.')) {
+    return 'must be a public DNS name, not a local one (use net.connect for local-network addresses)'
+  }
+  return null
+}
+
+function assertNetworkOriginsAreCoherent(manifest: ExtensionManifest): void {
+  const origins = manifest.networkOrigins
+  const requested = (manifest.permissions ?? []).includes('net.origins')
+  // Both directions are errors. A permission with no list is consent to
+  // nothing (the dialog would promise network access the broker never
+  // grants); a list with no permission is a destination nobody consented to.
+  if (requested && !origins?.length) {
+    throw new ManifestError('permission "net.origins" requires a "networkOrigins" list of the exact https origins it reaches')
+  }
+  if (!origins) return
+  if (!requested) throw new ManifestError('"networkOrigins" requires the "net.origins" permission')
+  if (manifest.apiVersion !== 2) throw new ManifestError('"networkOrigins" requires Agent Code API v2')
+  for (const entry of origins) {
+    const reason = invalidNetworkOrigin(entry)
+    if (reason) throw new ManifestError(`networkOrigins entry "${entry}" ${reason}`)
+  }
+  assertUnique(origins, 'network origin')
 }
 
 function assertUnique(ids: string[], kind: string): void {

@@ -14,10 +14,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import { usePaletteRequest } from './usePaletteRequest'
-import {
-  dispatchCommand,
-  dispatchResolvedRow,
-} from '@renderer/features/command-palette/executeCommand'
+import { dispatchResolvedRow } from '@renderer/features/command-palette/executeCommand'
 import {
   buildAgentIndexCommand,
   isAgentIndexCommand,
@@ -27,7 +24,9 @@ import {
   buildHistoryScoreMap,
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
+import { dispatchPendingInvocation } from '@renderer/features/command-palette/dispatchPendingInvocation'
+import { useSessionMenuHost } from '@renderer/features/session-context-menu/useSessionMenuHost'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {
@@ -80,7 +79,6 @@ import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templat
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
-import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
@@ -93,6 +91,7 @@ import { dirtyAiWorkspacePaths } from '@renderer/features/ai-workspace/lib/aiWor
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -100,14 +99,6 @@ import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // sub-mode UI. The command registry lives outside this component
 // under feature-owned folders, so adding a feature command no longer
 // requires editing the palette implementation itself.
-
-type BuriedPaneInfo = {
-  id: string
-  label: string
-  description: string
-  note?: string
-  buriedAt: number
-}
 
 type PromptTemplateFillState = {
   sessionId: string
@@ -166,6 +157,10 @@ export function CommandPalette() {
   // #494), so a chord takes the route a menu click already took. One channel,
   // one dispatch path — rather than a second one growing beside it.
   const pendingCommandInvocation = useAppStore(state => state.pendingCommandInvocation)
+  // A Sessions row right-click (#1180) mounts the host for the same reason a
+  // chord does: building the menu runs command `when` predicates, which need
+  // the live CommandContext only this host assembles.
+  const sessionMenuRequest = useAppStore(state => state.sessionMenuRequest)
   const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
   const clearCommandInvocation = useAppStore(state => state.clearCommandInvocation)
 
@@ -213,7 +208,7 @@ export function CommandPalette() {
   // in the app — flashed the palette open and shut. Separating "the host is
   // mounted" from "the user can see it" keeps the #494 cost model (build the
   // context only when something actually needs it) without the flash.
-  if (!open && !pendingCommandInvocation && !executionRequest) return null
+  if (!open && !pendingCommandInvocation && !executionRequest && !sessionMenuRequest) return null
   return (
     <OpenCommandPalette
       visible={open}
@@ -260,12 +255,6 @@ function OpenCommandPalette({
   const setSettings = useAppStore(state => state.setSettings)
   const { onNewTabRequest } = usePathPickerRequests()
 
-  const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
-  const onTileTabsRequest = useCallback(() => {
-    openTileTabsModal(
-      workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
-    )
-  }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
   const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
   const openMergeProjectTabs = useAppStore(state => state.openMergeProjectTabs)
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
@@ -276,6 +265,7 @@ function OpenCommandPalette({
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
+  const openCloseCompletedAgents = useAppStore(state => state.openCloseCompletedAgents)
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
   const openProviderSwitchPicker = useAppStore(state => state.openProviderSwitchPicker)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
@@ -288,6 +278,7 @@ function OpenCommandPalette({
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
+  const closeCloseCompletedAgents = useAppStore(state => state.closeCloseCompletedAgents)
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
   const closeConversations = useAppStore(state => state.closeConversations)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
@@ -298,6 +289,10 @@ function OpenCommandPalette({
   const openAgentAnalytics = useAppStore(state => state.openAgentAnalytics)
   const openApp = useAppStore(state => state.openApp)
   const openKeyVault = useAppStore(state => state.openKeyVault)
+  const openMcpServerDialogState = useAppStore(state => state.openMcpServerDialog)
+  const openAddSkillDialogState = useAppStore(state => state.openAddSkillDialog)
+  const requestSkillUpdateCheck = useAppStore(state => state.requestSkillUpdateCheck)
+  const openAgentMcpServers = useAppStore(state => state.openAgentMcpServers)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -316,7 +311,6 @@ function OpenCommandPalette({
   const closeGlobalEditorAction = useAppStore(state => state.closeGlobalEditor)
   const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
-  const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
   const openNewAgentIn = useAppStore(state => state.openNewAgentIn)
   const openPinAgents = useAppStore(state => state.openPinAgents)
@@ -331,13 +325,6 @@ function OpenCommandPalette({
   const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
   const editorFullscreen = useGlobalEditorStore(state => state.editorFullscreen)
 
-  const enterDispatchMode = workspace.enterDispatchMode
-  const exitDispatchMode = workspace.exitDispatchMode
-  const enterGlobalDispatch = useCallback(
-    () =>
-      workspace.setDispatchScope(workspace.dispatchMode?.scope === 'global' ? 'project' : 'global'),
-    [workspace],
-  )
   const setAggressiveDebugPersistence = useCallback(
     (enabled: boolean) => setSettings({ aggressiveDebugPersistence: enabled }),
     [setSettings],
@@ -356,12 +343,14 @@ function OpenCommandPalette({
   const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const browserPocketEnabled = settings.browserPocketEnabled
   const commandPaletteOpenFlag = useAppStore(state => state.commandPaletteOpen)
   const usageModalOpen = useAppStore(state => state.usageModalOpen)
   const agentAnalyticsOpen = useAppStore(state => state.agentAnalyticsOpen)
   const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
+  const closeCompletedAgentsOpen = useAppStore(state => state.closeCompletedAgentsOpen)
   const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
   const conversationsOpen = useAppStore(state => state.conversationsOpen)
   const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
@@ -384,8 +373,6 @@ function OpenCommandPalette({
   const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const caffeinateActive = caffeinateStatus?.active === true
   const caffeinateSupported = caffeinateStatus?.supported !== false
-  const dispatchModeEnabled = workspace.dispatchMode !== null
-  const globalDispatchEnabled = workspace.dispatchMode?.scope === 'global'
 
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -428,50 +415,8 @@ function OpenCommandPalette({
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   const customPromptTemplates = settings.savedPromptTemplates
-  // Buried panes are scoped to the ACTIVE TAB. The natural temptation
-  // is to show every buried pane in the workspace ("they're paused
-  // work, the user might want any of them") but that mixes contexts:
-  // a buried Codex agent from project A appears alongside a buried
-  // Claude agent from project B with no surface-level indication
-  // they're cross-project. Scoping by sourceTabId matches the rest of
-  // the workspace's per-tab discipline and prevents revive-into-wrong-
-  // tab footguns (revive places the pane back into the tab the user
-  // is currently in, not the tab it was buried from).
-  //
-  // Buried panes from other tabs are not lost — switching to that tab
-  // surfaces them in its palette.
-  const activeTabId = workspace.state.activeTabId
-  const buried = useMemo<BuriedPaneInfo[]>(
-    () =>
-      [...workspace.state.buried]
-        .filter(entry => entry.sourceTabId === activeTabId)
-        .sort((a, b) => b.buriedAt - a.buriedAt)
-        .map(entry => {
-          const kind = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
-          const cwd = entry.sessionMeta.cwd
-          return {
-            id: entry.id,
-            // Same title rule as every other list (#865), kind as context.
-            label: `${sessionDisplayTitle(entry.sessionMeta)} · ${kind}`,
-            description: `${entry.sourceTabTitle} · ${cwd}`,
-            note: entry.note,
-            buriedAt: entry.buriedAt,
-          }
-        }),
-    [activeTabId, workspace.state.buried],
-  )
-
-  const enterBuriedMode = useCallback(() => {
-    setMode('buried')
-    setQuery('')
-    setSelectedIndex(0)
-  }, [])
-
-  const enterKillBuriedMode = useCallback(() => {
-    setMode('kill-buried')
-    setQuery('')
-    setSelectedIndex(0)
-  }, [])
+  // The buried / kill-buried picker modes lived here until #992: an unplaced
+  // pool session is already "hidden but alive", and every index lists it.
 
   const enterPromptTemplateMode = useCallback(() => {
     setMode('prompt-template')
@@ -578,7 +523,6 @@ function OpenCommandPalette({
       workspace,
       ui: {
         openNewTabPicker: onNewTabRequest,
-        openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
         openMergeProjectTabs,
         openSettings: onSettingsRequest,
@@ -593,6 +537,7 @@ function OpenCommandPalette({
         openAgentActivity,
         openKeyboardShortcuts,
         openCloseOldAgents,
+        openCloseCompletedAgents,
         openBulkProviderSwitch,
         openProviderSwitchPicker,
         openRewindPrompt,
@@ -605,6 +550,7 @@ function OpenCommandPalette({
         closeKeyboardShortcuts,
         closeAgentActivity,
         closeCloseOldAgents,
+        closeCloseCompletedAgents,
         closeBulkProviderSwitch,
         closeConversations,
         closeReorderTabs,
@@ -614,6 +560,10 @@ function OpenCommandPalette({
         openUsageModal,
         openAgentAnalytics,
         openKeyVault,
+        openMcpServerDialog: () => openMcpServerDialogState({ mode: 'add' }),
+        openAddSkillDialog: () => openAddSkillDialogState(),
+        requestSkillUpdateCheck,
+        openAgentMcpServers,
         toggleGitBar,
         toggleWorktreesBar,
         toggleDebugPanel,
@@ -633,17 +583,11 @@ function OpenCommandPalette({
         closeGlobalEditor: closeGlobalEditorAction,
         toggleGlobalEditor,
         toggleFileTreeVisible,
-        enterDispatchMode,
-        enterGlobalDispatch,
-        exitDispatchMode,
         openTiledDispatchPrompt,
-        openDispatchAttach,
         openLinkedAgent,
         openNewAgentIn,
         openPinAgents,
         setAggressiveDebugPersistence,
-        enterBuriedMode,
-        enterKillBuriedMode,
         enterPromptTemplateMode,
         enterManagePromptTemplateMode,
         enterSavePromptTemplateMode,
@@ -665,6 +609,7 @@ function OpenCommandPalette({
         usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
+        browserPocketEnabled,
         commandPaletteOpen: commandPaletteOpenFlag,
         paletteMode: mode,
         usageModalOpen,
@@ -672,6 +617,7 @@ function OpenCommandPalette({
         keyboardShortcutsOpen,
         agentActivityOpen,
         closeOldAgentsOpen,
+        closeCompletedAgentsOpen,
         bulkProviderSwitchOpen,
         conversationsOpen,
         remotePanelOpen,
@@ -699,8 +645,6 @@ function OpenCommandPalette({
         focusedCwd,
         fileTreeVisible,
         editorFullscreen,
-        dispatchModeEnabled,
-        globalDispatchEnabled,
         agentViewMode,
         commandVisibilityOverrides,
         navigationCommandsEnabled,
@@ -711,7 +655,6 @@ function OpenCommandPalette({
     [
       workspace,
       onNewTabRequest,
-      onTileTabsRequest,
       onReorderTabsRequest,
       openMergeProjectTabs,
       onSettingsRequest,
@@ -720,6 +663,7 @@ function OpenCommandPalette({
       openConversations,
       openAgentActivity,
       openCloseOldAgents,
+      openCloseCompletedAgents,
       openBulkProviderSwitch,
       openProviderSwitchPicker,
       openRewindPrompt,
@@ -731,6 +675,7 @@ function OpenCommandPalette({
       closeKeyboardShortcuts,
       closeAgentActivity,
       closeCloseOldAgents,
+      closeCloseCompletedAgents,
       closeBulkProviderSwitch,
       closeConversations,
       closeReorderTabs,
@@ -741,6 +686,10 @@ function OpenCommandPalette({
       openAgentAnalytics,
       openApp,
       openKeyVault,
+      openMcpServerDialogState,
+      openAddSkillDialogState,
+      requestSkillUpdateCheck,
+      openAgentMcpServers,
       toggleGitBar,
       toggleWorktreesBar,
       toggleDebugPanel,
@@ -760,17 +709,11 @@ function OpenCommandPalette({
       closeGlobalEditorAction,
       toggleGlobalEditor,
       toggleFileTreeVisible,
-      enterDispatchMode,
-      enterGlobalDispatch,
-      exitDispatchMode,
       openTiledDispatchPrompt,
-      openDispatchAttach,
       openLinkedAgent,
       openNewAgentIn,
       openPinAgents,
       setAggressiveDebugPersistence,
-      enterBuriedMode,
-      enterKillBuriedMode,
       enterPromptTemplateMode,
       enterManagePromptTemplateMode,
       enterSavePromptTemplateMode,
@@ -784,6 +727,7 @@ function OpenCommandPalette({
       usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
+      browserPocketEnabled,
       commandPaletteOpenFlag,
       mode,
       usageModalOpen,
@@ -791,6 +735,7 @@ function OpenCommandPalette({
       keyboardShortcutsOpen,
       agentActivityOpen,
       closeOldAgentsOpen,
+      closeCompletedAgentsOpen,
       bulkProviderSwitchOpen,
       conversationsOpen,
       remotePanelOpen,
@@ -818,8 +763,6 @@ function OpenCommandPalette({
       focusedCwd,
       fileTreeVisible,
       editorFullscreen,
-      dispatchModeEnabled,
-      globalDispatchEnabled,
       agentViewMode,
       commandVisibilityOverrides,
       navigationCommandsEnabled,
@@ -871,25 +814,6 @@ function OpenCommandPalette({
   // the user is typing the name of is `primary`, short supporting text is
   // `secondary`, and long prose is `body` — which `rankEntries` matches
   // by literal substring only, never by subsequence.
-  const filteredBuried = useMemo(
-    () =>
-      rankEntries(buried, queryText, item => [
-        // `note` is the ONLY human-authored, row-distinguishing field
-        // here, so it is the primary one despite not being the row's
-        // headline. `label` is generated (`${kind} · ${cwdBase}`) and is
-        // byte-identical for every pane buried from the same repo — as
-        // primary it made tier 4 a mass tie that the note could never
-        // break, and let an unrelated repo's provider name outrank a note
-        // that literally started with the query.
-        primary(item.note),
-        secondary(item.label),
-        // `${sourceTabTitle} · ${cwd}` — contains an absolute path, so as
-        // a secondary field every buried pane matched "users",
-        // "development", and every other path segment at tier 3.
-        body(item.description),
-      ]),
-    [buried, queryText],
-  )
   const filteredPromptTemplates = useMemo(
     () =>
       rankEntries(promptTemplates, queryText, template => [
@@ -1004,23 +928,17 @@ function OpenCommandPalette({
       ? resolveAgentPaneLabel(
           workspace.state,
           directAgentQuery.label,
-          workspace.tileTabs,
         )
       : null,
-    [directAgentQuery, workspace.state, workspace.tileTabs],
+    [directAgentQuery, workspace.state],
   )
-  // WHY the syntax intent is normalized against the visible surface before we
-  // build the row: `A2!` can only mean "Here" when a Tiled Dispatch lane is on
-  // screen. Persisted state can contain a hidden Dispatch layout underneath
-  // Tiled Tabs, and grid/classic Dispatch deliberately retain ordinary
-  // coordinate navigation. Passing the raw bang there would make row zero
-  // promise "Open Here" while Enter actually switches to an existing pane.
-  const directAgentIntent =
-    directAgentQuery?.intent === 'open-in-focused-tiled-dispatch-lane' &&
-    !workspace.tileTabs &&
-    workspace.state.dispatchMode?.tiled
-      ? directAgentQuery.intent
-      : 'reuse-existing-view'
+  // The bang intent (`A2!` = "open it HERE, in the focused lane") passes
+  // straight through. It used to be normalized to 'reuse-existing-view' unless
+  // a Tiled Dispatch lane was on screen, because the grid and classic Dispatch
+  // had no lane for "Here" to mean and row zero would have promised "Open
+  // Here" while Enter switched to an existing pane. A lane is always on screen
+  // now (#992), so "Here" always has a referent.
+  const directAgentIntent = directAgentQuery?.intent ?? 'reuse-existing-view'
   const directAgentCommand = useMemo(
     () =>
       directAgentTarget && directAgentQuery
@@ -1093,15 +1011,13 @@ function OpenCommandPalette({
   }, [commandSortMode, commandStarred, paletteRows, queryText])
 
   const filteredLength =
-    mode === 'buried' || mode === 'kill-buried'
-        ? filteredBuried.length
-        : mode === 'prompt-template'
-          ? filteredPromptTemplates.length
-          : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
-            ? filteredAiWorkspaces.length
-            : mode === 'commands'
-              ? paletteRows.length
-              : 0
+    mode === 'prompt-template'
+      ? filteredPromptTemplates.length
+      : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
+        ? filteredAiWorkspaces.length
+        : mode === 'commands'
+          ? paletteRows.length
+          : 0
 
   const selectedPaletteRow = useMemo(() => {
     if (mode !== 'commands') return null
@@ -1197,6 +1113,8 @@ function OpenCommandPalette({
     [commandContext, onClose, showToast],
   )
 
+  useSessionMenuHost({ commandContext, showToast })
+
   // Native menu → command dispatch (issue #148).
   //
   // The macOS File menu lives in main, but its actions are renderer commands
@@ -1214,15 +1132,13 @@ function OpenCommandPalette({
   // admission only, so hiding a command can no longer disable its menu item.
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
-    void dispatchCommand({
-      // The SOURCE travels with the request, so a chord is recorded as a
-      // keybinding invocation and a File-menu click as a native-menu one. A
-      // hardcoded source here would have made every keyboard invocation look
-      // like a menu click in personalized history.
-      id: pendingMenuCommand.id,
-      source: pendingMenuCommand.source,
-      ctx: commandContext,
-      reportError: message => showToast(message, 6000),
+    // #1180: a pending invocation may name an explicit target (the Sessions
+    // list right-click menu). Only THIS host can run it, because it is the
+    // only place a full CommandContext (with its `ui` bucket) exists.
+    void dispatchPendingInvocation({
+      pending: pendingMenuCommand,
+      commandContext,
+      showToast,
       // Without these a contributed keybinding resolved to nothing here, and the
       // outcome — `status: 'unknown'` — is not inspected by the keybinding path, so
       // every manifest-declared shortcut was a silent no-op.
@@ -1253,25 +1169,6 @@ function OpenCommandPalette({
       onClose()
     }
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
-
-  const executeBuried = useCallback(
-    (item: BuriedPaneInfo) => {
-      onClose()
-      void workspace.reviveBuried(item.id)
-    },
-    [onClose, workspace],
-  )
-
-  const executeKillBuried = useCallback(
-    (item: BuriedPaneInfo) => {
-      const remainingCount = filteredBuried.filter(candidate => candidate.id !== item.id).length
-      void workspace.killBuried(item.id).then(() => {
-        if (remainingCount === 0) onClose()
-        else setSelectedIndex(i => Math.max(0, Math.min(i, remainingCount - 1)))
-      })
-    },
-    [filteredBuried, onClose, workspace],
-  )
 
   const executePromptTemplate = useCallback(
     async (template: PromptTemplate, originSelectedIndex = selectedIndex) => {
@@ -1576,12 +1473,6 @@ function OpenCommandPalette({
         } else if (mode === 'ai-workspace-clear') {
           const workspace = filteredAiWorkspaces[selectedIndex]
           if (workspace) void clearAiWorkspace(workspace)
-        } else if (mode === 'buried') {
-          const item = filteredBuried[selectedIndex]
-          if (item) executeBuried(item)
-        } else if (mode === 'kill-buried') {
-          const item = filteredBuried[selectedIndex]
-          if (item) executeKillBuried(item)
         } else if (mode === 'prompt-template') {
           const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
@@ -1596,14 +1487,11 @@ function OpenCommandPalette({
       mode,
       aiWorkspacePending,
       filteredLength,
-      filteredBuried,
       paletteRows,
       filteredAiWorkspaces,
       filteredPromptTemplates,
       selectedIndex,
-      executeBuried,
       executeCommand,
-      executeKillBuried,
       executePromptTemplate,
       createAiWorkspace,
       clearAiWorkspace,
@@ -1709,16 +1597,6 @@ function OpenCommandPalette({
             : 'Search application commands and related session workflows.'}
         </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
-          {mode === 'buried' && (
-            <span className="text-accent text-[11px] flex-shrink-0 select-none">
-              revive &rsaquo;
-            </span>
-          )}
-          {mode === 'kill-buried' && (
-            <span className="text-danger text-[11px] flex-shrink-0 select-none">
-              kill buried &rsaquo;
-            </span>
-          )}
           {mode === 'prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
               template &rsaquo;
@@ -1777,9 +1655,7 @@ function OpenCommandPalette({
                   ? 'Workspace name…'
                     : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
                       ? 'Search AI Workspaces…'
-                      : mode === 'buried' || mode === 'kill-buried'
-                        ? 'Search buried panes…'
-                        : mode === 'prompt-template'
+                      : mode === 'prompt-template'
                           ? 'Search prompt templates…'
                           : 'Type a command…'
             }
@@ -1826,7 +1702,7 @@ function OpenCommandPalette({
             </Button>
           )}
           {/* Commands mode only. The other ten modes render short, intrinsically
-              ordered lists (session recency, buried-at time, [...custom,
+              ordered lists (session recency, [...custom,
               ...builtin]) where a sort control would be chrome without a
               purpose — the command list is the only one long enough to be hard
               to scan. */}
@@ -2115,7 +1991,11 @@ function OpenCommandPalette({
                           else openAiWorkspace(workspace.workspaceId)
                         }}
                       >
-                        <div className="text-[12px] truncate">{workspace.name}</div>
+                        {/* MCP accepts any name, so `Review` and
+                            `Review<U+200B>` are two workspaces that read the
+                            same — in this picker and in its armed "confirm
+                            metadata deletion" state (#1049 re-review). */}
+                        <div className="text-[12px] truncate">{withVisibleControls(workspace.name)}</div>
                         <div className="text-[10px] text-muted mt-0.5 truncate">
                           {pending
                             ? 'Clearing…'
@@ -2123,7 +2003,7 @@ function OpenCommandPalette({
                               ? 'Press Enter or click again to confirm metadata deletion'
                               : `${workspace.fileCount} files${
                                   workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''
-                                }${workspace.description ? ` · ${workspace.description}` : ''}`}
+                                }${workspace.description ? ` · ${withVisibleControls(workspace.description)}` : ''}`}
                         </div>
                       </button>
                     )
@@ -2171,65 +2051,6 @@ function OpenCommandPalette({
               </div>
             )}
 
-            {mode === 'buried' &&
-              (filteredBuried.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">No buried panes</div>
-              ) : (
-                filteredBuried.map((item, i) => (
-                  <div
-                    key={item.id}
-                    className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    data-palette-row={i}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeBuried(item)}
-                  >
-                    <div className="text-[12px] truncate">{item.label}</div>
-                    {item.note && (
-                      <div className="text-[11px] text-ink mt-0.5 truncate">{item.note}</div>
-                    )}
-                    <div className="text-[10px] text-muted mt-0.5 truncate">{item.description}</div>
-                  </div>
-                ))
-              ))}
-
-            {mode === 'kill-buried' &&
-              (filteredBuried.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">No buried panes</div>
-              ) : (
-                filteredBuried.map((item, i) => (
-                  <div
-                    key={item.id}
-                    className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-danger-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    data-palette-row={i}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeKillBuried(item)}
-                  >
-                    <div className="text-[12px] truncate">{item.label}</div>
-                    {item.note && (
-                      <div className="text-[11px] text-ink mt-0.5 truncate">{item.note}</div>
-                    )}
-                    <div className="text-[10px] text-muted mt-0.5 truncate">{item.description}</div>
-                  </div>
-                ))
-              ))}
 
             {mode === 'prompt-template' &&
               (filteredPromptTemplates.length === 0 ? (
@@ -2255,7 +2076,7 @@ function OpenCommandPalette({
                     onClick={() => void executePromptTemplate(template)}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <div className="min-w-0 flex-1 text-[12px] truncate">{template.title}</div>
+                      <div className="min-w-0 flex-1 text-[12px] truncate">{withVisibleControls(template.title)}</div>
                       {template.scope === 'custom' && (
                         <div className="flex flex-shrink-0 items-center gap-1">
                           <button

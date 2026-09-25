@@ -5,6 +5,7 @@ import { FileIcon, FolderIcon } from '@renderer/features/editor/lib/fileIcon'
 // Shared editor FS contract — was a local duplicate of the main/preload entry
 // shape. See @shared/types/editorFs.
 import type { EditorFsEntry } from '@shared/types/editorFs'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type TreeNode = {
   entry: EditorFsEntry
@@ -1071,7 +1072,12 @@ function TreeEntries({
                     <FileIcon name={entry.name} />
                   )}
                 </span>
-                <span className="truncate">{entry.name}</span>
+                {/* The identity a two-click Delete in this tree acts on, and
+                    for a clean file that menu IS the confirmation — the
+                    escaped dialog only appears when a dirty buffer is at
+                    stake (#1049 re-review). `report.txt<U+200B>` and
+                    `report.txt` are different files on disk. */}
+                <span className="truncate">{withVisibleControls(entry.name)}</span>
               </button>
             )}
             {entry.isDirectory && isExpanded && (

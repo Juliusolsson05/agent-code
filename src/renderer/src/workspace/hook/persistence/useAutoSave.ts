@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
-import { pruneSessionOwnership, repairPersistedTabs } from '@renderer/workspace/sessionOwnership'
+import { pruneSessionOwnership } from '@renderer/workspace/sessionOwnership'
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import { isAgentSessionKind } from '@shared/types/providerKind'
 
@@ -55,44 +55,25 @@ export function useAutoSave(
       // Autosave is the durability boundary. If an action accidentally leaves
       // an unowned row in `state.sessions`, writing it to workspace.json turns a
       // transient invariant violation into a startup respawn on every future
-      // launch. Pruning here is the last line of defense: owned hidden sessions
-      // (detached/buried) still persist, but metadata with no owner cannot make
-      // itself durable.
+      // launch. Pruning here is the last line of defense: parked sessions still
+      // persist, but metadata with no owner cannot make itself durable.
+      //
+      // "No owner" means the row's `projectId` names no project. That is also
+      // what a session looks like if some writer forgot to FILE it
+      // (fileSessionInProject), in which case this warning is the only trace
+      // of a session that will be gone after restart — treat it as a bug
+      // report, not as housekeeping.
       // eslint-disable-next-line no-console
       console.warn('[workspace] dropping unowned sessions during autosave:', pruned.droppedSessionIds)
     }
-    // Repair the tile trees BEFORE serializing them. `pruneSessionOwnership`
-    // above scrubs every pointer that aims at a session, but the trees are
-    // themselves an ownership surface and used to be written verbatim — so a
-    // leaf whose metadata had already been removed from `state.sessions` could
-    // become durable. That shape is not merely untidy: rehydrate counts such a
-    // leaf as a pane it must restore, can never restore it, and therefore
-    // reports `partial-restore` and holds autosave off on every subsequent
-    // launch. Since autosave is the only writer of workspace.json, the file
-    // then cannot be repaired by the app at all.
-    //
-    // WHY `pruned.sessions` and not `s.sessions`: they agree on exactly the
-    // question being asked. `pruned.sessions` keeps `ownedIds ∩ own keys of
-    // s.sessions`, and every tile leaf with metadata is owned by construction,
-    // so a leaf is missing here if and only if it was already an orphan in
-    // this same snapshot. Nothing `pruneSessionOwnership` drops for an
-    // unrelated reason (unowned metadata, a detached record whose parent tab
-    // is gone, a buried pane) can ever be a tile leaf — which is what stops
-    // this from deleting a live pane. If that ever stops holding, this call
-    // becomes destructive, so keep the two in step.
-    const repairedTabs = repairPersistedTabs({
-      tabs: s.tabs,
-      sessions: pruned.sessions,
-      activeTabId: s.activeTabId,
-      tileTabs: refs.latestTileTabsRef.current,
-    })
-    if (repairedTabs.droppedLeafSessionIds.length > 0) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[workspace] dropping tile leaves with no session metadata during autosave:',
-        { leaves: repairedTabs.droppedLeafSessionIds, tabs: repairedTabs.droppedTabIds },
-      )
-    }
+    // (A `repairPersistedTabs` pass ran here until #992. Tile trees were an
+    // ownership surface written verbatim, so a leaf whose metadata was already
+    // gone could become durable — and rehydrate, counting it as a pane it must
+    // restore and never could, reported `partial-restore` and held autosave off
+    // on every later launch. Since autosave is the only writer of
+    // workspace.json, the file could then never be repaired by the app. With
+    // ownership on the row, an orphan is an unowned row and the prune above
+    // already dropped it; there is no second structure to cut it out of.)
 
     // Collect non-empty drafts so in-progress prompts survive crashes. Only agent
     // panes own a composer. Extension panes stay in `pruned.sessions` so their
@@ -113,15 +94,31 @@ export function useAutoSave(
     const persistedPinnedSessionIds = s.pinnedSessionIds.filter(
       id => pruned.sessions[id] !== undefined,
     )
+    // v3 ONLY (#992). Nothing of the v2 shape is written any more: no `tabs`
+    // with tile trees, no `detachedSessions`, no `buried`, no `dispatchMode`.
+    // An older build opening this file finds no `tabs`, fails its rehydrate and
+    // lands in its recovery path with autosave LOCKED — it cannot show the
+    // workspace, and it cannot overwrite it either (see PersistedWorkspace).
+    //
+    // A project that no longer holds a session is not written. It owns nothing
+    // (U4), and reading one back would give a header over an empty list.
+    const populatedProjectIds = new Set<string>()
+    for (const meta of Object.values(pruned.sessions)) {
+      if (meta.projectId !== undefined) populatedProjectIds.add(meta.projectId)
+    }
+    const projects = s.tabs
+      .filter(tab => populatedProjectIds.has(tab.id))
+      .map(tab => ({ id: tab.id, title: tab.title }))
     const persisted: PersistedWorkspace = {
-      tabs: repairedTabs.tabs.map(t => ({
-        id: t.id,
-        title: t.title,
-        focusedSessionId: t.focusedSessionId,
-        root: t.root,
-      })),
-      activeTabId: repairedTabs.activeTabId,
-      dispatchMode: pruned.dispatchMode,
+      projects,
+      activeProjectId: projects.some(project => project.id === s.activeTabId)
+        ? s.activeTabId
+        : (projects[0]?.id ?? ''),
+      // The lane grid, scrubbed against the same live ids as the pool: what is
+      // in memory is what is written. (Through stage 2 of #992 this was
+      // DERIVED at save time from the v2 half; a derivation at the durability
+      // boundary would overwrite the user's lanes with a guess on every save.)
+      stage: pruned.stage,
       // WHY normalize MCP domains at the persistence boundary:
       //
       // The provider process only receives short-lived MCP URLs/tokens, but
@@ -130,18 +127,19 @@ export function useAutoSave(
       // stable contract: duplicate domains, hand-edited junk, or removed
       // experimental names cannot become durable state that future launches
       // keep trying to inject.
+      //
+      // Every row already carries its pool membership (`projectId`,
+      // `joinedAt`) — it is ordinary SessionMeta, stamped when the session was
+      // filed, so there is nothing to derive here.
       sessions: Object.fromEntries(
         Object.entries(pruned.sessions).map(([id, meta]) => [
           id,
           withNormalizedBuiltInMcpDomains(meta),
         ]),
       ),
-      detachedSessions: pruned.detachedSessions,
-      buried: pruned.buried,
       pinnedSessionIds: persistedPinnedSessionIds.length > 0
         ? persistedPinnedSessionIds
         : undefined,
-      tileTabs: repairedTabs.tileTabs,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     let json = ''
@@ -175,9 +173,8 @@ export function useAutoSave(
           }
         }
         saveSpan.end({
-          tabs: persisted.tabs.length,
+          tabs: projects.length,
           sessions: Object.keys(persisted.sessions).length,
-          tileTabs: persisted.tileTabs?.tabIds.length ?? 0,
           bytes: json.length,
         })
       })
@@ -210,7 +207,6 @@ export function useAutoSave(
   }, [
     refs.latestRuntimesRef,
     refs.latestStateRef,
-    refs.latestTileTabsRef,
     refs.pendingAdoptionWindowIdsRef,
   ])
 

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { SessionManager } from '@main/sessionManager.js'
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
@@ -31,10 +32,13 @@ import { wrapWithSttTag } from 'agent-voice-dictation/composer'
 //   - Everything durable (secret, registry) lazy-loads on first enable()
 //     and persists across disable/enable cycles — pairing survives toggling
 //     the server off overnight.
-//   - Everything live (feed tap, server, transport) is created on enable()
+//   - Everything live (feed sink, server, transport) is created on enable()
 //     and torn down on disable() — a disabled remote subsystem holds NO
-//     manager subscriptions and NO sockets, so its steady-state cost when
-//     off is zero. That property is why this is safe to ship default-off.
+//     sink on the shared session feed tap and NO sockets, so its
+//     steady-state cost when off is zero. That property is why this is safe
+//     to ship default-off. (The tap itself belongs to main and feeds the
+//     desktop whether or not remote is on; since #1177 remote no longer
+//     subscribes to SessionManager directly.)
 
 export type RemoteTransportMode = 'lan' | 'tunnel'
 
@@ -96,6 +100,17 @@ export type RemoteStatus = {
 
 export type RemoteControllerDeps = {
   manager: SessionManager
+  /**
+   * The ONE session feed tap main/index.ts builds for the manager, shared
+   * with the desktop forwarder (#1177). A GETTER because this controller is
+   * constructed before index.ts wires the forwarder, and the tap must be
+   * created at the forwarder's spot to keep its manager listeners in their
+   * old registration order; remote is only ever enabled by a later user
+   * action, so the getter always resolves by then. Required, not defaulted:
+   * a controller that quietly built its own tap would bring back the second
+   * sub-agent watcher and the drifting second copy of the ordering.
+   */
+  getFeedTap: () => SessionFeedTap
   journal?: AppRunJournal | null
   /** Override the durable-state root (secret, devices.json). Tests point
    *  this at a tmpdir; production uses REMOTE_STATE_DIR. */
@@ -144,6 +159,8 @@ export class RemoteController extends EventEmitter {
    *  the whole class: later calls observe the state their predecessors left
    *  and no-op when it already matches. */
   private chain: Promise<unknown> = Promise.resolve()
+  private disposalAdmitted = false
+  private disposalPromise: Promise<void> | null = null
 
   constructor(private readonly deps: RemoteControllerDeps) {
     super()
@@ -166,13 +183,15 @@ export class RemoteController extends EventEmitter {
   }
 
   async enable(mode: RemoteTransportMode = 'lan'): Promise<RemoteStatus> {
+    if (this.disposalAdmitted) throw new Error('Remote access is shutting down')
     return this.runExclusive(async () => {
+      if (this.disposalAdmitted) throw new Error('Remote access is shutting down')
       // Same mode already live: idempotent no-op. Different mode: clean
       // switch — every socket drops (URL and reachability change anyway;
       // phones reconnect via their feed's backoff, and paired tokens
       // survive because pairing is durable state).
-      if (this.server && this.url) {
-        if (this.transport === mode) return this.getStatus()
+      if (this.server) {
+        if (this.url && this.transport === mode) return this.getStatus()
         await this.teardownLive()
         this.emit('status-changed', this.getStatus())
       }
@@ -184,10 +203,11 @@ export class RemoteController extends EventEmitter {
     try {
       // Transport FIRST: it is the most likely failure (tunnel binary
       // missing) and allocates nothing that needs teardown, whereas
-      // SessionFeedSource subscribes to SessionManager the moment it is
-      // constructed. Building the tap before a throwing transport leaked a
-      // full set of manager listeners per failed enable attempt (review
-      // finding) — construction order IS the resource-safety argument here.
+      // SessionFeedSource attaches a sink to the shared feed tap the moment
+      // it is constructed. Building it before a throwing transport leaked a
+      // full set of listeners per failed enable attempt (review finding;
+      // then manager listeners, now a tap sink) — construction order IS the
+      // resource-safety argument here.
       const transport = this.deps.createTransport?.() ?? (await this.buildTransport(mode))
       const secret = await loadOrCreateRemoteSecret(this.stateDir)
       if (!this.registry) {
@@ -195,7 +215,7 @@ export class RemoteController extends EventEmitter {
         await this.registry.load()
       }
       this.pairing = new DevicePairing({ secret, registry: this.registry })
-      this.feedSource = new SessionFeedSource(this.deps.manager)
+      this.feedSource = new SessionFeedSource(this.deps.manager, this.deps.getFeedTap())
       this.server = new RemoteServer({
         manager: this.deps.manager,
         feedSource: this.feedSource,
@@ -241,6 +261,7 @@ export class RemoteController extends EventEmitter {
       this.transport = mode
       this.server.on('clients-changed', () => this.emitStatus())
       const { url } = await this.server.start()
+      if (this.disposalAdmitted) throw new Error('Remote access is shutting down')
       this.url = url
     } catch (err) {
       // Whatever partially came up, tear it ALL down so a retry starts
@@ -311,9 +332,22 @@ export class RemoteController extends EventEmitter {
     return revoked
   }
 
-  async dispose(): Promise<void> {
-    await this.teardownLive()
-    this.removeAllListeners()
+  dispose(): Promise<void> {
+    this.disposalAdmitted = true
+    if (this.disposalPromise) return this.disposalPromise
+    // Disposal must join the SAME FIFO as enable/disable. Stopping outside it
+    // could observe no server while a slow enable was still preparing its
+    // secret/transport, then return before that initializer published a server.
+    const disposal = this.runExclusive(async () => {
+      await this.teardownLive()
+      this.removeAllListeners()
+    })
+    this.disposalPromise = disposal
+    void disposal.catch(() => {
+      // Keep failed resource owners below, but allow an explicit shutdown retry.
+      if (this.disposalPromise === disposal) this.disposalPromise = null
+    })
+    return disposal
   }
 
   /** Build the transport for a mode. LAN needs nothing; tunnel resolves the
@@ -337,11 +371,13 @@ export class RemoteController extends EventEmitter {
 
   private async teardownLive(): Promise<void> {
     const server = this.server
-    this.server = null
     this.url = null
+    if (server) await server.stop()
+    // A rejection is not release evidence. Keep this exact server reachable so
+    // a retry cannot mistake a cleared registry field for successful teardown.
+    this.server = null
     this.transport = null
     this.pairing = null
-    if (server) await server.stop()
     this.feedSource?.dispose()
     this.feedSource = null
   }

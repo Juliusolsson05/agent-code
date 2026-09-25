@@ -8,6 +8,8 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { killSessionBackendIfOwned, useSessionActions } from './session'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -28,10 +30,13 @@ describe('useSessionActions recovery retry', () => {
     const killOwnedSession = vi.fn(async () => true)
     Object.defineProperty(window, 'api', { configurable: true, value: { killOwnedSession } })
     const refs = { stateRef: ref({ sessions: {} }) } as unknown as WorkspaceRefs
-    expect(await killSessionBackendIfOwned(refs, 'just-spawned')).toBe(false)
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned', 'spawn.unplaced')).toBe(false)
     expect(killOwnedSession).not.toHaveBeenCalled()
-    expect(await killSessionBackendIfOwned(refs, 'just-spawned', { cwd: '/captured/project', kind: 'codex' })).toBe(true)
-    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: 'just-spawned', cwd: '/captured/project', kind: 'codex', providerRuntime: undefined })
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned', 'spawn.unplaced', { cwd: '/captured/project', kind: 'codex' })).toBe(true)
+    // The caller rides the ownership request to main, which journals it on
+    // kill.request (#1135); dropping it here would make every renderer kill
+    // journal as 'unknown'.
+    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: 'just-spawned', cwd: '/captured/project', kind: 'codex', providerRuntime: undefined, caller: 'spawn.unplaced' })
   })
 
   it('seeds fresh sessions from Settings while an explicit empty list wins', async () => {
@@ -39,10 +44,8 @@ describe('useSessionActions recovery retry', () => {
       tabs: [],
       activeTabId: '',
       sessions: {},
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: freshStage(),
     } as unknown as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
     const refs = {
@@ -146,17 +149,13 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
         [sessionId]: { cwd: '/tmp/project', kind: 'claude' as const },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: {
@@ -253,8 +252,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
@@ -264,10 +261,8 @@ describe('useSessionActions recovery retry', () => {
           ...(providerRuntime ? { providerRuntime } : {}),
         },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: { ...emptyRuntime(), processStatus: 'spawning', inputReady: false },
@@ -314,6 +309,37 @@ describe('useSessionActions recovery retry', () => {
     const { result } = renderHook(() => useSessionActions(state, setState, setRuntimes, refs))
     return { result, recoverSession, killOwnedSession, runtimes: () => runtimes, setRuntimes }
   }
+
+  it.each([
+    { what: 'asks main to re-emit what the woken backend is blocked on', present: true },
+    // The hint is not a step: a preload without it must still wake the pane.
+    { what: 'wakes normally against a preload that cannot re-emit', present: false },
+  ])('$what (#895)', async ({ present }) => {
+    // A parked session woken onto a backend that is ALREADY sitting on a
+    // permission or a question hears nothing otherwise: providers publish
+    // conditions only when they CHANGE, and this renderer has never seen one
+    // for it. The request goes out after the runtime is updated, on the
+    // ordinary event channel, so the wake itself cannot overwrite it.
+    const sessionId = present ? 'woken' : 'woken-bare'
+    const h = spawnedNotReadyHarness(sessionId)
+    const reseedSessionConditions = vi.fn(async () => 1)
+    h.recoverSession.mockResolvedValue({
+      ok: true,
+      disposition: 'adopted',
+      snapshot: {
+        sessionId, kind: 'claude', cwd: '/tmp/project', lifecycle: 'live',
+        input: { ready: true, revision: 2, reason: 'ready' }, builtInMcpDomains: [],
+      },
+    } as unknown as Awaited<ReturnType<typeof h.recoverSession>>)
+    const api = (window as unknown as { api: Record<string, unknown> }).api
+    if (present) api.reseedSessionConditions = reseedSessionConditions
+    else delete api.reseedSessionConditions
+
+    await act(async () => { await h.result.current.ensureSessionLive(sessionId, 'tile-leaf.send') })
+
+    expect(h.runtimes()[sessionId]).toMatchObject({ processStatus: 'started' })
+    if (present) expect(reseedSessionConditions).toHaveBeenCalledExactlyOnceWith([sessionId])
+  })
 
   it('does not kill a spawned backend that is alive but not ready when the deadline passes', async () => {
     vi.useFakeTimers()
@@ -376,8 +402,6 @@ describe('useSessionActions recovery retry', () => {
       tabs: [{
         id: 'tab-1',
         title: 'Project',
-        focusedSessionId: sessionId,
-        root: { type: 'leaf' as const, sessionId },
       }],
       activeTabId: 'tab-1',
       sessions: {
@@ -385,13 +409,12 @@ describe('useSessionActions recovery retry', () => {
           cwd: '/tmp/project',
           kind: 'claude' as const,
           title: 'Initial title',
+          projectId: 'tab-1',
+          joinedAt: 0,
         },
       },
-      detachedSessions: {},
-      gridRelatedSelections: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(sessionId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: emptyRuntime(),

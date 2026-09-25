@@ -1,7 +1,9 @@
 import { mainOperations } from '@main/performance/operations.js'
 import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
-import { hasReportingDomain } from '@shared/types/tldr.js'
+import { REPORTING_DOMAINS, type ReportingDomain } from '@shared/types/tldr.js'
+import type { SessionStartFailureCause } from '@shared/lifecycle/events.js'
+import type { ManagedSkillPreparationFailure } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 import { EventEmitter } from 'events'
 import path from 'node:path'
 import { performance } from 'perf_hooks'
@@ -31,6 +33,7 @@ import type {
   AgentInputReadiness,
   SessionBackendSnapshot,
   SessionInputReadiness,
+  SessionKillOptions,
   SessionOwnershipOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
@@ -46,7 +49,7 @@ import { getToolPath, refreshToolchainFromState } from '@main/setup/toolchain.js
 import { resolveToolPath } from '@main/setup/binaryResolver.js'
 import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
-import { CappedTextBuffer } from '@main/sessions/cappedTextBuffer.js'
+import { TerminalReplayBuffer } from '@main/sessions/terminalReplayBuffer.js'
 import { ScreenFrameGate } from '@main/sessions/screenFrameGate.js'
 import type {
   ConditionCustomAction,
@@ -55,9 +58,11 @@ import type {
 import {
   DEFAULT_PROVIDER,
   isAgentProviderRuntime,
+  effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
   isSessionKind,
+  isTerminalOnlyProviderKind,
 } from '@shared/types/providerKind.js'
 import type {
   AgentProviderKind,
@@ -66,6 +71,24 @@ import type {
 } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import {
+  normalizeUserMcpOverrides,
+  type ResolvedUserMcpServer,
+  type UserMcpDroppedServer,
+} from '@shared/userMcp/types.js'
+
+/** Structural so SessionManager does not depend on the service class; see
+ * UserMcpService.resolveForLaunch for the rules it applies. */
+export type UserMcpResolver = (params: {
+  provider: string
+  overrides: Readonly<Record<string, boolean>>
+  cwd: string
+}) => Promise<{
+  servers: ResolvedUserMcpServer[]
+  attachedIds: string[]
+  dropped: UserMcpDroppedServer[]
+  codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+}>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type { PromptGateState } from '@shared/types/session.js'
@@ -79,6 +102,8 @@ import {
   type CodexTranscriptObservationEventName,
   type SessionLifecycleCorrelationIds,
   type SessionLifecycleData,
+  isKillCaller,
+  type KillCaller,
 } from '@shared/lifecycle/events.js'
 import type {
   SessionSpawnOptions,
@@ -174,6 +199,9 @@ type ManagerEvents = {
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
   'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
+  /** The provider session this pane runs changed without a respawn (Pi /new,
+   *  /resume, /fork). See AgentSessionEvents['provider-session-changed']. */
+  'provider-session-changed': [{ sessionId: string; providerSessionId: string; transcriptFile: string | null; reason: string }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'terminal-foreground': [TerminalForegroundEvent]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
@@ -209,6 +237,14 @@ type ManagerEvents = {
   'semantic-event': [{ sessionId: string; event: unknown }]
   /** Internal cleanup signal emitted exactly before a session leaves the manager. */
   removed: [{ sessionId: string }]
+  /** A launching agent asked for product skills (TLDR/Goal) that the pre-spawn
+   *  reconcile could not prepare, and it is being started without them (#1133).
+   *  Carries domain names only, never the error: see the pre-spawn gate. */
+  'managed-skills-unavailable': [{ sessionId: string; skills: ReportingDomain[] }]
+  // #1143. A user MCP server the agent asked for could not be attached to this
+  // launch (missing secret, unsupported transport, name collision…). The
+  // launch itself proceeded without it.
+  'user-mcp-unavailable': [{ sessionId: string; servers: UserMcpDroppedServer[] }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
@@ -340,6 +376,8 @@ type CodexReplacementHandoff = {
   predecessorRecovery: RecoveryClaim | null
   proof: CodexReplacementProof
   restoreOptions: SessionSpawnOptions
+  /** Tag for the predecessor's kill.request; see SessionSpawnOptions.predecessorKillCaller. */
+  predecessorKillCaller: KillCaller
   stopPromise: Promise<void> | null
   compensationRequired: boolean
 }
@@ -349,6 +387,53 @@ class RecoveryCancelledError extends Error {
     super('Session recovery was cancelled')
     this.name = 'RecoveryCancelledError'
   }
+}
+
+/**
+ * The provider CLI could not be resolved to an absolute path (#495 A9).
+ *
+ * WHY a class when the message was already specific: `recover.failed` needs
+ * a typed `cause` (#1133), and classifying by message substring would quietly
+ * turn into `unknown` the day someone rewords the Setup hint. The message itself
+ * is unchanged, because the renderer's spawn-error text reads it.
+ */
+export class ProviderCliNotFoundError extends Error {
+  constructor(kind: string) {
+    // Names a real place (#995): Setup opens from File › Setup… or the
+    // "Open Setup" command, and shows the install command for this CLI.
+    super(`${kind} CLI not found. Open Setup (File › Setup…) to install it or enter its path.`)
+    this.name = 'ProviderCliNotFoundError'
+  }
+}
+
+/**
+ * Start-failure causes attached to errors at the boundary that knows them.
+ *
+ * WHY a WeakMap tag instead of wrapping the error in a typed class: provider
+ * start errors propagate through the Codex replacement compensation and back
+ * to callers and tests that match on the ORIGINAL error (identity and message).
+ * Wrapping would change what every one of them sees just so a journal field
+ * could be filled. The tag is invisible to everyone except
+ * `classifyStartFailure`, and it is garbage-collected with the error.
+ * Non-object throws cannot be tagged and fall through to `unknown`.
+ */
+const startFailureCauses = new WeakMap<object, SessionStartFailureCause>()
+
+function tagStartFailure(error: unknown, cause: SessionStartFailureCause): void {
+  // First tag wins: an error re-thrown through an outer boundary must keep the
+  // most specific layer that saw it first.
+  if (typeof error === 'object' && error !== null && !startFailureCauses.has(error)) {
+    startFailureCauses.set(error, cause)
+  }
+}
+
+function classifyStartFailure(error: unknown): SessionStartFailureCause {
+  if (error instanceof MissingWorkspaceDirectoryError) return 'missing-workspace'
+  if (error instanceof ProviderCliNotFoundError) return 'cli-not-found'
+  if (typeof error === 'object' && error !== null) {
+    return startFailureCauses.get(error) ?? 'unknown'
+  }
+  return 'unknown'
 }
 
 function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
@@ -373,6 +458,26 @@ function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
 // emits one write per keystroke, so this is the difference between a journal
 // that answers "who typed here" and one that is nothing but keystrokes.
 const INPUT_WRITE_COALESCE_MS = 1000
+
+/**
+ * How long one `awaitReadyForPrompt` arm lasts while a bootstrap prompt waits
+ * for its child's composer, and how long the wait pauses before re-arming
+ * (#854).
+ *
+ * It is NOT a deadline for the wait — that ends when the prompt lands, the
+ * session ends, or an orchestration send supersedes it. It is also NOT a
+ * cancellation checkpoint, which an earlier version of this comment claimed:
+ * cancellation wakes the current arm directly and was measured at 4 ms, not at
+ * this interval.
+ *
+ * What it really is: the floor on how often the gate is asked. Claude answers
+ * `blocked` SYNCHRONOUSLY — and `blocked` (its first-launch trust dialog) is
+ * 26 of the 47 recorded cases this feature exists for — so without a pause
+ * between arms the loop would spin at full speed for as long as a human takes
+ * to answer a dialog. The pacing is load-bearing for the primary case, not a
+ * guard against a hypothetical future provider.
+ */
+const PENDING_PROMPT_GATE_WAIT_MS = 2_000
 
 /**
  * Who put bytes into a session's PTY.
@@ -401,10 +506,35 @@ type InputWriteOrigin =
 
 const TERMINAL_BUFFER_CAP = 256 * 1024
 
+/**
+ * The single place a kill caller from outside this class is trusted.
+ *
+ * WHY 'unknown' rather than dropping the field: a kill whose caller we cannot
+ * name must be a visible gap in the journal, not an event that silently lacks
+ * a key (#1135). WHY re-validate at all when TypeScript already types it: the
+ * value normally crossed IPC from a renderer, and a stale or hostile renderer
+ * is not bound by our types. The journal's payload allowlist would record any
+ * string, so a free-form value here would reintroduce the drift the closed
+ * union exists to prevent.
+ */
+function normalizeKillCaller(caller: unknown): KillCaller {
+  return isKillCaller(caller) ? caller : 'unknown'
+}
+
 function resolveProviderRuntime(
   kind: SessionKind,
   requested: unknown,
 ): AgentProviderRuntime | undefined {
+  // A terminal-only provider (Pi) runs its TUI whatever the caller asked for
+  // — including nothing, which is what most spawn paths send. Normalizing
+  // HERE, at every main entry point (spawn, recover, cancel, adopt), is what
+  // keeps the stored runtime and every ownership comparison consistent: a
+  // recovery request without a runtime must match a pane stored as
+  // 'terminal', not look like a different backend.
+  if (isTerminalOnlyProviderKind(kind)) {
+    if (requested !== undefined && requested !== 'terminal') throw new Error('Unsupported agent provider runtime')
+    return 'terminal'
+  }
   if (requested === undefined) return undefined
   if (!isAgentProviderRuntime(requested) || !isAgentProviderKind(kind)) {
     throw new Error('Unsupported agent provider runtime')
@@ -459,6 +589,13 @@ export class SessionManager extends EventEmitter {
   // paste B and turn a slow operation into duplicate queue entries.
   private readonly promptDeliveriesInFlight = new Set<string>()
   /**
+   * Prompts waiting for a session that is not ready for one YET (#854).
+   *
+   * One per session, cancellable, cleared when the session goes. See
+   * `deliverPromptWhenReady` for why this exists at all.
+   */
+  private readonly pendingPromptDeliveries = new Map<string, { cancel: (reason: string) => void }>()
+  /**
    * Open coalescing window per session for `input.write`. See recordInputWrite.
    *
    * The timer handle is held so teardown can cancel it. Without that, a session
@@ -475,6 +612,8 @@ export class SessionManager extends EventEmitter {
     timer?: ReturnType<typeof setTimeout>
   }>()
   private readonly lastActivityAt = new Map<string, number>()
+  /** Subscribers to tmux ownership becoming true; see onTmuxAttached. */
+  private readonly tmuxAttachListeners = new Set<(tmuxName: string) => void>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
   // SessionFeedSource/RemoteServer — enabled long after sessions started —
@@ -484,6 +623,9 @@ export class SessionManager extends EventEmitter {
   // the subscriber existed would be invisible forever. Cost is one Map.set
   // per event (a reference store, no clone); entries die with the session
   // in cleanupSessionState.
+  // Same generation-owned lifetime as the screen/conditions caches. Process
+  // activity is an independent observation; input-ready does not mean idle.
+  private readonly lastProcessState = new Map<string, AgentProcessState>()
   private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
   // See screenFrameGate.ts — drops spinner-only repaints before they fan out.
   private readonly screenFrameGate = new ScreenFrameGate()
@@ -591,7 +733,13 @@ export class SessionManager extends EventEmitter {
     // Always-on incident journal. Optional so tests / non-journaled callers
     // still construct cleanly; null-guarded at every use.
     private readonly journal: AppRunJournal | null = null,
-    private readonly beforeAgentSessionStart: ((options: SessionSpawnOptions) => Promise<void>) | null = null,
+    // The managed-skills pre-spawn reconcile (#1133). It resolves with the steps
+    // it could not complete. `void` is accepted for hooks with nothing to report
+    // (tests that only gate timing). A rejection is tolerated too; see the gate
+    // in spawnWithId for how each outcome is handled.
+    private readonly beforeAgentSessionStart:
+      | ((options: SessionSpawnOptions) => Promise<readonly ManagedSkillPreparationFailure[] | void>)
+      | null = null,
     // Optional opt-in recording projection. Kept as a structural callback so
     // the process/session registry does not depend on the dev-debug recorder.
     private readonly recordCodexObservation: (
@@ -607,6 +755,25 @@ export class SessionManager extends EventEmitter {
     // `?.` guard. See SessionLifecycleJournal for why nothing may READ these.
     this.lifecycle = new SessionLifecycleJournal(journal)
   }
+
+  /**
+   * User MCP servers (#1143). A setter rather than another positional
+   * constructor argument because the service is optional (tests and the
+   * headless harnesses construct managers without one) and the constructor's
+   * positional list is already long enough that one more slot invites
+   * argument-order bugs at every call site.
+   */
+  setUserMcpResolver(resolver: UserMcpResolver | null): void {
+    this.userMcpResolver = resolver
+  }
+
+  private userMcpResolver: UserMcpResolver | null = null
+  // What each live agent was actually launched with, and the per-agent
+  // choices it was launched from. The first feeds the backend snapshot the
+  // same way builtInMcpHost.sessionDomains does; the second lets a same-rollout
+  // Codex restore relaunch with the predecessor's exact choices.
+  private readonly userMcpAttached = new Map<string, string[]>()
+  private readonly userMcpOverridesBySession = new Map<string, Record<string, boolean>>()
 
   private readonly lifecycle: SessionLifecycleJournal
 
@@ -641,7 +808,7 @@ export class SessionManager extends EventEmitter {
   // WHY CappedTextBuffer and not a string: see src/main/sessions/
   // cappedTextBuffer.ts — the string version copied the whole cap on every
   // chunk and retained sliced-string parents (#726).
-  private readonly terminalBuffers = new Map<string, CappedTextBuffer>()
+  private readonly terminalBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly terminalAttached = new Set<string>()
 
   // Shell activity producer (#865). Emits on a channel of its own, NOT
@@ -676,7 +843,7 @@ export class SessionManager extends EventEmitter {
   // terminal, and agent PTYs can be noisy. Buffer in main, broadcast
   // only after an attach, and let the renderer replay the buffer before
   // draining live bytes.
-  private readonly agentPtyBuffers = new Map<string, CappedTextBuffer>()
+  private readonly agentPtyBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
 
@@ -883,6 +1050,11 @@ export class SessionManager extends EventEmitter {
       )
     }
     this.sessions.delete(sessionId)
+    // A prompt still waiting for this session's composer has nothing left to
+    // wait for (#854). Cancelling here rather than letting the wait discover
+    // the empty registry keeps the reason honest in the journal: the session
+    // ended, it did not fail to become ready.
+    this.pendingPromptDeliveries.get(sessionId)?.cancel('session-ended')
     this.sessionStateGenerations.delete(sessionId)
     // Flush rather than drop: the writes in an open window really happened, and
     // the ones immediately before a session dies are the most diagnostically
@@ -895,6 +1067,7 @@ export class SessionManager extends EventEmitter {
     // session's screen/conditions to a late subscriber would present it as
     // live (the exact stale-state bug the remote late-joiner replay had).
     this.lastScreenSnapshot.delete(sessionId)
+    this.lastProcessState.delete(sessionId)
     this.screenFrameGate.forget(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
@@ -918,6 +1091,12 @@ export class SessionManager extends EventEmitter {
       this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
+      // Once the backend is gone its user-MCP launch facts must not outlive it
+      // and be reported for a successor. Unconditional (review round 2):
+      // `revokeAgentMcp` is about the built-in host bearer and is false when a
+      // launch had no built-in domains, which leaked these entries.
+      this.userMcpAttached.delete(sessionId)
+      this.userMcpOverridesBySession.delete(sessionId)
     }
     forgetFeedDebugSession(sessionId)
     return true
@@ -1022,7 +1201,10 @@ export class SessionManager extends EventEmitter {
     if (!ownership) return false
     return (
       (ownership.kind ?? DEFAULT_PROVIDER) === (options.kind ?? DEFAULT_PROVIDER) &&
-      (ownership.providerRuntime ?? null) === (options.providerRuntime ?? null) &&
+      // Effective, not raw: a terminal-only provider's stored runtime is
+      // 'terminal' while a request may omit it (see resolveProviderRuntime).
+      (effectiveProviderRuntime(ownership.kind ?? DEFAULT_PROVIDER, ownership.providerRuntime) ?? null) ===
+        (effectiveProviderRuntime(options.kind ?? DEFAULT_PROVIDER, options.providerRuntime) ?? null) &&
       path.resolve(ownership.cwd) === path.resolve(options.cwd)
     )
   }
@@ -1159,11 +1341,13 @@ export class SessionManager extends EventEmitter {
   private reclaimPendingCodexReplacement(
     options: SessionRecoverOptions,
     reservation: CodexReplacementReservationRecord,
+    onAdmitted?: () => void,
   ): Promise<SessionRecoverResult> {
     if (!this.replacementOwnershipMatches(reservation.predecessorOwnership, options)) {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
     if (reservation.reclaimPromise) {
+      onAdmitted?.()
       const activeReclaim = this.codexReplacements.getReclaim(
         reservation.predecessorSessionId,
       )
@@ -1184,6 +1368,7 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
     }
 
+    onAdmitted?.()
     reservation.reclaimRequested = true
     const reclaim = this.beginCodexReplacementReclaim(
       options,
@@ -1197,7 +1382,11 @@ export class SessionManager extends EventEmitter {
           // rollout. Rehydrate still owns predecessorId durably, so reclamation
           // must retire that hidden owner without reclassifying the event as a
           // user close (which would suppress the stable-ID recovery below).
-          await this.killInternal(reservation.successorSessionId, reservation)
+          await this.killInternal(
+            reservation.successorSessionId,
+            this.internalKillCaller('replacement.reclaim'),
+            reservation,
+          )
         }
         if (
           reservation.cancelled ||
@@ -1254,11 +1443,13 @@ export class SessionManager extends EventEmitter {
   private reclaimPersistedCodexRedirect(
     options: SessionRecoverOptions,
     redirect: CodexReplacementRedirect,
+    onAdmitted?: () => void,
   ): Promise<SessionRecoverResult> {
     if (!this.replacementOwnershipMatches(redirect.predecessorOwnership, options)) {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
     if (redirect.reclaimPromise) {
+      onAdmitted?.()
       const activeReclaim = this.codexReplacements.getReclaim(
         redirect.predecessorSessionId,
       )
@@ -1277,6 +1468,7 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
     }
 
+    onAdmitted?.()
     const siblingRedirects = this.codexReplacements
       .findRedirects(redirect.successorSessionId)
       .filter(candidate => candidate !== redirect)
@@ -1293,7 +1485,12 @@ export class SessionManager extends EventEmitter {
           // names the exact rollout owner, so retire it even though restoration
           // is now forbidden; otherwise a timed-out reclaim would leave the
           // successor alive and unreachable from the renderer that gave up.
-          await this.killInternal(redirect.successorSessionId, null, redirect)
+          await this.killInternal(
+            redirect.successorSessionId,
+            this.internalKillCaller('replacement.reclaim'),
+            null,
+            redirect,
+          )
           return this.replacementRecoveryCancelled(options.sessionId)
         }
         // A later replacement may already be active for this target. Public
@@ -1303,7 +1500,12 @@ export class SessionManager extends EventEmitter {
         const nestedReplacement = this.codexReplacements.getReservationByPredecessor(
           redirect.successorSessionId,
         )
-        await this.killInternal(redirect.successorSessionId, null, redirect)
+        await this.killInternal(
+          redirect.successorSessionId,
+          this.internalKillCaller('replacement.reclaim'),
+          null,
+          redirect,
+        )
         // stop() can return before a provider start generation finishes its
         // second late-materialization stop. Joining the nested transaction keeps
         // the stale predecessor from racing that still-physical rollout owner
@@ -1460,7 +1662,16 @@ export class SessionManager extends EventEmitter {
    * persisted local SessionId is the only ownership key. Provider history ids
    * are consumed only by the cold-spawn path and never used to adopt a process.
    */
-  recover(options: SessionRecoverOptions): Promise<SessionRecoverResult> {
+  recover(
+    options: SessionRecoverOptions,
+    // The IPC adapter may establish display ownership only after the same
+    // admission that authorizes this recovery. Claiming before these checks
+    // leaks live observations on a rejected kind/cwd request; claiming after
+    // start settles hides trust/permission conditions needed to finish start.
+    // This synchronous, non-reentrant hook may throw to reject the display
+    // claim BEFORE tokens, provider work, or replacement effects are admitted.
+    onAdmitted?: () => void,
+  ): Promise<SessionRecoverResult> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
       // WHY validate again in main even though renderer has a type guard: IPC
@@ -1523,7 +1734,7 @@ export class SessionManager extends EventEmitter {
         addressesPredecessor &&
         options.reclaimPendingReplacement
       ) {
-        return this.reclaimPendingCodexReplacement(options, replacement)
+        return this.reclaimPendingCodexReplacement(options, replacement, onAdmitted)
       }
       const owningReclaim = addressesPredecessor
         ? this.codexReplacements.getReclaim(options.sessionId)
@@ -1593,7 +1804,7 @@ export class SessionManager extends EventEmitter {
           return Promise.resolve(this.replacementRecoveryCancelled(options.sessionId))
         }
         if (options.reclaimPendingReplacement) {
-          return this.reclaimPersistedCodexRedirect(options, predecessorRedirect)
+          return this.reclaimPersistedCodexRedirect(options, predecessorRedirect, onAdmitted)
         }
         return Promise.resolve({
           ok: false,
@@ -1642,6 +1853,7 @@ export class SessionManager extends EventEmitter {
         (existingClaim.providerRuntime ?? null) === (providerRuntime ?? null) &&
         existingClaim.cwd === cwd
       ) {
+        onAdmitted?.()
         if (options.recoveryToken) {
           // Compatible callers share one physical provider start. A new
           // renderer therefore joins that generation's cancellation authority
@@ -1684,6 +1896,7 @@ export class SessionManager extends EventEmitter {
         (snapshot.providerRuntime ?? null) === (providerRuntime ?? null) &&
         path.resolve(snapshot.cwd) === cwd
       ) {
+        onAdmitted?.()
         // Adoption carries the ADOPTED BACKEND'S readiness, not just the
         // disposition. #596 turned on exactly this distinction: a caller that
         // adopts a live-but-not-ready agent behaves completely differently from
@@ -1726,6 +1939,7 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
 
+    onAdmitted?.()
     // WHY the microtask: assigning the promise by calling an async helper first
     // would execute that helper synchronously until its first await. Provider
     // construction (and MCP registration) occurs before spawn's first
@@ -1822,6 +2036,7 @@ export class SessionManager extends EventEmitter {
         // manufacturing a second cause.
         await this.killInternal(
           options.sessionId,
+          this.internalKillCaller('recovery.late-materialization'),
           this.findCodexReplacementReservation(options.sessionId),
         )
         this.lifecycle.session('recover.cancelled', options.sessionId, {
@@ -1879,6 +2094,13 @@ export class SessionManager extends EventEmitter {
       this.lifecycle.session('recover.failed', options.sessionId, {
         kind: claim.kind,
         code: 'start-failed',
+        // #1133: `start-failed` alone could not tell a deleted worktree from a
+        // missing CLI from a provider crash, so two workspace-wide outages had
+        // to be reconstructed by matching `seq` numbers. The cause is a closed
+        // enum (SESSION_START_FAILURE_CAUSES) for the same privacy reason the
+        // message below is flattened: the raw exception never enters this
+        // stream.
+        cause: classifyStartFailure(error),
         lifecycle: 'spawning',
         durationMs: performance.now() - claim.startedAt,
       })
@@ -2193,6 +2415,7 @@ export class SessionManager extends EventEmitter {
         dangerousMode: predecessorInfo.dangerousMode,
         useProxy: predecessorInfo.useProxy,
         builtInMcpDomains: effectiveDomains,
+        userMcpOverrides: this.userMcpOverridesBySession.get(predecessorSessionId) ?? {},
         tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(predecessorSessionId),
       }
       reservation.restoreOptions = restoreOptions
@@ -2215,6 +2438,13 @@ export class SessionManager extends EventEmitter {
         // is what authorizes this value; copying null would create a fresh
         // session and abandon the pane's transcript after a failed reload.
         restoreOptions,
+        // Normalized here, not with normalizeKillCaller: an absent tag on
+        // THIS path is not an unknown kill — main knows it is a handoff — so
+        // the fallback is the specific main-side tag, and only an explicit
+        // renderer value overrides it.
+        predecessorKillCaller: isKillCaller(options.predecessorKillCaller)
+          ? options.predecessorKillCaller
+          : 'replacement.handoff',
         stopPromise: null,
         compensationRequired: false,
       }
@@ -2264,6 +2494,7 @@ export class SessionManager extends EventEmitter {
       if (currentEntry === handoff.predecessorEntry) {
         const stopped = await this.killOwnedInternal(
           handoff.predecessorOwnership,
+          handoff.predecessorKillCaller,
           handoff.reservation,
         )
         if (stopped) handoff.compensationRequired = true
@@ -2459,6 +2690,171 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Run the managed-skills reconcile before an agent launch. It never fails the
+   * launch (#1133).
+   *
+   * WHY this can no longer abort a spawn, although it used to for TLDR/Goal:
+   * the old rule ("TLDR and Goal each promise a managed skill, so do not launch
+   * while silently omitting it") treated the skill as part of the capability.
+   * It is not. The TLDR and Goal MCP servers deliver their own server
+   * instructions with the tools, so an agent without the skill file loses some
+   * GUIDANCE about when to call them, not the ability to call them. Almost
+   * every pane has TLDR or Goal enabled, though, so that rule turned ANY
+   * managed-skill failure into a workspace-wide outage: every pane of every
+   * provider refused to start, while each restored transcript made the
+   * workspace look healthy. It happened twice in two days from two unrelated
+   * causes: a failed TLDR deployment on Sept 18 (on a build before grok, so
+   * the cause was never recovered), and grok's unsupported-provider health on
+   * Sept 19 (#1014). A degraded agent the user is told about beats N dead
+   * agents they are not. Launching without the skill is the default the user
+   * accepted in #1133. If a strict mode is ever wanted, it belongs behind an
+   * explicit setting, not back as the silent default.
+   *
+   * WHY not silently either: the old strictness existed so an omitted skill
+   * would never go unnoticed. That goal stays. Instead of refusing the launch,
+   * the manager emits `managed-skills-unavailable`, which the renderer shows as
+   * a toast naming the skill and pointing at Settings, where its health rows
+   * explain the cause.
+   *
+   * WHY the raw error only reaches the journal: reconcile errors can quote
+   * file paths in the user's provider skill folders. The journal is main-only.
+   * The warning carries domain names, and the renderer composes its own text.
+   */
+  private async runPreSpawnSkillReconcile(
+    sessionId: string,
+    options: SessionSpawnOptions,
+  ): Promise<ReportingDomain[]> {
+    if (!this.beforeAgentSessionStart) return []
+    const requested = REPORTING_DOMAINS.filter(domain => options.builtInMcpDomains?.includes(domain))
+    let failures: readonly ManagedSkillPreparationFailure[]
+    try {
+      failures = (await this.beforeAgentSessionStart(options)) ?? []
+    } catch (error) {
+      // The hook is contracted to report failures, not throw them, so a throw
+      // is a bug or an unexpected I/O fault. Nothing says which skills were
+      // prepared, so assume none of the requested ones were. Under-warning
+      // here would bring back exactly the silent omission the old strict rule
+      // guarded against.
+      failures = requested.length > 0
+        ? requested.map(skill => ({ skill, error }))
+        : [{ skill: 'conventions', error }]
+    }
+    for (const failure of failures) {
+      // Same event name as before #1133, so triage that already greps for it
+      // keeps working. `skill` says which step failed, which the old single
+      // catch could not.
+      // `ids.sessionId`, not `data.sessionId`: the `.degraded` row and every
+      // `recover.*` row for this pane are keyed by ids, and triage follows
+      // one pane by filtering on ids. The error row explains WHY that pane is
+      // degraded, so it has to be found by the same filter. Written
+      // unconditionally, even if the spawn is cancelled right after: the
+      // reconcile really did fail, and that is machine-wide skill health, not
+      // a claim about this session.
+      this.journal?.recordError(
+        'conventions.pre_spawn_reconcile.error',
+        failure.error,
+        { skill: failure.skill },
+        { sessionId },
+      )
+    }
+    // Only skills this agent ASKED for are worth interrupting the user about.
+    // A machine-wide audit failure (`conventions`) does not toast. Be precise
+    // about history here, because it matters when reading old journals:
+    // before #1133 an audit throw shared the hook's single catch, so it too
+    // ABORTED every TLDR/Goal launch (only launches without reporting domains
+    // survived it). A pre-#1133 outage such as the Sept 18 cluster can
+    // therefore be an audit failure as easily as a skill deploy failure. The
+    // `.error` row's message tells them apart. Now it is journal-only: the
+    // audit never removes a skill the agent asked for (the product skills are
+    // prepared in their own steps), and its degraded health already shows in
+    // Settings. A failure for a domain the launch did not request cannot
+    // happen with the production hook, and would not affect this agent anyway.
+    return REPORTING_DOMAINS.filter(domain =>
+      requested.includes(domain) && failures.some(failure => failure.skill === domain),
+    )
+  }
+
+  /**
+   * Publish that a launch is going ahead without some requested product skills.
+   *
+   * WHY this is separate from the reconcile and runs only after the
+   * post-reconcile cancellation check: the reconcile can take a while (it
+   * serializes behind other skill writes), and a restore can be cancelled
+   * meanwhile because the pane closed or a Codex replacement superseded it.
+   * Journaling `.degraded` before that check wrote a false "this session is
+   * launching without its skills" row for a session that never launched. That
+   * is exactly the kind of untrustworthy journal fact #1133 set out to remove.
+   * The toast would also have claimed "agents started" off a launch that did
+   * not happen.
+   */
+  /**
+   * Decide which user MCP servers this launch gets (#1143).
+   *
+   * Never throws: a broken MCP document, an unreadable keyring or a bad server
+   * must cost the user that server, not the agent. Every server the agent
+   * asked for but did not get is reported through `user-mcp-unavailable`, so
+   * the absence is visible instead of looking like an attached server whose
+   * tools never appear.
+   */
+  private async resolveUserMcpServers(
+    sessionId: string,
+    kind: SessionKind,
+    options: SessionSpawnOptions,
+  ): Promise<{
+    servers: ResolvedUserMcpServer[]
+    codexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
+  }> {
+    if (!this.userMcpResolver || !isAgentProviderKind(kind)) return { servers: [] }
+    const overrides = normalizeUserMcpOverrides(options.userMcpOverrides)
+    this.userMcpOverridesBySession.set(sessionId, overrides)
+    try {
+      const resolution = await this.userMcpResolver({ provider: kind, overrides, cwd: options.cwd })
+      this.userMcpAttached.set(sessionId, resolution.attachedIds)
+      if (resolution.dropped.length > 0) {
+        this.journal?.record({
+          area: 'mcp.user',
+          name: 'user_mcp.unavailable',
+          severity: 'warn',
+          ids: { sessionId },
+          // Names and reasons only; reasons are fixed strings built by the
+          // service and never contain a secret value.
+          data: { servers: resolution.dropped.map(server => `${server.name}: ${server.reason}`) },
+        })
+        this.emit('user-mcp-unavailable', { sessionId, servers: resolution.dropped })
+      }
+      return {
+        servers: resolution.servers,
+        ...(resolution.codexShellPolicy ? { codexShellPolicy: resolution.codexShellPolicy } : {}),
+      }
+    } catch (error) {
+      this.userMcpAttached.set(sessionId, [])
+      this.journal?.recordError('user_mcp.resolve_failed', error, undefined, { sessionId })
+      this.emit('user-mcp-unavailable', {
+        sessionId,
+        servers: [{ name: 'MCP servers', reason: 'Your MCP server settings could not be read' }],
+      })
+      return { servers: [] }
+    }
+  }
+
+  private reportSkillsUnavailable(sessionId: string, unavailable: readonly ReportingDomain[]): void {
+    if (unavailable.length === 0) return
+    // Pairs with the `.error` rows (same ids.sessionId): "this session is
+    // launching WITHOUT these skills". Before #1133 the next row was
+    // `recover.failed`. It says "launching", not "started", because the
+    // provider can still fail afterwards; that shows up as `recover.failed`
+    // with its own cause. Joined into a string because journal data stays flat.
+    this.journal?.record({
+      area: 'conventions.pre_spawn_reconcile',
+      name: 'conventions.pre_spawn_reconcile.degraded',
+      severity: 'warn',
+      ids: { sessionId },
+      data: { skills: unavailable.join(',') },
+    })
+    this.emit('managed-skills-unavailable', { sessionId, skills: [...unavailable] })
+  }
+
+  /**
    * Start a backend under an already-owned local routing id.
    *
    * WHY this is private: accepting a caller-selected id on the ordinary spawn
@@ -2586,7 +2982,7 @@ export class SessionManager extends EventEmitter {
         }
       }
       if (!binary) {
-        throw new Error(`${kind} CLI not found — open Setup to locate it`)
+        throw new ProviderCliNotFoundError(kind)
       }
       const initialSize = {
         cols: options.cols ?? 120,
@@ -2606,21 +3002,13 @@ export class SessionManager extends EventEmitter {
         })
         mcpRegistered = true
       }
+      const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
+        await this.resolveUserMcpServers(sessionId, kind, options)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
-        try {
-          // Conventions reconciliation is a best-effort compatibility boundary,
-          // with degraded/conflict health in Settings. TLDR opts into a stricter
-          // launch contract below because its requested reporting skill is part
-          // of the capability, not an optional personal convention.
-          await this.beforeAgentSessionStart(options)
-        } catch (error) {
-          this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
-          // TLDR and Goal each promise a managed skill. Do not launch an
-          // enabled session while silently omitting that requested contract.
-          if (hasReportingDomain(options.builtInMcpDomains)) throw error
-        }
+        const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+        this.reportSkillsUnavailable(sessionId, unavailableSkills)
       }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
@@ -2673,6 +3061,8 @@ export class SessionManager extends EventEmitter {
         // `openai_base_url`.
         useProxy: options.useProxy,
         builtInMcpServers,
+        userMcpServers,
+        ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex
@@ -2713,7 +3103,7 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessionSizes.set(sessionId, initialSize)
-      this.agentPtyBuffers.set(sessionId, new CappedTextBuffer(AGENT_PTY_BUFFER_CAP))
+      this.agentPtyBuffers.set(sessionId, new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP))
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
@@ -2752,7 +3142,7 @@ export class SessionManager extends EventEmitter {
         this.markActivity(sessionId)
         let replay = this.agentPtyBuffers.get(sessionId)
         if (!replay) {
-          replay = new CappedTextBuffer(AGENT_PTY_BUFFER_CAP)
+          replay = new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP)
           this.agentPtyBuffers.set(sessionId, replay)
         }
         replay.append(data)
@@ -2789,6 +3179,26 @@ export class SessionManager extends EventEmitter {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('history-boundary', { sessionId, ...boundary })
+      })
+      session.on('provider-session-changed', change => {
+        if (!ownsEntry()) return
+        // The pane now runs a different provider session (Pi /new, /resume,
+        // /fork). Backend snapshots read session.getProviderSessionId() live,
+        // but main's two transcript caches must move with it NOW:
+        //   - lastTranscriptFile: Pi writes nothing for a /new session until
+        //     its first reply, so "the next committed row will update it"
+        //     leaves the phone, Agent Management and every other resolver
+        //     describing the conversation the user just LEFT for a whole
+        //     turn. A null file means the new session has none yet.
+        //   - spawnInfo.resumeSessionId: resolveTranscriptFile's fallback
+        //     re-derives from it, and would find the old file again.
+        // The renderer owns the durable pane identity (workspace.json), so
+        // the fact is also forwarded there.
+        if (change.transcriptFile) this.lastTranscriptFile.set(sessionId, change.transcriptFile)
+        else this.lastTranscriptFile.delete(sessionId)
+        const info = this.spawnInfo.get(sessionId)
+        if (info) this.spawnInfo.set(sessionId, { ...info, resumeSessionId: change.providerSessionId })
+        this.emit('provider-session-changed', { sessionId, ...change })
       })
       session.on('jsonl-entry', (
         entry: AgentTranscriptEntry,
@@ -2881,6 +3291,7 @@ export class SessionManager extends EventEmitter {
       session.on('process-state', (state: AgentProcessState) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
+        this.lastProcessState.set(sessionId, state)
         this.emit('process-state', { sessionId, ...state })
       })
       session.on('trust-dialog', (state: AgentTrustDialogState) => {
@@ -2980,6 +3391,11 @@ export class SessionManager extends EventEmitter {
           provider: kind,
         })
       } catch (err) {
+        // Tagged here, not at recover(): this catch is the only place that
+        // knows the provider runtime existed and its start() is what threw.
+        // A cancellation that surfaces here is excluded because recover
+        // reports it as `recover.cancelled`, never `recover.failed`.
+        if (!(err instanceof RecoveryCancelledError)) tagStartFailure(err, 'provider-launch')
         await this.settleEntryStart(sessionId, agentEntry)
         this.lifecycle.session('provider.start.end', sessionId, {
           kind,
@@ -3006,6 +3422,7 @@ export class SessionManager extends EventEmitter {
       return {
         sessionId,
         ...(providerSessionId ? { providerSessionId } : {}),
+        userMcpServerIds: this.userMcpAttached.get(sessionId) ?? [],
       }
     }
 
@@ -3102,7 +3519,7 @@ export class SessionManager extends EventEmitter {
     // and is replayed to the renderer on attach — see the block
     // comment on terminalBuffers above for the full reasoning.
     this.sessionSizes.set(sessionId, initialSize)
-    this.terminalBuffers.set(sessionId, new CappedTextBuffer(TERMINAL_BUFFER_CAP))
+    this.terminalBuffers.set(sessionId, new TerminalReplayBuffer(TERMINAL_BUFFER_CAP))
 
     // Terminal sessions only emit started / data / exit. The 'data'
     // event carries raw PTY bytes for xterm.js on the renderer side;
@@ -3130,7 +3547,7 @@ export class SessionManager extends EventEmitter {
       // standard terminal scrollback behavior.
       let replay = this.terminalBuffers.get(sessionId)
       if (!replay) {
-        replay = new CappedTextBuffer(TERMINAL_BUFFER_CAP)
+        replay = new TerminalReplayBuffer(TERMINAL_BUFFER_CAP)
         this.terminalBuffers.set(sessionId, replay)
       }
       replay.append(data)
@@ -3157,6 +3574,11 @@ export class SessionManager extends EventEmitter {
     })
 
     this.sessions.set(sessionId, terminalEntry)
+    // Publish ownership at the moment it becomes true, on the same tick. The
+    // detached sweep uses this to disqualify a name from an in-flight scan's
+    // kills, and to reset a retention clock the next sweep would otherwise
+    // still be counting from a PREVIOUS close (#1030 item 4 review).
+    this.noteTmuxAttached(tmuxSessionName)
     this.rememberSessionId(sessionId)
     this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     try {
@@ -3194,6 +3616,7 @@ export class SessionManager extends EventEmitter {
       // a half-dead TerminalSession that callers might still try to
       // write()/resize()/kill(). Roll back everything we added in
       // THIS spawn so the caller can retry from a clean slate.
+      if (!(err instanceof RecoveryCancelledError)) tagStartFailure(err, 'provider-launch')
       await this.settleEntryStart(sessionId, terminalEntry)
       performanceService.error('session.spawn.terminalStart.error', err, { sessionId })
       throw err
@@ -3305,7 +3728,8 @@ export class SessionManager extends EventEmitter {
       )
       return ''
     }
-    const buffer = this.terminalBuffers.get(sessionId)?.read() ?? ''
+    // replay(), not read(): the modes the evicted bytes set come first (#843).
+    const buffer = this.terminalBuffers.get(sessionId)?.replay() ?? ''
     // Flip the attach flag in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
     // can only happen on a later tick, so nothing can sneak in.
@@ -3353,7 +3777,8 @@ export class SessionManager extends EventEmitter {
       )
       return null
     }
-    const buffer = this.agentPtyBuffers.get(sessionId)?.read() ?? ''
+    // replay(), not read(): the modes the evicted bytes set come first (#843).
+    const buffer = this.agentPtyBuffers.get(sessionId)?.replay() ?? ''
     const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
     if (attachCount === 0) {
       const currentSize = this.sessionSizes.get(sessionId)
@@ -4004,6 +4429,20 @@ export class SessionManager extends EventEmitter {
     return session.awaitPastePlaceholder(opts)
   }
 
+  /**
+   * Ask the provider to scroll its own transcript view to the newest message
+   * (#843). Only providers whose TUI pages its transcript on the alternate
+   * screen need this; for every other session the renderer's xterm
+   * scrollToBottom already does the job, so 'unsupported' is a normal answer,
+   * not an error.
+   */
+  async jumpToLatest(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal') return { ok: false, reason: 'no-session' }
+    if (typeof entry.session.jumpToLatest !== 'function') return { ok: false, reason: 'unsupported' }
+    return entry.session.jumpToLatest()
+  }
+
   async resolveCondition(
     sessionId: string,
     action: ConditionCustomAction,
@@ -4077,12 +4516,322 @@ export class SessionManager extends EventEmitter {
    * protocol-free paste with no readiness gate and no confirmation
    * (#394 §4.2).
    */
+  /**
+   * Deliver a prompt as soon as the session can accept one, instead of failing
+   * because it cannot accept one YET (#854).
+   *
+   * WHY this exists, from the run journal rather than from reasoning: across
+   * 11 app runs, 55 `create_agent` bootstrap deliveries failed, and 47 of them
+   * failed with a state that resolves on its own — 26 "blocked by
+   * claude.trust-dialog" (a first-launch prompt that an orchestration child in
+   * a fresh worktree hits EVERY time, and that a human answers in their own
+   * time) and 21 "still warming (composer-unpainted)". Only 5 ever reached the
+   * absorption stage. The prompt was not wrong, and the child was not broken:
+   * the prompt was simply early.
+   *
+   * What the old shape did with that: returned `prompt_delivery_failed` with
+   * `disposition: retry-same-session`, which invites an immediate retry into
+   * the same not-ready window — and it is that second attempt that writes
+   * prompt bytes without Enter and leaves the orphaned draft the parent then
+   * has to close the session to escape.
+   *
+   * WHY there is no wall-clock deadline: the two dominant states clear on
+   * human action (answering a trust dialog) and on process progress (a TUI
+   * painting), neither of which has a useful upper bound — a timer here would
+   * be a number invented to look decisive. The bound is the session itself:
+   * this resolves when the prompt is delivered, when the session ends, or when
+   * an orchestration send supersedes it.
+   *
+   * A child that never becomes ready therefore holds one waiter for as long as
+   * it lives, which is why the loop below re-creates its wake each iteration
+   * rather than racing one long-lived promise: review measured the earlier
+   * shape retaining ~969 bytes per re-arm, about 40 MB a day per waiting
+   * child, because a `Promise.race` reaction on a promise that never settles
+   * is never released.
+   *
+   * WHY it re-arms `awaitReadyForPrompt` in a loop instead of asking for one
+   * long wait: that call is event-driven (it listens for gate changes) but
+   * takes a deadline, and a very distant one would make cancellation wait for
+   * it. Re-arming gives cancellation a checkpoint without polling the gate.
+   */
+  /**
+   * Can this session's readiness actually be WAITED on (#854 review)?
+   *
+   * Only Claude and Codex implement `awaitReadyForPrompt`. OpenCode and Grok
+   * report not-readiness as an ordinary delivery failure and have nothing to
+   * subscribe to — so "wait for the gate" there is one instant retry into the
+   * identical window, and a caller that then tells its parent "do not send it
+   * again" has turned a retryable failure into a silent loss.
+   *
+   * The caller asks this BEFORE it decides what to promise, because the
+   * promise is the part that cannot be taken back.
+   */
+  canWaitForPromptReadiness(sessionId: string): boolean {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal') return false
+    return typeof entry.session.awaitReadyForPrompt === 'function'
+  }
+
+  async deliverPromptWhenReady(
+    sessionId: string,
+    prompt: string,
+    record?: (event: string, data?: Record<string, unknown>) => void,
+    options?: {
+      /**
+       * This waiter REPLACES whatever orchestration prompt is already waiting
+       * for the session (#1134), instead of being refused as a second waiter.
+       *
+       * Only `orchestration_send_prompt` passes it, and only right after its
+       * own direct attempt — which already cancelled any earlier waiter via
+       * `deliverPromptToAgent`'s `supersedesPendingPrompt` — came back "not
+       * ready yet". Cancellation is a flag plus a wake; the cancelled
+       * waiter's entry leaves the map only when its loop unwinds, which is a
+       * few microtasks later. A provider that answers "blocked" synchronously
+       * (Claude's trust dialog does) can finish the direct attempt inside that
+       * window, and without this flag the new waiter would be REFUSED as a
+       * duplicate — after the MCP reply had already promised the parent
+       * `promptPending: true`. That is the silent loss #854's review was about.
+       *
+       * Replacing is safe because both ends are keyed by identity: the old
+       * waiter's teardown deletes only its own entry (see the `finally`), and
+       * a cancelled waiter never writes — its flag is checked synchronously
+       * between the gate answering `ready` and the delivery starting. A waiter
+       * already DELIVERING is not in the map at all, so it cannot be replaced
+       * here; it holds the in-flight reservation instead. The caller's direct
+       * attempt is then refused with `stage: 'reservation'`, and the MCP
+       * layer's `isNotReadyYet` rejects every stage but `before-write` — so
+       * that refusal is reported to the parent as a failure and this arm is
+       * never reached. That exclusion is what keeps a second copy from
+       * queueing behind a delivery in progress; the orchestration pending
+       * tests pin it with a real manager.
+       *
+       * create_agent does not pass it: its waiter is armed for a session that
+       * did not exist a moment earlier, so there is nothing to replace, and a
+       * refusal there would be a genuine double-arm worth surfacing.
+       */
+      supersedesPendingPrompt?: boolean
+    },
+  ): Promise<PromptDeliveryResult> {
+    if (options?.supersedesPendingPrompt) {
+      // Reported, like the direct-delivery supersede (#1134 review): a waiter
+      // can arm between send_prompt's direct attempt and this arm — the
+      // direct attempt spans provider awaits, and create_agent arms from its
+      // own handler — and replacing it here without a word would leave a
+      // parent believing a prompt is pending that will never arrive. The
+      // caller ORs this into its reply's `supersededPendingPrompt`. Emitted
+      // synchronously, before this function's first await, so the caller
+      // knows by the time the call returns its promise.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-newer-prompt')) {
+        record?.('pending-superseded')
+      }
+      // Drop the entry now instead of waiting for the cancelled loop to
+      // unwind; its `finally` deletes by identity, so it will not touch ours.
+      this.pendingPromptDeliveries.delete(sessionId)
+    }
+    if (this.pendingPromptDeliveries.has(sessionId)) {
+      // Two waiters would both fire when the gate opens, and the child would
+      // receive its brief twice.
+      return {
+        ok: false, stage: 'reservation', code: 'delivery-in-flight',
+        retrySafe: false, disposition: 'retry-same-session',
+        promptWritten: false, enterWritten: false,
+        message: `A prompt is already waiting for session ${sessionId} to become ready`,
+      }
+    }
+    // WHY the wake is re-created every iteration instead of racing one
+    // long-lived promise (#854 review): `Promise.race` SUBSCRIBES a reaction,
+    // and a reaction on a promise that never settles is retained until it
+    // does. Racing the same cancellation promise on every arm therefore grew
+    // the heap for as long as the child waited — measured at 969 bytes per
+    // iteration surviving a forced GC, which at this pacing is about 40 MB a
+    // day per waiting child, unbounded. The dominant recorded case is a trust
+    // dialog answered by a human in their own time, so "for as long as the
+    // child waits" is not a small number.
+    //
+    // One slot, replaced each time, dropped at the end of the iteration. The
+    // flag is what cancellation actually decides; the wake only stops the
+    // current sleep early.
+    let cancelledFor: string | null = null
+    let wakeCurrent: (() => void) | null = null
+    const pending = {
+      cancel: (reason: string) => {
+        // First reason wins (#1134). send_prompt cancels the same waiter
+        // twice — once from its direct attempt, once when arming its own
+        // waiter with `supersedesPendingPrompt` — and the journal should name
+        // the cause that actually ended the wait, not the last one to ask.
+        cancelledFor ??= reason
+        wakeCurrent?.()
+      },
+    }
+    this.pendingPromptDeliveries.set(sessionId, pending)
+    record?.('pending-armed')
+    try {
+      for (;;) {
+        if (cancelledFor !== null) break
+        const entry = this.sessions.get(sessionId)
+        if (!entry || entry.kind === 'terminal') {
+          return {
+            ok: false, stage: 'before-write', code: 'not-ready', retrySafe: false,
+            disposition: 'session-unusable',
+            promptWritten: false, enterWritten: false,
+            message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
+          }
+        }
+        const session = entry.session
+        if (session.isExited?.()) {
+          return {
+            ok: false, stage: 'before-write', code: 'not-ready', retrySafe: false,
+            disposition: 'session-unusable',
+            promptWritten: false, enterWritten: false,
+            message: `Cannot deliver prompt: session ${sessionId} has exited`,
+          }
+        }
+        if (typeof session.awaitReadyForPrompt !== 'function') {
+          // Refuse rather than "wait" (#854 review). An earlier version fell
+          // through to one immediate delivery here, on the premise that a
+          // provider without a gate owns readiness in its own delivery path.
+          // That premise is false for OpenCode and Grok: they report
+          // not-readiness as an ordinary failure, so the "wait" was a single
+          // retry into the same window — measured at 1 ms and one attempt —
+          // after which the prompt was gone and the reply still said "do not
+          // send it again".
+          //
+          // Callers ask `canWaitForPromptReadiness` first, so reaching this is
+          // a capability skew (a session replaced under the same id between
+          // the question and the answer). Failing honestly hands the caller
+          // back the retry it would have had.
+          return {
+            ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+            disposition: 'retry-same-session',
+            promptWritten: false, enterWritten: false,
+            message: `Session ${sessionId} cannot be waited on for prompt readiness`,
+          }
+        }
+        const armedAt = Date.now()
+        const outcome = await Promise.race([
+          session.awaitReadyForPrompt({ timeoutMs: PENDING_PROMPT_GATE_WAIT_MS }),
+          new Promise<'cancelled'>(resolve => { wakeCurrent = () => resolve('cancelled') }),
+        ])
+        wakeCurrent = null
+        if (outcome === 'cancelled' || cancelledFor !== null) break
+        if (outcome.kind === 'ready') {
+          record?.('pending-ready')
+          // Released BEFORE delivering: `deliverPromptToAgent` is what any
+          // other caller's cancellation is racing, and holding the pending
+          // slot across it would make a legitimate concurrent delivery look
+          // like a second waiter.
+          //
+          // BY IDENTITY, here and in the `finally` (#854 review). Deleting by
+          // id alone let this waiter's teardown remove a DIFFERENT waiter that
+          // armed while this one was delivering — and that one was then
+          // unreachable, so no direct delivery could supersede it and it fired
+          // its own copy when the gate opened. Two briefs, one child. Only one
+          // caller exists today, so the invariant held by luck rather than by
+          // construction.
+          if (this.pendingPromptDeliveries.get(sessionId) === pending) {
+            this.pendingPromptDeliveries.delete(sessionId)
+          }
+          return await this.deliverPromptToAgent(sessionId, prompt, undefined, record)
+        }
+        // `timeout` is OUR re-arm expiring, not the session's verdict — a
+        // warming gate never surfaces as itself here, it surfaces as a timeout
+        // carrying `lastState: warming`. `blocked` (the trust dialog) and
+        // `occupied` (a human draft in the child's composer) both clear
+        // without anyone acting on this side, which is the whole premise.
+        //
+        // `terminal` is the session saying it cannot take prompts at all, and
+        // waiting for that would be waiting forever.
+        if (
+          outcome.kind !== 'timeout'
+          && outcome.kind !== 'blocked'
+          && outcome.kind !== 'occupied'
+        ) {
+          return {
+            ok: false, stage: 'before-write', code: 'not-ready', retrySafe: false,
+            disposition: 'session-unusable',
+            promptWritten: false, enterWritten: false,
+            message: `Session ${sessionId} cannot accept prompts (${outcome.kind})`,
+          }
+        }
+        // Pace the re-arm on what the gate actually costs.
+        //
+        // This is NOT defence against a hypothetical provider: Claude's gate
+        // returns `blocked` synchronously (`awaitReadyForPrompt` short-circuits
+        // for any non-warming verdict), and `blocked` is the trust dialog —
+        // 26 of the 47 recorded cases this whole feature is for. Without the
+        // pause the loop spins at full speed for as long as a human takes to
+        // answer that dialog. Waiting out the rest of the window costs nothing
+        // when the gate already blocked for it, and a cancellation still ends
+        // the sleep immediately.
+        const spentMs = Date.now() - armedAt
+        if (spentMs < PENDING_PROMPT_GATE_WAIT_MS) {
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, PENDING_PROMPT_GATE_WAIT_MS - spentMs)
+            wakeCurrent = () => {
+              clearTimeout(timer)
+              resolve()
+            }
+          })
+          wakeCurrent = null
+        }
+      }
+      record?.('pending-cancelled', { reason: cancelledFor ?? 'unknown' })
+      return {
+        ok: false, stage: 'before-write', code: 'not-ready', retrySafe: false,
+        disposition: 'session-unusable',
+        promptWritten: false, enterWritten: false,
+        message: `Prompt for session ${sessionId} was not delivered (${cancelledFor ?? 'cancelled'})`,
+      }
+    } finally {
+      if (this.pendingPromptDeliveries.get(sessionId) === pending) {
+        this.pendingPromptDeliveries.delete(sessionId)
+      }
+    }
+  }
+
+  /**
+   * Stop waiting for a session's composer, because something else is now
+   * responsible for what it would have delivered (#854).
+   *
+   * The case that matters: the parent, told its child's brief is pending,
+   * sends the same prompt itself anyway. Two deliveries of one bootstrap is a
+   * duplicated task and a confused child.
+   */
+  cancelPendingPromptDelivery(sessionId: string, reason: string): boolean {
+    const pending = this.pendingPromptDeliveries.get(sessionId)
+    if (!pending) return false
+    pending.cancel(reason)
+    return true
+  }
+
   async deliverPromptToAgent(
     sessionId: string,
     prompt: string,
     imagePaths?: string[],
     record?: (event: string, data?: Record<string, unknown>) => void,
     operationId?: string,
+    options?: {
+      /**
+       * This delivery REPLACES a bootstrap prompt that is waiting for the
+       * child's composer (#854 review).
+       *
+       * Only the orchestration send path passes it. An earlier version
+       * cancelled the waiter from EVERY delivery, and this function has seven
+       * callers — a human typing in the child's pane, the phone, the goal
+       * loop, and two compaction paths among them. A child whose composer
+       * holds a human draft parks the waiter indefinitely, so the moment that
+       * human pressed Enter the brief the parent was promised was silently
+       * thrown away.
+       *
+       * Those callers are not sending the brief. They are writing something
+       * else, and the brief still has to arrive.
+       */
+      supersedesPendingPrompt?: boolean
+      /** Stricter provider-owned admission for generated tasks such as browser
+       * recovery. Never infer native draft safety in the renderer or overwrite
+       * a draft to make this request fit. */
+      requireEmptyNativeComposer?: boolean
+    },
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
       record?.('duplicate-blocked')
@@ -4096,6 +4845,25 @@ export class SessionManager extends EventEmitter {
         retrySafe: true, disposition: 'retry-same-session',
         promptWritten: false, enterWritten: false,
         message: `A prompt delivery is already in flight for session ${sessionId}`,
+      }
+    }
+    // A prompt waiting for this session is superseded ONLY by a caller that
+    // says it is sending the same thing (#854): the parent decided not to
+    // wait, and two bootstraps would be two tasks. The waiter that called us
+    // releases its own slot first, so this only fires for a genuinely
+    // different caller.
+    if (options?.supersedesPendingPrompt) {
+      // Recorded only when a waiter was REALLY cancelled (#1134). The
+      // orchestration send path turns this into `supersededPendingPrompt` in
+      // its reply: once send_prompt can itself leave a prompt waiting, a
+      // parent that sends a DIFFERENT follow-up while an earlier one waits has
+      // to be told the earlier one will not arrive — otherwise "latest wins"
+      // is a silent loss. Threaded through the existing `record` hook rather
+      // than a new return field because `PromptDeliveryResult` is the shared
+      // provider contract and this is a fact about the manager, not about the
+      // provider's delivery.
+      if (this.cancelPendingPromptDelivery(sessionId, 'superseded-by-direct-delivery')) {
+        record?.('pending-superseded')
       }
     }
     const entry = this.sessions.get(sessionId)
@@ -4164,6 +4932,7 @@ export class SessionManager extends EventEmitter {
         prompt,
         imagePaths,
         record,
+        ...(options?.requireEmptyNativeComposer ? { requireEmptyNativeComposer: true } : {}),
       })
       finishDelivery(delivery.ok ? 'success' : 'error')
       // Instrumentation must never change a delivery outcome. `acceptance` is
@@ -4238,12 +5007,35 @@ export class SessionManager extends EventEmitter {
    * Kill a session and remove it from the registry. Returns true if
    * the session existed and was killed.
    */
-  async kill(sessionId: string): Promise<boolean> {
-    return await this.killInternal(sessionId)
+  async kill(sessionId: string, caller?: KillCaller): Promise<boolean> {
+    return await this.killInternal(sessionId, normalizeKillCaller(caller))
   }
 
+  /**
+   * The tag for a kill main issues on its own behalf.
+   *
+   * WHY shutdown overrides the specific tag (#1135 review): killAll sets
+   * `shuttingDown` and cancels every reservation, redirect, reclaim and
+   * recovery claim before it awaits anything. The continuations those
+   * cancellations wake (a reclaim retiring its successor, a recovery cleaning
+   * up a provider that materialized late) then issue their own kills. Those
+   * kills happen BECAUSE the app is quitting; tagging them as reclaim or
+   * recovery would make a quit during a restart herd look like a small
+   * recovery storm — the exact misreading this field exists to prevent.
+   */
+  private internalKillCaller(caller: KillCaller): KillCaller {
+    return this.shuttingDown ? 'app.shutdown' : caller
+  }
+
+  // WHY `caller` is a REQUIRED positional here while the public entry points
+  // take it optionally: the public surface is reached from IPC and from
+  // integrations that may not know who they are, and those land as an explicit
+  // 'unknown'. Every call INSIDE this class does know — it is a shutdown, a
+  // replacement, a recovery cleanup — so the compiler makes each one say so
+  // (the same forcing function that found 13 wake sites instead of nine).
   private async killInternal(
     sessionId: string,
+    caller: KillCaller,
     authorizedReplacement: CodexReplacementReservationRecord | null = null,
     authorizedRedirect: CodexReplacementRedirect | null = null,
   ): Promise<boolean> {
@@ -4352,9 +5144,15 @@ export class SessionManager extends EventEmitter {
     // `cause` separates the three shapes: killing a live entry, cancelling an
     // in-flight recovery, and a no-op kill against an id main does not hold
     // (which usually means the caller is operating on a stale id).
+    //
+    // `caller` answers the other half, "who asked" (#1135). Without it, 185
+    // `live-entry` kills in the journal triage could not be split into quit,
+    // Close Old Agents and genuine recovery replacement, and ~30 ordinary
+    // shutdowns were misread as recovery storms.
     this.lifecycle.session('kill.request', sessionId, {
       cause: entry ? 'live-entry' : recovery ? 'recovery-claim' : 'no-owner',
       kind: entry?.kind ?? recovery?.kind ?? null,
+      caller,
     })
 
     // WHY registry visibility is severed now but the spawn-generation fence is
@@ -4397,7 +5195,10 @@ export class SessionManager extends EventEmitter {
       // registered under its new random ID; otherwise a cancelled replacement
       // can keep a provider alive with no renderer owner. Passing the reservation
       // prevents this internal cascade from being mistaken for a second cause.
-      await this.killInternal(replacement.successorSessionId, replacement)
+      // The cascade inherits the parent's caller: the hidden successor dies
+      // BECAUSE of this request, so tagging it with anything else would make
+      // one close look like two unrelated kills in the journal.
+      await this.killInternal(replacement.successorSessionId, caller, replacement)
     }
     if (
       cancelsReplacement &&
@@ -4422,12 +5223,38 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Kill only when the caller's durable workspace ownership still matches. */
-  async killOwned(options: SessionOwnershipOptions): Promise<boolean> {
-    return await this.killOwnedInternal(options)
+  /**
+   * Does main still hold ANY ownership record for this session?
+   *
+   * WHY this exists (#935 Codex delta review): a caller that was refused a
+   * close needs to tell "you do not own that backend" from "there is nothing
+   * left to close", and a backend snapshot alone cannot answer it. During a
+   * destructive Codex handoff the predecessor has no snapshot while its
+   * replacement reservation is still authoritative — and if the successor's
+   * startup then fails, compensation restores the predecessor. Treating that
+   * window as "gone" released the pane's display claim, and the restored
+   * session's output went nowhere. These are the same four tables killOwned
+   * itself consults.
+   */
+  retainsSessionOwnership(sessionId: string): boolean {
+    return this.sessions.has(sessionId)
+      || this.recoveriesInFlight.has(sessionId)
+      || this.findCodexReplacementReservation(sessionId) !== null
+      || this.codexReplacements.findRedirects(sessionId).length > 0
+  }
+
+  /**
+   * `options.caller` normally arrives from the renderer over
+   * `session:kill-owned`, so it is untrusted input: anything outside
+   * KILL_CALLERS (or absent) is journaled as 'unknown'.
+   */
+  async killOwned(options: SessionKillOptions): Promise<boolean> {
+    return await this.killOwnedInternal(options, normalizeKillCaller(options.caller))
   }
 
   private async killOwnedInternal(
     options: SessionOwnershipOptions,
+    caller: KillCaller,
     authorizedReplacement: CodexReplacementReservationRecord | null = null,
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
@@ -4511,7 +5338,7 @@ export class SessionManager extends EventEmitter {
           teardownIds.add(redirect.successorSessionId)
         }
       }
-      await Promise.all([...teardownIds].map(id => this.killInternal(id)))
+      await Promise.all([...teardownIds].map(id => this.killInternal(id, caller)))
       // The redirect itself is main-owned teardown work even when the first
       // reclaim continuation already removed the target registry row before
       // this close reached it. Report the cancellation as handled so renderer
@@ -4537,7 +5364,7 @@ export class SessionManager extends EventEmitter {
         return false
       }
     }
-    return await this.killInternal(options.sessionId, authorizedReplacement)
+    return await this.killInternal(options.sessionId, caller, authorizedReplacement)
   }
 
   private async cancelRecoveryClaim(
@@ -4622,7 +5449,11 @@ export class SessionManager extends EventEmitter {
         // entire bug is that start may be the hung operation. Authorization
         // prevents this internal timeout teardown from becoming close intent.
         teardown.push(
-          this.killInternal(reservation.successorSessionId, reservation),
+          this.killInternal(
+            reservation.successorSessionId,
+            this.internalKillCaller('recovery.deadline'),
+            reservation,
+          ),
         )
       }
     }
@@ -4718,6 +5549,16 @@ export class SessionManager extends EventEmitter {
     return this.lastScreenSnapshot.get(sessionId) ?? null
   }
 
+  getProcessStateSnapshot(sessionId: string): AgentProcessState | null {
+    return this.lastProcessState.get(sessionId) ?? null
+  }
+
+  /** The provider's current native selection, never a guessed transcript path. */
+  getNativeConversationId(sessionId: string): string | null {
+    const entry = this.sessions.get(sessionId)
+    return entry && entry.kind !== 'terminal' ? entry.session.getProviderSessionId?.() ?? null : null
+  }
+
   /** Latest provider-conditions snapshot for a live session, or null if no
    *  condition has ever been live. Same late-attach rationale as
    *  getScreenSnapshot. */
@@ -4764,6 +5605,7 @@ export class SessionManager extends EventEmitter {
         ? {
             builtInMcpDomains:
               this.builtInMcpHost?.sessionDomains?.(sessionId) ?? [],
+            userMcpServerIds: this.userMcpAttached.get(sessionId) ?? [],
             tldrIdentity: this.builtInMcpHost?.sessionTldrIdentity?.(sessionId),
           }
         : {}),
@@ -4854,6 +5696,46 @@ export class SessionManager extends EventEmitter {
     return this.terminalForeground.snapshot()
   }
 
+  /**
+   * Called synchronously whenever a tmux session is bound to a live terminal
+   * entry. The detached sweep subscribes; see its `noteAttached`.
+   *
+   * WHY a listener rather than the sweep polling `getLiveTmuxNames()`: every
+   * answer the sweep computes is a snapshot taken before an await, and an Undo
+   * Close restore can land inside one. This is the one signal that cannot be
+   * stale, because it fires on the same tick as the registration.
+   */
+  onTmuxAttached(listener: (tmuxName: string) => void): () => void {
+    this.tmuxAttachListeners.add(listener)
+    return () => { this.tmuxAttachListeners.delete(listener) }
+  }
+
+  private noteTmuxAttached(tmuxName: string | null): void {
+    if (!tmuxName) return
+    for (const listener of this.tmuxAttachListeners) {
+      // A listener must never be able to fail a terminal spawn.
+      try { listener(tmuxName) } catch { /* diagnostics only */ }
+    }
+  }
+
+  /**
+   * Every tmux session name main currently owns a live terminal for.
+   *
+   * The detached sweep (`tmux/detachedSweep.ts`) needs this as the second
+   * authority beside the persisted workspace file: autosave is debounced, so a
+   * terminal created seconds ago is live here and absent from the file, and the
+   * file alone would read it as an orphan and kill the user's brand-new shell.
+   * Read live from the registry rather than cached — a snapshot taken before an
+   * await is exactly the stale evidence that would authorize that kill.
+   */
+  getLiveTmuxNames(): string[] {
+    const names: string[] = []
+    for (const entry of this.sessions.values()) {
+      if (entry.kind === 'terminal' && entry.tmuxName) names.push(entry.tmuxName)
+    }
+    return names
+  }
+
   /** Kill every live session. Called on app quit. */
   async killAll(): Promise<void> {
     this.shuttingDown = true
@@ -4895,7 +5777,7 @@ export class SessionManager extends EventEmitter {
         ...reclaimIds,
       ]),
     ]
-    await Promise.all(ids.map(id => this.kill(id)))
+    await Promise.all(ids.map(id => this.killInternal(id, 'app.shutdown')))
     // Registry removal precedes provider stop, so the id snapshot above cannot
     // prove teardown is finished. Join the exact reclaim generations captured
     // before the first await; each rechecks cancellation after its current

@@ -2,7 +2,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 // This API needs the tree traversal, not the workspace hook's compatibility
 // barrel. That barrel imports the complete provider/editor UI and makes a
 // standalone extension host initialize unrelated application modules.
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 
 import type { AgentCodeApiV1, JsonValue } from '@renderer/apps/api/types'
 import { CUSTOM_APPEARANCE_CSS_VARS } from '@renderer/app-state/settings/customAppearance'
@@ -150,12 +150,28 @@ export function createAppHostApi(deps: AppHostApiDeps): AgentCodeApiV1 {
     },
 
     panes: {
-      observe: async () =>
-        useAppStore.getState().workspaceState.tabs.map(tab => ({
+      // `leafSessionIds` is a PUBLISHED extension-SDK field name and keeps its
+      // spelling, but there are no leaves (#992): it is every session filed
+      // under the project, in index order. For the workspaces extensions were
+      // written against — one-pane tabs with their agents parked in Dispatch —
+      // this now reports the agents an extension author would have expected
+      // and the old value (the tab's lone tile leaf) did not. Renamed with the
+      // rest of the SDK surface in stage 7 of the plan.
+      observe: async () => {
+        const state = useAppStore.getState().workspaceState
+        return state.tabs.map(tab => ({
           tabId: tab.id,
-          leafSessionIds: [...collectLeaves(tab.root)],
-        })),
-      subscribe: listener => useAppStore.subscribe(s => s.workspaceState.tabs, () => listener()),
+          leafSessionIds: resolveTabSessions(state, tab.id),
+        }))
+      },
+      // Membership lives on the session rows now, so a session joining or
+      // leaving a project changes `sessions` without touching `tabs`. Listening
+      // to `tabs` alone (correct while a tab owned a tree) would miss it.
+      subscribe: listener => {
+        const offTabs = useAppStore.subscribe(s => s.workspaceState.tabs, () => listener())
+        const offSessions = useAppStore.subscribe(s => s.workspaceState.sessions, () => listener())
+        return () => { offTabs(); offSessions() }
+      },
     },
   }
 }

@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { Dialog, DialogContent, DialogTitle } from './dialog'
-import { DialogActions, focusedControlOwnsEnter } from './dialog-actions'
+import { DialogActions, focusedControlOwnsEnter, focusedControlOwnsSpace } from './dialog-actions'
 
 // DialogActions' Enter rule is shared: list dialogs that handle Enter on
 // DialogContent themselves (New Agent In, Switch Provider) call the exported
@@ -53,5 +53,23 @@ describe('focusedControlOwnsEnter', () => {
     // dialog's to handle.
     expect(focusedControlOwnsEnter(document.createElement('div'))).toBe(false)
     expect(focusedControlOwnsEnter(null)).toBe(false)
+  })
+})
+
+describe('focusedControlOwnsSpace', () => {
+  it('claims Space for buttons and text fields, but NOT for links', () => {
+    // The two keys do not activate the same elements, which is the whole
+    // reason this is a second predicate rather than the Enter one reused.
+    // Space presses a focused button and types into a text field; on a link it
+    // SCROLLS — it does not follow it. A dialog that swallowed Space on a
+    // focused link would take the scroll away and give the key to a list the
+    // user is not looking at.
+    expect(focusedControlOwnsSpace(document.createElement('button'))).toBe(true)
+    expect(focusedControlOwnsSpace(document.createElement('textarea'))).toBe(true)
+    expect(focusedControlOwnsSpace(document.createElement('input'))).toBe(true)
+    expect(focusedControlOwnsSpace(document.createElement('a'))).toBe(false)
+    expect(focusedControlOwnsEnter(document.createElement('a'))).toBe(true)
+    expect(focusedControlOwnsSpace(document.createElement('div'))).toBe(false)
+    expect(focusedControlOwnsSpace(null)).toBe(false)
   })
 })

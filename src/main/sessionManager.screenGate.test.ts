@@ -134,4 +134,48 @@ describe('SessionManager screen-frame gate', () => {
     expect(write).toHaveBeenCalledExactlyOnceWith('\x1b')
     await manager.kill(sessionId)
   })
+
+  it('routes Jump to Latest to a provider that can scroll its own view, and says unsupported otherwise (#843)', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const plain = new FakeAgentSession()
+    createSession.mockImplementationOnce(() => plain)
+    const { sessionId: plainId } = await manager.spawn({ kind: 'claude', cwd: '/tmp/project' })
+    expect(await manager.jumpToLatest(plainId)).toEqual({ ok: false, reason: 'unsupported' })
+
+    const jumper = Object.assign(new FakeAgentSession(), { jumpToLatest: vi.fn(async () => ({ ok: true as const })) })
+    createSession.mockImplementationOnce(() => jumper)
+    const { sessionId: jumperId } = await manager.spawn({ kind: 'claude', cwd: '/tmp/project' })
+    expect(await manager.jumpToLatest(jumperId)).toEqual({ ok: true })
+    expect(jumper.jumpToLatest).toHaveBeenCalledTimes(1)
+    expect(await manager.jumpToLatest('missing')).toEqual({ ok: false, reason: 'no-session' })
+    await manager.kill(plainId)
+    await manager.kill(jumperId)
+  })
+
+  it('a remounted raw terminal gets the modes its evicted startup bytes set (#843, real OpenCode recording)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const { Terminal } = await import('@xterm/headless')
+    const recording = JSON.parse(readFileSync(resolve(__dirname, '../../testing/fixtures/terminal-replay-modes/opencode-1.18.31-startup.json'), 'utf8')) as Array<{ d: string }>
+    const preamble = recording.findIndex(chunk => chunk.d.includes('\x1b[?1049h'))
+    const frames = recording.slice(preamble + 1).map(chunk => chunk.d).filter(chunk => chunk.includes('\x1b[?2026h'))
+    const { SessionManager } = await import('./sessionManager')
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager()
+    const { sessionId } = await manager.spawn({ kind: 'claude', cwd: '/tmp/project' })
+    for (const chunk of recording.slice(0, preamble + 1)) session.emit('pty-data', chunk.d)
+    // Past the real 512 KiB agent cap, as minutes of 60 fps repaint are.
+    let written = 0
+    while (written < 600 * 1024) for (const frame of frames) { session.emit('pty-data', frame); written += frame.length }
+    const replay = manager.attachAgentPty(sessionId)!
+    const terminal = new Terminal({ cols: 120, rows: 36, allowProposedApi: true })
+    await new Promise<void>(done => terminal.write(replay, done))
+    expect(terminal.buffer.active.type).toBe('alternate')
+    expect(terminal.modes.mouseTrackingMode).toBe('any')
+    manager.detachAgentPty(sessionId)
+    await manager.kill(sessionId)
+  })
 })
+

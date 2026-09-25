@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCommittedOwnership,
   decideLiveCandidate,
-  SUPPRESSION_POLICY,
 } from '@renderer/rendering/model/ownership'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
 
@@ -12,6 +11,7 @@ import {
   normalizeTextKey,
 } from '@renderer/rendering/observations/committed'
 import type { RawCommittedEntry } from '@renderer/rendering/observations/committed'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // Fixture times are explicit ISO strings — entry.timestamp is producer
 // wall-clock and the collector must parse it, never substitute Date.now().
@@ -206,7 +206,7 @@ describe('block-grain tool ownership mining (corpus new-bug fix)', () => {
       timestampMs: TS_MS,
       sequence: 0,
     }
-    const d = decideLiveCandidate(live, ownership, SUPPRESSION_POLICY.claude)
+    const d = decideLiveCandidate(live, ownership, getRendererProviderCapabilities('claude').ledgerPolicy.suppression)
     expect(d.selected).toBe(false)
     expect(d.reason).toBe('committed-tool-use-owned')
   })
@@ -235,7 +235,7 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const dead = decideLiveCandidate(
       historyTool({ toolName: 'Read' }),
       emptyOwnership,
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
       TS_MS + 60_000,
     )
     expect(dead.selected).toBe(false)
@@ -249,7 +249,7 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const lagging = decideLiveCandidate(
       historyTool({ toolName: 'Read' }),
       emptyOwnership,
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
       TS_MS - 5_000,
     )
     expect(lagging.selected).toBe(true)
@@ -257,7 +257,7 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const fresh = decideLiveCandidate(
       historyTool({ toolName: 'Bash' }),
       emptyOwnership,
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
       null,
     )
     expect(fresh.selected).toBe(true)
@@ -267,14 +267,14 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const d = decideLiveCandidate(
       historyTool({ toolName: 'Read', resolved: true }),
       emptyOwnership,
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
       TS_MS + 60_000,
     )
     expect(d.selected).toBe(true)
   })
 
   it('non-churn tools paint even while unresolved (running Task chip is live signal)', () => {
-    const d = decideLiveCandidate(historyTool({ toolName: 'Task' }), emptyOwnership, SUPPRESSION_POLICY.claude)
+    const d = decideLiveCandidate(historyTool({ toolName: 'Task' }), emptyOwnership, getRendererProviderCapabilities('claude').ledgerPolicy.suppression)
     expect(d.selected).toBe(true)
   })
 
@@ -282,7 +282,7 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const d = decideLiveCandidate(
       historyTool({ toolName: 'Bash', resolved: true }),
       emptyOwnership,
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
     )
     expect(d.selected).toBe(true)
   })
@@ -291,7 +291,7 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const d = decideLiveCandidate(
       historyTool({ provider: 'codex', toolName: 'Read' }),
       emptyOwnership,
-      SUPPRESSION_POLICY.codex,
+      getRendererProviderCapabilities('codex').ledgerPolicy.suppression,
     )
     expect(d.selected).toBe(true)
   })
@@ -300,7 +300,7 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     const d = decideLiveCandidate(
       historyTool({ owner: 'semantic-current', toolName: 'Read' }),
       emptyOwnership,
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
     )
     expect(d.selected).toBe(true)
   })

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Entry } from '@shared/types/transcript'
@@ -7,6 +7,15 @@ import type { UsageLimitScope, UsageProviderKind, UsageSnapshot } from '@shared/
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { BulkProviderSwitchModal } from './BulkProviderSwitchModal'
+import { useProviderEnablementStore } from '@renderer/features/providers/store'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+
+// The bulk modal derives its directions from the shared enablement store;
+// without a reset, an earlier test file in this worker could leave a
+// restricted snapshot and empty every direction (fail-open = all kinds).
+beforeEach(() => {
+  useProviderEnablementStore.setState({ snapshot: null, enabledKinds: new Set(AGENT_PROVIDER_KINDS) })
+})
 
 // The modal's policy surface, driven by a real-shaped usage snapshot.
 //
@@ -95,11 +104,10 @@ function workspaceFixture(entries: Entry[] = []): Workspace {
       tabs: [{
         id: 'project-tab',
         title: 'Project tab',
-        focusedSessionId: 'agent',
-        root: { type: 'leaf', sessionId: 'agent' },
       }],
-      sessions: { agent: { cwd: '/projects/agent-code', kind: 'codex' } },
-      detachedSessions: {},
+      sessions: { agent: { cwd: '/projects/agent-code', kind: 'codex', projectId: 'project-tab', joinedAt: 0 } },
+      pinnedSessionIds: [],
+      stage: { lanes: [{ selectedSessionId: 'agent' }], rows: [{ length: 1 }], focusedLane: 0 },
       lastProviderSwitchBatch: null,
     },
     runtimes: { agent: { ...emptyRuntime(), entries } },
@@ -116,7 +124,9 @@ function claudeWorkspaceFixture(): Workspace {
     ...base,
     state: {
       ...base.state,
-      sessions: { agent: { cwd: '/projects/agent-code', kind: 'claude' } },
+      // Spread the row, change only its kind: membership is ON the row (#992),
+      // so a bare literal here un-files the agent and the modal lists nobody.
+      sessions: { agent: { ...base.state.sessions.agent!, kind: 'claude' } },
     },
   } as unknown as Workspace
 }

@@ -6,6 +6,13 @@ import { createGrokTranscriptEntryMapper, extractGrokProviderSessionId, isGrokTy
 import { grokComposerSubmit } from '@providers/grok/renderer/composerSubmit'
 import { GROK_CONDITION_POLICY } from '@providers/grok/renderer/conditions/policy'
 import { GROK_SEMANTIC_FOLD_POLICY } from '@providers/grok/renderer/semanticFoldPolicy'
+import { PI_IDENTITY } from '@providers/pi/renderer/identity'
+import { PI_VIEWS } from '@providers/pi/renderer/conditions/views'
+import { renderPiOperation } from '@providers/pi/renderer/rows/dispatch'
+import { createPiTranscriptEntryMapper, extractPiProviderSessionId, isPiTypedUserPrompt } from '@providers/pi/renderer/transcript/mapper'
+import { piComposerSubmit } from '@providers/pi/renderer/composerSubmit'
+import { PI_CONDITION_POLICY } from '@providers/pi/renderer/conditions/policy'
+import { PI_SEMANTIC_FOLD_POLICY } from '@providers/pi/renderer/semanticFoldPolicy'
 import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
@@ -45,6 +52,12 @@ import type {
   TranscriptEntryMapper,
 } from '@shared/types/providerConfig'
 import { CLAUDE_SEMANTIC_FOLD_POLICY } from '@providers/claude/renderer/semanticFoldPolicy'
+import type { LedgerProviderPolicy } from '@renderer/rendering/model/ownership'
+import { CLAUDE_LEDGER_POLICY } from '@providers/claude/renderer/ledgerPolicy'
+import { CODEX_LEDGER_POLICY } from '@providers/codex/renderer/ledgerPolicy'
+import { OPENCODE_LEDGER_POLICY } from '@providers/opencode/renderer/ledgerPolicy'
+import { GROK_LEDGER_POLICY } from '@providers/grok/renderer/ledgerPolicy'
+import { PI_LEDGER_POLICY } from '@providers/pi/renderer/ledgerPolicy'
 import { CODEX_SEMANTIC_FOLD_POLICY } from '@providers/codex/renderer/semanticFoldPolicy'
 import { OPENCODE_SEMANTIC_FOLD_POLICY } from '@providers/opencode/renderer/semanticFoldPolicy'
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
@@ -67,6 +80,7 @@ import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
   createClaudeTranscriptEntryMapper,
   extractClaudeProviderSessionId,
+  claudeTypedUserPromptText,
   isClaudeTypedUserPrompt,
 } from '@providers/claude/renderer/transcript/mapper'
 import {
@@ -178,6 +192,26 @@ export type RendererProviderCapabilities = {
    */
   isTypedUserPrompt: (entry: Entry, text: string) => boolean
   /**
+   * The user's own words, with provider scaffolding removed — what to SHOW
+   * and what to REPLAY into the composer.
+   *
+   * WHY this is separate from `isTypedUserPrompt` (#1059): that predicate
+   * already had to understand Claude's `<pasted_content id="…">` envelope to
+   * answer "did the user type this?", but it only unwrapped to DECIDE, and
+   * handed the raw envelope on. So the feed painted `❯ <pasted_content
+   * id="cade"> …`, pane titles for any pasted prompt started with
+   * `<pasted_content id="…`, and ⌘↑ replayed the envelope into the composer —
+   * where sending it again made Claude wrap the already-wrapped text, adding
+   * one envelope per round trip.
+   *
+   * WHY it is NOT applied to the acceptance comparison in main: that compares
+   * against the row Claude committed, and Claude committed the envelope. This
+   * is the display edge only.
+   *
+   * The default is identity; a provider that wraps prompts overrides it.
+   */
+  typedUserPromptText: (text: string) => string
+  /**
    * Composer submit protocol (#394 phase 2c-4). Owns the provider's
    * paste/submit discipline (Codex: one atomic bracketed-paste+Enter;
    * Claude: prepares attachments, then delegates every finished prompt to the
@@ -231,6 +265,15 @@ export type RendererProviderCapabilities = {
    * WHYs.
    */
   semanticFoldPolicy: SemanticFoldPolicy
+  /**
+   * The provider's rendering asymmetries for the ownership ledger (#1177):
+   * suppression bits, whether its ghost plane may render, whether its
+   * '<'-prefixed user rows are scaffolding. They were literals in the shared
+   * decide layer keyed by provider name, so adding a provider meant editing
+   * shared code. Required, so a new provider must decide each one. See
+   * LedgerProviderPolicy and providers/<kind>/renderer/ledgerPolicy.ts.
+   */
+  ledgerPolicy: LedgerProviderPolicy
 }
 
 /** See providers/<kind>/renderer/conditions/policy.ts for the concrete
@@ -313,11 +356,13 @@ const claudeCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
   isTypedUserPrompt: isClaudeTypedUserPrompt,
+  typedUserPromptText: claudeTypedUserPromptText,
   composerSubmit: claudeComposerSubmit,
   supportsImageAttachments: true,
   usesOptimisticUserEcho: false,
   conditionPolicy: CLAUDE_CONDITION_POLICY,
   semanticFoldPolicy: CLAUDE_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: CLAUDE_LEDGER_POLICY,
 }
 
 const codexCapabilities: RendererProviderCapabilities = {
@@ -338,11 +383,14 @@ const codexCapabilities: RendererProviderCapabilities = {
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
   extractProviderSessionId: extractCodexProviderSessionId,
   isTypedUserPrompt: isCodexTypedUserPrompt,
+  // Codex's non-typed rows are excluded outright; what survives is verbatim.
+  typedUserPromptText: text => text,
   composerSubmit: codexComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
   conditionPolicy: CODEX_CONDITION_POLICY,
   semanticFoldPolicy: CODEX_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: CODEX_LEDGER_POLICY,
 }
 
 const opencodeCapabilities: RendererProviderCapabilities = {
@@ -359,11 +407,14 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
   isTypedUserPrompt: isOpencodeTypedUserPrompt,
+  // OpenCode's mapper drops `synthetic` parts; what survives is verbatim.
+  typedUserPromptText: text => text,
   composerSubmit: opencodeComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
   conditionPolicy: OPENCODE_CONDITION_POLICY,
   semanticFoldPolicy: OPENCODE_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: OPENCODE_LEDGER_POLICY,
 }
 
 const grokCapabilities: RendererProviderCapabilities = {
@@ -381,6 +432,8 @@ const grokCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: () => createGrokTranscriptEntryMapper(),
   extractProviderSessionId: extractGrokProviderSessionId,
   isTypedUserPrompt: isGrokTypedUserPrompt,
+  // Grok's non-typed rows are excluded outright; what survives is verbatim.
+  typedUserPromptText: text => text,
   composerSubmit: grokComposerSubmit,
   // Grok's own terminal can attach clipboard images on paste, but the
   // composer→prompt path is control-only; image attachments via the app are
@@ -389,6 +442,31 @@ const grokCapabilities: RendererProviderCapabilities = {
   usesOptimisticUserEcho: true,
   conditionPolicy: GROK_CONDITION_POLICY,
   semanticFoldPolicy: GROK_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: GROK_LEDGER_POLICY,
+}
+
+const piCapabilities: RendererProviderCapabilities = {
+  id: 'pi',
+  name: 'Pi',
+  ...PI_IDENTITY,
+  // Attention-only conditions (answered in pi's own TUI): no outlet views.
+  conditionViews: PI_VIEWS,
+  renderOperation: renderPiOperation,
+  classifyDurableEntry: () => null,
+  // Pi has no subagent-spawn tool.
+  isSpawnTool: () => false,
+  createTranscriptEntryMapper: () => createPiTranscriptEntryMapper(),
+  extractProviderSessionId: extractPiProviderSessionId,
+  isTypedUserPrompt: isPiTypedUserPrompt,
+  // Pi stores the text the user typed verbatim; nothing to strip.
+  typedUserPromptText: text => text,
+  composerSubmit: piComposerSubmit,
+  // Prompts reach pi through the bridge as text; image delivery is unrecorded.
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
+  conditionPolicy: PI_CONDITION_POLICY,
+  semanticFoldPolicy: PI_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: PI_LEDGER_POLICY,
 }
 
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
@@ -396,6 +474,7 @@ const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCa
   codex: codexCapabilities,
   opencode: opencodeCapabilities,
   grok: grokCapabilities,
+  pi: piCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

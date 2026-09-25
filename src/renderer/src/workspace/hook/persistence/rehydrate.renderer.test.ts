@@ -13,6 +13,8 @@ import type {
 } from '@shared/types/session'
 
 import { rehydrateWorkspace } from './rehydrate'
+import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -59,18 +61,33 @@ function makePersisted(): PersistedWorkspace {
   }
 }
 
+/**
+ * What "the pane survived" means now that there is no tile tree (#992).
+ *
+ * These cases used to assert `tabs[0].root` — the leaf was still in the tree,
+ * the split still had both children. A session's place is two independent facts
+ * now, and a boot bug can break either one without the other: whether its
+ * PROJECT still lists it (ownership; lose this and autosave drops the row), and
+ * whether a LANE still shows it (a pointer; lose this and the user's screen
+ * rearranged itself). Asserting both in one value keeps each case's intent —
+ * "recovery did not take this away" — readable at the call site.
+ */
+function placement(state: WorkspaceState, tabId = 'tab-1') {
+  return {
+    listed: resolveTabSessions(state, tabId),
+    lanes: state.stage.lanes.map(lane => lane.selectedSessionId ?? null),
+  }
+}
+
 function makeHarness() {
   let state = {
     tabs: [],
     activeTabId: 'tab-1',
     sessions: {},
-    detachedSessions: {},
-    buried: [],
     pinnedSessionIds: [],
-    dispatchMode: null,
-  } as unknown as WorkspaceState
+    stage: freshStage(),
+  } satisfies WorkspaceState as WorkspaceState
   let runtimes: Record<SessionId, SessionRuntime> = {}
-  let tileTabs: null = null
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
@@ -98,11 +115,6 @@ function makeHarness() {
       runtimes = typeof next === 'function' ? next(runtimes) : next
       refs.latestRuntimesRef.current = runtimes
     },
-    setTileTabs: (next: unknown) => {
-      tileTabs = typeof next === 'function'
-        ? (next as (prev: null) => null)(tileTabs)
-        : next as null
-    },
   }
 }
 
@@ -121,8 +133,64 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         },
       })),
     } })
-    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
     expect(harness.state().sessions['stable-session']?.tldrIdentity).toBe('main-summary')
+  })
+
+  it('asks main to re-emit blockers for the backends it restored (#895)', async () => {
+    // Providers publish conditions only when they CHANGE — the OpenCode
+    // Terminal package and claude-code-headless both deduplicate — so a
+    // session recovered onto a backend already sitting on a permission or a
+    // question came back with no blocker at all, while the raw TUI still
+    // showed it. A cold restore builds each runtime from `emptyRuntime()`,
+    // so the re-emit has to come after, on the ordinary event channel.
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    const reseedSessionConditions = vi.fn(async () => 1)
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'adopted' as const,
+      snapshot: {
+        sessionId: 'stable-session', kind: 'claude' as const, cwd: '/tmp/project',
+        lifecycle: 'live' as const, input: { ready: true, revision: 1, reason: 'ready' as const },
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession, reseedSessionConditions, defaultCwd: vi.fn(),
+        loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
+    })
+
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
+
+    // Only sessions with a live backend: a parked one has no process to be
+    // blocked by, and is re-seeded when it is woken.
+    expect(reseedSessionConditions).toHaveBeenCalledExactlyOnceWith(['stable-session'])
+  })
+
+  it('restores normally against a preload with no re-emit at all', async () => {
+    // The hint is not a step. A shell without it must still get the workspace
+    // back; the pane simply paints without its blocker until the next change.
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession: vi.fn(async () => ({
+          ok: true as const, disposition: 'adopted' as const,
+          snapshot: { sessionId: 'stable-session', kind: 'claude' as const, cwd: '/tmp/project', lifecycle: 'live' as const, input: { ready: true, revision: 1, reason: 'ready' as const } },
+        })),
+        defaultCwd: vi.fn(),
+        loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false, totalEntries: 0 })),
+        gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+      },
+    })
+
+    await expect(rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn()))
+      .resolves.toMatchObject({ complete: true })
   })
 
   it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
@@ -181,7 +249,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -244,7 +311,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -267,7 +333,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       },
     }))
     Object.defineProperty(window, 'api', { configurable: true, value: { recoverSession, defaultCwd: vi.fn() } })
-    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, harness.setTileTabs, vi.fn())
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
     // Recovery may adopt an existing process. Settings describe the next
     // launch; they cannot change the tools that process already started with.
     expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({ builtInMcpDomains: ['tldr'] }))
@@ -305,7 +371,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -317,9 +382,11 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       builtInMcpDomains: [],
     }))
     expect(spawnSession).not.toHaveBeenCalled()
-    expect(harness.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'stable-session',
+    // A v2 file with no lane grid boots onto the migration default: the pane
+    // the user was commanding in lane 0, beside one empty lane (plan §6.4).
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session'],
+      lanes: ['stable-session', null],
     })
     expect(harness.state().pinnedSessionIds).toEqual(['stable-session'])
     expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([
@@ -352,7 +419,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
     await vi.waitFor(() => expect(recoverSession).toHaveBeenCalledTimes(1))
@@ -408,7 +474,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       newTab,
     )
 
@@ -418,9 +483,11 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       cwd: '/tmp/project',
       kind: 'claude',
     })
-    expect(harness.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'stable-session',
+    // A v2 file with no lane grid boots onto the migration default: the pane
+    // the user was commanding in lane 0, beside one empty lane (plan §6.4).
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session'],
+      lanes: ['stable-session', null],
     })
     expect(harness.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
@@ -465,7 +532,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
@@ -475,10 +541,19 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     })
   })
 
-  it('keeps failed siblings in a split after every leaf has a resolved outcome', async () => {
+  it('keeps a failed session and its parked sibling listed once every outcome is resolved', async () => {
+    // Re-based with #992. This was "keeps failed siblings in a SPLIT": two tile
+    // leaves, both spawned at boot, one succeeding and one refused, and the
+    // assertion that the refused leaf stayed in the tree. Two things changed
+    // under it. There is no tree to fall out of — the failure that matters now
+    // is the ROW being dropped, which takes the project's listing with it. And
+    // boot spawns only the focused lane's occupant (sessionOwnership.ts), so
+    // the sibling is never asked to start at all. What is still worth pinning
+    // is the pair: a refused recovery must not cost the refused session its
+    // place, and must not disturb the sibling that was never part of it.
     const persisted = makePersisted()
     persisted.sessions['second-session'] = { cwd: '/tmp/project', kind: 'codex' }
-    persisted.tabs[0].root = {
+    persisted.tabs![0]!.root = {
       type: 'split',
       direction: 'vertical',
       ratio: 0.5,
@@ -486,26 +561,12 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       b: { type: 'leaf', sessionId: 'second-session' },
     }
     const harness = makeHarness()
-    const recoverSession = vi.fn(async ({ sessionId }: { sessionId: string }) =>
-      sessionId === 'stable-session'
-        ? {
-            ok: true as const,
-            disposition: 'spawned' as const,
-            snapshot: {
-              sessionId,
-              kind: 'claude' as const,
-              cwd: '/tmp/project',
-              lifecycle: 'live' as const,
-              input: { ready: false, revision: 0, reason: 'starting' as const },
-            },
-          }
-        : {
-            ok: false as const,
-            code: 'ownership-conflict' as const,
-            retryable: false,
-            message: 'Owned by another project',
-          },
-    )
+    const recoverSession = vi.fn(async () => ({
+      ok: false as const,
+      code: 'ownership-conflict' as const,
+      retryable: false,
+      message: 'Owned by another project',
+    }))
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: { recoverSession, spawnSession: vi.fn(), defaultCwd: vi.fn() },
@@ -516,45 +577,59 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
-    expect(result).toEqual({ restoredSessions: 1, expectedSessions: 2, complete: true })
-    expect(harness.state().tabs[0].root).toMatchObject({
-      type: 'split',
-      a: { sessionId: 'stable-session' },
-      b: { sessionId: 'second-session' },
+    // `complete` with zero restored: a refusal is a RESOLVED outcome, which is
+    // what lets autosave unlock instead of waiting forever on a backend that
+    // will never come.
+    expect(result).toEqual({ restoredSessions: 0, expectedSessions: 1, complete: true })
+    expect(recoverSession).toHaveBeenCalledTimes(1)
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'stable-session' }))
+    // Tree order became pool order: the split's depth-first leaves.
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session', 'second-session'],
+      lanes: ['stable-session', null],
     })
-    expect(harness.runtimes()['second-session']).toMatchObject({
+    expect(harness.runtimes()['stable-session']).toMatchObject({
       processStatus: 'failed',
       processError: 'Owned by another project',
       recoveryFailureCode: 'ownership-conflict',
       inputReady: false,
     })
+    // Parked, not failed: nothing tried to start it, so nothing about it can
+    // have gone wrong. `idle` is also what makes the first selection wake it.
+    expect(harness.runtimes()['second-session']).toMatchObject({
+      processStatus: 'idle',
+      processError: null,
+      recoveryFailureCode: null,
+    })
   })
 
   it('never replays persisted layout or runtime state after the initial shell is published', async () => {
+    // Re-based with #992: the old case raced TWO boot recoveries against each
+    // other and removed the first leaf while the second was pending. One
+    // backend spawns at boot now, so the race is that recovery against the
+    // USER — which was always the point. Everything the user can do to a
+    // published shell while a provider is still starting is done below, and
+    // the late outcome must own none of it.
     const persisted = makePersisted()
     persisted.sessions['second-session'] = {
       cwd: '/tmp/project',
       kind: 'codex',
       title: 'Persisted title',
     }
-    persisted.tabs[0].root = {
+    persisted.tabs![0]!.root = {
       type: 'split',
       direction: 'vertical',
       ratio: 0.5,
       a: { type: 'leaf', sessionId: 'stable-session' },
       b: { type: 'leaf', sessionId: 'second-session' },
     }
-    const first = deferred<Awaited<ReturnType<Window['api']['recoverSession']>>>()
-    const second = deferred<Awaited<ReturnType<Window['api']['recoverSession']>>>()
+    const pending = deferred<Awaited<ReturnType<Window['api']['recoverSession']>>>()
     const harness = makeHarness()
     const recoveryApi = {
-      recoverSession: vi.fn(({ sessionId }: { sessionId: string }) =>
-        sessionId === 'stable-session' ? first.promise : second.promise,
-      ),
+      recoverSession: vi.fn(() => pending.promise),
       cancelSessionRecovery: vi.fn(async () => true),
       defaultCwd: vi.fn(async () => '/tmp/fallback'),
     }
@@ -564,20 +639,46 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       recoveryApi,
     )
 
-    expect(harness.state().tabs[0].root).toMatchObject({
-      type: 'split',
-      a: { sessionId: 'stable-session' },
-      b: { sessionId: 'second-session' },
+    // The whole durable workspace is on screen BEFORE any provider answers.
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session', 'second-session'],
+      lanes: ['stable-session', null],
     })
-    expect(harness.runtimes()['stable-session'].processStatus).toBe('spawning')
-    expect(harness.runtimes()['second-session'].processStatus).toBe('spawning')
+    expect(harness.runtimes()['stable-session']!.processStatus).toBe('spawning')
+    expect(harness.runtimes()['second-session']!.processStatus).toBe('idle')
 
-    first.resolve({
+    // Model user and live-feed mutations while the provider is still
+    // unresolved: the parked sibling is closed, the recovering agent is moved
+    // to the other lane and renamed, and its draft and feed move on. The
+    // eventual outcome owns neither the removed row, nor the layout, nor this
+    // newer draft/feed/title state.
+    harness.setState(prev => ({
+      ...prev,
+      stage: {
+        ...prev.stage,
+        lanes: [{}, { selectedSessionId: 'stable-session' }],
+        focusedLane: 1,
+      },
+      sessions: {
+        'stable-session': {
+          ...prev.sessions['stable-session']!,
+          title: 'Edited while recovering',
+        },
+      },
+    }))
+    harness.setRuntimes(prev => ({
+      'stable-session': {
+        ...prev['stable-session']!,
+        draftInput: 'newer draft',
+        queuedMessages: [{ content: 'live feed state', timestamp: 'now' }],
+      },
+    }))
+
+    pending.resolve({
       ok: true,
       disposition: 'spawned',
       snapshot: {
@@ -585,63 +686,25 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         kind: 'claude',
         cwd: '/tmp/project',
         lifecycle: 'live',
-        input: { ready: true, revision: 2, reason: 'ready' },
-      },
-    })
-    await vi.waitFor(() => {
-      expect(harness.runtimes()['stable-session'].processStatus).toBe('started')
-    })
-
-    // Model user and live-feed mutations while the second provider is still
-    // unresolved. Its eventual outcome owns neither the removed first leaf nor
-    // this newer draft/feed/title state.
-    harness.setState(prev => ({
-      ...prev,
-      tabs: [{
-        ...prev.tabs[0],
-        root: { type: 'leaf', sessionId: 'second-session' },
-        focusedSessionId: 'second-session',
-      }],
-      sessions: {
-        'second-session': {
-          ...prev.sessions['second-session'],
-          title: 'Edited while recovering',
-        },
-      },
-    }))
-    harness.setRuntimes(prev => ({
-      'second-session': {
-        ...prev['second-session'],
-        draftInput: 'newer draft',
-        queuedMessages: [{ content: 'live feed state', timestamp: 'now' }],
-      },
-    }))
-
-    second.resolve({
-      ok: true,
-      disposition: 'spawned',
-      snapshot: {
-        sessionId: 'second-session',
-        kind: 'codex',
-        cwd: '/tmp/project',
-        lifecycle: 'live',
         input: { ready: true, revision: 3, reason: 'ready' },
       },
     })
     await expect(bootstrap).resolves.toEqual({
-      restoredSessions: 2,
-      expectedSessions: 2,
+      restoredSessions: 1,
+      expectedSessions: 1,
       complete: true,
     })
 
-    expect(harness.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'second-session',
+    // The user's arrangement, not the file's seed.
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session'],
+      lanes: [null, 'stable-session'],
     })
-    expect(harness.state().sessions['stable-session']).toBeUndefined()
-    expect(harness.state().sessions['second-session'].title).toBe('Edited while recovering')
-    expect(harness.runtimes()['stable-session']).toBeUndefined()
-    expect(harness.runtimes()['second-session']).toMatchObject({
+    expect(harness.state().stage.focusedLane).toBe(1)
+    expect(harness.state().sessions['second-session']).toBeUndefined()
+    expect(harness.state().sessions['stable-session']!.title).toBe('Edited while recovering')
+    expect(harness.runtimes()['second-session']).toBeUndefined()
+    expect(harness.runtimes()['stable-session']).toMatchObject({
       processStatus: 'started',
       draftInput: 'newer draft',
       queuedMessages: [{ content: 'live feed state', timestamp: 'now' }],
@@ -667,7 +730,6 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
       recoveryApi,
       5,
@@ -687,9 +749,11 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       recoveryToken: expect.any(String),
     })
     expect(cancelledRecovery?.recoveryToken).toBe(admittedRecovery?.recoveryToken)
-    expect(harness.state().tabs[0].root).toEqual({
-      type: 'leaf',
-      sessionId: 'stable-session',
+    // A v2 file with no lane grid boots onto the migration default: the pane
+    // the user was commanding in lane 0, beside one empty lane (plan §6.4).
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session'],
+      lanes: ['stable-session', null],
     })
     expect(harness.runtimes()['stable-session']).toMatchObject({
       processStatus: 'failed',
@@ -698,7 +762,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     })
   })
 
-  it('preserves a parked agent draft and Dispatch focus without spawning its backend', async () => {
+  it('seeds the parked agent the user was commanding into lane 0, spawns only it, and keeps every draft', async () => {
     const persisted = makePersisted()
     persisted.sessions['parked-session'] = {
       cwd: '/tmp/project',
@@ -715,6 +779,9 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         detachedAt: 42,
       },
     }
+    // Deliberately the v2 ON-DISK shape: real users' files carry this envelope,
+    // and rehydrate is where it becomes a stage (#992). A classic-Dispatch focus
+    // on a parked agent is the #977 entry seed.
     persisted.dispatchMode = {
       scope: 'project',
       focusedSessionId: 'parked-session',
@@ -724,13 +791,17 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       'parked-session': 'finish this after restart',
     }
     const harness = makeHarness()
-    const recoverSession = vi.fn(async () => ({
+    // Echoes whichever session was asked for. The old mock hard-coded the grid
+    // leaf's id, which was fine while "the tile leaf" was the only thing boot
+    // could ever request — and would now answer a request for the parked agent
+    // with someone else's snapshot.
+    const recoverSession = vi.fn(async (options: SessionRecoverOptions) => ({
       ok: true as const,
-      disposition: 'adopted' as const,
+      disposition: 'spawned' as const,
       snapshot: {
-        sessionId: 'stable-session',
-        kind: 'claude' as const,
-        cwd: '/tmp/project',
+        sessionId: options.sessionId,
+        kind: options.kind ?? ('claude' as const),
+        cwd: options.cwd,
         lifecycle: 'live' as const,
         input: { ready: true, revision: 1, reason: 'ready' as const },
       },
@@ -749,32 +820,56 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
     // WHY this assertion is stricter than merely checking the metadata row:
-    // parked agents deliberately have no provider process after restart, but
-    // they are still first-class workspace owners. Losing either their draft
-    // or the Dispatch selection makes a successful rehydrate feel like data
-    // loss and sends the next command to a different agent.
+    // a parked agent is a first-class workspace owner. Losing either its draft
+    // or the fact that the user was commanding it makes a successful rehydrate
+    // feel like data loss and sends the next command to a different agent.
+    //
+    // WHAT CHANGED with #992, because this case used to assert the opposite
+    // spawn. In v2 the tile leaf (`stable-session`) spawned and the parked
+    // agent stayed parked even though it was the one under the cursor — so the
+    // user's first prompt after a restart paid a wake. The boot-spawn set is
+    // the focused lane's occupant now, and the entry seed puts the agent the
+    // user was commanding in that lane. So exactly the roles swap: the agent
+    // they were talking to comes up live, the pane they had left behind waits.
+    // Still ONE spawn, still nothing spawned because a file merely lists it —
+    // the #258 fork-bomb guard is the count, and the count did not move.
     expect(recoverSession).toHaveBeenCalledTimes(1)
-    expect(result).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
-    expect(harness.state().detachedSessions['parked-session']).toMatchObject({
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'parked-session',
-      projectTabId: 'tab-1',
+      kind: 'codex',
+    }))
+    expect(result).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
+    // The detached record became the row's own membership: filed under the
+    // project it was parked from, ordered by when it left the screen (42),
+    // after the tile leaf (ordinal 0).
+    expect(harness.state().sessions['parked-session']).toMatchObject({
+      projectId: 'tab-1',
+      joinedAt: 42,
     })
-    expect(harness.state().dispatchMode).toMatchObject({
-      focusedSessionId: 'parked-session',
+    // Lane 0 shows it, beside one empty lane (the imported-workspace default,
+    // plan §6.4).
+    expect(placement(harness.state())).toEqual({
+      listed: ['stable-session', 'parked-session'],
+      lanes: ['parked-session', null],
     })
+    expect(harness.state().stage.focusedLane).toBe(0)
     expect(harness.runtimes()['parked-session']).toMatchObject({
+      processStatus: 'started',
+      draftInput: 'finish this after restart',
+    })
+    // The pane left behind: no backend, draft intact, ready to wake on use.
+    expect(harness.runtimes()['stable-session']).toMatchObject({
       processStatus: 'idle',
       inputReady: false,
-      draftInput: 'finish this after restart',
+      draftInput: 'unfinished prompt',
     })
   })
 
-  it('repairs detached records for deleted project tabs before publishing runtimes', async () => {
+  it('drops a session filed under a deleted project before publishing runtimes, and spawns nothing for it', async () => {
     const persisted = makePersisted()
     persisted.sessions['parked-session'] = {
       cwd: '/tmp/project',
@@ -802,6 +897,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         detachedAt: 21,
       },
     }
+    // v2 on-disk shape on purpose (see the parked-draft case above).
     persisted.dispatchMode = {
       scope: 'global',
       focusedSessionId: 'ghost-session',
@@ -843,21 +939,29 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       harness.refs,
       harness.setState,
       harness.setRuntimes,
-      harness.setTileTabs,
       vi.fn(),
     )
 
-    expect(result).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
-    expect(recoverSession).toHaveBeenCalledTimes(1)
+    // The FOCUSED lane named the ghost, so the boot-spawn set is empty: the
+    // pointer under the cursor resolved to nothing, and a pointer is never
+    // ownership. Nothing is spawned in its place — promoting lane 0's occupant
+    // (or the old tile leaf) would be boot deciding what the user is working
+    // on. An empty set is still a COMPLETE boot, which is what unlocks
+    // autosave; `0 === 0` is the honest reading, not a special case.
+    expect(result).toEqual({ restoredSessions: 0, expectedSessions: 0, complete: true })
+    expect(recoverSession).not.toHaveBeenCalled()
     expect(harness.state().sessions).toHaveProperty('stable-session')
     expect(harness.state().sessions).toHaveProperty('parked-session')
     expect(harness.state().sessions).not.toHaveProperty('ghost-session')
-    expect(harness.state().detachedSessions).toHaveProperty('parked-session')
-    expect(harness.state().detachedSessions).not.toHaveProperty('ghost-session')
+    // A ghost never falls back to the active project: that would hand a
+    // stranger's agent to whichever project happened to be open.
+    expect(placement(harness.state()).listed).toEqual(['stable-session', 'parked-session'])
     expect(harness.runtimes()).toHaveProperty('parked-session')
     expect(harness.runtimes()).not.toHaveProperty('ghost-session')
-    expect(harness.state().dispatchMode?.focusedSessionId).toBeUndefined()
-    expect(harness.state().dispatchMode?.tiled?.lanes).toEqual([
+    // The ghost's lane is emptied, never refilled; focus stays on the lane
+    // index the user left it on.
+    expect(harness.state().stage.focusedLane).toBe(1)
+    expect(harness.state().stage.lanes).toEqual([
       { selectedSessionId: 'parked-session' },
       { selectedSessionId: undefined },
     ])

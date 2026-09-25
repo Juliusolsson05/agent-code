@@ -2,8 +2,10 @@ import type {
   BuiltInMcpDomain,
   BuiltInMcpServerConfig,
 } from '@mcp/shared/types.js'
+import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 import type { AgentProviderRuntime, SessionKind } from '@shared/types/providerKind.js'
+import type { KillCaller } from '@shared/lifecycle/events.js'
 
 // Re-export the provider/session kind source of truth so callers that
 // already import session types from here keep one import. The canonical
@@ -82,6 +84,11 @@ export type SessionBackendSnapshot = {
    *  observed backend fact, not the renderer's requested policy. It is absent
    *  for terminal sessions, which never receive built-in MCP configuration. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Ids of the user MCP servers (#1143) this backend was launched with. Like
+   *  `builtInMcpDomains`, an observed launch fact reported by main, never the
+   *  renderer's request: main applies defaults, secrets and support at launch,
+   *  and an adopted process keeps whatever it started with. */
+  userMcpServerIds?: string[]
   /** Main-owned logical summary identity when this backend exposes TLDR. */
   tldrIdentity?: string
 }
@@ -99,6 +106,10 @@ export type SessionRecoverOptions = {
   recoverTmuxName?: string
   tldrIdentity?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** The pane's explicit per-agent user MCP choices (bare server id → on/off).
+   *  Used only if recovery has to START a backend; an adopted one keeps the
+   *  servers it was launched with. */
+  userMcpOverrides?: Record<string, boolean>
   /**
    * Opaque renderer-generated generation for this recovery admission.
    *
@@ -120,6 +131,22 @@ export type SessionOwnershipOptions = Pick<
   SessionRecoverOptions,
   'sessionId' | 'kind' | 'providerRuntime' | 'cwd'
 >
+
+/**
+ * The `session:kill-owned` request: the ownership proof plus who asked.
+ *
+ * WHY a separate type rather than adding `caller` to SessionOwnershipOptions:
+ * that tuple is also the durable ownership record main stores on Codex
+ * replacement reservations and redirects (predecessorOwnership /
+ * successorOwnership). "Who asked for this kill" is a property of one
+ * request, not of ownership, and must not be persisted into those records.
+ *
+ * Optional on the wire so an older or foreign caller still kills; main
+ * journals the gap as `caller: 'unknown'` (#1135).
+ */
+export type SessionKillOptions = SessionOwnershipOptions & {
+  caller?: KillCaller
+}
 
 export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
   recoveryToken: string
@@ -411,6 +438,21 @@ export type AgentSessionEvents = {
   // rather than a per-entry flag. Sessions emit it from Stage 4; delivery
   // through preload and both SessionFeeds is Stage 5 of the grok plan.
   'history-boundary': [ProviderHistoryBoundaryEvent & { file: string }]
+  /**
+   * The provider session this pane runs changed WITHOUT a respawn: the user
+   * started, resumed or forked a session inside a native TUI that Agent Code
+   * follows (Pi: /new, /resume, /fork — decision D4 in
+   * docs/decomposition/pi-terminal.md). Emitted BEFORE the provider's own
+   * history-boundary reset and the new session's rows, so a consumer has
+   * rebound the pane's identity by the time the new conversation arrives.
+   *
+   * WHY an explicit event and not a new id inside a transcript row: the
+   * renderer quarantines any committed burst whose provider id conflicts with
+   * the pane's durable one (#290 — duplicated panes rendering each other's
+   * messages). A switch the user made on purpose must be distinguishable from
+   * that misattach, and only the runtime that watched it happen can say so.
+   */
+  'provider-session-changed': [{ providerSessionId: string; transcriptFile: string | null; reason: string }]
 
   'semantic-event': [unknown]
   exit: [{ exitCode: number; signal?: number }]
@@ -523,6 +565,13 @@ export interface AgentSession extends AgentSessionEmitter {
     | { ok: true; state?: unknown }
     | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
   >
+
+  /** Optional (OpenCode Terminal today): scroll the provider's OWN transcript
+   *  view to its newest message. For a TUI that pages its transcript on the
+   *  alternate screen, xterm's scrollToBottom cannot move anything (#843). The
+   *  provider must use a rebinding-proof route; a user-configurable chord is
+   *  not one. Never throws. */
+  jumpToLatest?(): Promise<{ ok: true } | { ok: false; reason: string }>
 
   /** Optional (Claude today): wait for the bracketed-paste placeholder
    *  to appear before firing Enter. See sessionManager.ts:952. */
@@ -661,6 +710,13 @@ export type SessionOptions = {
    *  never the long-lived domain policy; the renderer/session metadata remains
    *  the source of truth for which domains should be enabled. */
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  /** User MCP servers (#1143) already validated, secret-resolved and filtered
+   *  by main for this launch and this provider. Providers only translate them;
+   *  they never decide which ones apply. */
+  userMcpServers?: ResolvedUserMcpServer[]
+  /** Codex only: how to send shell exclusions for the user-server secrets it
+   *  carries, matching the user's own config (see CodexShellPolicyStyle). */
+  userMcpCodexShellPolicy?: { style: 'filters' } | { style: 'legacy'; exclude: readonly string[] }
   /**
    * Main-owned one-shot boundary invoked by a resumed provider immediately
    * before it acquires exclusive durable-transcript ownership.
@@ -675,4 +731,18 @@ export type SessionOptions = {
    * ownership boundary ignore it.
    */
   beforeResumeOwnershipAcquire?: () => Promise<void>
+}
+
+export type SessionHistoryChunk = {
+  entries: AgentTranscriptEntry[]
+  hasMore: boolean
+  // Only set on initial-load chunks. See `HistoryChunk.totalEntries`
+  // in src/main/sessions/historyLoader.ts for the full WHY. Renderers
+  // should treat absence as "unknown / not provided" and avoid using
+  // it as a denominator unless it's a positive number.
+  totalEntries?: number
+  // Byte offset of each entry's transcript line, parallel to `entries`.
+  // The renderer echoes the one for its pagination cursor line back as
+  // `beforeOffset`. See `HistoryChunk.offsets` in historyLoader.ts.
+  offsets?: number[]
 }

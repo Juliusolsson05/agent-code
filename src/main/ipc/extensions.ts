@@ -9,14 +9,17 @@ import {
 } from '@main/extensions/storage.js'
 import { installExtension, installExtensionFromPath } from '@main/extensions/install.js'
 import type { ConsentPrompt } from '@main/extensions/install.js'
-import { listInstalledExtensions, onExtensionPublication, removeExtension } from '@main/extensions/ledger.js'
+import { listInstalledExtensions, listQuarantinedExtensions, onExtensionPublication, removeExtension, removeQuarantinedExtension } from '@main/extensions/ledger.js'
 import { installedExtensionCapabilities } from '@main/extensions/grants.js'
 import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type {
   ExtensionCapability,
   ExtensionInstallResult,
   ExtensionListEntry,
+  ExtensionManifest,
+  QuarantinedExtensionEntry,
 } from '@shared/types/extensions.js'
+import { withVisibleControls } from '@shared/text/visibleControls.js'
 
 // The capability-consent dialog, shared by both install paths (GitHub + local
 // folder). A blocking, OS-native dialog on purpose: granting an extension
@@ -49,14 +52,72 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
     'Create or replace text files it names inside projects belonging to active sessions.',
   'notifications.show':
     'Show short app-wide status notifications while it runs in the background.',
+  // The one disclosure that is about TRUST rather than data: a service is a
+  // bundled program the host launches as a real child process with this user's
+  // privileges. It can read and write what this account can, open network
+  // connections, and run for as long as Agent Code is open. The grant gates the
+  // host's lifecycle/proxy conveniences — it is not a sandbox. If that sounds
+  // alarming, it is meant to: this is the VS Code extension-host decision,
+  // made once, per extension, here.
+  'service.run':
+    'Run bundled native programs as child processes with this user’s privileges — only when you use the extension’s start control. Native code is not sandboxed.',
+  'service.transport':
+    'Exchange requests with its own running service on this machine (the host proxies them; the extension cannot reach anything else on the network).',
+  'net.listen':
+    'Make one of its running services reachable from this machine’s local network. The host owns that listener and closes it when the service stops. Use a trusted network only.',
+  'net.connect':
+    'Open web requests to addresses you or the extension enter on this local network (private addresses only in this release; the request goes through the host, not the sandbox).',
+  // The origins themselves are appended by disclosureFor — the capability
+  // alone says nothing useful; WHICH servers is the whole decision.
+  'net.origins':
+    'Send HTTPS requests over the internet to only these servers (through the host, not the sandbox):',
+}
+
+/** Capabilities that reach a network. Used to keep the dialog's closing
+ *  sentence true: it said "It has no network access." unconditionally, even
+ *  for extensions that had just been granted net.connect or native services. */
+const NETWORK_CAPABILITIES: readonly ExtensionCapability[] = ['service.run', 'net.listen', 'net.connect', 'net.origins']
+
+function disclosureFor(cap: ExtensionCapability, manifest: ExtensionManifest): string {
+  if (cap !== 'net.origins') return `  • ${CAPABILITY_DISCLOSURE[cap]}`
+  // Every origin on its own line. The list was validated at parse time (exact
+  // https origins, DNS names); withVisibleControls is applied to the whole
+  // detail by the caller so a lookalike or bidi-spoofed name is visible.
+  const origins = (manifest.networkOrigins ?? []).map(origin => `      – ${origin}`).join('\n')
+  return `  • ${CAPABILITY_DISCLOSURE[cap]}\n${origins}`
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {
   return async manifest => {
     const win = BrowserWindow.fromWebContents(evt.sender)
     const permissions = manifest.permissions ?? []
-    const detail = permissions.map(cap => `  • ${CAPABILITY_DISCLOSURE[cap]}`).join('\n')
+    // A manifest that asks for NOTHING still gets a dialog (#1049 re-review).
+    // Tier 0 used to install in silence, so nothing ever showed the user which
+    // folder or repository they were about to run code from — and the
+    // extension row that does show it appears only afterwards. The wording
+    // drops the capability paragraph, because there is nothing to grant; the
+    // decision is the source.
+    if (permissions.length === 0) {
+      const plain = {
+        type: 'question' as const,
+        buttons: ['Cancel', 'Install'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Install extension',
+        message: `Install ${withVisibleControls(manifest.id)} from ${withVisibleControls(source)}?`,
+        detail:
+          `"${withVisibleControls(manifest.name)}" requests no capabilities: it cannot read or change `
+          + `project files and has no network access.\n\n`
+          + `Install it only if you trust ${withVisibleControls(source)}.`,
+      }
+      const plainResult = win
+        ? await dialog.showMessageBox(win, plain)
+        : await dialog.showMessageBox(plain)
+      return plainResult.response === 1
+    }
+    const detail = permissions.map(cap => disclosureFor(cap, manifest)).join('\n')
     const canWrite = permissions.includes('fs.write')
+    const usesNetwork = permissions.some(cap => NETWORK_CAPABILITIES.includes(cap))
 
     const options = {
       // Read-only requests stay a question. A real project mutation uses warning
@@ -73,12 +134,16 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
       // one thing the dialog did not show. `manifest.name` is attacker-chosen and
       // only length-bounded, so it is presented as a claim about an identity
       // (`id`), never as the identity itself.
-      message: `Install ${manifest.id} from ${source}?`,
+      // Every interpolated field here is attacker-chosen (#1049 review).
+      message: `Install ${withVisibleControls(manifest.id)} from ${withVisibleControls(source)}?`,
       detail:
-        `"${manifest.name}" wants these capabilities:\n\n${detail}\n\n` +
+        `"${withVisibleControls(manifest.name)}" wants these capabilities:\n\n${withVisibleControls(detail)}\n\n` +
         `${canWrite ? 'It can change project files.' : 'It cannot change project files.'} ` +
-        `It has no network access. ` +
-        `Install it only if you trust ${source}.`,
+        (usesNetwork ? '' : `It has no network access. `) +
+        // The same value, twice, and the second one was raw: a source string
+        // with a bidi override could therefore spoof the sentence that carries
+        // the whole trust decision (#1049 re-review).
+        `Install it only if you trust ${withVisibleControls(source)}.`,
     }
     const result = win
       ? await dialog.showMessageBox(win, options)
@@ -148,6 +213,15 @@ export function registerExtensionsIpc(): void {
     listInstalledExtensions(),
   )
 
+  // Rows this build set aside (#959). Separate from `extensions:list` because
+  // they are NOT installed extensions: nothing here is loaded, activated or
+  // granted anything, and giving them the same shape would invite a caller to
+  // treat one as runnable. Settings shows them so the user can see why an
+  // extension is missing and remove it, which is the whole recovery path.
+  ipcMain.handle('extensions:list-quarantined', async (): Promise<QuarantinedExtensionEntry[]> =>
+    listQuarantinedExtensions(),
+  )
+
   // WHY install returns a result object instead of rejecting: every failure here is
   // something the user can act on — wrong repo name, private repo, missing
   // manifest, unsupported API version, archive too large. An IPC rejection reaches
@@ -162,9 +236,11 @@ export function registerExtensionsIpc(): void {
     // credential upgrade without knowing it exists.
     async (evt, repo: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
       try {
+        // firstInstall: `owner/repo` typed (or pasted) just now. A pasted one
+        // can carry invisible characters, and this dialog is where they show.
         const record = await installExtension(repo, consentPromptFor(evt, repo.trim()), {
           githubCliAuth: useGithubCliAuth !== false,
-        })
+        }, true)
         return { ok: true, entry: { ...record, present: true } }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -189,7 +265,9 @@ export function registerExtensionsIpc(): void {
     const dir = picked.filePaths[0]
     if (picked.canceled || !dir) return { ok: false, error: 'No folder selected.' }
     try {
-      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir))
+      // firstInstall: the user picked this folder just now, and nothing has
+      // shown them its name in a form that reveals invisible characters.
+      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir), true)
       return { ok: true, entry: { ...record, present: true } }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -228,8 +306,56 @@ export function registerExtensionsIpc(): void {
     }
   })
 
+  // Re-install a GITHUB extension from the `owner/repo` already recorded in its
+  // ledger row — the counterpart of update-local, and for the same reason.
+  //
+  // WHY this exists instead of the Update button re-calling `extensions:install`
+  // with `entry.repo` (#1049 round 9): that handler hardcodes `firstInstall=true`,
+  // because everything reaching it IS a first install — a string the user just
+  // typed or pasted into the box, which is exactly when an invisible-character
+  // repo name has to be shown before code runs. Routing Update through it made
+  // every Tier-0 update prompt again, which is the noise the firstInstall split
+  // was introduced to avoid: the source was chosen once, approved once, and is
+  // now read back from OUR ledger, not from the renderer.
+  //
+  // The renderer names an id, never a repo, so this cannot be turned into
+  // "install any repository on the renderer's say-so". Everything else is
+  // unchanged: normalizeRepo, download, tree/entry containment, and an
+  // unconditional consent prompt for any manifest that requests capabilities.
+  ipcMain.handle(
+    'extensions:update-github',
+    async (evt, id: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> => {
+      if (!isValidExtensionId(id)) return { ok: false, error: 'Unknown extension.' }
+      const installed = await listInstalledExtensions()
+      const entry = installed.find(candidate => candidate.manifest.id === id)
+      if (!entry) return { ok: false, error: 'Extension is no longer installed.' }
+      if (entry.origin !== 'github') {
+        return { ok: false, error: 'This extension was loaded from a folder; use Reload.' }
+      }
+      try {
+        const record = await installExtension(entry.repo, consentPromptFor(evt, entry.repo), {
+          githubCliAuth: useGithubCliAuth !== false,
+        })
+        return { ok: true, entry: { ...record, present: true } }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  )
+
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
+    // removeExtension deletes the id's secrets before the ledger commit, and
+    // finalizeInstall clears stale ones on any first install (#1151 review):
+    // one owner for the credential lifecycle, shared by both removal paths.
     await removeExtension(id)
+  })
+
+  // Clearing a SET-ASIDE row is a different operation from uninstalling an
+  // extension, not a flag on it (#959 review): a ledger can hold both under one
+  // id, and one handler doing whichever it found meant clearing the set-aside
+  // row uninstalled the working extension and deleted its bundle.
+  ipcMain.handle('extensions:remove-quarantined', async (_evt, id: string): Promise<void> => {
+    await removeQuarantinedExtension(id)
   })
 
   // Consent belongs to the committed installation, and is checked against a

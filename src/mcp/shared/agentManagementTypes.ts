@@ -1,7 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
-export type ManagedAgentPlacement = 'grid' | 'dispatch' | 'buried'
+// One value since the unified layout (#992): every managed agent is a row in
+// its project's agent index. The union kept 'grid' and 'buried' for one
+// release after nothing produced them (they named v2 owner structures that
+// no longer exist) and narrows here — stage 7 — so a caller still switching
+// on the removed values fails to compile instead of silently never matching.
+export type ManagedAgentPlacement = 'dispatch'
 
 export type ManagedAgentBackendState =
   | 'live'
@@ -25,6 +30,17 @@ export type ManagedAgentTranscriptAvailability =
   | 'not_created'
   | 'unavailable'
 
+/**
+ * Which class of evidence a published `lastActivityAt` rests on. An auditing
+ * agent cites it, and the design doc ranks these deliberately: a real
+ * transcript record outranks a clock that a screen repaint can move
+ * (docs/superpowers/plans/2026-07-23-open-agent-mcp-control.md).
+ */
+export type ManagedAgentActivitySource = 'transcript' | 'runtime' | 'backend'
+
+/** The subset the RENDERER can decide: it has no view of the backend's clock. */
+export type ManagedAgentRendererActivitySource = Exclude<ManagedAgentActivitySource, 'backend'>
+
 export type ManagedAgentProject = {
   tabId: string
   title: string
@@ -33,6 +49,23 @@ export type ManagedAgentProject = {
 
 export type ManagedAgentRecord = {
   sessionId: string
+  /**
+   * The label the user sees beside this agent right now (`B28`, or `★2` when
+   * pinned), or null when it shows none (#1145). Users name agents by this,
+   * so a record without it left the calling model unable to map "prompt
+   * B28" to any session.
+   *
+   * WHY always present (null rather than absent): "this agent has no label"
+   * is a fact the model can repeat to the user; a missing field reads as
+   * "this tool does not know about labels", which is the bug being fixed.
+   *
+   * It is a SCREEN COORDINATE, not an identity: closing, pinning or adding
+   * an earlier row renumbers every later one. Target by `label` to resolve it
+   * at call time; never cache a label from an earlier listing.
+   */
+  displayLabel: string | null
+  /** Spoken agent name, only while the Agent names setting is on (#1145). */
+  agentName?: string
   kind: AgentProviderKind
   cwd: string
   title?: string
@@ -47,7 +80,7 @@ export type ManagedAgentRecord = {
     lastModifiedAt?: number
   }
   lastActivityAt?: number
-  lastActivitySource?: 'transcript' | 'runtime' | 'backend'
+  lastActivitySource?: ManagedAgentActivitySource
   idleForMs?: number
   processActive: boolean
   awaitingAssistant: boolean
@@ -86,15 +119,35 @@ export type ManagedAgentTranscriptOutput = {
 export type ManagedAgentRendererDescriptor = {
   agent: ManagedAgentRecord
   providerSessionId?: string
-  transcriptActivityAt?: number
-  runtimeActivityAt?: number
+  /**
+   * The ONE answer to "when was this agent last active" (#915), shared with
+   * the TLDR peek footer via `sessionActivity`, plus which class of evidence
+   * produced it.
+   *
+   * WHY the renderer decides the source and the bridge does not: the bridge
+   * sees this as a single number and would have to label it by where it
+   * arrived from, which is how a JSONL watermark came to be published as
+   * `lastActivitySource: 'runtime'` — the value right, the citation wrong
+   * (review of #1080). Only the renderer knows whether a transcript record or
+   * a runtime clock won.
+   *
+   * This type is renderer-private and never serialised to an MCP caller (see
+   * `providerSessionId` above); its sole consumer is `AgentManagementBridge`,
+   * in the same binary. An earlier version also carried the raw
+   * `transcriptActivityAt`/`runtimeActivityAt` components "because an existing
+   * caller may read them" — there is no such caller, and once the bridge
+   * stopped recombining them nothing read them at all, so they are gone.
+   */
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
 }
 
 export type ManagedAgentRendererOutput = {
   output: ManagedAgentTranscriptOutput
   providerSessionId?: string
-  transcriptActivityAt?: number
-  runtimeActivityAt?: number
+  /** See `ManagedAgentRendererDescriptor.lastActiveAt` (#915). */
+  lastActiveAt?: number
+  lastActiveSource?: ManagedAgentRendererActivitySource
 }
 
 type AgentManagementRequestBase = {
@@ -102,11 +155,27 @@ type AgentManagementRequestBase = {
   callerSessionId: string
 }
 
+/**
+ * How a caller names ONE target (#1145): exactly one field is set.
+ *
+ * WHY label and name travel to the renderer unresolved: only the renderer has
+ * the row stream a label indexes and the name map a name reads, and it must
+ * resolve against the SAME state snapshot the operation then acts on — a
+ * label is what the user sees now, and resolving it earlier (in main, or from
+ * a previous listing) could hand the prompt to whichever agent took that
+ * row's number since.
+ */
+export type ManagedAgentTarget = {
+  sessionId?: string
+  label?: string
+  name?: string
+}
+
 export type AgentManagementRendererRequest =
   | (AgentManagementRequestBase & { type: 'list-agents' })
   | (AgentManagementRequestBase & {
       type: 'read-agent'
-      sessionId: string
+      target: ManagedAgentTarget
       maxMessages?: number
       maxCharsPerMessage?: number
       maxCharsPerAgent?: number
@@ -114,6 +183,9 @@ export type AgentManagementRendererRequest =
   | (AgentManagementRequestBase & {
       type: 'read-agents'
       sessionIds?: string[]
+      /** Visible labels / spoken names, resolved like ManagedAgentTarget. */
+      labels?: string[]
+      names?: string[]
       includeCaller?: boolean
       maxMessagesPerAgent?: number
       maxCharsPerMessage?: number
@@ -122,12 +194,12 @@ export type AgentManagementRendererRequest =
     })
   | (AgentManagementRequestBase & {
       type: 'send-prompt'
-      sessionId: string
+      target: ManagedAgentTarget
       prompt: string
     })
   | (AgentManagementRequestBase & {
       type: 'close-agent'
-      sessionId: string
+      target: ManagedAgentTarget
     })
 
 export type AgentManagementRendererResponse =
@@ -166,6 +238,8 @@ export type AgentManagementRendererResponse =
       ok: true
       type: 'send-prompt'
       sessionId: string
+      /** Echoed so the caller can tell the user which agent it reached. */
+      displayLabel: string | null
       delivery: PromptDeliveryResult
     }
   | {
@@ -173,6 +247,7 @@ export type AgentManagementRendererResponse =
       ok: true
       type: 'close-agent'
       closedSessionId: string
+      displayLabel: string | null
     }
   | {
       requestId: string
@@ -185,6 +260,10 @@ export type AgentManagementRendererResponse =
         | 'self_target_forbidden'
         | 'transcript_unavailable'
         | 'close_would_affect_additional_sessions'
+        | 'invalid_target'
+        | 'label_not_found'
+        | 'name_not_found'
+        | 'name_ambiguous'
         | 'request_failed'
       message: string
       sessionId?: string

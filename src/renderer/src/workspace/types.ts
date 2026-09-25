@@ -33,27 +33,51 @@ export type TabId = string
 
 export type SplitDirection = 'vertical' | 'horizontal'
 
-/**
- * Vertical split = divider runs top-to-bottom, `a` is left, `b` is right.
- * Horizontal split = divider runs left-to-right, `a` is top, `b` is bottom.
- * We deliberately use a/b instead of left/right so the direction flip
- * between vertical and horizontal doesn't mislead.
- */
-export type TileNode =
-  | { type: 'leaf'; sessionId: SessionId }
-  | {
-      type: 'split'
-      direction: SplitDirection
-      ratio: number
-      a: TileNode
-      b: TileNode
-    }
+// `TileNode` — the recursive binary split tree — lived here until #992. It is
+// now `LegacyTileNode` in legacyWorkspaceV2.ts, which is the only place that
+// still needs to understand one (to read an old file). Nothing at runtime
+// owns, renders or mutates a tree.
 
+/**
+ * A project: a title, and a stable position that gives its agents their index
+ * letter (A1, B7).
+ *
+ * It is called `Tab` and lives in `WorkspaceState.tabs` for one reason only:
+ * renaming the in-memory field touches ~200 call sites and is cleanup, not
+ * behavior (stage 8 of the #992 plan). What matters is what it no longer has:
+ *
+ *   - `root` — the tile tree that OWNED the tab's visible sessions. Ownership
+ *     is `SessionMeta.projectId` now: a session says which project it belongs
+ *     to, instead of a project holding a structure its sessions hang off.
+ *   - `focusedSessionId` — the tree's focus. The focused lane's occupant is
+ *     the one focus truth (U3); a second, per-project focus is exactly the
+ *     shape of #266/#267/#271.
+ *
+ * A project therefore owns NOTHING (U4). It exists while at least one session
+ * names it and is removed when its last session closes.
+ */
 export type Tab = {
   id: TabId
   title: string
-  root: TileNode
-  focusedSessionId: SessionId
+}
+
+/**
+ * A project, post unified-layout merge (#992, plan
+ * docs/superpowers/plans/2026-09-17-unified-stage-layout.md).
+ *
+ * This is the ON-DISK spelling of a project (`workspace.json`'s `projects`).
+ * It is structurally what `Tab` is in memory; the two names exist because the
+ * file was renamed in #992 and the in-memory field was not (see `Tab`). The
+ * migration (workspaceShape.ts) mints these from v2 tabs and keeps the old
+ * TabId as `id` so lane bindings, row project bindings, and labels survive
+ * the merge unchanged.
+ */
+export type ProjectRef = {
+  /** Old TabId — deliberately reused; see the comment above. */
+  id: TabId
+  title: string
+  /** Spawn cwd default. Absent => inherit from the spawning context. */
+  cwd?: string
 }
 
 /**
@@ -88,6 +112,47 @@ export type AgentViewModeOverride = 'agent' | 'terminal'
 export type SessionSpawnSelection = {
   kind: SessionKind
   providerRuntime?: AgentProviderRuntime
+}
+
+/**
+ * The browser pocket attached to an agent session (spec §3,
+ * docs/decomposition/lane-browser-pocket.md Stage 3).
+ *
+ * WHY on the SESSION and not the lane: lanes are index-keyed
+ * (TiledDispatchLayout renders `key={laneIndex}`), spliced by every grid
+ * mutation, and projected down to `{ selectedSessionId }` on persist, so a
+ * lane field would slide to the wrong agent or vanish. Spotlight holds a
+ * session too. SessionMeta already rides autosave, migration, adoption,
+ * project merge and removal; only replaceSession's literal and undo's
+ * carryDurableMeta need to learn this field. Do NOT copy the
+ * `dispatchColorFlags` pattern (a Settings map keyed by session id): it is
+ * never remapped or cleaned and orphans on every reload.
+ */
+export type BrowserPocketConfig = {
+  /**
+   * Minted once, never re-minted. Names the guest and its cookie partition.
+   * Reload, provider switch, rewind and undo all MINT NEW SessionIds
+   * (idRemap.ts), so anything keyed by SessionId would log the user out of
+   * their dev app on every reload.
+   */
+  pocketId: string
+  /** Last committed top-level URL (http/https). Restored lazily on first show. */
+  url?: string
+  /** 'open' = split beside the agent; 'collapsed' = the lane strip only. */
+  view: 'open' | 'collapsed'
+  /** The pocket's share of the split, 0.2–0.8. Absent = half. */
+  split?: number
+  /** Which cookie jar: the pocket's own (default, D1) or the project's. */
+  profile: 'lane' | 'project'
+  /** CSS viewport emulation; absent = fill the slot. */
+  viewport?:
+    | { mode: 'fill' }
+    | { mode: 'preset'; preset: string; landscape?: boolean }
+    | { mode: 'free'; width: number; height: number }
+  /** prefers-color-scheme override; absent = follow the OS. */
+  colorScheme?: 'light' | 'dark'
+  /** Page zoom for this pocket only (the host re-asserts it; guests inherit the app's zoom otherwise). */
+  zoom?: number
 }
 
 export type SessionMeta = {
@@ -169,6 +234,11 @@ export type SessionMeta = {
     | 'proxy-header'
     | 'resume-request'
     | 'runtime-start'
+    // The runtime watched the user switch sessions inside a native TUI it
+    // follows (Pi /new, /resume, /fork) — a durable identity, stated apart
+    // from 'jsonl-entry' so a later reader can tell a deliberate follow from
+    // an id first captured from a transcript row.
+    | 'provider-follow'
   /**
    * For tmux-backed terminals (P1): the registry-managed tmux
    * session name. Captured from the spawn IPC response and passed
@@ -189,6 +259,8 @@ export type SessionMeta = {
    * installed. Absent on every non-extension kind.
    */
   extensionViewId?: string
+  /** Browser pocket (see BrowserPocketConfig). Agent kinds only; absent = none. */
+  browserPocket?: BrowserPocketConfig
   /**
    * Set on a "Linked Agent" — an agent spawned via the Linked Agent
    * command with another agent as its parent. Two consequences:
@@ -260,54 +332,53 @@ export type SessionMeta = {
   /** Durable per-domain choices. {} inherits every global preference; missing
    * maps belong to legacy snapshots and migrate via sessionMcpOverrides. */
   builtInMcpOverrides?: BuiltInMcpOverrides
-}
-
-export type BuriedPaneRecord = {
-  /** Stable id for picker actions; same as sessionId for now. */
-  id: string
-  /** The live hidden session. Remains running while buried. */
-  sessionId: SessionId
-  /** Persisted session metadata so reload/revive can describe it. */
-  sessionMeta: SessionMeta
-  buriedAt: number
-  /** Where the pane came from before it was removed from the tree. */
-  sourceTabId: TabId
-  sourceTabTitle: string
-  sourceTabIndex: number
-  /** Placement hint captured from the parent split when available. */
-  direction?: SplitDirection
-  ratio?: number
-  side?: 'a' | 'b'
-  /** Anchor leaf from the surviving sibling subtree, if any. */
-  siblingLeafId?: SessionId
-  /** Optional user note captured when the pane was buried. */
-  note?: string
-}
-
-export type DetachedSessionSurface = 'dispatch'
-
-export type DetachedSessionRecord = {
-  /** The live session that is intentionally not placed in any tile tree. */
-  sessionId: SessionId
+  /** User MCP server ids (#1143) the last known provider process was launched
+   * with, as reported by main. Observed, like `builtInMcpDomains`; the choices
+   * behind it live in `builtInMcpOverrides` under `user:<id>` keys. */
+  userMcpServerIds?: string[]
   /**
-   * Which non-grid surface owns the session right now.
+   * Project membership (#992). THE ownership fact: a session belongs to the
+   * workspace because it names a live project. It replaces all three ways a
+   * v2 session could be owned — "I am a leaf of tabs[i].root", a
+   * `detachedSessions` record's `projectTabId`, and a `buried` record's
+   * `sourceTabId` — with one field on the session itself.
    *
-   * WHY this says "surface" instead of "backlog": the important model
-   * decision is that sessions can be live without grid placement. Dispatch is
-   * the first consumer, but the shape should still scale to future surfaces
-   * without pretending those sessions are children of Dispatch Mode itself.
+   * Optional in the TYPE only because `SessionMeta` also describes v2 rows on
+   * disk, which predate it, and the transient row `spawn` writes a moment
+   * before its caller files it. It is set on every session a reducer has
+   * finished creating, carried across provider swaps and reloads, and a row
+   * without a live one is dropped at the autosave and rehydrate boundaries —
+   * metadata is never its own owner (sessionOwnership.ts).
    */
-  surface: DetachedSessionSurface
+  projectId?: TabId
   /**
-   * Project affinity, not hierarchy. The session is detached from the grid,
-   * but it still needs a project tab for grouping, cwd defaults, terminal
-   * selection, and project/global filtering in Dispatch Mode.
+   * Position inside its project's index: ascending, ties broken by the
+   * `sessions` map's insertion order. The ONLY ordering key, replacing v2's
+   * two-part rule (tree leaves depth-first, then detached by `detachedAt`).
+   *
+   * Stamped with `Date.now()` when a session is filed, so new agents list
+   * last; carried verbatim across a provider swap or reload so a row does not
+   * jump when its backend is replaced. Migrated v2 tree leaves hold small
+   * ordinals (0, 1, 2…), which is what keeps them ahead of every timestamped
+   * row exactly as "leaves first" used to.
    */
-  projectTabId: TabId
-  projectTabTitle: string
-  projectTabIndex: number
-  detachedAt: number
+  joinedAt?: number
+  /**
+   * Terminals only: when the user last USED this shell — typed or pasted into
+   * it, or a command started/finished, or a `cd` — in epoch ms (#1178).
+   * Persisted so Close Old Agents can age a shell across restarts; the only
+   * writer is workspace/terminalLastUsed.ts, which explains why a reload never
+   * moves it.
+   */
+  lastUsedAt?: number
 }
+
+// `BuriedPaneRecord`, `DetachedSessionSurface` and `DetachedSessionRecord` lived
+// here until #992. They were the two non-tree OWNERS of a session: a record in
+// `detachedSessions` ("live, but in no tile tree") and a record in `buried`
+// ("live, hidden"). Both statements are simply true of any pool session that
+// no lane shows, so they are no longer kinds of thing. The shapes survive as
+// `Legacy*` types in legacyWorkspaceV2.ts for reading old files.
 
 /**
  * One lane in a Tiled Dispatch layout. lanes[0] is always the full index
@@ -367,8 +438,9 @@ export type DispatchGridRow = {
   /** This row's index-list fraction of the row width. Absent => default. */
   indexFraction?: number
   /**
-   * Restrict this row to these projects. Absent (or empty) => the row follows
-   * `DispatchModeState.scope` like the whole layout used to.
+   * Restrict this row to these projects. Absent (or empty) => the row lists
+   * every project. (Until #992 an unbound row followed a layout-wide
+   * project/global scope; that scope is gone and unbound simply means all.)
    *
    * WHY a set rather than the single `projectTabId` this replaced: a row is a
    * working context, and a working context routinely spans two repos — an app
@@ -383,10 +455,7 @@ export type DispatchGridRow = {
    * representation, or every reader needs to test for both.
    *
    * A binding FILTERS, it never fills: the user named a constraint, not an
-   * occupant. Binding also promotes scope to 'global', because a project-scoped
-   * row set is built from activeTabId alone and would leave any other project's
-   * row with an empty index (the same promotion, for the same reason, that
-   * agentIndexNavigation applies to a cross-project label).
+   * occupant.
    */
   projectTabIds?: TabId[]
   /**
@@ -462,64 +531,49 @@ export type TiledDispatchState = {
   ratios?: number[]
 }
 
-export type DispatchModeState = {
-  scope: 'project' | 'global'
-  /**
-   * Dispatch Mode selection is separate from grid focus. Reusing
-   * Tab.focusedSessionId for detached rows would violate the tile-tree
-   * invariant above and make every normal grid command capable of targeting a
-   * non-leaf session. Keep this mode-local so exiting Dispatch never leaves the
-   * grid in an impossible focus state.
-   */
-  focusedSessionId?: SessionId
-  /**
-   * Present => render the multi-lane TiledDispatchLayout instead of the
-   * classic single-agent layout. Lives inside dispatchMode (which is
-   * already persisted to workspace.json) so lanes / focusedLane / ratios
-   * survive reloads for free. Absent => classic Dispatch (unchanged).
-   */
-  tiled?: TiledDispatchState
-  // HISTORICAL: a `terminalVisible: boolean` flag used to live here, then a
-  // global `settings.dispatchProjectTerminal` toggle replaced it. Both are
-  // gone — the auto-created Dispatch project terminal was retired entirely.
-  // Ordinary user-created terminals are unaffected: they are normal sessions
-  // and normal Dispatch rows.
-}
+// `DispatchModeState` lived here until the unified layout (#992). It wrapped
+// the lane grid in an optional MODE: `scope: 'project' | 'global'`, a classic
+// single-selection `focusedSessionId`, and an optional `tiled` block whose
+// presence chose between two layouts. All three are gone:
+//   - the mode: the lane grid is the workspace, so it is a required field
+//     (`WorkspaceState.stage`), never null and never "entered";
+//   - the scope: every index lists every project, and a ROW's `projectTabIds`
+//     binding is the only filter. The command that switched scope was deleted
+//     with the mode, which would have stranded anyone whose saved scope was
+//     'project' — another reason the field could not stay;
+//   - the classic focus: `stage.focusedLane` is the one focus truth.
+// Old files still carry the wrapper; workspaceShape.ts reads it once.
 
 export type WorkspaceState = {
   tabs: Tab[]
   activeTabId: TabId
+  // `gridRelatedSelections` lived here until #992: which related child a grid
+  // pane was showing in place of its owner. See TileTree.tsx for why the stage
+  // has no equivalent.
   /**
-   * Grid panes can temporarily render a related detached child (linked agent or
-   * orchestration worker) inside the parent's physical tile. This map is keyed
-   * by the physical grid leaf id, not by the rendered child id.
+   * The stage: ragged rows of lanes. THE workspace — always present, never a
+   * mode. A lane names a pool session or is empty; nothing fills a lane except
+   * the user (#681) and the two continuity writes (entry seed on migration,
+   * spawn into an empty focused lane).
    *
-   * WHY this is view state instead of tile-tree state:
-   * linked/orchestration children are intentionally detached Dispatch sessions.
-   * Pretending they are tile leaves would violate the grid invariant that
-   * `tab.root` owns the mounted layout and would make a harmless "peek at
-   * worker" click mutate the user's splits. Keeping the selected child here
-   * lets input/commands target the visible child while the layout still says
-   * "this pane belongs to the parent."
+   * The type keeps its historical name (`TiledDispatchState`) and so do the
+   * helpers in dispatch/gridShape.ts and dispatch/tiledDispatchSelectors.ts:
+   * every shape rule and lane-coherence helper carries over byte for byte,
+   * and renaming them is cleanup, not behavior.
    */
-  gridRelatedSelections?: Record<SessionId, SessionId>
+  stage: TiledDispatchState
   /**
-   * Dispatch Mode is part of the workspace layout, not a global user
-   * preference. Persisting it here means a reload preserves the user's
-   * command-center view for this project while other workspaces can keep
-   * using the grid.
-   */
-  dispatchMode: DispatchModeState | null
-  /**
-   * Per-session metadata. Every live session MUST exist here. Grid-placed
-   * sessions are referenced from tab roots; detached sessions are referenced
-   * from detachedSessions. A session should never be in both places.
+   * The pool: every session the workspace owns, keyed by its durable id. Each
+   * row names its project (`projectId`) and its place in that project's index
+   * (`joinedAt`). This map is the ONLY home a session has (U1): the stage
+   * merely points at some of it.
+   *
+   * `detachedSessions` and `buried` sat beside this until #992. They were
+   * owner records for sessions outside the tile tree; with no tree there is
+   * no "outside", and whether a session has a backend right now is a fact
+   * about its RUNTIME (`processStatus`), not about which bucket lists it.
    */
   sessions: Record<SessionId, SessionMeta>
-  /** Live sessions that intentionally have no tile-tree placement. */
-  detachedSessions: Record<SessionId, DetachedSessionRecord>
-  /** Hidden-but-live sessions removed from the visible layout. */
-  buried: BuriedPaneRecord[]
   /**
    * Ordered list of session IDs the user has explicitly pinned to the
    * top of the dispatch list. ORDER MATTERS — `pinnedSessionIds[0]`
@@ -610,17 +664,19 @@ export type ProviderSwitchBatch = {
   compactOnArrival: boolean
 }
 
-export const RATIO_MIN = 0.1
-export const RATIO_MAX = 0.9
-export const RATIO_DEFAULT = 0.5
+// RATIO_MIN / RATIO_MAX / RATIO_DEFAULT (tile-tree split ratios) lived here
+// until #992 deleted the tree. Lane and row sizing clamps live in
+// dispatch/gridShape.ts.
 
 // -----------------------------------------------------------------------------
 // Mode-surface layout states. These lived in workspaceState.ts until the #493
 // layer split moved SessionRuntime (and everything the runtime object is made
-// of) into session-runtime/state.ts. Spotlight / Reader / TileTabs are pure
-// tile-tree VIEW selections — they reference TabId/SessionId and nothing from
-// the runtime — so they belong with the rest of the layout data model here,
-// not in the ingest layer.
+// of) into session-runtime/state.ts. Spotlight / Reader are pure VIEW
+// selections — they reference TabId/SessionId and nothing from the runtime —
+// so they belong with the rest of the layout data model here, not in the
+// ingest layer. TileTabsState lived here too until the unified layout (#992)
+// deleted Tile Tabs: rows bound to different projects are the stage's way of
+// showing several projects at once.
 // -----------------------------------------------------------------------------
 
 export type SpotlightState = {
@@ -633,9 +689,3 @@ export type ReaderModeState = {
   focusedSessionId: SessionId
 }
 
-export type TileTabsState = {
-  tabIds: TabId[]
-  focusedTabId: TabId
-  direction: SplitDirection
-  ratios: number[]
-}

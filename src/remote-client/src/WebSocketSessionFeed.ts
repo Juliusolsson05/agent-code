@@ -6,6 +6,7 @@ import type {
   SessionExitEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionTranscriptDiagnosticEvent,
   SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
@@ -13,6 +14,9 @@ import type {
   SessionStartedEvent,
   SessionSubAgentsEvent,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -29,6 +33,19 @@ import type {
   RemoteSessionSummary,
 } from './wire'
 import type { UsageSnapshot } from '@shared/types/usage'
+
+/**
+ * How stale the picker's recency stamp may get before a stream frame
+ * refreshes it.
+ *
+ * It is not a debounce on rendering — it is the resolution of the value
+ * itself. The list sorts by it, so a finer stamp does not make the phone more
+ * informative, it only makes rows change places; the row's own `working`
+ * marker is what shows live state. Thirty seconds also matches the interval
+ * the list already re-renders on to keep its relative labels fresh, so a
+ * refreshed stamp is visible on the next tick at the latest.
+ */
+const ACTIVITY_REFRESH_MS = 30_000
 
 function applyRemoteThemeSettings(settings: Record<string, unknown> | null | undefined): void {
   if (!settings) return
@@ -92,13 +109,15 @@ type Pending = {
 type RemoteReply = Omit<Extract<OutboundFrame, { type: 'reply' }>, 'type' | 'id'>
 
 export class WebSocketSessionFeed implements SessionFeed {
-  private readonly listeners: Record<FeedChannel | 'sub-agents', Set<(e: never) => void>> = {
+  private readonly listeners: Record<FeedChannel, Set<(e: never) => void>> = {
     started: new Set(),
     'input-readiness': new Set(),
     screen: new Set(),
     'jsonl-entries': new Set(),
     'jsonl-error': new Set(),
     'history-boundary': new Set(),
+    'transcript-diagnostic': new Set(),
+    'provider-session-changed': new Set(),
     'semantic-event': new Set(),
     conditions: new Set(),
     'process-state': new Set(),
@@ -107,9 +126,6 @@ export class WebSocketSessionFeed implements SessionFeed {
     // onSessionRemoved — desktop panes learn removal via workspace state);
     // the phone consumes it internally to prune its session list below.
     removed: new Set(),
-    // The server never emits sub-agents in v1 (SessionFeedSource doesn't tap
-    // it yet); the set exists so onSessionSubAgents satisfies the contract
-    // and starts working the moment the server adds the channel.
     'sub-agents': new Set(),
   }
   private readonly sessionListListeners = new Set<(s: RemoteSessionSummary[]) => void>()
@@ -136,6 +152,8 @@ export class WebSocketSessionFeed implements SessionFeed {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private nextRequestId = 1
   private lastSessionList: RemoteSessionSummary[] = []
+  /** See serverClockKnown. Set from each `session-list` frame. */
+  private serverClockSeen = false
   /** Latest hello-declared STT capability. null = unknown (no hello yet, or
    *  a pre-capability server that omits the field) — consumers treat null as
    *  available so version skew degrades to the old fail-at-upload behavior,
@@ -149,6 +167,19 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
 
   // --- client-specific surface (beyond SessionFeed) ---
+
+  /** Did the CURRENT list carry the sender's clock?
+   *
+   *  The list screen needs this to know whether the stamps it is sorting were
+   *  CONVERTED into this device's time base. Against a desktop too old to
+   *  send one they are not, and an overshoot can then be the gap between two
+   *  machines rather than this phone's own clock artefact (#1055 review).
+   *
+   *  It answers for the list currently held, so a reconnect to an older
+   *  desktop takes the wider tolerance back. */
+  serverClockKnown(): boolean {
+    return this.serverClockSeen
+  }
 
   getSessionList(): RemoteSessionSummary[] {
     return this.lastSessionList
@@ -236,8 +267,31 @@ export class WebSocketSessionFeed implements SessionFeed {
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub {
     return this.sub('jsonl-error', cb)
   }
+  /**
+   * Relayed since #1177, when the phone started sinking from the same
+   * main-side tap as the desktop. It used to be a deliberate no-op because
+   * the host never forwarded the channel. The TranscriptStore consumes it to
+   * clear a late live channel's fault the moment it reports connected, the
+   * desktop's rule (session-runtime/liveChannelRecovery.ts).
+   */
+  onSessionTranscriptDiagnostic(cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
+    return this.sub('transcript-diagnostic', cb)
+  }
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
     return this.sub('history-boundary', cb)
+  }
+  /**
+   * Relayed since #1177 for the same reason as the diagnostic above; main
+   * flushes the OLD session's buffered rows before it crosses (see
+   * SessionFeedTap), so a listener could trust that every earlier row belongs
+   * to the previous provider session. The phone's TranscriptStore does NOT
+   * listen today: it follows a provider-session switch through its transcript
+   * roll detection (the `file` riding live frames) and the history-boundary
+   * reset. The desktop consumes the event to rebind the pane's durable
+   * identity, which the phone does not own.
+   */
+  onSessionProviderSessionChanged(cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
+    return this.sub('provider-session-changed', cb)
   }
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub {
     return this.sub('semantic-event', cb)
@@ -343,31 +397,44 @@ export class WebSocketSessionFeed implements SessionFeed {
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> {
     const reply = await this.request({ type: 'permission-reply', sessionId, action })
-    // The server flattens the resolver's structured failure into reply.error;
-    // reconstruct the nearest ResolveConditionResult shape. 'aborted' is the
-    // most honest generic bucket for a transport-level failure.
-    return reply.ok
-      ? { ok: true, state: reply.result }
-      : { ok: false, reason: 'aborted', failedAtStep: reply.error }
+    // The server sends the resolver's REASON as itself since #1099; older
+    // hosts send only the flattened `error` string, and `aborted` remains the
+    // honest generic bucket for those and for a transport-level failure.
+    // Without this the phone could reach exactly one of the app's five
+    // refusal messages, and printed the internal reason token while doing it.
+    const refused = reply as { reason?: string; failedAtStep?: string; error?: string }
+    if (reply.ok) return { ok: true, state: reply.result }
+    return {
+      ok: false,
+      // The wire carries whatever the provider said; `refusalOf` on the other
+      // side narrows it by membership and keeps unknown words as themselves.
+      reason: (refused.reason ?? 'aborted') as Extract<ResolveConditionResult, { ok: false }>['reason'],
+      failedAtStep: refused.failedAtStep ?? refused.error,
+    }
   }
 
-  /** Transcript backfill (client-specific, beyond SessionFeed — the desktop
-   *  loads history through its own IPC path). beforeMarker absent = initial
-   *  newest-N chunk; present = the page immediately before it. */
-  async getHistory(
-    sessionId: string,
-    opts: { beforeMarker?: string; beforeOffset?: number; limit?: number } = {},
-  ): Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }> {
+  /**
+   * SessionFeed.loadHistory over the one `get-history` message. Replaced the
+   * phone-only `getHistory` extra (#1177) so the desktop and the phone page
+   * history through the same contract.
+   *
+   * `request.transcript` is deliberately NOT sent: the server resolves the
+   * transcript from the live session and must never read a path a client
+   * names. The `{ ok:false, error }` reply becomes a rejection carrying the
+   * server's exact message, because callers match on it (the benign "no
+   * transcript yet" case, REMOTE_HISTORY_TOO_LARGE); see SessionHistoryPage
+   * for why failure is a rejection on every transport.
+   */
+  async loadHistory(request: SessionHistoryRequest): Promise<SessionHistoryPage> {
     const reply = await this.request({
       type: 'get-history',
-      sessionId,
-      beforeMarker: opts.beforeMarker,
-      beforeOffset: opts.beforeOffset,
-      limit: opts.limit,
+      sessionId: request.sessionId,
+      beforeMarker: request.beforeMarker,
+      beforeOffset: request.beforeOffset,
+      limit: request.limit,
     })
-    return reply.ok
-      ? { ok: true, chunk: reply.result as HistoryChunkResult }
-      : { ok: false, error: reply.error ?? 'history unavailable' }
+    if (!reply.ok) throw new Error(reply.error ?? 'history unavailable')
+    return reply.result as HistoryChunkResult
   }
 
   /** pty actions ride the same permission-reply message; exposed for the
@@ -383,7 +450,7 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   // --- internals ---
 
-  private sub<E>(channel: FeedChannel | 'sub-agents', cb: (e: E) => void): Unsub {
+  private sub<E>(channel: FeedChannel, cb: (e: E) => void): Unsub {
     const set = this.listeners[channel] as Set<(e: E) => void>
     set.add(cb)
     return () => set.delete(cb)
@@ -454,20 +521,84 @@ export class WebSocketSessionFeed implements SessionFeed {
     }
     switch (frame.type) {
       case 'session-list': {
-        this.lastSessionList = frame.sessions
-        for (const cb of [...this.sessionListListeners]) cb(frame.sessions)
+        // Identity (title, pin, runtime, membership) comes from the server and
+        // replaces ours immediately. The RECENCY does not: the server stamps
+        // when it last saw activity, we stamp when we last received a frame,
+        // and the server's value can be OLDER. Taking it wholesale made the
+        // list reorder on every projection change — the reviewer measured two
+        // reversals inside 300 ms — and it also undid the rate limit below by
+        // resetting the stamp the limit is measured from.
+        //
+        // Keeping the newer of the two makes recency monotone per session,
+        // which is what a picker's ordering needs: rows move when something
+        // newer happened, never because two clocks disagree.
+        const previous = new Map(this.lastSessionList.map(row => [row.sessionId, row.lastActivityAt ?? 0]))
+        const now = Date.now()
+        // ONE CLOCK. The server stamps `lastActivityAt` with its clock; this
+        // client stamps its local activity bumps with the phone's; and the
+        // list sorts the mixture. Two devices sit minutes apart often enough
+        // that a just-finished turn sorted below one from three minutes
+        // earlier (#1055 review). Converting the whole frame on arrival means
+        // every later comparison — newer-of below, the sort, the "3m ago"
+        // label — spans one time base.
+        //
+        // An older desktop sends no `serverNow`; then the offset is zero and
+        // the behaviour is what it was.
+        const offset = typeof frame.serverNow === 'number' ? frame.serverNow - now : 0
+        // Per FRAME, not latched (#1055 review): a feed that reconnects to an
+        // older desktop at the same endpoint — a rollback — converts nothing
+        // from then on, and a sticky flag would keep handing the list the
+        // tighter tolerance that only a converted list has earned.
+        this.serverClockSeen = typeof frame.serverNow === 'number'
+        this.lastSessionList = frame.sessions.map(row => {
+          const server = row.lastActivityAt === null || row.lastActivityAt === undefined
+            ? null
+            : row.lastActivityAt - offset
+          const local = previous.get(row.sessionId) ?? 0
+          // A local stamp in the FUTURE is this phone's own clock artefact —
+          // it was fast when the row emitted — and dropping it is the recovery
+          // path an unconditional maximum cannot have: otherwise that row
+          // stays pinned above genuinely newer ones, reading "now", long after
+          // the clock was corrected.
+          const usable = local <= now ? local : 0
+          return usable > (server ?? 0) ? { ...row, lastActivityAt: usable } : { ...row, lastActivityAt: server }
+        })
+        for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
         return
       }
       case 'session-event': {
-        // Keep the picker's recency live without re-requesting the list:
-        // any event for a session IS activity. Cheap (one map when the
-        // session is present) and mirrors how the server stamps the value.
+        // Keep the picker's recency live without re-requesting the list: any
+        // event for a session IS activity, and the server only re-sends the
+        // whole list when the workspace projection changes.
+        //
+        // WHY this is rate-limited and was not: it fired for EVERY event on
+        // every channel — screen, process-state, semantic-event,
+        // jsonl-entries — and screen/process-state are broadcast unbatched, so
+        // a working agent rebuilt the array at frame rate. Each rebuild is a
+        // new array identity, so the phone's list screen re-ran its sort and
+        // repainted every row; with two agents working the two rows swapped
+        // places continuously, which is what "the phone menu is flashing and
+        // switching positions like a million times" is. Measured on the real
+        // socket: 60 notifications for 60 frames.
+        //
+        // The value is a SORT KEY for a picker, accurate to the minute at
+        // most — the row already shows `working` for the live state. Refresh
+        // it when it has gone stale, not when a terminal repaints.
         const activeId = (frame.payload as { sessionId?: string })?.sessionId
-        if (activeId && this.lastSessionList.some(s => s.sessionId === activeId)) {
-          this.lastSessionList = this.lastSessionList.map(s =>
-            s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
-          )
-          for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+        if (activeId) {
+          const current = this.lastSessionList.find(s => s.sessionId === activeId)
+          // `Math.abs`, so a stamp in the FUTURE is refreshed on the next
+          // event rather than waiting for a list publication (#1055 review):
+          // the elapsed time is negative there, and the plain comparison
+          // never fired, so a phone whose clock was corrected kept an
+          // inflated stamp until an unrelated workspace change happened to
+          // re-list. Any activity now retires it.
+          if (current && Math.abs(Date.now() - (current.lastActivityAt ?? 0)) >= ACTIVITY_REFRESH_MS) {
+            this.lastSessionList = this.lastSessionList.map(s =>
+              s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
+            )
+            for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+          }
         }
         const set = this.listeners[frame.channel]
         if (!set) return

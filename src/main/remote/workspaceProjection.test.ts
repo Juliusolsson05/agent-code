@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { RemoteWorkspaceProjection } from './workspaceProjection'
+import { fakeWorkspaceFileStore } from './workspaceProjection.testSupport'
 
 // The projection is the single join behind every identity fact the phone
 // shows (title, agent name, tab, pin, TLDR identity). These unit tests pin
@@ -17,28 +18,14 @@ type FakeStoreOptions = {
 
 type FakeStore = ReturnType<typeof fakeStore>
 
+/** Thin adapter onto the shared store fake so both projection test files use
+ *  ONE definition of "the store notifies only after bytes reach disk". */
 function fakeStore({ saves = [] }: FakeStoreOptions = {}) {
-  let windows: readonly PersistedWindow[] = saves[0] ?? []
-  let cursor = 1
-  const observers = new Set<(w: readonly PersistedWindow[]) => void>()
-  return {
-    windows: () => windows,
-    observe(listener: (w: readonly PersistedWindow[]) => void) {
-      observers.add(listener)
-      return () => observers.delete(listener)
-    },
-    /** Test seam: commit the next fixture document, exactly as the real
-     *  store notifies only after bytes reach disk. */
-    commitNext() {
-      windows = saves[cursor] ?? windows
-      cursor += 1
-      for (const observer of observers) observer(windows)
-    },
-  }
+  return fakeWorkspaceFileStore(saves)
 }
 
 function asStore(store: FakeStore): WorkspaceFileStore {
-  return store as unknown as WorkspaceFileStore
+  return store.asStore()
 }
 
 // Name reader seam: pass-through — call sites hand the projection a

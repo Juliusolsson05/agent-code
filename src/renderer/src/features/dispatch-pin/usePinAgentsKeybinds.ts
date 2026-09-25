@@ -1,3 +1,4 @@
+import { focusedControlOwnsEnter, focusedControlOwnsSpace } from '@renderer/components/ui/dialog-actions'
 import { useCallback, useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
@@ -98,6 +99,11 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
       // make this feature's key handler race Radix's close/focus-restoration
       // path and can call the owner twice for one key press.
       if (event.key === 'Enter') {
+        // A focused footer button owns its own Enter (#867). Without this,
+        // Tab to Cancel and Enter SAVED the unpinning the user was
+        // abandoning — and with nothing selected it committed an empty list,
+        // which is what `DialogActions`' `confirmDisabled` exists to prevent.
+        if (focusedControlOwnsEnter(event.target)) return
         event.preventDefault()
         onCommit(selectedIds)
         return
@@ -116,6 +122,13 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
         return
       }
       if (event.key === ' ') {
+        // The same rule as Enter above, and for the same reason — this one was
+        // missed the first time (#867 review). Space is a BUTTON's activation
+        // key, so `preventDefault()` here suppressed Cancel and Done while
+        // this handler toggled the highlighted row instead: with Cancel
+        // focused, Space silently changed a pin the user was not looking at
+        // and the button they pressed did nothing.
+        if (focusedControlOwnsSpace(event.target)) return
         event.preventDefault()
         const row = rows[focusedIndex]
         if (row) toggle(row.sessionId)

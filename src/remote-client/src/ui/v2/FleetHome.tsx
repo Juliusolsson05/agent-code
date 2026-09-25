@@ -28,6 +28,17 @@ const HOLD_SLOP_PX = 10
 
 type PeekTarget = { sessionId: string; kind: PeekKind }
 
+
+/** How far ahead of this device's clock a stamp may sit and still be treated
+ *  as real, when the feed CONVERTED it — everything is then in one time base,
+ *  so this covers transit and rounding only. */
+const CONVERTED_STAMP_TOLERANCE_MS = 5_000
+/** The same, for a desktop too old to send its clock (`serverNow`). Its
+ *  stamps arrive unconverted, so an overshoot here really can be the gap
+ *  between two machines, and the tighter cutoff would rank a just-finished
+ *  turn below one from three minutes ago (#1055 review). */
+const UNCONVERTED_STAMP_TOLERANCE_MS = 60_000
+
 export function FleetHome({
   feed,
   connection,
@@ -43,7 +54,7 @@ export function FleetHome({
   const [activity, setActivity] = useState<Record<string, boolean>>({})
   const [usage, setUsage] = useState<UsageSnapshot | null>(feed.getUsage())
   const [peek, setPeek] = useState<PeekTarget | null>(null)
-  const [, setClockTick] = useState(0)
+  const [clockTick, setClockTick] = useState(0)
 
   useEffect(() => {
     const offs = [
@@ -65,8 +76,46 @@ export function FleetHome({
   }, [feed])
 
   const groups = useMemo(() => {
+    // Recomputed on the clock tick as well as on new sessions (see the memo's
+    // dependencies): a clamped row's place depends on `now`, so without the
+    // tick the arrangement froze at whatever the clock said when the list was
+    // opened (#1055 review).
+    const now = Date.now()
+    // Every comparison ends in the session id, and the groups are ordered by a
+    // rule rather than by arrival.
+    //
+    // WHY (#T18): this list reorders itself from `lastActivityAt`, and two
+    // agents working at once produce stamps that are equal or a millisecond
+    // apart. With no tiebreak, Array.sort left them in whatever order the feed
+    // last rebuilt the array in — so the rows swapped places on every update.
+    // The group list had it worse: it was Map INSERTION order, i.e. the order
+    // the first live session of each project happened to appear in, so whole
+    // sections jumped. The feed's own rate limit stops most of the churn; this
+    // makes the remaining updates land on the same arrangement instead of a
+    // reshuffled one.
+    // A stamp cannot describe activity that has not happened yet (#1055
+    // review). Every stamp reaching here is in THIS device's time base — the
+    // feed converts a server frame on arrival — so an overshoot is not skew
+    // between two machines. It is this phone's own clock having been fast
+    // when the row last emitted, and then corrected.
+    //
+    // Under a few seconds, that is transit and rounding: clamp and keep the
+    // row where it is. Beyond it, the value says nothing about when that
+    // agent last worked, and a QUIET row has no further event to retire it,
+    // so it ranks as unknown rather than as the most recent thing on the
+    // phone — which is what an hour-fast clock had made it, above everything
+    // genuinely newer.
+    const tolerance = feed.serverClockKnown()
+      ? CONVERTED_STAMP_TOLERANCE_MS
+      : UNCONVERTED_STAMP_TOLERANCE_MS
+    const seenAt = (row: RemoteSessionSummary): number => {
+      const at = row.lastActivityAt ?? 0
+      if (at <= now) return at
+      return at - now <= tolerance ? now : 0
+    }
     const byRecency = (a: RemoteSessionSummary, b: RemoteSessionSummary) =>
-      (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
+      seenAt(b) - seenAt(a)
+      || a.sessionId.localeCompare(b.sessionId)
     const live = sessions.filter(s => s.alive)
     const exited = sessions.filter(s => !s.alive)
     const grouped = new Map<string, RemoteSessionSummary[]>()
@@ -84,8 +133,20 @@ export function FleetHome({
         return pinDelta !== 0 ? pinDelta : byRecency(a, b)
       })
     }
-    return { grouped: [...grouped.entries()], exited: exited.sort(byRecency) }
-  }, [sessions])
+    // The group with the most recent work first, ties broken by name. A group
+    // keeps its place while its rows do.
+    const groupOrder = [...grouped.entries()].sort(([nameA, rowsA], [nameB, rowsB]) => {
+      const recencyA = Math.max(...rowsA.map(seenAt))
+      const recencyB = Math.max(...rowsB.map(seenAt))
+      // localeCompare is not a TOTAL order: two distinct strings can compare
+      // equal (composed `café` and decomposed `café` do), and they stay
+      // separate groups, so the arrangement would again depend on arrival
+      // order. The code-unit comparison after it is the tiebreak that makes
+      // this deterministic for every pair (#1055 review).
+      return recencyB - recencyA || nameA.localeCompare(nameB) || (nameA < nameB ? -1 : nameA > nameB ? 1 : 0)
+    })
+    return { grouped: groupOrder, exited: exited.sort(byRecency) }
+  }, [sessions, clockTick, feed])
 
   const peekSession = peek ? sessions.find(s => s.sessionId === peek.sessionId) ?? null : null
   const peekRecord: RemoteNoteRecord | null =

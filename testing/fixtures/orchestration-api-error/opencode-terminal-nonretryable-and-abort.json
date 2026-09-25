@@ -1,0 +1,548 @@
+{
+  "fixture": "opencode-terminal-nonretryable-and-abort",
+  "provider": "opencode",
+  "providerRuntime": "terminal (packages/opencode-terminal-headless)",
+  "outcome": "Three api_error shapes that are NOT preceded by retries. (a) 403 isRetryable=false -> terminal immediately. (b) MessageAbortedError \"Aborted\" -> produced by a user interrupt, the same api_error kind, the user prompt raced it. (c) 403, then the USER re-prompted 8.5 s later and that turn ran normally (recovery is user-driven, not provider-driven).",
+  "provenance": {
+    "a": {
+      "feedDebug": "~/.config/agent-code/feed-debug/eb8287fc-7626-4f3a-b30d-cddeb84aad45.jsonl",
+      "opencodeSession": "ses_9848b97f…",
+      "recordedAt": "2026-09-17T20:41:12.707Z"
+    },
+    "b": {
+      "feedDebug": "~/.config/agent-code/feed-debug/6d6cac8c-fe3d-4f5e-82e3-740036b4aebd.jsonl",
+      "opencodeSession": "ses_7e76f124…",
+      "recordedAt": "2026-09-18T00:20:14.696Z"
+    },
+    "c": {
+      "feedDebug": "~/.config/agent-code/feed-debug/2c690b9e-d218-4543-984d-02c268a043ca.jsonl",
+      "opencodeSession": "ses_6a1c143c…",
+      "recordedAt": "2026-09-18T00:07:43.728Z"
+    }
+  },
+  "a_nonRetryable403": {
+    "feedDebug": {
+      "anchorEpochMs": 1789677672707,
+      "anchorIso": "2026-09-17T20:41:12.707Z",
+      "events": [
+        {
+          "tMs": 0,
+          "layer": "STATE",
+          "kind": "initial_history",
+          "summary": "initial history +0",
+          "data": {
+            "rawEntries": 100,
+            "mappedEntries": 0,
+            "hasMore": false
+          }
+        },
+        {
+          "tMs": 75,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user: You were interrupted on Sep 14 when Agent …"
+            ],
+            "entryCountAfter": 135
+          }
+        },
+        {
+          "tMs": 86,
+          "layer": "SEM",
+          "kind": "turn_started",
+          "summary": "turn_started src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_started"
+          }
+        },
+        {
+          "tMs": 89,
+          "layer": "SEM",
+          "kind": "stream_phase",
+          "summary": "stream_phase src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "stream_phase"
+          }
+        },
+        {
+          "tMs": 187,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 226,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 1188,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          },
+          "repeats": 7,
+          "lastTMs": 7211
+        },
+        {
+          "tMs": 8070,
+          "layer": "SEM",
+          "kind": "api_error",
+          "summary": "api_error src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "api_error"
+          }
+        },
+        {
+          "tMs": 8175,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 8177,
+          "layer": "SEM",
+          "kind": "turn_completed",
+          "summary": "turn_completed src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_completed"
+          }
+        },
+        {
+          "tMs": 8275,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        }
+      ]
+    },
+    "opencodeDbAssistantRows": [
+      {
+        "table": "message",
+        "id": "msg_0b11a1947001mD5HxaU5Qw1qJ8",
+        "session_id": "ses_9848b97f09c359b291f62c59898890ec",
+        "time_created": 1789677672775,
+        "time_updated": 1789677680878,
+        "data": {
+          "role": "assistant",
+          "parentID": "msg_0b11a191b001YDg208YGP5dnNd",
+          "providerID": "opencode",
+          "modelID": "big-pickle",
+          "time": {
+            "created": 1789677672775,
+            "completed": 1789677680876
+          },
+          "finish": null,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "error": {
+            "name": "APIError",
+            "data": {
+              "message": "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode",
+              "statusCode": 403,
+              "isRetryable": false,
+              "responseHeaders": {
+                "date": "Thu, 17 Sep 2026 20:41:20 GMT"
+              },
+              "responseBody": "{\"type\":\"error\",\"error\":{\"type\":\"FreeTierError\",\"message\":\"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode\"}}",
+              "metadata": {
+                "url": "https://opencode.ai/zen/v1/chat/completions"
+              },
+              "responseHeadersNote": "filtered to retry-relevant headers; trace ids / cookies removed"
+            }
+          }
+        }
+      }
+    ],
+    "derivedMessage": "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"
+  },
+  "b_userAbort": {
+    "feedDebug": {
+      "anchorEpochMs": 1789690814696,
+      "anchorIso": "2026-09-18T00:20:14.696Z",
+      "events": [
+        {
+          "tMs": 0,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · running bash",
+          "data": {
+            "active": true,
+            "status": "running bash",
+            "clearedQueuedMessages": 0
+          },
+          "repeats": 10,
+          "lastTMs": 9005
+        },
+        {
+          "tMs": 9453,
+          "layer": "SEM",
+          "kind": "api_error",
+          "summary": "api_error src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "api_error"
+          }
+        },
+        {
+          "tMs": 9457,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user: what is status"
+            ],
+            "entryCountAfter": 299
+          }
+        },
+        {
+          "tMs": 9609,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 9623,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +2",
+          "data": {
+            "appended": [
+              "assistant",
+              "user"
+            ],
+            "entryCountAfter": 301
+          }
+        },
+        {
+          "tMs": 9633,
+          "layer": "SEM",
+          "kind": "turn_completed",
+          "summary": "turn_completed src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_completed"
+          }
+        },
+        {
+          "tMs": 9733,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 9774,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 90249,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user: ."
+            ],
+            "entryCountAfter": 302
+          }
+        },
+        {
+          "tMs": 90252,
+          "layer": "SEM",
+          "kind": "turn_started",
+          "summary": "turn_started src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_started"
+          }
+        },
+        {
+          "tMs": 90253,
+          "layer": "SEM",
+          "kind": "stream_phase",
+          "summary": "stream_phase src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "stream_phase"
+          }
+        },
+        {
+          "tMs": 90350,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 90400,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 91351,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          },
+          "repeats": 4,
+          "lastTMs": 94353
+        }
+      ]
+    },
+    "opencodeDbAssistantRows": [
+      {
+        "table": "message",
+        "id": "msg_0b1dacf52001znZg7zTbYN5gRF",
+        "session_id": "ses_7e76f12489224b43abc3984fe2e5bda2",
+        "time_created": 1789690302290,
+        "time_updated": 1789690824304,
+        "data": {
+          "role": "assistant",
+          "parentID": "msg_0b1d928410015SOFwcNAq0Nbvo",
+          "providerID": "zai-coding-plan",
+          "modelID": "glm-5.3",
+          "time": {
+            "created": 1789690302290,
+            "completed": 1789690824303
+          },
+          "finish": null,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "error": {
+            "name": "MessageAbortedError",
+            "data": {
+              "message": "Aborted"
+            }
+          }
+        }
+      }
+    ],
+    "derivedMessage": "Aborted"
+  },
+  "c_nonRetryable403ThenUserRetry": {
+    "feedDebug": {
+      "anchorEpochMs": 1789690063728,
+      "anchorIso": "2026-09-18T00:07:43.728Z",
+      "events": [
+        {
+          "tMs": 0,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user: what where we doing ?"
+            ],
+            "entryCountAfter": 98
+          }
+        },
+        {
+          "tMs": 18,
+          "layer": "SEM",
+          "kind": "turn_started",
+          "summary": "turn_started src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_started"
+          }
+        },
+        {
+          "tMs": 22,
+          "layer": "SEM",
+          "kind": "stream_phase",
+          "summary": "stream_phase src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "stream_phase"
+          }
+        },
+        {
+          "tMs": 97,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 152,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 1097,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 1205,
+          "layer": "SEM",
+          "kind": "api_error",
+          "summary": "api_error src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "api_error"
+          }
+        },
+        {
+          "tMs": 1282,
+          "layer": "SEM",
+          "kind": "turn_completed",
+          "summary": "turn_completed src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_completed"
+          }
+        },
+        {
+          "tMs": 1383,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process idle",
+          "data": {
+            "active": false,
+            "status": null,
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 9689,
+          "layer": "JSONL",
+          "kind": "jsonl_entries",
+          "summary": "entries +1",
+          "data": {
+            "appended": [
+              "user: what where we doing"
+            ],
+            "entryCountAfter": 99
+          }
+        },
+        {
+          "tMs": 9693,
+          "layer": "SEM",
+          "kind": "turn_started",
+          "summary": "turn_started src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "turn_started"
+          }
+        },
+        {
+          "tMs": 9695,
+          "layer": "SEM",
+          "kind": "stream_phase",
+          "summary": "stream_phase src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "stream_phase"
+          }
+        },
+        {
+          "tMs": 9790,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          }
+        },
+        {
+          "tMs": 9841,
+          "layer": "STATE",
+          "kind": "bootstrap_complete",
+          "summary": "bootstrap replay quiet window elapsed"
+        },
+        {
+          "tMs": 10790,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · requesting",
+          "data": {
+            "active": true,
+            "status": "requesting",
+            "clearedQueuedMessages": 0
+          },
+          "repeats": 7,
+          "lastTMs": 16797
+        },
+        {
+          "tMs": 16960,
+          "layer": "SEM",
+          "kind": "stream_phase",
+          "summary": "stream_phase src=opencode-sse turn=opencode-t",
+          "data": {
+            "eventType": "stream_phase"
+          }
+        },
+        {
+          "tMs": 17060,
+          "layer": "STATE",
+          "kind": "process_state",
+          "summary": "process active · thinking",
+          "data": {
+            "active": true,
+            "status": "thinking",
+            "clearedQueuedMessages": 0
+          },
+          "repeats": 5,
+          "lastTMs": 20799
+        }
+      ]
+    }
+  }
+}

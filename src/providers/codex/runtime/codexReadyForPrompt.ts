@@ -25,3 +25,20 @@ export function isCodexReadyForPromptScreen(screen: string): boolean {
   if (!/(^|\n)›\s/.test(screen)) return false
   return screen.includes(' · ')
 }
+
+/** The existing readiness heuristic allows text after `›`. Generated tasks
+ * need a stronger, deliberately conservative boundary: a visibly empty bottom
+ * composer immediately above its idle footer. Do not whitelist placeholder
+ * prose: this attribute-blind snapshot cannot prove it isn't a human draft.
+ * Rich native draft observation is tracked separately in agent-code#800. */
+export function isCodexNativeComposerEmpty(screen: string): boolean {
+  const rows = screen.trimEnd().split('\n')
+  const footer = rows.pop() ?? ''
+  if (!/^ {2}\S.* · .+$/u.test(footer)) return false
+  if (/ {2,}Vim: (?:Insert|Normal)$/u.test(footer)) return false
+  // Native attachments can be displayed above the marker. Even a historical
+  // image label is insufficient evidence to risk submitting an unseen image.
+  if (/\[Image #\d+\]/u.test(screen)) return false
+  while (rows.length && !rows.at(-1)!.trim()) rows.pop()
+  return /^›[ \t]*$/u.test(rows.at(-1) ?? '')
+}

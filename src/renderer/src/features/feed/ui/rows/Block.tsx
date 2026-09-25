@@ -17,6 +17,7 @@ import { TextProse } from '@renderer/features/feed/ui/markdown'
 
 import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
+import { UserPromptProse } from '@renderer/features/feed/ui/rows/UserPromptProse'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
@@ -165,9 +166,13 @@ export const Block = memo(function Block({
       // NOT a user prompt (it's tool output), and must not get the
       // highlight — that's why the band lives here and not around
       // the whole ConversationRow.
+      // A user-role text block is the user's prompt, so it renders through
+      // UserPromptProse, which strips the provider's own paste envelope
+      // (#1059). An assistant text block is the model's output verbatim.
+      const text = (block as { text: string }).text
       const row = (
         <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
-          <TextProse text={(block as { text: string }).text} />
+          {role === 'user' ? <UserPromptProse text={text} /> : <TextProse text={text} />}
         </MarkerRow>
       )
       return debugBlock(role === 'user' ? <UserBand>{row}</UserBand> : row)

@@ -7,8 +7,12 @@ import {
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
+import { sessionIsWorking } from '@renderer/session-runtime/working'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { goalLoopChipLabel, goalLoopChipTitle, isShownGoalLoop, useGoalLoops } from '@renderer/features/goal-loop/useGoalLoops'
+import type { GoalLoopState } from '@shared/types/goalLoop'
 import { useAgentName } from '@renderer/workspace/agentNames/useAgentName'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { dispatchRowTitle } from './rowTitle'
@@ -38,7 +42,6 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   groups,
   pinnedRows,
   activeSessionId,
-  dispatchScope,
   focusSessionInTab,
   showWorktreeBadges,
   disabledSessionIds,
@@ -52,7 +55,6 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
   activeSessionId: string | null
-  dispatchScope: 'global' | 'project'
   focusSessionInTab: Workspace['focusSessionInTab']
   showWorktreeBadges: boolean
   // Renders a "+" in each project header when supplied. Optional so the
@@ -126,6 +128,19 @@ export const DispatchAgentList = memo(function DispatchAgentList({
       : pinnedRows.filter(row => boundProjects.includes(row.tabId))),
     [pinnedRows, boundProjects],
   )
+  // Every agent the index is showing, for ONE goal-loop read (#1031 item 2).
+  // Read at the list level rather than per row: `goal-loop:changed` is a
+  // payload-free ping, so a per-row subscription would mean one IPC round trip
+  // per listed agent per loop event.
+  const listedSessionIds = useMemo(
+    () => [
+      ...scopedPinnedRows.map(row => row.sessionId),
+      ...scopedGroups.flatMap(group => group.rows.map(row => row.sessionId)),
+    ],
+    [scopedPinnedRows, scopedGroups],
+  )
+  const goalLoops = useGoalLoops(listedSessionIds)
+
   // Tab LETTERS, not names: the header is 10px uppercase with room for a few
   // characters, and A/B/C is already how dispatch labels and pinned project
   // chips read. Degrades to "A·B +2" rather than truncating a name to nothing.
@@ -199,7 +214,10 @@ export const DispatchAgentList = memo(function DispatchAgentList({
           )}
           {/* The row's project binding lives at the top of the list it
               constrains — the whole benefit of a per-row index over one shared
-              sidebar. Falls back to the scope label in classic Dispatch. */}
+              sidebar. With no picker wired (a bare list in a test or a future
+              read-only surface) it states the truth of an unbound row. It
+              used to fall back to a layout-wide 'project' / 'global' scope
+              label; that scope died with #992. */}
           {onPickRowProject ? (
             <button
               type="button"
@@ -211,7 +229,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
               {rowProjectLabel ?? 'Any project'}
             </button>
           ) : (
-            <span>{dispatchScope}</span>
+            <span className="uppercase">Any project</span>
           )}
         </span>
       </div>
@@ -237,6 +255,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                 showWorktreeBadges={showWorktreeBadges}
                 focusSessionInTab={focusSessionInTab}
                 targetLaneIndex={targetLaneIndex}
+                goalLoop={goalLoops[row.sessionId]}
                 projectChip={`${tabIndexLabel(row.tabIndex)} · ${row.tabTitle}`}
               />
             ))}
@@ -262,23 +281,110 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   showWorktreeBadges={showWorktreeBadges}
                   focusSessionInTab={focusSessionInTab}
                   targetLaneIndex={targetLaneIndex}
+                  goalLoop={goalLoops[item.row.sessionId]}
                 />
               ) : (
-                <button
+                <ChildCollapseRow
                   key={`${item.kind}:${item.parentSessionId}`}
-                  type="button"
-                  onClick={() => onToggleExpandedParent?.(item.parentSessionId)}
-                  data-dispatch-row="true"
-                  className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
-                >
-                  {item.kind === 'more' ? `+ ${item.hidden} more` : '− Show fewer'}
-                </button>
+                  goalLoops={goalLoops}
+                  label={item.kind === 'more' ? `+ ${item.hidden} more` : '− Show fewer'}
+                  hiddenSessionIds={item.kind === 'more' ? item.hiddenSessionIds : EMPTY_SESSION_IDS}
+                  onToggle={() => onToggleExpandedParent?.(item.parentSessionId)}
+                />
               )
             ))}
           </div>
         </div>
       ))}
     </aside>
+  )
+})
+
+/**
+ * How many of these sessions are working, for the group header's
+ * `running/total`.
+ *
+ * Exported so the COUNT can be tested without rendering the header (#1085
+ * review, finding 1). It was inline in a `useAppStore` selector, and #880's
+ * acceptance — "a row with no runtime counts as not running in both places" —
+ * was met in neither: a mutation replacing the whole condition with `true`
+ * left the entire renderer suite green.
+ */
+export function countWorkingSessions(
+  runtimes: Record<SessionId, SessionRuntime>,
+  sessionIds: readonly SessionId[],
+): number {
+  let count = 0
+  for (const sessionId of sessionIds) if (sessionIsWorking(runtimes[sessionId])) count += 1
+  return count
+}
+
+const EMPTY_SESSION_IDS: SessionId[] = []
+
+/**
+ * The "+N more" / "Show fewer" row under a capped orchestration parent.
+ *
+ * WHY it carries the "new" badge (#1013 review B): orchestration children
+ * always land in the pool, and the cap hides every child past the third. The
+ * badges of a 5-worker run were therefore 3 visible and 2 behind the collapse,
+ * and "where did my agent go?" had no answer for those two. The selector
+ * returns one boolean, so this row re-renders only when that answer changes.
+ */
+const ChildCollapseRow = memo(function ChildCollapseRow({
+  label,
+  hiddenSessionIds,
+  onToggle,
+  goalLoops,
+}: {
+  label: string
+  hiddenSessionIds: SessionId[]
+  onToggle: () => void
+  /** Every listed agent's loop, so a HIDDEN child's loop is still announced. */
+  goalLoops: Record<string, GoalLoopState>
+}) {
+  const hidesNew = useAppStore(state => hiddenSessionIds.some(id => state.workspaceRuntimes[id]?.pooledSpawnAt != null))
+  // WHY this row carries the chip too (review finding 1): the child cap hides
+  // every orchestration child past the third, and orchestration children are
+  // exactly the agents that land in the pool running a goal loop. Without it
+  // the feature missed its own headline case — a 5-worker run showed chips for
+  // two workers and said nothing about the other three. `hidesNew` solves the
+  // identical problem for the pooled-spawn badge, immediately above.
+  const hidden = hiddenSessionIds.map(id => goalLoops[id]).filter(isShownGoalLoop)
+  // The most urgent hidden state leads: blocked asks for the user, active is
+  // still moving, paused is waiting. Showing a count instead would make the
+  // user expand to find out which kind it is.
+  const hiddenLoop = hidden.find(loop => loop.phase === 'ended')
+    ?? hidden.find(loop => loop.phase === 'active')
+    ?? hidden[0]
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      data-dispatch-row="true"
+      className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
+    >
+      {label}
+      {hidesNew && (
+        <span
+          data-dispatch-new-in-pool="true"
+          title="A new agent is among the hidden ones. Expand to see it"
+          className="ml-1 flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10 px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent"
+        >
+          new
+        </span>
+      )}
+      {hiddenLoop && (
+        <span
+          data-dispatch-goal-loop="true"
+          title={`${hidden.length === 1 ? 'A hidden agent has a goal loop' : `${hidden.length} hidden agents have goal loops`}. Expand to see ${hidden.length === 1 ? 'it' : 'them'}. — ${goalLoopChipTitle(hiddenLoop)}`}
+          className={`ml-1 flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none ${
+            hiddenLoop.phase === 'active' ? 'border-accent/70 bg-accent/10 text-accent' : 'border-border text-muted'
+          }`}
+        >
+          {hidden.length === 1 ? goalLoopChipLabel(hiddenLoop) : `${hidden.length} loops`}
+        </span>
+      )}
+    </button>
   )
 })
 
@@ -300,14 +406,7 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
   onCreateAgent?: ((tabId: TabId, anchorSessionId: SessionId) => void) | undefined
 }) {
   const sessionIds = useMemo(() => rows.map(row => row.sessionId), [rows])
-  const runningCount = useAppStore(useShallow(state => {
-    let count = 0
-    for (const sessionId of sessionIds) {
-      const runtime = state.workspaceRuntimes[sessionId]
-      if (runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle') count += 1
-    }
-    return count
-  }))
+  const runningCount = useAppStore(useShallow(state => countWorkingSessions(state.workspaceRuntimes, sessionIds)))
 
   return (
     <div className="flex items-center justify-between gap-2 px-2.5 py-1 text-[10px] text-ink bg-canvas">
@@ -349,6 +448,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   focusSessionInTab,
   projectChip,
   targetLaneIndex,
+  goalLoop,
 }: {
   row: DispatchAgentRow
   active: boolean
@@ -358,6 +458,8 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   disabled?: boolean
   showWorktreeBadges: boolean
   focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
+  /** This agent's goal loop, when it has a live one (#1031 item 2). */
+  goalLoop?: GoalLoopState
   // Optional small label (tab letter + project title) shown next to
   // the secondary metadata row. Only pinned rows pass this — regular
   // rows already live under a group header that names the project,
@@ -395,12 +497,57 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // comparison stable across those per-second updates while still
       // giving terminal rows the live value they actually render.
       activityStatus: row.kind === 'terminal' ? current?.activityStatus : undefined,
+      // The pooled-spawn badge (#992 §4.3): a spawn that took no lane marks
+      // itself here until placed. Boolean, not the timestamp — the row only
+      // re-renders when membership of the badge changes, and the chip does
+      // not care when it was minted.
+      isNewInPool: current?.pooledSpawnAt != null,
     }
   }))
   const onSelect = useCallback(() => {
     if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
   }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
+  // The right-click menu (#1180). The row only RECORDS the request; the
+  // command palette host builds and shows the menu, because the menu's items
+  // are commands whose `when` needs the live CommandContext (see
+  // SessionMenuRequest in uiShell/types.ts).
+  const requestSessionMenu = useAppStore(state => state.requestSessionMenu)
+  const menuOpen = useAppStore(state => state.sessionMenuOpenFor === row.sessionId)
+  const goalLoopLive = goalLoop !== undefined && goalLoop.phase !== 'ended'
+  const openMenu = useCallback((point?: { x: number; y: number }) => {
+    requestSessionMenu({
+      sessionId: row.sessionId,
+      // `onSelect` itself, so "Show in Lane N" is by construction exactly what
+      // a left click on this row does — including TiledDispatchLayout's
+      // row-scoped lane choice, which this component does not know.
+      showInLane: disabled
+        ? undefined
+        : { label: targetLaneIndex === undefined ? 'Lane' : `Lane ${targetLaneIndex + 1}`, run: onSelect },
+      goalLoopLive,
+      ...point,
+    })
+  }, [disabled, goalLoopLive, onSelect, requestSessionMenu, row.sessionId, targetLaneIndex])
+  const onContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    // A mouse chord wins without a check here: while a chord anchor is held,
+    // lib/mouseArbiter.ts cancels contextmenu with stopPropagation in the
+    // window CAPTURE phase, so this handler never runs and the chord keeps
+    // its second click.
+    //
+    // No `focusSessionInTab`: right-click never selects (D5). The user is
+    // asking about this agent, not asking to look at it.
+    openMenu()
+  }, [openMenu])
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    // The platform keys for "this item's menu", as in the file explorer
+    // (editor.context-menu). Anchored to the row, not the pointer: the mouse
+    // may be resting anywhere while the user is on the keyboard.
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    openMenu({ x: rect.left + Math.min(rect.width, 24), y: rect.top + Math.min(rect.height, 20) })
+  }, [openMenu])
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
@@ -420,7 +567,20 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     <button
       type="button"
       onClick={onSelect}
-      disabled={disabled}
+      onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
+      // aria-disabled, not `disabled` (#1180): Chromium delivers no mouse
+      // events to a disabled form control, so a disabled row could never
+      // open its menu — and it is exactly the row a user right-clicks to ask
+      // "where is this agent, and what can I do with it". `onSelect` already
+      // refuses the click, so the attribute only ever did presentation.
+      aria-disabled={disabled || undefined}
+      // …but keep it out of the Tab order, as `disabled` did (#1180 review):
+      // a keyboard user stepping through a grid should not stop on rows that
+      // refuse Enter. Right-click still reaches it; the keyboard menu keys
+      // (which need focus) stay limited to rows you can select, as before.
+      tabIndex={disabled ? -1 : undefined}
+      data-menu-open={menuOpen ? 'true' : undefined}
       title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
@@ -437,6 +597,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
         relative flex w-full items-stretch text-left border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
         ${disabled ? 'opacity-40 cursor-not-allowed' : ''}
+        ${menuOpen ? 'outline outline-1 -outline-offset-1 outline-accent' : ''}
       `}
     >
       {/* Linked-agent indent. A linked agent (row.depth > 0) renders
@@ -476,6 +637,54 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
               {title}
             </span>
           </span>
+          {runtime.isNewInPool && (
+            // The one-word answer to "my ⌘N did nothing" (#992): the spawn
+            // landed in the pool without moving anything on screen. Retired
+            // by the placement itself (pooledSpawnBadge.ts), never by time —
+            // a badge that expires while still unplaced would train the user
+            // to distrust it. Rendered BEFORE the unread badge because it is
+            // the answer to an earlier question ("where is it") than "what
+            // happened while I was away".
+            <span
+              data-dispatch-new-in-pool="true"
+              title="Spawned into the pool — click to place it in this row's focused lane"
+              className="
+                flex-shrink-0 rounded-chip border border-accent/70 bg-accent/10
+                px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+              "
+            >
+              new
+            </span>
+          )}
+          {isShownGoalLoop(goalLoop) && (
+            // The answer to "why is this agent still working when I never
+            // prompted it?" (#1031 item 2). Before this the index showed
+            // nothing: GoalLoopPane mounts only for a session occupying a
+            // lane, so a loop on a POOLED agent — which is where every
+            // orchestration child lands — was invisible, and
+            // `commandTargetSessionId` resolves the focused lane's occupant,
+            // so Stop Goal Loop could not reach it either. Selecting the row
+            // places the agent and makes it the command target, which is what
+            // makes the existing controls reachable again; this chip is what
+            // tells the user there is a reason to.
+            //
+            // Rendered beside the unread badge rather than in the secondary
+            // metadata row because it is live state, not provenance, and it is
+            // the one thing on the row that is still changing while nobody
+            // watches.
+            <span
+              data-dispatch-goal-loop="true"
+              title={goalLoopChipTitle(goalLoop)}
+              className={`
+                flex-shrink-0 rounded-chip border px-1.5 py-[1px] text-[9px] font-semibold leading-none
+                ${goalLoop.phase === 'active'
+                  ? 'border-accent/70 bg-accent/10 text-accent'
+                  : 'border-border text-muted'}
+              `}
+            >
+              {goalLoopChipLabel(goalLoop)}
+            </span>
+          )}
           {unreadBadge && (
             <DispatchUnreadBadge kind={unreadBadge.kind} text={unreadBadge.text} />
           )}

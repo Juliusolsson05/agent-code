@@ -15,8 +15,8 @@ afterEach(() => { cleanup(); useAppStore.setState(original, true); window.api = 
 it.each(['spawn', 'retirement'] as const)('retires an uncommittable successor when source closes during %s', async stage => {
   vi.useFakeTimers()
   useAppStore.setState({ workspaceState: { ...original.workspaceState, activeTabId: 'project',
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'source' }, focusedSessionId: 'source' }],
-    sessions: { source: { kind: 'claude', cwd: '/recorded/project', providerSessionId: 'native-source' } }, detachedSessions: {}, buried: [],
+    tabs: [{ id: 'project', title: 'Project' }],
+    sessions: { source: { kind: 'claude', cwd: '/recorded/project', providerSessionId: 'native-source', projectId: 'project', joinedAt: 0 } },  
   }, workspaceRuntimes: { source: { ...emptyRuntime(), draftInput: 'human draft' } } })
   const state = useAppStore.getState().workspaceState
   const refs = makeRefs(state)
@@ -33,7 +33,7 @@ it.each(['spawn', 'retirement'] as const)('retires an uncommittable successor wh
   useAppStore.getState().setWorkspaceState(previous => ({ ...previous, tabs: [], sessions: Object.fromEntries(Object.entries(previous.sessions).filter(([id]) => id !== 'source')) }))
   useAppStore.getState().setWorkspaceRuntimes(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => id !== 'source')))
   await act(async () => { finish(); expect(await replacement!).toBeUndefined(); await vi.runAllTimersAsync() })
-  expect(killOwnedSession).toHaveBeenCalledWith({ sessionId: 'successor', cwd: '/recorded/project', kind: 'claude', providerRuntime: undefined })
+  expect(killOwnedSession).toHaveBeenCalledWith({ sessionId: 'successor', cwd: '/recorded/project', kind: 'claude', providerRuntime: undefined, caller: 'replace.orphaned-successor' })
   expect(useAppStore.getState().workspaceState.tabs).toEqual([])
   expect(useAppStore.getState().workspaceState.sessions).toEqual({})
   expect(useAppStore.getState().workspaceRuntimes.successor).toBeUndefined()

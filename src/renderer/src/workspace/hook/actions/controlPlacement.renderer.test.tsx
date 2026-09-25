@@ -1,41 +1,114 @@
 import { act } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { mountPaneActions } from './testing/paneActionsHarness'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 function state(): WorkspaceState {
-  return { activeTabId: 'project', dispatchMode: null, pinnedSessionIds: [], detachedSessions: {}, buried: [],
-    tabs: [{ id: 'project', title: 'Project', root: { type: 'leaf', sessionId: 'anchor' }, focusedSessionId: 'anchor' }],
-    sessions: { anchor: { kind: 'claude', cwd: '/project' } } }
+  return { activeTabId: 'project', stage: oneLaneStage('anchor'), pinnedSessionIds: [],  
+    tabs: [{ id: 'project', title: 'Project' }],
+    sessions: { anchor: { kind: 'claude', cwd: '/project', projectId: 'project', joinedAt: 0 } } }
 }
 
-it('returns the exact created ID with project affinity and leaves the grid intact', async () => {
+// "Leaves the grid intact" was this suite's recurring assertion: a control-plane
+// create parked the new agent in the detached bucket and must not have touched
+// the tab's tile tree. The tree is gone (#992), so that half has nothing left
+// to assert. What a create DOES touch is pinned instead, precisely: it files
+// the agent under the requested project, and — unless the caller passes
+// `selectCreated: false` — never moves a lane that already shows a session.
+//
+// The lane default was briefly "replace the focused lane's occupant" and was
+// pinned here as KNOWN NOT ENDORSED. Context-places (#992 §4.3, stage 4)
+// replaced it: an occupied lane is never displaced, so a control create lands
+// in the pool with nothing on screen moving. The fill case has its own test
+// below with an empty focused lane.
+it('returns the exact created ID, files it under the project, and moves nothing on screen', async () => {
   const initial = state()
   const harness = mountPaneActions(initial, { spawnSessionId: 'exact-created-agent' })
   await act(async () => {
     expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' }, { tabId: 'project', anchorSessionId: 'anchor' }))
       .toBe('exact-created-agent')
   })
-  expect(harness.getState().detachedSessions['exact-created-agent']).toMatchObject({ projectTabId: 'project' })
-  expect(harness.getState().tabs[0].root).toEqual(initial.tabs[0].root)
+  expect(harness.getState().sessions['exact-created-agent']).toMatchObject({ projectId: 'project', joinedAt: expect.any(Number) })
+  // Appended: a new agent never jumps the queue in its project's index.
+  expect(resolveTabSessions(harness.getState(), 'project')).toEqual(['anchor', 'exact-created-agent'])
+  // The focused lane still shows `anchor`, by reference: not even a focus
+  // move. The caller places the returned ID with an explicit lane-select.
+  expect(harness.getState().stage).toBe(initial.stage)
   expect(harness.spawn).toHaveBeenCalledTimes(1)
   harness.mounted.unmount()
 })
 
-it('restores a buried record under its existing ID without spawning another agent', async () => {
+// #863. The dead end this PR is about, at the point where it is felt.
+//
+// `createDetachedDispatchAgent` resolves a target project and then does
+// `if (!tab) return null`. Before this, that return was the primary creation
+// command failing with NOTHING: no toast, and — because only a successful
+// spawn closes it — the placement overlay still up, with
+// `NewAgentPlacementOverlay`'s `committingRef` latched true and cleared only
+// by its `open` effect, so Enter and clicks were no-ops and Escape was the
+// only way out. The user's report was "New Agent just stopped working".
+//
+// The cause (a row bound to a project that closed) is fixed in
+// `workspaceWithoutSessions`, so these cases construct the stale target
+// directly. That is the point: the branch is meant to be unreachable, and the
+// next thing that makes it reachable must be loud.
+it.each([
+  {
+    name: 'a lane-resolved create names the lane, because the lane is the thing the user can change',
+    override: undefined,
+    expected: /this lane is pointing at/,
+  },
+  {
+    name: 'an explicitly targeted create does not, because there is no lane in the story',
+    override: { tabId: 'ghost-project' as never, anchorSessionId: 'anchor' as never },
+    expected: /could not find that project/,
+  },
+])('says so and gets out of the way when the target project is gone: $name', async ({ override, expected }) => {
   const initial = state()
-  initial.sessions.archived = { kind: 'codex', cwd: '/project' }
-  initial.buried = [{ id: 'buried-record', sessionId: 'archived', sessionMeta: initial.sessions.archived,
-    buriedAt: 1, sourceTabId: 'project', sourceTabTitle: 'Project', sourceTabIndex: 0 }]
+  if (!override) {
+    // The reported state exactly: an EMPTY focused lane whose row is still
+    // bound to a project that closed. `resolveDispatchSpawnTarget` treats a
+    // row binding as outranking the active project — correctly, since the
+    // row's index offers only that project — so the binding is what resolves,
+    // and it names a tab that no longer exists.
+    //
+    // Setting `activeTabId` to a ghost would NOT reproduce this: the focused
+    // lane's occupant resolves first, so the create would quietly succeed
+    // under the lane's real project and this test would pass for the wrong
+    // reason.
+    initial.stage = { focusedLane: 0, lanes: [{}], rows: [{ length: 1, projectTabIds: ['ghost-project' as never] }] }
+  }
   const harness = mountPaneActions(initial)
-  await act(async () => { await harness.actions.reviveBuried('buried-record') })
-  expect(harness.sessionActions.ensureSessionLive).toHaveBeenCalledWith('archived', 'pane.revive-buried')
-  expect(harness.getState().buried).toEqual([])
-  expect(collectLeaves(harness.getState().tabs[0].root).filter(id => id === 'archived')).toHaveLength(1)
+
+  await act(async () => {
+    expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' }, override)).toBeNull()
+  })
+
+  expect(harness.showToast).toHaveBeenCalledWith(expect.stringMatching(expected))
+  // The half a toast alone did not fix: the overlay has to come down, or the
+  // advice in it is advice the user cannot act on.
+  expect(harness.closeNewAgentPlacement).toHaveBeenCalled()
+  // And nothing was created on the way out.
   expect(harness.spawn).not.toHaveBeenCalled()
   harness.mounted.unmount()
 })
+
+it('fills the focused lane when it is EMPTY and selectCreated is not false', async () => {
+  const initial = state()
+  initial.stage = { focusedLane: 0, lanes: [{}, { selectedSessionId: 'anchor' }] }
+  const harness = mountPaneActions(initial, { spawnSessionId: 'exact-created-agent' })
+  await act(async () => {
+    expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' }, { tabId: 'project', anchorSessionId: 'anchor' }))
+      .toBe('exact-created-agent')
+  })
+  // Lane 0 (focused, empty) fills; lane 1 keeps `anchor`.
+  expect(harness.getState().stage.lanes.map(lane => lane.selectedSessionId))
+    .toEqual(['exact-created-agent', 'anchor'])
+  harness.mounted.unmount()
+})
+
 
 it('keeps native continuation cwd and target project separate from focus', async () => {
   const initial = state()
@@ -46,21 +119,26 @@ it('keeps native continuation cwd and target project separate from focus', async
       .toBe('resumed-agent')
   })
   expect(harness.spawn).toHaveBeenCalledExactlyOnceWith('/native-worktree', expect.objectContaining({ kind: 'opencode', providerRuntime: 'terminal', resumeSessionId: 'ses_native', builtInMcpOverrides: { orchestration: true } }))
-  expect(harness.getState().detachedSessions['resumed-agent'].projectTabId).toBe('project')
-  expect(harness.getState().tabs[0].root).toEqual(initial.tabs[0].root)
+  // Filed under the TARGET project even though its cwd is somewhere else
+  // entirely: a project is a label the caller chose, not a directory match.
+  expect(harness.getState().sessions['resumed-agent']).toMatchObject({ projectId: 'project', cwd: '/native-worktree' })
+  // Occupied focused lane ⇒ pooled, not displacing.
+  expect(harness.getState().stage).toBe(initial.stage)
   harness.mounted.unmount()
 })
 
 // Reproduce the operator's two-lane creation observation through the real
-// placement owner: detached membership must not imply preserved selection.
-it.each([true, false])('creation selectCreated=%s preserves or replaces the captured lane explicitly', async selectCreated => {
+// placement owner. The focused lane is EMPTY here (the fill-eligible case):
+// `selectCreated` is the only thing that decides whether the new agent takes
+// it. With an occupied focused lane both values now pool — see the first case.
+it.each([true, false])('creation selectCreated=%s fills or preserves the focused EMPTY lane explicitly', async selectCreated => {
   const initial = state()
-  initial.sessions.hermes = { kind: 'codex', cwd: '/other' }
-  initial.tabs.push({ id: 'other', title: 'Other', root: { type: 'leaf', sessionId: 'hermes' }, focusedSessionId: 'hermes' })
+  initial.sessions.hermes = { kind: 'codex', cwd: '/other', projectId: 'other', joinedAt: 0 }
+  initial.tabs.push({ id: 'other', title: 'Other' })
   initial.activeTabId = 'other'
-  initial.dispatchMode = { scope: 'global', focusedSessionId: 'anchor', tiled: {
-    focusedLane: 1, lanes: [{ selectedSessionId: 'anchor' }, { selectedSessionId: 'hermes' }],
-  } }
+  initial.stage = {
+    focusedLane: 1, lanes: [{ selectedSessionId: 'anchor' }, {}],
+  }
   const harness = mountPaneActions(initial, { spawnSessionId: 'new-agent' })
   await act(async () => {
     await harness.actions.createDetachedSession({ kind: 'codex' },
@@ -68,10 +146,9 @@ it.each([true, false])('creation selectCreated=%s preserves or replaces the capt
   })
   const next = harness.getState()
   expect(next.activeTabId).toBe(selectCreated ? 'project' : 'other')
-  expect(next.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId))
-    .toEqual(['anchor', selectCreated ? 'new-agent' : 'hermes'])
-  expect(next.sessions.hermes).toEqual(initial.sessions.hermes)
-  expect(next.detachedSessions['new-agent'].projectTabId).toBe('project')
+  expect(next.stage.lanes.map(lane => lane.selectedSessionId))
+    .toEqual(['anchor', selectCreated ? 'new-agent' : undefined])
+  expect(next.sessions['new-agent']?.projectId).toBe('project')
   expect(harness.sessionActions.killSession).not.toHaveBeenCalled()
   harness.mounted.unmount()
 })

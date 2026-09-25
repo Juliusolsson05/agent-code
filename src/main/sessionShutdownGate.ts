@@ -8,17 +8,23 @@ interface SessionShutdownApp {
   quit(): void
 }
 
-interface SessionShutdownManager {
-  killAll(): Promise<void>
-}
-
 interface SessionShutdownGateOptions {
   app: SessionShutdownApp
-  getManager: () => SessionShutdownManager | null
+  drain: () => Promise<void>
   onQuitAllowed: () => void
   platform?: NodeJS.Platform
-  onLastWindowClosed?: () => void
   onShutdownError?: (error: unknown) => void
+  /** Self-update exit: when drain completes with a pending update, install()
+   *  REPLACES the final app.quit(). electron-updater's quitAndInstall does not
+   *  exit the process — it re-enters before-quit/will-quit, arming Squirrel's
+   *  relaunch. Calling it AFTER a plain app.quit() loses the race and the
+   *  process exits before ShipIt takes the update: a silent no-op update. On
+   *  this second will-quit pass shutdownComplete is already true, so the gate
+   *  runs onQuitAllowed (lock release, clean journal) and does not prevent. */
+  update?: {
+    pending(): boolean
+    install(): void
+  }
 }
 
 export interface SessionShutdownGate {
@@ -50,7 +56,6 @@ export function installSessionShutdownGate(
     // and allow exit while the first call still awaited physical provider
     // stops. Keeping manager access out of this branch makes the gate below the
     // sole owner of the exact teardown promise on every platform.
-    options.onLastWindowClosed?.()
     options.app.quit()
   })
 
@@ -59,17 +64,6 @@ export function installSessionShutdownGate(
       // WHY final lifecycle bookkeeping lives on the re-entered event: process
       // lock release and clean-run journaling are truthful only once teardown
       // has settled and this quit is no longer being prevented.
-      options.onQuitAllowed()
-      return
-    }
-
-    const manager = options.getManager()
-    if (!manager) {
-      // WHY absence is already terminal: packaging smoke and failed startup can
-      // legitimately quit before SessionManager construction. Inventing an
-      // async gate there would hold Electron for work that cannot exist.
-      terminalShutdownAdmitted = true
-      shutdownComplete = true
       options.onQuitAllowed()
       return
     }
@@ -94,11 +88,18 @@ export function installSessionShutdownGate(
     // recovery/replacement claims terminal before awaiting provider stops.
     // Starting a second teardown is unnecessary, while clearing that fence to
     // roll back a veto would be unsafe because some stops may already be done.
-    shutdownPromise = manager
-      .killAll()
+    // Publish the join BEFORE calling application code. A stop implementation
+    // can throw synchronously or re-enter app.quit(); neither may bypass the
+    // gate or start another drain. The drain still starts synchronously so its
+    // producer admission fences close on this same JavaScript turn.
+    let resolve!: () => void
+    let reject!: (error: unknown) => void
+    const drain = new Promise<void>((yes, no) => { resolve = yes; reject = no })
+    shutdownPromise = drain
       .then(() => {
         shutdownComplete = true
-        options.app.quit()
+        if (options.update?.pending()) options.update.install()
+        else options.app.quit()
       })
       .catch(error => {
         // WHY failure stays fail-closed but retryable: allowing Electron to exit
@@ -107,6 +108,7 @@ export function installSessionShutdownGate(
         shutdownPromise = null
         options.onShutdownError?.(error)
       })
+    try { options.drain().then(resolve, reject) } catch (error) { reject(error) }
   })
 
   return {

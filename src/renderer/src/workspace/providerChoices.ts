@@ -2,6 +2,8 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import {
   AGENT_PROVIDER_KINDS,
+  isAgentProviderKind,
+  isTerminalOnlyProviderKind,
   type AgentProviderKind,
   type AgentProviderRuntime,
 } from '@shared/types/providerKind'
@@ -36,6 +38,10 @@ export const AGENT_PROVIDER_CHOICES: readonly AgentProviderChoice[] =
       kind,
       label: capabilities.shortLabel,
       description: capabilities.spawnDescription,
+      // A terminal-only provider's one choice IS the terminal runtime. Stated
+      // on the choice so every consumer sees the truth; the read-time
+      // resolution (effectiveProviderRuntime) still covers callers that drop it.
+      ...(isTerminalOnlyProviderKind(kind) ? { providerRuntime: 'terminal' as const } : {}),
     }
     if (kind !== 'opencode') return [structured]
     return [
@@ -70,4 +76,48 @@ export function providerChoiceLabel(
   return kind === 'opencode' && providerRuntime === 'terminal'
     ? 'OpenCode Terminal'
     : getRendererProviderCapabilities(kind).shortLabel
+}
+
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
+
+/**
+ * Enablement filters (#1102). Pickers receive the filtered list; the static
+ * exports above stay complete so non-picking consumers (validation cores,
+ * keybinding defaults) can choose their own policy.
+ */
+export function filterAgentProviderChoices(
+  choices: readonly AgentProviderChoice[],
+  enabledKinds: ReadonlySet<AgentProviderKind>,
+): AgentProviderChoice[] {
+  return choices.filter(choice => enabledKinds.has(choice.kind))
+}
+
+export function filterSessionSpawnChoices(
+  choices: readonly SessionSpawnChoice[],
+  enabledKinds: ReadonlySet<AgentProviderKind>,
+): SessionSpawnChoice[] {
+  // `terminal` is not a provider: a user who disables every agent still
+  // gets shells — enablement is a provider filter, not an app lockout.
+  // extension-view can never appear in a spawn list but shares SessionKind,
+  // so the isAgentProviderKind guard is what makes the narrowing honest.
+  return choices.filter(
+    choice =>
+      choice.kind === 'terminal' ||
+      (isAgentProviderKind(choice.kind) && enabledKinds.has(choice.kind)),
+  )
+}
+
+export function enabledProviderSwitchChoices(
+  sourceKind: AgentProviderKind,
+  enabledKinds: ReadonlySet<AgentProviderKind>,
+): AgentProviderChoice[] {
+  // A disabled source has no valid destinations: switching away from a
+  // provider the user turned off is how it sneaks back into the workspace.
+  if (!enabledKinds.has(sourceKind)) return []
+  return filterAgentProviderChoices(providerSwitchChoices(sourceKind), enabledKinds)
+}
+
+/** Non-React validation-core variant: reads the live store snapshot. */
+export function enabledAgentProviderChoices(): AgentProviderChoice[] {
+  return filterAgentProviderChoices(AGENT_PROVIDER_CHOICES, enabledAgentProviderKindsSnapshot())
 }

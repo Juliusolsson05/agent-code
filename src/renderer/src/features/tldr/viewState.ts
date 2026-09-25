@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+import type { HoldEndReason } from '@shared/types/tldr'
+
 // Preview state is deliberately outside persisted Settings/workspace state.
 // Restarting the renderer while a key is held must never restore a darkened UI.
 //
@@ -22,10 +24,15 @@ export function toggleTldr(preview: PreviewKind = 'tldr'): void {
 
 type HoldEvent = Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'repeat'>
 
-export function observeTldrHoldRelease(event: HoldEvent, release: () => void): () => void {
+export function observeTldrHoldRelease(
+  event: HoldEvent,
+  release: (reason: HoldEndReason) => void,
+): () => void {
   if (!event.metaKey) return () => {}
   const token = crypto.randomUUID()
-  const unsubscribe = window.api.onTldrHoldReleased(released => { if (released === token) release() })
+  const unsubscribe = window.api.onTldrHoldReleased((released, reason) => {
+    if (released === token) release(reason)
+  })
   window.api.startTldrHold(event.code, token)
   return () => { unsubscribe(); window.api.stopTldrHold(token) }
 }
@@ -36,12 +43,36 @@ export function observeTldrHoldRelease(event: HoldEvent, release: () => void): (
 export function createTldrHoldController(
   setHeld = (held: boolean, preview: PreviewKind = 'tldr') =>
     useTldrView.setState(held ? { held, latched: false, preview } : { held, latched: false }),
-  observeRelease: (event: HoldEvent, release: () => void) => () => void = () => () => {},
+  observeRelease: (event: HoldEvent, release: (reason: HoldEndReason) => void) => () => void = () => () => {},
+  /** Told once when the native watcher turns out to be blind, so the user can
+   *  be shown WHY the letter-release stopped working (#1066 review finding 1:
+   *  journalling it and saying nothing to the user is half a fix). */
+  onUnobservable?: () => void,
 ) {
   let gesture: HoldEvent | null = null
   let stopObserving: (() => void) | null = null
-  const release = () => {
+  const release = (reason: HoldEndReason = 'released') => {
     if (!gesture) return
+    // ── WHY AN UNOBSERVABLE HOLD KEEPS HOLDING (#1066, review finding 2) ──
+    // Only the Cmd-LETTER keyup is swallowed by AppKit. The COMMAND keyup
+    // still reaches the renderer, and `keyUp` below already ends the hold on
+    // it. So on a machine where the native watcher is blind, the peek can
+    // still behave as a real hold — it simply ends when the user lets go of
+    // Command rather than of the letter.
+    //
+    // The first version of this fix LATCHED here instead, which threw that
+    // signal away and was worse than the bug: a latched overlay owns every
+    // keystroke but Escape (useKeybinds' input gate), so the exact users this
+    // fix targets would have had typing swallowed after every ⌘L — the #1021
+    // trap, re-created. Keeping the gesture alive costs nothing and needs no
+    // escape hatch, because the Command keyup always comes, and main's
+    // blur/close/navigation handlers still end the hold if it does not.
+    if (reason === 'unobservable') {
+      stopObserving?.()
+      stopObserving = null
+      onUnobservable?.()
+      return
+    }
     gesture = null
     stopObserving?.()
     stopObserving = null

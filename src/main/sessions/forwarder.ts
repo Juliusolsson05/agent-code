@@ -2,196 +2,113 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { LspManager } from '@main/lspManager.js'
+import { USER_MCP_UNAVAILABLE_CHANNEL } from '@main/ipc/userMcp.js'
+import type { UserMcpUnavailableEvent } from '@shared/userMcp/types.js'
+import {
+  MANAGED_SKILLS_UNAVAILABLE_CHANNEL,
+  type ManagedSkillsUnavailableEvent,
+} from '@shared/types/tldr.js'
 
 import {
   broadcastToWindows,
-  releaseSession,
   sendToSessionWindow,
 } from '@main/window/windowRegistry.js'
-import {
-  enqueueJsonl,
-  flushAllJsonl,
-  flushAndDropJsonl,
-  flushJsonl,
-} from '@main/sessions/jsonlCoalescer.js'
-import { SemanticEventIpcCoalescer } from '@main/sessions/semanticEventCoalescer.js'
-import { LatestSessionIpcCoalescer } from '@main/sessions/latestSessionIpcCoalescer.js'
-import { SubAgentWatcherManager } from '@main/subagents/index.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 
-// Session event forwarder.
+// Session event forwarder — the desktop WINDOW SINK over the SessionFeedTap.
 //
-// Wires every manager event to a matching IPC channel. Each payload already
-// carries the sessionId, which is now load-bearing twice over: main routes the
-// message to the window that owns the session, and that window's renderer then
-// routes it to the right tile. Before multi-window only the second half
-// existed and every event went to the one window.
+// Since #1177 this file owns no ordering at all. Every coalescer, every
+// ordering barrier, the JSONL burst buffer and the sub-agent watcher live in
+// sessionFeedTap.ts, which the phone's SessionFeedSource consumes too; read
+// that file for WHY each barrier exists. What remains here is only what is
+// genuinely about Electron windows:
 //
-// WHY routing matters beyond tidiness: without it every window would decode the
-// full firehose of every other window's agents, and — worse — each session
-// handler in useIpcSubscriptions materializes `emptyRuntime()` for an
-// unrecognized id, so a misrouted event grows a ghost runtime rather than being
-// ignored. Complete
-// snapshots and cumulative semantic prefixes pass through the narrow
-// coalescers below; structural events still preserve direct ordering.
+//   1. Routing. Each payload carries the sessionId, which is load-bearing
+//      twice over: main routes the message to the window that owns the
+//      session, and that window's renderer then routes it to the right tile.
+//      WHY routing matters beyond tidiness: without it every window would
+//      decode the full firehose of every other window's agents, and — worse —
+//      each session handler in useIpcSubscriptions materializes
+//      `emptyRuntime()` for an unrecognized id, so a misrouted event grows a
+//      ghost runtime rather than being ignored.
+//   2. The IPC channel names (`session:<tap channel>`).
+//   3. The screen alias (#746), an IPC-edge byte optimisation.
+//   4. Broadcast-only events that are machine-wide rather than per session.
 //
 // terminal-data and agent-pty-data are intentionally separate channels from
-// screen / jsonl-entry. terminal-data is for plain shell panes;
-// agent-pty-data is an opt-in inline terminal for Claude/Codex panes.
-// Keeping both out of the normal structured feed path prevents every
-// agent pane listener from unpacking and ignoring raw PTY bytes.
+// screen / jsonl-entries. terminal-data is for plain shell panes;
+// agent-pty-data is an opt-in inline terminal for Claude/Codex panes. Keeping
+// both out of the normal structured feed path prevents every agent pane
+// listener from unpacking and ignoring raw PTY bytes. This sink is the one
+// that subscribes to them (`rawPty: true`); the remote sink does not.
 
 export type SessionForwarderControl = {
   flush(): void
+  flushSession(sessionId: string): void
 }
 
+/**
+ * @param tap The shared tap. Production passes the one instance main/index.ts
+ *   also hands the remote subsystem, so there is one sub-agent watcher and one
+ *   ordering decision per event. The default (a private tap) exists for the
+ *   test harnesses that wire a forwarder over a throwaway manager — they have
+ *   no second sink, so a private tap is exactly the old behaviour.
+ */
 export function wireSessionForwarder(
   manager: SessionManager,
   lspManager: LspManager,
+  tap: SessionFeedTap = new SessionFeedTap(manager),
 ): SessionForwarderControl {
-  // Per-session subagent fleet watcher. Driven off the main transcript stream
-  // (jsonl-entry carries the transcript `file` we derive the subagents dir
-  // from, and the tool_result blocks that flip a subagent to done/error). See
-  // src/main/subagents/.
-  const subAgents = new SubAgentWatcherManager((sessionId, map) =>
-    sendToSessionWindow(sessionId, 'session:sub-agents', { sessionId, subAgents: map }),
-  )
-  // WHY the alias happens here and not at the manager (#746): the remote
-  // server and the recorder-independent readers take the full payload from
-  // the manager; only the renderer IPC edge pays structured-clone bytes for
-  // the duplicate `recent` strings, and only the preload expands them back.
-  // (The session recorder taps this send, so recordings carry the wire form;
-  // replay treats screen frames as no-op ticks and never reads the fields.)
-  const screens = new LatestSessionIpcCoalescer<{ sessionId: string } & AgentScreenSnapshot>(payload =>
-    sendToSessionWindow(payload.sessionId, 'session:screen', aliasScreenSnapshotForWire(payload)),
-  )
-  const processStates = new LatestSessionIpcCoalescer(payload =>
-    sendToSessionWindow(payload.sessionId, 'session:process-state', payload),
-  )
-  const semanticEvents = new SemanticEventIpcCoalescer(
-    payload => sendToSessionWindow(payload.sessionId, 'session:semantic-event', payload),
-    undefined,
-    sessionId => {
-      // See SemanticEventIpcCoalescer.beforeBarrier. These are full snapshots / committed entries,
-      // so flushing them cannot lose information and prevents an older delayed value from landing
-      // after turn_completed or another structural semantic boundary.
-      screens.flush(sessionId)
-      processStates.flush(sessionId)
-      flushJsonl(sessionId)
-    },
-  )
+  tap.addSink((channel, payload) => {
+    // `removed` is a cleanup signal the tap needed for its own buffers; the
+    // desktop learns removal from workspace state, and never had an IPC
+    // channel for it.
+    if (channel === 'removed') return
+    if (channel === 'screen') {
+      // WHY the alias happens here and not in the tap or the manager (#746):
+      // the remote server and the recorder-independent readers take the full
+      // payload; only the renderer IPC edge pays structured-clone bytes for
+      // the duplicate `recent` strings, and only the preload expands them
+      // back. (The session recorder taps this send, so recordings carry the
+      // wire form; replay treats screen frames as no-op ticks and never reads
+      // the fields.)
+      sendToSessionWindow(
+        payload.sessionId,
+        'session:screen',
+        aliasScreenSnapshotForWire(payload as { sessionId: string } & AgentScreenSnapshot),
+      )
+      return
+    }
+    sendToSessionWindow(payload.sessionId, `session:${channel}`, payload)
+  }, { rawPty: true })
 
-  manager.on('started', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:started', payload),
-  )
-  manager.on('input-readiness', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:input-readiness', payload),
-  )
-  // WHY screen/process-state do not cross IPC directly: both are complete,
-  // authoritative snapshots. During a nine-agent burst the old path cloned and
-  // dispatched every intermediate repaint even though the next snapshot made
-  // it obsolete. Latest-per-session delivery is lossless at the state level
-  // and keeps Chromium's queue bounded independently of producer cadence.
-  manager.on('screen', payload => screens.enqueue(payload))
-
-  // Bulk-only forwarding. See jsonlCoalescer.ts for the full rationale
-  // — every jsonl-entry goes through the coalescer; live single
-  // entries become 1-element bulk messages with imperceptible latency.
-  manager.on('jsonl-entry', payload => {
-    // Committed transcript state must not overtake an earlier cumulative semantic preview still
-    // sitting in main's 100 ms window. The renderer's JSONL barrier can only flush messages it has
-    // received, so main must establish this order before crossing Electron IPC.
-    semanticEvents.flush(payload.sessionId)
-    enqueueJsonl(payload.sessionId, payload.entry, payload.file, payload.observation)
-    subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
+  // #1133. BROADCAST, not sendToSessionWindow, on purpose. Managed-skill health
+  // is machine-wide (one broken TLDR skill affects every window's next launch),
+  // so the warning is not about one pane. Session routing would also be wrong
+  // mechanically: it quarantines events for ids no window has claimed yet and
+  // records a routing gap for them, so a main-initiated spawn would raise a
+  // false "missed session events" notice instead of this warning. Only domain
+  // names cross, never the reconcile error (see runPreSpawnSkillReconcile).
+  // Not a tap channel: it is not session-scoped and the phone has no surface
+  // for it.
+  manager.on('managed-skills-unavailable', ({ skills }) => {
+    const event: ManagedSkillsUnavailableEvent = { skills }
+    broadcastToWindows(MANAGED_SKILLS_UNAVAILABLE_CHANNEL, event)
   })
-  manager.on('jsonl-error', ({ sessionId, error }) => {
-    // A failed drain can still commit earlier records. Preserve that order
-    // across the asynchronous batch boundary or those records clear the
-    // renderer's error after the durable channel has already stopped.
-    flushJsonl(sessionId)
-    sendToSessionWindow(sessionId, 'session:jsonl-error', {
-      sessionId,
-      message: String(error.message ?? error),
-    })
+  // #1143. Broadcast for the same routing reason as managed skills above: the
+  // launch can be main-initiated (orchestration child, restore) before any
+  // window has claimed the id. Only server names and fixed reason strings
+  // cross; nothing here can carry a secret value.
+  manager.on('user-mcp-unavailable', ({ servers }) => {
+    const event: UserMcpUnavailableEvent = { servers }
+    broadcastToWindows(USER_MCP_UNAVAILABLE_CHANNEL, event)
   })
-  manager.on('history-boundary', payload => {
-    // Same ordering discipline as jsonl-error: a rewrite supersedes every
-    // buffered record of the old generation, so both the 100 ms semantic
-    // window and the pending jsonl batch must land BEFORE the boundary, and
-    // the boundary itself crosses directly (never coalesced — it is an
-    // ordering fact, not state to keep current).
-    semanticEvents.flush(payload.sessionId)
-    flushJsonl(payload.sessionId)
-    sendToSessionWindow(payload.sessionId, 'session:history-boundary', payload)
-  })
-  manager.on('transcript-diagnostic', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
-  )
-  manager.on('terminal-data', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:terminal-data', payload),
-  )
-  // Shell activity (#865) crosses directly: the monitor already emits only on
-  // change (at most once per terminal per second), so there is no burst for a
-  // coalescer to absorb.
-  manager.on('terminal-foreground', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:terminal-foreground', payload),
-  )
-  manager.on('agent-pty-data', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:agent-pty-data', payload),
-  )
-  manager.on('process-state', payload => processStates.enqueue(payload))
-  // Legacy per-condition channels (session:trust-dialog / :resume-prompt /
-  // :permission-prompt) are no longer forwarded to the
-  // renderer. The renderer consumes only the unified `session:conditions`
-  // snapshot and derives every pending-prompt field from it; no renderer or
-  // harness ever subscribed to the granular channels (confirmed by rg before
-  // removal — see docs/audit-plans/execution/ipc-shared-contracts-implementation-log.md).
-  // The manager STILL emits the granular events internally (provider runtimes
-  // drive them); we simply stop bridging them over IPC. Re-deprecating the
-  // manager-level events is owned by the conditions-framework cluster.
-  manager.on('conditions', payload =>
-    sendToSessionWindow(payload.sessionId, 'session:conditions', payload),
-  )
-  manager.on('semantic-event', payload => semanticEvents.enqueue(payload))
-  manager.on('removed', payload => {
-    // Final cleanup is keyed to removal, not renderer-facing exit. Some provider
-    // stop() paths resolve without emitting exit, and SessionManager.kill() must
-    // still be authoritative over the JSONL coalescer buffer and subagent
-    // watchers. Natural exits emit `removed` before `exit`, preserving the old
-    // ordering where the final bulk JSONL flush reaches the renderer before the
-    // pane is marked exited.
-    // A structural session removal is an ordering barrier just like turn_completed. Flush every
-    // pending cumulative delta before the renderer learns that a runtime disappeared; otherwise a
-    // final assistant/tool prefix can be stranded behind teardown and never become visible.
-    semanticEvents.flush(payload.sessionId)
-    screens.flush(payload.sessionId)
-    processStates.flush(payload.sessionId)
-    flushAndDropJsonl(payload.sessionId)
-    subAgents.stop(payload.sessionId)
-    // WHY window ownership is released HERE but only on the next tick:
-    //
-    // `removed` is the designated final-cleanup point, but it fires BEFORE the
-    // renderer-facing `exit` (see the ordering note above), so releasing
-    // synchronously would leave that last event unowned and broadcast it to
-    // every window. Deferring by one turn lets `exit` route to the owner and
-    // still drops the entry, which otherwise grows for the life of the process
-    // — and, worse, would hand a closing window's survivor ids for backends
-    // that no longer exist.
-    setImmediate(() => releaseSession(payload.sessionId))
-  })
-  manager.on('exit', payload => {
-    sendToSessionWindow(payload.sessionId, 'session:exit', payload)
-  })
-    // Diagnostics are keyed by file, not by session: two windows can have the
+  // Diagnostics are keyed by file, not by session: two windows can have the
   // same file open in their editors and both need them.
   lspManager.on('diagnostics', payload => broadcastToWindows('lsp:diagnostics', payload))
 
   return {
-    flush(): void {
-      semanticEvents.flush()
-      screens.flush()
-      processStates.flush()
-      flushAllJsonl()
-    },
+    flushSession: sessionId => tap.flushSession(sessionId),
+    flush: () => tap.flush(),
   }
 }

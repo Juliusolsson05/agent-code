@@ -10,12 +10,14 @@
 // caused the node tsconfig to walk into renderer files and emit the
 // JSX-not-set cascade across ~500 lines of error output. Both halves
 // and their registries are now strictly separate; `registry.main.ts`
-// builds MainProviderConfig, `registry.renderer.ts` builds
-// RendererProviderConfig, and nothing re-joins them.
+// builds MainProviderConfig, `registry.renderer.capabilities.ts` builds the
+// renderer's RendererProviderCapabilities, and nothing re-joins them. (A
+// `registry.renderer.ts` with a per-provider TileLeaf slot also existed until
+// #1177; every provider mapped to the same pane, so it was deleted.)
 
 import type { ComponentType, ReactNode } from 'react'
 import type { SessionOptions, AgentSession } from '@shared/types/session.js'
-import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
 /**
@@ -108,50 +110,6 @@ export type ProviderTaskNotification = {
   usage: string | null
 }
 
-export type TileLeafRelatedAgentTab = {
-  sessionId: string
-  relation: 'parent' | 'linked' | 'orchestration'
-  label: string
-  title: string
-  // Typed SessionKind because the value flows from SessionMeta.kind, which is a
-  // SessionKind. buildGridRelatedAgentTabs guarantees at runtime that only agent
-  // kinds actually arrive here (it drops every non-agent owner and candidate via
-  // isAgentSessionKind), so the wider type is a plumbing artifact, not a claim
-  // that a terminal or extension-view pane can be a related-agent tab. Narrowing
-  // it to AgentProviderKind would need a cast at the one construction site and
-  // would move the guarantee from a readable filter into an assertion.
-  kind: SessionKind | undefined
-  placement: 'grid' | 'detached'
-}
-
-// Props the shell passes to every provider's TileLeaf.
-export type TileLeafProps = {
-  sessionId: string
-  runtime: unknown
-  focused: boolean
-  paneLabel?: string
-  onFocusRequest: () => void
-  workspace: unknown
-  showStatusMode?: boolean
-  showWorktreeBadges?: boolean
-  /**
-   * WHY these shell-chrome props live in the provider contract now:
-   * TileTree has always passed them to the concrete in-repo TileLeaf, but the
-   * public type claimed providers only received the bare pane identity/runtime
-   * fields. That mismatch forced TileTree to widen the component with a local
-   * cast, which hid the real call surface from any future provider pane.
-   *
-   * Keep the shapes structural and renderer-free here on purpose. Importing
-   * `Workspace`, `SessionId`, or `GridRelatedAgentTab` from the renderer would
-   * make this shared type drag renderer files into the node project again, the
-   * exact boundary leak this file exists to prevent. The concrete renderer
-   * types are assignable to these strings/records without coupling the halves.
-   */
-  ownerSessionId?: string
-  relatedAgentTabs?: TileLeafRelatedAgentTab[]
-  selectedRelatedSessionId?: string
-  onSelectRelatedSession?: (sessionId: string) => void
-}
 
 /**
  * The shared provider config intentionally does not import `ConditionView`.
@@ -285,37 +243,6 @@ export type SemanticFoldPolicy = {
    * 0/1/0/1 semantic row flicker).
    */
   allowReplaceOfLiveTurn: boolean
-}
-
-/**
- * Renderer-side config: only browser-safe imports.
- * Imported by TileTree, workspaceStore, etc.
- */
-export type RendererProviderConfig = {
-  /** Provider identity — constrained to the shared source of truth so a
-   *  config can't be registered under an id the rest of the app doesn't
-   *  recognise. */
-  id: AgentProviderKind
-  name: string
-  /**
-   * Provider-owned condition views.
-   *
-   * WHY this belongs on the renderer registry: the snapshot already carries a
-   * provider id, and unknown providers should flow through the same throwing
-   * registry lookup as panes. The old `provider === 'claude' ? A : B` in
-   * ProviderConditionOutlet silently rendered every future provider with Codex
-   * views. Keeping the views here makes the provider registry load-bearing for
-   * one real renderer capability instead of another ad hoc binary fallback.
-   */
-  conditionViews: RendererConditionViewRegistry
-  /** Provider-owned interpretation of one correlated tool operation. */
-  renderOperation: (input: ProviderOperationInput) => ProviderOperationDecision
-  /** Provider-only durable rows such as Claude/Codex compaction artifacts. */
-  renderDurableEntry?: (
-    input: ProviderDurableEntryInput,
-  ) => ProviderDurableEntryDecision | undefined
-  /** The pane component the shell mounts inside TileTree. */
-  TileLeaf: ComponentType<TileLeafProps>
 }
 
 /**
@@ -488,7 +415,14 @@ export type MainProviderConfig = {
   deliverPrompt: (io: PromptDeliveryIo) => Promise<PromptDeliveryResult>
 }
 
-export type PromptDeliveryIo = {
+export type PromptDeliveryOptions = {
+  /** App-generated tasks must not submit an unrelated native terminal draft.
+   * Providers must refuse when their transport cannot preserve it or establish
+   * that the active composer is empty. This is stricter than legacy delivery. */
+  requireEmptyNativeComposer?: boolean
+}
+
+export type PromptDeliveryIo = PromptDeliveryOptions & {
   session: AgentSession
   /** Write raw bytes to the session PTY. Returns false when the
    *  session is gone — callers already treat that as delivery

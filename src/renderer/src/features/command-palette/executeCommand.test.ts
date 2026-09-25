@@ -102,26 +102,11 @@ describe('admission cannot be bypassed by source', () => {
     expect(uiCalls).toEqual([])
   })
 
-  it('refuses a grid command while Dispatch Mode owns the layout', async () => {
-    // The #228 class: a grid-only command is a silent no-op in Dispatch, and
-    // the explicit outcome is what replaces the silence.
-    //
-    // `nav-left`, not `split-vertical`. This case used the latter until the
-    // create commands were found to work in BOTH modes — `splitFocused` spawns
-    // a detached agent in Dispatch — and their `surface: 'grid'` was refusing a
-    // mode their own action implements. `nav-left` is genuinely grid-only:
-    // Dispatch focus is `dispatchMode.focusedSessionId` while grid navigation
-    // walks the tile tree, so asking the grid for a neighbour of a detached
-    // session really does nothing.
-    const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
-    const outcome = await dispatchCommand({ id: 'nav-left', source: 'keybinding', ctx })
-    expect(outcome.status).toBe('unavailable')
-  })
-
-  it('admits that same grid command outside Dispatch Mode', async () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
-    expect(canDispatchCommand('nav-left', ctx)).toBe(true)
-  })
+  // DELETED (#992): 'refuses a grid command while Dispatch Mode owns the
+  // layout' + its inverse — the #228 mode gate died with the modes. nav-left
+  // itself died with the tile tree; no surviving command is mode-gated, so
+  // the admission seam is exercised by the unknown-id and when-guard cases
+  // below and the availability tests in resolveInvocation.test.ts.
 
   it('distinguishes an unknown id from an unavailable one', async () => {
     // A menu or caller bug and a contextual refusal are different problems and
@@ -224,7 +209,7 @@ describe('history policy', () => {
     expect(recordCommandUse).toHaveBeenCalledWith('new-tab', 'native-menu')
   })
 
-  it.each(['palette', 'native-menu', 'keybinding'] as const)(
+  it.each(['palette', 'native-menu', 'keybinding', 'context-menu'] as const)(
     'records %s invocations',
     async source => {
       await dispatchCommand({ id: 'new-tab', source, ctx: makeContext() })
@@ -337,17 +322,14 @@ describe('create commands in Dispatch Mode', () => {
     'codex-horizontal',
   ]
 
-  it('admits every create command while Dispatch owns the layout', () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
+  // Two cases lived here ("while Dispatch owns the layout" / "in the grid"),
+  // toggling a `dispatchModeEnabled` flag. There is one layout (#992) and the
+  // flag is gone, so there is one case. The property it pins is unchanged and
+  // still worth pinning: no create command is ever surface-gated away.
+  it('admits every create command on the stage', () => {
+    const ctx = makeContext()
     for (const id of CREATE_IDS) {
-      expect(canDispatchCommand(id, ctx), `${id} refused in Dispatch`).toBe(true)
-    }
-  })
-
-  it('still admits them in the grid', () => {
-    const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
-    for (const id of CREATE_IDS) {
-      expect(canDispatchCommand(id, ctx), `${id} refused in the grid`).toBe(true)
+      expect(canDispatchCommand(id, ctx), `${id} refused`).toBe(true)
     }
   })
 })

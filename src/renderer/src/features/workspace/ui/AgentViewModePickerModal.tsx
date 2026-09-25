@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
@@ -12,7 +13,7 @@ import {
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 type PickerValue = AgentViewModeOverride | 'default'
@@ -45,7 +46,9 @@ export function AgentViewModePickerModal({
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   const isAgent = isAgentProviderKind(kind)
   const provider = getRendererProviderCapabilities(isAgent ? kind : DEFAULT_PROVIDER)
-  const terminalRuntime = meta?.providerRuntime === 'terminal'
+  // Effective runtime: a terminal-only provider (Pi) is locked to its TUI
+  // even when its metadata carries no runtime.
+  const terminalRuntime = effectiveProviderRuntime(kind, meta?.providerRuntime) === 'terminal'
   const nativeUnavailable = kind === 'opencode' && !terminalRuntime
   const currentValue: PickerValue = terminalRuntime
     ? 'terminal'
@@ -140,6 +143,13 @@ export function AgentViewModePickerModal({
             return
           }
           if (e.key === 'Enter') {
+            // A focused footer button owns its own Enter (#867). This handler
+            // sits on `DialogContent`, so without the check it `preventDefault`s
+            // the focused button's native click and runs the LIST's action
+            // instead — Tab to Cancel, Enter, and the change being abandoned is
+            // applied. Same rule `DialogActions` follows, same helper (#860),
+            // same bug #862 fixed in Switch Provider.
+            if (focusedControlOwnsEnter(e.target)) return
             e.preventDefault()
             pick(cursor)
           }
@@ -155,7 +165,15 @@ export function AgentViewModePickerModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas">
+        {/* Roving focus: rows out of the tab order need the highlight ANNOUNCED
+            rather than focused, or a screen reader hears nothing as the arrows
+            move (#867 review). */}
+        <div
+          role="listbox"
+          aria-label="Agent view mode"
+          aria-activedescendant={`agent-view-mode-${cursor}`}
+          className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas"
+        >
           {options.map(option => {
             const selected = option.value === currentValue
             const focused = option.value === cursor
@@ -164,6 +182,20 @@ export function AgentViewModePickerModal({
               <button
                 key={option.value}
                 type="button"
+                id={`agent-view-mode-${option.value}`}
+                role="option"
+                aria-selected={selected}
+                // Out of the tab order, with the arrow-driven highlight the
+                // only selection signal (#867, same as #862). A Tab-focused
+                // row can diverge from that highlight, and Space clicks the
+                // FOCUSED one — so the user would act on a row other than the
+                // one the dialog is showing as chosen, whatever Enter does.
+                tabIndex={-1}
+                // `tabIndex={-1}` does not stop CLICK focus — Chromium focuses
+                // a button on mousedown whatever its tabindex — and a focused
+                // row owns the next Enter, so the dialog's own Enter would bow
+                // out for the rest of the dialog's life after one click.
+                onMouseDown={event => event.preventDefault()}
                 disabled={disabled}
                 onMouseEnter={() => setCursor(option.value)}
                 onClick={() => pick(option.value)}

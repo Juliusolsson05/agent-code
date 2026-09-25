@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { collectProviderNotices } from '@renderer/rendering/observations/providerNotices'
 import type { SemanticErrorEntry } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
@@ -22,6 +23,9 @@ import {
 } from '@renderer/rendering/observations/semantic'
 import type { SemanticBlockLike, SemanticTurnLike } from '@renderer/rendering/observations/semantic'
 import { createUnknownRegistry } from '@renderer/rendering/model/unknowns'
+// Shared optimistic-row marker (Codex-named, provider-neutral); see its module
+// for why every layer reads one constant instead of its own literal.
+import { OPTIMISTIC_PROMPT_UUID_PREFIX } from '@renderer/session-runtime/optimisticPrompt'
 import type { UnknownBehavior } from '@renderer/rendering/model/types'
 
 // ---------------------------------------------------------------------------
@@ -63,7 +67,7 @@ export type RuntimeSemanticTurn = {
   endedAt: number | null
   isCompactionSynthesis?: boolean
   /** #963: the adapter sealed this turn because the machine slept. */
-  interruption?: 'system-suspended'
+  interruption?: 'system-suspended' | 'transport-error'
   /** Runtime lookup snapshot — tool-call status by id. Optional because
    *  hand-written fixtures omit it. `toTurnLike` reads
    *  lookups.toolCallsById[toolUseId].status to stamp lookupStatus onto
@@ -101,11 +105,6 @@ export type LedgerInputBundle = {
    *  debug promise (plan D5). */
   collectorDecisions: readonly OwnershipDecision[]
 }
-
-/** Shared optimistic-row marker. Codex-named for history (it shipped for
- *  Codex first) but provider-neutral: every echo provider's submit path
- *  mints this prefix. Source of truth: workspace/hook/actions/streaming.ts. */
-const OPTIMISTIC_UUID_PREFIX = 'optimistic-codex-user:'
 
 function toTurnLike(turn: RuntimeSemanticTurn): SemanticTurnLike {
   return {
@@ -193,6 +192,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
   let staticsCache: {
     streamPhaseIdle: boolean
     sleepInterruptedTurnId: string | null
+    transportInterruptedTurnId: string | null
     provider: AgentProviderKind
     candidates: readonly RenderCandidate[]
   } | null = null
@@ -255,7 +255,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       const committedRows: RawCommittedEntry[] = []
       const optimisticRows: OptimisticPromptLike[] = []
       for (const e of slices.entries) {
-        if (e.uuid?.startsWith(OPTIMISTIC_UUID_PREFIX)) {
+        if (e.uuid?.startsWith(OPTIMISTIC_PROMPT_UUID_PREFIX)) {
           optimisticRows.push({
             uuid: e.uuid,
             text: optimisticTextOf(e),
@@ -375,21 +375,31 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       newestTurn?.interruption === 'system-suspended' && newestTurn.endedAt !== null
         ? newestTurn.turnId
         : null
+    // #1040: the same for a turn whose stream died before it finished. Kept as
+    // a separate key so the two markers cannot be confused in the cache, and
+    // so a turn cannot switch from one to the other without a new identity.
+    const transportInterruptedTurnId =
+      newestTurn?.interruption === 'transport-error' && newestTurn.endedAt !== null
+        ? newestTurn.turnId
+        : null
     if (
       !staticsCache ||
       staticsCache.streamPhaseIdle !== streamPhaseIdle ||
       staticsCache.sleepInterruptedTurnId !== sleepInterruptedTurnId ||
+      staticsCache.transportInterruptedTurnId !== transportInterruptedTurnId ||
       staticsCache.provider !== provider
     ) {
       staticsCache = {
         streamPhaseIdle,
         sleepInterruptedTurnId,
+        transportInterruptedTurnId,
         provider,
         candidates: collectLifecycleCandidates({
           provider,
           sessionId,
           streamPhaseIdle,
           sleepInterruptedTurnId,
+          transportInterruptedTurnId,
         }),
       }
     }
@@ -446,6 +456,11 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
 
     const input: LedgerInput = {
       provider,
+      // Resolved here, at the one boundary that holds real provider identity,
+      // so the pure model receives the provider's declared policy instead of
+      // looking one up by name (#1177). A stable object per provider, so the
+      // bundle reuse check above stays a reference comparison on provider.
+      policy: getRendererProviderCapabilities(provider).ledgerPolicy.suppression,
       committed: committedCache.committed,
       notices: noticeCache.candidates,
       live,

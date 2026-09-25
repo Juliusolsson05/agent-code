@@ -3,12 +3,15 @@ import { goalLoopCommands } from '@renderer/features/goal-loop/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
+import { mcpCommands } from '@renderer/features/mcp/commands/mcpCommands'
+import { skillsCommands } from '@renderer/features/skills/commands/skillsCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
+import { setupCommands } from '@renderer/features/setup/commands/setupCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
-import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
+import { browserPocketCommands } from '@renderer/features/browser-pocket/commands/browserPocketCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
@@ -73,14 +76,22 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // regressions to users who navigate by position.
   ...globalEditorCommands,
   ...sessionCommands,
+  // Right after the session commands, where the per-capability MCP toggles it
+  // replaced used to sit (#1143), so the MCP family keeps its browse position.
+  ...mcpCommands,
+  // Beside MCP: the same page/add/bulk-action family for skills (#1161).
+  ...skillsCommands,
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
+  // Beside Spotlight: the pocket is what sits next to the agent in it (#1142).
+  ...browserPocketCommands,
   ...tldrCommands,
   ...goalLoopCommands,
   ...readerCommands,
-  ...tileTabsCommands,
   ...settingsCommands,
+  // Beside Settings: Setup is the other configuration surface (#995).
+  ...setupCommands,
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
@@ -158,5 +169,8 @@ export function findCatalogDefects(commands: readonly CommandDef[]): string[] {
 // the catalog is the boundary a future extension-contributed or
 // provider-generated command crosses, and those are built from strings that
 // TypeScript cannot check at the point of construction.
-const VALID_SURFACES = new Set(['app', 'grid', 'dispatch', 'session', 'editor', 'debug'])
+// Unified layout (#992): grid/dispatch merged into 'workspace'. Kept in
+// sync with CommandSurface by hand — this runtime set exists precisely
+// because generated provider commands escape the compile-time union check.
+const VALID_SURFACES = new Set(['app', 'workspace', 'session', 'editor', 'debug'])
 const VALID_TIERS = new Set(['default', 'advanced', 'experimental', 'debug'])

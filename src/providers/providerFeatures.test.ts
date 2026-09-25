@@ -33,7 +33,7 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['codex', 'opencode', 'grok'],
+        switchTargets: ['codex', 'opencode', 'grok', 'pi'],
         verifiedExternalResumeCommand: true,
       },
       codex: {
@@ -41,7 +41,7 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['claude', 'opencode', 'grok'],
+        switchTargets: ['claude', 'opencode', 'grok', 'pi'],
         verifiedExternalResumeCommand: true,
       },
       grok: {
@@ -49,7 +49,7 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['claude', 'codex', 'opencode'],
+        switchTargets: ['claude', 'codex', 'opencode', 'pi'],
         verifiedExternalResumeCommand: true,
       },
       opencode: {
@@ -61,7 +61,20 @@ describe('provider feature matrix', () => {
         // shell-command flag, and this row is what makes that regression
         // visible if anyone re-conflates the two.
         inAppResume: true,
-        switchTargets: ['claude', 'codex', 'grok'],
+        switchTargets: ['claude', 'codex', 'grok', 'pi'],
+        verifiedExternalResumeCommand: true,
+      },
+      // Terminal-only Pi: prompts come from its session rows and Reload
+      // relaunches `pi --session-id` (verified against the real CLI, which is
+      // also what Copy Resume Command hands out). Its transcript adapter backs
+      // rewind, duplicate and switching both ways; the Rewind COMMAND is
+      // hidden on its TUI panes by the effective runtime (sessionCommands).
+      pi: {
+        transcriptRewind: true,
+        transcriptDuplicate: true,
+        promptHistoryExtraction: true,
+        inAppResume: true,
+        switchTargets: ['claude', 'codex', 'opencode', 'grok'],
         verifiedExternalResumeCommand: true,
       },
     })
@@ -90,14 +103,20 @@ describe('provider feature matrix', () => {
     expect(opencode.transcriptDuplicate).toBe(true)
     expect(opencode.promptHistoryExtraction).toBe(true)
     expect(opencode.verifiedExternalResumeCommand).toBe(true)
-    expect(opencode.switchTargets).toEqual(['claude', 'codex', 'grok'])
+    expect(opencode.switchTargets).toEqual(['claude', 'codex', 'grok', 'pi'])
     expect(opencode.inAppResume).toBe(true)
   })
 
   it('declares a complete directed switch graph for all transcript adapters', () => {
+    // "Has a transcript adapter" is what Duplicate needs too (it projects the
+    // provider's transcript into a new session through that adapter), so it
+    // identifies the providers the graph must connect. A provider without one
+    // switches nowhere and is nobody's target: it can neither half-join the
+    // graph nor silently drop out of it.
+    const adapters = AGENT_PROVIDER_KINDS.filter(kind => getProviderFeatures(kind).transcriptDuplicate)
     for (const kind of AGENT_PROVIDER_KINDS) {
       expect(getProviderFeatures(kind).switchTargets)
-        .toEqual(AGENT_PROVIDER_KINDS.filter(candidate => candidate !== kind))
+        .toEqual(adapters.includes(kind) ? adapters.filter(candidate => candidate !== kind) : [])
     }
   })
 

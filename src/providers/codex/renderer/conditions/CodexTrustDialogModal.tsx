@@ -6,6 +6,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   state: { workspace?: string } | null
@@ -60,7 +61,7 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
           <p className="mb-3">Codex is about to work in:</p>
           {state.workspace && (
             <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
-              {state.workspace}
+              {withVisibleControls(state.workspace)}
             </pre>
           )}
           <p className="text-[11.5px] text-muted">

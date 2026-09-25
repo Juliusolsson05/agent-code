@@ -59,6 +59,10 @@ jobs:
           # Electron 43 downloads lazily on first import. Keep that network
           # activity in dependency setup, before the offline system tests.
           node node_modules/electron/install.js
+          # Exercise our embedded-page transport against real Chromium, not
+          # just recorded CDP replies. Runtime still reuses Electron's engine;
+          # this browser is a CI-only test fixture in an isolated profile.
+          node node_modules/playwright-core/cli.js install chromium
 
       - name: Validate testing contract
         run: npm run test:contract

@@ -107,6 +107,22 @@ describe('SessionManager recover', () => {
     terminalControl.stop.mockClear()
   })
 
+  it('admits a display synchronously before provider construction and rejects it without publishing backend work', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const options = { sessionId: 'routing-admission', kind: 'claude' as const, cwd: '/tmp/project' }
+    expect(() => manager.recover(options, () => { throw new Error('window unavailable') })).toThrow('window unavailable')
+    expect(manager.getBackendSnapshot(options.sessionId)).toBeNull()
+    expect(createSession).not.toHaveBeenCalled()
+    const order: string[] = []
+    createSession.mockImplementation(() => { order.push('construct'); return new FakeAgentSession() })
+    const starting = manager.recover(options, () => { order.push('display-admitted') })
+    expect(order).toEqual(['display-admitted'])
+    await expect(starting).resolves.toMatchObject({ ok: true, disposition: 'spawned' })
+    expect(order).toEqual(['display-admitted', 'construct'])
+    await manager.kill(options.sessionId)
+  })
+
   it('reports the missing folder instead of a generic start failure', async () => {
     // The 2026-09-08 regression report: six panes came up as ERROR after their
     // git worktrees were deleted, and the only text the user ever saw was
@@ -563,6 +579,26 @@ describe('SessionManager recover', () => {
     deliveryGate.resolve({ ok: true, promptWritten: true, enterWritten: true })
     await expect(delivery).resolves.toMatchObject({ ok: true })
     expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps generated-task native draft protection across the provider boundary', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const { deliverCodexPrompt } = await import('@providers/codex/runtime/promptDelivery')
+    const session = new FakeAgentSession()
+    Object.assign(session, {
+      awaitReadyForPrompt: async () => ({ kind: 'ready', waitedMs: 0 }),
+      snapshotScreen: () => '› unfinished draft\n\n  gpt-5.6-sol high · /tmp/project',
+    })
+    createSession.mockReturnValue(session)
+    deliverPrompt.mockImplementation(deliverCodexPrompt)
+    const manager = new SessionManager()
+    try {
+      await manager.recover({ sessionId: 'generated-task', kind: 'codex', cwd: '/tmp/project' })
+      await expect(manager.deliverPromptToAgent('generated-task', 'Restart the server', undefined, undefined, undefined, { requireEmptyNativeComposer: true })).resolves.toMatchObject({ ok: false, disposition: 'retry-after-resolve', promptWritten: false, enterWritten: false })
+      expect(session.write).not.toHaveBeenCalled()
+    } finally {
+      await manager.killAll()
+    }
   })
 
   it('lets kill cancel a blocked recovery and leaves no backend behind', async () => {

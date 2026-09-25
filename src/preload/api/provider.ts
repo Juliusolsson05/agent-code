@@ -189,6 +189,14 @@ export const providerApi = {
      *  Empty for codex responses since codex rollouts don't carry
      *  image blocks. */
     promptImages: Array<{ mediaType: string; data: string }>
+    // Bytes deliberately excluded: the restored images already cross here in
+    // `promptImages`, and this is the loss REPORT, not a second copy (#929).
+    promptAttachments: Array<{
+      status: 'restored' | 'unavailable' | 'unsupported'
+      reason?: 'external-reference' | 'unreadable'
+      mediaType: string | null
+      name: string | null
+    }>
     promptTimestamp: string | null
   }> => ipcRenderer.invoke('session:rewind-to-prompt', params),
 }

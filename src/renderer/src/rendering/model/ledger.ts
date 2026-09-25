@@ -7,8 +7,8 @@ import type {
 import {
   buildCommittedOwnership,
   decideLiveCandidate,
-  SUPPRESSION_POLICY,
 } from '@renderer/rendering/model/ownership'
+import type { SuppressionPolicy } from '@renderer/rendering/model/ownership'
 import { orderCandidates } from '@renderer/rendering/model/order'
 import type {
   OwnershipDecision,
@@ -45,6 +45,13 @@ export type GhostLedgerCandidate = {
 
 export type LedgerInput = {
   provider: AgentProviderKind
+  /**
+   * The provider's suppression policy, resolved from the renderer capability
+   * registry by the adapter (#1177). An INPUT rather than a lookup so the
+   * pure model never names a provider: it used to index a per-provider
+   * literal table here, which made every new provider a shared-code edit.
+   */
+  policy: SuppressionPolicy
   notices?: readonly RenderCandidate[]
   committed: readonly RenderCandidate[]
   live: readonly RenderCandidate[]
@@ -99,7 +106,7 @@ const EMPTY_GHOST_CONTEXT: GhostPredicateContext = {
 }
 
 function computeLedger(input: LedgerInput): RenderLedger {
-  const policy = SUPPRESSION_POLICY[input.provider]
+  const policy = input.policy
   const ownership = buildCommittedOwnership(input.committed)
 
   const decisions: OwnershipDecision[] = []
@@ -193,6 +200,11 @@ export function createSessionLedger(): (input: LedgerInput) => RenderLedger {
     if (
       last &&
       last.input.provider === input.provider &&
+      // The policy became an INPUT in #1177 (it was a lookup by provider, so
+      // the provider comparison covered it). Production resolves one stable
+      // object per provider, but a caller that swaps the policy under the same
+      // provider must get a recomputed ledger, not the previous decisions.
+      last.input.policy === input.policy &&
       last.input.committed === input.committed &&
       last.input.live === input.live &&
       last.input.notices === input.notices &&

@@ -3,6 +3,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 
 import {
   createAppWindow,
+  isWindowCreationAllowed,
   sendToFocusedWindow,
   zoomFocusedWindow,
 } from '@main/window/windowRegistry.js'
@@ -54,7 +55,15 @@ function dispatchCommand(commandId: NativeMenuCommandId): void {
   sendToFocusedWindow('menu:command', commandId)
 }
 
-export function buildAppMenu(): Menu {
+export function buildAppMenu(options: {
+  /** Self-update surface: when omitted (tests, very early startup) the items
+   *  stay absent rather than clicking into nothing. The single item does dual
+   *  duty: no update downloaded → force a check; update ready → ask, then
+   *  apply it. A static menu cannot flip labels, and rebuilding the menu on
+   *  updater events would briefly detach every accelerator; the handler
+   *  answers with a dialog instead (UpdateService.menuCheck, #1130). */
+  onCheckForUpdates?: () => void
+} = {}): Menu {
   const isMac = process.platform === 'darwin'
 
   const template: MenuItemConstructorOptions[] = [
@@ -80,7 +89,7 @@ export function buildAppMenu(): Menu {
           // windows per press.
           label: 'New Window',
           click: () => {
-            createAppWindow()
+            if (isWindowCreationAllowed()) createAppWindow()
           },
         },
         { type: 'separator' },
@@ -113,6 +122,15 @@ export function buildAppMenu(): Menu {
           // (>1 tab) lives in the renderer; the menu always dispatches and the
           // command no-ops when not applicable.
           click: () => dispatchCommand('reorder-tabs'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Setup…',
+          // → renderer command `open-setup` (#995). The spawn error for a
+          // missing CLI tells the user to "open Setup"; a user who has never
+          // opened the command palette looks in the menu bar, so it has to be
+          // here too.
+          click: () => dispatchCommand('open-setup'),
         },
         { type: 'separator' },
         {
@@ -160,6 +178,21 @@ export function buildAppMenu(): Menu {
     // Standard Window menu — minimize/zoom/front, plus the window list on mac.
     { role: 'windowMenu' },
   ]
+
+  if (options.onCheckForUpdates) {
+    // App menu (macOS) / File menu (elsewhere): updates are an application
+    // lifecycle concern, so they sit beside Quit, not among workspace commands.
+    const updatesItem: MenuItemConstructorOptions = {
+      label: 'Check for Updates…',
+      click: () => { options.onCheckForUpdates?.() },
+    }
+    // The macOS appMenu is a bare role (Electron generates its submenu), so a
+    // lifecycle item lives at the END of File, beside the other app-level
+    // entries (Setup…, Close Tab) rather than inside a generated role menu.
+    const file = template.find(item => item.label === 'File') as { submenu?: MenuItemConstructorOptions[] } | undefined
+    if (file?.submenu) file.submenu.push({ type: 'separator' }, updatesItem)
+    else template.unshift({ label: 'Help', submenu: [updatesItem] })
+  }
 
   return Menu.buildFromTemplate(template)
 }

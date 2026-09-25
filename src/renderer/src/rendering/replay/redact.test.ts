@@ -150,6 +150,26 @@ describe('redactRecording', () => {
     expect(String(ev.text)).not.toContain('streamed prose')
   })
 
+  it('structure-only keeps the interruption discriminator (#1040)', () => {
+    // Why a turn stopped is a closed enum, and the feed paints a different
+    // marker row for each value. Redacted to `⟨text:15⟩` it survives as
+    // neither: the fold drops the unknown value and the recording can no
+    // longer reproduce what the user saw.
+    const recording = sampleRecording()
+    recording.events.push({
+      t: 20,
+      wall: 20,
+      ch: 'session:semantic-event',
+      payload: { sessionId: 's1', event: { type: 'turn_stopped', turnId: 't-1', stopReason: null, interruption: 'transport-error' } },
+    })
+    const red = redactRecording(recording, 'structure-only')
+    const stopped = red.events
+      .filter(e => e.ch === 'session:semantic-event')
+      .map(e => (e.payload as { event: Record<string, unknown> }).event)
+      .find(event => event.type === 'turn_stopped')!
+    expect(stopped.interruption).toBe('transport-error')
+  })
+
   it('structure-only drops the provably-ignored screen channel; full-text-capped keeps it capped', () => {
     const structure = redactRecording(sampleRecording(), 'structure-only')
     expect(structure.events.some(e => e.ch === 'session:screen')).toBe(false)

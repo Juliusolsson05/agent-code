@@ -19,6 +19,10 @@ export type HistoryWrite = Omit<HistoryEvent, 'sequence'>
 // until a restart (#975).
 export interface ControlHistory {
   append(event: HistoryWrite, payload?: unknown): Promise<HistoryEvent>
+  /** Settle every queued append. Optional so an in-memory history used in a
+   *  test is not forced to model a write queue it does not have; committed
+   *  shutdown treats its absence as "nothing is queued" (#943). */
+  drain?(): Promise<void>
   events(): Promise<HistoryEvent[]>
   payload(id: string): Promise<unknown>
   chunk(id: string, offset: number, limit: number): Promise<{

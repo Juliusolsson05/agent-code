@@ -18,6 +18,7 @@ import type {
   AppRunIncidentInput,
   AppRunJournalEvent,
   AppRunJournalEventInput,
+  AppRunJournalIds,
   AppRunJournalManifest,
 } from '@main/incident/journalTypes.js'
 import { sanitizePerformanceData } from '@shared/performance/serialization.js'
@@ -215,11 +216,17 @@ export class AppRunJournal {
     this.pending.push(event)
   }
 
-  recordError(name: string, error: unknown, data?: Record<string, unknown>): void {
+  // `ids` is optional so the ~all existing callers stay untouched. It exists
+  // because an error row that belongs to one session must be joinable on
+  // `ids.sessionId` like that session's other rows (#1133 review). A sessionId
+  // tucked into `data` is invisible to a triage filter on ids, so the error
+  // that explains a `.degraded` row could not be found next to it.
+  recordError(name: string, error: unknown, data?: Record<string, unknown>, ids?: AppRunJournalIds): void {
     this.record({
       area: areaFromName(name),
       name,
       severity: 'error',
+      ...(ids ? { ids } : {}),
       data: {
         ...data,
         error: normalizeError(error),

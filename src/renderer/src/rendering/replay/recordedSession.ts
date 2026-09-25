@@ -269,9 +269,14 @@ export function replayRecording(
   recording: ParsedRecording,
   options: ReplayOptions,
 ): ReplayResult {
-  const provider: AgentProviderKind = isAgentProviderKind(recording.header.provider)
-    ? recording.header.provider
-    : 'claude'
+  // A recording names its provider; an unknown one is refused, not replayed
+  // as Claude (#1177). Coercing it painted another provider's transcript
+  // through Claude's mappers and rows, so a corpus assertion could pass or
+  // fail against the wrong renderer entirely.
+  if (!isAgentProviderKind(recording.header.provider)) {
+    throw new Error(`recording ${recording.header.recordingId} names unknown provider ${String(recording.header.provider)}`)
+  }
+  const provider: AgentProviderKind = recording.header.provider
 
   const state = createReplayFoldState(provider, recording.header.sessionId)
   // Constructed ONCE — the per-plane and last-call D11 caches must persist

@@ -15,7 +15,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
-import { isAgentProviderKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind, isTerminalOnlyProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 import type { RemoteSessionIdentity } from './workspaceProjection.js'
@@ -97,6 +97,10 @@ export type RemoteSessionControl = {
   // structural fakes in tests stay valid; absent = no runtime field on the
   // summary, which reads as the structured runtime on the phone.
   getSpawnProviderRuntime?(sessionId: string): AgentProviderRuntime | null
+  // The live process's native session id: history's key for a FILE-backed
+  // provider that pages its own history (Pi). OPTIONAL for the same test-fake
+  // reason as above; absent means only a parseable locator can page history.
+  getNativeConversationId?(sessionId: string): string | null
 }
 
 /**
@@ -321,6 +325,11 @@ export class RemoteServer extends EventEmitter {
           input: backend.input,
         })
       }
+      // The sub-agent watcher is shared with the desktop since #1177 and only
+      // emits on change, so a fleet that is already running when remote is
+      // enabled would never reach this cache from live events alone.
+      const subAgents = this.deps.feedSource.getSubAgentsSnapshot(session.sessionId)
+      if (subAgents) this.lastSubAgents.set(session.sessionId, subAgents)
     }
 
     try {
@@ -656,7 +665,7 @@ export class RemoteServer extends EventEmitter {
       // recording (see the sttAvailable WHY in protocol/messages.ts).
       sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
-    this.send(ws, { type: 'session-list', sessions: this.summarizeSessions() })
+    this.send(ws, { type: 'session-list', sessions: this.summarizeSessions(), serverNow: Date.now() })
     // v2: current TLDR/Goal records for the listed sessions, so a freshly
     // connected phone's peek surfaces are instantly correct instead of
     // blank until an agent happens to update. Per-socket (bootstrap, not
@@ -822,7 +831,14 @@ export class RemoteServer extends EventEmitter {
         // provider also owns decoding its minted locator: resume history can
         // be requested before any live entry has announced the native id.
         const provider = getMainProvider(kind)
+        // A minted locator carries its own identity (OpenCode). A provider
+        // whose transcript IS a file but that still pages history itself
+        // (Pi: only the active branch of its tree is the conversation) has
+        // no locator grammar, and its identity is the live session's native
+        // id. Pi must not register parseTranscriptLocator for plain paths,
+        // because that would also stop inventory from stat'ing its files.
         const providerSessionId = provider.parseTranscriptLocator?.(file)
+          ?? (provider.loadHistoryChunk ? this.deps.manager.getNativeConversationId?.(msg.sessionId) ?? null : null)
         if (provider.loadHistoryChunk && !providerSessionId) {
           return { ok: false, error: 'provider transcript locator has no session identity' }
         }
@@ -866,7 +882,7 @@ export class RemoteServer extends EventEmitter {
     action:
       | { kind: 'pty'; id: string; label: string; data: string }
       | ConditionCustomAction,
-  ): Promise<{ ok: boolean; error?: string; result?: unknown }> {
+  ): Promise<{ ok: boolean; error?: string; result?: unknown; reason?: string; failedAtStep?: string }> {
     if (action.kind === 'custom') {
       // Custom actions go through the provider's own resolver, which
       // reparses the live terminal and fails closed — the safety property
@@ -874,7 +890,12 @@ export class RemoteServer extends EventEmitter {
       const result = await this.deps.manager.resolveCondition(sessionId, action)
       return result.ok
         ? { ok: true, result: result.state }
-        : { ok: false, error: `resolver: ${result.reason}` }
+        // The REASON travels as itself, not folded into an error string
+        // (#1099 review). The phone rebuilds a `ResolveConditionResult` from
+        // this reply and shares the app's wording for it; with only
+        // `resolver: <reason>` to work from it could reach exactly one of the
+        // five messages, and printed the internal token while doing it.
+        : { ok: false, error: `resolver: ${result.reason}`, reason: result.reason, ...(result.failedAtStep ? { failedAtStep: result.failedAtStep } : {}) }
     }
 
     // pty actions ARE raw keystrokes, so schema validation alone would be
@@ -951,11 +972,12 @@ export class RemoteServer extends EventEmitter {
               pinned: identity.pinned,
             }
           : {}),
-        // Runtime only means something for the provider that HAS two
-        // runtimes; stamping 'terminal'-vs-null onto claude/codex rows
-        // would conflate OpenCode's discriminator with the plain-shell
-        // session kind and confuse future readers of the wire.
-        ...(summary.kind === 'opencode' ? { providerRuntime: runtime } : {}),
+        // Runtime only means something for a provider whose pane can be its
+        // native TUI: OpenCode (two runtimes) and the terminal-only ones (Pi,
+        // always 'terminal' — main normalizes it at spawn). Stamping
+        // 'terminal'-vs-null onto claude/codex rows would conflate the
+        // discriminator with the plain-shell session kind.
+        ...(summary.kind === 'opencode' || isTerminalOnlyProviderKind(summary.kind) ? { providerRuntime: runtime } : {}),
         ...(subAgentCount !== null ? { subAgentCount } : {}),
       }
     })
@@ -977,7 +999,7 @@ export class RemoteServer extends EventEmitter {
    *  events of their own. */
   private broadcastSessionList(): void {
     if (!this.server) return
-    this.broadcast({ type: 'session-list', sessions: this.summarizeSessions() })
+    this.broadcast({ type: 'session-list', sessions: this.summarizeSessions(), serverNow: Date.now() })
   }
 
   /** Reverse join: which live sessions carry this TLDR/Goal identity. */

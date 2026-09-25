@@ -23,6 +23,7 @@ const sessionWindowOwner = vi.fn((_sessionId: string): string | null => 'test-wi
 vi.mock('@main/window/windowRegistry.js', () => ({
   sendToWindow: (_windowId: string, _channel: string, request: unknown) => {
     sentRendererRequests.push(request)
+    return true
   },
   windowForSession: (sessionId: string) => sessionWindowOwner(sessionId),
 }))
@@ -70,6 +71,7 @@ function rendererDescriptor(): ManagedAgentRendererDescriptor {
   return {
     agent: {
       sessionId: 'agent-1',
+      displayLabel: 'A2',
       kind: 'claude' as const,
       cwd: '/tmp/project',
       project: { tabId: 'tab-1', title: 'Project', index: 0 },
@@ -83,7 +85,8 @@ function rendererDescriptor(): ManagedAgentRendererDescriptor {
       isCaller: false,
     },
     providerSessionId: 'provider-agent-1',
-    runtimeActivityAt: 7_000,
+    lastActiveAt: 7_000,
+    lastActiveSource: 'runtime' as const,
   }
 }
 

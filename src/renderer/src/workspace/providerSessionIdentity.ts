@@ -197,6 +197,25 @@ export type JsonlProviderSessionResolution =
       currentSource: SessionMeta['providerSessionIdSource'] | null
     }
 
+/**
+ * Rebind a pane to the provider session its runtime now runs, after the user
+ * switched sessions inside a native TUI the runtime follows (Pi /new,
+ * /resume, /fork — AgentSessionEvents['provider-session-changed']).
+ *
+ * WHY this bypasses the conflict rule in applyJsonlProviderSessionId: that
+ * rule refuses a DIFFERENT id arriving inside transcript rows because such an
+ * id is more likely a misattached stream (#290) than recovery data. This id
+ * does not come from a row — the runtime that owns the process watched the
+ * switch happen and says so explicitly — so replacing the durable identity is
+ * exactly right, and refusing it would leave reload / resume / Copy Resume
+ * Command pointing at a session the pane no longer shows.
+ */
+export function applyProviderSessionSwitch(meta: SessionMeta, providerSessionId: string): SessionMeta | null {
+  if (!providerSessionId) return null
+  if (meta.providerSessionId === providerSessionId && meta.providerSessionIdSource === 'provider-follow') return null
+  return { ...meta, providerSessionId, providerSessionIdSource: 'provider-follow' }
+}
+
 export function applyJsonlProviderSessionId(
   meta: SessionMeta,
   providerSessionId: string,

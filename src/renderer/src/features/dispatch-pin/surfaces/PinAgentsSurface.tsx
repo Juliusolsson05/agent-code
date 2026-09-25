@@ -89,7 +89,6 @@ export function PinAgentsSurface() {
 
     return result
   }, [
-    state.detachedSessions,
     state.pinnedSessionIds,
     state.sessions,
     state.tabs,

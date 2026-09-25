@@ -7,7 +7,7 @@ import {
   isSessionLiveForClose,
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 import {
   Dialog,
@@ -25,10 +25,12 @@ import {
 import type { ProjectScopeRow } from '@renderer/features/workspace/lib/projectScope'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
+import { terminalLastUsedUpperBound } from '@renderer/workspace/terminalLastUsed'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
   open: boolean
@@ -49,8 +51,28 @@ type AgentRow = {
   cwd: string
   cwdBase: string
   isLive: boolean
+  /** A terminal nobody is observing yet: counted as live, but the row must
+   *  not claim it IS running (review of #1179). */
+  livenessUnknown: boolean
   lastActiveAt: number | null
   ageMs: number | null
+}
+
+/**
+ * A terminal nobody is observing yet counts as possibly running (review of
+ * #1179).
+ *
+ * WHY: after a restart a parked tmux shell is not re-attached or
+ * foreground-polled until something wakes it, so its runtime has no
+ * foreground observation and `isSessionLiveForClose` reads it as idle — while
+ * the shell may be running a dev server. Before #1178 such a shell had no age
+ * at all and was never listed. Its durable record now gives it an age, so the
+ * missing liveness has to be stated explicitly: unknown is treated as running,
+ * which means "excluded unless Include running is ticked". The user can still
+ * close it deliberately; the default never kills what it cannot see.
+ */
+function terminalLivenessUnknown(kind: SessionKind, runtime: Workspace['runtimes'][string] | undefined): boolean {
+  return kind === 'terminal' && (runtime?.terminalForeground ?? null) === null && runtime?.exited == null
 }
 
 /** One preview row for a session filed under `tab` (null without metadata). */
@@ -68,13 +90,14 @@ function agentRowFor(
 
   const runtime = runtimes[sessionId]
   // Every session kind can be old (#865). Agents age by transcript
-  // timestamps; shells by their last foreground change (a command
-  // starting/finishing or a cd), which is the only activity a shell has.
-  const lastActiveAt = runtime
-    ? kind === 'terminal'
-      ? runtime.terminalForeground?.changedAt ?? null
-      : latestAgentActivityAt(runtime)
-    : null
+  // timestamps. Shells age by their DURABLE last-used record (#1178): typing,
+  // a command starting or finishing, a cd. It used to be the runtime's
+  // `terminalForeground.changedAt`, which every restart re-stamps to "now",
+  // so no terminal could ever be old after a restart. The record lives on the
+  // metadata, so a parked shell whose runtime was never rebuilt ages too.
+  const lastActiveAt = kind === 'terminal'
+    ? terminalLastUsedUpperBound(meta)
+    : runtime ? latestAgentActivityAt(runtime) : null
 
   return {
     sessionId,
@@ -88,7 +111,8 @@ function agentRowFor(
     // Shared with every other close path (expansion, the confirmation
     // dialog, Kill Buried). Three private copies of "is this busy" is how a
     // preview and a confirmation come to disagree about the same session.
-    isLive: isSessionLiveForClose(runtimes, sessionId),
+    isLive: isSessionLiveForClose(runtimes, sessionId) || terminalLivenessUnknown(kind, runtime),
+    livenessUnknown: !isSessionLiveForClose(runtimes, sessionId) && terminalLivenessUnknown(kind, runtime),
     lastActiveAt,
     ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
   }
@@ -208,19 +232,24 @@ function absoluteTime(ts: number): string {
 // screen receipt alone is not activity: cursor redraws must not make an idle
 // agent look new. Unknown/bootstrap history remains ineligible until observed.
 //
-// WHY this is its own, deliberately conservative rule instead of a shared
-// "last active" helper (#886 review m1): #915 documents that the TLDR footer
-// (features/tldr/freshness.ts) and Agent Management (agentManagementMcp.ts)
-// already derive last-active differently, and unifying them changes Agent
-// Management's MCP output for existing callers — #915 owns that decision, so
-// this PR does not pre-empt it. This rule answers a narrower question, "is it
-// SAFE to kill this as old?", so it takes the newest of every channel
-// (transcript tail, ingest watermark, submission, phase, semantic turns) and
-// refuses to age incomplete history. It can call an agent recent that Agent
-// Activity (AgentActivityModal: last entry ?? turnStartedAt) shows as "8h ago";
-// for a destructive filter that is the right direction to be wrong in. When
-// #915 lands one helper, this should become its most conservative consumer,
-// not be loosened to match the display surfaces.
+// WHY this is its own, deliberately conservative rule instead of the shared
+// `sessionActivity` helper (#886 review m1, revisited when #915 landed):
+// #915 unified the TLDR footer and Agent Management on `sessionActivity`,
+// which takes the newest of the ingest watermark, the transcript tail and the
+// three runtime clocks. This rule keeps TWO signals that helper does not have:
+// the semantic turn boundaries (`semantic.currentTurn`/`history`), and the
+// refusal to answer at all while history is still bootstrapping. Both exist
+// because the question here is narrower and destructive — "is it SAFE to kill
+// this as old?" — and `null` is a real answer to it, while `sessionActivity`
+// is a display value that must always produce something.
+//
+// So `latestAgentActivityAt(runtime) >= sessionActivity(runtime).timestamp`
+// by construction: this rule can call an agent recent that Agent Activity
+// (which reads `sessionActivity` since #1170) shows as "8h ago", and for
+// a destructive filter that is the right direction to be wrong in. Keep it
+// that way — if these ever need to converge, the move is to give
+// `sessionActivity` an optional conservative mode, never to loosen this one to
+// match a display surface.
 function latestAgentActivityAt(runtime: Workspace['runtimes'][string]): number | null {
   // A replayed transcript is historical evidence, not proof that this live
   // agent has been idle since then. Submission/phase clocks survive the gap
@@ -294,7 +323,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
   }, [open])
 
   // Recompute ages while the modal is open so a borderline row ages into the
-  // preview without the user changing a field. 10s matches AgentActivityModal:
+  // preview without the user changing a field. 10s matches Agent Activity:
   // precise enough for human decisions, cheap enough for large workspaces.
   useEffect(() => {
     if (!open) return
@@ -415,6 +444,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
         sessions: workspace.state.sessions,
         closeSession: workspace.closeSession,
         currentTarget: currentCloseTarget,
+        killCaller: 'bulk.close-old-agents',
       })
 
       const report = describePartialClose(outcome)
@@ -585,11 +615,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                         {/* The Dispatch vocabulary (A · title), so this picker
                             names projects the way the index does. Worktrees
                             appear below as directories inside the project. */}
+                        {/* Escaped like the session rows below: these two
+                            lines are what the user reads to decide WHICH
+                            project they are ticking for a bulk close, and both
+                            come from titles and paths an agent can influence
+                            (#1049 re-review). */}
                         <span className="block text-[11px] text-ink truncate">
-                          {project.label}
+                          {withVisibleControls(project.label)}
                         </span>
                         <span className="block text-[10px] text-muted truncate">
-                          {project.directories.join(' · ')}
+                          {withVisibleControls(project.directories.join(' · '))}
                         </span>
                       </span>
                       <span className="flex-shrink-0 text-[10px] text-muted tabular-nums">
@@ -641,15 +676,21 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
+                      {/* Same rule as the close confirmation: these identify
+                          what a bulk close is about to terminate (#1049). */}
                       <div className="text-[12px] text-ink truncate">
-                        {row.title}
+                        {withVisibleControls(row.title)}
                       </div>
                       <div className="mt-0.5 text-[10px] text-muted truncate">
-                        {tabIndexLabel(row.tabIndex)} · {row.tabTitle} · {row.cwd}
+                        {tabIndexLabel(row.tabIndex)} · {withVisibleControls(row.tabTitle)} · {withVisibleControls(row.cwd)}
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
-                      {row.isLive ? (
+                      {row.livenessUnknown ? (
+                        <div className="text-[11px] text-warning" title="Not observed since the app started, so it may still be running a command. Wake it to check, or tick Include running to close it anyway.">
+                          not observed yet
+                        </div>
+                      ) : row.isLive ? (
                         <div className="text-[11px] text-danger">running</div>
                       ) : null}
                       {row.lastActiveAt != null && row.ageMs != null ? (
@@ -674,7 +715,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
 
         <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
-            Running agents and terminals with a command in progress are excluded unless explicitly included.
+            Running agents, terminals with a command in progress, and terminals not observed since the app started are excluded unless explicitly included.
           </div>
           <div className="flex items-center gap-2">
             <button

@@ -7,6 +7,7 @@ import {
   keybindingFromEvent,
   normalizeKeybinding,
   parseKeybinding,
+  toElectronAccelerator,
   tryNormalizeKeybinding,
 } from '@renderer/features/command-keybindings/normalize'
 
@@ -176,6 +177,23 @@ describe('eventMatchesKeybinding', () => {
     const e = evt({ altKey: true, shiftKey: true, code: 'KeyD', key: 'Î' })
     expect(eventMatchesKeybinding(e, 'Alt+D')).toBe(false)
     expect(eventMatchesKeybinding(e, 'Alt+Shift+D')).toBe(true)
+  })
+})
+
+describe('toElectronAccelerator', () => {
+  // The Sessions right-click menu (#1180) shows effective shortcuts natively.
+  // Every canonical key token must already be a valid Electron key name, so
+  // only the modifiers are translated; these cover each token family.
+  it('translates modifiers and passes canonical keys through', () => {
+    expect(toElectronAccelerator('Cmd+Shift+P')).toBe('Command+Shift+P')
+    expect(toElectronAccelerator('Ctrl+Alt+Left')).toBe('Control+Alt+Left')
+    expect(toElectronAccelerator('Alt+PageUp')).toBe('Alt+PageUp')
+    expect(toElectronAccelerator('Cmd+[')).toBe('Command+[')
+    expect(toElectronAccelerator('F12')).toBe('F12')
+  })
+
+  it('returns null for a malformed value so the menu still opens', () => {
+    expect(toElectronAccelerator('Cmd+')).toBeNull()
   })
 })
 

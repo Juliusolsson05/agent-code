@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // CodexApprovalPane — inline approval prompt rendered inside the pane,
 // matching how Codex's TUI draws it in the bottom pane.
@@ -89,7 +90,13 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
 
   if (!approval) return null
 
-  const command = approval.command.join(' ').trim()
+  // Escape BEFORE trimming, never after. `./check.sh\r` is a filename whose
+  // last byte is CR — the exact trick #1049 exists to expose — and `.trim()`
+  // removes CR, so trimming first deleted the evidence and left two different
+  // commands rendering identically (#1049 re-review). After escaping, the CR
+  // is the visible text `⟨U+000D CR⟩`, which trim leaves alone, and ordinary
+  // surrounding whitespace is still tidied.
+  const command = withVisibleControls(approval.command.join(' ')).trim()
 
   return (
     <div
@@ -138,7 +145,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
       {/* Reason — parsed from the screen's "Reason: <text>" line */}
       {approval.reason && (
         <div className="text-ink-dim italic mb-2">
-          Reason: {approval.reason}
+          Reason: {withVisibleControls(approval.reason)}
         </div>
       )}
 
@@ -146,7 +153,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
       {command && (
         <div className="mb-2">
           <span className="text-muted select-none">$ </span>
-          <span className="text-accent">{command}</span>
+          <span className="text-accent">{withVisibleControls(command)}</span>
         </div>
       )}
 
@@ -164,7 +171,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
             <span className={`select-none ${i === localSelected ? 'text-accent' : 'text-transparent'}`}>
               ›{' '}
             </span>
-            {i + 1}. {opt}
+            {i + 1}. {withVisibleControls(opt)}
             <span className="text-muted ml-1">({DEFAULT_HINTS[i] ?? ''})</span>
           </div>
         ))}

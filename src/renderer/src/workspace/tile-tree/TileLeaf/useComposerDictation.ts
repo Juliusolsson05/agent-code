@@ -172,6 +172,26 @@ export function useComposerDictation({
   const focusedRef = useRef(focused)
   const startRef = useRef<() => Promise<void>>(async () => {})
   const stopRef = useRef<() => Promise<void>>(async () => {})
+  /**
+   * This stop was caused by the pane being HIDDEN, not by the user (#916).
+   *
+   * The distinction decides where the transcript may go. A deliberate stop
+   * happens on a pane the user is looking at; a hidden one finishes somewhere
+   * they have navigated away from, so the result must not overwrite what they
+   * did next, and must never be DELIVERED anywhere irrevocable.
+   */
+  const hiddenStopRef = useRef(false)
+  /**
+   * The pane went away while a stop was still in flight (#1079 review, 5).
+   *
+   * The unmount cleanup used to cancel the provider stream while `stop()` was
+   * mid-finalise, so main deleted the session and the stop came back with an
+   * error — reported on a dead pane, and for a terminal sink written to the
+   * GLOBAL overlay store, clobbering whatever another pane had started. The
+   * stop owns the stream once it begins; unmount records that nothing may be
+   * written and leaves it alone.
+   */
+  const abandonedStopRef = useRef(false)
   const cancelRecordingRef = useRef<(recording: ActiveRecording) => void>(() => {})
   const pendingStopRef = useRef(false)
   const pendingDiscardRef = useRef(false)
@@ -330,7 +350,39 @@ export function useComposerDictation({
   }, [writeInput])
 
   const commitTranscript = useCallback((recording: ActiveRecording, text: string) => {
-    const base = recording.baseInput
+    // The pane went away mid-finalise. There is nothing left to write to, and
+    // writing anyway reaches a global store (#1079 review, 5).
+    if (abandonedStopRef.current) return
+    // ── A HIDDEN PANE MAY NOT DELIVER TO A TERMINAL (#1079 review, 4) ──
+    // For a terminal sink this is not a draft write: `writeInput` sends
+    // bracketed-paste BYTES to the PTY. Doing that while the pane is hidden
+    // pastes into a shell the user cannot see, and bracketed paste only
+    // protects them when the foreground program honours it — not a `read`
+    // prompt, a bare REPL, or an ssh session to a host without it. An
+    // invisible pane is the worst possible place to discover that.
+    //
+    // So the capture still ends deterministically, but the transcript is not
+    // delivered; the user is TOLD, which is #916's "make any discard visible
+    // or explicit". Holding it and pasting on return is the better answer and
+    // is a follow-up, not something to invent inside a commit path.
+    if (hiddenStopRef.current && sinkRef.current.kind === 'terminal') {
+      reportMessage('Dictation stopped: the terminal pane was hidden, so the transcript was not sent.')
+      setHasTranscriptPreview(false)
+      return
+    }
+    // ── AND MAY NOT OVERWRITE WHAT THE USER DID NEXT (#1079 review, 2 and 3) ──
+    // `recording.baseInput` is a snapshot from before they navigated away. The
+    // composer stays live and typable for the whole provider finalise, so
+    // committing against that snapshot silently destroys anything typed since
+    // — the same class of loss #916 is filed against, moved from speech to
+    // typing. It also destroys a transcript from Spotlight's SECOND live leaf
+    // for the same session, which is not behind the retained surface at all.
+    //
+    // The current draft is the only base that is true at the moment of
+    // writing.
+    const base = hiddenStopRef.current && sinkRef.current.kind === 'composer'
+      ? inputRef.current
+      : recording.baseInput
     const separator = base.trim().length > 0 ? '\n\n' : ''
     writeInput(`${base}${separator}${text}`, 'commit')
     // Clear the preview flag now that the final STT-wrapped text is the
@@ -348,7 +400,7 @@ export function useComposerDictation({
       event: 'committed',
       data: { textLen: text.length, head: text.slice(0, 240) },
     })
-  }, [writeInput])
+  }, [reportMessage, writeInput])
 
   const restoreBaseInput = useCallback((recording: ActiveRecording) => {
     if (sinkRef.current.kind === 'composer') {
@@ -547,16 +599,39 @@ export function useComposerDictation({
       if (statusRef.current === 'starting') {
         const heldMs = hotkeyDownAtRef.current ? Date.now() - hotkeyDownAtRef.current : null
         pendingStopRef.current = true
-        pendingDiscardRef.current = heldMs !== null && heldMs < MIN_HOLD_TO_TRANSCRIBE_MS
+        // A HIDDEN stop always discards here (#1079 review, 1). `start()` is
+        // still inside `getUserMedia`, so there is no recording to finish and
+        // nothing has been said yet — and the alternative is letting the
+        // recorder come up in a `display:none` pane, which is the stranded
+        // microphone this whole change exists to prevent. Marking it a discard
+        // makes `start()` stop the tracks on resume and never build one.
+        pendingDiscardRef.current = hiddenStopRef.current
+          || (heldMs !== null && heldMs < MIN_HOLD_TO_TRANSCRIBE_MS)
       }
       return
     }
     if (statusRef.current === 'stopping') return
 
-    const heldMs = hotkeyDownAtRef.current ? Date.now() - hotkeyDownAtRef.current : null
+    // ── THE ACCIDENTAL-TAP RULE IS ABOUT A HOTKEY, NOT A NAVIGATION ──
+    // `hotkeyDownAtRef` answers "how long was the key held", which is the
+    // right question for a key release and the wrong one for a pane being
+    // hidden (#1079 review, 6): hiding 30 ms after a hotkey press silently
+    // discarded, and starting from the mic button left the ref at 0 so the
+    // protection did not apply at all. A hidden stop asks how long the
+    // RECORDING ran, which is the thing it actually cares about.
+    const heldMs = hiddenStopRef.current
+      ? Date.now() - recording.startedAt
+      : hotkeyDownAtRef.current ? Date.now() - hotkeyDownAtRef.current : null
     if (heldMs !== null && heldMs < MIN_HOLD_TO_TRANSCRIBE_MS) {
-      debug('stop:short-press-discard', { heldMs })
+      debug('stop:short-press-discard', { heldMs, hidden: hiddenStopRef.current })
       cancelRecording(recording)
+      // A recording this short really does hold no speech, so discarding it is
+      // right — but doing so in SILENCE is the complaint #916 was filed
+      // about. A deliberate release is self-explanatory (the user let go);
+      // being hidden is not, so that case says what happened.
+      if (hiddenStopRef.current) {
+        reportMessage('Dictation stopped: too short to transcribe.')
+      }
       return
     }
 
@@ -661,21 +736,31 @@ export function useComposerDictation({
 
   useEffect(() => {
     if (enabled) return
-    const recording = activeRef.current
-    if (!recording) return
-    activeRef.current = null
-    cleanup(recording)
-    restoreBaseInput(recording)
-    recording.discarded = true
-    if (recording.id) {
-      void window.api.cancelDictationStream({ id: recording.id })
-    } else if (recording.streamStartPromise) {
-      void recording.streamStartPromise.then(id => {
-        if (id) void window.api.cancelDictationStream({ id })
-      })
-    }
-    setLifecycleStatus('idle')
-  }, [cleanup, enabled, restoreBaseInput, setLifecycleStatus])
+    // ── HIDING THE PANE ENDS THE RECORDING, IT DOES NOT DISCARD IT (#916) ──
+    // This used to cancel: stop the tracks, restore the base draft, mark the
+    // recording discarded and cancel the provider stream. So opening Settings
+    // mid-sentence silently threw away everything the user had said —
+    // including when they opened Settings to look at the dictation
+    // configuration.
+    //
+    // `enabled` goes false whenever the owning pane is hidden: `MainSurface`
+    // hides the RETAINED workspace surface for Settings, Reader and Spotlight,
+    // and `GlobalEditorWorkspaceSlot` does the same for editor fullscreen.
+    // Retained means still mounted, so `stop()` can normally run to completion
+    // here — the recorder is drained, the provider finalises, and the result
+    // is delivered the way a deliberate stop delivers it.
+    //
+    // WHY THERE IS NO `activeRef.current` GUARD (#1079 review, 1): there was
+    // one, and it defeated the case #916 names FIRST. `start()` can sit inside
+    // `getUserMedia` for seconds, during which `activeRef` is still null;
+    // returning early there let the recorder come up afterwards in a
+    // `display:none` pane, with nothing able to stop it — the registration is
+    // gone, `toggle` is shut, and this effect has already run. `stop()`
+    // already handles that state through `pendingStopRef`, which `start()`
+    // honours on resume. Calling it unconditionally is the fix.
+    hiddenStopRef.current = true
+    void stopRef.current()
+  }, [enabled])
 
   useEffect(() => () => {
     // True unmount cleanup: empty deps so this fires once when the component
@@ -685,6 +770,16 @@ export function useComposerDictation({
     // this cleanup on EVERY render — killing the active recording within a
     // frame of starting it. Inline the few lines we need, pull state through
     // refs, and never put a prop-derived callback in here.
+    // ── A STOP THAT IS ALREADY RUNNING OWNS THE STREAM (#1079 review, 5) ──
+    // Cancelling underneath it made main delete the session, so `stop()`'s
+    // finalise came back an error — reported on a dead pane, and for a
+    // terminal sink written to the GLOBAL overlay store, clobbering whatever
+    // another pane had started. Record that nothing may be written and leave
+    // the stream alone; `stop()` will end it properly.
+    if (statusRef.current === 'stopping') {
+      abandonedStopRef.current = true
+      return
+    }
     const recording = activeRef.current
     if (!recording) return
     if (sinkRef.current.kind === 'terminal') resetDictationOverlay()
@@ -718,6 +813,11 @@ export function useComposerDictation({
 
   const start = useCallback(async () => {
     if (!enabled || activeRef.current || statusRef.current !== 'idle') return
+    // Both belong to ONE attempt. A stale `hidden` would make the next,
+    // deliberate stop refuse to deliver; a stale `abandoned` would make it
+    // write nothing at all.
+    hiddenStopRef.current = false
+    abandonedStopRef.current = false
     prewarmSuperseded = true
     // Mint and publish the debug-session id BEFORE any debug(...) calls
     // so the first emit (`start:begin`) already has a route to the
@@ -1191,6 +1291,10 @@ export function useComposerDictation({
           pendingDiscardRef.current = true
         }
       },
+      // The lane boundary dictation follows (#1031 item 3): the registry
+      // matches this against the workspace's focused session rather than
+      // guessing from recency.
+      sessionId: sinkRef.current.sessionId,
       isStarting: () => statusRef.current === 'starting',
       isActive: () => activeRef.current !== null,
     }

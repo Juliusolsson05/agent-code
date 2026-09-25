@@ -1,11 +1,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { UsageSnapshot } from '@shared/types/usage'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { BulkProviderSwitchModal } from './BulkProviderSwitchModal'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import { useProviderEnablementStore } from '@renderer/features/providers/store'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+
+// The bulk modal derives its directions from the shared enablement store;
+// without a reset, an earlier test file in this worker could leave a
+// restricted snapshot and empty every direction (fail-open = all kinds).
+beforeEach(() => {
+  useProviderEnablementStore.setState({ snapshot: null, enabledKinds: new Set(AGENT_PROVIDER_KINDS) })
+})
 
 // The selected-scope path is where #908 lived: the checkbox list was built
 // from working directories, so a worktree agent had its own checkbox and the
@@ -42,21 +52,16 @@ function workspaceFixture(): Workspace {
   return {
     state: {
       activeTabId: 'tab-agent-code',
-      dispatchMode: null,
-      gridRelatedSelections: {},
+      stage: oneLaneStage('audit'),
       tabs: [
-        { id: 'tab-agent-code', title: 'agent-code', focusedSessionId: 'audit', root: { type: 'leaf', sessionId: 'audit' } },
-        { id: 'tab-startup', title: 'startup', focusedSessionId: 'pitch', root: { type: 'leaf', sessionId: 'pitch' } },
+        { id: 'tab-agent-code', title: 'agent-code' },
+        { id: 'tab-startup', title: 'startup' },
       ],
       sessions: {
-        audit: { cwd: '/dev/agent-code', kind: 'codex' },
-        grok: { cwd: '/dev/agent-code/.worktrees/grok-package-wiring', kind: 'codex' },
-        pitch: { cwd: '/dev/startup', kind: 'codex' },
+        audit: { cwd: '/dev/agent-code', kind: 'codex', projectId: 'tab-agent-code', joinedAt: 0 },
+        grok: { cwd: '/dev/agent-code/.worktrees/grok-package-wiring', kind: 'codex', projectId: 'tab-agent-code', joinedAt: 1 },
+        pitch: { cwd: '/dev/startup', kind: 'codex', projectId: 'tab-startup', joinedAt: 0 },
       },
-      detachedSessions: {
-        grok: { sessionId: 'grok', surface: 'dispatch', projectTabId: 'tab-agent-code', projectTabTitle: 'agent-code', projectTabIndex: 0, detachedAt: 1 },
-      },
-      buried: [],
       pinnedSessionIds: [],
       lastProviderSwitchBatch: null,
     },

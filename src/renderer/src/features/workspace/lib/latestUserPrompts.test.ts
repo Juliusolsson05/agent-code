@@ -69,6 +69,28 @@ describe('latest user prompts', () => {
     expect(extractLatestUserPrompts(entries, undefined).map(prompt => prompt.text)).toEqual(['Rename the loader'])
   })
 
+  it('keeps a PASTED Claude prompt, which the envelope makes start with `<` (#1052)', () => {
+    // Claude Code 2.1.278 wraps a pasted prompt in `<pasted_content id="…">`,
+    // and the scaffolding guard rejects anything starting with `<` — so the
+    // user's longest prompts, the pasted ones, silently vanished from composer
+    // history. The row still has to be a real submission (permissionMode), and
+    // scaffolding must still be rejected.
+    //
+    // The EXPECTED TEXT changed in #1059, deliberately: this used to assert
+    // the raw envelope, because that is what #1052 left behind. Everything
+    // downstream of this extractor shows or replays the result — pane titles,
+    // ⌘↑ history, View Prompts, Rewind — and ⌘↑ fed the envelope back to
+    // Claude, which wrapped the already-wrapped text. What this test is ABOUT
+    // is unchanged: the pasted row is kept and the scaffolding row is not.
+    const entries = [
+      userRow('<pasted_content id="cade">\nrefactor the loader\n</pasted_content id="cade">', { permissionMode: 'default' }),
+      userRow('<command-name>/clear</command-name>', { permissionMode: 'default' }),
+    ]
+    expect(extractLatestUserPrompts(entries, 'claude').map(prompt => prompt.text)).toEqual([
+      'refactor the loader',
+    ])
+  })
+
   it('keeps Codex\'s rule: no permissionMode needed, context blocks skipped', () => {
     const entries = [
       userRow('<environment_context><cwd>/repo</cwd></environment_context>'),

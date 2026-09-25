@@ -218,15 +218,6 @@ const workspaceCases: WorkspaceUpdateCase[] = [
     change: state => state.setWorkspaceReaderMode({ tabId: 'tab', focusedSessionId: 'session' }),
     value: state => state.workspaceReaderMode,
   },
-  {
-    name: 'tileTabs',
-    directNoop: state => state.setWorkspaceTileTabs(state.workspaceTileTabs),
-    updaterNoop: state => state.setWorkspaceTileTabs(previous => previous),
-    change: state => state.setWorkspaceTileTabs({
-      tabIds: ['tab-a', 'tab-b'], focusedTabId: 'tab-a', direction: 'horizontal', ratios: [0.5, 0.5],
-    }),
-    value: state => state.workspaceTileTabs,
-  },
 ]
 
 describe('workspace setter notification isolation', () => {

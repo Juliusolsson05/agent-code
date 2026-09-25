@@ -1,3 +1,4 @@
+import { describeRewindAttachmentLoss } from '@renderer/workspace/hook/actions/rewindAttachmentLoss'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
@@ -243,8 +244,13 @@ export function useProviderActions(
             ? `!${result.promptText}`
             : result.promptText
 
+        // WHY the registry capability and not `kind === 'claude'`: the
+        // hardcode predates the provider registry and was already stale —
+        // `supportsImageAttachments` is the field every other image path
+        // consults, so a provider that gains image support would have had to
+        // remember this line too (#1073 review, finding 2).
         const draftImages: ClaudeDraftImage[] =
-          kind === 'claude'
+          getRendererProviderCapabilities(kind).supportsImageAttachments
             ? result.promptImages.map((image, index) => ({
                 id: `rewind-${Date.now()}-${index}`,
                 mediaType: image.mediaType,
@@ -292,7 +298,30 @@ export function useProviderActions(
           }
         })
 
-        showPaneToast(newSessionId, 'Rewound to prompt - Undo Rewind available until next submit')
+        // What did NOT come back (#1075). Main has produced this report since
+        // #1073 and the Rewind picker uses it; nothing used it after the
+        // rewind, so a user who picked a row labelled `[Image prompt]` got an
+        // empty composer and no explanation. The capability is part of the
+        // question: a perfectly restored image is still a loss when the
+        // provider's composer cannot carry it, which is every provider except
+        // Claude today.
+        const attachmentLoss = describeRewindAttachmentLoss(result.promptAttachments, {
+          composerCarriesImages: getRendererProviderCapabilities(kind).supportsImageAttachments,
+        })
+        showPaneToast(
+          newSessionId,
+          attachmentLoss
+            ? `Rewound to prompt, but ${attachmentLoss} Undo Rewind available until next submit`
+            : 'Rewound to prompt - Undo Rewind available until next submit',
+          // WHY a longer toast for the loss case (#1100 review): the default is
+          // 2000 ms and `PaneToast` clamps to three lines, which for a sentence
+          // naming two files and two reasons is a message nobody finishes
+          // reading. The house numbers for a toast carrying something to act on
+          // are 5-6 s (a copied command, a saved path), and this is the same
+          // kind of thing. The ordinary success toast keeps the default,
+          // because "it worked" needs no reading time.
+          attachmentLoss ? 6000 : undefined,
+        )
         return { status: 'completed', sourceSessionId, newSessionId }
       } catch (err) {
         const message =

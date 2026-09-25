@@ -36,6 +36,44 @@ export type ReservedInteraction = {
  * watch — a chord that is really taken but absent from this table would be
  * offered to the user as free, and the resulting conflict would be silent.
  */
+/**
+ * The macOS chords the OS owns in EVERY editable text field — the runtime half
+ * of the "macOS text selection" reservation below.
+ *
+ * WHY a second export when the reservation entry lists the same chords: the
+ * static table stops a chord being OFFERED as free; nothing enforced it at
+ * runtime, so a dispatch-context binding could still steal delete-word in the
+ * composer while the table claimed macOS owned it (the header of that entry
+ * admitted exactly this gap for Alt+Shift+Arrow). useKeybinds imports this set
+ * and refuses to route any of these chords to a command while a text field
+ * owns the target — making the table's claim true rather than aspirational.
+ *
+ * Alt+Backspace (delete word backwards) is the founding member that forced
+ * the runtime half to exist: Clear Lane ships on it (#992 §4.4), and it is
+ * the single most load-bearing editing chord Option owns in a composer.
+ */
+const MACOS_TEXT_EDITING_CHORDS: readonly Keybinding[] = [
+  'Alt+Backspace',
+  'Alt+Shift+Left', 'Alt+Shift+Right', 'Alt+Shift+Up', 'Alt+Shift+Down',
+  'Cmd+Shift+Up', 'Cmd+Shift+Down',
+]
+
+/**
+ * The chords a named reserved interaction owns (its entry in
+ * RESERVED_INTERACTIONS, bindings only). Exists for surfaces that need to
+ * SHOW a reserved chord — the starter card's ⌘1–9 fill-grammar row (#992
+ * §4.6) — without hand-copying chords into a second table that would drift
+ * the first time the reservation changed.
+ */
+export function reservedInteractionBindings(owner: string): readonly Keybinding[] {
+  return RESERVED_INTERACTIONS.find(entry => entry.owner === owner)?.bindings ?? []
+}
+
+/** Runtime lookup companion of MACOS_TEXT_EDITING_CHORDS. */
+export function isMacosTextEditingChord(binding: Keybinding): boolean {
+  return (MACOS_TEXT_EDITING_CHORDS as readonly string[]).includes(binding)
+}
+
 export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
   {
     // Indexed tab activation, and Dispatch's two-digit row grammar which
@@ -66,6 +104,10 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     // Context is `global` deliberately: the OS owns these wherever text is
     // editable, so they can never be safely claimed by a layout context either.
     //
+    // Alt+Backspace is in this set and yet Clear Lane binds it: see
+    // APPROVED_OVERLAPS below — the router yields the chord to the text field
+    // first, so exactly one owner is live for a given focus.
+    //
     // NOT listed here: bare Option+Arrow (word movement). Dispatch genuinely
     // claims Alt+Arrow for lane movement, and the router yields it back inside
     // the GLOBAL EDITOR specifically (`if (alt && !cmd) return`) — not in the
@@ -77,22 +119,13 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     // from being OFFERED as free. It does not stop the inline dispatch grammar
     // in useKeybinds from consuming Alt+Shift+Arrow in a composer today, which
     // it does because that block tests `alt && !cmd` with no shift check.
-    bindings: [
-      'Alt+Shift+Left', 'Alt+Shift+Right', 'Alt+Shift+Up', 'Alt+Shift+Down',
-      // Select to document start/end. Monaco has its own cursorTopSelect /
-      // cursorBottomSelect for these, but that is Monaco COPYING the OS
-      // convention — macOS owns them in every text field, so they belong here
-      // and not in the Monaco entry.
-      //
-      // WHY that distinction became load-bearing: `editor` is now disjoint from
-      // `grid`/`dispatch` (#697). A chord filed only under `editor` is
-      // therefore reported FREE for a dispatch binding — correct for chords
-      // Monaco alone owns, wrong for chords the OS owns everywhere. Filed under
-      // `editor` these would have been offered as free the moment the
-      // disjointness landed, and select-to-document-start would have died in
-      // the composer whenever Dispatch was live.
-      'Cmd+Shift+Up', 'Cmd+Shift+Down',
-    ],
+    //
+    // WHY Cmd+Shift+Up/Down are in THIS entry and not Monaco's: they are the
+    // OS's select-to-document-start/end in every text field (#697 made
+    // `editor` disjoint from the layout contexts, so filing them under
+    // `editor` would have offered them as free to a dispatch binding and
+    // killed them in the composer the moment Dispatch went live).
+    bindings: [...MACOS_TEXT_EDITING_CHORDS],
     context: 'global',
     owner: 'macOS text selection',
   },
@@ -122,26 +155,20 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     context: 'editor',
     owner: 'Monaco multi-cursor / column select',
   },
-  {
-    // Dispatch row/lane movement. Mutually exclusive with the grid navigation
-    // COMMANDS that share these chords — that disjointness is exactly what the
-    // overlap matrix encodes, and why this is legal rather than a conflict.
-    bindings: ['Alt+Up', 'Alt+Down', 'Alt+Left', 'Alt+Right', 'Alt+J', 'Alt+K', 'Alt+H', 'Alt+L'],
-    context: 'dispatch',
-    owner: 'Dispatch row and lane selection',
-  },
-  {
-    bindings: ['Alt+=', 'Alt+-'],
-    context: 'global',
-    owner: 'Split resize',
-  },
-  {
-    // Fn+Option+Arrow arrives as Option + Home/End/PageUp/PageDown, because
-    // macOS translates Fn before the event reaches the app.
-    bindings: ['Alt+Home', 'Alt+End', 'Alt+PageUp', 'Alt+PageDown'],
-    context: 'global',
-    owner: 'Directional split resize',
-  },
+  // 'Dispatch row and lane selection' (Alt+arrows + Alt+H/J/K/L, dispatch
+  // context) was reserved here until #992 stage 5: the gestures were an
+  // unregistered inline branch in useKeybinds, so a reservation was the only
+  // way to stop a user binding something the app would swallow. They are
+  // COMMANDS now — dispatch-select-previous/next-agent and
+  // dispatch-focus-lane-left/right — which own the chords in the defaults
+  // table and participate in collision checking like every other command.
+  // Keeping the reservation would have reported each chord as doubly owned by
+  // its own command.
+  // 'Split resize' (Alt+= / Alt+-) and 'Directional split resize'
+  // (Alt+Home/End/PageUp/PageDown, i.e. Fn+Option+Arrow) were reserved here
+  // until the tile tree died (#992). A reservation exists to stop a user
+  // binding a chord the app will swallow; nothing swallows these any more, so
+  // keeping the entries would have fenced off six free chords for no owner.
   {
     bindings: ['Escape'],
     context: 'global',
@@ -188,16 +215,9 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     context: 'global',
     owner: 'Native editing commands',
   },
-  {
-    // Tiled-tab resize CONTINUATION. After Cmd+N focuses a tiled tab, arrows
-    // held under Cmd resize it (useKeybinds' pendingTiledResizeIndex). Stateful
-    // and therefore easy to miss when transcribing owners: the chord only does
-    // anything in the window between Cmd+N and releasing Cmd, but during that
-    // window it beats anything else bound to the same keys.
-    bindings: ['Cmd+Left', 'Cmd+Right', 'Cmd+Up', 'Cmd+Down'],
-    context: 'global',
-    owner: 'Tiled tab resize (after numbered selection)',
-  },
+  // The Tile Tabs resize continuation (Cmd+Arrow after a numbered selection)
+  // was reserved here until #992 deleted Tile Tabs. Cmd+Arrow is caret motion
+  // in every text field again, with nothing of ours competing for it.
   {
     // The agent pane IS a terminal, and these go to the process, not to us.
     //
@@ -244,6 +264,15 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
   },
   { bindings: ['Cmd+L'], context: 'editor', owner: 'Editor Select Line' },
   { bindings: ['Cmd+G'], context: 'editor', owner: 'Editor Find Next' },
+  // Monaco's Find Previous, verified in
+  // node_modules/monaco-editor/esm/vs/editor/contrib/find/browser/findController.js
+  // (PreviousMatchFindAction, mac: CtrlCmd|Shift|KeyG) rather than from memory.
+  // Missing until #1007 moved goal-loop-preview onto this chord: the app-side
+  // checker passed because nothing in this table claimed it, and review found
+  // the router was latching the goal-loop overlay on top of Monaco's own
+  // Find Previous. This is the second time the "incomplete list" failure in
+  // the header has happened, and both times a reservation was the fix.
+  { bindings: ['Cmd+Shift+G'], context: 'editor', owner: 'Editor Find Previous' },
 ]
 
 export type BindingOwnerRef = {
@@ -274,6 +303,7 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
 }> = [
   { binding: 'Cmd+L', owners: ['tldr-preview', 'Editor Select Line'], reason: 'The TLDR hold handler explicitly yields while editor chrome owns the input target; Monaco keeps its native Select Line command and TLDR operates only in the agent workspace.' },
   { binding: 'Cmd+G', owners: ['goal-preview', 'Editor Find Next'], reason: 'Goal shares the TLDR hold handler, which yields while editor chrome owns the input target; Monaco keeps its native Find Next and Goal operates only in the agent workspace.' },
+  { binding: 'Cmd+Shift+G', owners: ['goal-loop-preview', 'Editor Find Previous'], reason: 'The router yields the chord while editor chrome owns the input target, the same rule Cmd+L and Cmd+G already follow; Monaco keeps its native Find Previous and the goal loop overlay opens only in the agent workspace.' },
   {
     binding: 'Cmd+W',
     owners: ['close-pane', 'Editor-native close file and indentation', 'Native application menu'],
@@ -315,6 +345,22 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
       'Jump to Latest Message requires a focused rendered feed and a target '
       + 'that is not text-editing, while editor tab navigation requires focus '
       + 'inside editor chrome. The two preconditions cannot hold at once.',
+  },
+  {
+    binding: 'Alt+Backspace',
+    owners: ['clear-focused-lane', 'macOS text selection'],
+    // Clear Lane ships on ⌥⌫ (#992 §4.4) and macOS owns ⌥⌫ as delete-word in
+    // every text field. Not a conflict for the same reason the editor pairs
+    // above are not: useKeybinds refuses to route ANY entry of
+    // MACOS_TEXT_EDITING_CHORDS while a text field owns the target, so the
+    // composer keeps delete-word and the lane keeps its clear — exactly one
+    // owner live per focus. (A user who rebinds Clear Lane off ⌥⌫ gets
+    // delete-word everywhere; a user who rebinds something ELSE onto ⌥⌫ gets
+    // the same yield, because the rule is about the chord, not the command.)
+    reason:
+      'useKeybinds yields OS-owned text-editing chords while a text field '
+      + 'owns the target (isMacosTextEditingChord), so the composer keeps '
+      + 'native delete-word and Clear Lane fires only outside text editing.',
   },
   {
     binding: 'Cmd+Shift+R',

@@ -5,8 +5,8 @@ import {
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   isBuiltInThemeMode,
+  SHIPPED_BUILT_IN_MCP_DOMAINS,
   USAGE_HEADER_LEVELS,
-  WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import {
   V4_CUSTOM_MIGRATION_MARKER,
@@ -33,7 +33,7 @@ import { coerceCommandKeybindingOverrides } from '@renderer/features/command-key
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceMouseButtonBinding, coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
-import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
+import { coerceBuiltInMcpDefaults, uniformBuiltInMcpDefaults } from '@mcp/shared/types'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -49,8 +49,6 @@ export function coerceSettings(value: unknown): Settings {
   // silently reset itself.
   const savedThemes = migrateLegacyCustomAppearance(parsed, coerceSavedThemes(parsed.savedThemes))
   const savedPromptTemplates = coerceSavedPromptTemplates(parsed.savedPromptTemplates)
-  // Must run before mode/accent are resolved below — see migrateLegacyDefaultAppearance.
-  const legacyAppearance = migrateLegacyDefaultAppearance(parsed)
 
   return {
     ...DEFAULT_SETTINGS,
@@ -64,17 +62,22 @@ export function coerceSettings(value: unknown): Settings {
     savedThemes,
     savedPromptTemplates,
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
-    mode: legacyAppearance?.mode ?? resolvePersistedMode(parsed, savedThemes),
+    mode: resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     agentNamesEnabled: parsed.agentNamesEnabled === true,
-    // A retired accent id ('lime', 'sage') fails the membership test and lands
-    // on Frost — that is the intended landing for the green accents (#973).
-    accent: legacyAppearance?.accent
-      ?? (ACCENTS.some(a => a.id === parsed.accent)
-        ? (parsed.accent as AccentId)
-        : DEFAULT_SETTINGS.accent),
+    // A retired accent id (today only 'sage') fails the membership test and
+    // lands on the default. 'lime' passes again since #1173 restored it; the
+    // Dark + Lime → Nord + Frost step is NOT here any more — it lives in the
+    // store's version-gated `migrate`, see migrateLegacyDefaultAppearance.
+    accent: ACCENTS.some(a => a.id === parsed.accent)
+      ? (parsed.accent as AccentId)
+      : DEFAULT_SETTINGS.accent,
     customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
     showStatusMode: parsed.showStatusMode !== false,
+    // On by default (#1172) and for EXISTING installs too: `!== false` so a
+    // blob written before this key existed reads as on, and only an explicit
+    // persisted `false` (the user turned it off) stays off.
+    showAgentCompletionIndicator: parsed.showAgentCompletionIndicator !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
     // `!== false`: absent → on (the #973 default); only an explicit persisted
     // `false` keeps dangerous mode off. Same idiom as useProxyStreaming.
@@ -130,6 +133,14 @@ export function coerceSettings(value: unknown): Settings {
       ? DEFAULT_SETTINGS.paletteMouseChord
       : coerceMouseChordBinding(parsed.paletteMouseChord),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
+    // Strict `=== true` for the two risky switches so a malformed or hand-edited
+    // settings file can never turn them on; `!== false` for the harmless one.
+    // Already-enabled installs have made their MCP choices. Migration must
+    // not silently re-grant a domain the user removed from a provider.
+    browserPocketDefaultsInitialized: parsed.browserPocketDefaultsInitialized === true || parsed.browserPocketEnabled === true,
+    browserPocketEnabled: parsed.browserPocketEnabled === true,
+    browserPocketOpenLocalhostLinks: parsed.browserPocketOpenLocalhostLinks !== false,
+    browserPocketAllowEvaluate: parsed.browserPocketAllowEvaluate === true,
     // `=== true`: absent → off (the #973 default); an explicit `true` from an
     // older blob keeps autosend on for the user who had it.
     autoSendPromptSuggestion: parsed.autoSendPromptSuggestion === true,
@@ -144,12 +155,8 @@ export function coerceSettings(value: unknown): Settings {
     )
       ? (parsed.usageHeaderLevel as UsageHeaderLevel)
       : DEFAULT_SETTINGS.usageHeaderLevel,
-    // WHY membership check via WORKSPACE_MODES rather than a literal
-    // === 'dispatch': keeps the source of truth in one array so adding
-    // a new mode label later (if ever) only requires editing types.ts.
-    defaultWorkspaceMode: WORKSPACE_MODES.some(m => m.id === parsed.defaultWorkspaceMode)
-      ? (parsed.defaultWorkspaceMode as Settings['defaultWorkspaceMode'])
-      : DEFAULT_SETTINGS.defaultWorkspaceMode,
+    // `defaultWorkspaceMode` is dropped on read (#992): a stale persisted
+    // value names a mode that no longer exists and selects nothing.
     // Agent view mode is a product contract, not a loose string. A typo in
     // localStorage must fall back to the compatible custom-rendered Agent mode
     // rather than accidentally booting every pane into raw terminal mode.
@@ -176,11 +183,21 @@ export function coerceSettings(value: unknown): Settings {
     // which is why the absent branch cannot go through the normalizer —
     // normalize treats an empty array as "no preference" and would flatten
     // the shipped default to nothing.
+    //
+    // #1143: the value became a per-provider map. A pre-#1143 flat list is
+    // copied to every provider by coerceBuiltInMcpDefaults, so an upgrade
+    // changes nobody's behavior; no store version bump is needed because this
+    // coercion runs on every hydration and no persisted value changed meaning.
+    //
+    // Known, accepted limitation: a pre-#1143 build reads this object as "not
+    // an array", normalizes it to [] and autosaves that, so downgrading and
+    // then upgrading again starts every provider with no built-in defaults.
+    // Writing the map under a new key would avoid it, at the cost of two keys
+    // for one preference in every build from now on; downgrades are rare and
+    // the loss is visible and one grid away from being restored.
     defaultBuiltInMcpDomains: parsed.defaultBuiltInMcpDomains === undefined
-      ? [...DEFAULT_SETTINGS.defaultBuiltInMcpDomains]
-      : normalizeConfigurableBuiltInMcpDomains(
-        parsed.defaultBuiltInMcpDomains,
-      ),
+      ? uniformBuiltInMcpDefaults(SHIPPED_BUILT_IN_MCP_DOMAINS)
+      : coerceBuiltInMcpDefaults(parsed.defaultBuiltInMcpDomains, SHIPPED_BUILT_IN_MCP_DOMAINS),
     // Same membership-check pattern as accent/mode: garbage / typo / a
     // removed font id from a future migration falls back to the default
     // rather than crashing applyTheme with an undefined family string.
@@ -218,6 +235,12 @@ export function coerceSettings(value: unknown): Settings {
     commandKeybindingOverrides: pruneRetiredKeybindingOverrides(
       coerceCommandKeybindingOverrides(parsed.commandKeybindingOverrides),
     ),
+    // Bounded and string-only: this is persisted, untrusted input, and a
+    // malformed value must degrade to "nothing hidden", never a crash.
+    hiddenExternalSkills: Array.isArray(parsed.hiddenExternalSkills)
+      ? [...new Set(parsed.hiddenExternalSkills.filter((value: unknown): value is string =>
+          typeof value === 'string' && value.length > 0 && value.length <= 512))].slice(0, 2_000)
+      : [],
   }
 }
 
@@ -267,24 +290,32 @@ function migrateLegacyCustomAppearance(
 // "the default changed" means for an existing install (#973). Any other mode
 // or accent is a choice the user made and is left alone.
 //
-// WHY this is safe to run on every hydration rather than only in `migrate`:
-// after it runs the accent is 'frost', and 'lime' no longer exists as a
-// selectable accent, so the condition can never be true twice. A user who
-// later picks Dark again keeps Dark. Same reasoning as
-// migrateLegacyCustomAppearance for living in coerceSettings: `migrate` only
-// fires for older versions, `merge` coerces every launch.
-// Deliberately typed `string`, not `AccentId`: 'lime' was REMOVED from the
-// union, but the whole point of this check is to catch blobs persisted while
-// it was still selectable. A literal-typed constant would make TS reject the
-// comparison as a no-overlap error and hide the migration.
-const LEGACY_DEFAULT_MODE = 'dark'
-const LEGACY_DEFAULT_ACCENT: string = 'lime'
+// WHY this is NOT in coerceSettings (it used to be): coerceSettings runs on
+// EVERY hydration via the store's `merge`. That was only safe while 'lime'
+// could not be selected, so the pair could never be true twice. #1173 brought
+// Lime back, and from then on a user who deliberately picks Dark + Lime would
+// be flipped to Nord + Frost on every launch — silently, and indistinguishable
+// from "my setting did not save". A value can only be read as "untouched old
+// default" if it was persisted BEFORE the default changed, and the store
+// version is the one record of that: #973 bumped it to 11. So the store calls
+// this from `migrate`, only for blobs older than
+// LEGACY_DEFAULT_APPEARANCE_BEFORE_VERSION. Every v11+ blob has already been
+// through this step once, which is why no new version bump is needed.
+//
+// The version check lives HERE rather than at the call site so the "only
+// before v11" rule cannot be dropped by a caller that forgets it — the store
+// just forwards the persisted version Zustand handed to `migrate`.
+export const LEGACY_DEFAULT_APPEARANCE_BEFORE_VERSION = 11
+const LEGACY_DEFAULT_MODE: Settings['mode'] = 'dark'
+const LEGACY_DEFAULT_ACCENT: AccentId = 'lime'
 
-function migrateLegacyDefaultAppearance(
-  parsed: Partial<Settings>,
-): Pick<Settings, 'mode' | 'accent'> | null {
-  if (parsed.mode !== LEGACY_DEFAULT_MODE || parsed.accent !== LEGACY_DEFAULT_ACCENT) return null
-  return { mode: DEFAULT_SETTINGS.mode, accent: DEFAULT_SETTINGS.accent }
+export function migrateLegacyDefaultAppearance(
+  settings: Partial<Settings> | undefined,
+  version: number,
+): Partial<Settings> | undefined {
+  if (version >= LEGACY_DEFAULT_APPEARANCE_BEFORE_VERSION) return settings
+  if (settings?.mode !== LEGACY_DEFAULT_MODE || settings.accent !== LEGACY_DEFAULT_ACCENT) return settings
+  return { ...settings, mode: DEFAULT_SETTINGS.mode, accent: DEFAULT_SETTINGS.accent }
 }
 
 const LEGACY_CUSTOM_THEME_NAME = 'Custom'
@@ -333,12 +364,48 @@ function resolvePersistedMode(
  * canonical fields) are untouched, so no value migration is needed — only the
  * now-meaningless per-command preference entries go.
  */
-const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
+export const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
   'toggle-status-mode',
   'toggle-worktree-badges',
   'usage.toggle-header',
   'usage.cycle-header-level',
   'dangerous-agents',
+  // Retired by the unified stage (#992). WHY this matters more than tidiness
+  // (#1013 review B, MAJOR): useKeybinds' binding index puts a user's
+  // customized entries AHEAD of every default and gives an id it cannot
+  // resolve the `global` context. A saved `nav-left: ['Alt+H', 'Alt+Left']`
+  // override therefore won ⌥H/⌥← over the new lane commands. The router
+  // called preventDefault, the gateway answered `unknown`, and the chord did
+  // nothing. Settings has no row for a retired id, so the user had no way to
+  // find the override except "Reset all bindings".
+  'dispatch-mode',
+  'global-dispatch',
+  'normalize-layout',
+  'hard-normalize-layout',
+  'rotate-layout',
+  'nav-left',
+  'nav-right',
+  'nav-up',
+  'nav-down',
+  'tiled-tabs',
+  'bury-pane',
+  'revive-pane',
+  'kill-buried-pane',
+  'attach-detached-to-grid',
+  'attach-all-detached-for-tab',
+  'detach-to-dispatch',
+  // Retired by the MCP servers interface (#1143): one staged "Agent MCP
+  // Servers…" picker replaced the per-capability toggles and the reset
+  // command. Listed for the same stale-override reason as the block above.
+  'use-global-mcp-settings',
+  'enable-ai-workspace-mcp',
+  'enable-orchestration-mcp',
+  'enable-agent-transcripts-mcp',
+  'enable-agent-management-mcp',
+  'enable-tldr-mcp',
+  'enable-goal-mcp',
+  'enable-goal-loop-mcp',
+  'enable-workflow-mcp',
 ])
 
 /**

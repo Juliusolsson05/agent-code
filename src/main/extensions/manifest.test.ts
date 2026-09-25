@@ -168,7 +168,8 @@ describe('parseExtensionManifest — contribution namespacing', () => {
 
 describe('parseExtensionManifest — capabilities', () => {
   it('accepts every capability the host actually implements', () => {
-    const parsed = parseExtensionManifest(manifest({ apiVersion: 2, permissions: [...EXTENSION_CAPABILITIES] }))
+    // net.origins is only coherent with its declared list (see below).
+    const parsed = parseExtensionManifest(manifest({ apiVersion: 2, permissions: [...EXTENSION_CAPABILITIES], networkOrigins: ['https://api.example.com'] }))
     expect(parsed.permissions).toEqual([...EXTENSION_CAPABILITIES])
   })
 
@@ -229,4 +230,79 @@ it('requires a separately contained view module for API v2 while retaining v1 ma
   const parsed = parseExtensionManifest(manifest({ apiVersion: 2, contributes: { views: [{ ...view, entry: 'dist/view.js' }] } }))
   expect(parsed.contributes?.views?.[0]?.entry).toBe('dist/view.js')
   expect(parseExtensionManifest(manifest({ contributes: { views: [view] } })).apiVersion).toBe(1)
+})
+
+describe('contributes.services', () => {
+  const service = { id: 'timer.worker', entry: 'dist/worker.js' }
+  const v2 = { apiVersion: 2, entry: 'dist/index.js' }
+
+  it('accepts a declared v2 service and keeps the closed capability in lockstep', () => {
+    const parsed = parseExtensionManifest(manifest({ ...v2, contributes: { services: [service] }, permissions: ['service.run'] }))
+    expect(parsed.contributes?.services).toEqual([service])
+    // The union is load-bearing in both directions: a name in the schema that
+    // EXTENSION_CAPABILITIES does not know fails every future install.
+    expect(EXTENSION_CAPABILITIES).toContain('service.run')
+  })
+
+  it.each([
+    ['v1 manifest', { contributes: { services: [service] } }, /API v2/],
+    ['v1 permission', { apiVersion: 1, permissions: ['service.run'] }, /API v2/],
+    ['missing entry', { ...v2, contributes: { services: [{ id: 'timer.worker' }] } }, /entry/],
+    ['escaping entry', { ...v2, contributes: { services: [{ ...service, entry: '../../tool.js' }] } }, /..|entry/i],
+    ['foreign namespace', { ...v2, contributes: { services: [{ ...service, id: 'other.worker' }] } }, /namespace/],
+    ['duplicate ids', { ...v2, contributes: { services: [service, service] } }, /duplicate service/],
+    ['too many services', { ...v2, contributes: { services: Array.from({ length: 5 }, (_, i) => ({ id: `timer.s${i}`, entry: 'dist/s.js' })) } }, /services/],
+  ])('rejects %s before publication', (_label, overrides, pattern) => {
+    expect(() => parseExtensionManifest(manifest(overrides))).toThrow(pattern)
+  })
+})
+
+describe('networkOrigins / net.origins (#1150)', () => {
+  const v2 = (overrides: Record<string, unknown>) => manifest({ apiVersion: 2, permissions: ['net.origins'], ...overrides })
+
+  it('accepts exact public https origins and keeps them verbatim for the consent dialog', () => {
+    const parsed = parseExtensionManifest(v2({ networkOrigins: ['https://api.example.org', 'https://api.example.com:8443'] }))
+    expect(parsed.networkOrigins).toEqual(['https://api.example.org', 'https://api.example.com:8443'])
+  })
+
+  // Each shape is a way for the dialog to under-state what can be reached.
+  it.each([
+    ['a wildcard subdomain', 'https://*.example.org'],
+    ['plain http', 'http://api.example.org'],
+    ['a path', 'https://api.example.org/v1'],
+    ['a trailing slash', 'https://api.example.org/'],
+    ['a query', 'https://api.example.org?x=1'],
+    ['userinfo', 'https://user:pass@api.example.org'],
+    ['an IPv4 literal', 'https://8.8.8.8'],
+    ['an IPv6 literal', 'https://[2001:db8::1]'],
+    ['localhost', 'https://localhost'],
+    ['an mDNS name', 'https://printer.local'],
+    ['a single-label name', 'https://intranet'],
+    ['a non-URL', 'api.example.org'],
+    ['upper-case host (not the canonical origin)', 'https://API.example.org'],
+    // WHATWG keeps a trailing dot as written, so each of these used to pass
+    // the suffix checks (the first two resolve to this machine / the LAN).
+    ['a trailing-dot localhost', 'https://localhost.'],
+    ['a trailing-dot mDNS name', 'https://foo.local.'],
+    ['a trailing-dot public name', 'https://api.example.com.'],
+  ])('refuses %s', (_label, origin) => {
+    expect(() => parseExtensionManifest(v2({ networkOrigins: [origin] }))).toThrow(ManifestError)
+    // Pin that the URL parser really kept the dot (the case the check exists for).
+    if (origin.endsWith('.')) expect(new URL(origin).origin).toBe(origin)
+  })
+
+  it('pairs the list with the permission in both directions', () => {
+    expect(() => parseExtensionManifest(v2({}))).toThrow(/requires a "networkOrigins" list/)
+    expect(() => parseExtensionManifest(manifest({ apiVersion: 2, networkOrigins: ['https://api.example.com'] })))
+      .toThrow(/requires the "net.origins" permission/)
+  })
+
+  it('is v2-only, bounded and duplicate-free', () => {
+    expect(() => parseExtensionManifest(manifest({ permissions: ['net.origins'], networkOrigins: ['https://api.example.com'] })))
+      .toThrow(/API v2/)
+    expect(() => parseExtensionManifest(v2({ networkOrigins: Array.from({ length: 5 }, (_, i) => `https://a${i}.example.com`) })))
+      .toThrow(ManifestError)
+    expect(() => parseExtensionManifest(v2({ networkOrigins: ['https://api.example.com', 'https://api.example.com'] })))
+      .toThrow(/duplicate network origin/)
+  })
 })

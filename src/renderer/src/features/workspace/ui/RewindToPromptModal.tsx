@@ -15,6 +15,7 @@ import { PromptList } from '@renderer/features/conversations/ui/PromptList'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // RewindToPromptModal — picker for the rewind-to-prompt flow.
 //
@@ -26,7 +27,7 @@ import { resumableProviderSessionId } from '@renderer/workspace/providerSessionI
 //
 // Parallel to `ViewPromptsModal` (same row component, every prompt, newest
 // first) but rows are clickable — each invokes
-// `workspace.rewindFocusedToPrompt(anchor)` and the modal closes.
+// `workspace.rewindSessionToPrompt(sessionId, anchor)` and the modal closes.
 // Keyboard navigation mirrors the other command palette family
 // (Up/Down to move, Enter to confirm, Esc to close).
 //
@@ -117,7 +118,15 @@ export function RewindToPromptModal({
   // The list renders text and time; the address stays in `prompts` at the
   // same index, which is what confirm() reads.
   const rows = useMemo(
-    () => prompts.map(prompt => ({ text: prompt.text, timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null })),
+    // Escaped HERE rather than in PromptList, because the same component is
+    // also the read-only View Prompts surface where the raw text is the
+    // point. In this modal a click rewinds the live pane to that prompt, so
+    // two rows that read alike are two different destinations (#1049
+    // re-review). The address dispatched below is untouched.
+    () => prompts.map(prompt => ({
+      text: withVisibleControls(prompt.text),
+      timestamp: prompt.timestamp ? Date.parse(prompt.timestamp) : null,
+    })),
     [prompts],
   )
 
@@ -130,9 +139,14 @@ export function RewindToPromptModal({
   // the highlight state has not caught up with it in this render.
   const confirm = async (index = selectedIndex) => {
     const target = prompts[index] ?? null
-    if (!target) return
+    if (!target || !sessionId) return
     onClose()
-    await workspace.rewindFocusedToPrompt(target.address)
+    // The session this modal was opened FOR, not whichever agent is focused
+    // now (#1180). rewindFocusedToPrompt re-resolved focus at confirm time: if
+    // focus moved while the modal was open — or the modal was opened from the
+    // Sessions right-click menu for an agent that was never focused — it
+    // rewound a different agent than the one whose prompts were listed.
+    await workspace.rewindSessionToPrompt(sessionId, target.address)
   }
 
   return (
@@ -153,8 +167,10 @@ export function RewindToPromptModal({
           <DialogTitle>Rewind to Prompt</DialogTitle>
           <DialogDescription asChild>
             <div>
-              <div>{meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}</div>
-              <div className="mt-0.5 truncate text-[10px]">{meta.cwd}</div>
+              {/* Names the session whose history is about to be discarded
+                  back to a chosen prompt (#1049 re-review). */}
+              <div>{meta.kind ?? DEFAULT_PROVIDER} · {withVisibleControls(cwdBase)}</div>
+              <div className="mt-0.5 truncate text-[10px]">{withVisibleControls(meta.cwd)}</div>
             </div>
           </DialogDescription>
         </DialogHeader>

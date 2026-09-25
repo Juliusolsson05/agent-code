@@ -55,7 +55,7 @@ primitives that file now re-exports).
 │                      the FORWARD-LOOKING headless ConditionModule contract    │
 │    view.ts           ConditionView / ConditionViewProps / AttentionLevel      │
 │    ConditionOutlet.tsx  the ONE generic outlet (routes snapshot by kind)      │
-│    dispatch.ts       makeDispatch / makeDispatchFromOnSend (pty arm wired,    │
+│    dispatch.ts       makeDispatch / makeOutletDispatch (pty arm wired,        │
 │                      custom arm delegates to a resolver when provided)         │
 ├─ Layer 2: provider modules ─────────────────────────────────────────────────┤
 │  src/providers/claude/renderer/conditions/views.tsx  → CLAUDE_VIEWS           │
@@ -106,8 +106,30 @@ graceful-old-client posture the wire format already assumes).
 
 The **dispatch driver** (`dispatch.ts`) turns a chosen action into a side
 effect. The `pty` arm calls `sendInput`/`onSend` with the action's raw `data`.
-The `custom` arm calls the resolver callback passed by the host surface; if no
-resolver is provided it throws rather than silently dropping the action.
+The `custom` arm calls the resolver callback passed by the host surface and
+**reports every refusal** (#1070): the resolver's `{ ok: false, reason }` answer
+is narrowed by `refusalOf`, turned into a sentence by `describeConditionRefusal`,
+and handed to the `onRefused` reporter the host surface passes in. The driver
+never picks a surface itself — it is shared by the app and the phone.
+
+The two builders differ in ONE respect, and it is load-bearing:
+
+- `makeOutletDispatch` (outlets) **reports and returns**. Its pty arm hands the
+  surface the whole action (`{ id, label, data }`), not just its bytes: the
+  desktop writes `data`, while the phone sends the action over the wire so the
+  desktop can verify it against the live menu. That is what lets the phone
+  mount the same `ProviderConditionOutlet` as the desktop (#1177); it used to
+  keep a second dispatcher and mount the core outlet directly. Views call
+  `void dispatch(action)`, so a rejection would be an unhandled promise
+  rejection on top of a failure the user can already see in a toast. A missing
+  resolver here is the ordinary refusal `no-resolver`, with its own message
+  ("answer it in the terminal instead") rather than a throw.
+- `makeDispatch` (the sessionId-bound control-plane form) reports **and
+  rejects**. `sessions.conditionsReply` injects a resolver that turns
+  `{ ok: false }` into a `ControlError` and relies on that rejection to fail the
+  capability; swallowing it made a refused trust-dialog reply answer
+  `accepted: true` to an agent that then believed a folder was trusted when it
+  was not. A missing resolver there is still a throw.
 
 Type-safety guardrail: the core stores **erased** views
 (`ConditionView<string, unknown>`) in `Record<string, ConditionView>`. That
@@ -194,12 +216,17 @@ headless emitter
   → IPC 'session:conditions'
   → useIpcSubscriptions.ts: applyConditionSnapshot(current, snapshot) (~:195, applied ~:1065)
   → runtime.conditions
-  → TileLeaf.tsx (~:510)  <ProviderConditionOutlet conditions={runtime.conditions} onSend={send}/>
+  → useAgentFeedModel: provider normalizeConditions (shared with the phone)
+  → TileLeaf.tsx  <ProviderConditionOutlet conditions={feedModel.normalizedConditions}
+                    onPtyAction={action => sendConditionKey(action.data)}/>
 ```
 
-`send` (TileLeaf's prop) is already bound to the active session and ultimately
-reaches `window.api.sendInput(sessionId, data)` → `session:input`. PR-1 reuses
-that `onSend` verbatim via `makeDispatchFromOnSend`.
+`sendConditionKey` is bound to the active session and writes through the
+pane's SessionFeed (`sendInput(sessionId, data)` → `session:input`). The phone
+mounts the same outlet with its own `onPtyAction`, which sends the whole
+action to the desktop for verification. Since #1177 the event reaches both
+clients through one main-side session feed tap (the desktop's window sink is
+forwarder.ts).
 
 ## Why `custom` actions exist
 
@@ -217,9 +244,12 @@ AskUserQuestionRow
   → claude.askUserQuestion.answer module resolver
 ```
 
-The dispatch `custom` arm still throws if a surface does not pass a resolver.
-That is intentional: a custom action without its named resolver would otherwise
-look clickable while doing nothing.
+A surface that does not pass a resolver never silently drops the action. On the
+control plane (`makeDispatch`) that is a throw; in an outlet
+(`makeOutletDispatch`) it is the reported refusal `no-resolver`, which the
+user sees as "This agent cannot receive that kind of answer. Answer it in the
+terminal instead." Either way the click accounts for itself — a custom action
+without its named resolver would otherwise look clickable while doing nothing.
 
 ## CRITICAL DESIGN NOTE — `detect()` is free-form
 

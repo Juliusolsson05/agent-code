@@ -4,6 +4,7 @@ import { builtInCommandCatalog, findCatalogDefects } from '@renderer/features/co
 import { NATIVE_MENU_COMMAND_IDS } from '@shared/commands/nativeMenuCommandIds'
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { RETIRED_BUILT_IN_COMMAND_IDS } from '@renderer/app-state/settings/persistence'
 
 // ---------------------------------------------------------------------------
 // Phase 0 of the command-governance plan (docs/superpowers/plans/
@@ -19,12 +20,13 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Merge Project Tabs (#913), 123 with View TLDR History (#917), 125 with
 // Goal preview and Goal MCP (#936), 126 with Auto-follow All Working Agents (#938), 128 with
 // the performance report/trace commands (#944), 129 with Close Idle Orchestration
-// Agents (#960), 130 with Open Agent Analytics (#964), 132 with Goal Loop (#1001), and
-// 134 with the two generated Grok split commands (#844). That last step is the
-// one that reached main unpinned: #844 never touched this file because the
-// commands are GENERATED from AGENT_PROVIDER_KINDS, not written as literal ids,
-// so its author had no diff here to review and main went red on merge. The
-// generated-splits invariant further down is what names the cause.
+// Agents (#960), 130 with Open Agent Analytics (#964), 132 with Goal Loop (#1001), 134
+// with the two generated Grok split commands (#844), then the unified layout (#992):
+// 16 retirements took it to 118, Clear Lane (stage 4) to 119 and the lane keyboard
+// grammar (stage 5) to 123. (#992 was written against 130 and read 119 at the end;
+// merging main added Goal Loop's two commands and the two generated Grok splits.)
+// 124 with Open Setup (#995). 132 with the seven Browser Pocket commands (#1142), 133 with Browser Pocket MCP; 128 as
+// merged with the two generated Pi splits (#1132). 132 with Close Completed Agents (#1182), 133 with Pin Session (#1180).
 // Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
@@ -60,13 +62,10 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'split-vertical',
   'split-horizontal',
   'close-pane',
-  'bury-pane',
   'linked-agent',
-  'attach-detached-to-grid',
   'pin-agents',
+  'pin-agent',
   'unpin-agent',
-  'attach-all-detached-for-tab',
-  'detach-to-dispatch',
   'terminal-horizontal',
   'terminal-vertical',
   'codex-vertical',
@@ -75,13 +74,9 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'opencode-horizontal',
   'grok-vertical',
   'grok-horizontal',
-  'nav-left',
-  'nav-right',
-  'nav-up',
-  'nav-down',
+  'pi-vertical',
+  'pi-horizontal',
   'undo-close',
-  'revive-pane',
-  'kill-buried-pane',
   'toggle-tail',
   'toggle-tail-all',
   'toggle-tail-working',
@@ -91,11 +86,14 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'undo-clear-composer',
   'send-composer',
   // layoutCommands (performance report/trace are ordinary app commands)
-  'dispatch-mode',
-  'global-dispatch',
   'tiled-dispatch',
   'new-tiled-lane',
   'remove-tiled-lane',
+  'clear-focused-lane',
+  'dispatch-select-previous-agent',
+  'dispatch-select-next-agent',
+  'dispatch-focus-lane-left',
+  'dispatch-focus-lane-right',
   'close-agent-remove-lane',
   'new-dispatch-row',
   'remove-dispatch-row',
@@ -103,9 +101,6 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'dispatch-row-child-cap',
   'dispatch-focus-row-up',
   'dispatch-focus-row-down',
-  'normalize-layout',
-  'hard-normalize-layout',
-  'rotate-layout',
   'toggle-performance-panel',
   'save-performance-report',
   'record-performance-trace',
@@ -121,8 +116,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'create-ai-workspace',
   'clear-ai-workspace',
   'toggle-file-tree',
-  // sessionCommands (33)
-  'use-global-mcp-settings',
+  // sessionCommands (24): the nine per-capability MCP commands were retired
+  // into Agent MCP Servers… (#1143)
   'view-prompts',
   'rewind-to-prompt',
   'remove-cybersecurity-block',
@@ -132,17 +127,13 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   // Registered directly after Close Old Agents so the two cleanup commands sit
   // together in the empty-query browse order (#960).
   'close-idle-orchestration-agents',
+  // Beside the other two cleanup commands for the same browse-order reason
+  // (#1182).
+  'close-completed-agents',
   'switch-agents-provider',
   'search-conversation-prompts',
   'enable-built-in-mcp-ping',
-  'enable-ai-workspace-mcp',
-  'enable-orchestration-mcp',
-  'enable-agent-transcripts-mcp',
-  'enable-agent-management-mcp',
   'enable-root-agent-code-management',
-  'enable-tldr-mcp',
-  'enable-goal-mcp',
-  'enable-workflow-mcp',
   'reload-agent',
   'soft-reload-agent',
   'set-agent-view-mode',
@@ -160,25 +151,42 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-html-debug-panel',
   'clear-agent-composer',
   'toggle-dev-debug-panel',
+  // mcpCommands (3), registered right after the session commands (#1143)
+  'mcp-servers',
+  'add-mcp-server',
+  'agent-mcp-servers',
+  // skillsCommands (3, #1161)
+  'skills',
+  'add-skill',
+  'check-skill-updates',
   // agentTitleCommands (1)
   'agent.title.set',
   // dispatchColorFlagCommands (1)
   'dispatch.color-flag.set',
   // spotlight / TLDR / reader / tile-tabs (6) + goal loop (2)
   'toggle-spotlight',
+  // browserPocketCommands (7, #1142)
+  'toggle-browser-pocket',
+  'reload-browser-pocket',
+  'focus-browser-pocket-address',
+  'pick-browser-pocket-element',
+  'open-browser-pocket-external',
+  'open-browser-pocket-devtools',
+  'detach-browser-pocket',
   'tldr-preview',
   'goal-preview',
   'view-tldr-history',
   'goal-loop-preview',
   'goal-loop-stop',
   'toggle-reader-mode',
-  'tiled-tabs',
   // settingsCommands (4, was 5: worktree-badges + dangerous-agents retired,
   // open-keyboard-shortcuts added)
   'open-settings',
   'open-keyboard-shortcuts',
   'toggle-aggressive-debug-persistence',
   'toggle-worktrees-bar',
+  // setupCommands (1, #995)
+  'open-setup',
   // copy-assistant / copy-code-block (2)
   'copy-assistant-message',
   'copy-code-block',
@@ -203,11 +211,44 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
  *  canonical settings fields are untouched, so no value migration is needed —
  *  only the now-meaningless per-command preference entries are pruned. */
 const RETIRED_COMMAND_IDS: readonly string[] = [
+  // Unified layout retirements (#992): the mode toggle, mode scope, and the
+  // tree-only layout/navigation commands. Their bindings (⌘⇧M, ⌘⇧G, ⌥H/J/K/L
+  // + ⌥Arrows) are released; release notes must say so.
+  'dispatch-mode',
+  'global-dispatch',
+  'normalize-layout',
+  'hard-normalize-layout',
+  'rotate-layout',
+  'nav-left',
+  'nav-right',
+  'nav-up',
+  'nav-down',
+  // Stage 3a (#992): Tile Tabs, the bury archive and the grid attach/detach
+  // pair. No default chords were bound to any of them except none — see
+  // defaults.ts — so only palette rows and visibility overrides are affected.
+  'tiled-tabs',
+  'bury-pane',
+  'revive-pane',
+  'kill-buried-pane',
+  'attach-detached-to-grid',
+  'attach-all-detached-for-tab',
+  'detach-to-dispatch',
   'toggle-status-mode',
   'toggle-worktree-badges',
   'usage.toggle-header',
   'usage.cycle-header-level',
   'dangerous-agents',
+  // #1143: replaced by the staged Agent MCP Servers… picker, which carries
+  // the same choices through one reload instead of one reload per toggle.
+  'use-global-mcp-settings',
+  'enable-ai-workspace-mcp',
+  'enable-orchestration-mcp',
+  'enable-agent-transcripts-mcp',
+  'enable-agent-management-mcp',
+  'enable-tldr-mcp',
+  'enable-goal-mcp',
+  'enable-goal-loop-mcp',
+  'enable-workflow-mcp',
 ]
 
 /** The exact six-member Navigation Commands group (plan decision 6). Closed by
@@ -217,21 +258,17 @@ const RETIRED_COMMAND_IDS: readonly string[] = [
 const NAVIGATION_COMMAND_GROUP: readonly string[] = [
   'next-tab',
   'prev-tab',
-  'nav-left',
-  'nav-right',
-  'nav-up',
-  'nav-down',
 ]
 
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 134 governed commands in registration order', () => {
+  it('contains exactly the 133 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 134 commands', () => {
+  it('has exactly 133 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -248,13 +285,25 @@ describe('built-in command catalog — baseline characterization', () => {
     // TLDR History (#917) → 125 with Goal preview and Goal MCP (#936) → 126
     // with Auto-follow All Working Agents (#938) → 128 with the two ordinary
     // performance report/trace commands (#944) → 129 with Close Idle
-    // Orchestration Agents (#960) → 130 with Open Agent Analytics (#964) →
-    // 132 with Goal Loop preview and stop (#1001) → 134 with the two generated
-    // Grok split commands (#844).
+    // Orchestration Agents (#960) → 130 with Open Agent Analytics (#964) → 121 with
+    // the unified layout (#992): −dispatch-mode, −global-dispatch, −nav×4,
+    // −normalize×3 → 114 with stage 3a: −tiled-tabs, −bury/revive/kill-buried,
+    // −attach×2, −detach → 115 with Clear Lane (#992 stage 4) → 119 with the
+    // lane keyboard grammar (#992 stage 5) → 123 once main's Goal Loop preview
+    // and stop (#1001) and the two generated Grok splits (#844) merged in → 124
+    // with Goal Loop MCP (#1006) → 125 with Open Setup (#995) → 119 with the MCP
+    // servers interface (#1143): −9 per-capability MCP commands, +3 MCP
+    // commands → 126 with the seven Browser Pocket commands (#1142; its
+    // per-agent MCP toggle is a row in the #1143 grid, not a command) → 128
+    // with the two generated Pi splits `pi-vertical` / `pi-horizontal` (#1132)
+    // → 131 with Skills, Add Skill… and Check Skill Updates (#1161) → 132
+    // with Close Completed Agents… (#1182) → 133 with Pin Session (#1180),
+    // the single-agent counterpart of Pin Sessions… that the Sessions
+    // right-click menu offers.
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(134)
+    expect(builtInCommandCatalog).toHaveLength(133)
   })
 
   it('reports no structural defects', () => {
@@ -288,12 +337,18 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 134 total - 6 generated = 128 literal `id:` fields across the command
+    // 128 total - 8 generated = 120 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
-    // count test above (through Open Agent Analytics, #964).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(128)
+    // count test above (through the lane keyboard grammar, #992 stage 5, and
+    // Goal Loop, #1001, Goal Loop MCP, #1006, and Open Setup, #995), then
+    // down by six with the MCP servers interface (#1143: −9 toggles, +3),
+    // then up by the seven Browser Pocket commands (#1142), then up by the
+    // three skills commands (#1161), then up by Close Completed Agents…
+    // (#1182), then up by Pin Session (#1180).
+    // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(125)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -354,7 +409,7 @@ describe('native menu contract', () => {
     expect(missing).toEqual([])
   })
 
-  it('covers the six File-menu actions recorded in the audit', () => {
+  it('covers the six File-menu actions recorded in the audit, plus Setup', () => {
     expect([...NATIVE_MENU_COMMAND_IDS]).toEqual([
       'new-tab',
       'resume-session',
@@ -362,6 +417,9 @@ describe('native menu contract', () => {
       'save-all-editor-files',
       'reorder-tabs',
       'close-tab',
+      // #995: the spawn error for a missing CLI says "Open Setup", so the menu
+      // bar has to offer it.
+      'open-setup',
     ])
   })
 })
@@ -378,6 +436,14 @@ describe('governance targets', () => {
     }
   })
 
+  it('prunes every retired id from persisted settings', () => {
+    // The #992 retirements were recorded here and nowhere else, so saved
+    // overrides for them were never pruned and kept swallowing the chords the
+    // lane commands now own (#1013 review B). Retiring an id means listing it
+    // in BOTH places; this keeps the two lists equal.
+    expect([...RETIRED_BUILT_IN_COMMAND_IDS].sort()).toEqual([...RETIRED_COMMAND_IDS].sort())
+  })
+
   it('contains the one approved addition', () => {
     // Cmd+Shift+P was hard-coded in useKeybinds and named no command at all,
     // which is exactly why it could not be rebound or collision-checked.
@@ -392,8 +458,10 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 37 additions = 134, checked against the
-    // real catalog rather than trusted as prose.
+    // 102 baseline - 30 retirements + 61 additions = 133, checked against the
+    // real catalog rather than trusted as prose. (5 governance retirements +
+    // 16 unified-layout retirements + 9 MCP retirements (#1143), all recorded
+    // in RETIRED_COMMAND_IDS.)
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
     // value is the pre-governance baseline — so growing the catalog means
@@ -418,13 +486,23 @@ describe('governance targets', () => {
     // `view-tldr-history` (#917), `goal-preview` and `enable-goal-mcp` (#936),
     // `toggle-tail-working` (#938), `save-performance-report` and
     // `record-performance-trace` (#944), `close-idle-orchestration-agents` (#960),
-    // `agent-analytics.open` (#964), `goal-loop-preview` and
-    // `goal-loop-stop` (#1001), and `grok-vertical` and `grok-horizontal`
-    // (#844 — generated, not literal: they appeared the moment grok joined
-    // AGENT_PROVIDER_KINDS, which is why they count as additions here exactly
-    // like the codex/opencode splits already inside the 102 baseline).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 37).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(134)
+    // `agent-analytics.open` (#964), `goal-loop-preview` and `goal-loop-stop`
+    // (#1001), `grok-vertical` and `grok-horizontal` (#844, generated from
+    // AGENT_PROVIDER_KINDS), `clear-focused-lane` (#992 stage 4), and the four
+    // lane-grammar commands (#992 stage 5), `enable-goal-loop-mcp` (#1006)
+    // and `open-setup` (#995), and `mcp-servers`, `add-mcp-server` and
+    // `agent-mcp-servers` (#1143). The nine commands #1143 retired are counted
+    // in RETIRED_COMMAND_IDS, which is why the additions they had once been
+    // counted as stay in this total. Then the seven Browser Pocket commands
+    // (#1142): `toggle-browser-pocket`, `reload-browser-pocket`,
+    // `focus-browser-pocket-address`, `pick-browser-pocket-element`,
+    // `open-browser-pocket-external`, `open-browser-pocket-devtools` and
+    // `detach-browser-pocket`. Then `pi-vertical` and `pi-horizontal` (#1132,
+    // generated from AGENT_PROVIDER_KINDS like Grok's). Then `skills`,
+    // `add-skill` and `check-skill-updates` (#1161). Then
+    // `close-completed-agents` (#1182). Then `pin-agent` (#1180).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 61).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(133)
   })
 })
 

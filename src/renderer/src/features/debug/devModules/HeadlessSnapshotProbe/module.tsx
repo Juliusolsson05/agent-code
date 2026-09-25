@@ -10,7 +10,10 @@ export const headlessSnapshotProbeModule: DevDebugModule = {
 }
 
 function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps) {
-  const [pattern, setPattern] = useState('\\[Pasted text #\\d+')
+  // Wrap-tolerant by default (#1113), so the probe agrees with what
+  // `placeholderCount` counts in production rather than missing every pill the
+  // composer happened to wrap.
+  const [pattern, setPattern] = useState('\\[Pasted\\s+text\\s+#\\d+')
   const [flags, setFlags] = useState('i')
   const plain = runtime.screen
   const markdown = runtime.screenMarkdown

@@ -1,108 +1,35 @@
 import { TldrPane } from '@renderer/features/tldr/TldrOverlay'
 import { GoalLoopPane } from '@renderer/features/goal-loop/GoalLoopPane'
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { memo, useCallback, useRef } from 'react'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { memo, useCallback } from 'react'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 
-import { getRendererProvider } from '@providers/registry.renderer'
+import { TileLeaf } from '@renderer/workspace/tile-tree/TileLeaf'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
-import {
-  buildGridRelatedAgentTabs,
-  selectedGridRelatedSessionId,
-} from '@renderer/workspace/gridRelatedAgents'
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { ExtensionViewLeaf } from '@renderer/workspace/tile-tree/ExtensionViewLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
+import type { SessionId, TabId } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
+import { PocketedLeaf, type PocketPlacement } from '@renderer/features/browser-pocket/ui/PocketedLeaf'
 
-// TileTree — recursive renderer for a tab's binary-split tree.
+// The workspace leaf renderer.
 //
-// A leaf is a TileLeaf. A split is two TileTrees laid side-by-side (or
-// stacked) with a draggable divider in between. The recursion makes
-// arbitrary split nesting Just Work — the tree is literally the layout.
+// This file used to be the recursive renderer for a tab's binary-split tree:
+// a `TileTree` component, a draggable `SplitContainer`, and the leaf renderer
+// below. The unified layout (#992) deleted the tree — the stage's lanes are the
+// only place a session is shown — and what survives is the part every surface
+// always funnelled through: `renderWorkspaceLeaf`, which picks the right view
+// (terminal, extension view, raw agent terminal, provider feed) for a session.
+// Lanes, Spotlight and tests all call it; the file keeps its path so those
+// importers did not have to move in the same change.
 
-type Props = {
-  tabId: TabId
-  node: TileNode
-  focusedSessionId: SessionId | null
-  workspace: Workspace
-  agentViewMode: AgentViewMode
-  // WHY both display settings are required rather than defaulted to `true`
-  // (#856): Spotlight and Tiled Tabs never passed them. They silently got the
-  // defaults, so a user who turned Status Mode or worktree badges off still
-  // saw them there. A default here only ever means "some surface forgot to
-  // read the setting". Required props make tsc name every surface that has to
-  // thread the real value.
-  showStatusMode: boolean
-  showWorktreeBadges: boolean
-}
-
-export const TileTree = memo(function TileTree({
-  tabId,
-  node,
-  focusedSessionId,
-  workspace,
-  agentViewMode,
-  showStatusMode,
-  showWorktreeBadges,
-}: Props) {
-  if (node.type === 'leaf') {
-    return renderWorkspaceLeaf(
-      node.sessionId,
-      focusedSessionId,
-      workspace,
-      tabId,
-      agentViewMode,
-      showStatusMode,
-      showWorktreeBadges,
-      undefined,
-      true,
-    )
-  }
-
-  return (
-    <SplitContainer
-      direction={node.direction}
-      ratio={node.ratio}
-      a={
-        <TileTree
-          tabId={tabId}
-          node={node.a}
-          focusedSessionId={focusedSessionId}
-          workspace={workspace}
-          agentViewMode={agentViewMode}
-          showStatusMode={showStatusMode}
-          showWorktreeBadges={showWorktreeBadges}
-        />
-      }
-      b={
-        <TileTree
-          tabId={tabId}
-          node={node.b}
-          focusedSessionId={focusedSessionId}
-          workspace={workspace}
-          agentViewMode={agentViewMode}
-          showStatusMode={showStatusMode}
-          showWorktreeBadges={showWorktreeBadges}
-        />
-      }
-      // Resize dragging needs to know which sessions to update the
-      // ratio between. We pick the first leaf on each side as the
-      // identity for this split.
-      aSessionId={firstLeafId(node.a)}
-      bSessionId={firstLeafId(node.b)}
-      tabId={tabId}
-      workspace={workspace}
-    />
-  )
-})
-
-// No defaults for the tab, view mode or display settings, for the same reason
-// as TileTree's props (#856). Every caller is a surface that knows these
+// No defaults for the tab, view mode or display settings (#856): Spotlight and
+// Tiled Tabs once silently got `true` for Status Mode and worktree badges
+// because a default existed. Every caller is a surface that knows these
 // values, and a default would hide the one that doesn't pass them.
 export function renderWorkspaceLeaf(
   sessionId: SessionId,
@@ -113,10 +40,14 @@ export function renderWorkspaceLeaf(
   showStatusMode: boolean,
   showWorktreeBadges: boolean,
   onFocusRequest?: () => void,
-  showRelatedAgentTabs = false,
   surfacePaneLabel?: string,
+  // Where this leaf is drawn, for the browser pocket (#1142). Lanes and
+  // Spotlight both pass one; since both draw through THIS function, the pocket
+  // follows an agent into Spotlight with no Spotlight-specific data. Absent
+  // (other callers) ⇒ no pocket UI.
+  pocketPlacement?: PocketPlacement,
 ) {
-  return <WorkspaceLeaf
+  const leaf = <WorkspaceLeaf
     sessionId={sessionId}
     focusedSessionId={focusedSessionId}
     workspace={workspace}
@@ -125,9 +56,13 @@ export function renderWorkspaceLeaf(
     showStatusMode={showStatusMode}
     showWorktreeBadges={showWorktreeBadges}
     onFocusRequest={onFocusRequest}
-    showRelatedAgentTabs={showRelatedAgentTabs}
     surfacePaneLabel={surfacePaneLabel}
   />
+  // EVERY lane and Spotlight leaf is wrapped, pocket or not: attaching a
+  // pocket must not change the element type above the agent, or React
+  // remounts the agent view (terminal attach, feed) — review B #4.
+  if (!pocketPlacement) return leaf
+  return <PocketedLeaf sessionId={sessionId} workspace={workspace} placement={pocketPlacement}>{leaf}</PocketedLeaf>
 }
 
 // The subscription belongs below the recursive layout and above provider/view
@@ -135,7 +70,7 @@ export function renderWorkspaceLeaf(
 // output must not traverse this pane or recreate any terminal callbacks.
 const WorkspaceLeaf = memo(function WorkspaceLeaf({
   sessionId, focusedSessionId, workspace, tabId, agentViewMode,
-  showStatusMode, showWorktreeBadges, onFocusRequest, showRelatedAgentTabs,
+  showStatusMode, showWorktreeBadges, onFocusRequest,
   surfacePaneLabel,
 }: {
   sessionId: SessionId
@@ -146,20 +81,26 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
   showStatusMode: boolean
   showWorktreeBadges: boolean
   onFocusRequest?: () => void
-  showRelatedAgentTabs: boolean
   surfacePaneLabel?: string
 }) {
   const requestFocus = useCallback(() => {
     if (onFocusRequest) onFocusRequest()
     else workspace.focusSessionInTab(tabId, sessionId)
   }, [onFocusRequest, workspace, tabId, sessionId])
-  const relatedTabs = showRelatedAgentTabs
-    ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
-    : []
-  const selectedSessionId = showRelatedAgentTabs
-    ? selectedGridRelatedSessionId(workspace.state, tabId, sessionId) ?? sessionId
-    : sessionId
-  const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
+  // A pane renders the session it was asked to render.
+  //
+  // Until #992 it could render a DIFFERENT one: in the tile grid a pane had a
+  // strip of "related agent" mini-tabs (its linked agents and orchestration
+  // workers), and picking one swapped that child into the parent's physical
+  // tile, remembered in `WorkspaceState.gridRelatedSelections`. The grid had
+  // no index, so that strip was the only way to reach a parked child. The
+  // stage has an index and a per-lane strip that both list children nested
+  // under their parent, and selecting one simply puts it in the lane — so
+  // lanes never enabled the mini-tabs, the selection map lost its only
+  // writer, and both were deleted. The strip's presentational half still
+  // exists in PaneHeader/TileLeaf/AgentTerminalLeaf (prop-driven, fed nothing
+  // here); stage 4 of the plan either feeds it from the pool or removes it.
+  const renderedSessionId = sessionId
   const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   const runtime = useSessionRuntime(workspace, renderedSessionId)
@@ -185,11 +126,11 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     )
   }
 
-  // Extension-view pane. Short-circuited BEFORE getRendererProvider(kind), which
-  // throws on any non-agent kind — the single edit that lights this up in grid,
-  // both dispatch layouts, spotlight, and tile-tabs at once, because they all funnel
-  // here. Uses `sessionId` (the physical leaf) not `renderedSessionId`: an extension
-  // pane has no related-agent tab selection.
+  // Extension-view pane. Short-circuited BEFORE the agent-kind check below,
+  // which throws on any non-agent kind. Every lane and Spotlight funnel through here,
+  // so this one branch lights the view up everywhere. Uses `sessionId` (the
+  // lane's own session) not `renderedSessionId`: the extension view is keyed to
+  // its own id, not whatever agent the lane resolves to.
   if (kind === 'extension-view') {
     return (
       <ExtensionViewLeaf
@@ -201,7 +142,12 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     )
   }
 
-  const provider = getRendererProvider(kind)
+  // Validate the untrusted kind (persisted SessionMeta.kind, IPC) before
+  // mounting an agent surface. This check is all that remained of the renderer
+  // provider registry's pane lookup (#1177): every provider mapped to the SAME
+  // TileLeaf, so the per-provider slot was indirection with no choice in it,
+  // and it made the provider registry import the workspace pane.
+  if (!isAgentProviderKind(kind)) throw new Error(`Unknown provider: ${kind}`)
   if (getEffectiveAgentSurfaceForSession({
     kind,
     providerRuntime: meta?.providerRuntime,
@@ -229,27 +175,16 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
             // branch didn't, which is why terminal-view panes never lit their
             // header while working (#851).
             showStatusMode={showStatusMode}
-            // #858: same related-agent identity the rendered branch below
-            // passes to LeafComponent, so a persisted related selection that
-            // lands here (raw-terminal surface) is named in the status row
-            // instead of silently swapping which agent's TUI this pane shows.
-            ownerSessionId={sessionId}
-            relatedAgentTabs={relatedTabs}
-            onSelectRelatedSession={(nextSessionId: SessionId) => {
-              workspace.selectGridRelatedSession(sessionId, nextSessionId)
-              workspace.focusSessionInTab(tabId, sessionId)
-            }}
           />
         </MountedAgentTerminalOwner>
       </TldrPane>
     )
   }
 
-  const LeafComponent = provider.TileLeaf
   return (
     <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))} goalEnabled={Boolean(meta?.builtInMcpDomains?.includes('goal'))}>
       <GoalLoopPane sessionId={renderedSessionId} />
-      <LeafComponent
+      <TileLeaf
         sessionId={renderedSessionId}
         runtime={runtime}
         paneLabel={paneLabel}
@@ -258,128 +193,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
         workspace={workspace}
         showStatusMode={showStatusMode}
         showWorktreeBadges={showWorktreeBadges}
-        ownerSessionId={sessionId}
-        relatedAgentTabs={relatedTabs}
-        selectedRelatedSessionId={renderedSessionId}
-        onSelectRelatedSession={(nextSessionId: SessionId) => {
-          workspace.selectGridRelatedSession(sessionId, nextSessionId)
-          workspace.focusSessionInTab(tabId, sessionId)
-        }}
       />
     </TldrPane>
   )
 })
-
-function firstLeafId(n: TileNode): SessionId {
-  let current = n
-  while (current.type !== 'leaf') current = current.a
-  return current.sessionId
-}
-
-// ---------------------------------------------------------------------------
-// SplitContainer — CSS flex with a draggable divider.
-// ---------------------------------------------------------------------------
-
-type SplitProps = {
-  tabId: TabId
-  direction: 'vertical' | 'horizontal'
-  ratio: number
-  a: React.ReactNode
-  b: React.ReactNode
-  aSessionId: SessionId
-  bSessionId: SessionId
-  workspace: Workspace
-}
-
-function SplitContainer({
-  direction,
-  ratio,
-  a,
-  b,
-  aSessionId,
-  bSessionId,
-  tabId,
-  workspace,
-}: SplitProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // vertical split = side-by-side (flex-row), divider is a vertical bar
-  // that resizes horizontally. horizontal split = stacked (flex-col),
-  // divider is a horizontal bar that resizes vertically.
-  const isVertical = direction === 'vertical'
-  const flexDir = isVertical ? 'flex-row' : 'flex-col'
-  const cursor = isVertical ? 'cursor-col-resize' : 'cursor-row-resize'
-  const dividerDims = isVertical ? 'w-[3px] h-full' : 'h-[3px] w-full'
-
-  const aFlex = { flexBasis: `${ratio * 100}%` }
-  const bFlex = { flexBasis: `${(1 - ratio) * 100}%` }
-
-  // Drag handler: measure the container and map mouse position → new ratio.
-  // Uses document-level listeners so dragging past the divider edge still
-  // works even if the mouse leaves the container bounds.
-  const onDividerMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      const container = containerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      let frame: number | null = null
-      let pendingRatio: number | null = null
-      let lastSentRatio = ratio
-
-      const flush = () => {
-        frame = null
-        if (pendingRatio === null) return
-        const nextRatio = pendingRatio
-        pendingRatio = null
-        // WHY a tiny epsilon matters here: pointermove fires far more often
-        // than CSS flex-basis visibly changes, and many adjacent events clamp
-        // to the same effective split ratio. Skipping no-op-ish commits avoids
-        // rewriting workspace state, re-rendering every pane, and triggering
-        // terminal ResizeObservers for movements that cannot affect layout.
-        if (Math.abs(nextRatio - lastSentRatio) < 0.001) return
-        lastSentRatio = nextRatio
-        workspace.setSplitRatioInTab(tabId, aSessionId, bSessionId, nextRatio)
-      }
-
-      const onMove = (ev: MouseEvent) => {
-        pendingRatio = isVertical
-          ? (ev.clientX - rect.left) / rect.width
-          : (ev.clientY - rect.top) / rect.height
-        if (frame === null) frame = requestAnimationFrame(flush)
-      }
-      const onUp = () => {
-        if (frame !== null) {
-          cancelAnimationFrame(frame)
-          frame = null
-        }
-        flush()
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    },
-    [aSessionId, bSessionId, isVertical, tabId, workspace],
-  )
-
-  return (
-    <div
-      ref={containerRef}
-      className={`flex ${flexDir} w-full h-full min-h-0 min-w-0`}
-    >
-      <div style={aFlex} className="min-h-0 min-w-0 overflow-hidden">
-        {a}
-      </div>
-      <div
-        role="separator"
-        aria-orientation={isVertical ? 'vertical' : 'horizontal'}
-        className={`${dividerDims} ${cursor} bg-border hover:bg-accent transition-colors flex-shrink-0`}
-        onMouseDown={onDividerMouseDown}
-      />
-      <div style={bFlex} className="min-h-0 min-w-0 overflow-hidden">
-        {b}
-      </div>
-    </div>
-  )
-}

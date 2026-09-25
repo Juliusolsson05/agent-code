@@ -13,38 +13,32 @@ import type {
 } from '@shared/types/session'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
-import type { TileTabsState } from '@renderer/workspace/types'
 import type {
-  BuriedPaneRecord,
-  DetachedSessionRecord,
   SessionId,
   SessionKind,
   SessionMeta,
   Tab,
-  TileNode,
 } from '@renderer/workspace/types'
-import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import {
   keepTiledLaneSessions,
-  normalizeDispatchModeGrid,
+  normalizeStage,
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
-import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
+import { migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
 import {
   collectLiveProcessIds,
   collectOwnedSessionIds,
-  collectUnownedSessionIds,
 } from '@renderer/workspace/sessionOwnership'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-  WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
+import { userMcpOverridesFrom } from '@shared/userMcp/types'
 import * as perf from '@renderer/performance/client'
 import { reportLifecycle } from '@renderer/lifecycle/report'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
@@ -61,7 +55,10 @@ import {
 type WorkspaceRecoveryApi = Pick<
   Window['api'],
   'recoverSession' | 'cancelSessionRecovery' | 'defaultCwd'
->
+  // Optional because it is a hint, not a step: a preload without it (an older
+  // shell, a test double that does not care) still restores the workspace,
+  // just without re-seeding blockers.
+> & Partial<Pick<Window['api'], 'reseedSessionConditions'>>
 
 const DEFAULT_SESSION_RECOVERY_TIMEOUT_MS = 30_000
 
@@ -110,8 +107,8 @@ async function recoverSessionBeforeDeadline(
   }
 }
 
-// Reconcile every visible persisted leaf under its ORIGINAL Agent Code
-// SessionId. Main either adopts the backend it already owns (renderer reload)
+// Reconcile the session the stage's focused lane shows under its ORIGINAL Agent
+// Code SessionId (see collectLiveProcessIds for why only that one). Main either adopts the backend it already owns (renderer reload)
 // or starts one replacement under that same local id (full app restart).
 //
 // WHY the local id is stable while providerSessionId is only a launch hint:
@@ -133,21 +130,43 @@ async function recoverSessionBeforeDeadline(
 // atomicity that actually belongs to main.
 
 export async function rehydrateWorkspace(
-  persisted: PersistedWorkspace,
+  persistedInput: PersistedWorkspace,
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
-  setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
   recoveryApi: WorkspaceRecoveryApi = window.api,
   recoveryTimeoutMs = DEFAULT_SESSION_RECOVERY_TIMEOUT_MS,
 ): Promise<{ restoredSessions: number; expectedSessions: number; complete: boolean }> {
-  perf.mark('workspace.rehydrate.start', {
-    tabs: persisted.tabs.length,
-    sessions: Object.keys(persisted.sessions).length,
-    detachedSessions: Object.keys(persisted.detachedSessions ?? {}).length,
-    buried: persisted.buried?.length ?? 0,
-  })
+  // ONE normalization, before anything reasons about ownership (#992). The
+  // file may be v2 (tabs owning tile trees, a detached bucket, a buried
+  // bucket, a dispatchMode envelope), v3 (a pool and a stage), or the hybrid
+  // the intermediate builds wrote. `migrateWorkspaceToStage` is total over all
+  // three and everything below sees ONLY its output, so this function no
+  // longer knows that a tile tree, a detached record or a buried pane ever
+  // existed. Every row of `persisted.sessions` is owned (its `projectId` names
+  // one of `persisted.tabs`) and carries its index position; unowned metadata
+  // and ghosts were dropped inside the migration, which is where the v2
+  // ownership rules now live (legacyWorkspaceV2.ts).
+  const migrated = migrateWorkspaceToStage(persistedInput)
+  const persisted = {
+    tabs: migrated.projects.map(project => ({ id: project.id, title: project.title })) as Tab[],
+    activeTabId: migrated.activeProjectId,
+    sessions: migrated.sessions as Record<SessionId, SessionMeta>,
+    stage: migrated.stage,
+    pinnedSessionIds: migrated.pinnedSessionIds,
+    drafts: migrated.drafts,
+  }
+  // Counts of what the FILE contained, for the journal: the shape of a bad
+  // boot is a ratio between these (see below), and after the migration the
+  // v2 buckets are no longer distinguishable.
+  const fileCounts = {
+    tabs: (persistedInput.projects ?? persistedInput.tabs ?? []).length,
+    sessions: Object.keys(persistedInput.sessions ?? {}).length,
+    detachedSessions: Object.keys(persistedInput.detachedSessions ?? {}).length,
+    buried: persistedInput.buried?.length ?? 0,
+  }
+  perf.mark('workspace.rehydrate.start', fileCounts)
   // The always-on twin of the perf mark above. The perf channel is gated behind
   // AGENT_CODE_PERF and is off by default, which is exactly why no cold boot has
   // ever been measured. Shape matters here: #258's fork bomb (49 persisted, 9
@@ -155,17 +174,18 @@ export async function rehydrateWorkspace(
   // ratio between these counts, and this is the first record of that ratio at
   // the moment restore begins.
   reportLifecycle('rehydrate.start', undefined, {
-    tabs: persisted.tabs.length,
-    leaves: Object.keys(persisted.sessions).length,
-    detached: Object.keys(persisted.detachedSessions ?? {}).length,
-    buried: persisted.buried?.length ?? 0,
+    tabs: fileCounts.tabs,
+    leaves: fileCounts.sessions,
+    detached: fileCounts.detachedSessions,
+    buried: fileCounts.buried,
   })
   const rehydrateStartedAt = Date.now()
   const idMap = new Map<SessionId, SessionId>()
   const freshSessions: Record<SessionId, SessionMeta> = {}
   const ownedIds = collectOwnedSessionIds(persisted)
   const liveProcessIds = collectLiveProcessIds(persisted)
-  const staleIds = collectUnownedSessionIds(persisted)
+  // What the migration dropped: rows the file had that nothing owned.
+  const staleIds = Object.keys(persistedInput.sessions ?? {}).filter(id => !ownedIds.has(id))
 
   if (staleIds.length > 0) {
     // WHY log and drop instead of trying to repair by providerSessionId:
@@ -174,7 +194,7 @@ export async function rehydrateWorkspace(
     // provider history identity and can legitimately be duplicated by clone,
     // rewind, or failed restore paths. Using it as a repair key risks attaching
     // a hidden stale row to the wrong visible pane. The only safe restore set is
-    // the ids already owned by tab leaves, detached sessions, or buried panes.
+    // the ids the migration found an owner for.
     // Dropping stale metadata here prevents invisible persisted rows from
     // becoming real backend processes/proxies during startup.
     // eslint-disable-next-line no-console
@@ -232,61 +252,25 @@ export async function rehydrateWorkspace(
   // at a time and are safe to publish incrementally.
   syncRecoveryProjection()
 
-  const sanitizeRemappedNode = (n: TileNode): TileNode | null => {
-    if (n.type === 'leaf') {
-      // WHY layout membership follows durable ownership, not provider timing:
-      // an unresolved or failed pane is still user-owned workspace state. The
-      // runtime below communicates "starting" or "failed" honestly while the
-      // stable leaf remains closable/retryable from the first paint.
-      return freshSessions[n.sessionId] ? n : null
+  // A project exists while at least one session names it (U4). A project the
+  // file lists whose every session was dropped as unowned has nothing to show
+  // and nothing to spawn into, so it does not come back.
+  //
+  // WHY membership follows durable ownership, not provider timing: an
+  // unresolved or failed session is still user-owned workspace state. Its
+  // runtime communicates "starting" or "failed" honestly while its row — and
+  // therefore its project — is closable/retryable from the first paint.
+  //
+  // (Until #992 this rebuilt each tab's TILE TREE: remap every leaf through
+  // idMap, cut out leaves with no metadata, collapse the emptied splits, and
+  // re-point the tab's focus at a leaf that survived.)
+  const buildRemappedTabs = (): Tab[] => {
+    const populated = new Set<string>()
+    for (const meta of Object.values(freshSessions)) {
+      if (meta.projectId !== undefined) populated.add(meta.projectId)
     }
-    const a = sanitizeRemappedNode(n.a)
-    const b = sanitizeRemappedNode(n.b)
-    if (!a && !b) return null
-    if (!a) return b
-    if (!b) return a
-    return { ...n, a, b }
+    return persisted.tabs.filter(tab => populated.has(tab.id))
   }
-
-  const buildRemappedTabs = (): Tab[] =>
-    persisted.tabs
-      .map(t => {
-        const remappedRoot = sanitizeRemappedNode(remapTileTreeSessionIds(t.root, idMap))
-        if (!remappedRoot) return null
-        const leaves = collectLeaves(remappedRoot)
-        if (leaves.length === 0) return null
-        const focused = idMap.get(t.focusedSessionId) ?? leaves[0]
-        return {
-          id: t.id,
-          title: t.title,
-          root: remappedRoot,
-          focusedSessionId: focused,
-        } satisfies Tab
-      })
-      .filter((t): t is Tab => t !== null)
-
-  const buildRemappedBuried = (): BuriedPaneRecord[] =>
-    (persisted.buried ?? [])
-      .flatMap(entry => {
-        // WHY fall back to the original sessionId when idMap has no entry:
-        //
-        // Buried panes are hibernated by design — no PTY, no rehydrate spawn,
-        // metadata only. They never appear in idMap because the spawn loop
-        // skipped them (see liveProcessIds filter). The previous behavior
-        // ("drop if not in idMap") silently lost the buried pane on every
-        // restart, defeating the purpose of "bury this for later". Use the
-        // original sessionId as the key so the record round-trips intact.
-        const mappedSessionId = idMap.get(entry.sessionId) ?? entry.sessionId
-        const remapped: BuriedPaneRecord = {
-          ...entry,
-          id: mappedSessionId,
-          sessionId: mappedSessionId,
-        }
-        if (entry.siblingLeafId) {
-          remapped.siblingLeafId = idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId
-        }
-        return [remapped]
-      })
 
   // WHY this still projects through idMap even though recovery maps id->id:
   // the layout code historically consumes one common identity projection for
@@ -309,7 +293,6 @@ export async function rehydrateWorkspace(
     for (const oldId of ids) {
       // WHY fall back to the original id when not in idMap:
       //
-      // Same pattern as buildRemappedDetachedSessions / buildRemappedBuried.
       // Hibernated sessions are seeded into freshSessions under their original
       // persisted id and never get an idMap entry. A pin pointing at a parked
       // dispatch agent is durable user state — dropping it on every restart
@@ -323,42 +306,6 @@ export async function rehydrateWorkspace(
       remapped.push(mapped)
     }
     return remapped
-  }
-
-  const buildRemappedDetachedSessions = (): Record<SessionId, DetachedSessionRecord> => {
-    const out: Record<SessionId, DetachedSessionRecord> = {}
-    for (const entry of Object.values(persisted.detachedSessions ?? {})) {
-      // WHY fall back to the original sessionId when idMap has no entry:
-      //
-      // Detached (hibernated) sessions are intentionally not respawned during
-      // rehydrate — that is the entire point of the live-vs-owned split in
-      // sessionOwnership.ts. They have no idMap entry because the spawn loop
-      // skipped them. Pre-fix code dropped them here on every restart, which
-      // silently emptied the dispatch parking pool after each launch. Falling
-      // back to the original id preserves the record verbatim, ready to be
-      // woken by an explicit user action later.
-      //
-      // A visible recovered session has an explicit identity mapping; a
-      // hibernated one does not. Both resolve to the same durable id today, but
-      // keeping this projection shared with the rest of layout restoration
-      // prevents detached records from becoming a special-case identity path.
-      const mappedSessionId = idMap.get(entry.sessionId) ?? entry.sessionId
-      // WHY metadata survival is the gate here, not the presence of the raw
-      // detached record:
-      //
-      // collectOwnedSessionIds rejects a detached agent when its project tab
-      // no longer exists. Copying the raw record anyway would leave half of the
-      // corrupted pair in renderer state: no SessionMeta/runtime, but a ghost
-      // Dispatch owner that autosave and selectors must keep reasoning about.
-      // freshSessions is the already-normalized ownership set, so closing the
-      // projection over it repairs old workspace files on their first launch.
-      if (!freshSessions[mappedSessionId]) continue
-      out[mappedSessionId] = {
-        ...entry,
-        sessionId: mappedSessionId,
-      }
-    }
-    return out
   }
 
   const buildRemappedSessions = (): Record<SessionId, SessionMeta> => {
@@ -383,18 +330,6 @@ export async function rehydrateWorkspace(
       out[sessionId] = remapSessionMetaRelationships(meta, idMap, knownSessionIds)
     }
     return out
-  }
-
-  const buildRemappedTileTabs = (tabs: Tab[]): TileTabsState | null => {
-    const persistedTileTabs = persisted.tileTabs
-    if (!persistedTileTabs) return null
-    const validTabIds = persistedTileTabs.tabIds.filter(id =>
-      tabs.some(tab => tab.id === id),
-    )
-    return sanitizeTileTabsState({
-      ...persistedTileTabs,
-      tabIds: validTabIds,
-    })
   }
 
   let initialWorkspacePublished = false
@@ -518,7 +453,6 @@ export async function rehydrateWorkspace(
     const newTabs = buildRemappedTabs()
     if (newTabs.length === 0) return false
 
-    const restoredTileTabs = buildRemappedTileTabs(newTabs)
     if (!initialWorkspacePublished) {
       initialWorkspacePublished = true
       const initialSessions = buildRemappedSessions()
@@ -529,47 +463,56 @@ export async function rehydrateWorkspace(
         const currentActiveTabStillExists = newTabs.some(t => t.id === prev.activeTabId)
         const activeTabId = currentActiveTabStillExists
           ? prev.activeTabId
-          : restoredTileTabs?.focusedTabId
-            ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
+          : newTabs.find(t => t.id === persisted.activeTabId)?.id
             ?? newTabs[0].id
-        // Grid shape is normalized OUTERMOST so the shape rules see the final
-        // lane array: a workspace written before Grid Dispatch has no `rows`
-        // (=> one row of every lane) and a legacy `ratios` array that has to be
-        // split into the row's index fraction and the per-lane weights. Doing
-        // it here rather than at every reader is what lets the rest of the
-        // renderer assume a coherent grid.
-        const remappedDispatchMode = normalizeDispatchModeGrid(keepTiledLaneSessions(
-          remapTiledLanes(
-            persisted.dispatchMode
-              ? {
-                  ...persisted.dispatchMode,
-                  focusedSessionId: persisted.dispatchMode.focusedSessionId
-                    ? idMap.get(persisted.dispatchMode.focusedSessionId)
-                    : undefined,
-                }
-              : null,
-            idMap,
-          ),
+        // The stage comes from the migration at the top of this function
+        // (#992), not from a field read directly. That is what makes every
+        // file shape boot into a stage without a second code path:
+        //   - a v3 file: its `stage`;
+        //   - a v2 file with lanes: `dispatchMode.tiled`;
+        //   - a v2 file that never had lanes (grid-only, or classic
+        //     Dispatch): the seeded default, lane 0 holding the pane the user
+        //     was last commanding (#977's entry seed) beside one empty lane.
+        // Bootstrap used to do that last case by calling enterTiledDispatch
+        // after rehydrate returned; doing it here means the FIRST published
+        // state already has a stage, so nothing can render — or autosave —
+        // a workspace that lacks one.
+        //
+        // The chain after it is unchanged and its ORDER is load-bearing:
+        // remap (restored sessions may carry new ids), then keep-live, then
+        // normalize OUTERMOST so the shape rules see the final lane array — a
+        // file written before the row grid has no `rows` (=> one row of every
+        // lane) and a legacy `ratios` array that has to be split into the
+        // row's index fraction and the per-lane weights. Doing it here rather
+        // than at every reader is what lets the rest of the renderer assume a
+        // coherent grid.
+        //
+        // A seeded or restored lane may name a HIBERNATED session. That is
+        // fine and deliberate, and how it wakes depends on its kind: a
+        // terminal leaf wakes its backend when it mounts; an agent leaf shows
+        // its committed transcript and wakes on the first send (TileLeaf.send
+        // -> ensureSessionLive, the #691 fix for a hibernated lane rejecting
+        // its first prompt). Neither spawns because a FILE lists it, which is
+        // what keeps the #258 fork-bomb guard intact.
+        const stage = normalizeStage(keepTiledLaneSessions(
+          remapTiledLanes(persisted.stage, idMap),
           // WHY remapping alone cannot repair stale lane ownership:
           // remapTiledLanes intentionally leaves unknown ids untouched because
           // valid hibernated sessions keep their durable ids. After ownership
           // normalization, initialSessions is the authority that distinguishes
-          // those valid parked ids from deleted-tab ghosts. Closing every
-          // Dispatch pointer over this same set prevents the repaired owner
-          // record from lingering as a selected-but-unresolvable lane.
+          // those valid parked ids from deleted-tab ghosts. Closing every lane
+          // pointer over this same set prevents the repaired owner record from
+          // lingering as a selected-but-unresolvable lane.
           new Set(Object.keys(initialSessions)),
-        )) ?? null
+        ))
         return {
           tabs: newTabs,
           activeTabId,
-          dispatchMode: remappedDispatchMode,
+          stage,
           sessions: initialSessions,
-          detachedSessions: buildRemappedDetachedSessions(),
-          buried: buildRemappedBuried(),
           pinnedSessionIds: buildRemappedPinnedSessionIds(),
         }
       })
-      setTileTabs(restoredTileTabs)
       setRuntimes(prev => {
         const out: Record<SessionId, SessionRuntime> = {}
         for (const sessionId of Object.keys(freshSessions)) {
@@ -629,30 +572,29 @@ export async function rehydrateWorkspace(
     return true
   }
 
-  // Publish every durable leaf before starting provider work. This is the
-  // renderer-side half of bounded recovery: a hung provider remains a visible,
-  // closable "starting" pane instead of withholding the entire workspace.
+  // Publish the whole durable workspace before starting provider work. This is
+  // the renderer-side half of bounded recovery: a hung provider remains a
+  // visible, closable "starting" session instead of withholding everything.
   const publishedDurableWorkspace = commitRehydratedState()
 
-  // Spawn live tile-leaf sessions concurrently. A single slow respawn
-  // must not block the entire tab strip from coming back.
+  // Recover the boot-spawn set. A single slow respawn must not block the rest
+  // of the workspace from coming back.
   //
   // WHY this filter is liveProcessIds, not ownedIds (the original bug):
   //
-  // ownedIds includes detached and buried sessions — i.e. parked agents the
-  // user has explicitly removed from their visible workspace. The previous
-  // code spawned every owner on rehydrate, which meant every time you parked
-  // dispatch agents and restarted, all of them came back as live processes
-  // (plus a per-session mitmdump) regardless of whether you intended to use
-  // them. With ~40 parked dispatch agents accumulating in detachedSessions,
-  // a single restart fork-bombed the machine with 40 claude + 40 mitmdump
-  // processes, all started in this Promise.all in the same ~3 seconds.
+  // ownedIds is every session the workspace owns, parked agents included. The
+  // previous code spawned every owner on rehydrate, which meant every time you
+  // parked agents and restarted, all of them came back as live processes (plus
+  // a per-session mitmdump) regardless of whether you intended to use them.
+  // With ~40 parked agents accumulated, a single restart fork-bombed the
+  // machine with 40 claude + 40 mitmdump processes, all started in this
+  // Promise.all in the same ~3 seconds.
   //
-  // liveProcessIds is the strictly smaller set the user is going to be
-  // exposed to on launch — current tile-tree leaves only. Hibernated
-  // sessions get metadata-restored above (so they're still rendered in
-  // dispatch lists and revivable later), but no PTY/mitmdump/MCP host
-  // is created until the user explicitly wakes one.
+  // liveProcessIds is the strictly smaller set that must have a backend at
+  // first paint — the focused lane's occupant (sessionOwnership.ts explains
+  // why that and no more). Every other session is metadata-restored above, so
+  // it is listed in its project's index and wakes on first use, but no
+  // PTY/mitmdump/MCP host is created for it here.
   await Promise.all(
     Object.entries(persisted.sessions)
       .filter(([oldId]) => liveProcessIds.has(oldId))
@@ -735,6 +677,9 @@ export async function rehydrateWorkspace(
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains,
+            // User MCP choices ride the same path as the built-in domains
+            // (#1143); main uses them only if it has to start the backend.
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             // Only bootstrap can prove the predecessor ID still came from the
             // durable workspace. Ordinary retry/wake calls must not be able to
             // abort a same-pane replacement transaction.
@@ -798,6 +743,9 @@ export async function rehydrateWorkspace(
             ...(recoveredBuiltInMcpDomains !== undefined
               ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
               : {}),
+            ...(recovery.snapshot.userMcpServerIds !== undefined
+              ? { userMcpServerIds: recovery.snapshot.userMcpServerIds }
+              : {}),
             ...(recovery.tmuxName ? { tmuxName: recovery.tmuxName } : {}),
           }
           recoveryOutcomes.set(newId, {
@@ -853,15 +801,27 @@ export async function rehydrateWorkspace(
     const cwd = await recoveryApi.defaultCwd()
     await newTab(cwd)
   }
+  // Every runtime that is going to exist now does, so main can re-emit what
+  // these backends are blocked on (#895). A cold restore builds each runtime
+  // from `emptyRuntime()`, and providers publish conditions only when they
+  // CHANGE — so a session recovered onto a backend already sitting on a
+  // permission or a question came back with no blocker at all, while the raw
+  // TUI still showed it.
+  //
+  // AFTER the seeding above, never before: anything delivered earlier is
+  // overwritten by it. Only sessions with a live backend, because a parked one
+  // has no process to be blocked by; it is re-seeded when it is woken.
+  // Not awaited — it arrives on the event channel like any other condition
+  // change, and boot must not wait on it.
+  void recoveryApi.reseedSessionConditions?.([...liveBackendIds])
   // WHY restored/expected count live-spawned sessions, not owned:
   //
   // `complete` here gates autosave (useBootstrap reads it to decide whether
   // disk can be overwritten with the in-memory model). The invariant the gate
-  // enforces is "no visible pane was silently dropped" — i.e. every leaf in
-  // the user's tile tree got a working backend process. Hibernated sessions
-  // (detached + buried) deliberately do not spawn a process during rehydrate;
+  // enforces is "every session boot was supposed to start got an outcome".
+  // Parked sessions deliberately do not spawn a process during rehydrate;
   // counting them against expected would make `complete` false forever for
-  // anyone who has parked a dispatch agent, permanently disabling autosave.
+  // anyone who has parked an agent, permanently disabling autosave.
   // freshSessions also includes hibernated metadata seeds, so successful
   // process telemetry counts liveBackendIds while the autosave safety gate
   // counts resolvedIds (success OR retained failure).

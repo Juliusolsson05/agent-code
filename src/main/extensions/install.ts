@@ -22,7 +22,8 @@ import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { BUNDLE_MAX_BYTES, BUNDLE_MAX_DEPTH, BUNDLE_MAX_ENTRIES } from './bundleLimits.js'
 import { githubApiHeaders, resolveGitHubCliToken } from './githubCli.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
-import { discardExtensionBundle, extensionBundleDirectory, readLedger, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
+import { removeExtensionSecrets } from '@main/extensions/secrets.js'
+import { discardExtensionBundle, extensionBundleDirectory, preservedBundleExtensionIds, readLedger, readLedgerContents, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
 import type { ExtensionManifest, InstalledExtension } from '@shared/types/extensions.js'
 
 /**
@@ -610,18 +611,32 @@ async function finalizeInstall(
   bundleDir: string,
   provenance: { origin: 'github' | 'local'; repo: string; ref: string; sha256: string },
   promptConsent?: ConsentPrompt,
+  firstInstall = false,
 ): Promise<InstalledExtension> {
-  // Consent gate. If the extension requests capabilities beyond Tier 0, the user
-  // must approve them BEFORE the bundle moves into place — declining aborts the
-  // install, so nothing is left behind. A Tier-0-only extension installs with no
-  // prompt, matching the "repo name is the trust decision" stance.
+  // Consent gate. The user must approve BEFORE the bundle moves into place —
+  // declining aborts the install, so nothing is left behind.
+  //
+  // Two reasons to prompt, and Tier 0 needs the second one (#1049 re-review):
+  //
+  //  1. The manifest asks for capabilities. Always prompted, always was.
+  //  2. This is a FIRST install — the user just typed a repo or picked a
+  //     folder. Tier 0 used to install in silence here, on the stance that
+  //     "the repo name is the trust decision"; the stance is right and the
+  //     silence contradicted it, because nothing ever rendered that name where
+  //     the user could compare it. `owner/repo` copied from a page can carry
+  //     invisible characters, and the extension row that shows the source
+  //     appears only after the code is installed.
+  //
+  // A RELOAD or UPDATE re-runs a source already recorded in the ledger, so it
+  // stays silent for Tier 0: the choice was made, and prompting on every
+  // rebuild would make extension development miserable for no new information.
   const permissions = manifest.permissions ?? []
-  if (permissions.length > 0) {
+  if (permissions.length > 0 || firstInstall) {
     const approved = promptConsent ? await promptConsent(manifest) : false
     if (!approved) {
-      throw new InstallError(
-        `Installation of ${manifest.name} was declined — its requested capabilities were not granted.`,
-      )
+      throw new InstallError(permissions.length > 0
+        ? `Installation of ${manifest.name} was declined — its requested capabilities were not granted.`
+        : `Installation of ${manifest.name} was declined.`)
     }
   }
 
@@ -648,6 +663,16 @@ async function finalizeInstall(
           `Remove it before installing another extension with the same id.`,
       )
     }
+    // ── A FIRST INSTALL OF AN ID STARTS WITH NO SECRETS (#1151 review) ──
+    // Secrets are deleted on uninstall, but a delete can be lost: the process
+    // can die between the ledger commit and the secret cleanup, and a
+    // quarantined row can be cleared while its secrets sit on disk. Rather than
+    // chase every removal path, the invariant is enforced where it matters:
+    // whenever there is no runnable row for this id, whatever secrets exist
+    // belong to an installation that is gone, never to this newcomer (which may
+    // be a different source). Updates/reloads have `previous` and keep theirs.
+    // Done before the commit: a crash here costs a first install nothing.
+    if (!previous) await removeExtensionSecrets(manifest.id)
     const finalDir = extensionBundleDirectory(record)
     await mkdir(join(finalDir, '..'), { recursive: true })
     // Immutable generations make the ledger rename the ONLY commit point.
@@ -699,7 +724,19 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
         await removeAbandoned(path)
       }
     }
-    const referenced = new Set((await readLedger()).map(extensionBundleDirectory))
+    // Preserved rows count as referenced (#959). A row this build cannot read
+    // still names a bundle on disk, and the build that CAN read it will need
+    // that bundle. Reclaiming it would turn "your extension is set aside until
+    // you roll forward" into "your extension is gone" — and the sweep runs at
+    // startup, so a single rollback-and-relaunch would do it.
+    //
+    // Their directories are computed from the RAW row rather than a validated
+    // one, so this deliberately protects both possible layouts for an id it
+    // cannot fully trust; a preserved row's bundle is only ever protected from
+    // deletion here, never served or executed.
+    const { rows, preserved } = await readLedgerContents()
+    const referenced = new Set(rows.map(extensionBundleDirectory))
+    const preservedIds = preservedBundleExtensionIds(preserved)
     const bundlesRoot = join(EXTENSIONS_DIR, '.bundles')
     let extensionDirs
     try { extensionDirs = await readdir(bundlesRoot, { withFileTypes: true }) } catch (error) {
@@ -709,6 +746,12 @@ export async function sweepAbandonedInstallDirectories(): Promise<void> {
     for (const extension of extensionDirs) {
       // Never follow a hand-created symlink during recursive housekeeping.
       if (!extension.isDirectory()) continue
+      // A preserved row claims this id, so none of its generations may be
+      // collected: we cannot tell WHICH one the row points at without parsing
+      // the field that failed to parse, and the build that can read the row
+      // will need it. Skipping the whole subtree is the only answer that does
+      // not depend on a guess.
+      if (preservedIds.has(extension.name)) continue
       const parent = join(bundlesRoot, extension.name)
       for (const generation of await readdir(parent, { withFileTypes: true })) {
         const path = join(parent, generation.name)
@@ -733,6 +776,9 @@ export async function installExtension(
   repoInput: string,
   promptConsent?: ConsentPrompt,
   options?: InstallOptions,
+  /** True when the user just typed this repo; false for an Update that
+   *  re-runs the one already recorded. See finalizeInstall. */
+  firstInstall = false,
 ): Promise<InstalledExtension> {
   const repo = normalizeRepo(repoInput)
   // Credential first, before any network: the disabled path must call NOTHING
@@ -759,12 +805,20 @@ export async function installExtension(
     for (const view of manifest.contributes?.views ?? []) {
       if (manifest.apiVersion === 2 && view.entry) await verifyEntryInsideBundle(staging, view.entry)
     }
+    // Service entries are launch targets for native processes, so they get the
+    // same bundle containment as the runtime entry at BOTH install sites. A
+    // manifest-level escape (e.g. ../../tool.js) already failed the schema; this
+    // closes the symlink flavor of the same attack before any fork happens.
+    for (const service of manifest.contributes?.services ?? []) {
+      await verifyEntryInsideBundle(staging, service.entry)
+    }
 
     return await finalizeInstall(
       manifest,
       staging,
       { origin: 'github', repo, ref: source.ref, sha256 },
       promptConsent,
+      firstInstall,
     )
   } finally {
     // .catch: `force` only suppresses ENOENT. A staging tree containing a
@@ -790,6 +844,9 @@ export async function installExtension(
 export async function installExtensionFromPath(
   sourceDir: string,
   promptConsent?: ConsentPrompt,
+  /** True when the user just picked this folder; false when reinstalling the
+   *  path already recorded in the ledger. See finalizeInstall. */
+  firstInstall = false,
 ): Promise<InstalledExtension> {
   let sourceReal: string
   try {
@@ -850,6 +907,9 @@ export async function installExtensionFromPath(
     for (const view of manifest.contributes?.views ?? []) {
       if (manifest.apiVersion === 2 && view.entry) await verifyEntryInsideBundle(staging, view.entry)
     }
+    for (const service of manifest.contributes?.services ?? []) {
+      await verifyEntryInsideBundle(staging, service.entry)
+    }
 
     // PROVENANCE ONLY. There is no tarball, so the entry digest answers "which
     // bytes did the source hand me" for a local install. It does NOT bind the
@@ -866,6 +926,7 @@ export async function installExtensionFromPath(
       staging,
       { origin: 'local', repo: sourceReal, ref: 'local', sha256 },
       promptConsent,
+      firstInstall,
     )
   } finally {
     // .catch: `force` only suppresses ENOENT. A staging tree containing a

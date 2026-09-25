@@ -11,6 +11,7 @@ import { withoutProvisionalProviderSession } from '@renderer/workspace/providerS
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 import { useSessionActions } from './session'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({
   loadInitialHistoryForSession: vi.fn(async () => undefined),
@@ -31,15 +32,11 @@ function initialState(meta: Record<string, unknown>): WorkspaceState {
     tabs: [{
       id: 'tab-a',
       title: 'recorded',
-      root: { type: 'leaf' as const, sessionId: predecessorId },
-      focusedSessionId: predecessorId,
     }],
     activeTabId: 'tab-a',
-    sessions: { [predecessorId]: meta },
-    detachedSessions: {},
-    buried: [],
+    sessions: { [predecessorId]: { ...meta, projectId: 'tab-a', joinedAt: 0 }},
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: oneLaneStage(predecessorId),
   } as unknown as WorkspaceState
 }
 
@@ -182,98 +179,70 @@ describe('spoken name identity through Undo Close', () => {
     tabs: [{
       id: 'tab-a',
       title: 'recorded',
-      root: { type: 'leaf', sessionId: 'survivor' },
-      focusedSessionId: 'survivor',
     }],
     activeTabId: 'tab-a',
-    sessions: { survivor: { cwd: '/recorded/worktree', kind: 'codex' } },
-    detachedSessions: {},
-    buried: [],
+    sessions: { survivor: { cwd: '/recorded/worktree', kind: 'codex', projectId: 'tab-a', joinedAt: 0 } },
     pinnedSessionIds: [],
-    dispatchMode: null,
+    stage: oneLaneStage('survivor'),
   } as unknown as WorkspaceState)
 
-  it('restores a grid pane under its own identity and title', async () => {
-    // The pane path used to commit only `tabs`, so the successor's metadata was
-    // whatever `spawn` could rebuild — identity gone, and (pre-existing) the
-    // user's title with it.
+  // Until #992 there were three restore paths (a split pane re-inserted beside
+  // its sibling, a Dispatch row re-filed from its record, a tab remapped leaf
+  // by leaf) and each had lost this metadata in its own way: the pane path
+  // committed only `tabs`, the row path used a hand-written allowlist that
+  // predated naming, and the tab path built a `freshSessions` map nothing ever
+  // read. There are two paths now, and both go through carryDurableMeta.
+
+  it('restores a closed session under its own identity, title and place', async () => {
     const state = anchoredState()
     const refs = makeRefs(state)
     refs.undoStackRef.current.push({
-      type: 'pane',
+      type: 'session',
       closedAt: Date.now(),
-      tabId: 'tab-a',
-      sessionMeta: closedAgent('identity-one'),
-      direction: 'vertical',
-      ratio: 0.5,
-      side: 'a',
-      siblingLeafId: 'survivor',
+      sessionId: 'old-session',
+      sessionMeta: { ...closedAgent('identity-one'), projectId: 'tab-a', joinedAt: 10 },
     })
-    const undo = mountUndoCloseAction(state, refs, vi.fn().mockResolvedValue('restored-pane'))
+    const undo = mountUndoCloseAction(state, refs, vi.fn().mockResolvedValue('restored-session'))
 
     await act(async () => { await undo.actions.undoClose() })
 
-    expect(undo.getState().sessions['restored-pane']?.agentNameId).toBe('identity-one')
-    expect(undo.getState().sessions['restored-pane']?.title).toBe('the queue race')
+    const restored = undo.getState().sessions['restored-session']
+    expect(restored?.agentNameId).toBe('identity-one')
+    expect(restored?.title).toBe('the queue race')
+    // Membership is durable metadata `spawn` never sees, exactly like the
+    // identity: without it the restored agent would be unowned and pruned.
+    expect(restored).toMatchObject({ projectId: 'tab-a', joinedAt: 10 })
     undo.mounted.unmount()
   })
 
-  it('restores a detached Dispatch row under its own identity', async () => {
-    // This path did write a `sessions` patch, but as a hand-written allowlist
-    // that predates naming and therefore omitted `agentNameId`.
-    const state = anchoredState()
-    const refs = makeRefs(state)
-    refs.undoStackRef.current.push({
-      type: 'detached',
-      closedAt: Date.now(),
-      sessionMeta: closedAgent('identity-detached'),
-      record: {
-        sessionId: 'old-detached',
-        surface: 'dispatch',
-        projectTabId: 'tab-a',
-        projectTabTitle: 'recorded',
-        projectTabIndex: 0,
-        detachedAt: 10,
-      },
-    })
-    const undo = mountUndoCloseAction(state, refs, vi.fn().mockResolvedValue('restored-detached'))
-
-    await act(async () => { await undo.actions.undoClose() })
-
-    expect(undo.getState().sessions['restored-detached']?.agentNameId).toBe('identity-detached')
-    expect(undo.getState().detachedSessions['restored-detached']?.detachedAt).toBe(10)
-    undo.mounted.unmount()
-  })
-
-  it('restores a whole tab, grid leaves and detached children alike, under their own identities', async () => {
-    // The tab path looked safe — it built a `freshSessions` map keyed by the
-    // new ids — but nothing ever read that map, so it lost exactly what the
-    // pane path lost. Both of a closed tab's populations are asserted here
-    // because they are respawned by two different loops.
+  it('restores a whole project under its sessions own identities', async () => {
     const state = { ...anchoredState(), tabs: [], sessions: {} } as unknown as WorkspaceState
     const refs = makeRefs(state)
     refs.undoStackRef.current.push({
       type: 'tab',
       closedAt: Date.now(),
-      tab: {
-        id: 'closed-tab',
-        title: 'closed',
-        root: { type: 'leaf', sessionId: 'old-grid' },
-        focusedSessionId: 'old-grid',
-      },
+      tab: { id: 'closed-tab', title: 'closed' },
       tabIndex: 0,
-      sessionMetas: { 'old-grid': closedAgent('identity-grid') },
-      detachedEntries: [{ meta: closedAgent('identity-child'), detachedAt: 10 }],
+      sessions: [
+        { sessionId: 'old-first', meta: { ...closedAgent('identity-grid'), projectId: 'closed-tab', joinedAt: 0 } },
+        { sessionId: 'old-child', meta: { ...closedAgent('identity-child'), projectId: 'closed-tab', joinedAt: 10 } },
+      ],
     })
     const spawn = vi.fn()
-      .mockResolvedValueOnce('restored-grid')
+      .mockResolvedValueOnce('restored-first')
       .mockResolvedValueOnce('restored-child')
     const undo = mountUndoCloseAction(state, refs, spawn)
 
     await act(async () => { await undo.actions.undoClose() })
 
-    expect(undo.getState().sessions['restored-grid']?.agentNameId).toBe('identity-grid')
-    expect(undo.getState().sessions['restored-child']?.agentNameId).toBe('identity-child')
+    const after = undo.getState()
+    expect(after.sessions['restored-first']?.agentNameId).toBe('identity-grid')
+    expect(after.sessions['restored-child']?.agentNameId).toBe('identity-child')
+    // The project came back under a NEW id, and its sessions name that id.
+    expect(after.tabs).toHaveLength(1)
+    expect(after.tabs[0]!.id).not.toBe('closed-tab')
+    expect(after.sessions['restored-first']).toMatchObject({ projectId: after.tabs[0]!.id, joinedAt: 0 })
+    expect(after.sessions['restored-child']).toMatchObject({ projectId: after.tabs[0]!.id, joinedAt: 10 })
     undo.mounted.unmount()
   })
 })

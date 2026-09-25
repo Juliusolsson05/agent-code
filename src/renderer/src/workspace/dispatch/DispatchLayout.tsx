@@ -1,21 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
-
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { useAppStore } from '@renderer/app-state/hooks'
-import { SplitHandle } from '@renderer/features/shared/SplitHandle'
-import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
-import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
-import {
-  buildDispatchGroups,
-  buildPinnedDispatchRows,
-  buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
-import {
-  DispatchAgentList,
-  DispatchEmpty,
-} from '@renderer/workspace/dispatch/DispatchAgentList'
 import { TiledDispatchLayout } from '@renderer/workspace/dispatch/TiledDispatchLayout'
 
 type Props = {
@@ -25,162 +9,16 @@ type Props = {
   showWorktreeBadges: boolean
 }
 
-// The single render fork. This wrapper must call NO hooks before the
-// branch: the classic and tiled layouts run different numbers of hooks, so
-// choosing between them has to be a component swap (each child's hooks stay
-// unconditional), not an early return inside one hook-bearing component.
-// dispatchMode.tiled is the source of truth (set by enterTiledDispatch /
-// cleared by exitTiledDispatch).
+// The workspace stage (#992): ragged rows of lanes, always. This used to be
+// the render fork between classic Dispatch (sidebar + one agent view) and
+// Tiled Dispatch; the unified layout promotes the tiled stage to THE
+// workspace and the classic view — like the grid tree before it — is
+// deleted rather than reconciled.
+//
+// Kept as a named wrapper (rather than importing TiledDispatchLayout at the
+// call sites) because MainSurface, tests, and the placement-overlay
+// composition already speak "DispatchLayout" — the seam stays stable while
+// what it renders became the whole workspace.
 export function DispatchLayout(props: Props) {
-  if (props.workspace.state.dispatchMode?.tiled) {
-    return <TiledDispatchLayout {...props} />
-  }
-  return <ClassicDispatchLayout {...props} />
-}
-
-function ClassicDispatchLayout({
-  workspace,
-  agentViewMode,
-  showStatusMode,
-  showWorktreeBadges,
-}: Props) {
-  const groups = useMemo(
-    () => buildDispatchGroups(workspace.state),
-    [workspace.state],
-  )
-  const pinnedRows = useMemo(
-    () => buildPinnedDispatchRows(workspace.state),
-    [workspace.state],
-  )
-  // Pinned rows participate in keyboard dispatch (cmd+N) and in
-  // "which row is currently focused?" selection — they're real
-  // dispatch rows, just rendered in their own section. Prepending
-  // them here makes the focus fallback prefer a pinned row over
-  // anything else when the explicit focus id is stale, which matches
-  // the Pinned section's visual position at the top of the list.
-  const rows = useMemo(
-    () => buildVisibleDispatchRows(workspace.state),
-    [workspace.state],
-  )
-  const activeRow = selectVisibleDispatchRow(
-    rows,
-    workspace.state.dispatchMode?.focusedSessionId ?? null,
-    workspace.activeTab?.focusedSessionId ?? null,
-  )
-  // Resizable list/active-agent split. The ratio is owned by uiShell
-  // (see UiShellState.dispatchListRatio) so it survives mode toggles
-  // without being re-derived from workspace state. We measure against
-  // the outer flex row's bounding rect, NOT the viewport, because the
-  // dispatch layout can be wrapped by the Global Editor overlay — at
-  // which point its "100% width" is much narrower than the screen.
-  //
-  // The clamp in setDispatchListRatio (0.15..0.5) is the real bound;
-  // we deliberately do NOT keep the previous `min-w-[220px]
-  // max-w-[420px]` Tailwind classes on the list — they would override
-  // the user's drag and create a visual disconnect between the
-  // splitter handle and the actual list edge at narrow / wide
-  // viewports. If a user manages to get the list unreadably narrow at
-  // a tiny viewport, the 15% floor still applies.
-  const openNewAgentForProject = useAppStore(state => state.openNewAgentForProject)
-  const dispatchListRatio = useAppStore(state => state.dispatchListRatio)
-  const setDispatchListRatio = useAppStore(state => state.setDispatchListRatio)
-  const layoutRowRef = useRef<HTMLDivElement | null>(null)
-  const listSplitter = useResizableSplitter({
-    onDrag: useCallback(
-      (clientX: number) => {
-        const el = layoutRowRef.current
-        if (!el) return
-        const rect = el.getBoundingClientRect()
-        if (rect.width <= 0) return
-        setDispatchListRatio((clientX - rect.left) / rect.width)
-      },
-      [setDispatchListRatio],
-    ),
-  })
-
-  useEffect(() => {
-    if (!activeRow) return
-    if (
-      workspace.activeTab?.id === activeRow.tabId &&
-      workspace.state.dispatchMode?.focusedSessionId === activeRow.sessionId
-    ) {
-      return
-    }
-    // Global Dispatch can render a fallback row when the currently active
-    // tab has no visible agent rows. Keep the workspace focus aligned with
-    // that visible row so tab chrome, new-agent placement, and project
-    // terminal selection all agree with what the user is commanding.
-    workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId)
-  }, [
-    activeRow?.sessionId,
-    activeRow?.tabId,
-    workspace.activeTab?.id,
-    workspace.focusDispatchSession,
-    workspace.state.dispatchMode?.focusedSessionId,
-  ])
-
-  // List width is the ratio * row width; the active-agent pane absorbs the
-  // remainder via `flex-1`. This used to also describe a dedicated
-  // project-terminal column pinned at 25%; that column was removed, and
-  // terminals are ordinary Dispatch rows rendered in the active pane like any
-  // other session (#671).
-  const listWidthPct = (dispatchListRatio * 100).toFixed(2)
-
-  return (
-    <div
-      ref={layoutRowRef}
-      className="h-full min-h-0 min-w-0 flex overflow-hidden bg-canvas"
-    >
-      <div
-        className="flex-shrink-0 min-h-0 border-r border-border"
-        style={{ width: `${listWidthPct}%` }}
-      >
-        <DispatchAgentList
-          groups={groups}
-          pinnedRows={pinnedRows}
-          activeSessionId={activeRow?.sessionId ?? null}
-          dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
-          focusSessionInTab={workspace.focusDispatchSession}
-          showWorktreeBadges={showWorktreeBadges}
-          onCreateAgentInProject={openNewAgentForProject}
-        />
-      </div>
-
-      {/*
-        List/active splitter. Visible bar is 4px; hit area is 10px so
-        the bar can be grabbed without pixel-perfect aim. We render
-        between the list wrapper and the active-agent pane; the
-        wrapper takes the inline width, the splitter is fixed
-        (flex-shrink-0), and the active pane uses flex-1 to absorb
-        the remainder.
-      */}
-      <SplitHandle
-        dragging={listSplitter.dragging}
-        onMouseDown={listSplitter.onMouseDown}
-        hitSizePx={10}
-        barSizePx={4}
-      />
-      {listSplitter.cursorLock}
-
-      <div className="flex-1 min-w-0 min-h-0 border-r border-border">
-        {activeRow ? (
-          renderWorkspaceLeaf(
-            activeRow.sessionId,
-            activeRow.sessionId,
-            workspace,
-            activeRow.tabId,
-            agentViewMode,
-            showStatusMode,
-            showWorktreeBadges,
-            () => workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId),
-            false,
-            activeRow.label,
-          )
-        ) : (
-          <DispatchEmpty message="no sessions in this dispatch scope" />
-        )}
-      </div>
-
-    </div>
-  )
+  return <TiledDispatchLayout {...props} />
 }

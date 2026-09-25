@@ -1,6 +1,7 @@
+import type { SessionRoutingGap, SessionRoutingScope, SessionRoutingResyncResult, SessionRoutingHistoryResult } from '@shared/types/sessionRouting.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
@@ -12,12 +13,13 @@ import type {
   SessionKind,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionTranscriptDiagnosticEvent,
   SessionAgentPtyDataEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionInputReadinessEvent,
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
@@ -33,6 +35,7 @@ import type {
   TranscriptPathResult,
   Unsub,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@preload/api/types.js'
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
@@ -46,6 +49,13 @@ type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdow
 // callback — this avoids N×N listener storms as tabs and splits grow.
 
 export const sessionApi = {
+  onSessionRoutingGap: (cb: (gap: SessionRoutingGap) => void): Unsub => subscribe('session:routing-gap', cb),
+  getSessionRoutingGaps: (): Promise<SessionRoutingGap[]> => ipcRenderer.invoke('session:routing-gaps'),
+  resyncSessionRouting: (scope: SessionRoutingScope): Promise<SessionRoutingResyncResult> =>
+    ipcRenderer.invoke('session:resync-routing', scope),
+  loadSessionRoutingHistory: (scope: SessionRoutingScope, sourceKey: string): Promise<SessionRoutingHistoryResult> =>
+    ipcRenderer.invoke('session:load-routing-history', scope, sourceKey),
+
   // --- Session lifecycle ---
   spawnSession: (options: SessionSpawnOptions): Promise<SessionSpawnResult> =>
     ipcRenderer.invoke('session:spawn', options),
@@ -62,13 +72,26 @@ export const sessionApi = {
   getBackendSnapshot: (sessionId: string): Promise<SessionBackendSnapshot | null> =>
     ipcRenderer.invoke('session:get-backend-snapshot', sessionId),
 
+  /**
+   * Ask main to re-emit these sessions' cached provider conditions on
+   * `session:conditions` (#895).
+   *
+   * Call it once the runtimes exist: a window that adopts, restores or wakes a
+   * session rebuilds it from `emptyRuntime()`, and providers publish
+   * conditions only when they CHANGE — so an agent already blocked on a
+   * permission or a question sends nothing to a renderer that just started
+   * watching it. Returns how many were delivered.
+   */
+  reseedSessionConditions: (sessionIds: string[]): Promise<number> =>
+    ipcRenderer.invoke('session:reseed-conditions', sessionIds),
+
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
 
   // Workspace teardown knows the persisted kind/cwd and should use that
   // ownership proof. The legacy id-only primitive remains for trusted main
   // integrations that already hold a live manager reference.
-  killOwnedSession: (options: SessionOwnershipOptions): Promise<boolean> =>
+  killOwnedSession: (options: SessionKillOptions): Promise<boolean> =>
     ipcRenderer.invoke('session:kill-owned', options),
 
   getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
@@ -128,14 +151,18 @@ export const sessionApi = {
     prompt: string,
     imagePaths?: string[],
     deliveryId?: string,
+    options?: PromptDeliveryOptions,
   ): Promise<PromptDeliveryResult> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId, ...(options ? [options] : [])),
 
   resolveCondition: (
     sessionId: string,
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> =>
     ipcRenderer.invoke('session:resolveCondition', sessionId, action),
+
+  jumpToLatest: (sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('session:jumpToLatest', sessionId),
 
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('session:resize', sessionId, cols, rows),
@@ -199,7 +226,7 @@ export const sessionApi = {
 
   // The singular `session:jsonl-entry` bridge method was removed: main
   // emits JSONL ONLY through the coalescer as `session:jsonl-entries`
-  // (see main/sessions/jsonlCoalescer.ts). A live single entry arrives as
+  // (see the JSONL burst coalescing in main/sessions/sessionFeedTap.ts). A live single entry arrives as
   // a 1-element bulk burst with ~1ms setImmediate latency, so the renderer
   // can treat every JSONL delivery identically. The old singular channel
   // was the pre-coalescer slow path that caused the bootstrap-replay
@@ -211,6 +238,12 @@ export const sessionApi = {
 
   onSessionJsonlError: (cb: (e: SessionJsonlErrorEvent) => void): Unsub =>
     subscribe('session:jsonl-error', cb),
+
+  /** Channel HEALTH reports from provider adapters. Main has always sent
+   *  these; until #881 nothing subscribed, so a fault that healed could not
+   *  say so. */
+  onSessionTranscriptDiagnostic: (cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub =>
+    subscribe('session:transcript-diagnostic', cb),
 
   /** Raw PTY bytes for terminal sessions. Claude sessions do NOT
    *  emit on this channel — they use screen/jsonl-entry instead. */
@@ -271,6 +304,11 @@ export const sessionApi = {
    *  renderer/session-runtime/historyBoundary.ts. */
   onSessionHistoryBoundary: (cb: (e: SessionHistoryBoundaryEvent) => void): Unsub =>
     subscribe('session:history-boundary', cb),
+
+  /** The pane's provider session changed without a respawn (Pi /new, /resume,
+   *  /fork). Arrives before the history reset and rows of the new session. */
+  onSessionProviderSessionChanged: (cb: (e: SessionProviderSessionChangedEvent) => void): Unsub =>
+    subscribe('session:provider-session-changed', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

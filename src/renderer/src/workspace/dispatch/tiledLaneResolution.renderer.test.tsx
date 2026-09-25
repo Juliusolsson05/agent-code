@@ -1,5 +1,4 @@
 import { cleanup, render } from '@testing-library/react'
-import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
@@ -7,6 +6,7 @@ import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchS
 import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { SessionId, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 
 // What a lane does when it CANNOT resolve.
 //
@@ -26,6 +26,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 // lane on the next render. A unit test cannot see that; only mounting can.
 
 const appState = vi.hoisted(() => ({
+  settings: { browserPocketEnabled: false },
   workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),
@@ -48,12 +49,10 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
 vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
   DispatchMiniList: () => null,
 }))
-vi.mock('@providers/registry.renderer', () => ({
-  getRendererProvider: () => ({
-    TileLeaf: ({ sessionId }: { sessionId: string }) => (
-      <div data-testid="lane-agent" data-session-id={sessionId} />
-    ),
-  }),
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
+  TileLeaf: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="lane-agent" data-session-id={sessionId} />
+  ),
 }))
 
 // A REAL persisted Agent Code workspace: 4 tabs, 24 sessions, 12 detached, 3
@@ -61,14 +60,15 @@ vi.mock('@providers/registry.renderer', () => ({
 // recording rather than a hand-built state matters most for the kill case
 // below — the lane ids, the detached/grid split, and the scope filtering are
 // all shapes the product actually produced, not ones this test imagined.
-const FIXTURE = JSON.parse(
-  readFileSync('testing/fixtures/worktree-context/dispatch-global-d23.json', 'utf8'),
-) as { state: WorkspaceState }
+// Loaded through the shared lift: the file on disk is a v2 workspace whose lane
+// grid sits at `dispatchMode.tiled`; the loader moves it to `state.stage`
+// verbatim (see recordedDispatchWorkspace.ts for why it is not re-recorded).
+const FIXTURE = loadRecordedDispatchWorkspace()
 
 function recordedState(tiled: TiledDispatchState): WorkspaceState {
   return {
     ...FIXTURE.state,
-    dispatchMode: { ...FIXTURE.state.dispatchMode!, tiled },
+    stage: tiled,
   }
 }
 
@@ -105,7 +105,7 @@ function renderLanes(tiled: TiledDispatchState, state = recordedState(tiled)) {
 }
 
 // The lanes this workspace was actually saved with.
-const RECORDED_LANES = FIXTURE.state.dispatchMode!.tiled!.lanes.map(
+const RECORDED_LANES = FIXTURE.state.stage.lanes.map(
   lane => lane.selectedSessionId,
 ) as SessionId[]
 
@@ -118,7 +118,7 @@ describe('unresolved tiled lanes', () => {
   it('paints exactly the agents the recorded workspace selected', () => {
     // The baseline the cases below are diffed against. If this drifts, every
     // assertion after it is measuring the wrong thing.
-    const { painted } = renderLanes(FIXTURE.state.dispatchMode!.tiled!)
+    const { painted } = renderLanes(FIXTURE.state.stage)
 
     expect(RECORDED_LANES.length).toBeGreaterThanOrEqual(4)
     expect(painted()).toEqual(RECORDED_LANES)
@@ -133,16 +133,13 @@ describe('unresolved tiled lanes', () => {
     // hand-edited lane array, so this exercises the same path close/kill/bury
     // actually take.
     const killed = RECORDED_LANES[1]!
-    const afterKill = clearTiledLaneSessions(
-      FIXTURE.state.dispatchMode!,
-      killed,
-    )
+    const afterKill = clearTiledLaneSessions(FIXTURE.state.stage, killed)
     const survivors = { ...FIXTURE.state.sessions }
     delete survivors[killed]
 
     const { painted, selectTiledLaneSession } = renderLanes(
-      afterKill!.tiled!,
-      { ...recordedState(afterKill!.tiled!), sessions: survivors },
+      afterKill,
+      { ...recordedState(afterKill), sessions: survivors },
     )
 
     // Nothing was handed to the empty lane...
@@ -167,35 +164,31 @@ describe('unresolved tiled lanes', () => {
     expect(painted()).toEqual([RECORDED_LANES[0]])
   })
 
-  it('renders an out-of-scope lane empty while keeping its selection', () => {
-    // Project scope builds rows from activeTabId alone, so a lane holding
-    // another project's agent cannot resolve. It must render empty WITHOUT the
-    // selection being destroyed: flipping scope back has to bring the agent
-    // back. The old healer replaced the selection irreversibly, which is why
-    // this is asserted on the state as well as the paint.
+  it('paints another project s agent in a lane of the active project', () => {
+    // This case used to assert the OPPOSITE. Under project scope the index was
+    // built from activeTabId alone, so a lane holding another project's agent
+    // could not resolve and rendered empty (selection kept, so flipping scope
+    // back restored it). There is no scope now (#992): every index lists every
+    // project, so the lane resolves and paints. Pinned because "lanes are
+    // space, projects are labels" (U4) is exactly this — which project is
+    // active must never decide what a lane may show.
+    //
     // Picked through the real row builder rather than by guessing at the
     // fixture's internals: all four RECORDED_LANES happen to live in the active
-    // tab, so a foreign lane has to be sourced from the global row stream.
-    const foreign = buildVisibleDispatchRows({
-      ...FIXTURE.state,
-      dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'global' },
-    }).find(row => row.tabId !== FIXTURE.state.activeTabId)?.sessionId
+    // tab, so a foreign lane has to be sourced from the full row stream.
+    const foreign = buildVisibleDispatchRows(FIXTURE.state)
+      .find(row => row.tabId !== FIXTURE.state.activeTabId)?.sessionId
     expect(foreign).toBeDefined()
 
     const tiled: TiledDispatchState = {
       lanes: [{ selectedSessionId: foreign! }],
       focusedLane: 0,
     }
-    const projectScoped: WorkspaceState = {
-      ...FIXTURE.state,
-      dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'project', tiled },
-    }
 
-    const { painted, selectTiledLaneSession, getAllByTestId } = renderLanes(tiled, projectScoped)
+    const { painted, selectTiledLaneSession } = renderLanes(tiled, recordedState(tiled))
 
-    expect(painted()).toEqual([])
-    expect(getAllByTestId('lane-empty')).toHaveLength(1)
-    // The selection survives — nothing rewrote the lane.
+    expect(painted()).toEqual([foreign])
+    // Resolution is a read: nothing rewrote the lane to make it paint.
     expect(selectTiledLaneSession).not.toHaveBeenCalled()
     expect(tiled.lanes[0]?.selectedSessionId).toBe(foreign)
   })

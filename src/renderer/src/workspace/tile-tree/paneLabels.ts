@@ -5,7 +5,6 @@ import type {
   SessionId,
   Tab,
   TabId,
-  TileTabsState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -72,7 +71,6 @@ export function resolveAgentSessionTarget(state: WorkspaceState, sessionId: Sess
 export function resolveAgentPaneLabel(
   state: WorkspaceState,
   input: string,
-  tileTabs: TileTabsState | null = null,
 ): AgentPaneLabelTarget | null {
   const requestedLabel = input.trim().toUpperCase()
   if (!/^[A-Z]+[1-9]\d*$/.test(requestedLabel)) return null
@@ -87,22 +85,20 @@ export function resolveAgentPaneLabel(
   // still a valid workspace coordinate even though that project is not in the
   // current Dispatch index.
   //
-  // TileTabs wins MainSurface's render precedence over stale Dispatch state.
-  // Persisted workspaces can contain both because the two slices rehydrate
-  // independently, so hidden Dispatch rows must not redefine coordinates while
-  // the user is visibly looking at Tiled Tabs.
-  if (state.dispatchMode && !tileTabs) {
-    const dispatchRow = buildVisibleDispatchRows(state).find(
-      row => row.label === requestedLabel,
+  // (A Tile Tabs precedence check lived here until #992 deleted Tile Tabs.)
+  //
+  // (The index lookup was gated on "Dispatch is on" until the stage became a
+  // required field. The index is always on screen now, so it always wins.)
+  const dispatchRow = buildVisibleDispatchRows(state).find(
+    row => row.label === requestedLabel,
+  )
+  if (dispatchRow) {
+    return buildAgentPaneLabelTarget(
+      state,
+      requestedLabel,
+      dispatchRow.sessionId,
+      dispatchRow.tabId,
     )
-    if (dispatchRow) {
-      return buildAgentPaneLabelTarget(
-        state,
-        requestedLabel,
-        dispatchRow.sessionId,
-        dispatchRow.tabId,
-      )
-    }
   }
 
   for (let tabIndex = 0; tabIndex < state.tabs.length; tabIndex++) {
@@ -122,6 +118,41 @@ export function resolveAgentPaneLabel(
   }
 
   return null
+}
+
+/**
+ * The label a session shows on screen, or null when it shows none.
+ *
+ * WHY this lives here and is shared (#1145): `workspace.observe` published
+ * this as `displayLabel`, and Agent Management records must publish the SAME
+ * string — an agent told "prompt B28" reads the label from one surface and
+ * may act through the other. The rule used to be an inline closure in
+ * observeWorkspace; a second copy in the Agent Management descriptor would be
+ * the drift this module's header warns about.
+ *
+ * WHY the fallback is verified through resolveAgentPaneLabel: Dispatch row
+ * labels can shadow project-local labels (see resolveAgentPaneLabel). Only a
+ * fallback that the resolver maps back to this same session is advertised, so
+ * for every `[A-Z]+N` label `displayLabel(X) === L` exactly when
+ * `resolveAgentPaneLabel(state, L)` returns X. Agent Management's label
+ * targeting and `ac_agents_search {label}` rely on that equivalence to agree.
+ *
+ * `rows` is the caller's `buildVisibleDispatchRows(state)`: both callers label
+ * every session in one pass, and rebuilding the row stream per session would
+ * make a listing quadratic in the pool size.
+ */
+export function sessionDisplayLabel(
+  state: WorkspaceState,
+  sessionId: SessionId,
+  rows: readonly { sessionId: SessionId; label: string }[],
+): string | null {
+  const row = rows.find(candidate => candidate.sessionId === sessionId)
+  if (row) return row.label
+  const tabId = state.sessions[sessionId]?.projectId
+  const tab = tabId === undefined ? undefined : state.tabs.find(candidate => candidate.id === tabId)
+  if (!tab) return null
+  const localLabel = paneLabelForSession(state, tab.id, sessionId)
+  return resolveAgentPaneLabel(state, localLabel)?.sessionId === sessionId ? localLabel : null
 }
 
 function buildAgentPaneLabelTarget(

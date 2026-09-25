@@ -4,6 +4,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { TldrRecord } from '@shared/types/tldr'
 import { TldrFreshness } from './TldrFreshness'
 import { isPreviewVisible, useTldrView } from './viewState'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { PreviewKind } from './viewState'
 
 // What differs between the TLDR and Goal peeks is only where the text comes
@@ -32,7 +33,13 @@ function newest(previous: TldrRecord | null, next: TldrRecord | undefined): Tldr
 
 export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provider }: { kind?: PreviewKind; identity: string; enabled: boolean; runtime?: SessionRuntime; provider?: string }) {
   const source = SOURCES[kind]
-  const visible = useTldrView(state => isPreviewVisible(state, kind))
+  // WHY the pane's own visibility gates the overlay, not just the latch
+  // (#1027): Reader, Spotlight, Settings and the fullscreen Global Editor keep
+  // the workspace MOUNTED under display:none. An overlay rendered there is in
+  // the DOM, so the keyboard gate saw it and swallowed every key while nobody
+  // could see it. The same fix as GoalLoopPane (#1021).
+  const ownerVisible = useAgentTerminalOwnerVisible()
+  const visible = useTldrView(state => isPreviewVisible(state, kind)) && ownerVisible
   const [snapshot, setSnapshot] = useState<{ identity: string; record: TldrRecord | null; error: boolean }>({ identity, record: null, error: false })
   const [hookContact, setHookContact] = useState<{ identity: string; seen: boolean } | null>(null)
   const enforced = enabled && ENFORCED_PROVIDERS.has(provider ?? '')
@@ -77,6 +84,14 @@ export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provide
   if (!visible) return null
   const record = snapshot.identity === identity ? snapshot.record : null
   const text = !enabled ? `${source.label} is off` : snapshot.error ? `${source.label} unavailable` : record?.text ?? source.missing
+  // Goal completion (#1182). Shown with the goal, not instead of it: the peek
+  // answers "what is this agent for", and "done: <note>" alone would not say
+  // what was done. Only the Goal store ever carries the pair, so the kind check
+  // is belt and braces rather than the gate. A disabled capability shows
+  // nothing stale, the same rule the text above follows.
+  const completion = enabled && kind === 'goal' && record?.completedAt && record.completionNote
+    ? { at: record.completedAt, note: record.completionNote }
+    : null
   return <div
     data-agent-code-interaction-owner="app"
     {...(kind === 'tldr' ? { 'data-tldr-overlay': '' } : { 'data-goal-overlay': '' })}
@@ -90,13 +105,16 @@ export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provide
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
   >
-    <div className="absolute inset-0 flex items-center justify-center px-6 py-16">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 py-16">
+      {completion && <span data-goal-completed="" className="text-xs font-medium uppercase tracking-wider text-accent">✓ Completed</span>}
       <p className="max-h-full max-w-xl overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere] sm:text-base">{text}</p>
+      {completion && <p className="max-w-xl whitespace-pre-wrap break-words text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">{completion.note}</p>}
     </div>
     <TldrFreshness
       runtime={runtime}
       writtenAt={enabled ? record?.updatedAt : undefined}
       writtenLabel={source.writtenLabel}
+      completedAt={completion?.at}
       // WHY this needs a completed turn: a freshly (re)loaded agent has had no
       // turn for its hooks to fire on, and a just-submitted one may still be
       // ahead of its first hook, so "never contacted" is not yet a failure. A

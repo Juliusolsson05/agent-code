@@ -15,8 +15,8 @@ export const inspectAgentDraft = (sessionId: string) => {
   // Positive agent check: an extension pane has no composer either, and the old
   // terminal-only guard let a control caller write an invisible draft into one
   // that autosave would then persist.
-  if (!meta || !isAgentSessionKind(meta.kind) || store.workspaceState.buried.some(item => item.sessionId === sessionId)) {
-    throw new ControlError('unavailable', 'Choose a current, non-buried agent')
+  if (!meta || !isAgentSessionKind(meta.kind)) {
+    throw new ControlError('unavailable', 'Choose a current agent')
   }
   const runtime = store.workspaceRuntimes[sessionId] ?? emptyRuntime()
   const images = runtime.draftImages.map(({ id, filename, mediaType }) => ({ id, filename, mediaType }))

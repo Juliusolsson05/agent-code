@@ -1,10 +1,11 @@
+import type { WorkspaceState } from '@renderer/workspace/types'
 import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
+import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
+import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 
 import { useWorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -14,8 +15,6 @@ import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
 import { usePickerActions } from '@renderer/workspace/hook/actions/picker'
 import { useSpotlightActions } from '@renderer/workspace/hook/actions/spotlight'
 import { useReaderActions } from '@renderer/workspace/hook/actions/reader'
-import { useTileTabsActions } from '@renderer/workspace/hook/actions/tileTabs'
-import { useResizeActions } from '@renderer/workspace/hook/actions/resize'
 import { useSessionActions } from '@renderer/workspace/hook/actions/session'
 import { useTabActions } from '@renderer/workspace/hook/actions/tab'
 import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
@@ -34,10 +33,10 @@ import {
   usePinnedSessionIdsSanity,
   useReaderModeSanity,
   useSpotlightSanity,
-  useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
 import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
+import { useSessionRoutingRecovery } from '@renderer/workspace/hook/ipc/useSessionRoutingRecovery'
 import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
@@ -54,13 +53,23 @@ import {
   additionalCloseImpact,
   assertManagedTarget,
   listManagedAgentDescriptors,
+  ManagedAgentTargetError,
   readManagedAgentOutput,
   readManagedAgentOutputs,
+  resolveManagedTarget,
 } from '@renderer/workspace/agentManagementMcp'
+import type { ManagedAgentNames } from '@renderer/workspace/agentManagementMcp'
+import { sessionDisplayLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { hydrateTranscriptWithoutWaking as hydrateManagedTranscript } from '@renderer/workspace/hook/actions/hydrateTranscript'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { closeIdleOrchestrationAgents as runIdleOrchestrationCleanup } from '@renderer/workspace/idleOrchestrationAgents'
+import { closeAgentActivitySelection as runAgentActivityClose } from '@renderer/workspace/agentActivityClose'
+import { closeCompletedGoalAgents as runCompletedGoalClose } from '@renderer/workspace/completedGoalAgents'
+import type { TldrRecord } from '@shared/types/tldr'
+import { withTerminalLastUsed, withTerminalLastUsedFloor } from '@renderer/workspace/terminalLastUsed'
+import type { AgentActivitySelection } from '@renderer/workspace/agentActivityClose'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -82,17 +91,10 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  // Read once at mount via useBootstrap's useEffect closure. Live
-  // changes to this preference do not retro-trigger bootstrap — that
-  // is intentional, the setting only seeds initial state on a fresh
-  // install (no workspace.json yet).
-  defaultWorkspaceMode: WorkspaceModeId = 'grid',
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
+  defaultBuiltInMcpDomains: BuiltInMcpDefaultsInput = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
-  const openBuryPrompt = useAppStore(store => store.openBuryPrompt)
-  const closeBuryPrompt = useAppStore(store => store.closeBuryPrompt)
   const openNewAgentPlacement = useAppStore(store => store.openNewAgentPlacement)
   const closeNewAgentPlacement = useAppStore(store => store.closeNewAgentPlacement)
 
@@ -105,8 +107,6 @@ export function useWorkspace(
   const setRuntimes = useAppStore(store => store.setWorkspaceRuntimes)
   const spotlight = useAppStore(store => store.workspaceSpotlight)
   const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
-  const tileTabs = useAppStore(store => store.workspaceTileTabs)
-  const setTileTabs = useAppStore(store => store.setWorkspaceTileTabs)
   const readerMode = useAppStore(store => store.workspaceReaderMode)
   const setReaderMode = useAppStore(store => store.setWorkspaceReaderMode)
 
@@ -114,7 +114,6 @@ export function useWorkspace(
   const refs = useWorkspaceRefs(
     state,
     runtimes,
-    tileTabs,
     dangerousAgentsEnabled,
     useProxyStreaming,
     defaultBuiltInMcpDomains,
@@ -141,7 +140,6 @@ export function useWorkspace(
     })
     return () => { unsubscribeRuntime(); unsubscribeState() }
   }, [refs])
-  refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
   refs.useProxyStreamingRef.current = useProxyStreaming
   refs.defaultBuiltInMcpDomainsRef.current = defaultBuiltInMcpDomains
@@ -156,21 +154,6 @@ export function useWorkspace(
   // says "are we past the once-only effect", not "is the on-disk state
   // intact". See useBootstrap for the four possible terminal values.
   const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
-  const selectGridRelatedSession = useCallback((ownerSessionId: string, selectedSessionId: string) => {
-    setState(prev => {
-      const nextSelections = { ...(prev.gridRelatedSelections ?? {}) }
-      if (ownerSessionId === selectedSessionId) {
-        delete nextSelections[ownerSessionId]
-      } else {
-        nextSelections[ownerSessionId] = selectedSessionId
-      }
-      return {
-        ...prev,
-        gridRelatedSelections: nextSelections,
-      }
-    })
-  }, [setState])
-
   const setSessionAgentViewModeOverride = useCallback((
     sessionId: SessionId,
     override: AgentViewModeOverride | null,
@@ -195,8 +178,10 @@ export function useWorkspace(
       showToast('Choose OpenCode Terminal when creating the agent to use the native TUI')
       return false
     }
-    if (meta.providerRuntime === 'terminal' && override === 'agent') {
-      showToast('OpenCode Terminal sessions always use the native TUI')
+    if (effectiveProviderRuntime(kind, meta.providerRuntime) === 'terminal' && override === 'agent') {
+      // Effective runtime: Pi panes are terminal-only whatever their metadata
+      // stored, and the toast names the pane's own provider.
+      showToast(`${providerChoiceLabel(kind, 'terminal')} sessions always use the native TUI`)
       return false
     }
 
@@ -290,6 +275,8 @@ export function useWorkspace(
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
   } =
     useStreamingActions(setRuntimes, isCodexSession)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
@@ -305,23 +292,9 @@ export function useWorkspace(
     setState,
     refs,
   )
-  const {
-    openTileTabs,
-    closeTileTabs,
-    focusTiledTab,
-    focusTiledTabByIndex,
-    resizeFocusedTiledTab,
-    resizeTiledTabByIndex,
-  } = useTileTabsActions(setTileTabs, setSpotlight, setState, refs)
-  const {
-    resizeFocused,
-    resizeFocusedDirectional,
-    setSplitRatio,
-    setSplitRatioInTab,
-    normalizeLayout,
-    hardNormalizeLayout,
-    rotateLayout,
-  } = useResizeActions(setState, setTileTabs)
+  // useTileTabsActions and useResizeActions were composed here until the
+  // unified layout (#992): Tile Tabs and split resizing both died with the
+  // tile tree. Lane/row sizing lives in useDispatchActions.
 
   // Session lifecycle + derivatives that depend on it
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
@@ -332,7 +305,7 @@ export function useWorkspace(
 
   const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
-    setTileTabs,
+    setRuntimes,
     refs,
     sessionActions,
     showToast,
@@ -340,9 +313,8 @@ export function useWorkspace(
 
   const tabActions = useTabActions(
     state,
-    tileTabs,
     setState,
-    setTileTabs,
+    setRuntimes,
     setSpotlight,
     setReaderMode,
     refs,
@@ -355,12 +327,9 @@ export function useWorkspace(
     setState,
     setRuntimes,
     setSpotlight,
-    setTileTabs,
     setReaderMode,
     refs,
     showToast,
-    openBuryPrompt,
-    closeBuryPrompt,
     openNewAgentPlacement,
     closeNewAgentPlacement,
     sessionActions,
@@ -369,8 +338,6 @@ export function useWorkspace(
   createOrchestrationAgentRef.current = paneActions.createOrchestrationAgent
   const closeOrchestrationSessionRef = useRef(paneActions.closeSession)
   closeOrchestrationSessionRef.current = paneActions.closeSession
-  const killBuriedSessionRef = useRef(paneActions.killBuried)
-  killBuriedSessionRef.current = paneActions.killBuried
 
   useEffect(() => {
     const off = window.api.onOrchestrationRequest(async request => {
@@ -568,6 +535,20 @@ export function useWorkspace(
       error: unknown,
       sessionId?: string,
     ): Promise<void> => {
+      // A target refusal carries a message written for the calling model
+      // (which labels the project shows, why a name did not resolve), so it
+      // is forwarded verbatim instead of being flattened to a bare code.
+      if (error instanceof ManagedAgentTargetError) {
+        await window.api.resolveAgentManagementRequest({
+          requestId,
+          ok: false,
+          type,
+          code: error.code,
+          message: error.message,
+          ...(sessionId ? { sessionId } : {}),
+        })
+        return
+      }
       const candidate = error instanceof Error ? error.message : 'request_failed'
       const knownCodes = new Set([
         'caller_not_found',
@@ -608,13 +589,43 @@ export function useWorkspace(
         },
       })
 
+    // Read beside whichever workspace snapshot the caller is about to use, so
+    // a name is resolved and published from the same moment as the labels.
+    const agentNames = (): ManagedAgentNames => {
+      const store = useAppStore.getState()
+      return {
+        enabled: store.settings.agentNamesEnabled === true,
+        names: store.workspaceAgentNames ?? {},
+      }
+    }
+    // The single place a request's target becomes a session id (#1145). See
+    // resolveManagedTarget for why a label is resolved here, now, against the
+    // live state — and never re-resolved after an await.
+    const resolveTarget = (
+      callerSessionId: string,
+      target: Parameters<typeof resolveManagedTarget>[0]['target'],
+    ): string => resolveManagedTarget({
+      state: refs.stateRef.current,
+      callerSessionId,
+      target,
+      agentNames: agentNames(),
+    })
+    const currentLabel = (sessionId: string): string | null => {
+      const state = refs.stateRef.current
+      return sessionDisplayLabel(state, sessionId, buildVisibleDispatchRows(state))
+    }
+
     const off = window.api.onAgentManagementRequest(async request => {
+      // Filled as soon as a target resolves, so a later refusal names the
+      // session it was about rather than echoing an unresolved label.
+      let resolvedSessionId: string | undefined
       try {
         if (request.type === 'list-agents') {
           const listed = listManagedAgentDescriptors({
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
             callerSessionId: request.callerSessionId,
+            agentNames: agentNames(),
           })
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
@@ -627,23 +638,26 @@ export function useWorkspace(
         }
 
         if (request.type === 'read-agent') {
+          const sessionId = resolveTarget(request.callerSessionId, request.target)
+          resolvedSessionId = sessionId
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
             allowSelf: true,
           })
-          const unavailable = await hydrateTranscriptWithoutWaking(request.sessionId)
+          const unavailable = await hydrateTranscriptWithoutWaking(sessionId)
           if (unavailable) throw new Error('transcript_unavailable')
           const current = useAppStore.getState()
           const output = readManagedAgentOutput({
             state: current.workspaceState,
             runtimes: current.workspaceRuntimes,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
             maxMessages: request.maxMessages,
             maxCharsPerMessage: request.maxCharsPerMessage,
             maxCharsPerAgent: request.maxCharsPerAgent,
+            agentNames: agentNames(),
           })
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
@@ -660,10 +674,21 @@ export function useWorkspace(
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
             callerSessionId: request.callerSessionId,
+            agentNames: agentNames(),
           })
           const listedIds = new Set(listed.agents.map(item => item.agent.sessionId))
-          let targetIds = request.sessionIds
-            ? [...new Set(request.sessionIds)]
+          // Labels and names resolve through the same resolver as the single
+          // tools, then join the explicit id list: it is still "an explicit
+          // subset" (strict about departures below), however it was named.
+          const explicit = request.sessionIds || request.labels || request.names
+            ? [
+                ...(request.sessionIds ?? []),
+                ...(request.labels ?? []).map(label => resolveTarget(request.callerSessionId, { label })),
+                ...(request.names ?? []).map(name => resolveTarget(request.callerSessionId, { name })),
+              ]
+            : undefined
+          let targetIds = explicit
+            ? [...new Set(explicit)]
             : listed.agents
                 .filter(item => request.includeCaller === true || !item.agent.isCaller)
                 .map(item => item.agent.sessionId)
@@ -685,7 +710,7 @@ export function useWorkspace(
               .map(item => [item.sessionId, item] as const),
           )
           const current = useAppStore.getState()
-          if (!request.sessionIds) {
+          if (!explicit) {
             const originalIds = new Set(targetIds)
             const fresh = listManagedAgentDescriptors({
               state: current.workspaceState,
@@ -712,6 +737,7 @@ export function useWorkspace(
             maxCharsPerMessage: request.maxCharsPerMessage,
             maxCharsPerAgent: request.maxCharsPerAgent,
             maxTotalChars: request.maxTotalChars,
+            agentNames: agentNames(),
           })
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
@@ -728,26 +754,38 @@ export function useWorkspace(
         }
 
         if (request.type === 'send-prompt') {
+          const sessionId = resolveTarget(request.callerSessionId, request.target)
+          resolvedSessionId = sessionId
+          // The label the user saw when this was asked, captured BEFORE the
+          // wake: waking can reorder nothing today, but the echo must describe
+          // the agent as it was addressed, not whatever it shows afterwards.
+          const displayLabel = currentLabel(sessionId)
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
           })
           // Sending is the one operation that intentionally wakes a parked
           // target. Re-authorize after the await because the user can move or
           // close a pane while the provider is starting.
-          await ensureSessionLiveRef.current(request.sessionId, 'orchestration.send-prompt')
+          //
+          // WHY the re-check uses the RESOLVED id, never the label again: if an
+          // earlier row closed during the wake, "B28" now names a different
+          // agent. The request was about the agent that showed B28 when it was
+          // made; re-resolving would deliver to its neighbour.
+          await ensureSessionLiveRef.current(sessionId, 'orchestration.send-prompt')
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
-            sessionId: request.sessionId,
+            sessionId,
           })
-          const delivery = await window.api.deliverPrompt(request.sessionId, request.prompt)
+          const delivery = await window.api.deliverPrompt(sessionId, request.prompt)
           await window.api.resolveAgentManagementRequest({
             requestId: request.requestId,
             ok: true,
             type: 'send-prompt',
-            sessionId: request.sessionId,
+            sessionId,
+            displayLabel,
             delivery,
           })
           return
@@ -765,10 +803,13 @@ export function useWorkspace(
         // additionalCloseImpact therefore reports linked descendants only. The
         // model-facing tool adds the separate requirement that the current
         // user explicitly requested closure.
+        const closeTargetId = resolveTarget(request.callerSessionId, request.target)
+        resolvedSessionId = closeTargetId
+        const closeTargetLabel = currentLabel(closeTargetId)
         const affected = additionalCloseImpact({
           state: refs.stateRef.current,
           callerSessionId: request.callerSessionId,
-          sessionId: request.sessionId,
+          sessionId: closeTargetId,
         })
         if (affected.length > 0) {
           await window.api.resolveAgentManagementRequest({
@@ -777,7 +818,7 @@ export function useWorkspace(
             type: 'close-agent',
             code: 'close_would_affect_additional_sessions',
             message: 'Closing this target would also affect additional project sessions.',
-            sessionId: request.sessionId,
+            sessionId: closeTargetId,
             additionalAffectedSessionIds: affected,
           })
           return
@@ -786,13 +827,17 @@ export function useWorkspace(
         const placement = assertManagedTarget({
           state: current,
           callerSessionId: request.callerSessionId,
-          sessionId: request.sessionId,
+          sessionId: closeTargetId,
         })
-        if (placement.placement === 'buried') {
-          const buried = current.buried.find(item => item.sessionId === request.sessionId)
-          if (!buried) throw new Error('agent_not_found')
-          await killBuriedSessionRef.current(buried.id)
-        } else {
+        // A 'buried' placement used to branch to Kill Buried here. Buried
+        // records become ordinary pool rows when an old file is migrated
+        // (#992, legacyWorkspaceV2.ts legacyMemberships) and live state has no
+        // `buried` field at all, so nothing can report one and every
+        // managed close takes the one authorized path below. `placement` is
+        // still resolved for its side effect: assertManagedTarget throws when
+        // the caller does not manage this target.
+        void placement
+        {
           // THE authorization check for the Agent Management close tool.
           //
           // The tool's rule used to be prose in its description ("never close
@@ -808,12 +853,13 @@ export function useWorkspace(
           // idle target does not slip through the human-ergonomics exemption
           // the policy grants ⌘W. Declining rejects the tool call.
           const caller = current.sessions[request.callerSessionId]?.title
-          const closed = await closeOrchestrationSessionRef.current(request.sessionId, {
+          const closed = await closeOrchestrationSessionRef.current(closeTargetId, {
             requireConfirmation: {
               headline: caller
                 ? `Agent “${caller}” is asking to close this agent.`
                 : 'An agent is asking to close this agent.',
             },
+            killCaller: 'agent-management.close-agent',
           })
           // The comment above says "declining rejects the tool call" — it did
           // not. The gate RESOLVES false rather than throwing, so the success
@@ -835,14 +881,15 @@ export function useWorkspace(
           requestId: request.requestId,
           ok: true,
           type: 'close-agent',
-          closedSessionId: request.sessionId,
+          closedSessionId: closeTargetId,
+          displayLabel: closeTargetLabel,
         })
       } catch (error) {
         await resolveFailure(
           request.requestId,
           request.type,
           error,
-          'sessionId' in request ? request.sessionId : undefined,
+          resolvedSessionId,
         )
       }
     })
@@ -875,7 +922,28 @@ export function useWorkspace(
     [paneActions.closeSession, refs, showToast],
   )
 
-  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
+  // Agent Activity's multi-select close (#1170). Wired here for the same two
+  // reasons as the idle cleanup above: the global toast, and the live refs the
+  // flow reads before and after its confirmation dialog.
+  const closeAgentActivitySelection = useCallback(
+    (selection: readonly AgentActivitySelection[]) => runAgentActivityClose(selection, {
+      readState: () => refs.stateRef.current,
+      readRuntimes: () => refs.latestRuntimesRef.current,
+      closeSession: paneActions.closeSession,
+      confirm: requestCloseConfirmation,
+      showToast,
+    }),
+    [paneActions.closeSession, refs, showToast],
+  )
+
+  // Session events AND history reads arrive through whichever SessionFeed the
+  // app root mounted (desktop: ipcSessionFeed in app/main.tsx; remote client:
+  // its WebSocket feed; tests: FakeSessionFeed). The provider value is a
+  // module const, so identity is stable — which the subscription effect's dep
+  // array requires; see the WHY on useIpcSubscriptions. Read here, before the
+  // history actions, because older-history paging reads through it (#1177).
+  const sessionFeed = useSessionFeed()
+  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime, sessionFeed)
 
   const { undoClose, undoCloseCount } = useUndoCloseAction(
     state,
@@ -885,35 +953,60 @@ export function useWorkspace(
   )
 
   const dispatchActions = useDispatchActions(
-    state,
     setState,
-    setTileTabs,
-    closeNewAgentPlacement,
+    setRuntimes,
     refs,
     sessionActions.ensureSessionLive,
     showToast,
   )
 
+  // Close Completed Agents… (#1182). Wired here like the two bulk closes above
+  // for the global toast and the live refs, plus the lane removal the flow does
+  // afterwards — which is why it sits after dispatchActions. The goal records
+  // come from the modal: it is the one holding them fresh (read on open, kept
+  // current by goal:changed), and the flow reads them again at every kill.
+  const closeCompletedGoalAgents = useCallback(
+    (
+      selection: readonly SessionId[],
+      options: { removeLanes: boolean; readGoals: () => Record<string, TldrRecord> },
+    ) => runCompletedGoalClose(selection, { removeLanes: options.removeLanes }, {
+      readState: () => refs.stateRef.current,
+      readRuntimes: () => refs.latestRuntimesRef.current,
+      readGoals: options.readGoals,
+      closeSession: paneActions.closeSession,
+      removeTiledLane: dispatchActions.removeTiledLane,
+      showToast,
+    }),
+    [dispatchActions.removeTiledLane, paneActions.closeSession, refs, showToast],
+  )
+
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
-  // Session events arrive through whichever SessionFeed the app root mounted
-  // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
-  // feed; tests: FakeSessionFeed). The provider value is a module const, so
-  // identity is stable — which the subscription effect's dep array requires;
-  // see the WHY on useIpcSubscriptions.
-  const sessionFeed = useSessionFeed()
+  // `sessionFeed` is read above, next to the history actions.
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useTerminalForeground(restoreStatus, setRuntimes)
+  // A terminal's durable last-used record (#1178). One setter for both the
+  // foreground hook and the input path below, so the throttle and the
+  // floor-never-moves rule live in one pure helper.
+  const recordTerminalUsage = useCallback((sessionId: SessionId, usage: 'use' | 'floor') => {
+    const at = Date.now()
+    setState(prev => usage === 'use'
+      ? withTerminalLastUsed(prev, sessionId, at)
+      : withTerminalLastUsedFloor(prev, sessionId, at))
+  }, [setState])
+  const markTerminalUsed = useCallback((sessionId: SessionId) => recordTerminalUsage(sessionId, 'use'), [recordTerminalUsage])
+  const readRuntimeForForeground = useCallback(
+    (sessionId: SessionId) => refs.latestRuntimesRef.current[sessionId],
+    [refs],
+  )
+  useTerminalForeground(restoreStatus, setRuntimes, readRuntimeForForeground, recordTerminalUsage)
+  useSessionRoutingRecovery(refs, setRuntimes, state.sessions)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useBootstrap(
     refs,
     setState,
     setRuntimes,
-    setTileTabs,
     tabActions.newTab,
     setBootstrapComplete,
     setRestoreStatus,
-    defaultWorkspaceMode,
-    dispatchActions.enterDispatchMode,
   )
   // The persist effect reads current refs on its own timer, so it needs no
   // render-time snapshot — passing `runtimes` here would suggest a reactivity
@@ -921,7 +1014,6 @@ export function useWorkspace(
   useFeedDebugPersist(refs)
   useSpotlightSanity(spotlight, state, setSpotlight)
   useReaderModeSanity(readerMode, state, setReaderMode)
-  useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
   usePinnedSessionIdsSanity(state, setState)
   // Beside the sanity hooks because it is the same kind of thing: a
   // membership-driven correction that keeps an orthogonal slice consistent
@@ -950,9 +1042,11 @@ export function useWorkspace(
     }),
     activeTab,
     spotlight,
-    tileTabs,
     readerMode,
-    dispatchMode: state.dispatchMode,
+    // The lane grid. Exposed as `stage`, replacing the nullable `dispatchMode`
+    // envelope (#992): consumers used to branch on "is Dispatch on?" and then
+    // on "is it tiled?"; both questions are gone, so the field is the grid.
+    stage: state.stage,
     restoreStatus,
     setReaderModeTarget,
     toggleReaderMode,
@@ -966,6 +1060,12 @@ export function useWorkspace(
     // threw "is not a function" at runtime (vite strips types, so the build
     // never caught the missing member). Exposing it here is the whole fix.
     updateRuntime,
+    // Browser pocket config writes (#1142). Takes one of the pure transforms in
+    // features/browser-pocket/actions.ts rather than exposing a general
+    // setState: those transforms are the only code allowed to change
+    // SessionMeta.browserPocket, and they return the SAME object for no-ops,
+    // which setWorkspaceState turns into "no store notification, no autosave".
+    updateBrowserPocket: (transform: (state: WorkspaceState) => WorkspaceState) => setState(transform),
     // actions
     newTab: tabActions.newTab,
     // Close Tab runs through the pane close executor, beside closeSession, so
@@ -978,40 +1078,27 @@ export function useWorkspace(
     splitFocused: paneActions.splitFocused,
     openExtensionViewInPane: paneActions.openExtensionViewInPane,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
-    commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
     createDetachedSession: paneActions.createDetachedSession,
     createLinkedAgent: paneActions.createLinkedAgent,
     createOrchestrationAgent: paneActions.createOrchestrationAgent,
-    attachDetachedToGrid: paneActions.attachDetachedToGrid,
-    attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
-    detachSessionToDispatch: paneActions.detachSessionToDispatch,
-    detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     closeIdleOrchestrationAgents,
-    requestBuryFocused: paneActions.requestBuryFocused,
-    buryFocused: paneActions.buryFocused,
-    reviveBuried: paneActions.reviveBuried,
-    killBuried: paneActions.killBuried,
-    focusSession: paneActions.focusSession,
+    closeAgentActivitySelection,
+    closeCompletedGoalAgents,
+    markTerminalUsed,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
     focusAgentBySessionId,
     setAgentTitle,
     setSessionAgentViewModeOverride,
-    selectGridRelatedSession,
-    navigate: paneActions.navigate,
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
     mergeTabs: tabActions.mergeTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
-    resizeFocused,
-    resizeFocusedDirectional,
-    setSplitRatio,
-    setSplitRatioInTab,
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
     settleQueuedSubmit,
@@ -1020,6 +1107,8 @@ export function useWorkspace(
     appendFeedDebug,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
     setDraftInput,
     setDraftImages,
     clearDraft,
@@ -1028,9 +1117,6 @@ export function useWorkspace(
     showPaneToast,
     undoClose,
     undoCloseCount,
-    normalizeLayout,
-    hardNormalizeLayout,
-    rotateLayout,
     replaceSession,
     reloadFocusedAgent,
     softReloadAgentView,
@@ -1048,12 +1134,6 @@ export function useWorkspace(
     setSpotlightTarget,
     toggleSpotlight,
     setSpotlightSession,
-    openTileTabs,
-    closeTileTabs,
-    focusTiledTab,
-    focusTiledTabByIndex,
-    resizeFocusedTiledTab,
-    resizeTiledTabByIndex,
     toggleTailMode,
     acquireRenderedViewLease,
     releaseRenderedViewLease,
@@ -1064,16 +1144,11 @@ export function useWorkspace(
     pickerConfirm,
     pickerCancel,
     setCodeBlockPicker,
-    enterDispatchMode: dispatchActions.enterDispatchMode,
-    exitDispatchMode: dispatchActions.exitDispatchMode,
-    setDispatchScope: dispatchActions.setDispatchScope,
-    focusDispatchSession: dispatchActions.focusDispatchSession,
     pinSession: dispatchActions.pinSession,
     unpinSession: dispatchActions.unpinSession,
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
-    enterTiledDispatch: dispatchActions.enterTiledDispatch,
-    exitTiledDispatch: dispatchActions.exitTiledDispatch,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
+    clearTiledLane: dispatchActions.clearTiledLane,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,

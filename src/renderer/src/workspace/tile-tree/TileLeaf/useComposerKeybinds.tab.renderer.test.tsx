@@ -47,7 +47,6 @@ function setup(options: { runtime?: Partial<SessionRuntime>; input?: string; pro
     ...options.runtime,
   } as SessionRuntime
   const workspace = {
-    dispatchMode: false,
     updateRuntime,
     showPaneToast,
     clearPendingRewindUndo: vi.fn(),
@@ -77,7 +76,7 @@ function setup(options: { runtime?: Partial<SessionRuntime>; input?: string; pro
     }),
     { wrapper },
   )
-  return { hook, send, setInputText, updateRuntime, showPaneToast }
+  return { hook, send, setInputText, updateRuntime, showPaneToast, feed }
 }
 
 describe('composer Tab handling', () => {
@@ -134,20 +133,18 @@ describe('composer Tab handling', () => {
 describe('composer Escape while the provider composer is occupied', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    Object.defineProperty(window, 'api', {
-      configurable: true,
-      value: { sendInput: vi.fn(async () => true) },
-    })
   })
   afterEach(() => {
     vi.useRealTimers()
   })
 
   it('sends the spaced clear routine instead of the "still starting" toast', async () => {
-    const { hook, send, showPaneToast } = setup({
+    const { hook, send, showPaneToast, feed } = setup({
       runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
     })
-    const sendInput = vi.mocked(window.api.sendInput)
+    // The clear writes go through the pane's SessionFeed (#1177), like every
+    // other composer write, not straight to the preload bridge.
+    const clears = () => feed.calls.filter(call => call.method === 'sendInput')
 
     await act(async () => {
       const pending = hook.result.current.onKeyDown(keyEvent('Escape'))
@@ -156,16 +153,16 @@ describe('composer Escape while the provider composer is occupied', () => {
     })
 
     expect(send).not.toHaveBeenCalled()
-    expect(sendInput).toHaveBeenCalledTimes(CLEAR_AGENT_COMPOSER_PRESSES)
-    expect(sendInput.mock.calls.every(call => call[1] === '\x15')).toBe(true)
+    expect(clears()).toHaveLength(CLEAR_AGENT_COMPOSER_PRESSES)
+    expect(clears().every(call => call.method === 'sendInput' && call.data === '\x15')).toBe(true)
     expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clearing'))
   })
 
   it('runs one clear routine even when Escape repeats or is pressed again mid-clear', async () => {
-    const { hook, showPaneToast } = setup({
+    const { hook, showPaneToast, feed } = setup({
       runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
     })
-    const sendInput = vi.mocked(window.api.sendInput)
+    const clears = () => feed.calls.filter(call => call.method === 'sendInput')
 
     await act(async () => {
       const first = hook.result.current.onKeyDown(keyEvent('Escape'))
@@ -177,7 +174,7 @@ describe('composer Escape while the provider composer is occupied', () => {
       await Promise.all([first, repeat, second])
     })
 
-    expect(sendInput).toHaveBeenCalledTimes(CLEAR_AGENT_COMPOSER_PRESSES)
+    expect(clears()).toHaveLength(CLEAR_AGENT_COMPOSER_PRESSES)
     expect(showPaneToast).toHaveBeenCalledTimes(1)
   })
 
@@ -185,7 +182,7 @@ describe('composer Escape while the provider composer is occupied', () => {
     const starting = setup({ runtime: { inputReady: false, inputReadinessReason: 'provider-not-ready' } })
     await act(async () => { await starting.hook.result.current.onKeyDown(keyEvent('Escape')) })
     expect(starting.send).not.toHaveBeenCalled()
-    expect(vi.mocked(window.api.sendInput)).not.toHaveBeenCalled()
+    expect(starting.feed.calls.filter(call => call.method === 'sendInput')).toHaveLength(0)
     expect(starting.showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('still starting'))
 
     const ready = setup()

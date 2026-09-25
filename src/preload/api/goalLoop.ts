@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import { subscribeShared } from '@preload/api/ipc.js'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop.js'
 
 export type GoalLoopControlRequest = {
@@ -12,9 +13,7 @@ export const goalLoopApi = {
     ipcRenderer.invoke('goal-loop:read', sessionIds),
   controlGoalLoop: (request: GoalLoopControlRequest): Promise<GoalLoopState | null> =>
     ipcRenderer.invoke('goal-loop:control', request),
-  onGoalLoopChanged: (listener: () => void): (() => void) => {
-    const handler = () => listener()
-    ipcRenderer.on('goal-loop:changed', handler)
-    return () => { ipcRenderer.removeListener('goal-loop:changed', handler) }
-  },
+  // Shared (#1015): every mounted GoalLoopPane subscribes.
+  onGoalLoopChanged: (listener: () => void): (() => void) =>
+    subscribeShared('goal-loop:changed', () => listener()),
 }

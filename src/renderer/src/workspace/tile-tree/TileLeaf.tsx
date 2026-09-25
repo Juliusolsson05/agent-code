@@ -1,7 +1,6 @@
+import { sessionIsWorking } from '@renderer/session-runtime/working'
 import { useMonitorCommit } from '@renderer/performance/useMonitorCommit'
 import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
-import { conditionStateByKind } from '@shared/types/providerConditions'
-import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,24 +9,24 @@ import type { KeyboardEvent } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import { Feed } from '@renderer/features/feed/ui/Feed'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
+import { AgentFeed } from '@renderer/features/feed/agent/AgentFeed'
+import { useAgentFeedModel } from '@renderer/features/feed/agent/useAgentFeedModel'
+import { StarterHintCard, starterCardVisibleForAgent } from '@renderer/features/workspace/ui/StarterHintCard'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { describeConditionRefusal } from '@shared/conditions-core/dispatch'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
-import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
-import {
-  selectMergedEntries,
-} from '@renderer/session-runtime/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
+import { optimisticPromptUuid } from '@renderer/session-runtime/optimisticPrompt'
 import { ComposerActions } from '@renderer/workspace/tile-tree/TileLeaf/ComposerActions'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
+import { useAcknowledgeAfterDwell } from '@renderer/workspace/tile-tree/TileLeaf/useAcknowledgeAfterDwell'
 import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
@@ -39,7 +38,6 @@ import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileL
 import { readinessStatusSince, resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 import { collectWorkflowRunReferences } from '@renderer/features/workflows/model/workflowTool'
 import { useSessionWorkflowViews } from '@renderer/features/workflows/model/useSessionWorkflowViews'
 import { WorkflowRunView } from '@renderer/features/workflows/ui/WorkflowRunRow'
@@ -99,6 +97,11 @@ const MAX_TRACKED_VISIBLE_SUBMIT_SURFACES = 2_048
 // Enter/Escape/backspace-to-empty. The picker is a purely visual
 // reflection of CC's state; it doesn't gate anything.
 
+// The composer's image strip while a send is in flight (#1181). Module-level
+// so the locked composer gets the same empty array on every render instead of
+// a fresh one.
+const NO_DRAFT_IMAGES: SessionRuntime['draftImages'] = []
+
 type Props = {
   sessionId: SessionId
   runtime: SessionRuntime
@@ -108,10 +111,6 @@ type Props = {
   workspace: Workspace
   showStatusMode?: boolean
   showWorktreeBadges?: boolean
-  ownerSessionId?: SessionId
-  relatedAgentTabs?: GridRelatedAgentTab[]
-  selectedRelatedSessionId?: SessionId
-  onSelectRelatedSession?: (sessionId: SessionId) => void
 }
 
 export function TileLeaf({
@@ -123,10 +122,6 @@ export function TileLeaf({
   workspace,
   showStatusMode = true,
   showWorktreeBadges = true,
-  ownerSessionId,
-  relatedAgentTabs = [],
-  selectedRelatedSessionId,
-  onSelectRelatedSession,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
@@ -197,7 +192,7 @@ export function TileLeaf({
   // for WorkflowRunView below, and Reader Mode / Spotlight / Settings retain
   // the workspace hidden (RetainedWorkspaceSurface, #752 — the second mask
   // term below, same reasoning as the editor one); ReaderView owns an
-  // independent stickToBottom. The remote client mounts Feed directly
+  // independent stickToBottom. The remote client mounts the same AgentFeed
   // (remote-client/src/ui/SessionView.tsx) and deliberately passes no tail
   // props, so Tail All is desktop-only.
   // In all of these Tail All is inert, not wrong — but the palette still reports
@@ -248,7 +243,17 @@ export function TileLeaf({
   const acknowledgeSession = useCallback(() => {
     acknowledgeWorkspaceSession(sessionId)
   }, [acknowledgeWorkspaceSession, sessionId])
+  // #1172: the pane header's completion stripes render this same unread marker,
+  // the one behind Dispatch's NEW badge, so the two surfaces can't disagree.
+  // Engagement clears it through acknowledgeSession above; the hook adds "stayed
+  // on the pane long enough to see it", and owns what "watching" means.
+  const completionUnseen = runtime.unreadKind !== null
+  useAcknowledgeAfterDwell({ sessionId, focused, unread: completionUnseen, acknowledge: acknowledgeSession })
   const setDraftImages = workspace.setDraftImages
+  // The prompt has left the composer for the feed and is on its way (#1181).
+  // Every path that could edit the draft from the keyboard or clipboard keys
+  // off this one value, so the lock cannot disagree with itself.
+  const composerLocked = runtime.promptDelivery.kind === 'sending'
   // Agent kinds route through the registry; undefined kind is the
   // pre-kind-persistence back-compat case (#394 phase 2c-4 — the old
   // `=== 'codex' ? codex : claude` ternary silently coerced any
@@ -307,7 +312,10 @@ export function TileLeaf({
   // drifted elsewhere. Hook in ./TileLeaf/useTypeToFocus.ts owns
   // the full filter/injection logic.
   useTypeToFocus({
-    focused: interactive,
+    // Off while the composer is locked (#1181): this hook writes draftInput
+    // directly, so a keystroke typed with focus outside the textarea would
+    // otherwise edit a composer the user cannot edit from inside it.
+    focused: interactive && !composerLocked,
     sessionId,
     inputRef,
     setDraftInput,
@@ -451,31 +459,12 @@ export function TileLeaf({
   // its job — proving parity before cutover — is done, and the legacy renderer
   // it diffed against has been deleted.)
   const usageLimitActions = useUsageLimitActions(workspace, sessionId, runtime.sessionRunId)
-  const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
-    toolUseIndex: runtime.toolUseIndex,
-    toolResultIndex: runtime.toolResultIndex,
-    version: runtime.toolIndexVersion,
-  })
-  const mergedEntries = useMemo(
-    () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
-    [
-      runtime.entries,
-      runtime.ghosts,
-      runtime.lastJsonlEntryAt,
-      runtime.semantic.currentTurn?.turnId,
-      runtime.semantic.history,
-    ],
-  )
-  const normalizedConditions = useMemo(() => {
-    const normalize = getRendererProviderCapabilities(provider).normalizeConditions
-    return normalize
-      ? normalize({
-          snapshot: runtime.conditions,
-          currentTurn: runtime.semantic.currentTurn,
-          entries: runtime.entries,
-        })
-      : runtime.conditions
-  }, [provider, runtime.conditions, runtime.entries, runtime.semantic.currentTurn])
+  // The runtime → paint mapping shared with the phone (#1177): ledger rows,
+  // the merged ghost fallback, provider-normalized conditions. TileLeaf keeps
+  // the model in hand because its visible-submit evidence below reads the
+  // same ledger rows Feed paints.
+  const feedModel = useAgentFeedModel(runtime, provider, sessionId)
+  const { ledgerFeedPlan } = feedModel
 
   const workflowCwd = workspace.state.sessions[sessionId]?.cwd ?? null
   const transcriptWorkflowReferences = useMemo(() => collectWorkflowRunReferences({
@@ -639,7 +628,8 @@ export function TileLeaf({
   // ./TileLeaf/usePasteToFocus.ts. Declared here (not next to
   // useTypeToFocus) because it depends on `handlePaste`.
   usePasteToFocus({
-    focused: interactive,
+    // Off while locked, for the same reason as useTypeToFocus above.
+    focused: interactive && !composerLocked,
     sessionId,
     inputRef,
     setDraftInput,
@@ -818,12 +808,20 @@ export function TileLeaf({
         projectDir={runtime.projectDir}
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}
-        relatedAgentTabs={relatedAgentTabs}
-        selectedRelatedSessionId={selectedRelatedSessionId ?? sessionId}
-        ownerSessionId={ownerSessionId ?? sessionId}
-        onSelectRelatedSession={onSelectRelatedSession}
+        completionUnseen={completionUnseen}
       />
 
+      {/* The starter card (#992 §4.6, Context A): a fresh agent whose feed
+          shows only the provider welcome. Freshness is derived, never stored —
+          no user turn in the committed entries yet — so the card disappears on
+          its own the moment the first prompt lands, and a RESTORED session
+          (history replayed into entries) never shows one. Terminal views
+          (AgentTerminalLeaf) never mount this component at all: a raw PTY is
+          the provider's canvas and we do not paint over its welcome screen. */}
+      {starterCardVisibleForAgent(
+        workspace.state.sessions[sessionId],
+        runtime.entries,
+      ) && <StarterHintCard variant="fresh-agent" />}
       {/* Feed — overflow-auto lives inside Feed itself so it can
           own its own scroll listener for the sticky-bottom logic
           (see Feed.tsx FeedImpl). This wrapper just provides the
@@ -836,109 +834,36 @@ export function TileLeaf({
             onReferenceChange={workflowViews.replaceReference}
           />
         ) : (
-          <Feed
-            usageLimitActions={usageLimitActions}
-            renderItemsOverride={ledgerFeedPlan.items}
-            committedOperationDecisionOverride={ledgerFeedPlan.resolveOperation}
+          <AgentFeed
             sessionId={sessionId}
             provider={provider}
+            runtime={runtime}
+            model={feedModel}
+            onLoadOlderHistory={loadOlderHistory}
+            // Desktop chrome (see AgentFeedChromeProps): the phone mounts the
+            // same AgentFeed without any of these.
+            usageLimitActions={usageLimitActions}
             workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
-          // Committed transcript + (rare) orphan-ghost fallback.
-          // The layered predicate in selectMergedEntries renders
-          // a ghost only when JSONL has stalled past the proxy
-          // AND the ghost is not sidecar-shaped (title-gen /
-          // predict-next-prompt fingerprint). SemanticStreamingTurn
-          // owns the live current turn and bounded completed
-          // semantic history; selectMergedEntries suppresses ghosts
-          // for those turn ids so the two surfaces never
-          // double-render.
-          // See docs/design/ghost-system.md for the canonical
-          // explanation of the predicate and the dual-owner
-          // model.
-          entries={mergedEntries}
-          // Live text renders ONLY from the semantic channel. The
-          // former `streamingScreen` / `streamingScreenMarkdown` /
-          // `streamingBaseline` props are gone — Feed no longer
-          // parses the TUI buffer at render time. Screen-derived
-          // text never reaches `runtime.semantic` at all: since the
-          // 2026-04-18 headless redesign both headless packages
-          // publish it only on their debug `semanticShadow` channel.
-          // Live prose comes from the Claude proxy, the Codex rollout
-          // and OpenCode SSE; with none open, nothing is live, and
-          // that is the correct answer rather than a gap to fill
-          // from the screen (#855 was Reader filling it).
-          // (The dead `activityStatus={runtime.activityStatus}` pass-through was
-          // removed here — Feed no longer reads it; feed audit Deletion
-          // Candidate 1. runtime.activityStatus stays for DebugPanel.)
-          // Adapter-derived stream phase — drives the in-feed
-          // WorkIndicator. The renderer never re-derives; it just
-          // displays whatever phase the headless package published.
-          // See 2026-04-18-thinking-phase-in-headless.md for the
-          // derivation contract.
-            streamPhase={runtime.streamPhase}
-            streamPhasePendingToolName={runtime.streamPhasePendingToolName}
-            streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
-            turnStartedAt={runtime.turnStartedAt}
-          // Live-turn ownership: SemanticStreamingTurn renders the
-          // current turn end-to-end off the semantic channel. Ghosts
-          // for semantic current/history turn ids are filtered out of
-          // the merged feed, so semantic rows and orphan fallback rows
-          // cannot both own the same visible turn.
-          //
-          // Completed semantic history is passed separately because
-          // MCP/Codex tool execution can advance through several
-          // Responses turns before JSONL commits rows for the earlier
-          // turns. Without this bounded bridge, archiving the current
-          // semantic turn makes the visible feed shrink until the
-          // durable transcript catches up — the exact "conversation
-          // clears while the agent is working" failure.
-            semanticHistory={runtime.semantic.history}
-            semanticTurn={runtime.semantic.currentTurn}
             tailMode={effectiveTailMode}
             pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
+            pendingEntryUuid={
+              runtime.promptDelivery.kind === 'sending'
+                ? optimisticPromptUuid(runtime.promptDelivery.submissionId)
+                : null
+            }
             codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
             onScrollInfo={onScrollInfo}
             onUserEngagement={acknowledgeSession}
-            hasOlderHistory={runtime.hasOlderHistory}
-            loadingOlderHistory={runtime.loadingOlderHistory}
-            onLoadOlderHistory={loadOlderHistory}
-          // Bootstrap-replay perf wiring — see workspaceStore +
-          // Feed for the WHY. While `bootstrapping` is true Feed
-          // suspends per-append auto-scroll and lazy-mount cascades;
-          // the indices spare Feed from a useMemo rebuild on every
-          // append.
-            bootstrapping={runtime.bootstrapping}
             scrollToLatestRequest={runtime.scrollToLatestRequest}
-            toolUseIndex={runtime.toolUseIndex}
-            toolResultIndex={runtime.toolResultIndex}
-            toolIndexVersion={runtime.toolIndexVersion}
-            subAgents={runtime.subAgents}
-            askUserQuestionState={
-              // Kind-keyed lookup (#394 phase 3): globally namespaced
-              // kinds make the provider narrow redundant. undefined =
-              // "no snapshot yet", null = "snapshot without AUQ" — Feed
-              // distinguishes the two.
-              runtime.conditions
-                ? conditionStateByKind<ClaudeAskUserQuestionState>(
-                    runtime.conditions,
-                    'claude.ask-user-question',
-                  )
-                : undefined
-            }
-          // Keep render-decision logging tied to mounted feeds, not
-          // to the debug panel or the transient focus flag. The
-          // state/semantic layers already persist aggressively in
-          // normal sessions, but `Feed` used to log `visible_rows`
-          // only when the panel was mounted. A later focus-gated
-          // version still missed MCP/tool-call traces because focus
-          // can move while the same pane keeps receiving streamed
-          // state. That left the exact haunted class of bugs
-          // invisible in the saved trace: optimistic user row added,
-          // MCP semantic turn advanced, JSONL reconciled, and then
-          // no record of whether the feed actually rendered those
-          // rows. `Feed` logs only row/count changes and the debug
-          // store is capped, so all-mounted logging is the correct
-          // diagnostic boundary.
+            // Keep render-decision logging tied to mounted feeds, not to the
+            // debug panel or the transient focus flag. A focus-gated version
+            // missed MCP/tool-call traces because focus can move while the
+            // same pane keeps receiving streamed state, which left the haunted
+            // class of bugs invisible in saved traces (optimistic user row
+            // added, MCP semantic turn advanced, JSONL reconciled, and no
+            // record of whether the feed rendered those rows). Feed logs only
+            // row/count changes and the debug store is capped, so all-mounted
+            // logging is the correct diagnostic boundary.
             onDebugLog={appendRenderDebug}
           />
         )}
@@ -972,9 +897,31 @@ export function TileLeaf({
 
       <ProviderConditionOutlet
         sessionId={sessionId}
-        conditions={normalizedConditions}
-        onSend={sendConditionKey}
+        conditions={feedModel.normalizedConditions}
+        // The desktop writes a pty choice's bytes itself; the phone sends the
+        // whole action for the desktop to verify (makeOutletDispatch).
+        onPtyAction={action => sendConditionKey(action.data)}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
+        // #1070. The answer came back `{ ok: false }` and was discarded, so
+        // clicking an option that the agent had already replaced did nothing
+        // at all — no toast, no log, no state change.
+        //
+        // WHY the GLOBAL toast and not the pane toast (#1099 review): every
+        // condition that can refuse a custom action is a Radix modal, and a
+        // refusal does not clear it — so the modal is ALWAYS up when this
+        // fires. The pane toast is an in-flow sibling with no z-index, sitting
+        // under a 1100-z, 85%-opaque scrim and inside the subtree Radix marks
+        // `aria-hidden`. `GlobalToast`'s own header records this exact trap
+        // and is why it is z-[1200]. The first version of this fix put the one
+        // message it produced where nobody could read it.
+        //
+        // The duration is long because the message asks the user to re-read a
+        // question; the default is two seconds.
+        onConditionRefused={(refusal) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[condition ${sessionId.slice(0, 8)}] refused`, refusal.rawReason, refusal.failedAtStep ?? '')
+          showToast(describeConditionRefusal(refusal), 6000)
+        }}
         interactionActive={interactive}
       />
 
@@ -993,11 +940,16 @@ export function TileLeaf({
       <ComposerInput
         sessionId={sessionId}
         inputRef={inputRef}
-        input={input}
+        // While locked, the VIEW is empty but the store still holds the draft
+        // (#1181). The prompt is already shown in the feed as a pending row;
+        // showing it here too read as "not sent". The store copy is what
+        // autosave persists and a session replacement transfers, so a reload
+        // or replacement mid-send cannot lose it (see draftAfterAcceptance).
+        input={composerLocked ? '' : input}
         focused={focused}
         slashMode={slashMode}
         provider={provider}
-        draftImages={runtime.draftImages}
+        draftImages={composerLocked ? NO_DRAFT_IMAGES : runtime.draftImages}
         pickerState={runtime.picker}
         historyIndex={historyIndex}
         history={history}
@@ -1030,6 +982,7 @@ export function TileLeaf({
         }
         providerSwitchMessage={runtime.providerSwitch?.message ?? null}
         providerSwitchPhase={runtime.providerSwitch?.phase ?? null}
+        locked={composerLocked}
       />
 
       {/* Mouse Mode only. Rendered as a sibling BELOW the composer rather than
@@ -1043,14 +996,15 @@ export function TileLeaf({
           deliveryUncertain={runtime.promptDelivery.kind === 'uncertain'}
           providerSwitching={runtime.providerSwitch !== null}
           slashMode={slashMode}
-          // Same predicate the Dispatch list uses for its running count. NOT
+          // `sessionIsWorking`, the same rule the Dispatch running count and the
+          // worktree panel use — it lives in session-runtime/working.ts now,
+          // and this comment used to say "same predicate the Dispatch list
+          // uses" while keeping its own copy of it. NOT
           // `streamPhase !== 'idle'` alone: between clicking Send and the first
           // token, streamPhase is still idle while the session is already
           // running, so a stream-only test hid Stop during precisely the
           // interval where "I just sent the wrong thing" is most likely.
-          working={
-            runtime.sessionStatus === 'running' || runtime.streamPhase !== 'idle'
-          }
+          working={sessionIsWorking(runtime)}
           dictationStatus={dictation.status}
           onSend={() => void submitCurrentDraft('button')}
           // Same escape byte the keyboard interrupt sends, and the same one the

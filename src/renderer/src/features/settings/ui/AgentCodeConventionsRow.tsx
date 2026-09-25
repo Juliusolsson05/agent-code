@@ -11,6 +11,7 @@ import type {
   AgentCodeConventionsSnapshot,
 } from '@shared/types/agentCodeConventions.js'
 import { AgentCodeConventionsEditorModal } from './AgentCodeConventionsEditorModal'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // See docs/design/agent-code-conventions.md. This row displays main-owned
 // desired state and deployment health; it must never persist a shadow toggle.
@@ -166,7 +167,9 @@ export function AgentCodeConventionsRow() {
                 onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}
                 className="min-w-0 truncate text-right text-control-fg hover:text-ink"
               >
-                {target.displayPath || target.state} · {target.state}
+                {/* The deployment path beside this row's own controls
+                    (#1049 re-review). */}
+                {withVisibleControls(target.displayPath || target.state)} · {target.state}
               </button>
             </div>
           ))}

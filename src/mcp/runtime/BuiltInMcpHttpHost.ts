@@ -1,3 +1,6 @@
+import type { BrowserPocketsPort } from '@mcp/runtime/browserTools.js'
+import type { UserMcpToolDependencies } from '@mcp/runtime/userMcpTools.js'
+import type { SkillsToolDependencies } from '@mcp/runtime/skillsTools.js'
 import type { TldrStore } from '@main/tldr/TldrStore.js'
 import { hasReportingDomain } from '@shared/types/tldr.js'
 import { TLDR_HOOK_EVENTS } from '@main/tldr/enforcement.js'
@@ -28,10 +31,16 @@ import type {
 } from '@mcp/shared/types.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
-// Hook bodies are small provider payloads (session ids, a cwd, a flag, and at
-// most the last assistant message). The cap bounds memory for a hostile or
-// runaway client without ever truncating a real one.
-const TLDR_HOOK_MAX_BODY_BYTES = 256 * 1024
+// The cap bounds memory for a hostile or runaway client on a loopback,
+// bearer-authenticated route.
+//
+// WHY 16 MiB and not the 256 KiB this started at: the old comment said hook
+// bodies are small (ids, a cwd, a flag, at most the last assistant message).
+// That holds for Stop, but PostToolUse carries the whole `tool_input` and
+// `tool_response`, so one Write of a large file or one big Read overflows
+// 256 KiB (#1028 re-review). An overflow destroys the socket, and the goal
+// loop cannot then tell whether the hook came from a subagent.
+const TLDR_HOOK_MAX_BODY_BYTES = 16 * 1024 * 1024
 const TLDR_HOOK_PATH_PREFIX = '/hooks/tldr/'
 
 function readBody(req: IncomingMessage, limit: number): Promise<string> {
@@ -63,9 +72,9 @@ type BuiltInMcpServerFactory = (
   dependencies: BuiltInMcpDependencies,
 ) => McpServer
 
-export type BuiltInMcpDependencies = {
+export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDependencies & {
   tldrStore?: Pick<TldrStore, 'update'>
-  goalStore?: Pick<TldrStore, 'update'>
+  goalStore?: Pick<TldrStore, 'update' | 'complete'>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
@@ -76,7 +85,7 @@ export type BuiltInMcpDependencies = {
   appRunJournal?: AppRunJournal
   workflowService?: WorkflowService
   workflowBridge?: WorkflowBridge
-  goalLoopService?: Pick<GoalLoopService, 'startLoop' | 'complete'>
+  goalLoopService?: Pick<GoalLoopService, 'startLoop' | 'complete' | 'observeProviderHook'>
   /**
    * Installs the operator control catalog (`ac_*` tools) on a session's server
    * when its scope carries `root_management` (#906).
@@ -91,6 +100,12 @@ export type BuiltInMcpDependencies = {
    * authenticated session ID.
    */
   rootControlTools?: (server: McpServer, sessionId: string) => void
+  /**
+   * The lane browser pocket's controller (#1142). One app-owned instance for
+   * the same reason as workflowService: it holds live CDP sessions and
+   * per-pocket queues that must outlive the per-request McpServer.
+   */
+  browserPockets?: BrowserPocketsPort
 }
 
 const MCP_REQUEST_SLOW_MS = 1000
@@ -263,7 +278,11 @@ export class BuiltInMcpHttpHost {
     this.tokensBySession.set(scope.sessionId, token)
 
     const config = this.serverConfig(token)
-    return [hasReportingDomain(domains)
+    // Turn hooks go to reporting sessions (TLDR/Goal enforcement) AND to goal
+    // loop sessions. A loop's only reliable turn boundary is the provider's
+    // Stop hook (#1024). Without it, the loop fell back to stream phases,
+    // which go idle at every tool gap and delivered continuations mid-turn.
+    return [hasReportingDomain(domains) || domains.includes('goal_loop')
       ? { ...config, tldrHooks: { baseUrl: `http://127.0.0.1:${this.port}${TLDR_HOOK_PATH_PREFIX.slice(0, -1)}` } }
       : config]
   }
@@ -533,7 +552,10 @@ export class BuiltInMcpHttpHost {
     }
     const enforcement = this.dependencies.tldrEnforcement
     const identity = registration.scope.tldrIdentity
-    if (!enforcement || !identity || !hasReportingDomain(registration.scope.domains)) {
+    const domains = registration.scope.domains
+    const enforcing = Boolean(enforcement && identity && hasReportingDomain(domains))
+    const loopReporting = domains.includes('goal_loop')
+    if (!enforcing && !loopReporting) {
       this.writeJson(res, 200, {})
       return
     }
@@ -544,16 +566,49 @@ export class BuiltInMcpHttpHost {
       // A malformed or oversized body is still a turn boundary worth
       // recording; the rules only ever read `stop_hook_active` from it.
     }
+    // WHY subagent hooks never reach the loop (#1028 review): both CLIs send a
+    // subagent's hooks with the PARENT's bearer, marked only by a non-empty
+    // `agent_id` (enforcement ignores them for the same reason). A background
+    // Task's PostToolUse is not the main agent's turn. Forwarded, it reopened
+    // a turn the main agent had already Stopped, so a Resume, a backoff retry,
+    // or the deferred continuation after an allowed Stop found the turn "open"
+    // and delivered nothing, with the loop still showing active.
+    const fromSubagent = Boolean(input && typeof input === 'object'
+      && typeof (input as { agent_id?: unknown }).agent_id === 'string'
+      && (input as { agent_id: string }).agent_id.length > 0)
+    // Tell the goal loop about every main-agent turn hook, AFTER enforcement
+    // has decided, because a Stop that enforcement blocks does not end the
+    // turn (#1024). Only a loop-enabled registration reports, and only for its
+    // own session id: the bearer already scopes this request to one process.
+    // A body that could not be read or parsed hides who sent it. Only a Stop
+    // is still forwarded then, because missing the main agent's turn end
+    // stalls the loop. A non-Stop hook only OPENS a turn, and opening one on
+    // behalf of a subagent is exactly what the agent_id rule prevents, so an
+    // unattributable one is dropped (#1028 re-review).
+    const unattributable = input === null
+    const tellGoalLoop = (output: unknown) => {
+      if (!loopReporting || registration.revoked || fromSubagent) return
+      if (unattributable && event !== 'stop') return
+      const blocked = Boolean(output && typeof output === 'object' && (output as { decision?: unknown }).decision === 'block')
+      this.dependencies.goalLoopService?.observeProviderHook(registration.scope.sessionId, event, { blocked })
+    }
+    if (!enforcing) {
+      this.writeJson(res, 200, {})
+      tellGoalLoop({})
+      return
+    }
     try {
-      const domains = registration.scope.domains
-      const output = await enforcement.handle(registration.token, identity, event, input, {
+      const output = await enforcement!.handle(registration.token, identity!, event, input, {
         tldr: domains.includes('tldr'), goal: domains.includes('goal'),
       })
       // Re-check revocation after the async store read: an old process's Stop
       // must not block a turn in the process that just replaced it.
-      this.writeJson(res, 200, registration.revoked ? {} : output)
+      const answer = registration.revoked ? {} : output
+      this.writeJson(res, 200, answer)
+      tellGoalLoop(answer)
     } catch {
       this.writeJson(res, 200, {})
+      tellGoalLoop({})
     }
   }
 

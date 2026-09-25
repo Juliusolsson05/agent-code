@@ -8,7 +8,9 @@ it.each(['unsupported_schema', 'sqlite_unavailable', 'read_failed', 'open_failed
   'preserves %s as a typed unavailable outcome', async code => {
     const error = new OpencodeStoreError(code, 'fixture failure')
     const store = vi.fn().mockRejectedValue(error)
-    const source = createOpencodeHistorySource({ store, release: vi.fn() })
+    // `lease` is unused by the history source — it reads synchronously after the
+    // await, which is exactly what a plain `store()` borrow is for.
+    const source = createOpencodeHistorySource({ store, lease: vi.fn(), release: vi.fn() })
     await expect(source.loadHistoryChunk(request)).rejects.toMatchObject({ code: error.code, message: expect.stringContaining(error.code), cause: error })
     expect(store).toHaveBeenCalledTimes(code === 'busy' ? 3 : 1)
   },
@@ -21,6 +23,6 @@ it.each(['readHistory', 'countMessages'] as const)('propagates a %s failure afte
     countMessages: vi.fn(() => 0),
   }
   handle[operation].mockImplementation(() => { throw error })
-  const source = createOpencodeHistorySource({ store: async () => handle as unknown as OpencodeStore, release: vi.fn() })
+  const source = createOpencodeHistorySource({ store: async () => handle as unknown as OpencodeStore, lease: vi.fn(), release: vi.fn() })
   await expect(source.loadHistoryChunk(request)).rejects.toMatchObject({ code: error.code, message: expect.stringContaining(error.code), cause: error })
 })

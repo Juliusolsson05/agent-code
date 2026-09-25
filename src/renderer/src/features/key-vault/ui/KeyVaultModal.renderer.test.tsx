@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { KeyVaultModal } from './KeyVaultModal'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 // The app, not a modal, owns workspace boot/subscriptions. This catches an
 // accidental call to useWorkspace() while exercising the real context seam.
@@ -29,7 +30,7 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 function open() {
-  render(<WorkspaceProvider workspace={{ state: { sessions: {}, tabs: [] } } as unknown as Workspace}>
+  render(<WorkspaceProvider workspace={{ state: { sessions: {}, tabs: [], activeTabId: '',   pinnedSessionIds: [], stage: oneLaneStage() } } as unknown as Workspace}>
     <KeyVaultModal />
   </WorkspaceProvider>)
 }

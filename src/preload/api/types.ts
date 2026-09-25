@@ -15,6 +15,7 @@ import type {
   SessionKind,
 } from '@shared/types/providerKind.js'
 import type { AgentTranscriptEntry } from '@shared/types/session.js'
+import type { KillCaller } from '@shared/lifecycle/events.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type {
@@ -61,6 +62,7 @@ export type {
   SessionScreenEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionTranscriptDiagnosticEvent,
   SessionConditionsEvent,
   SessionProcessStateEvent,
   SubAgentToolCall,
@@ -70,6 +72,7 @@ export type {
   SessionExitEvent,
   ResolveConditionResult,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@shared/sessionFeed/types.js'
 
 export type DevDebugConfig = {
@@ -89,6 +92,7 @@ export type {
   UsageLimitRow,
   UsageProviderError,
   UsageProviderKind,
+  UsageSourceId,
   UsageProviderOk,
   UsageProviderSnapshot,
   UsageSeverity,
@@ -168,6 +172,7 @@ export type { AgentProviderRuntime, SessionKind } from '@shared/types/providerKi
 export type {
   SessionBackendSnapshot,
   SessionInputReadiness,
+  SessionKillOptions,
   SessionOwnershipOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
@@ -197,6 +202,19 @@ export type SessionSpawnOptions = {
    * start-before-stop order.
    */
   predecessorSessionId?: string
+  /**
+   * Who is retiring `predecessorSessionId`, journaled on the `kill.request`
+   * main issues when it performs the same-rollout Codex handoff itself.
+   *
+   * WHY it rides the spawn (#1135 review): in that handoff MAIN kills the
+   * predecessor and the renderer skips its own tagged kill, so without this
+   * the one user-initiated swap (reload / resume / rewind / MCP reload of N
+   * Codex agents) journaled a main-internal tag and read as recovery. Carrying
+   * the initiator keeps "predecessor retired by replaceSession" one tag no
+   * matter which side does the kill. Untrusted like every renderer value:
+   * main re-validates it and falls back to 'replacement.handoff'.
+   */
+  predecessorKillCaller?: KillCaller
   /** Agent sessions only: opt into provider-specific dangerous mode. */
   dangerousMode?: boolean
   /** Agent sessions only: opt into provider-specific proxy/semantic streaming. */
@@ -207,6 +225,13 @@ export type SessionSpawnOptions = {
   tldrIdentity?: string
   /** Agent sessions only: built-in Agent Code MCP domains exposed to the child. */
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /**
+   * Agent sessions only: the pane's explicit per-agent user MCP choices (bare
+   * server id → on/off, #1143). Deliberately NOT a resolved server list: main
+   * owns the server document and secrets and applies the defaults itself, so a
+   * stale renderer snapshot can never attach a deleted or disabled server.
+   */
+  userMcpOverrides?: Record<string, boolean>
 }
 
 export type SessionSpawnResult = {
@@ -221,6 +246,8 @@ export type SessionSpawnResult = {
    * durable workspace persistence, not this response, commits the transaction.
    */
   replacementTransactionId?: string
+  /** Agent sessions only: user MCP servers main actually attached (#1143). */
+  userMcpServerIds?: string[]
 }
 
 export type { ConditionCustomAction }
@@ -241,19 +268,7 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // provider runtimes; those are owned by the conditions-framework /
 // provider-boundary clusters and are intentionally untouched here.
 
-export type SessionHistoryChunk = {
-  entries: JsonlEntry[]
-  hasMore: boolean
-  // Only set on initial-load chunks. See `HistoryChunk.totalEntries`
-  // in src/main/sessions/historyLoader.ts for the full WHY. Renderers
-  // should treat absence as "unknown / not provided" and avoid using
-  // it as a denominator unless it's a positive number.
-  totalEntries?: number
-  // Byte offset of each entry's transcript line, parallel to `entries`.
-  // The renderer echoes the one for its pagination cursor line back as
-  // `beforeOffset`. See `HistoryChunk.offsets` in historyLoader.ts.
-  offsets?: number[]
-}
+export type { SessionHistoryChunk } from '@shared/types/session.js'
 
 export type TranscriptPathRequest = {
   sessionId: string

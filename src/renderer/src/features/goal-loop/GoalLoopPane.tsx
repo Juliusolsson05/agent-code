@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 const PHASE_LABEL: Record<GoalLoopState['phase'], string> = {
   active: 'active', paused: 'paused', ended: 'ended',
@@ -14,6 +17,27 @@ function describe(loop: GoalLoopState): string {
   return `iteration ${budget}`
 }
 
+/** The latched overlay's shell, shared by the "loop" and "no loop" states so
+ * both carry the SAME interaction-ownership marker and the same
+ * `data-goal-loop-overlay` attribute. The keyboard router gates on that
+ * attribute being mounted (#1021), so a latched state that renders any other
+ * markup would reopen the invisible-trap bug. */
+function GoalLoopOverlay({ children }: { children: ReactNode }) {
+  return <div
+    data-agent-code-interaction-owner="app"
+    data-goal-loop-overlay=""
+    role="dialog"
+    aria-label="Agent goal loop"
+    className="absolute inset-0 z-50 bg-canvas text-ink"
+    onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
+    onClick={event => event.stopPropagation()}
+  >
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+      {children}
+    </div>
+  </div>
+}
+
 /** Mounts inside TldrPane's relative container (TileTree): a slim always-on
  * status strip while a loop exists for this session, plus the latched control
  * overlay. The strip keeps passive awareness — a running loop is visible
@@ -22,7 +46,16 @@ function describe(loop: GoalLoopState): string {
  * the clicks, and theme tokens so they read in every theme. */
 export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   const [loop, setLoop] = useState<GoalLoopState | null>(null)
-  const latched = useGoalLoopView(state => state.latched)
+  // WHY the overlay also requires VISIBILITY, not just the latch (#1021
+  // review): Reader, Spotlight, Settings and the fullscreen Global Editor
+  // keep the whole workspace MOUNTED under display:none. An overlay rendered
+  // there exists in the DOM, so the keyboard gate saw it and swallowed every
+  // key, but nobody could see it. That is the same invisible trap, one level
+  // down. The visibility context composes every enclosing hiding shell (see
+  // AgentTerminalOwnership), so a hidden pane renders no overlay, and the
+  // router treats the latch as stale instead.
+  const visible = useAgentTerminalOwnerVisible()
+  const latched = useGoalLoopView(state => state.latched) && visible
   useEffect(() => {
     // Guard: pane tests stub window.api partially, and a loop surface that
     // crashes a pane over a missing IPC method is worse than one that renders
@@ -41,7 +74,24 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     read()
     return () => { current = false; unsubscribe() }
   }, [sessionId])
-  if (!loop) return null
+  if (!loop) {
+    if (!latched) return null
+    // #1021: the latch is app-wide and running the command is an explicit
+    // request to see this surface, so it must visibly answer even when this
+    // agent has no loop, which is the normal case since only an agent starts
+    // one. Rendering nothing here was half of the freeze: the router gated
+    // input on a surface the user could not see. TldrOverlay answers the same
+    // way ("No TLDR yet"). A loop being read for the first time also lands
+    // here briefly. That is acceptable: the overlay is up, it explains itself,
+    // and it swaps to the real loop the moment the read resolves.
+    return <GoalLoopOverlay>
+      <p className="text-sm sm:text-base">No goal loop on this agent</p>
+      <p className="max-w-xl text-xs">An agent starts a goal loop through Goal Loop MCP. Press Escape to close.</p>
+      <div className="flex gap-3 text-sm">
+        <button type="button" onClick={dismissGoalLoop}>Close</button>
+      </div>
+    </GoalLoopOverlay>
+  }
   // Raise cap is clamped to the ceiling main enforces: past 175 an unclamped
   // +25 exceeded the IPC schema's maximum, so the request was rejected and the
   // button silently did nothing. At the ceiling there is nothing to raise, so
@@ -71,7 +121,9 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     onMouseDown={event => event.stopPropagation()}
     onClick={event => event.stopPropagation()}
   >
-    <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {loop.goal}</span>
+    {/* The goal is agent-authored and sits beside Resume, Raise cap and Stop
+        — the controls that grant it more turns (#1049 re-review). */}
+    <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {withVisibleControls(loop.goal)}</span>
     <span className="flex shrink-0 gap-2">
       {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
       {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
@@ -87,20 +139,11 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
   if (!latched) return strip
   return <>
     {strip}
-    <div
-      data-agent-code-interaction-owner="app"
-      data-goal-loop-overlay=""
-      role="dialog"
-      aria-label="Agent goal loop"
-      className="absolute inset-0 z-50 bg-canvas text-ink"
-      onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
-      onClick={event => event.stopPropagation()}
-    >
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
+    <GoalLoopOverlay>
         <p className="text-sm sm:text-base">Goal loop · {PHASE_LABEL[loop.phase]}{loop.phase === 'paused' ? ` · ${loop.pauseReason}` : ''}</p>
-        <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{loop.goal}</p>
+        <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{withVisibleControls(loop.goal)}</p>
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>
-        {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {loop.completionSummary}</p>}
+        {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {withVisibleControls(loop.completionSummary)}</p>}
         <div className="flex gap-3 text-sm">
           {loop.phase === 'active' && <button type="button" onClick={control('pause')}>Pause</button>}
           {loop.phase === 'paused' && <button type="button" onClick={control('resume')}>Resume</button>}
@@ -114,7 +157,6 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
               capture-phase owner of that key is useKeybinds, not this pane. */}
           <button type="button" onClick={dismissGoalLoop}>Close</button>
         </div>
-      </div>
-    </div>
+    </GoalLoopOverlay>
   </>
 }

@@ -22,6 +22,7 @@ import type {
   AgentCodeCustomSkillsSnapshot,
 } from '@shared/types/agentCodeCustomSkills.js'
 import type { AgentCodeConventionsTargetStatus } from '@shared/types/agentCodeConventions.js'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 const HEALTH_LABELS: Record<AgentCodeCustomSkill['health'], string> = {
   disabled: 'Draft',
@@ -370,7 +371,11 @@ function AgentCodeCustomSkillsModal({
                     <span>Generated SKILL.md preview</span>
                     <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 disabled:opacity-50" onClick={() => setPreview(null)}>Back to editor</button>
                   </div>
-                  <pre className="rounded-slab max-h-[360px] overflow-auto whitespace-pre-wrap border border-input-border bg-input-bg p-3 text-[11px] text-ink">{preview}</pre>
+                  {/* The generated file, read immediately before Save &
+                      Enable deploys it to every provider's skills directory.
+                      Display only — the editor model and the saved bytes are
+                      untouched (#1049 re-review). */}
+                  <pre className="rounded-slab max-h-[360px] overflow-auto whitespace-pre-wrap border border-input-border bg-input-bg p-3 text-[11px] text-ink">{withVisibleControls(preview)}</pre>
                 </div>
               ) : (
                 <Textarea
@@ -450,7 +455,7 @@ function AgentCodeCustomSkillsModal({
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-[12px] text-ink">{skill.name}</div>
-                            <div className="mt-1 text-[10px] text-muted">{skill.description}</div>
+                            <div className="mt-1 text-[10px] text-muted">{withVisibleControls(skill.description)}</div>
                             <div className="mt-1 text-[10px] text-muted">{HEALTH_LABELS[skill.health]}</div>
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
@@ -483,7 +488,7 @@ function AgentCodeCustomSkillsModal({
 
           {conflictTargets.length > 0 ? (
             <div className="rounded-slab border border-danger p-2 text-[10px] text-danger">
-              {conflictTargets.map(target => <div key={target.id}>{target.displayPath || target.id} · {target.state}</div>)}
+              {conflictTargets.map(target => <div key={target.id}>{withVisibleControls(target.displayPath || target.id)} · {target.state}</div>)}
             </div>
           ) : null}
           {current.recovery ? (
@@ -523,7 +528,9 @@ function TargetList({ skill, targets, onError }: {
     <div className="flex flex-col gap-1 border-t border-panel-border pt-2 text-[10px]">
       {targets.map(target => (
         <div key={target.id} className="flex items-center justify-between gap-3">
-          <span className="min-w-0 flex-1 truncate text-muted">{target.displayPath || target.id} · {target.state}</span>
+          {/* An unsupported row names the provider, which is the one thing it
+              is about; it has no path (#1037 review). */}
+          <span className="min-w-0 flex-1 truncate text-muted">{target.state === 'unsupported' ? target.providers.join(' + ') : withVisibleControls(target.displayPath || target.id)} · {target.state}</span>
           {target.state === 'installed' || target.state === 'conflict' || target.state === 'retired' ? (
             <button
               type="button"

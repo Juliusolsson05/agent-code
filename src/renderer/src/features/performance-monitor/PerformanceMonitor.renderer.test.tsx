@@ -1,4 +1,5 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MonitorSnapshot } from '@shared/performance/monitorSnapshot.js'
@@ -22,13 +23,17 @@ const usage: MonitorAgentUsage = {
   sessions: [{ sessionId: 'a1', kind: 'agent', provider: 'claude', processCount: 3, memoryBytes: 2 * GB, cpuPercent: 12, complete: true, history: [[1000, 1.2 * GB, 10], [2000, 2 * GB, 12]] }],
 }
 const focusAgentBySessionId = vi.fn(async () => true)
+// The v3 stage shape (#992): the session belongs to its project through its
+// own projectId row, and the stage is always present. The earlier v2 literal
+// (a tab `root`, dispatchMode, tileTabs) was cast through `unknown`, so the
+// type checker could not flag it when the model changed; the missing label
+// was the only symptom.
 const workspace = {
   state: {
-    tabs: [{ id: 'tab-a', title: 'alpha', root: { type: 'leaf', sessionId: 'a1' }, focusedSessionId: 'a1' }],
-    activeTabId: 'tab-a', gridRelatedSelections: {}, dispatchMode: null, detachedSessions: {}, buried: [], pinnedSessionIds: [],
-    sessions: { a1: { cwd: '/work/alpha', kind: 'claude', title: 'Leaky agent' } },
+    tabs: [{ id: 'tab-a', title: 'alpha' }],
+    activeTabId: 'tab-a', stage: oneLaneStage('a1'), pinnedSessionIds: [],
+    sessions: { a1: { cwd: '/work/alpha', kind: 'claude', title: 'Leaky agent', projectId: 'tab-a', joinedAt: 0 } },
   },
-  tileTabs: null,
   focusAgentBySessionId,
 } as unknown as Workspace
 // The monitor reads agent labels from the app's workspace context, exactly as

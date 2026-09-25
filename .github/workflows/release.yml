@@ -11,14 +11,25 @@ on:
         options:
           - "false"
           - "true"
+      # No `channel` input (2026-09-24, RELEASE.md "Channels"): every manual
+      # release is STABLE and becomes releases/latest. Previews of the next
+      # version are published automatically by preview.yml, which replaced
+      # hand-cut `-beta.N` prereleases. scripts/release/identity.mjs refuses a
+      # prerelease version in package.json before anything builds.
+      # WHY these are optional and default to empty (Stage 8 of
+      # docs/decomposition/release-readiness.md): they used to default to
+      # v0.0.2-beta.1, the release that already exists, so every later
+      # dispatch had to override both or fail. Empty now means "derived from
+      # package.json" (scripts/release/identity.mjs), which is the only tag
+      # the check accepts anyway.
       release_tag:
-        description: "Beta release tag to create when publish_release is true"
-        required: true
-        default: "v0.0.2-beta.1"
+        description: "Release tag; empty = v<package.json version>"
+        required: false
+        default: ""
       release_name:
-        description: "Release name to create when publish_release is true"
-        required: true
-        default: "Agent Code 0.0.2 Beta 1"
+        description: "Release name; empty = Agent Code <version>"
+        required: false
+        default: ""
 
 concurrency:
   group: release-macos
@@ -27,6 +38,13 @@ concurrency:
 jobs:
   validate-release:
     runs-on: ubuntu-latest
+    # The release identity, decided once before any build and handed to the
+    # job that publishes (package-macos).
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      name: ${{ steps.identity.outputs.name }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      make_latest: ${{ steps.identity.outputs.make_latest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -55,18 +73,24 @@ jobs:
             exit 1
           fi
 
+      # The rules (tag = v<version>; the version must be stable) live in a
+      # script with system tests: testing/system/release/identity.test.ts.
       - name: Validate release identity
+        id: identity
         if: ${{ github.event.inputs.publish_release == 'true' }}
         env:
           RELEASE_TAG: ${{ github.event.inputs.release_tag }}
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          expected="v${version}"
-          if [ "$RELEASE_TAG" != "$expected" ]; then
-            printf 'Release tag must match package.json exactly: expected %s, got %s\n' "$expected" "$RELEASE_TAG"
-            exit 1
-          fi
+          RELEASE_NAME: ${{ github.event.inputs.release_name }}
+        run: node scripts/release/identity.mjs
 
+  # DRIFT WARNING: build-app and package-macos below are mirrored verbatim in
+  # .github/workflows/reusable-app-build-macos.yml, which the preview
+  # (preview.yml, formerly nightly.yml, #1011) builds through. Until this
+  # file adopts that reusable workflow, a fix to either copy MUST be mirrored
+  # in the other. The #965 executable-bit fix is the kind of hotfix that would
+  # otherwise land here only and silently leave previews shipping a broken
+  # build. (The reusable copy's "Stamp the build version" steps are the one
+  # intended difference: a stable release ships package.json as committed.)
   build-app:
     needs: validate-release
     runs-on: macos-latest
@@ -182,7 +206,9 @@ jobs:
           if-no-files-found: error
 
   package-macos:
-    needs: build-app
+    # validate-release is listed so its identity outputs are in `needs` here;
+    # build-app already waits for it.
+    needs: [validate-release, build-app]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -291,9 +317,13 @@ jobs:
         run: npm run package:mac
 
       - name: Verify packaged app contents and architectures
+        # verify-update-feed (#1129): every file latest-mac.yml names must exist
+        # here under exactly that name, or installed apps get 404 when they
+        # update. Checked before upload, while the feed and files sit together.
         run: |
           npm run verify:package:mac
           npm run smoke:package:mac
+          node scripts/release/verify-update-feed.mjs
 
       - name: Verify signed apps and notarization tickets
         if: ${{ env.HAS_SIGNING_IDENTITY == 'true' }}
@@ -337,18 +367,31 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest-mac.yml
           if-no-files-found: error
 
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          name: ${{ github.event.inputs.release_name }}
-          prerelease: true
+          tag_name: ${{ needs.validate-release.outputs.tag }}
+          # The tag must name the commit that was BUILT (#1035 review). A
+          # stable release is created as a draft and published after the
+          # uploads, and GitHub creates the tag only then. Without this it tags
+          # the default branch's head at that moment, which can be a commit
+          # merged during the ~26-minute build, or main when the release was
+          # dispatched from another ref.
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.validate-release.outputs.name }}
+          # Always false/true now that manual releases are stable-only; read
+          # from identity.mjs so the tested decision and the published flags
+          # cannot drift.
+          prerelease: ${{ needs.validate-release.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.validate-release.outputs.make_latest }}
+          # latest-mac.yml by name, not release/*.yml: the wildcard also
+          # published electron-builder's builder-debug.yml on every release.
           files: |
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest-mac.yml

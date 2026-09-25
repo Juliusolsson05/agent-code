@@ -6,9 +6,10 @@ import {
   CodeRenderContext,
 } from '@renderer/features/feed/context'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
+import { describeConditionRefusal, refusalOf } from '@shared/conditions-core/dispatch'
 import {
   readAskQuestions,
   type AskOption,
@@ -22,6 +23,7 @@ import {
   useAnswerSubmissionStore,
   useAnsweredViaMessageStore,
 } from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -205,19 +207,21 @@ export function AskUserQuestionRow({
           // "option not found" without corrupting the terminal, so keeping the row
           // interactive is the safer failure mode.
           endAnswer(operationId)
-          // WHY failedAtStep is optional: transport-level refusals can explain
-          // the failure without entering the multi-step TUI driver. Appending
-          // an absent step produced the user-facing nonsense “at undefined”.
-          setResolveError(
-            result.failedAtStep === undefined
-              ? result.reason
-              : `${result.reason} at ${result.failedAtStep}`,
-          )
+          // WHY the shared describer and not `result.reason` (#1099 review):
+          // this row used to print the wire token verbatim — "option-not-found
+          // at select-option" — which is a log line, not a sentence, and told
+          // the reader nothing about what to do next. `refusalOf` narrows the
+          // same answer the toast path narrows, so the row and the toast now
+          // say the identical thing for the identical refusal. The `?? `
+          // fallback is unreachable (we are inside `!result.ok`) but costs
+          // nothing and keeps the box from going blank if that ever changes.
+          const refusal = refusalOf(action, result)
+          setResolveError(refusal ? describeConditionRefusal(refusal) : 'That answer could not be delivered. Try again.')
         }
       })
       .catch(() => {
         endAnswer(operationId)
-        setResolveError('resolver IPC failed')
+        setResolveError('That answer could not be delivered. Try again.')
       })
   }
 
@@ -408,12 +412,18 @@ export function AskUserQuestionRow({
             <div key={qi} className="flex flex-col gap-1.5">
               {q.header ? (
                 <span className="self-start text-[10px] uppercase tracking-wider text-muted bg-surface-hi rounded-chip px-1.5 py-0.5">
-                  {q.header}
+                  {/* DISPLAY only — the resolver still sends the option's own
+                      bytes, and the transcript keeps the original text. What
+                      is escaped is what the user READS before clicking, which
+                      an agent authors: `Run ./check.sh<U+FE0F>` and
+                      `Run ./check.sh` are different commands that render
+                      identically (#1049 re-review). */}
+                  {withVisibleControls(q.header)}
                 </span>
               ) : null}
               {q.question ? (
                 <div className="text-[13px] leading-[1.65] text-ink font-semibold">
-                  {q.question}
+                  {withVisibleControls(q.question)}
                 </div>
               ) : null}
               <div className="flex flex-col gap-1">
@@ -453,9 +463,9 @@ export function AskUserQuestionRow({
                         {q.multiSelect ? (isSelected ? '[x]' : '[ ]') : isSelected ? '(*)' : `${oi + 1}.`}
                       </span>
                       <span className="flex flex-col gap-0.5">
-                        <span className="text-ink">{opt.label}</span>
+                        <span className="text-ink">{withVisibleControls(opt.label)}</span>
                         {opt.description ? (
-                          <span className="text-[12px] text-muted">{opt.description}</span>
+                          <span className="text-[12px] text-muted">{withVisibleControls(opt.description)}</span>
                         ) : null}
                       </span>
                     </button>
@@ -504,9 +514,15 @@ export function AskUserQuestionRow({
         ) : answering ? (
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}
+        {/* No "Answer failed:" prefix any more: every message that reaches
+            here is now a complete sentence (from `describeConditionRefusal`,
+            from `deliverAnswersViaPrompt`, or the pick-something-first hint),
+            and the danger styling already carries the "this failed" framing.
+            The prefix only survived because the old messages were bare tokens
+            that made no sense on their own. */}
         {resolveError ? (
           <div className="rounded-slab border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
-            Answer failed: {resolveError}
+            {resolveError}
           </div>
         ) : null}
       </div>

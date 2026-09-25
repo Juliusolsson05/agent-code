@@ -1,3 +1,4 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
@@ -27,40 +28,30 @@ import type {
 const commandDefs: readonly CommandDef[] = builtInCommandCatalog
 
 /**
- * Mode gate applied BEFORE each command's own `when`.
+ * Surface availability applied BEFORE each command's own `when`.
  *
- * This is the one place the surface→mode policy lives. `grid` commands
- * are meaningless or silent no-ops while Dispatch Mode owns the layout
- * (they target `tab.root` grid focus); `dispatch` commands have nothing
- * to act on outside Dispatch. Everything else — `app`, `session`,
- * `editor`, `debug` — is mode-independent and reaches its own `when`.
+ * Unified layout (#992): the old mode gate — `grid` hidden in Dispatch,
+ * `dispatch` hidden in the grid — died with the modes. Every surviving
+ * surface is available everywhere; a command's applicability now comes
+ * from its own `when` (does a target exist? is the overlay open?).
  *
- * Putting the gate here, not in 13 separate `when` closures, is the
- * point of issue #228: a command's module no longer has to remember to
- * re-implement "...and hide me in the wrong mode." It declares a
- * surface; the registry enforces it uniformly.
- *
- * WHY an exhaustive switch instead of the two ifs plus `return true` this
- * replaces: the fallthrough silently classified any UNKNOWN surface as
- * "available everywhere". That is the permissive direction — a new surface
- * added to the union but forgotten here would not fail the build, it would
- * quietly show its commands in every mode, which is precisely the #228 bug
- * class the surface field was introduced to kill. With `assertNever`, adding
- * a surface without deciding its mode policy is a compile error.
+ * The switch REMAINS exhaustive with assertNever on purpose: adding a
+ * surface without deciding its availability policy must stay a compile
+ * error. The permissive fallthrough this replaced silently showed
+ * unknown-surface commands everywhere — exactly the #228 bug class the
+ * field was introduced to kill.
  */
-function surfaceAvailable(surface: CommandSurface, ctx: CommandContext): boolean {
+function surfaceAvailable(surface: CommandSurface, _ctx: CommandContext): boolean {
   switch (surface) {
-    case 'grid':
-      return !ctx.flags.dispatchModeEnabled
-    case 'dispatch':
-      return ctx.flags.dispatchModeEnabled
     case 'app':
+    case 'workspace':
     case 'session':
     case 'editor':
     case 'debug':
-      // Mode-independent by design. `editor` and `debug` carry their own
-      // `when` guards for overlay-open / feature-enabled checks; listing them
-      // explicitly rather than defaulting keeps that a stated decision.
+      // Availability is the command's own `when` from here; the surface is
+      // a category, not a gate. `editor` and `debug` carry overlay-open /
+      // feature-enabled guards; workspace/session commands guard on target
+      // existence.
       return true
     default:
       return assertNever(surface)
@@ -145,7 +136,9 @@ function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
 }
 
 function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolean {
-  const sessionId = commandTargetSessionId(ctx.workspace)
+  // The command's own target (#1180): with an explicit `ctx.target` the
+  // rendered-view policy must judge THAT agent's view, not the focused one's.
+  const sessionId = commandTarget(ctx)
   if (!sessionId) return true
   const meta = ctx.workspace.state.sessions[sessionId]
   const kind = meta?.kind

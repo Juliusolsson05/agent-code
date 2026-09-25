@@ -18,7 +18,9 @@ const noop: SessionFeed = {
   onSessionScreen: () => () => {},
   onSessionJsonlEntries: () => () => {},
   onSessionJsonlError: () => () => {},
+  onSessionTranscriptDiagnostic: () => () => {},
   onSessionHistoryBoundary: () => () => {},
+  onSessionProviderSessionChanged: () => () => {},
   onSessionSemanticEvent: () => () => {},
   onSessionConditions: () => () => {},
   onSessionProcessState: () => () => {},
@@ -32,6 +34,7 @@ const noop: SessionFeed = {
     acceptance: { kind: 'transport', acceptedAt: 123 },
   }),
   resolveCondition: async () => ({ ok: true }),
+  loadHistory: async () => ({ entries: [], hasMore: false }),
 }
 
 // Reference the const so it cannot be flagged as dead and quietly deleted —

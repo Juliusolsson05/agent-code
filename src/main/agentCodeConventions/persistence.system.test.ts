@@ -178,6 +178,30 @@ describe('Agent Code conventions persistence', () => {
     await writeFile(statePath, JSON.stringify(document))
     expect(await readAgentCodeConventionsState(statePath)).toEqual({ kind: 'ok', document })
 
+    // #1161 review round 1: a pre-#1161 build keeps unknown keys when the
+    // user enables a skill, so a downgrade can leave an enabled record that
+    // still carries an agent's proposal marker. The enable was the review:
+    // the marker is stripped on load, never a reason for Recovery required.
+    const reviewedAfterDowngrade = structuredClone(document)
+    reviewedAfterDowngrade.installedSkills['skill-1'] = {
+      ...reviewedAfterDowngrade.installedSkills['skill-1']!,
+      enabled: true,
+      providers: ['codex'],
+      pendingReview: { by: 'agent', sessionId: 'agent-1', requestedAt: '2026-09-23T00:00:00.000Z' },
+    }
+    await writeFile(statePath, JSON.stringify(reviewedAfterDowngrade))
+    const loaded = await readAgentCodeConventionsState(statePath)
+    expect(loaded.kind).toBe('ok')
+    expect(loaded.document.installedSkills['skill-1']).toMatchObject({ enabled: true, providers: ['codex'] })
+    expect(loaded.document.installedSkills['skill-1']!.pendingReview).toBeUndefined()
+
+    // An empty or unknown provider choice is unsafe (an enabled skill no
+    // agent receives) and is rejected like any other malformed field.
+    const noProviders = structuredClone(document)
+    noProviders.installedSkills['skill-1'] = { ...noProviders.installedSkills['skill-1']!, providers: [] }
+    await writeFile(statePath, JSON.stringify(noProviders))
+    expect((await readAgentCodeConventionsState(statePath)).kind).toBe('recovery-required')
+
     document.installedSkills['skill-1']!.snapshotDigest = 'c'.repeat(64)
     await writeFile(statePath, JSON.stringify(document))
     expect(await readAgentCodeConventionsState(statePath)).toMatchObject({

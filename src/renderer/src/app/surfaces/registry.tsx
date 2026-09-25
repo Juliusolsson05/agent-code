@@ -13,17 +13,16 @@ import { RemotePanelSurface } from '@renderer/features/remote/surfaces/RemotePan
 import { DebugSurfaces } from '@renderer/features/debug/surfaces/DebugSurfaces'
 import { CommandPaletteSurface } from '@renderer/features/command-palette/surfaces/CommandPaletteSurface'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
-import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
-import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
 import { RootManagementConfirmSurface } from '@renderer/features/workspace/surfaces/RootManagementConfirmSurface'
 import { MergeProjectTabsSurface } from '@renderer/features/workspace/surfaces/MergeProjectTabsSurface'
 import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
 import { ConversationsSurface } from '@renderer/features/conversations/surfaces/ConversationsSurface'
-import { AgentActivitySurface } from '@renderer/features/workspace/surfaces/AgentActivitySurface'
+import { AgentActivitySurface } from '@renderer/features/agent-activity/surfaces/AgentActivitySurface'
 import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/CloseOldAgentsSurface'
+import { CloseCompletedAgentsSurface } from '@renderer/features/workspace/surfaces/CloseCompletedAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
 import { AgentViewModePickerSurface } from '@renderer/features/workspace/surfaces/AgentViewModePickerSurface'
 import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
@@ -36,6 +35,9 @@ import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyV
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
 import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
 import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
+import { McpServerDialogSurface } from '@renderer/features/mcp/surfaces/McpServerDialogSurface'
+import { AddSkillDialogSurface } from '@renderer/features/skills/surfaces/AddSkillDialogSurface'
+import { AgentMcpServersSurface } from '@renderer/features/mcp/surfaces/AgentMcpServersSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -74,10 +76,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'dispatch-row-project', Component: DispatchRowProjectSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
   { id: 'keyboard-shortcuts', Component: KeyboardShortcutsSurface },
-  { id: 'tile-tabs', Component: TileTabsModalSurface },
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },
-  { id: 'bury-pane', Component: BuryPanePromptSurface },
   { id: 'close-confirmation', Component: CloseConfirmationSurface },
   { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
   { id: 'recording-note', Component: RecordingNoteSurface },
@@ -85,6 +85,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'conversations', Component: ConversationsSurface },
   { id: 'agent-activity', Component: AgentActivitySurface },
   { id: 'close-old-agents', Component: CloseOldAgentsSurface },
+  { id: 'close-completed-agents', Component: CloseCompletedAgentsSurface },
   { id: 'bulk-provider-switch', Component: BulkProviderSwitchSurface },
   { id: 'agent-view-mode-picker', Component: AgentViewModePickerSurface },
   { id: 'color-flag-picker', Component: ColorFlagPickerSurface },
@@ -112,6 +113,17 @@ export const modalSurfaces: SurfaceEntry[] = [
   // Appended per the contract above (#964). Opened only from a command that
   // closes the palette first, so it stacks over established modals by order.
   { id: 'agent-analytics', Component: AgentAnalyticsSurface },
+  // Appended per the contract above (#1143); both are opened from commands
+  // that close the palette first. The per-agent picker can hand off to the
+  // root-management confirmation (earlier in this array), but it closes itself
+  // before opening it, so the two are never on screen together and the order
+  // between them does not matter.
+  { id: 'agent-mcp-servers', Component: AgentMcpServersSurface },
+  { id: 'mcp-server-dialog', Component: McpServerDialogSurface },
+  // Appended per the contract above (#1161). Opened from the Skills grid, the
+  // "Add Skill…" command (which closes the palette first) and an external
+  // skill's "Manage with Agent Code"; it stacks over Settings by order.
+  { id: 'add-skill-dialog', Component: AddSkillDialogSurface },
   // Built-in apps host. Last in the array, which per the paint-order contract
   // above means it paints above every modal already mounted. That placement is
   // reasoned, not defaulted: an app is always user-initiated from the palette and

@@ -86,6 +86,7 @@ export const SURFACE_OWNER_FLAGS = {
   'open-keyboard-shortcuts': 'keyboardShortcutsOpen',
   'open-agent-activity': 'agentActivityOpen',
   'close-old-agents': 'closeOldAgentsOpen',
+  'close-completed-agents': 'closeCompletedAgentsOpen',
   'switch-agents-provider': 'bulkProviderSwitchOpen',
   'search-conversation-prompts': 'conversationsOpen',
   'resume-session': 'conversationsOpen',
@@ -114,8 +115,6 @@ export type SurfaceOwningCommandId = keyof typeof SURFACE_OWNER_FLAGS
  * decides whether it gets the chance.
  */
 export const PALETTE_MODE_COMMANDS = {
-  'revive-pane': 'buried',
-  'kill-buried-pane': 'kill-buried',
   'prompt-template': 'prompt-template',
   'manage-prompt-templates': 'manage-prompt-template',
   'save-composer-as-prompt-template': 'save-prompt-template',

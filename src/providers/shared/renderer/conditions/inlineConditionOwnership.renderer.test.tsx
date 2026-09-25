@@ -107,3 +107,23 @@ describe('pane-local condition keyboard ownership', () => {
     expect(request).toHaveBeenCalledOnce()
   })
 })
+
+describe('what an approval modal SHOWS is part of the decision (#1049)', () => {
+  it('keeps a trailing carriage return visible instead of trimming it away', async () => {
+    // `./check.sh\r` is a filename whose last byte is CR: a shell runs a
+    // DIFFERENT file than `./check.sh`, and the two render identically. The
+    // first fix escaped the command but trimmed it first, and `.trim()`
+    // removes CR — so the modal went on showing the safe-looking name for the
+    // command Codex would actually run (#1049 re-review).
+    const { CodexApprovalModal } = await import('@providers/codex/renderer/CodexApprovalModal')
+    render(
+      <CodexApprovalModal
+        approval={{ callId: 'call-cr', command: ['./check.sh\r'], workdir: '/repo' }}
+        onSend={vi.fn(async () => undefined)}
+        interactionActive={false}
+      />,
+    )
+    const strip = screen.getByRole('group', { name: 'Codex command approval options' })
+    expect(strip.textContent).toContain('U+000D CR')
+  })
+})

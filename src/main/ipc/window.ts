@@ -3,9 +3,12 @@ import { ipcMain } from 'electron'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import {
   createAppWindow,
+  captureSessionWindowLease,
   releaseSession,
   windowIdFor,
+  windowRendererGeneration,
 } from '@main/window/windowRegistry.js'
+import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 
 // Window-chrome IPC, plus the confirmation half of the workspace handoff.
 //
@@ -23,8 +26,9 @@ import {
 type PendingBequest = {
   /** The window that was offered the closed window's workspace. */
   survivorWindowId: string
-  /** Sessions whose routing was moved to the survivor when the offer was made. */
-  sessionIds: string[]
+  /** Exact routing claims moved to the survivor when the offer was made. */
+  leases: Array<SessionWindowLease | null>
+  survivorGeneration: number | null
 }
 
 /**
@@ -43,7 +47,11 @@ export function recordPendingBequest(
   survivorWindowId: string,
   sessionIds: string[],
 ): void {
-  pendingBequests.set(closedWindowId, { survivorWindowId, sessionIds })
+  pendingBequests.set(closedWindowId, {
+    survivorWindowId,
+    leases: sessionIds.map(captureSessionWindowLease),
+    survivorGeneration: windowRendererGeneration(survivorWindowId),
+  })
 }
 
 /**
@@ -51,15 +59,14 @@ export function recordPendingBequest(
  *
  * Used when the offer could not even be composed (the closed window had no
  * persisted slice). The sessions go back to being unowned, which routes their
- * events to a broadcast and leaves a diagnostic breadcrumb — visible and
- * recoverable, rather than silently pinned to a window that will never show
- * them.
+ * events to bounded ownership-repair metadata. A refusal never broadens
+ * content recipients, and cannot release a newer claim admitted meanwhile.
  */
 export function abandonPendingBequest(closedWindowId: string): void {
   const pending = pendingBequests.get(closedWindowId)
   if (!pending) return
   pendingBequests.delete(closedWindowId)
-  for (const sessionId of pending.sessionIds) releaseSession(sessionId)
+  for (const lease of pending.leases) releaseSession(lease)
 }
 
 export function registerWindowIpc(store: WorkspaceFileStore): void {
@@ -73,7 +80,10 @@ export function registerWindowIpc(store: WorkspaceFileStore): void {
 
   ipcMain.handle('window:adoption-complete', async (evt, windowId: string) => {
     const pending = pendingBequests.get(windowId)
-    if (!pending || pending.survivorWindowId !== windowIdFor(evt.sender)) {
+    if (
+      !pending || pending.survivorWindowId !== windowIdFor(evt.sender) ||
+      pending.survivorGeneration !== windowRendererGeneration(pending.survivorWindowId)
+    ) {
       // Not an offer this window was made. Dropping a slice on an unverified
       // claim is unrecoverable for a window that closed with no survivor, so
       // an unmatched confirmation is ignored rather than honored.
@@ -89,7 +99,10 @@ export function registerWindowIpc(store: WorkspaceFileStore): void {
 
   ipcMain.handle('window:adoption-refused', (evt, windowId: string) => {
     const pending = pendingBequests.get(windowId)
-    if (!pending || pending.survivorWindowId !== windowIdFor(evt.sender)) return
+    if (
+      !pending || pending.survivorWindowId !== windowIdFor(evt.sender) ||
+      pending.survivorGeneration !== windowRendererGeneration(pending.survivorWindowId)
+    ) return
     // The slice is deliberately NOT removed: the workspace comes back as its
     // own window on the next launch, with everything intact. Ownership is
     // rolled back so the sessions do not stay pinned to a window that refused

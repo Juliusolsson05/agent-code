@@ -9,6 +9,7 @@ import type {
   ExtensionInstallResult,
   ExtensionListEntry,
   InstalledExtension,
+  QuarantinedExtensionEntry,
 } from '@shared/types/extensions.js'
 
 // Extension-app storage and management bridge.
@@ -76,6 +77,10 @@ export const extensionsApi = {
   // extension must never be able to install or remove another extension. They are
   // called only by the Settings UI.
   extensionsList: (): Promise<ExtensionListEntry[]> => ipcRenderer.invoke('extensions:list'),
+
+  // Ledger rows this build could not use. Never runnable — see the type.
+  extensionsListQuarantined: (): Promise<QuarantinedExtensionEntry[]> =>
+    ipcRenderer.invoke('extensions:list-quarantined'),
   onExtensionsChanged: (handler: (rows: InstalledExtension[]) => void): (() => void) =>
     subscribe('extensions:changed', handler),
 
@@ -94,7 +99,19 @@ export const extensionsApi = {
   extensionsUpdateLocal: (id: string): Promise<ExtensionInstallResult> =>
     ipcRenderer.invoke('extensions:update-local', id),
 
+  // Re-install a GitHub extension from the `owner/repo` recorded at install
+  // time. Same shape as update-local — id in, main reads the source — so that
+  // Update re-runs an approved choice instead of arriving as a fresh repo
+  // string, which is what makes the first-install consent prompt skippable here.
+  extensionsUpdateGithub: (id: string, useGithubCliAuth?: boolean): Promise<ExtensionInstallResult> =>
+    ipcRenderer.invoke('extensions:update-github', id, useGithubCliAuth),
+
   extensionsRemove: (id: string): Promise<void> => ipcRenderer.invoke('extensions:remove', id),
+
+  // Clear a set-aside row. A DIFFERENT operation from uninstalling: a ledger
+  // can hold a preserved row and a runnable one under the same id.
+  extensionsRemoveQuarantined: (id: string): Promise<void> =>
+    ipcRenderer.invoke('extensions:remove-quarantined', id),
 
   // Reads the set of capabilities a user granted an extension, for the frame broker
   // to gate Tier 1-3 calls. A HOST method, not part of AgentCodeApiV1 — an extension

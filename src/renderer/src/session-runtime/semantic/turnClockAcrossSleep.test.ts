@@ -167,6 +167,49 @@ describe('in-feed turn clock across a laptop sleep (Claude proxy)', () => {
     expect(working).toContain('work')
   })
 
+  it('leaves an "Interrupted before the response finished" marker when the stream dies (#1040)', () => {
+    // An Esc mid-stream: Claude Code closes the connection, mitmproxy reports
+    // it through its error hook, and the adapter seals the flow. The feed has
+    // to say so — before this, the half-answer sat there with no explanation
+    // and the phase stayed Thinking until the next prompt.
+    //
+    // The wording claims no cause on purpose: mitmproxy hands the hook
+    // `Client disconnected.` for an Esc, for its own inactivity timeout and
+    // for some upstream failures alike.
+    const pane = mountClaudePane()
+    streamUntilSleep(pane)
+    expect(feedItemTypes(pane.reducer.pane, 'claude')).toContain('work')
+
+    pane.adapter.handleTransportEvent({ kind: 'response-error', flow_id: 1, error: 'Client disconnected.' })
+
+    expect(pane.reducer.stops).toEqual([expect.objectContaining({ interruption: 'transport-error' })])
+    const severed = feedItemTypes(pane.reducer.pane, 'claude')
+    expect(severed).not.toContain('work')
+    expect(severed.at(-1)).toBe('transport-interruption')
+
+    // And the next prompt replaces it with the work chip, like any other tail.
+    request(pane.adapter, 2)
+    chunk(pane.adapter, 2, [messageStart('msg_next_prompt'), thinkingStart(0)])
+    const working = feedItemTypes(pane.reducer.pane, 'claude')
+    expect(working).not.toContain('transport-interruption')
+    expect(working).toContain('work')
+  })
+
+  it('still calls it a sleep when the transport reports a slept-through stream (#1040)', () => {
+    // The adapter learns the suspension instant immediately now, so whichever
+    // signal arrives first, a stream that was already silent when the machine
+    // went down is reported as sleep.
+    const pane = mountClaudePane()
+    streamUntilSleep(pane)
+    pane.adapter.noteSuspension(SLEEP.suspendedAt)
+
+    vi.setSystemTime(WAKE_AT + 1_000)
+    pane.adapter.handleTransportEvent({ kind: 'response-error', flow_id: 1, error: 'Client disconnected.' })
+
+    expect(pane.reducer.stops).toEqual([expect.objectContaining({ interruption: 'system-suspended' })])
+    expect(feedItemTypes(pane.reducer.pane, 'claude').at(-1)).toBe('sleep-interruption')
+  })
+
   it('does not seal a stream that showed life after the sleep began', () => {
     const pane = mountClaudePane()
     streamUntilSleep(pane)

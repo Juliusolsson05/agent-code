@@ -9,6 +9,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { useSessionActions } from './session'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({
   loadInitialHistoryForSession: vi.fn(async () => undefined),
@@ -38,8 +39,6 @@ describe('renderer session replacement handoff', () => {
       tabs: [{
         id: 'tab-a',
         title: 'recorded',
-        root: { type: 'leaf' as const, sessionId: predecessorId },
-        focusedSessionId: predecessorId,
       }],
       activeTabId: 'tab-a',
       sessions: {
@@ -49,12 +48,12 @@ describe('renderer session replacement handoff', () => {
           providerSessionId: 'recorded-provider-session',
           providerSessionIdSource: 'resume-request' as const,
           builtInMcpDomains: [],
+          projectId: 'tab-a',
+          joinedAt: 0,
         },
       },
-      detachedSessions: {},
-      buried: [],
       pinnedSessionIds: [],
-      dispatchMode: null,
+      stage: oneLaneStage(predecessorId),
     } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {
       [predecessorId]: {
@@ -66,7 +65,6 @@ describe('renderer session replacement handoff', () => {
       stateRef: ref(state),
       latestStateRef: ref(state),
       latestRuntimesRef: ref(runtimes),
-      latestTileTabsRef: ref(null),
       dangerousAgentsRef: ref(false),
       useProxyStreamingRef: ref(true),
       defaultBuiltInMcpDomainsRef: ref([]),
@@ -138,20 +136,30 @@ describe('renderer session replacement handoff', () => {
       cwd: '/recorded/worktree',
       resumeSessionId: 'recorded-provider-session',
       predecessorSessionId: predecessorId,
+      // Main journals its handoff kill of the predecessor with this tag, so a
+      // Codex reload reads as the user's swap, not as recovery (#1135).
+      predecessorKillCaller: 'replace.predecessor',
       dangerousMode: destination === 'terminal' ? undefined : false,
       useProxy: destination === 'terminal' ? undefined : true,
       recoverTmuxName: undefined,
       builtInMcpDomains: destination === 'terminal' ? undefined : destination === 'codex' ? ['workflows'] : [],
+      // Agents carry the pane's user MCP choices to main (#1143); terminals never do.
+      ...(destination === 'terminal' ? {} : { userMcpOverrides: {} }),
     })
     // A transaction-bearing result means main already retired the predecessor
     // and is holding the successor pending durable workspace ownership. Sending
     // the legacy cleanup here is indistinguishable from an explicit close and
     // would correctly cancel the hidden successor before the remap can persist.
     expect(killOwnedSession).not.toHaveBeenCalled()
-    expect(state.tabs[0]).toMatchObject({
-      root: { type: 'leaf', sessionId: 'local-successor' },
-      focusedSessionId: 'local-successor',
-    })
+    // The successor stands exactly where the predecessor stood: same project,
+    // same position in its index (`joinedAt` is INHERITED, not re-stamped — a
+    // provider switch must not send the agent to the bottom of the list), and
+    // the lane that showed the predecessor now shows it. Until #992 this was
+    // one fact, "the tile leaf was swapped in place"; membership and the lane
+    // are separate writes now, so each is asserted.
+    expect(state.sessions[predecessorId]).toBeUndefined()
+    expect(state.sessions['local-successor']).toMatchObject({ projectId: 'tab-a', joinedAt: 0 })
+    expect(state.stage.lanes).toEqual([{ selectedSessionId: 'local-successor' }])
     expect(runtimes['local-successor']?.draftInput).toBe('edited while spawning')
     expect(runtimes['local-successor']?.draftImages).toEqual(destination === 'claude' ? [image] : [])
 
@@ -167,6 +175,7 @@ describe('renderer session replacement handoff', () => {
       useProxy: true,
       recoverTmuxName: undefined,
       builtInMcpDomains: [],
+      userMcpOverrides: {},
     })
   })
 })

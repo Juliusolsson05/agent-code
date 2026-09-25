@@ -12,11 +12,11 @@ const seam = vi.hoisted(() => ({
 }))
 vi.mock('@main/window/windowRegistry.js', () => ({
   windowForSession: () => 'parent-window',
-  sendToWindow: (...args: unknown[]) => seam.send(...args),
+  sendToWindow: (...args: unknown[]) => { seam.send(...args); return true },
 }))
 vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: (kind: AgentProviderKind) => ({
-    name: { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', grok: 'Grok' }[kind],
+    name: { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', grok: 'Grok', pi: 'Pi' }[kind],
     createTerminalSession: seam.terminalProviders.has(kind) ? () => undefined : undefined,
   }),
 }))

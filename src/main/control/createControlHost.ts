@@ -16,6 +16,15 @@ import { globalControlCapabilities, type ObserveWindows } from './globalCapabili
 import { batchControlCapabilities } from './batches'
 import { createWaitControl } from './waits'
 
+/**
+ * How long committed shutdown waits for admitted control work.
+ *
+ * Long enough that an ordinary operation and its durable write always finish,
+ * short enough that a wedged one cannot hold the application hostage. See
+ * `dispose` for why a bound exists at all.
+ */
+const CONTROL_DRAIN_TIMEOUT_MS = 10_000
+
 export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
   windowIdFor(sender: WebContents): string | null
@@ -54,7 +63,24 @@ export function createControlHost(windowAccess: {
       await focusWindow(window)
     },
     dispatch: (request, context) => registry.invoke(request, context) })
-  const waits = createWaitControl((request, caller) => executor.invoke(request, caller))
+  // Nested: a wait's inner read belongs to the wait that was already
+  // admitted, and refusing it mid-shutdown would strand the parent.
+  //
+  // ── WHY THESE FLAGS ARE UNTESTABLE TODAY, AND KEPT ANYWAY ──
+  // Removing `nested` from any of the three internal call sites leaves the
+  // suite green, and that is honest rather than a coverage gap: none of them
+  // can currently reach the gate.
+  //   - The main task port carries only `operations.start`/`operations.finish`,
+  //     which are receipt-exempt (see the gate in `executor.invoke`).
+  //   - `agents.batchRead` is a read and its members are hardcoded
+  //     `agents.read` — also reads, admitted regardless.
+  //   - `agents.batchPrompt` is a MUTATION, so the batch itself is refused at
+  //     the gate before any member runs.
+  //   - A wait's inner request is hardcoded `agents.read`/`operations.read`.
+  // The flags are the standing answer for the first non-read batch member or
+  // non-receipt main-port capability, which would otherwise be half-finished
+  // by a shutdown with no test to notice.
+  const waits = createWaitControl((request, caller) => executor.invoke(request, caller, { nested: true }))
   const bridge = new ControlRendererBridge((windowId, message) => {
     const window = getBrowserWindow(windowId)
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) throw new Error('Window unavailable')
@@ -75,7 +101,7 @@ export function createControlHost(windowAccess: {
   // external request never gets this application identity from tool input.
   const additional = typeof additionalCapabilities === 'function' ? additionalCapabilities({ invokeTask: (context, request) => {
     if (JSON.stringify(context.owner) !== JSON.stringify(mainOwner) || !['operations.start', 'operations.finish'].includes(request.capabilityId)) throw new ControlError('unavailable', 'Main task port only records its own lifecycle')
-    return executor.invoke(request, { kind: 'application', id: `control-main:${mainOwner.generation}` })
+    return executor.invoke(request, { kind: 'application', id: `control-main:${mainOwner.generation}` }, { nested: true })
   } }) : additionalCapabilities
   const unregisterMain = registry.register(mainOwner, [...windowControlCapabilities(() =>
     listWindowIds().map((windowId, index) => ({
@@ -86,7 +112,7 @@ export function createControlHost(windowAccess: {
       generation: windows.get(windowId)?.generation ?? null,
     })),
   ), ...historyCapabilities(history), ...taskHistoryCapabilities(history, owner => registry.list().some(row => JSON.stringify(row.owner) === JSON.stringify(owner))),
-  ...globalControlCapabilities(observeWindows), ...waits.capabilities, ...batchControlCapabilities((request, caller) => executor.invoke(request, caller)), ...additional])
+  ...globalControlCapabilities(observeWindows), ...waits.capabilities, ...batchControlCapabilities((request, caller) => executor.invoke(request, caller, { nested: true })), ...additional])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)
@@ -154,8 +180,73 @@ export function createControlHost(windowAccess: {
         },
       }
     },
-    dispose() {
+    /**
+     * Committed shutdown for the control surface (#943).
+     *
+     * ── WHY THIS IS ASYNC, AND WHY THE ORDER IS THE CONTRACT ──
+     * It used to retire waits, window registrations and IPC handlers and
+     * return. None of that is evidence that anything STOPPED: an admitted
+     * operation was still running, and its durable result was still queued
+     * behind `FileControlHistory`'s append tail. The caller
+     * (`applicationShutdown`'s `control` stage) then released the exit and the
+     * state-process lock, so the process could die between an effect happening
+     * and the record of it reaching disk — the one state that makes a retry
+     * after restart unanswerable.
+     *
+     *  1. Close admission. Reads keep answering; they change nothing, and
+     *     refusing them would blind the tooling used to diagnose a stuck quit.
+     *  2. Cancel outstanding WAITS. A wait is a read that would otherwise sit
+     *     in the drain for its full deadline for no purpose — the thing it is
+     *     waiting for is being torn down. This does not touch the registry.
+     *  3. AWAIT what was admitted, THEN the history tail. This order is real:
+     *     an operation finishing appends its own result, so draining the file
+     *     first would leave the very last one behind. And the tail covers what
+     *     the executor cannot — `recordTransport` appends straight to the
+     *     history, outside any call.
+     *  4. ONLY NOW retire the registrations, and last of all the IPC handlers.
+     *
+     * ── WHY STEP 4 IS LAST, WHICH IT WAS NOT (#1074 review, 1) ──
+     * `unregisterMain()` and the window retirements EMPTY THE CATALOG, and the
+     * admission gate resolves a capability's declared effect against that
+     * catalog, treating an unknown id as effectful. Doing them before the
+     * drain therefore refused everything during it — including every declared
+     * read, and including `operations.start`/`operations.finish`, whose own
+     * owner had just been unregistered ("No owner for operations.start").
+     * Three of the claims in this comment were false as written. Draining
+     * first keeps the catalog intact for exactly as long as anything still
+     * needs it.
+     *
+     * ── WHY THE DRAIN IS BOUNDED ──
+     * It holds the exit and the state-process lock. A never-resolving
+     * operation — a stalled `fsync` in the history append is the realistic
+     * one — would make the application impossible to quit, and the user's
+     * answer to that is a force quit, which loses the record this protects AND
+     * strands the lock. `stopPerformance` already settled the same trade-off
+     * three stages later for the same reason. Giving up loudly beats hanging
+     * silently, so what was still outstanding is reported to the caller.
+     */
+    async dispose(options: {
+      timeoutMs?: number
+      onIncompleteDrain?: (outstanding: { operations: number; tasks: number }) => void
+    } = {}) {
+      executor.closeAdmission()
       waits.dispose()
+      // The deadline lives HERE, not in the executor: `src/control-sdk` is
+      // platform-neutral and has no timer in its type lib, which the CI
+      // type-check caught when the race was written there.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        executor.settled(),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, options.timeoutMs ?? CONTROL_DRAIN_TIMEOUT_MS)
+        }),
+      ])
+      if (timer) clearTimeout(timer)
+      const outcome = executor.outstanding()
+      await history.drain?.()
+      if (!outcome.drained) {
+        options.onIncompleteDrain?.({ operations: outcome.operations, tasks: outcome.tasks })
+      }
       for (const window of [...windows.values()]) window.dispose()
       unregisterMain()
       for (const name of ['register', 'unregister', 'response', 'catalog', 'invoke']) ipcMain.removeHandler(`control:${name}`)

@@ -8,24 +8,30 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { PromptDeliveryOptions } from '@shared/types/providerConfig.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
 import type {
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
 } from '@shared/types/session.js'
 import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import {
   claimSessionForWindow,
+  captureSessionWindowLease,
+  isSessionWindowLeaseCurrent,
   releaseSession,
+  sendToSessionWindow,
   sessionsOwnedBy,
   windowIdFor,
 } from '@main/window/windowRegistry.js'
+import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -59,6 +65,9 @@ import {
 export function registerSessionIpc(
   manager: SessionManager,
   pasteDebugJournals: PasteDebugJournalRegistry,
+  // The shared session feed tap (#1177), for the one ordering barrier this
+  // file owns: deliver-prompt flushes committed rows before replying (#1181).
+  feedTap: Pick<SessionFeedTap, 'flushCommitted'>,
   appRunJournal?: AppRunJournal,
 ): void {
   ipcMain.handle(
@@ -72,18 +81,28 @@ export function registerSessionIpc(
       // resolved result: the provider emits `started` and its first screen and
       // semantic events while `spawn()` is still awaiting, and those must
       // already route to this window.
-      return await manager.spawn(options, sessionId =>
-        claimSessionForWindow(sessionId, owner),
-      )
+      let lease: SessionWindowLease | null = null
+      try {
+        return await manager.spawn(options, sessionId => {
+          lease = claimSessionForWindow(sessionId, owner)
+          if (!lease) throw new Error('The requesting window can no longer own this session')
+        })
+      } catch (error) {
+        // A failed spawn never returns its minted id to the renderer, so no
+        // pane-disposal request can clean this claim later. Release only this
+        // admission; a successor recovery may already have claimed the id.
+        releaseSession(lease)
+        throw error
+      }
     },
   )
 
   ipcMain.handle('session:recover', async (evt, options: SessionRecoverOptions) => {
-    // Recovery already knows its id — the renderer supplies the durable local
-    // id it is restoring — so the claim can happen before the call rather than
-    // through a mint hook.
-    claimSessionForWindow(options.sessionId, windowIdFor(evt.sender))
-    const result = await manager.recover(options)
+    let lease: SessionWindowLease | null = null
+    const result = await manager.recover(options, () => {
+      lease = claimSessionForWindow(options.sessionId, windowIdFor(evt.sender))
+      if (!lease) throw new Error('This session is owned by another window or the requesting window is unavailable')
+    })
     // A fresh/reloaded renderer has no previous screen even when this backend
     // is already live. The spinner gate may now suppress every subsequent
     // repaint, and an idle backend may emit none. Seed this requesting renderer
@@ -91,9 +110,9 @@ export function registerSessionIpc(
     // global gate or broadcast to unrelated windows just to satisfy one joiner.
     // Read after await so a frame received during recovery cannot be replayed
     // behind a newer cached value. Failed/conflicting recoveries reveal nothing.
-    if (result.ok && !evt.sender.isDestroyed()) {
+    if (result.ok && !evt.sender.isDestroyed() && isSessionWindowLeaseCurrent(lease)) {
       const screen = manager.getScreenSnapshot(options.sessionId)
-      if (screen) evt.sender.send('session:screen', aliasScreenSnapshotForWire({ sessionId: options.sessionId, ...screen }))
+      if (screen) sendToSessionWindow(options.sessionId, 'session:screen', aliasScreenSnapshotForWire({ sessionId: options.sessionId, ...screen }))
     }
     return result
   })
@@ -109,15 +128,85 @@ export function registerSessionIpc(
     return manager.getBackendSnapshot(sessionId)
   })
 
-  ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
+  /**
+   * Re-emit each session's cached provider-conditions snapshot to the window
+   * that owns it, on the ORDINARY event channel (#895).
+   *
+   * WHY the renderer asks, rather than main pushing when it transfers routing:
+   * every path that needs this — adopting a closed window's sessions, a cold
+   * restore, waking a parked agent — rebuilds the runtime from `emptyRuntime()`
+   * AFTER its own `invoke` resolves. A snapshot delivered before that seed is
+   * simply overwritten by it. The renderer is the only side that knows when
+   * its runtimes exist.
+   *
+   * WHY the event channel and not the reply to that invoke: conditions have no
+   * revision, and a reply raced against live events cannot be ordered against
+   * them. The first attempt at #895 carried the snapshot on
+   * `SessionBackendSnapshot` and compared `ts` — and 1 ms `Date.now()` ties are
+   * genuinely unordered (OpenCode emits several snapshots per millisecond with
+   * no dedupe latch), so a prompt answered in the same millisecond it appeared
+   * could be RESTORED onto the user's screen. On this channel there is nothing
+   * to order: main updates its cache before forwarding, so the cache is never
+   * older than what the renderer has already folded, and the re-emit is just
+   * the next event in the same stream. The renderer's own handler then applies
+   * the one projection, the unread mark and the debug log, exactly as it does
+   * for a live change — `session:resync-routing` seeds the same way, for the
+   * same reason.
+   *
+   * Ownership is checked per session, so a stale request cannot make main
+   * deliver another window's state.
+   */
+  ipcMain.handle('session:reseed-conditions', (evt, sessionIds: string[]): number => {
+    if (!Array.isArray(sessionIds)) return 0
+    let delivered = 0
+    for (const sessionId of sessionIds) {
+      if (typeof sessionId !== 'string' || !sessionId) continue
+      const lease = captureSessionWindowLease(sessionId)
+      if (!lease || lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease)) continue
+      const snapshot = manager.getConditionsSnapshot(sessionId)
+      // No cached snapshot means no condition has ever been live for this
+      // session. Sending nothing is the honest answer; an empty snapshot would
+      // be a claim that everything is clear, which is a different statement.
+      if (!snapshot) continue
+      if (sendToSessionWindow(sessionId, 'session:conditions', { sessionId, snapshot }) === 'delivered') delivered += 1
+    }
+    return delivered
+  })
+
+  ipcMain.handle('session:kill', async (evt, sessionId: string) => {
+    const lease = captureSessionWindowLease(sessionId)
+    if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
+    // No caller on this legacy id-only channel: it has no renderer consumer
+    // today, so a kill.request with `caller: 'unknown'` from here is itself the
+    // signal that something started using it (#1135).
     const killed = await manager.kill(sessionId)
-    releaseSession(sessionId)
+    releaseSession(lease)
     return killed
   })
 
-  ipcMain.handle('session:kill-owned', async (_evt, options: SessionOwnershipOptions) => {
+  ipcMain.handle('session:kill-owned', async (evt, options: SessionKillOptions) => {
+    const lease = captureSessionWindowLease(options.sessionId)
+    // A stale window must not dispose another window's current view, even if
+    // its saved provider/cwd still happen to match. Main-internal shutdown and
+    // custody cleanup retain their direct manager authority.
+    if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
+    // `options.caller` is forwarded untouched; killOwned re-validates it
+    // against KILL_CALLERS, so a renderer cannot write free text into the
+    // journal through it.
     const killed = await manager.killOwned(options)
-    releaseSession(options.sessionId)
+    // WHY the release is conditional (#935 Codex review): killOwned returns
+    // false for two different situations. One is "there was nothing to close"
+    // — an already-exited pane being cleaned up, where releasing the claim is
+    // exactly right. The other is "this request does not own that backend":
+    // a stale pane whose saved cwd or provider no longer matches the live
+    // session. Releasing there revoked the display claim of a session that is
+    // still running, and since this branch removes the broadcast fallback its
+    // output was then quarantined with no owner left to show the gap — the
+    // pane simply went quiet. `retainsSessionOwnership` asks the same four
+    // tables killOwned consults, because a backend snapshot alone is not
+    // enough: mid-handoff a Codex predecessor has no snapshot while its
+    // replacement reservation still owns it (#935 Codex delta review).
+    if (killed || !manager.retainsSessionOwnership(options.sessionId)) releaseSession(lease)
     return killed
   })
 
@@ -244,6 +333,13 @@ export function registerSessionIpc(
     },
   )
 
+  // Jump to Latest for a provider whose TUI owns its transcript scrollback
+  // (#843). A fixed request, never a command string from the renderer: the
+  // route beneath it can run any TUI command, including destructive ones.
+  ipcMain.handle('session:jumpToLatest', async (_evt, sessionId: string) => {
+    return await manager.jumpToLatest(sessionId)
+  })
+
   ipcMain.handle(
     'session:resolveCondition',
     async (_evt, sessionId: string, action: ConditionCustomAction) => {
@@ -267,6 +363,7 @@ export function registerSessionIpc(
       prompt: string,
       imagePaths?: string[],
       deliveryId?: string,
+      options?: PromptDeliveryOptions,
     ) => {
       const record = typeof deliveryId === 'string' && deliveryId.length > 0
         ? (event: string, data?: Record<string, unknown>) => {
@@ -277,7 +374,20 @@ export function registerSessionIpc(
             })
           }
         : undefined
-      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId)
+      const result = await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId,
+        options?.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : undefined)
+      // ORDER BARRIER (#1181): send the committed rows before the answer.
+      // Claude's acceptance IS main seeing the prompt's JSONL line, and that
+      // line is buffered in the session feed tap's JSONL burst and sent on the next
+      // setImmediate. The reply to this invoke would otherwise overtake it,
+      // because the await above resumes in a microtask. The renderer removes
+      // its pending "Sending…" row the moment the reply lands. Without this
+      // flush the prompt blinked out of the feed until the batch arrived
+      // (PR #1183 review, Claude 1). Both messages then travel the same
+      // renderer channel in this order. Flushing early costs nothing: it is
+      // the same batch, just sent now, and an empty buffer is a no-op.
+      feedTap.flushCommitted(sessionId)
+      return result
     },
   )
 

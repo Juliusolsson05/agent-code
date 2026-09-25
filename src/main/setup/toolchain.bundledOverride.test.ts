@@ -44,8 +44,11 @@ function setupState(overrides: {
     toolPaths: overrides.toolPaths ?? {},
     manualToolPaths: overrides.manualToolPaths ?? {},
     skippedOptionalTools: {},
+    acknowledgedNoProviders: false,
     cliUpdateBehavior: 'automatic' as const,
     cliUpdateCache: {},
+    providerEnablementOverrides: {},
+    opencodeUsageSource: 'none' as const,
     updatedAt: 0,
   }
 }

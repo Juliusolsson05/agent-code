@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { Conversation, ConversationListResponse } from '@shared/conversations/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ConversationsPicker } from './ConversationsPicker'
+import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
 afterEach(() => {
@@ -40,7 +41,7 @@ type WorkspaceMock = Workspace & { replaceSession: Mock; newTab: Mock }
 function workspace(over: Record<string, unknown> = {}): WorkspaceMock {
   return {
     activeTab: { id: 't', focusedSessionId: 's' },
-    state: { tabs: [{ id: 't', focusedSessionId: 's' }], activeTabId: 't', dispatchMode: false, sessions: { s: { cwd: '/fixture/repo', kind: 'claude' } } },
+    state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude', projectId: 't', joinedAt: 0 } } },
     replaceSession: vi.fn(async () => 's2'),
     newTab: vi.fn(async () => undefined),
     ...over,
@@ -69,8 +70,34 @@ describe('ConversationsPicker', () => {
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex' }))
+    // `newConversation` is part of this call's meaning, not a detail (#1090):
+    // the picker swaps a STRANGER's conversation into the pane, so the
+    // successor must not inherit the pane's orchestration parentage. Every
+    // other caller of replaceSession continues the same agent and omits it.
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex', newConversation: true }))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('does not resume the highlighted row when Enter presses a filter chip (#867)', async () => {
+    // The picker handles Enter on `DialogContent` and `preventDefault`s it, so
+    // the chips inside that content — ordinary tabbable buttons — never got
+    // their native click. Tab to "everywhere" and press Enter and the chip did
+    // not toggle: the picker RESUMED the highlighted conversation instead,
+    // replacing what was running in the focused pane. The #867 audit called
+    // this consumer safe for having no footer; the rule is about the focused
+    // CONTROL, not the footer slot.
+    install()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    const chip = screen.getByRole('button', { name: 'everywhere' })
+
+    // `true` = the default survived, which is what lets a real browser deliver
+    // the chip's own click.
+    expect(fireEvent.keyDown(chip, { key: 'Enter' })).toBe(true)
+
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    expect(chip.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('re-queries with the toggled scope, provider and children filters, and with the typed query', async () => {
@@ -114,7 +141,7 @@ describe('ConversationsPicker', () => {
 
   it('asks for a pane when none is commanded, and lists everywhere without one', async () => {
     const list = install()
-    const ws = workspace({ state: { tabs: [{ id: 't', focusedSessionId: 's' }], activeTabId: 't', dispatchMode: false, sessions: {} } })
+    const ws = workspace({ state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: {} } })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     expect(await screen.findByText(/focus a pane to list its repository/i)).toBeInTheDocument()
     expect(list).not.toHaveBeenCalled()
@@ -125,7 +152,7 @@ describe('ConversationsPicker', () => {
 
   it('opens a new tab when no pane can be replaced', async () => {
     install()
-    const ws = workspace({ activeTab: null, state: { tabs: [{ id: 't', focusedSessionId: 's' }], activeTabId: 't', dispatchMode: false, sessions: { s: { cwd: '/fixture/repo', kind: 'claude' } } } })
+    const ws = workspace({ activeTab: null, state: { tabs: [{ id: 't', title: 'fixture' }], activeTabId: 't', stage: oneLaneStage('s'),   pinnedSessionIds: [], sessions: { s: { cwd: '/fixture/repo', kind: 'claude', projectId: 't', joinedAt: 0 } } } })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     fireEvent.click(await screen.findByText('Project context bootstrapping'))
     await waitFor(() => expect(ws.newTab).toHaveBeenCalledWith('/fixture/repo', 'ededdea8-06bf-4474-b945-b3a8f8ce0fe1', 'claude'))

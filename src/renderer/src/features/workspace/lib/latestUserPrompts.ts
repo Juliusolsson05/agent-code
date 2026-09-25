@@ -25,6 +25,23 @@ function isMetaEntry(entry: Entry): boolean {
 // kind that predates the field is a legacy Claude session; both take the
 // default provider's (Claude's) rule, which is exactly what the old inline
 // switch did for them.
+/**
+ * The user's own words, with provider scaffolding removed (#1059).
+ *
+ * Applied right after the predicate, because everything downstream of this
+ * helper SHOWS or REPLAYS the result — pane titles, ⌘↑ composer history, View
+ * Prompts and the Rewind picker. Claude's `<pasted_content id="…">` envelope
+ * reached all four verbatim, and ⌘↑ then fed it back to Claude, which wrapped
+ * the already-wrapped text.
+ */
+function typedUserPromptText(text: string, sessionKind: SessionKind | undefined): string {
+  // Resolved exactly as the predicate above resolves it, so the rule that
+  // accepted a row and the rule that renders it can never come from two
+  // different providers.
+  const provider = isAgentProviderKind(sessionKind) ? sessionKind : DEFAULT_PROVIDER
+  return getRendererProviderCapabilities(provider).typedUserPromptText(text)
+}
+
 function isTypedUserPrompt(entry: Entry, text: string, sessionKind: SessionKind | undefined): boolean {
   const provider = isAgentProviderKind(sessionKind) ? sessionKind : DEFAULT_PROVIDER
   return getRendererProviderCapabilities(provider).isTypedUserPrompt(entry, text)
@@ -56,9 +73,13 @@ export function extractLatestUserPrompts(
     if (isCompactSummaryEntry(entry)) continue
     if (isMetaEntry(entry)) continue
 
-    const text = extractPromptText(entry)
-    if (!text) continue
-    if (!isTypedUserPrompt(entry, text, sessionKind)) continue
+    const raw = extractPromptText(entry)
+    if (!raw) continue
+    if (!isTypedUserPrompt(entry, raw, sessionKind)) continue
+    // De-duplicated on the DISPLAYED text: two consecutive pastes of the same
+    // prompt carry different envelope ids, so comparing the raw rows called
+    // them distinct and ⌘↑ history showed the same prompt twice.
+    const text = typedUserPromptText(raw, sessionKind)
     if (chronological.length > 0 && chronological[chronological.length - 1]?.text === text) {
       continue
     }
@@ -85,11 +106,11 @@ export function extractLatestUserPrompt(
     if (isCompactSummaryEntry(entry)) continue
     if (isMetaEntry(entry)) continue
 
-    const text = extractPromptText(entry)
-    if (!text) continue
-    if (!isTypedUserPrompt(entry, text, sessionKind)) continue
+    const raw = extractPromptText(entry)
+    if (!raw) continue
+    if (!isTypedUserPrompt(entry, raw, sessionKind)) continue
     return {
-      text,
+      text: typedUserPromptText(raw, sessionKind),
       timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : null,
     }
   }

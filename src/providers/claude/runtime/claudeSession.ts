@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import { excludeExternalControlFromClaude } from '@providers/shared/runtime/externalControlExclusion.js'
 import { CLAUDE_TLDR_HOOK_TOKEN_ENV, claudeTldrHookSettings, tldrHookServer } from '@providers/shared/runtime/tldrHooks.js'
 import { EventEmitter } from 'events'
@@ -17,6 +18,8 @@ import {
   createPrivateClaudeMcpConfig,
   type PrivateMcpConfig,
 } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { claudeUserMcpEntries } from '@providers/shared/runtime/userMcpLaunch.js'
+import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import type {
   AgentInputReadiness,
   PromptAcceptanceOutcome,
@@ -24,6 +27,7 @@ import type {
   PromptGateState,
   PromptReadinessOutcome,
 } from '@shared/types/session.js'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
   ClaudeCondition,
@@ -61,6 +65,8 @@ export type ClaudeSessionOptions = {
    *  mitmproxy while letting opted-in users get the richer stream. */
   useProxy?: boolean
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  /** Already filtered and secret-resolved by main (#1143). */
+  userMcpServers?: ResolvedUserMcpServer[]
 }
 
 export type ScreenSnapshot = {
@@ -78,6 +84,10 @@ export type ClaudeSessionEvents = {
   // generation boundary. This provider never emits it today; it exists so the
   // shared event map can carry providers whose transcripts rewrite in place.
   'history-boundary': [{ type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
+  // Declared for AgentSession contract parity (Pi, decision D4): an in-TUI
+  // session switch the runtime follows. This provider never emits it — a
+  // Claude/Codex pane changes session only through a respawn.
+  'provider-session-changed': [{ providerSessionId: string; transcriptFile: string | null; reason: string }]
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
@@ -211,7 +221,9 @@ export class ClaudeSession extends EventEmitter {
   private readonly useProxy: boolean
   private readonly shellSessionId: string | null
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
+  private readonly userMcpServers: ResolvedUserMcpServer[]
   private privateMcpConfig: PrivateMcpConfig | null = null
+  private privateMcpConfigForgotten = false
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -230,6 +242,7 @@ export class ClaudeSession extends EventEmitter {
     this.useProxy = options.useProxy === true
     this.shellSessionId = options.shellSessionId ?? null
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.userMcpServers = options.userMcpServers ?? []
 
     const env: Record<string, string | undefined> = {}
     for (const [k, v] of Object.entries(process.env)) {
@@ -864,7 +877,25 @@ export class ClaudeSession extends EventEmitter {
         reason: nextReason,
       })
     }
+    if (next.kind === 'ready') this.forgetPrivateMcpConfigContents()
     return next
+  }
+
+  /**
+   * Remove the private MCP config file once Claude is up (#1143 review round
+   * 2). It now carries resolved user secrets, and its path is on Claude's argv,
+   * so for as long as it exists any tool the model runs as the same user can
+   * `ps` for the path and read it. Claude parses `--mcp-config` once during
+   * startup (vendor main.tsx) and reconnects from the in-memory config, and a
+   * ready composer means startup is long past, so the file is not needed
+   * again. Only the FILE goes; the directory and dispose() stay, so stop,
+   * rollback and the startup sweep keep working unchanged.
+   */
+  private forgetPrivateMcpConfigContents(): void {
+    const config = this.privateMcpConfig
+    if (!config || this.privateMcpConfigForgotten) return
+    this.privateMcpConfigForgotten = true
+    void rm(config.path, { force: true }).catch(() => {})
   }
 
   private refreshPromptGate(): PromptGateState {
@@ -1059,10 +1090,19 @@ export class ClaudeSession extends EventEmitter {
       const withoutImagePills = imageCountForEntry > 0
         ? stripTrailingClaudeImagePills(content, imageCountForEntry)
         : null
-      const matches = waiter.prompts.has(canonicalContent) || (
-        withoutImagePills !== null &&
-        waiter.prompts.has(canonicalizeAcceptedPrompt(withoutImagePills))
-      )
+      // Every witness Claude could have committed for THIS delivery: the entry
+      // as written, the same text with Claude's generated image pills removed,
+      // and either of those with Claude's own paste envelope unwrapped. A
+      // candidate that matches proves acceptance; one that does not is tallied
+      // and dropped. Order is irrelevant — they are alternatives, not a
+      // pipeline — but the pill strip runs BEFORE the unwrap because pills are
+      // appended after the envelope's closing tag.
+      const matches = waiter.prompts.has(canonicalContent) || [content, withoutImagePills].some(candidate => {
+        if (candidate === null) return false
+        if (candidate !== content && waiter.prompts.has(canonicalizeAcceptedPrompt(candidate))) return true
+        const unwrapped = unwrapClaudePastedContent(candidate)
+        return unwrapped !== null && waiter.prompts.has(canonicalizeAcceptedPrompt(unwrapped))
+      })
       if (!matches) { waiter.misses.exact += 1; continue }
       waiter.finish(kind === 'queue'
         ? { kind: 'queue', acceptedAt: Date.now() }
@@ -1088,6 +1128,14 @@ export class ClaudeSession extends EventEmitter {
    * that did survive is never cut.
    */
   noteSystemSuspension(suspension: import('@shared/types/systemSuspension.js').SystemSuspension): void {
+    // Tell the adapter NOW, not in a minute (#1040 review). The grace below
+    // exists so a stream that survives the sleep is not cut off — but a
+    // stream that did NOT survive often reports its own death first, as a
+    // transport error seconds after wake. Whichever signal arrives first
+    // decides what the user is told, and without this the turn was reported
+    // as a transport failure and the later seal found nothing left to
+    // attribute, so the feed lost "Interrupted while asleep".
+    this.headless?.proxy?.noteSuspension(suspension.suspendedAt)
     if (this.sleepSealTimer) clearTimeout(this.sleepSealTimer)
     this.sleepSealTimer = setTimeout(() => {
       this.sleepSealTimer = null
@@ -1179,7 +1227,13 @@ export class ClaudeSession extends EventEmitter {
     const tldrHooks = tldrHookServer(this.builtInMcpServers)
     if (tldrHooks) env[CLAUDE_TLDR_HOOK_TOKEN_ENV] = tldrHooks.bearerToken
     excludeExternalControlFromClaude(args, tldrHooks ? claudeTldrHookSettings(tldrHooks.tldrHooks.baseUrl) : {})
-    this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers)
+    // User servers (#1143) are resolved INTO the private file, never into
+    // Claude's environment, which every child process and model shell would
+    // inherit; see claudeUserMcpEntries. Main has already dropped anything the
+    // translator would refuse.
+    const userMcp = claudeUserMcpEntries(this.userMcpServers)
+    this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers, userMcp.entries)
+    this.privateMcpConfigForgotten = false
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }
 

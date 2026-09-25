@@ -1,0 +1,292 @@
+{
+  "fixture": "opencode-terminal-usage-limit-after-retries",
+  "provider": "opencode",
+  "providerRuntime": "terminal (packages/opencode-terminal-headless, LiveStateProjector)",
+  "outcome": "TERMINAL: retrying (attempt 1..5) with processActive=true, then api_error -> turn_completed -> process idle; nothing after",
+  "provenance": {
+    "feedDebug": "~/.config/agent-code/feed-debug/9cd8d6c6-0a1b-46d6-a4b9-e96b83b62057.jsonl",
+    "opencodeDb": "message rows of ses_d7a1e644… in the window",
+    "recordedAt": "2026-09-17T20:41:13.358Z",
+    "opencodeBinary": "1.18.31"
+  },
+  "feedDebug": {
+    "anchorEpochMs": 1789677673358,
+    "anchorIso": "2026-09-17T20:41:13.358Z",
+    "events": [
+      {
+        "tMs": 0,
+        "layer": "STATE",
+        "kind": "initial_history",
+        "summary": "initial history +0",
+        "data": {
+          "rawEntries": 120,
+          "mappedEntries": 0,
+          "hasMore": true
+        }
+      },
+      {
+        "tMs": 1851,
+        "layer": "SEM",
+        "kind": "turn_started",
+        "summary": "turn_started src=opencode-sse turn=opencode-t",
+        "data": {
+          "eventType": "turn_started"
+        }
+      },
+      {
+        "tMs": 1854,
+        "layer": "SEM",
+        "kind": "stream_phase",
+        "summary": "stream_phase src=opencode-sse turn=opencode-t",
+        "data": {
+          "eventType": "stream_phase"
+        }
+      },
+      {
+        "tMs": 1883,
+        "layer": "JSONL",
+        "kind": "jsonl_entries",
+        "summary": "entries +1",
+        "data": {
+          "appended": [
+            "user: You were interrupted on Sep 14 when Agent …"
+          ],
+          "entryCountAfter": 282
+        }
+      },
+      {
+        "tMs": 1951,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 2034,
+        "layer": "STATE",
+        "kind": "bootstrap_complete",
+        "summary": "bootstrap replay quiet window elapsed"
+      },
+      {
+        "tMs": 2952,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 6,
+        "lastTMs": 7954
+      },
+      {
+        "tMs": 8376,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 1)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 1)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 3,
+        "lastTMs": 9955
+      },
+      {
+        "tMs": 10642,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 10955,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 2)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 2)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 5,
+        "lastTMs": 14968
+      },
+      {
+        "tMs": 15203,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 15881,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 3)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 3)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 10,
+        "lastTMs": 24982
+      },
+      {
+        "tMs": 25251,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 25674,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 4)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 4)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 20,
+        "lastTMs": 44008
+      },
+      {
+        "tMs": 44591,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 44994,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · retrying (attempt 5)",
+        "data": {
+          "active": true,
+          "status": "retrying (attempt 5)",
+          "clearedQueuedMessages": 0
+        },
+        "repeats": 33,
+        "lastTMs": 77025
+      },
+      {
+        "tMs": 77232,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process active · requesting",
+        "data": {
+          "active": true,
+          "status": "requesting",
+          "clearedQueuedMessages": 0
+        }
+      },
+      {
+        "tMs": 77694,
+        "layer": "SEM",
+        "kind": "api_error",
+        "summary": "api_error src=opencode-sse turn=opencode-t",
+        "data": {
+          "eventType": "api_error"
+        }
+      },
+      {
+        "tMs": 77829,
+        "layer": "SEM",
+        "kind": "turn_completed",
+        "summary": "turn_completed src=opencode-sse turn=opencode-t",
+        "data": {
+          "eventType": "turn_completed"
+        }
+      },
+      {
+        "tMs": 77923,
+        "layer": "STATE",
+        "kind": "process_state",
+        "summary": "process idle",
+        "data": {
+          "active": false,
+          "status": null,
+          "clearedQueuedMessages": 0
+        }
+      }
+    ]
+  },
+  "opencodeDbAssistantRows": [
+    {
+      "table": "message",
+      "id": "msg_0b11a22c1001gFijfSIfbfQhIe",
+      "session_id": "ses_d7a1e6448f6a5a598dc28f42a08f4477",
+      "time_created": 1789677675202,
+      "time_updated": 1789677751166,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_0b11a1bea001mpDMw4ZB0fwgC8",
+        "providerID": "openai",
+        "modelID": "gpt-5.6-sol",
+        "time": {
+          "created": 1789677675202,
+          "completed": 1789677751163
+        },
+        "finish": null,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "error": {
+          "name": "APIError",
+          "data": {
+            "message": "The usage limit has been reached",
+            "statusCode": 429,
+            "isRetryable": true,
+            "responseHeaders": {
+              "date": "Thu, 17 Sep 2026 20:42:31 GMT"
+            },
+            "responseBody": "{\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"pro\",\"resets_at\":1789843274,\"eligible_promo\":null,\"resets_in_seconds\":165523}}",
+            "metadata": {
+              "url": "https://api.openai.com/v1/responses"
+            },
+            "responseHeadersNote": "filtered to retry-relevant headers; trace ids / cookies removed"
+          }
+        }
+      }
+    }
+  ],
+  "derivedSemanticApiError": {
+    "note": "Derived from LiveStateProjector.errorMessage (error.data.message ?? error.message ?? error.name) + SessionSequencer.ts:254, which forwards only {type, turnId, message, source, ts}: no errorType, status or name.",
+    "event": {
+      "type": "api_error",
+      "turnId": "opencode-turn-…",
+      "message": "The usage limit has been reached",
+      "source": "opencode-sse"
+    }
+  }
+}

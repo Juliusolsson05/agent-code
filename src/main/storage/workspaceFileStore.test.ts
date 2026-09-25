@@ -53,6 +53,22 @@ describe('workspace persistence ordering', () => {
     unlink.mockReset().mockResolvedValue(undefined)
   })
 
+  it('keeps shutdown waiting for the final admitted rename without inventing another save', async () => {
+    const publication = deferred()
+    rename.mockImplementationOnce(() => publication.promise)
+    const store = await WorkspaceFileStore.open()
+    const save = store.saveSlice('w1', slice(['agent']), NO_GEOMETRY)
+    await vi.waitFor(() => expect(rename).toHaveBeenCalledOnce())
+    const settled = vi.fn()
+    const drain = store.drainAdmittedWrites().then(settled)
+    await Promise.resolve()
+    expect(settled).not.toHaveBeenCalled()
+    publication.resolve()
+    await Promise.all([save, drain])
+    expect(settled).toHaveBeenCalledOnce()
+    expect(writeFile).toHaveBeenCalledOnce()
+  })
+
   it('commits overlapping saves in admission order', async () => {
     const firstWriteGate = deferred()
     const tempContents = new Map<string, string>()

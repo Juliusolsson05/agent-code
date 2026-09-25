@@ -10,8 +10,9 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import {
   providerChoiceLabel,
-  providerSwitchChoices,
+  enabledProviderSwitchChoices,
 } from '@renderer/workspace/providerChoices'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 
 // Single-agent provider switch — the shared core.
 //
@@ -178,9 +179,13 @@ export async function switchAgentProvider(params: {
   if (!isAgentProviderKind(sourceKind)) {
     return { status: 'skipped', reason: 'Only agent panes can switch provider' }
   }
-  const declaredChoice = providerSwitchChoices(sourceKind).some(choice => (
-    choice.kind === targetKind && choice.providerRuntime === targetProviderRuntime
-  ))
+  // Enablement-aware (#1102): a disabled target is not a switch
+  // destination even when the feature edge declares it, and a disabled
+  // source has no destinations at all.
+  const declaredChoice = enabledProviderSwitchChoices(
+    sourceKind,
+    enabledAgentProviderKindsSnapshot(),
+  ).some(choice => choice.kind === targetKind && choice.providerRuntime === targetProviderRuntime)
   if (!declaredChoice) {
     // WHY validate again below the picker: commands are also reachable from
     // native menus, keybindings, tests, and future automation. The modal is a

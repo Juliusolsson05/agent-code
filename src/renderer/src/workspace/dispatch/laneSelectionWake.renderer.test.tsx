@@ -7,17 +7,28 @@ import {
   insertRowBelowInGrid,
   removeRowFromGrid,
 } from '@renderer/workspace/dispatch/gridShape'
+import { workspaceWithoutSessions } from '@renderer/workspace/pool'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // #690: a hibernated agent must be woken BEFORE it is placed in a lane.
 //
-// Rehydrate deliberately does not respawn detached sessions — they survive a
-// restart as metadata with no provider process. Placing one straight into a
-// lane renders a pane that looks fine and then rejects the first prompt with
-// "Cannot deliver prompt: <id> is not a live agent session" (main logs
-// `reason: never-owned`). Agent-index navigation already woke; the four
-// in-layout selection gestures did not.
+// Rehydrate deliberately spawns only the focused lane's occupant — every other
+// session survives a restart as metadata with no provider process. Placing one
+// straight into a lane renders a pane that looks fine and then rejects the
+// first prompt with "Cannot deliver prompt: <id> is not a live agent session"
+// (main logs `reason: never-owned`). Agent-index navigation already woke; the
+// four in-layout selection gestures did not.
+//
+// WHAT DECIDES "hibernated" changed with #992, and the fixture with it. It was
+// STRUCTURAL: a session with a `detachedSessions` record had not been respawned,
+// a tile leaf had. Both containers are gone, so the gesture asks the RUNTIME:
+// `processStatus === 'started'` is the only thing that skips the wake. The
+// harness therefore feeds `latestRuntimesRef`, and a fixture that forgot to
+// would make every session look hibernated — which is the safe direction to be
+// wrong in, and is pinned as its own case below.
 //
 // These assert the ORDER, not just that a wake happened: writing the lane first
 // exposes a dead pane the user can type into during the gap, which is the exact
@@ -25,42 +36,44 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 const LIVE = 'live-session' as SessionId
 const HIBERNATED = 'hibernated-session' as SessionId
+const EXPANDED_PARENT = 'expanded-parent' as SessionId
 
 function harness(options: {
   wakeRejects?: boolean
   duringWake?: (ref: { current: WorkspaceState }) => void
-  rows?: { length: number }[]
+  rows?: NonNullable<WorkspaceState['stage']['rows']>
   lanes?: number
+  /** Override the runtime map, e.g. to model a session whose backend died. */
+  runtimes?: Record<SessionId, SessionRuntime>
 } = {}) {
   const order: string[] = []
   const state = {
     activeTabId: 'tab-a',
-    dispatchMode: {
-      scope: 'global' as const,
-      tiled: {
-        // Default [1, 2] — a first row of one lane, then the row races target.
-        lanes: [
-          { selectedSessionId: LIVE },
-          ...Array.from({ length: (options.lanes ?? 3) - 1 }, () => ({})),
-        ],
-        rows: options.rows ?? [{ length: 1 }, { length: 2 }],
-        focusedLane: 0,
-      },
+    stage: {
+      // Default [1, 2] — a first row of one lane, then the row races target.
+      lanes: [
+        { selectedSessionId: LIVE },
+        ...Array.from({ length: (options.lanes ?? 3) - 1 }, () => ({})),
+      ],
+      rows: options.rows ?? [{ length: 1 }, { length: 2 }],
+      focusedLane: 0,
     },
+    tabs: [{ id: 'tab-a', title: 'A' }, { id: 'tab-b', title: 'B' }],
+    pinnedSessionIds: [],
     sessions: {
-      [LIVE]: { cwd: '/work/a', kind: 'claude' as const },
-      [HIBERNATED]: { cwd: '/work/b', kind: 'claude' as const },
+      [LIVE]: { cwd: '/work/a', kind: 'claude' as const, projectId: 'tab-a', joinedAt: 0 },
+      [HIBERNATED]: { cwd: '/work/b', kind: 'claude' as const, projectId: 'tab-b', joinedAt: 0 },
+      [EXPANDED_PARENT]: { cwd: '/work/a', kind: 'claude' as const, projectId: 'tab-a', joinedAt: 0 },
     },
-  }
-  // Only HIBERNATED is detached; LIVE is grid-placed and owned by a tile tree,
-  // so it was respawned at rehydrate and needs no wake.
-  const stateRef = {
-    current: {
-      ...state,
-      detachedSessions: {
-        [HIBERNATED]: { sessionId: HIBERNATED, surface: 'dispatch', projectTabId: 'tab-b' },
-      },
-    } as unknown as WorkspaceState,
+  } satisfies WorkspaceState
+  const stateRef = { current: state as WorkspaceState }
+  // LIVE has a running backend; HIBERNATED is exactly what rehydrate seeds for
+  // a session it did not spawn (processStatus 'idle').
+  const latestRuntimesRef = {
+    current: options.runtimes ?? {
+      [LIVE]: { ...emptyRuntime(), processStatus: 'started' as const },
+      [HIBERNATED]: emptyRuntime(),
+    },
   }
 
   const written: number[] = []
@@ -69,9 +82,9 @@ function harness(options: {
     // Run the reducer against current state so the lane index it targets is
     // observable — the whole point of the reshape case below.
     if (typeof updater === 'function') {
-      const before = JSON.stringify(stateRef.current.dispatchMode?.tiled?.lanes)
+      const before = JSON.stringify(stateRef.current.stage.lanes)
       const next = (updater as (p: WorkspaceState) => WorkspaceState)(stateRef.current)
-      const after = next.dispatchMode?.tiled?.lanes ?? []
+      const after = next.stage.lanes ?? []
       if (JSON.stringify(after) !== before) {
         written.push(after.findIndex(lane => lane.selectedSessionId === HIBERNATED))
       }
@@ -90,13 +103,15 @@ function harness(options: {
   })
   const showToast = vi.fn()
 
+  // The runtime-setter stub records badge clears like the real store setter
+  // would apply them; selectTiledLaneSession's synchronous branch writes the
+  // lane through it, and the pooled-spawn badge clear rides the same call.
+  const setRuntimes = vi.fn(updater => { updater({}) })
   const hook = renderHook(() =>
     useDispatchActions(
-      state,
       setState as never,
-      vi.fn(),
-      vi.fn(),
-      { stateRef } as unknown as WorkspaceRefs,
+      setRuntimes as never,
+      { stateRef, latestRuntimesRef } as unknown as WorkspaceRefs,
       ensureSessionLive as never,
       showToast,
     ),
@@ -122,6 +137,40 @@ describe('selecting an agent into a lane', () => {
     expect(written).toEqual([1])
   })
 
+  it.each([
+    { name: 'a close that prunes ANOTHER row', removed: EXPANDED_PARENT, expanded: [EXPANDED_PARENT] },
+    { name: 'a close that prunes nothing (control)', removed: EXPANDED_PARENT, expanded: [] },
+  ])('still places the woken agent through $name', async ({ removed, expanded }) => {
+    // The regression this pins is not in this file's code at all, which is why
+    // it survived review the first time: `workspaceWithoutSessions` prunes row
+    // METADATA on every close, and a version of `scrubGridRowMetadata` that
+    // rebuilt every row — including the rows it changed nothing about — made
+    // the identity check below read "the grid moved" for a close that touched
+    // a different row entirely.
+    //
+    // The user-visible result is the worst kind of silent failure: the agent
+    // IS woken, a provider process starts, and then nothing is placed and no
+    // toast is shown. The window is wide — a cold wake can hold it open for
+    // 30s — and every close path reaches it (Close Agent, Close Old Agents,
+    // Close Idle Orchestration Agents, MCP agents.close).
+    //
+    // The control row is what makes this a test rather than a coincidence: a
+    // close that scrubs nothing has always been safe, because the helper
+    // returns the same stage object.
+    const { hook, written } = harness({
+      rows: [{ length: 1, ...(expanded.length > 0 ? { expandedParents: expanded } : {}) }, { length: 2 }],
+      duringWake: ref => {
+        ref.current = workspaceWithoutSessions(ref.current, [removed])
+      },
+    })
+
+    await act(async () => {
+      await hook.result.current.selectTiledLaneSession(1, HIBERNATED)
+    })
+
+    expect(written).toEqual([1])
+  })
+
   it('does not place an agent it could not wake', async () => {
     // Leaving the lane on its previous occupant is honest; showing a pane whose
     // backend refused to come back is not, and it reproduces the original
@@ -136,10 +185,10 @@ describe('selecting an agent into a lane', () => {
     expect(showToast).toHaveBeenCalled()
   })
 
-  it('does not wake a grid-placed session', async () => {
-    // Owned by a tile tree, so rehydrate already respawned it. Paying a wake
-    // round-trip on every ordinary selection would make the common gesture
-    // async for nothing.
+  it('does not wake a session whose backend is already running', async () => {
+    // Paying a wake round-trip on every ordinary selection would make the
+    // common gesture async for nothing — and until #992 it DID, for every lane
+    // agent, because the structural test called all of them hibernated.
     const { hook, order, ensureSessionLive } = harness()
 
     await act(async () => {
@@ -148,6 +197,39 @@ describe('selecting an agent into a lane', () => {
 
     expect(ensureSessionLive).not.toHaveBeenCalled()
     expect(order).toEqual(['write-lane'])
+  })
+
+  it.each(['failed', 'exited'] as const)('wakes a session whose backend is %s, not only one that never started', async status => {
+    // The gap the structural test had: a tile leaf whose respawn failed at
+    // rehydrate, or whose process died since, "was not detached" and so was
+    // written into a lane un-woken. The wake path is also the retry path, so
+    // selecting a dead agent is now how the user brings it back.
+    const { hook, order, ensureSessionLive } = harness({
+      runtimes: {
+        [LIVE]: { ...emptyRuntime(), processStatus: status },
+        [HIBERNATED]: emptyRuntime(),
+      },
+    })
+
+    await act(async () => {
+      await hook.result.current.selectTiledLaneSession(1, LIVE)
+    })
+
+    expect(ensureSessionLive).toHaveBeenCalledWith(LIVE, 'dispatch-lane.select')
+    expect(order[0]).toBe('wake')
+  })
+
+  it('wakes a session with NO runtime entry rather than assuming it is live', async () => {
+    // Fail-safe direction: an unknown runtime costs one idempotent recover
+    // round-trip; an assumed-live one costs a prompt rejected by main.
+    const { hook, order, ensureSessionLive } = harness({ runtimes: {} })
+
+    await act(async () => {
+      await hook.result.current.selectTiledLaneSession(1, LIVE)
+    })
+
+    expect(ensureSessionLive).toHaveBeenCalledWith(LIVE, 'dispatch-lane.select')
+    expect(order).toEqual(['wake', 'write-lane'])
   })
 })
 
@@ -162,16 +244,16 @@ describe('selecting an agent into a lane', () => {
  * reason that never happens in the product.
  */
 function reshapeWith(
-  mutate: (tiled: NonNullable<NonNullable<WorkspaceState['dispatchMode']>['tiled']>) =>
+  mutate: (tiled: WorkspaceState['stage']) =>
     ReturnType<typeof insertLaneRightIntoGrid>,
 ) {
   return (ref: { current: WorkspaceState }) => {
-    const tiled = ref.current.dispatchMode!.tiled!
+    const tiled = ref.current.stage
     const next = mutate(tiled)
     if (!next) throw new Error('reshape refused; the fixture is wrong')
     ref.current = {
       ...ref.current,
-      dispatchMode: { ...ref.current.dispatchMode!, tiled: next },
+      stage: next,
     } as WorkspaceState
   }
 }

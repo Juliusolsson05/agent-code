@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
@@ -8,6 +9,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import type { TabId } from '@renderer/workspace/types'
+import { withVisibleControls } from '@shared/text/visibleControls'
 
 type ReorderTabOption = {
   id: TabId
@@ -88,6 +90,13 @@ export function ReorderTabsModal({
   const moveTabById = useCallback(
     (tabId: TabId, delta: -1 | 1) => {
       setError(null)
+      // The picked row follows the moved row, the way a row CLICK already made
+      // it (`if (movingTabId) setMovingTabId(tab.id)` below). Enter on a ↑/↓
+      // button only became reachable with #867's guard, and without this the
+      // accent "moving" paint stayed on the row the user picked earlier while
+      // the move happened elsewhere — so the next arrow key moved the wrong
+      // row, which is the exact confusion the two-phase model exists to avoid.
+      setMovingTabId(prev => (prev ? tabId : prev))
       setDraftTabs(prev => {
         const index = prev.findIndex(tab => tab.id === tabId)
         if (index < 0) return prev
@@ -99,6 +108,12 @@ export function ReorderTabsModal({
         return next
       })
       setCursorTabId(tabId)
+      // A move can DISABLE the button that performed it (the row is now at an
+      // end), and a disabled control keeps focus while dropping out of the
+      // event path — real keys then reach neither the button nor this dialog's
+      // ancestor handler, so arrows and Enter went dead mid-reorder. Hand focus
+      // back to the dialog, which is where every key in this dialog belongs.
+      dialogRef.current?.focus()
     },
     [],
   )
@@ -146,6 +161,12 @@ export function ReorderTabsModal({
       // ids separate is what prevents accidental reorders while the user is
       // still browsing the list.
       if (e.key === 'Enter') {
+        // A focused footer button owns its own Enter (#867). This footer is a
+        // plain `<div>` rather than a `DialogFooter`, which is exactly why the
+        // check is on the focused CONTROL and not on the slot: Tab to Cancel
+        // and Enter used to `confirm()` the reorder being abandoned, and Tab
+        // to Done with nothing picked entered move mode instead.
+        if (focusedControlOwnsEnter(e.target)) return
         e.preventDefault()
         if (movingTabId) {
           confirm()
@@ -208,7 +229,14 @@ export function ReorderTabsModal({
           Select a tab, then use arrow keys to move it. Enter confirms the order.
         </DialogDescription>
 
-        <div className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas">
+        {/* Roving focus: the rows left the tab order, so the cursor has to be
+            announced rather than focused (#867 review). */}
+        <div
+          role="listbox"
+          aria-label="Tab order"
+          aria-activedescendant={cursorTabId ? `reorder-tabs-row-${cursorTabId}` : undefined}
+          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas"
+        >
           {draftTabs.map((tab, index) => {
             const cursor = tab.id === cursorTabId
             const moving = tab.id === movingTabId
@@ -224,6 +252,22 @@ export function ReorderTabsModal({
               >
               <button
                 type="button"
+                id={`reorder-tabs-row-${tab.id}`}
+                role="option"
+                aria-selected={moving}
+                // Out of the tab order, with the arrow-driven highlight the
+                // only selection signal (#867, same as #862). A Tab-focused
+                // row can diverge from that highlight, and Space clicks the
+                // FOCUSED one — so the user would act on a row other than the
+                // one the dialog is showing as chosen, whatever Enter does.
+                tabIndex={-1}
+                // And `tabIndex={-1}` does not stop CLICK focus. A clicked row
+                // held focus and owned the next Enter, so Enter-to-pick bowed
+                // out: move mode was never entered, the arrows kept moving the
+                // cursor instead of the tab, and keyboard reordering was dead
+                // for the rest of the dialog — after one mouse click, in the
+                // dialog built for mixed mouse and keyboard use.
+                onMouseDown={event => event.preventDefault()}
                 onClick={() => {
                   setError(null)
                   setCursorTabId(tab.id)
@@ -243,7 +287,7 @@ export function ReorderTabsModal({
                   {index + 1}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[12px]">
-                  {tab.title}
+                  {withVisibleControls(tab.title)}
                 </span>
                 {active && (
                   <span

@@ -1,3 +1,4 @@
+import type { SessionRoutingGap } from '@shared/types/sessionRouting'
 // -----------------------------------------------------------------------------
 // session-runtime/state.ts — the INGEST layer's clean object (#493).
 //
@@ -49,17 +50,11 @@ export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
  *  time: shells have no transcript timestamps to age them by. */
 export type TerminalForegroundRuntime = TerminalForegroundState & { changedAt: number }
 
-export type PickerItem = {
-  id: string
-  label: string
-  description: string
-  selected: boolean
-}
-
-export type SlashPickerState = {
-  visible: boolean
-  items: PickerItem[]
-}
+// The picker shapes live in the SessionFeed contract (they cross the wire in
+// screen snapshots); this re-export was a second, identical declaration until
+// #1177, which let provider code import the type from the workspace store.
+import type { PickerItem, SlashPickerState } from '@shared/sessionFeed/types'
+export type { PickerItem, SlashPickerState }
 
 export type QueuedMessage = {
   content: string
@@ -94,7 +89,14 @@ export type ClaudeDraftImage = {
 
 export type PromptDeliveryUiState =
   | { kind: 'idle' }
-  | { kind: 'sending'; prompt: string; startedAt: number }
+  /**
+   * `submissionId` is the submit's paste-debug id. It names the ONE feed row
+   * that is still sending: the optimistic entry minted for this submit carries
+   * it in its uuid (see optimisticPromptUuid), so Feed can dim exactly that row
+   * without guessing from text or tail position (#1181). The composer is locked
+   * for as long as this state holds.
+   */
+  | { kind: 'sending'; prompt: string; startedAt: number; submissionId: string }
   | { kind: 'failed-safe'; message: string }
   /**
    * `enterWritten` is the fact that decides what the banner may claim. The
@@ -289,7 +291,12 @@ export type SemanticLiveTurn = {
    *  `turn_stopped.interruption`). The feed shows "Interrupted while asleep"
    *  while this is the newest turn and the pane is idle. Absent for every
    *  upstream-terminated turn. */
-  interruption?: 'system-suspended'
+  /** Why the turn stopped without a stop reason of its own.
+   *  `system-suspended`: the machine slept mid-stream (#963).
+   *  `transport-error`: the stream's socket died before the message ended —
+   *  an Esc interrupt, a proxy timeout, an upstream failure (#1040). The
+   *  provider cannot tell those apart, so neither does this. */
+  interruption?: 'system-suspended' | 'transport-error'
 }
 
 export type SemanticFlow = {
@@ -390,6 +397,10 @@ export type CodexTranscriptObservationOutboxEntry = {
 }
 
 export type SessionRuntime = {
+  // A repaired snapshot cannot reconstruct transient semantics or raw PTY
+  // bytes. Keep this independent of process/readiness/transcript error state.
+  routingGap?: SessionRoutingGap & { phase: 'refreshing' | 'refreshed' | 'unavailable' }
+
   screen: string
   screenMarkdown: string
   recentScreen: string
@@ -495,11 +506,29 @@ export type SessionRuntime = {
    *  entry counts: entries arrive from several sources (semantic
    *  ghosts, JSONL replay, optimistic rows), and replaying history
    *  would make count-based badges lie. The UI only needs a durable
-   *  "something happened while you were elsewhere" bit. Focus
-   *  actions clear it; IPC writers set it when hidden sessions
-   *  receive user-visible output or action-required prompts. */
+   *  "something happened while you were elsewhere" bit. Engagement
+   *  (acknowledgeSession) or dwelling on the visible pane clears it,
+   *  never a mere focus change (see unread.ts). IPC writers set it when a
+   *  turn finishes or an action-required prompt appears. */
   unreadSince: number | null
   unreadKind: 'output' | 'attention' | null
+  /** Transient "new in the pool" marker for the agent index (#992 §4.3).
+   *
+   *  Set when a spawn lands in the pool WITHOUT taking a lane — under
+   *  context-places that is every spawn from an occupied lane, the palette,
+   *  ⌘N, MCP and orchestration — because "nothing on screen moves" makes a
+   *  successful spawn look like a no-op. The index row wears a small "new"
+   *  chip until the session is placed, and placing it into any lane
+   *  (setTiledLaneSession) clears the field. In-memory only: runtimes are
+   *  rebuilt at boot, so a badge never survives a restart — which is the
+   *  right lifetime for "you have not looked at this yet".
+   *
+   *  WHY the runtime and not workspace state: the badge is presentation, not
+   *  truth about the workspace. Autosave must not write it, undo must not
+   *  restore it, and a row can read it through the same useShallow selector
+   *  it already uses for activity — a workspace-state field would re-render
+   *  the whole index on every spawn instead of one row. */
+  pooledSpawnAt: number | null
   paneToast: string | null
   historyOldestMarker: string | null
   /** Byte offset of the transcript line `historyOldestMarker` came from,
@@ -612,6 +641,16 @@ export type SessionRuntime = {
    * optional for older runtime snapshots that predate this field.
    */
   transcriptChannelError?: string | null
+  /**
+   * A LIVE channel that has not connected, while the transcript itself still
+   * works (Pi without its bridge: rows arrive, but status and prompt delivery
+   * do not). Shown in the same terminal banner as transcriptChannelError, but
+   * kept apart from the transcript fields on purpose. Every row path rewrites
+   * transcriptStatus/transcriptError, and a channel error would make parents
+   * read a readable conversation as `transcript_unavailable`. Cleared only by
+   * the channel's own "connected" diagnostic.
+   */
+  liveChannelWarning?: string | null
   /** Backend process lifecycle for send gating. `sessionStatus` is
    *  "is the agent doing work right now"; `processStatus` is "does a
    *  writable backend exist for this pane". Keeping them separate
@@ -860,6 +899,7 @@ export function emptyRuntime(): SessionRuntime {
     terminalForeground: null,
     unreadSince: null,
     unreadKind: null,
+    pooledSpawnAt: null,
     paneToast: null,
     historyOldestMarker: null,
     historyOldestOffset: null,
