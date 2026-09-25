@@ -536,6 +536,13 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (12:20) — **#1310 reworked for steering q34:** only a full row is a hard cut now.
+  - A row one cell short is ambiguous, because xterm drops trailing spaces, so it keeps its space. The worst case there is a timeout.
+  - The new negative test was red on 85c3490e and is green on d40fec0b.
+  - CJK sweeps now run on even body widths. The odd-width misses (43 of 121 widths) are pinned as the #1292 residual, and the PR says Refs #1292.
+  - All 3 reviewers were re-prompted for the final round.
+  - #1300 and #1301 both contain main 3c12bb73; their fresh gates are running. #1300 merges first.
+
 - 2026-09-25 (11:50) — **main CI for #1258 + #1264 is green** (run 36149128459), noted on #1264.
   - #1261 flaked again, on #1309; it was re-run, and #1300 is still first in the merge order.
   - **New PR #1312** fixes #1271: a running bulk provider switch can be stopped after the current agent. 3 reviewers.
