@@ -18,10 +18,11 @@ on its way.
 
 1. **Enter locks the composer.** While `promptDelivery.kind === 'sending'` the
    textarea is read-only and dimmed, and editing keys, history recall, slash
-   mode, paste, type-to-focus and paste-to-focus are ignored. Escape and Ctrl+C
-   still reach the agent, because interrupting a running turn is not an edit.
-2. **The text moves into the feed.** The draft (text and images) is cleared on
-   Enter, and the prompt appears at once as a user row at reduced opacity with a
+   mode, paste, type-to-focus and paste-to-focus are ignored. So are Escape and
+   Ctrl+C: main refuses raw writes for the whole main-owned delivery, so they
+   could not reach the agent anyway (review finding, see below).
+2. **The text moves into the feed.** The composer VIEW is emptied on Enter (the
+   draft stays in the store), and the prompt appears at once as a user row at reduced opacity with a
    `Sending…` caption. When the provider accepts it, the row goes to full
    opacity (echo providers) or is handed to the committed row (Claude).
 3. **"Sent" means the provider accepted it** (decision A): Claude's JSONL
@@ -33,20 +34,24 @@ on its way.
    queue acceptance. For Claude the pending row is removed and Claude's own
    queue-operation strip shows the prompt. Codex and OpenCode already put
    mid-turn prompts in the queued strip instead of the feed, which is unchanged.
-6. **Failure** puts the prompt back. On any failed send, the pending row is
-   removed and the submitted text and images are restored into the composer
-   ahead of anything that was inserted meanwhile. The existing `uncertain`
-   banner still blocks a plain resend when something may have reached the
-   provider.
+6. **Failure** puts the prompt back. On any failed send the pending row is
+   removed and the lock lifts, which makes the still-stored draft (text and
+   images) visible again. The existing `uncertain` banner still blocks a plain
+   resend when something may have reached the provider.
 
 ## Design
 
-- **Composer.** `submitCurrentDraft` snapshots text and images, clears both,
-  and restores them in the catch path. `draftAfterAcceptance` goes away,
-  because there is no longer a still-editable draft to protect on success.
-  It is replaced by a pure `draftAfterFailure(current, submitted)` merge.
+- **Composer.** The draft stays in the store for the whole send. TileLeaf
+  hides it from the composer view while locked, and on acceptance
+  `draftAfterAcceptance` strips the sent prompt, keeping text another writer
+  (dictation, templates, reply-to-selection) added at either end.
   `ComposerInput` gains an optional `locked` prop (the phone client does not
-  pass it).
+  pass it). `submitCurrentDraft` also refuses while `sending`, because the
+  per-mount in-flight ref does not survive a remount.
+  *Revised in review:* the first version cleared the store at Enter and
+  restored it on failure. That lost the prompt on a renderer reload mid-send
+  (autosave persists only `draftInput`), and restored a failed prompt into a
+  retired session after a replacement (only current draft fields transfer).
 - **Pending identity.** `promptDelivery.sending` carries the submission id
   (`pasteId`). The optimistic entry uuid becomes
   `optimistic-codex-user:<submissionId>` when a submission id exists, so the
@@ -57,9 +62,13 @@ on its way.
   with that uuid. They deliberately do NOT reuse `addOptimisticCodexUserEntry`:
   its mid-turn branch writes `queuedMessages`, which for Claude is owned by the
   queue-operation reducer. The entry is removed on acceptance (any kind) and on
-  failure. Between the JSONL tail reaching the renderer and the acceptance
-  result, the ledger's optimistic reconciliation already hides it behind the
-  committed row.
+  failure.
+- **Order barrier in main.** Claude's acceptance is main seeing the JSONL line,
+  but that line waits in the JSONL coalescer until the next `setImmediate`,
+  while the invoke reply resumes in a microtask. The `session:deliver-prompt`
+  handler now calls `flushJsonl(sessionId)` before replying, so the committed
+  row always reaches the renderer before the acceptance that removes the
+  pending row. Without it, the prompt blinked out of the feed.
 - **Painting.** Feed gets `pendingEntryUuid`, and the matching `entry` item is
   drawn at reduced opacity with a `Sending…` caption. Ledger rows, ordering and
   ownership are untouched by the pending flag, so the identity-cache contract
@@ -69,7 +78,12 @@ on its way.
   `continue`, and the new row vanished instantly. It becomes a map from key to
   the newest committed timestamp. An optimistic row is owned only by a committed
   user row at or after its submit time, minus a small clock tolerance. Rows
-  without timestamps keep the old presence rule.
+  without timestamps keep the old presence rule, which leaves Grok (whose
+  mapper emits no timestamps) on the old behavior.
+- **Pasted prompts.** A committed user row's ownership key is the inner text
+  of Claude's `<pasted_content>` envelope (`unwrapClaudePastedContent`, the
+  same strict unwrap main uses for acceptance), so a pasted prompt's pending
+  row is owned by its committed twin instead of painting beside it.
 
 ## Not in scope
 
