@@ -96,6 +96,13 @@ export type DialogActionsProps = {
    * list dialog. Mutually compatible with `children`; legend renders first.
    */
   legend?: React.ReactNode
+  /**
+   * Extra buttons rendered between the legend and Cancel — a step dialog's
+   * `Back ⌫`. Rendered as given; callers use `<Button variant="ghost"
+   * size="sm">` + a `Kbd` so the row stays one visual family. Kept a slot, not
+   * a config object, because each such button owns its own key and state.
+   */
+  extraActions?: React.ReactNode
   /** Extra content rendered left of the buttons, e.g. a summary count. */
   children?: React.ReactNode
 }
@@ -191,6 +198,7 @@ export function DialogActions({
   confirmOnEnter = true,
   escapeCancels = true,
   legend,
+  extraActions,
   children,
 }: DialogActionsProps) {
   const blocked = confirmDisabled || busy
@@ -254,6 +262,7 @@ export function DialogActions({
           {children ? <span className="min-w-0 truncate text-[11px]">{children}</span> : null}
         </div>
       ) : null}
+      {extraActions}
       {onCancel ? (
         <Button variant="ghost" size="sm" data-dialog-action="cancel" onClick={onCancel}>
           {cancelLabel}

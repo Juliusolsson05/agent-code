@@ -11,9 +11,9 @@ import { useListNavigation, type UseListNavigationOptions } from './useListNavig
 
 const ROWS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon']
 
-function Harness(props: Partial<UseListNavigationOptions> & { withInput?: boolean; rows?: string[] }) {
+function Harness(props: Partial<UseListNavigationOptions> & { withInput?: boolean; rows?: string[]; keyed?: boolean }) {
   const rows = props.rows ?? ROWS
-  const nav = useListNavigation({ count: rows.length, idPrefix: 'row', ...props })
+  const nav = useListNavigation({ count: rows.length, idPrefix: 'row', keys: props.keyed ? rows : undefined, ...props })
   const Focus = props.withInput === false ? 'div' : 'input'
   return (
     <div>
@@ -166,5 +166,25 @@ describe('useListNavigation', () => {
     for (let i = 0; i < 4; i += 1) press('ArrowDown')
     rerender(<Harness rows={['alpha', 'beta']} />)
     expect(highlighted()).toBe('beta')
+  })
+
+  it('keeps the highlight on the same ITEM when a row above it vanishes from a keyed live list', () => {
+    // New Agent In's failure mode: a project tab closes while the dialog is
+    // open, the list shifts up by one, and a positional highlight lands on the
+    // NEXT project — Enter then spawns an agent somewhere never highlighted.
+    const { rerender } = render(<Harness keyed />)
+    press('ArrowDown')
+    press('ArrowDown')
+    expect(highlighted()).toBe('gamma')
+    rerender(<Harness keyed rows={['beta', 'gamma', 'delta', 'epsilon']} />)
+    expect(highlighted()).toBe('gamma')
+  })
+
+  it('is positional without keys, which is right for a static list', () => {
+    const { rerender } = render(<Harness />)
+    press('ArrowDown')
+    press('ArrowDown')
+    rerender(<Harness rows={['beta', 'gamma', 'delta', 'epsilon']} />)
+    expect(highlighted()).toBe('delta')
   })
 })

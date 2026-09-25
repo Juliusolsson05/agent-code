@@ -80,6 +80,16 @@ export type UseListNavigationOptions = {
   onItemClick?: (index: number) => void
   /** DOM id prefix for rows, used for aria-activedescendant. */
   idPrefix?: string
+  /**
+   * Stable identity per row, for LIVE lists (rows can appear or vanish while
+   * the surface is open: an agent closes, a project tab closes, a
+   * conversation index refreshes). With keys, the highlight follows the ITEM
+   * — when a row above it disappears the highlight stays on the same item
+   * instead of sliding onto its neighbour, which for New Agent In meant
+   * spawning into a project the user never highlighted. Without keys the
+   * highlight is positional (clamped), which is right for static lists.
+   */
+  keys?: readonly string[]
 }
 
 export type ListItemProps = {
@@ -123,8 +133,15 @@ export function useListNavigation({
   onToggle,
   onItemClick,
   idPrefix,
+  keys,
 }: UseListNavigationOptions): UseListNavigationResult {
   const [index, setIndexState] = useState(initialIndex)
+  // The key under the highlight as of the last render, so a list change can
+  // re-find it. Written during render from the current (index, keys) pair —
+  // a ref, because it is bookkeeping for the effect below, not display state.
+  const highlightedKey = useRef<string | undefined>(undefined)
+  const keySignature = keys ? keys.join('\u0000') : undefined
+  const previousSignature = useRef(keySignature)
   const elements = useRef(new Map<number, HTMLElement>())
   // Only scroll when the KEYBOARD moved the highlight. Scrolling on hover
   // would drag the list under a stationary pointer, which then hovers the
@@ -138,6 +155,18 @@ export function useListNavigation({
     // the highlight under the user's arrows.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey])
+
+  // Follow the highlighted ITEM across a live list change (see `keys`). Runs
+  // before the clamp below, so a vanished item falls through to clamping.
+  useEffect(() => {
+    if (!keys || keySignature === previousSignature.current) return
+    previousSignature.current = keySignature
+    const key = highlightedKey.current
+    if (key === undefined) return
+    const moved = keys.indexOf(key)
+    if (moved >= 0) setIndexState(moved)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keySignature IS keys' content
+  }, [keySignature])
 
   // Clamp when the list shrinks under the highlight (a row closed, the filter
   // narrowed). Without it Enter would activate an index that no longer exists.
@@ -269,6 +298,12 @@ export function useListNavigation({
     }),
     [disabled, idPrefix, index, onActivate, onItemClick],
   )
+
+  // Record the key under the highlight for the NEXT list change. Only when the
+  // signature is the one the follow-effect has already processed — otherwise
+  // this render still shows the old index against the NEW keys, and recording
+  // now would overwrite the item we are about to re-find.
+  if (keys && keySignature === previousSignature.current) highlightedKey.current = keys[index]
 
   return {
     index,

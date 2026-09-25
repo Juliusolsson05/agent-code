@@ -411,7 +411,7 @@ entry when it lands.
 | S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | done |
 | S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | done |
 | S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | done |
-| S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | todo |
+| S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | done |
 | S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | todo |
 | S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | todo |
 | S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | todo |
@@ -586,6 +586,11 @@ Sharp corners and one light theme.
   (py-2, 12px medium), footer `↑ ↓ move` · `Cancel ⎋` (ghost, was outline) ·
   `Switch ↩`; the old prose line "↑↓ choose · Enter switch · Esc cancel" is
   gone; width is the 520 default (was 500).
+- **S6 New Agent In (⌘N-adjacent command):** agent step footer `↑ ↓ move` ·
+  `Cancel ⎋` · `Next ↩`; project step adds `Back ⌫` and `Create ↩`; rows
+  py-2, 12px medium, row-selected + 2px bar; a disabled project stays
+  visible at half opacity and the highlight skips it; the list keeps its
+  focus ring across the step change.
 
 ## Tasks
 
@@ -660,6 +665,15 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S6: New Agent In on two useListNavigation instances; the hook
+  gained `keys` (highlight follows the ITEM in live lists — the dialog's
+  documented tab-id invariant) and DialogActions gained `extraActions` for
+  Back ⌫. Existing 13 tests unchanged and green. Confirm-red: focus/chips
+  test fails on the pre-change file; the live-list test passes there (the
+  old code tracked by id) and FAILS when `keys` is removed — the first
+  version of that test highlighted the last row, where clamping lands on the
+  same project, and did not catch the mutation; rewritten to highlight a
+  middle row.
 - 2026-09-25 S5: Switch Provider on useListNavigation (⌃N/⌃P kept via the
   hook), listbox focus owner with role=option rows, Switch button.
   Confirm-red: both new tests fail on the pre-change file.
