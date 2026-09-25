@@ -10,6 +10,7 @@ import {
   pasteAbsorbedVia,
   pasteTailNeedle,
   placeholderCount,
+  pollPasteAbsorbed,
 } from './pasteConfirm.js'
 import { isPasteLike } from './pasteConfirm.js'
 
@@ -174,5 +175,32 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
       const partial = extractActiveClaudeComposer(screenAt(cols, prompt.slice(0, prompt.length - 30)))
       expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
     }
+  })
+
+  it('does not confirm a paste whose whitespace the composer does not show', () => {
+    // Review round 1 (A): a wrap only ever ADDS whitespace. The withdrawn
+    // strip-everything cut also accepted MISSING whitespace, so `foo\nbar`
+    // "landed" on a composer showing `foobar` and Enter was sent.
+    const tail = pasteTailNeedle('foo\nbar')
+    expect(pasteAbsorbedVia(extractActiveClaudeComposer(screenAt(80, 'foobar')), tail, 0, false)).toBeNull()
+    expect(pasteAbsorbedVia(extractActiveClaudeComposer(screenAt(80, 'foo bar')), tail, 0, false)).toBe('inline')
+  })
+
+  it('does not confirm a pending paste on an unrelated recorded composer', () => {
+    // Review round 1 (A), built from the recorded pair itself: the composer
+    // shows `… opencode [Image` / `  #1]` for a DIFFERENT prompt, while the
+    // pending payload is `opencode[\nImage#1]`. Stripped, the two were equal.
+    const recordedAfter = extractActiveClaudeComposer(fixture.deliveries.wrapped.after.screen)
+    const tail = pasteTailNeedle('opencode[\nImage#1]')
+    expect(pasteAbsorbedVia(recordedAfter, tail, 0, false)).toBeNull()
+  })
+
+  it('does not confirm a second paste on a hard-wrapped tail that was already there', async () => {
+    // Review round 1 (B): the composer already holds this payload's tail,
+    // hard-wrapped. The baseline must recognise it despite the wrap, or an
+    // unchanged screen confirms the new paste before it lands.
+    const already = screenAt(48, prompt)
+    const outcome = await pollPasteAbsorbed(() => already, already, prompt, { timeoutMs: 30, pollIntervalMs: 5 })
+    expect(outcome).toEqual({ kind: 'timeout' })
   })
 })

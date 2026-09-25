@@ -219,45 +219,58 @@ export function normalizeWhitespace(s: string): string {
 }
 
 /**
- * All whitespace removed, for the inline-tail comparison only.
+ * Does `screen` show `tail`, allowing for however the TUI wrapped it?
  *
- * WHY stripped and not collapsed (#1118): Claude's Ink wraps the composer with
- * `hard: true` (vendor/claude-code-src/full/ink/wrap-text.ts), so a token
- * longer than the line (an absolute path, a URL) is cut MID-TOKEN, and the
- * continuation line gets a two-space indent. Collapsing whitespace turned
- * that cut into a space inside the path, which no needle taken from the
- * payload contains, so absorption was never seen at 14 of 81 pane widths and
- * the send timed out and rolled back. Removing every whitespace character from
- * BOTH sides makes the comparison blind to where the wrap fell, soft or hard.
+ * WHY a pattern and not a plain substring (#1118): Claude's Ink wraps the
+ * composer with `hard: true` (vendor/claude-code-src/full/ink/wrap-text.ts),
+ * so a token longer than the line (an absolute path, a URL) is cut MID-TOKEN
+ * onto a continuation line with a two-space indent. Collapsing whitespace
+ * turned that cut into a space inside the path that the needle does not
+ * contain, so absorption was never seen at 14 of 81 pane widths and the send
+ * timed out and rolled back.
  *
- * What it gives up: two texts that differ only in spacing now compare equal.
- * For this check that is harmless. The needle is 24 non-space characters from
- * the end of the payload, the transition logic still requires it to APPEAR
- * (absent at baseline), and the composer region excludes scrollback, so a
- * spacing-only coincidence would need the same 24 characters in the live
- * composer that the paste did not put there.
- *
- * The placeholder counters keep `normalizeWhitespace`: their regexes need the
- * internal spaces, and a placeholder is never long enough to be hard-wrapped
- * in a real pane (see `imagePlaceholderCount`).
+ * WHY not simply strip all whitespace (the first cut, withdrawn in review):
+ * a wrap can only ADD whitespace. Stripping also treated missing whitespace
+ * as a match, so a payload `foo\nbar` "landed" on a composer showing
+ * `foobar`, and a recorded unrelated `opencode [Image #1]` composer matched a
+ * pending `opencode[\nImage#1]` payload. Both confirmed a paste that had not
+ * landed and sent Enter. The pattern keeps the asymmetry: every whitespace run
+ * in the needle must be whitespace on screen (`\s+`), and between any two
+ * other characters the screen MAY hold whitespace (`\s*`), which is exactly
+ * what a soft or hard wrap inserts.
  */
-function stripWhitespace(s: string): string {
-  return s.replace(/\s+/g, '')
+function tailPattern(tail: string): RegExp {
+  const parts: string[] = []
+  for (const ch of tail) {
+    if (ch === ' ') {
+      parts.push('\\s+')
+    } else {
+      if (parts.length > 0 && parts[parts.length - 1] !== '\\s+') parts.push('\\s*')
+      parts.push(ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    }
+  }
+  return new RegExp(parts.join(''), 'u')
+}
+
+function screenShowsTail(screen: string, tail: string): boolean {
+  return tailPattern(tail).test(screen)
 }
 
 /**
  * A distinctive needle from the END of the paste. The paste's tail lands at
  * the composer cursor, so it's the most reliable contiguous substring to find
- * when Claude inlines a paste (no placeholder). Whitespace is STRIPPED (see
- * `stripWhitespace`) so neither a soft nor a hard wrap can defeat the match.
- * Short prompts use their whole stripped value. They used to bypass this
- * detector through an unsafe atomic `text + \r` write; now even a
- * one-character prompt must visibly enter the active composer before Enter is
- * allowed to follow.
+ * when Claude inlines a paste (no placeholder). Whitespace-normalized (one
+ * space per run) so that `screenShowsTail` can require whitespace exactly where
+ * the payload had it. Short prompts use their full normalized value. They used
+ * to bypass this detector through an unsafe atomic `text + \r` write; now even
+ * a one-character prompt must visibly enter the active composer before Enter
+ * is allowed to follow.
  */
 export function pasteTailNeedle(payload: string): string | null {
-  const stripped = stripWhitespace(payload)
-  return stripped.length > 0 ? stripped.slice(-24) : null
+  const norm = normalizeWhitespace(payload).trim()
+  // trimStart: a needle that starts with a space would demand whitespace
+  // before its first visible character, which says nothing about the paste.
+  return norm.length > 0 ? norm.slice(-24).trimStart() : null
 }
 
 export type PasteAbsorbedOutcome =
@@ -283,7 +296,7 @@ export function pasteAbsorbedVia(
   tailAlreadyPresent: boolean,
 ): 'placeholder' | 'inline' | null {
   if (placeholderCount(screen) > baseCount) return 'placeholder'
-  if (tail && !tailAlreadyPresent && stripWhitespace(screen).includes(tail)) return 'inline'
+  if (tail && !tailAlreadyPresent && screenShowsTail(screen, tail)) return 'inline'
   return null
 }
 
@@ -307,7 +320,7 @@ export function pollPasteAbsorbed(
   const baselineComposer = extractActiveClaudeComposer(baselineScreen)
   const baseCount = placeholderCount(baselineComposer)
   const tailAlreadyPresent = tail
-    ? stripWhitespace(baselineComposer).includes(tail)
+    ? screenShowsTail(baselineComposer, tail)
     : false
   const startedAt = Date.now()
   return new Promise(resolve => {
