@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ColorFlagPickerModal } from '@renderer/features/workspace/ui/ColorFlagPickerModal'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import { DispatchAgentList } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
 import type {
@@ -96,6 +97,30 @@ describe('Dispatch sessions list keyboard', () => {
     expect(focusSessionInTab).not.toHaveBeenCalled() // focus moved, selection did not
     fireEvent.keyDown(rowsEls[1]!, { key: 'ArrowUp' })
     expect(document.activeElement).toBe(rowsEls[0])
+  })
+})
+
+describe('Dispatch row descriptions (K2-10)', () => {
+  it('describes the lane action and the "new" chip instead of hiding both in hover titles', () => {
+    appState.workspaceRuntimes = { [UNFLAGGED_SESSION_ID]: { ...emptyRuntime(), pooledSpawnAt: 1 } } as never
+    render(
+      <DispatchAgentList
+        groups={[group()]}
+        pinnedRows={[]}
+        activeSessionId={FLAGGED_SESSION_ID}
+        focusSessionInTab={vi.fn()}
+        targetLaneIndex={1}
+        showWorktreeBadges={false}
+      />,
+    )
+    const [, pooled] = [...document.querySelectorAll<HTMLElement>('[data-dispatch-session-row="true"]')]
+    const description = document.getElementById(pooled!.getAttribute('aria-describedby')!)
+    expect(description?.textContent).toBe(
+      "Enter shows it in lane 2, replacing that lane's view. New: spawned into the pool and not placed in a lane yet.",
+    )
+    // Outside the button, so it is not read as part of the row's NAME on
+    // every arrow press.
+    expect(pooled!.contains(description)).toBe(false)
   })
 })
 

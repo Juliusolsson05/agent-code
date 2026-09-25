@@ -4,7 +4,7 @@ import {
   isAgentProviderKind,
   isAgentSessionKind,
 } from '@shared/types/providerKind'
-import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { sessionIsWorking } from '@renderer/session-runtime/working'
@@ -357,9 +357,18 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
   const hiddenLoop = hidden.find(loop => loop.phase === 'ended')
     ?? hidden.find(loop => loop.phase === 'active')
     ?? hidden[0]
+  // Same as a session row (K2-10): the chips' explanations as the toggle's
+  // description instead of hover-only titles.
+  const descriptionId = useId()
+  const description = [
+    hidesNew ? 'A new agent is among the hidden ones.' : null,
+    hiddenLoop ? `${hidden.length === 1 ? 'A hidden agent has a goal loop' : `${hidden.length} hidden agents have goal loops`}: ${goalLoopChipTitle(hiddenLoop)}` : null,
+  ].filter((part): part is string => part !== null).join(' ')
   return (
+    <>
     <button
       type="button"
+      aria-describedby={description ? descriptionId : undefined}
       onClick={onToggle}
       data-dispatch-row="true"
       className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted outline-none hover:text-ink hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
@@ -386,6 +395,8 @@ const ChildCollapseRow = memo(function ChildCollapseRow({
         </span>
       )}
     </button>
+    {description ? <span id={descriptionId} hidden>{description}</span> : null}
+    </>
   )
 })
 
@@ -580,10 +591,30 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   // re-addressing #816 is about, even when it is only a tooltip.
   const nameAndTitle = [agentName, title].filter(Boolean).join(' — ')
   const unreadBadge = dispatchUnreadBadge(runtime, row.kind)
+  // What the row's hover titles say, as its accessible DESCRIPTION (K2-10).
+  // The "new" and goal-loop chips and the row itself explained themselves
+  // only in `title`s. A title on a span inside a button never reaches the
+  // button's name or description, so a screen reader heard "new" and "loop
+  // 3/25" with no idea what either meant, or what Enter would do to which
+  // lane. Kept in a hidden sibling, not inside the button: anything inside
+  // becomes part of the row's NAME, which is read on every arrow press.
+  // aria-describedby may point at a hidden element, and its text still counts.
+  const descriptionId = useId()
+  const description = [
+    disabled
+      ? 'Shown in another lane.'
+      : targetLaneIndex === undefined
+        ? null
+        : `Enter shows it in lane ${targetLaneIndex + 1}, replacing that lane's view.`,
+    runtime.isNewInPool ? 'New: spawned into the pool and not placed in a lane yet.' : null,
+    isShownGoalLoop(goalLoop) ? goalLoopChipTitle(goalLoop) : null,
+  ].filter((part): part is string => part !== null).join(' ')
 
   return (
+    <>
     <button
       type="button"
+      aria-describedby={description ? descriptionId : undefined}
       onClick={onSelect}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
@@ -743,6 +774,8 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           the same real 10px flex allocation in both rich and tiled lists. */}
       <DispatchColorFlagStrip sessionId={row.sessionId} />
     </button>
+    {description ? <span id={descriptionId} hidden>{description}</span> : null}
+    </>
   )
 })
 

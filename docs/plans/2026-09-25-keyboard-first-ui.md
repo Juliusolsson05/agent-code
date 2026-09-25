@@ -532,7 +532,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | todo |
 | K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | done (one details popover on hover OR focus-within) |
 | K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | done (status spelled out in the same popover; buttons aria-describedby it) |
-| K2-10 | Dispatch "new" / goal-loop chips (`dispatch/DispatchAgentList.tsx:369,378,670,697`) | explanation title-only | aria-describedby on the row | todo |
+| K2-10 | Dispatch "new" / goal-loop chips (`dispatch/DispatchAgentList.tsx:369,378,670,697`) | explanation title-only | aria-describedby on the row | done (hidden sibling description on session rows + the child-collapse toggle) |
 | K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | done (UnsupportedProviderNotes under the provider row, both dialog modes) |
 | K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | todo |
 | K2-13 | Worktree badge (`TileLeaf/SessionBadges.tsx:56`) | branch/touched files title-only | reveal on focus / Agent Status | todo |
@@ -1569,3 +1569,11 @@ Sharp corners and one light theme.
   hover titles and the mouse-only thumbnail. The port chip got an accessible
   name ("Open localhost:N in the pocket"), since its text is only ":5173".
   Confirm-red: the strip test fails on the pre-change strip.
+- 2026-09-25 K2-10: Dispatch rows and the child-collapse toggle get an
+  aria-describedby description (lane action, "new" pool chip, goal-loop
+  chip), in a hidden sibling so it is not part of the row's name. Ruling for
+  dense rows: the description is for assistive tech, and sighted users keep
+  the visible chip text plus the mouse title. A visible explanation per row
+  would double the list's height. Cost if wrong: a sighted keyboard user
+  still cannot read "click to place it" (the chip's word "new" is visible).
+  Confirm-red: the description test fails on the pre-change list.
