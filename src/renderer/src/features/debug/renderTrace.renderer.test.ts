@@ -70,4 +70,19 @@ describe('renderTrace', () => {
 
     expect(exportDebugTraceFiles(sessionId)).toEqual([])
   })
+
+  it('writes the screen samples main recorded into the bundle trace (#762)', () => {
+    // The samples now come from main (window.api.getScreenDebug); dropping
+    // the argument at the call site shipped empty screen traces while every
+    // test stayed green (#1236 review C).
+    const sessionId = `trace-screen-${crypto.randomUUID()}`
+    const samples = [
+      { id: '0-a', seq: 0, ts: 1, tsIso: new Date(1).toISOString(), hash: 'a', lineCount: 1, content: 'first' },
+      { id: '1-b', seq: 1, ts: 2, tsIso: new Date(2).toISOString(), hash: 'b', lineCount: 1, content: 'latest' },
+    ]
+    const files = exportDebugTraceFiles(sessionId, samples)
+    expect(readJsonl<{ content: string }>(files, 'trace/screen/tail-samples.jsonl').map(sample => sample.content))
+      .toEqual(['first', 'latest'])
+    expect(files.find(file => file.name === 'trace/screen/latest-tail.txt')?.content).toBe('latest')
+  })
 })

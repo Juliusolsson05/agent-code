@@ -5,9 +5,11 @@ import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/
 
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
-import type { AgentScreenSnapshotWire } from '@shared/types/session.js'
+import type { AgentScreenSnapshot, AgentScreenSnapshotWire } from '@shared/types/session.js'
+import type { ScreenTailSample } from '@shared/debug/screenTail.js'
 import type { TerminalForegroundEvent, TerminalForegroundState } from '@shared/types/terminalForeground.js'
 import type {
+
   SessionExitEvent,
   SessionHistoryChunk,
   SessionKind,
@@ -37,6 +39,14 @@ import type {
   SessionHistoryBoundaryEvent,
   SessionProviderSessionChangedEvent,
 } from '@preload/api/types.js'
+
+// One id per loaded document: preload runs again on every reload, so a new id
+// tells main the previous document's screen leases are dead (#762, see
+// main/sessions/screenInterest.ts for why this replaced a navigation event).
+const screenLeaseDocument = globalThis.crypto.randomUUID()
+// Announce the document at load, not at first lease: a reloaded page that
+// never leases must still retire the previous page's leases (steering q15).
+void ipcRenderer.invoke('session:screen-document', screenLeaseDocument).catch(() => undefined)
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
 
@@ -129,6 +139,19 @@ export const sessionApi = {
   detachAgentPty: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke('session:agent-pty-detach', sessionId),
 
+  // #762: live `session:screen` frames are forwarded only while a lease is
+  // held (debug surfaces). Acquire also sends the current screen as one
+  // ordinary session:screen event.
+  acquireScreenLease: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:screen-lease', sessionId, screenLeaseDocument),
+
+  releaseScreenLease: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:screen-release', sessionId, screenLeaseDocument),
+
+  /** The latest screen and main's screen-tail history, for debug bundles. */
+  getScreenDebug: (sessionId: string): Promise<{ screen: AgentScreenSnapshot | null; samples: ScreenTailSample[] }> =>
+    ipcRenderer.invoke('session:get-screen-debug', sessionId),
+
   // --- Per-session I/O ---
   //
   // Optional `pasteId` correlates this write against the per-paste
@@ -166,23 +189,6 @@ export const sessionApi = {
 
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('session:resize', sessionId, cols, rows),
-
-  // Event-driven paste-submit primitive. See
-  // src/renderer/.../claudePaste.ts and
-  // packages/claude-code-headless/src/ClaudeCodeHeadless.ts.
-  // Resolves when Claude's TUI renders `[Pasted text #N]`, or after
-  // the configured timeout. Renderer treats every non-'appeared'
-  // outcome as "fall through to the wall-clock submit path."
-  awaitClaudePastePlaceholder: (
-    sessionId: string,
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'appeared'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-    | { kind: 'no-session' }
-  > =>
-    ipcRenderer.invoke('claude:await-paste-placeholder', sessionId, opts),
 
   loadOlderHistory: (params: {
     kind: AgentProviderKind
