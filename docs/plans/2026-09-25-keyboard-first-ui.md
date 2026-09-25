@@ -393,7 +393,7 @@ entry when it lands.
 | F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | done |
 | F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | done (fixed-key legends in PathPicker/AgentActivity/BulkSwitch move with their S-rows) |
 | F7 | `ConfirmDialog` + replace `window.confirm` ×17 (destructive: focus Cancel, and never ⌘↩ — steering note 1; quit/close paths stay native — B7) | done (17/17 replaced; none was on a quit/close path) |
-| F8 | `dropdown-menu` primitive (D9) | todo |
+| F8 | `dropdown-menu` primitive (D9) | done |
 
 ### Dialogs (Radix)
 
@@ -581,6 +581,18 @@ Sharp corners and one light theme.
 - Ruling: hidden duplicate commands' notes ("kept runnable for the ⌥⇧T
   chord") keep their chord — it records WHY the command exists, not a hint.
 
+- Ruling: `@radix-ui/react-dropdown-menu` pinned EXACT at 2.1.20 — the
+  release on react-dialog 1.1.19's train (same dismissable-layer 1.1.15,
+  focus-scope 1.1.12, portal 1.1.13, primitive 2.1.7). Latest (2.1.24) would
+  add second copies of the layer/focus stacks, breaking Escape arbitration
+  for a menu inside a dialog — cost if wrong: a later bump must move dialog
+  and dropdown-menu together (recorded in dropdown-menu.tsx's header).
+- Ruling: AppearanceMenu (a panel of mode buttons, swatches and a toggle) is
+  built on DropdownMenu radio/checkbox items rather than a separate Popover
+  dependency; arrows traverse the grid in DOM order and typeahead works on
+  labels — cost if wrong: ↑↓ across a 2-column grid feels linear; a Popover
+  primitive would be a second new dependency.
+
 ## Execution notes
 
 - Sweep counts: 44 Radix dialogs (45 mounts), 15 hand-rolled overlays/menus,
@@ -602,6 +614,15 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 F8: `components/ui/dropdown-menu.tsx`, dep pinned 2.1.20.
+  Lockfile per B7's procedure: generated with npm 11.8
+  `install --package-lock-only --save-exact`; entry diff = 15 added
+  top-level packages (4 @floating-ui, 11 @radix-ui), 0 removed, 0 changed
+  except the root dependency list; `npm ci --dry-run` AND a real
+  `npm ci --ignore-scripts --include=dev` pass under npm 10.9.0 (Node
+  22.12.0) and npm 11.11.0 (Node 24.14.1), with no nested @radix-ui copies.
+  The 15 package dirs were copied additively into the shared main
+  node_modules for local tests (nothing existing touched).
 - 2026-09-25 F7: `components/ui/confirm-dialog.tsx` (ConfirmDialog,
   requestConfirm, ConfirmHost registered last in modalSurfaces); all 17
   `window.confirm` sites migrated, dirty-draft close guards made async (B7's
