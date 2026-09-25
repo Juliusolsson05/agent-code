@@ -36,8 +36,22 @@ export type CommittedOwnership = {
   toolUseIds: ReadonlySet<string>
   toolResultIds: ReadonlySet<string>
   itemIds: ReadonlySet<string>
-  /** Normalized committed USER text — optimistic reconciliation only. */
-  userTextKeys: ReadonlySet<string>
+  /**
+   * Normalized committed USER text → the NEWEST producer timestamp among the
+   * committed user rows carrying it. Optimistic reconciliation only.
+   *
+   * WHY a timestamp and not a set (#1181): with a set, ANY earlier committed
+   * row with the same text owned a new optimistic prompt. Send `continue` a
+   * second time in a session and its optimistic row was rejected the instant
+   * it was minted, so the prompt vanished from the feed until the transcript
+   * caught up. With the composer now cleared at Enter, that gap reads as a
+   * lost prompt. A committed row can only be the twin of a prompt submitted
+   * at or before it, so ownership now also requires the committed row to be
+   * no older than the submit (see OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS).
+   * `Infinity` records a committed row with no timestamp: it keeps the old
+   * presence-only rule, because a missing time proves nothing either way.
+   */
+  userTextKeys: ReadonlyMap<string, number>
 }
 
 /**
@@ -107,7 +121,7 @@ export function buildCommittedOwnership(
   const toolUseIds = new Set<string>()
   const toolResultIds = new Set<string>()
   const itemIds = new Set<string>()
-  const userTextKeys = new Set<string>()
+  const userTextKeys = new Map<string, number>()
   for (const c of committed) {
     // Block-grain evidence mined at collection time (see RenderCandidate
     // .ownedToolUseIds WHY). This is the corpus-proven path for claude:
@@ -116,7 +130,9 @@ export function buildCommittedOwnership(
     for (const id of c.ownedToolUseIds ?? []) toolUseIds.add(id)
     for (const id of c.ownedToolResultIds ?? []) toolResultIds.add(id)
     if (c.contentKind === 'user-text' && c.normalizedTextKey) {
-      userTextKeys.add(c.normalizedTextKey)
+      const at = c.timestampMs ?? Number.POSITIVE_INFINITY
+      const newest = userTextKeys.get(c.normalizedTextKey)
+      if (newest === undefined || at > newest) userTextKeys.set(c.normalizedTextKey, at)
     }
     if (c.contentKind === 'assistant-text') {
       if (c.messageId) wholeTurnOwnerIds.add(c.messageId)
@@ -135,6 +151,18 @@ export function buildCommittedOwnership(
   }
   return { wholeTurnOwnerIds, exactText, normalizedText, toolUseIds, toolResultIds, itemIds, userTextKeys }
 }
+
+/**
+ * How far BEFORE an optimistic submit a committed twin may be stamped and still
+ * own it. The two times come from different writers (the renderer stamps the
+ * optimistic row at Enter; the provider stamps its transcript row when it
+ * records the prompt), and the provider always writes after it receives the
+ * prompt, so on one machine the twin is never really earlier. The tolerance
+ * only absorbs clock granularity and small skew between the two writers. It is
+ * far below the time a person takes to type and send the same prompt twice,
+ * which is the case this rule exists to tell apart.
+ */
+export const OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS = 2_000
 
 /**
  * Decide one live candidate against committed ownership. Returns a full
@@ -156,11 +184,15 @@ export function decideLiveCandidate(
   // optimistic row SURVIVING when no owner is provable — surviving too long
   // is visible and diagnosable; vanishing early is the silent #339 class.
   if (candidate.owner === 'optimistic-submit') {
+    const newestTwinMs = candidate.normalizedTextKey
+      ? ownership.userTextKeys.get(candidate.normalizedTextKey)
+      : undefined
     if (
-      candidate.normalizedTextKey &&
-      ownership.userTextKeys.has(candidate.normalizedTextKey)
+      newestTwinMs !== undefined &&
+      (candidate.timestampMs === null ||
+        newestTwinMs >= candidate.timestampMs - OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS)
     ) {
-      evidence.push('committed user row with matching normalized text')
+      evidence.push('committed user row with matching normalized text, not older than the submit')
       return {
         candidateId: candidate.id,
         selected: false,
