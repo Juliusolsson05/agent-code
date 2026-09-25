@@ -65,7 +65,13 @@ export async function deliverCodexPrompt(
   // draft. Keep the stricter rule provider-owned and immediately before the
   // reserved write. Plain text cannot distinguish dim placeholder content
   // from the same words typed by a human; ambiguity is a refusal, not consent.
-  if (io.requireEmptyNativeComposer && !isCodexNativeComposerEmpty(io.session.snapshotScreen?.() ?? '')) {
+  // #1313: the text check alone could never call Codex 0.157's empty composer
+  // empty (a dim placeholder under which Codex adds a hint row), so every
+  // browser-pocket restart was refused. The package's attribute-aware
+  // reading says `empty` only with Codex's own empty-composer hint; either
+  // proof is consent, anything else still refuses.
+  const nativeEmpty = (io.session as { nativeComposerState?: () => string }).nativeComposerState?.() === 'empty'
+  if (io.requireEmptyNativeComposer && !nativeEmpty && !isCodexNativeComposerEmpty(io.session.snapshotScreen?.() ?? '')) {
     return {
       ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
       disposition: 'retry-after-resolve', promptWritten: false, enterWritten: false,

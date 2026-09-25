@@ -34,7 +34,7 @@ import type {
   PromptGateState,
   PromptReadinessOutcome,
 } from '@shared/types/session.js'
-import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
+import { isCodexNativeComposerEmpty, isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { addCodexUserMcpLaunchConfig, type CodexShellPolicyStyle } from '@providers/shared/runtime/userMcpLaunch.js'
 import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
@@ -236,6 +236,9 @@ export class CodexSession extends EventEmitter {
   private tldrHooks: PrivateCodexTldrHooks | null = null
   private exited = false
   private composerReady = false
+  /** The native-composer readiness last published after the startup latch
+   *  (#800, q40). `ready` is what markComposerReady itself publishes. */
+  private nativeComposerPublished: 'ready' | 'occupied' | 'unverified' = 'ready'
 
   private readonly cwd: string
   private readonly cols: number
@@ -329,6 +332,7 @@ export class CodexSession extends EventEmitter {
     }
     this.exited = false
     this.composerReady = false
+    this.nativeComposerPublished = 'ready'
     this.emit('input-readiness', {
       ready: false,
       reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
@@ -554,6 +558,7 @@ export class CodexSession extends EventEmitter {
       // Forward screen snapshots.
       this.headless.on('screen', snap => {
         this.markComposerReady(snap.plain)
+        this.publishNativeComposer()
         this.emit('screen', {
           plain: snap.plain,
           markdown: snap.markdown,
@@ -642,6 +647,7 @@ export class CodexSession extends EventEmitter {
       this.headless.on('exit', ({ exitCode, signal }) => {
         this.exited = true
         this.composerReady = false
+        this.nativeComposerPublished = 'ready'
         this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
         this.emit('exit', { exitCode, signal })
       })
@@ -869,7 +875,34 @@ export class CodexSession extends EventEmitter {
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
           this.markComposerReady(screen)
-          resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+          // #800: the screen check above passes for ANY `›` row, including a
+          // human's draft, and a paste would then append to that draft and
+          // submit both. Only the package's attribute-aware `drafted` blocks;
+          // `unknown` keeps today's behaviour so a frame we cannot read never
+          // stalls a prompt (the Claude gate once latched occupied for 186 s).
+          const composer = this.nativeComposerState()
+          if (composer === 'drafted') {
+            resolve({ kind: 'occupied', reason: 'human-draft' })
+            return
+          }
+          // `unknown` is NOT ready (steering q40): a draft longer than the
+          // package's composer bound reads `unknown` while this screen check
+          // still passes, and the paste landed in the human's draft. Ready
+          // needs a proof of empty: the package's reading (Codex's own
+          // empty hint), or the old text proof of a bare `›` above the
+          // status row, which is the only proof 0.149.1 and narrow 0.157
+          // panes (no hint row) can give.
+          if (composer === 'empty' || isCodexNativeComposerEmpty(screen)) {
+            resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+            return
+          }
+          // Text in the composer that nothing proves is a placeholder: refuse
+          // AT ONCE as a human's to resolve (retry-after-resolve). Polling to
+          // the deadline instead held the delivery reservation for 15 s and
+          // answered retry-same-session, the wrong instruction for a draft.
+          // Only this write gate says occupied; readiness publication says
+          // provider-not-ready for the same frame, so nothing latches.
+          resolve({ kind: 'occupied', reason: 'human-draft' })
           return
         }
         if (Date.now() >= deadlineAt) {
@@ -941,6 +974,44 @@ export class CodexSession extends EventEmitter {
       return { kind: approval.kind, resolvable: approval.actions.length > 0 }
     }
     return null
+  }
+
+  /**
+   * The native composer as codex-headless reads it from the live buffer and
+   * its cell attributes (#800, #1313): `empty` only with Codex's own
+   * empty-composer hint, `drafted` for plain typed cells, an attachment or the
+   * queue hint, `unknown` for everything else. `unknown` is neither ready nor
+   * occupied; callers must not map it to either.
+   */
+  nativeComposerState(): 'empty' | 'drafted' | 'unknown' {
+    const headless = this.headless as { getComposerState?: () => 'empty' | 'drafted' | 'unknown' } | null
+    return headless?.getComposerState?.() ?? 'unknown'
+  }
+
+  /**
+   * Publish a native draft as `composer-occupied`, and its clearing as
+   * `ready` (#800). Before this, readiness latched once at startup, so a
+   * draft typed into the TUI was invisible: the pane offered to send, and a
+   * send appended to the draft. Only after the startup latch (an unpainted
+   * composer is still `provider-not-ready`).
+   */
+  private publishNativeComposer(): void {
+    if (!this.composerReady || this.exited) return
+    // Same rule as the write gate: `drafted` is occupied, a proof of empty is
+    // ready, and anything else withdraws ready without claiming a draft
+    // (steering q40), so a pane never offers to send into a composer we
+    // cannot read, and never latches occupied either.
+    const composer = this.nativeComposerState()
+    const next = composer === 'drafted'
+      ? 'occupied'
+      : composer === 'empty' || isCodexNativeComposerEmpty(this.headless?.getScreen() ?? '')
+        ? 'ready'
+        : 'unverified'
+    if (next === this.nativeComposerPublished) return
+    this.nativeComposerPublished = next
+    this.emit('input-readiness', next === 'ready'
+      ? { ready: true, reason: 'ready' }
+      : { ready: false, reason: next === 'occupied' ? 'composer-occupied' : 'provider-not-ready' })
   }
 
   private markComposerReady(screen: string): void {
