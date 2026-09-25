@@ -123,10 +123,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     const { fixture, settled } = recordedSession()
     const spawnSession = vi.fn(async () => ({ sessionId: 'resumed-pane' }))
     const killOwnedSession = vi.fn(async () => true)
-    // Spawn also hydrates saved UI ghosts asynchronously. The empty store
-    // is a renderer boundary, unrelated to provider history or Resume.
-    const ghostRead = vi.fn(async () => [])
-    scope.extendApi({ spawnSession, killOwnedSession, ghostRead })
+    scope.extendApi({ spawnSession, killOwnedSession })
     const state: WorkspaceState = {
       tabs: [{ id: 'project', title: 'project' }],
       activeTabId: 'project', stage: oneLaneStage(SESSION_ID),
@@ -145,7 +142,7 @@ describe('an OpenCode Terminal pane restored without a rehydrate', () => {
     await act(async () => {
       await result.current.replaceSession(PANE_CWD, { kind: 'opencode', resumeSessionId: fixture.meta.sessionID })
     })
-    await waitFor(() => settled.includes('resumed-pane') && ghostRead.mock.calls.length === 1, 'resumed history and ghost bootstrap')
+    await waitFor(() => settled.includes('resumed-pane'), 'resumed history')
     expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       kind: 'opencode', providerRuntime: 'terminal', resumeSessionId: fixture.meta.sessionID,
     }))

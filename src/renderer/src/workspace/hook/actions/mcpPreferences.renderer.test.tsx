@@ -37,7 +37,7 @@ function setup(meta: Partial<SessionMeta> = { builtInMcpDomains: [], builtInMcpO
   }
   let sequence = 0
   const spawnSession = vi.fn(async (options: SessionSpawnOptions) => ({ sessionId: `new-${++sequence}`, providerSessionId: options.resumeSessionId }))
-  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), ghostRead: vi.fn(async () => []), controlGoalLoop: vi.fn(async () => null) }
+  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), controlGoalLoop: vi.fn(async () => null) }
   const hook = renderHook(() => {
     const sessions = useSessionActions(state, writer.setState, setRuntimes, refs)
     return { sessions, provider: useProviderActions(refs, setRuntimes, vi.fn(), sessions) }

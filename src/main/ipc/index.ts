@@ -2,7 +2,6 @@ import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import { EditorFsRootRegistry } from './editorFsRootRegistry.js'
 import type { LspManager } from '@main/lspManager.js'
-import type { GhostJournalRegistry } from '@main/ghostJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
@@ -20,7 +19,6 @@ import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
 import { registerMenuIpc } from '@main/ipc/menu.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
-import { registerGhostIpc } from '@main/ipc/ghost.js'
 import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
 import { registerPerformanceIpc } from '@main/ipc/performance.js'
@@ -82,7 +80,6 @@ export type IpcDeps = {
   manager: SessionManager
   userMcpService: UserMcpService
   lspManager: LspManager
-  ghostJournals: GhostJournalRegistry
   dictationDebugJournals: DictationDebugJournalRegistry
   pasteDebugJournals: PasteDebugJournalRegistry
   /** The one main-side session feed tap (#1177); see registerSessionIpc. */
@@ -123,7 +120,6 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)
   registerMenuIpc()
-  registerGhostIpc(deps.ghostJournals)
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()

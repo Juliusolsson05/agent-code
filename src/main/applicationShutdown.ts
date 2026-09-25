@@ -27,7 +27,6 @@ export interface ApplicationShutdownServices {
   stopDetachedTmuxSweep: Stop
   drainWorkspace: Stop
   drainDictationHistory: Stop
-  flushGhosts: Stop
   flushRecordings: Stop
   flushDictationDebug: Stop
   flushPasteDebug: Stop
@@ -153,7 +152,6 @@ export function installApplicationShutdown(options: {
     // Await their queued work, but report a diagnostic write failure without
     // misclassifying it as a provider that may still own a native conversation.
     await Promise.all(([
-      ['ghosts', services.flushGhosts],
       ['recordings', services.flushRecordings],
       ['dictation-debug', services.flushDictationDebug],
       ['paste-debug', services.flushPasteDebug],

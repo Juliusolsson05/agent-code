@@ -17,7 +17,6 @@ import {
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
-  ghostsToPersist,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
 import {
@@ -82,6 +81,24 @@ function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
     const uuid = (entry as { uuid?: string }).uuid
     if (uuid) seen.add(uuid)
   }
+}
+
+/**
+ * The lifetime channel error that survives a SUCCESSFUL history read.
+ *
+ * WHY the late-recovery banner is the exception (#1229 review, round 2):
+ * OpenCode's `db_path_recovered_late` says rows committed while the database
+ * path was unavailable are missing, and when the heal read fails that is set
+ * as the lifetime banner (useIpcSubscriptions). A later read that succeeds —
+ * a retry, a reload, a parent's hydrate — has now read those rows, so the
+ * banner's claim is false; keeping it left Agent Status and every parent's
+ * `transcript_unavailable` over a complete transcript. Every other channel
+ * error describes the live channel, which a snapshot cannot certify, and
+ * stays.
+ */
+function channelErrorAfterRead(error: string | null | undefined): string | null {
+  if (!error) return null
+  return error.includes('(db_path_recovered_late)') ? null : error
 }
 
 export async function loadInitialHistoryForSession({
@@ -354,9 +371,6 @@ export async function loadInitialHistoryForSession({
       for (const entry of initialEntries) {
         nextGhosts = reconcileUpstream(entry, nextGhosts)
       }
-      for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
-        window.api.ghostAppend(sessionId, ghost)
-      }
 
       // Bootstrap-load equivalent of the live-ingest stamping in
       // useIpcSubscriptions.ts. selectMergedEntries gates orphan
@@ -443,9 +457,12 @@ export async function loadInitialHistoryForSession({
           // The projection can remain readable after the event reader stops
           // for good. Snapshot success repairs a history failure only; it
           // cannot certify ongoing observation or follow TUI navigation.
-          transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+          // The one lifetime banner a successful read DOES disprove is the
+          // late-recovery hole (channelErrorAfterRead).
+          transcriptStatus: channelErrorAfterRead(current.transcriptChannelError) ? 'error' : 'ready',
           transcriptStatusChangedAt: Date.now(),
-          transcriptError: current.transcriptChannelError ?? null,
+          transcriptError: channelErrorAfterRead(current.transcriptChannelError),
+          transcriptChannelError: channelErrorAfterRead(current.transcriptChannelError),
           workActivity,
           workContext,
           toolUseIndex,

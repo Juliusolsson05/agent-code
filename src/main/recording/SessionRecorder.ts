@@ -13,7 +13,8 @@ import type { CodexTranscriptObservation } from '@shared/lifecycle/events.js'
 // The per-folder shape is a deliberate cleanup affordance: `rm -rf` one
 // folder removes exactly one recording, nothing else (the user's ask).
 //
-// The writer is cloned from GhostJournal (src/main/ghostJournal.ts) — one
+// The writer is cloned from the former GhostJournal (removed 2026-09-25 with
+// the on-disk ghost log; see storage/legacyGhostLogs.ts) — one
 // file, JSON+'\n', 100 ms batched drain, overlapping-drain guard, dir
 // created lazily on first write — because that writer already absorbed the
 // #388 OOM lessons. Added here on top of the ghost pattern, because a
@@ -28,7 +29,7 @@ import type { CodexTranscriptObservation } from '@shared/lifecycle/events.js'
 // Both are non-negotiable per the plan; retention (a budgeted
 // debugRetention bucket) is the sibling slice.
 
-// 100 ms mirrors GhostJournal / upstream Claude FLUSH_INTERVAL_MS — one
+// 100 ms mirrors the former GhostJournal / upstream Claude FLUSH_INTERVAL_MS — one
 // append per 100 ms per recording, not per event.
 const FLUSH_INTERVAL_MS = 100
 // Drop-oldest threshold. 2000 pending lines is the journal-plan rulebook's

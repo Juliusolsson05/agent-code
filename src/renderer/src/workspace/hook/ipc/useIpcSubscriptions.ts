@@ -63,10 +63,10 @@ import {
   type CommittedSeenLedger,
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   ghostsFromSemanticTurn,
-  ghostsToPersist,
   sweepGhosts,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
@@ -352,7 +352,7 @@ const MEMORY_GAUGE_INTERVAL_MS = 30_000
 // that advantage away: four busy agents produced 100+ React/ghost/debug/perf
 // pipelines per second, and the input/paint queue then sat behind seconds (or
 // minutes) of obsolete work even while JS heap stayed flat. A 100 ms preview
-// cadence matches the existing transcript and ghost journal batches, remains
+// cadence matches the existing transcript batch interval, remains
 // visually live for text, and puts a hard per-owner ceiling on renderer work.
 // Structural semantic events bypass this delay and first flush the latest
 // queued snapshots, preserving block/turn completion ordering.
@@ -398,7 +398,7 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 // pass FakeSessionFeed, and the remote client will pass its WebSocket feed.
 // Do NOT reintroduce a direct `window.api.onSession*` call for a feed-covered
 // event — that would silently exclude non-IPC transports from that event.
-// Desktop-only side channels (ghostAppend, gitWorktrees, feed-debug, perf)
+// Desktop-only side channels (gitWorktrees, feed-debug, perf)
 // intentionally STAY on window.api below: they are not session I/O, the
 // remote client must never need them, and abstracting them would widen the
 // SessionFeed contract for no consumer.
@@ -520,9 +520,6 @@ export function useIpcSubscriptions(
               gcMs: GHOST_SUPERSEDED_GC_MS,
             })
             if (nextGhosts !== runtime.ghosts) {
-              for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
-                window.api.ghostAppend(sessionId, ghost)
-              }
               working = appendFeedDebugLog(
                 { ...working, ghosts: nextGhosts },
                 {
@@ -897,6 +894,38 @@ export function useIpcSubscriptions(
         transcriptError: message,
         ...((channelStopped || sessionSwitched || serverUnreachable) ? { transcriptChannelError: message } : {}),
       })
+      // #1117. The late-opened channel is positioned at the database's
+      // current head, so everything the TUI committed while the path was
+      // unavailable counts as already seen and is never emitted. The package
+      // cannot heal that — it cannot tell a dark-window row from last week's —
+      // but a history read can: it admits only uuids this pane does not hold
+      // and places them in order around the rows it does (placeHistoryEntries).
+      // So the reload the message asks the user for is done here, once, the
+      // moment the channel is readable again. A load that succeeds writes
+      // `ready` over this error (nothing set the lifetime banner above).
+      //
+      // WHY a failed heal raises the LIFETIME banner (#1229 review): the load
+      // writes its own error, but the next committed row on this now-working
+      // channel writes `ready` over any error that is not a channel error, so
+      // the pane went back to looking whole while the rows committed in the
+      // dark window were still missing. They stay missing until the user
+      // reloads, which is exactly what this message says, so it is the one
+      // that must stand.
+      if (message.includes('(db_path_recovered_late)')) {
+        void loadInitialHistoryForSession({ sessionId, refs, setRuntimes }).then(healed => {
+          if (healed) return
+          // Only onto a pane that still exists: updateRuntime would create an
+          // orphan runtime for one closed while the heal was in flight.
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            return {
+              ...prev,
+              [sessionId]: { ...current, transcriptStatus: 'error', transcriptError: message, transcriptChannelError: message },
+            }
+          })
+        })
+      }
     })
 
     // #881. The one diagnostic the renderer acts on, and the reason the
@@ -1334,25 +1363,14 @@ export function useIpcSubscriptions(
         //   sub-slice and knows nothing about sessionId or the
         //   outer runtime. The ghost map lives on SessionRuntime
         //   because it needs to survive across semantic history
-        //   archival (when `currentTurn` flips to null) and because
-        //   the ghost journal persists it to disk with session-
-        //   scoped file names. Calling the ghost reducer at this
+        //   archival (when `currentTurn` flips to null). Calling the
+        //   ghost reducer at this
         //   outer boundary keeps the layering clean.
         const nextGhosts = ghostsFromSemanticTurn(
           nextSemantic.currentTurn,
           sessionId,
           current.ghosts,
         )
-
-        // Persist each changed ghost to disk (append-only JSONL
-        // under <userData>/ghost-logs). Fire-and-forget from the
-        // renderer; the main-side queue drains every 100 ms. See
-        // `src/main/ghostJournal.ts` for the writer and
-        // `../ghosts.ts` `ghostsToPersist` for why this diff is
-        // safe.
-        for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
-          window.api.ghostAppend(sessionId, ghost)
-        }
 
         // Full no-op short-circuit. foldSemanticEvent now returns
         // `state` unchanged for events that didn't mutate semantic
@@ -2332,15 +2350,6 @@ export function useIpcSubscriptions(
         let nextGhosts = current.ghosts
         for (const entry of appended) {
           nextGhosts = reconcileUpstream(entry, nextGhosts)
-        }
-
-        // Persist supersede records. When an upstream entry
-        // matched a ghost, `reconcileUpstream` produced a new ghost
-        // snapshot with `supersededBy` set; appending that to disk
-        // is how crash-recovered state knows "this ghost is no
-        // longer live."
-        for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
-          window.api.ghostAppend(sessionId, ghost)
         }
 
         // Persist the codex mapper's rolling turn cursor across bursts.

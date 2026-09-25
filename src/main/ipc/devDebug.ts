@@ -103,8 +103,8 @@ export function registerDevDebugIpc(
   //             finished typing (several ticks later). Returns the noteId.
   //   fill    → updates that noteId with the typed text on submit.
   // A crash between the two still leaves the reserved line, which alone flags
-  // "something was wrong here" — the same two-phase crash-safety the ghost
-  // journal uses.
+  // "something was wrong here" — a two-phase write whose first half is
+  // already useful evidence on its own.
   //
   // Both handlers are gated by isSessionRecordingEnabled(): the flag is the
   // trust boundary (a recording captures full session input, so a renderer

@@ -142,7 +142,11 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     // of inventing a smaller queue that merely looks plausible.
     const throughRecordedRemove = fixture.events.slice(0, 117)
     const removedPrompt = fixture.events[115]
-    const retainedNotification = fixture.events[112]
+    // Event 111, not 112 (#678): 111 and 112 are twins under one task id, and
+    // the committed entry at 114 carries 112's body, so 112 is the one that
+    // left. This line used to name 112 — it blessed the id-only misattribution
+    // that retired 111 with 112's evidence.
+    const retainedNotification = fixture.events[111]
     if (
       removedPrompt?.kind !== 'op' ||
       typeof removedPrompt.content !== 'string' ||
@@ -567,6 +571,59 @@ describe('dequeue is settled by identity, not inference', () => {
   })
 })
 
+describe('a committed notification retires the twin it carries (#678)', () => {
+  // Recorded: upstream reuses a task id when it reconciles a background shell
+  // from a previous session, so two DIFFERENT notification bodies can be queued
+  // under one id (fixture events 111-112: "...was stopped" style first, then
+  // "No completion record was found..."). The committed entry at event 114
+  // carries the SECOND verbatim. Matching on the id alone retired the first
+  // with the second's uuid as evidence and stranded the one that left.
+  it('names the twin whose body the committed entry carries, and keeps the other pending', () => {
+    const events = loadFixture('divergence-stranded-background-commands').events
+    const first = events[111] as Extract<FixtureEvent, { kind: 'op' }>
+    const second = events[112] as Extract<FixtureEvent, { kind: 'op' }>
+    const committed = events[114] as Extract<FixtureEvent, { kind: 'user' }>
+    expect(first.content).not.toBe(second.content)
+    expect(committed.text).toContain(second.content!.slice(0, 200))
+
+    const state = replay(events.slice(0, 115))
+    const decision = state.decisions.find(d => d.evidence.includes(committed.uuid!))
+    expect(decision?.reason).toBe('delivered-observed')
+    expect(state.pending.some(i => i.content === second.content)).toBe(false)
+    expect(state.pending.some(i => i.content === first.content)).toBe(true)
+  })
+
+  it('matches a twin whose whole body is WRAPPED inside the committed entry', () => {
+    // Containment, not equality or prefix: a committed entry can carry the
+    // notification inside other text. (#1234 review: a prefix check passed
+    // every other test.)
+    const events = loadFixture('divergence-stranded-background-commands').events
+    const first = events[111] as Extract<FixtureEvent, { kind: 'op' }>
+    const second = events[112] as Extract<FixtureEvent, { kind: 'op' }>
+    const wrapped = { kind: 'user' as const, uuid: 'wrapped-entry', text: `<task-notification>\n<carrier-wrapper>\n${second.content}\n</carrier-wrapper>` }
+    const state = replay([...events.slice(0, 114), wrapped])
+    expect(state.decisions.find(d => d.evidence.includes('wrapped-entry'))?.reason).toBe('delivered-observed')
+    expect(state.pending.some(i => i.content === second.content)).toBe(false)
+    expect(state.pending.some(i => i.content === first.content)).toBe(true)
+  })
+
+  it('retires neither twin when the entry names only their shared id', () => {
+    // A reformatted body (upstream rewording) leaves only the id to go on, and
+    // two pending items carry it. The id cannot say which one left, so no
+    // delivery is claimed; the debt settles by inference later, as for any
+    // unidentified entry. Retiring the first by array order was the bug.
+    const events = loadFixture('divergence-stranded-background-commands').events
+    const first = events[111] as Extract<FixtureEvent, { kind: 'op' }>
+    const second = events[112] as Extract<FixtureEvent, { kind: 'op' }>
+    const id = /<task-id>([^<]+)<\/task-id>/.exec(second.content!)![1]!
+    const reworded = { kind: 'user' as const, uuid: 'reworded-entry', text: `<task-notification>\n<task-id>${id}</task-id>\n<summary>reworded upstream</summary>\n</task-notification>` }
+    const state = replay([...events.slice(0, 114), reworded])
+    expect(state.decisions.some(d => d.evidence.includes('reworded-entry'))).toBe(false)
+    expect(state.pending.some(i => i.content === first.content)).toBe(true)
+    expect(state.pending.some(i => i.content === second.content)).toBe(true)
+  })
+})
+
 describe('popAll', () => {
   it('removes the popped prompt by logged content and leaves notifications', () => {
     let state = createClaudeQueueState()
@@ -693,9 +750,22 @@ describe('recorded corpus replay', () => {
     // The reported bug's own signature, on the session that exhibits it most
     // heavily (147 background notifications vs 16 agent). Asserted as an exact
     // count, on the fixture where the claim is load-bearing.
-    const state = replay(loadFixture('divergence-stranded-background-commands').events)
-    const stranded = state.pending.filter(i => i.content.includes('Background command'))
+    const events = loadFixture('divergence-stranded-background-commands').events
+    const state = replay(events)
+    // Events 111 and 359 are the first of two same-id twins (#678). Each pair
+    // has ONE dequeue and one committed entry, and that entry carries the
+    // SECOND body; nothing in the recording shows the first leaving. This
+    // assertion used to pass only because id-only matching retired the first
+    // with the second's evidence. They are the recording's own unattributable
+    // residue, and the honest end state is what the idle sweep gives them:
+    // `unconfirmed`, not a live queued row.
+    const neverDeparted = new Set([111, 359].map(i => (events[i] as Extract<FixtureEvent, { kind: 'op' }>).content))
+    const stranded = state.pending.filter(i => i.content.includes('Background command') && !neverDeparted.has(i.content))
     expect(stranded.map(i => i.content.slice(0, 60))).toEqual([])
+    const idle = markStaleWhenIdle(state, true)
+    for (const content of neverDeparted) {
+      expect(idle.pending.find(i => i.content === content)?.stale, content?.slice(0, 60)).toBe(true)
+    }
   })
 
   it('does not over-drain the later cohort when agent completions dominate', () => {
