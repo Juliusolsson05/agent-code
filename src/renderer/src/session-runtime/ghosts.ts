@@ -513,17 +513,33 @@ export function orphanStale(
  * upstream has been visible for a couple of seconds, no renderer
  * still needs the ghost for transition smoothing.
  *
+ * WHY ghosts of the live `currentTurn` are exempt (#730), the same rule
+ * `gcHiddenOrphanGhosts` follows: `ghostsFromSemanticTurn` re-mints any
+ * block of the current turn whose uuid is missing, on every semantic tick.
+ * The superseded marker IS what stops it touching that block, so evicting
+ * it while the turn is still current (a tool running, the next block still
+ * streaming) made the next tick create the same uuid again with no
+ * `supersededBy`. Its committed entry had already been reconciled, so
+ * nothing superseded it twice: 30 s later it orphaned with an `updatedAt`
+ * newer than the JSONL tail and painted as a duplicate of the committed
+ * block. The ghost logs on the author's machine held 3,231 of these
+ * (Codex and Claude, 93% tool_use), each 5–6 s after supersedure. Those
+ * ghosts wait until the turn is no longer current, which bounds them to
+ * one turn's blocks.
+ *
  * Called from the same periodic tick as `orphanStale`.
  */
 export function gcSupersededGhosts(
   prev: ReadonlyMap<string, GhostEntry>,
   now: number,
   gcMs: number,
+  currentTurnId: string | null,
 ): Map<string, GhostEntry> {
   if (prev.size === 0) return prev as Map<string, GhostEntry>
   let next: Map<string, GhostEntry> | null = null
   for (const [uuid, ghost] of prev) {
     if (ghost._atp.supersededBy === undefined) continue
+    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) continue
     if (ghost._atp.updatedAt + gcMs >= now) continue
     if (next === null) next = new Map(prev)
     next.delete(uuid)

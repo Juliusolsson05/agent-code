@@ -522,14 +522,18 @@ export function useIpcSubscriptions(
             // tail) can never render again and would otherwise pin the
             // live-entry trim bound for the rest of the session (#724).
             // Same grace as superseded GC, for the same persistence reason.
+            // Both sweeps spare the live turn's ghosts: ghostsFromSemanticTurn
+            // re-mints any missing block of it on the next tick (#724, #730).
+            const currentTurnId = runtime.semantic.currentTurn?.turnId ?? null
             const nextGhosts = gcHiddenOrphanGhosts(
               gcSupersededGhosts(
                 orphanedGhosts,
                 now,
                 GHOST_SUPERSEDED_GC_MS,
+                currentTurnId,
               ),
               runtime.lastJsonlEntryAt,
-              runtime.semantic.currentTurn?.turnId ?? null,
+              currentTurnId,
               now,
               GHOST_SUPERSEDED_GC_MS,
             )
