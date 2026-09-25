@@ -18,6 +18,11 @@ it('shows no toast for a pane that is no longer in the workspace', () => {
     expect(updateRuntime).not.toHaveBeenCalled()
     result.current('live', 'shown')
     expect(updateRuntime).toHaveBeenCalledWith('live', { paneToast: 'shown' })
+    // Closed while the toast shows: the dismiss must not recreate its row.
+    delete (stateRef.current.sessions as Record<string, unknown>).live
+    updateRuntime.mockClear()
+    vi.runAllTimers()
+    expect(updateRuntime).not.toHaveBeenCalled()
   } finally {
     vi.useRealTimers()
   }

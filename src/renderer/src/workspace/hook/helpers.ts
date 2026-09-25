@@ -250,8 +250,11 @@ export function usePaneToast(
       updateRuntime(sessionId, { paneToast: message })
 
       paneToastTimers.current[sessionId] = setTimeout(() => {
-        updateRuntime(sessionId, { paneToast: null })
         delete paneToastTimers.current[sessionId]
+        // Closed while its toast was showing: clearing it would recreate the
+        // dead pane's runtime row, the other half of the same leak.
+        if (stateRef && !stateRef.current.sessions[sessionId]) return
+        updateRuntime(sessionId, { paneToast: null })
       }, durationMs)
     },
     [paneToastTimers, updateRuntime, stateRef],
