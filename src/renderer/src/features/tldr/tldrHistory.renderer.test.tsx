@@ -9,6 +9,9 @@ import { mergeHistory, ReportHistoryModal } from './ReportHistoryModal'
 import { TldrPane } from './TldrOverlay'
 import { dismissTldr, toggleTldr } from './viewState'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import { useAppStore } from '@renderer/app-state/store'
+import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
+import { ReportHistorySurface } from './surfaces/ReportHistorySurface'
 
 const originalApi = window.api
 afterEach(() => { cleanup(); dismissTldr(); window.api = originalApi })
@@ -203,6 +206,68 @@ describe('Goal history', () => {
     historyApi([at('Reading the store.', 1, 10)], [])
     render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalAgent)} />)
     expect(await screen.findByText('No goal history yet.')).toBeTruthy()
+  })
+
+  it('explains an agent that never had Goal in goal terms', () => {
+    const api = historyApi([])
+    render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({ pane: { cwd: '/project', kind: 'claude' } })} />)
+    expect(screen.getByText('Goal has never been enabled for this agent.')).toBeTruthy()
+    expect(api.readGoalHistory).not.toHaveBeenCalled()
+  })
+})
+
+// #1190 review: the transitions around an open (or reopened) dialog. Both
+// failures were reproduced against the first version of this change.
+describe('Report history across a changing request', () => {
+  const agent = (id: string) => ({ [id]: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] } })
+
+  // A reload/provider switch replaces the session id but carries the
+  // identity (session.ts: the successor inherits `tldrIdentity`, then the
+  // predecessor is deleted). The open request still names the old id.
+  it('keeps showing the conversation’s history when its session is replaced while open', async () => {
+    const api = historyApi([], [at('Add a history view.', 1, 90)])
+    const view = render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('pane'))} />)
+    await screen.findByRole('list', { name: 'Goal history' })
+    view.rerender(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('successor'))} />)
+    expect(screen.queryByText('Goal has never been enabled for this agent.')).toBeNull()
+    expect(screen.getByRole('list', { name: 'Goal history' }).textContent).toContain('Add a history view.')
+    // Still subscribed under the held identity.
+    act(() => api.emitGoal('summary-1'))
+    await waitFor(() => expect(api.readGoalHistory).toHaveBeenCalledTimes(2))
+  })
+
+  it('never shows one request’s list under another request’s title', async () => {
+    historyApi([at('Reading the store.', 1, 10)], [])
+    const view = render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('pane'))} />)
+    await screen.findByText('Reading the store.')
+    // The goal read never settles, so what is on screen right after the
+    // rerender is exactly the frame the user would see before it does.
+    const api = historyApi([at('Reading the store.', 1, 10)])
+    api.readGoalHistory.mockReturnValue(new Promise(() => {}))
+    view.rerender(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('pane'))} />)
+    expect(screen.getByRole('dialog', { name: 'Goal History' })).toBeTruthy()
+    expect(screen.queryByText('Reading the store.')).toBeNull()
+    expect(screen.getByText('Loading…')).toBeTruthy()
+  })
+
+  // The only new wiring #1190 adds: the command's kind → the store → the
+  // surface → the dialog. Every other test stops at one side of it.
+  it('opens the history kind the store was asked for', async () => {
+    const original = useAppStore.getState()
+    try {
+      const api = historyApi([at('Reading the store.', 1, 10)], [at('Add a history view.', 1, 90)])
+      const workspace = { ...workspaceWith(agent('pane')), runtimes: {} } as unknown as Workspace
+      render(<WorkspaceProvider workspace={workspace}><ReportHistorySurface /></WorkspaceProvider>)
+      expect(screen.queryByRole('dialog')).toBeNull()
+      act(() => useAppStore.getState().openReportHistory('pane', 'goal'))
+      expect(await screen.findByRole('list', { name: 'Goal history' })).toBeTruthy()
+      expect(screen.getByRole('dialog', { name: 'Goal History' })).toBeTruthy()
+      expect(api.readTldrHistory).not.toHaveBeenCalled()
+      act(() => useAppStore.getState().closeReportHistory())
+      expect(screen.queryByRole('dialog')).toBeNull()
+    } finally {
+      useAppStore.setState(original, true)
+    }
   })
 })
 

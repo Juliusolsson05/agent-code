@@ -26,10 +26,13 @@ type Props = {
 
 type HistoryRow = TldrHistoryEntry & { kind: 'tldr' | 'goal' }
 
+// Every settled result carries the request it answers (`kind:identity`), and
+// the view renders a result only while it matches the current request. See the
+// comment at `view` below for why this is not a reset inside the effect.
 type Loaded =
   | { state: 'loading' }
-  | { state: 'ready'; entries: HistoryRow[]; unavailable: Array<'tldr' | 'goal'> }
-  | { state: 'error' }
+  | { state: 'ready'; key: string; entries: HistoryRow[]; unavailable: Array<'tldr' | 'goal'> }
+  | { state: 'error'; key: string }
 
 // The per-kind copy. Kept as data beside the component rather than branched
 // through the JSX, so the two dialogs visibly differ ONLY in what they read and
@@ -88,7 +91,23 @@ export function mergeHistory(tldr: TldrHistoryEntry[], goal: TldrHistoryEntry[])
 // fresh history instead of its source's.
 export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }: Props) {
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
-  const identity = sessionId && meta ? tldrIdentityForSession(sessionId, meta) : undefined
+  const resolved = sessionId && meta ? tldrIdentityForSession(sessionId, meta) : undefined
+  // WHY the identity is HELD once resolved (#1190 review): a reload or
+  // provider switch that finishes while this dialog is open deletes the
+  // requested session and creates a successor carrying the same identity. The
+  // request still names the old session id, so re-resolving from it finds no
+  // metadata, and the dialog used to swap the agent's real history for "never
+  // been enabled", which is false. It is still the same conversation, so the
+  // dialog keeps reading the identity it already had. Holding applies only
+  // while the session is GONE: a session that exists but has no identity
+  // really has never reported. The pair is keyed by session id, so retargeting
+  // to another agent never inherits the previous agent's identity.
+  const [held, setHeld] = useState<{ sessionId: SessionId; identity: string } | null>(null)
+  if (sessionId && resolved && (held?.sessionId !== sessionId || held.identity !== resolved)) {
+    setHeld({ sessionId, identity: resolved })
+  }
+  const identity = resolved ?? (sessionId && !meta && held?.sessionId === sessionId ? held.identity : undefined)
+  const requestKey = identity ? `${kind}:${identity}` : null
   const [loaded, setLoaded] = useState<Loaded>({ state: 'loading' })
   const [now, setNow] = useState(Date.now)
   const copy = COPY[kind]
@@ -100,6 +119,7 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
     // change every few minutes, and refetching a goal list on each of them
     // would be pure churn for a list they never appear in.
     const withTldr = kind === 'tldr'
+    const key = `${kind}:${identity}`
     const load = () => {
       // Settled, not all-or-nothing: the two histories are separate files, and
       // one unreadable file must not hide the other. A store deliberately
@@ -114,11 +134,12 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
         // In the goal view only the goal read can fail, so it alone decides
         // "unavailable"; the resolved placeholder above never rejects.
         if (goal.status === 'rejected' && (!withTldr || tldr.status === 'rejected')) {
-          setLoaded({ state: 'error' })
+          setLoaded({ state: 'error', key })
           return
         }
         setLoaded({
           state: 'ready',
+          key,
           entries: mergeHistory(tldr.status === 'fulfilled' ? tldr.value : [], goal.status === 'fulfilled' ? goal.value : []),
           unavailable: [
             ...(tldr.status === 'rejected' ? ['tldr' as const] : []),
@@ -127,7 +148,6 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
         })
       })
     }
-    setLoaded({ state: 'loading' })
     // Subscribe before the first read so an update that lands while the read
     // is in flight still triggers a refresh instead of being lost between them.
     const refresh = (update: { identity: string }) => { if (update.identity === identity) load() }
@@ -140,20 +160,31 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
     return () => { current = false; unsubscribeTldr(); unsubscribeGoal(); window.clearInterval(timer) }
   }, [open, identity, kind])
 
+  // WHY a key match at render time and not `setLoaded(loading)` at the start
+  // of the effect (which is what shipped first): an effect runs AFTER React
+  // commits, so the commit that changes the request still rendered the
+  // previous result. Reopening for another kind or agent showed the old list
+  // under the new title, and TLDR statuses under "Goal History" had no chip,
+  // so they passed for goals. The surface keeps this dialog mounted while
+  // closed, so every reopen took that path (#1190 review). Comparing keys
+  // makes a stale result impossible to render. Reopening the SAME request
+  // still shows its last list while the refresh runs, which is correct data.
+  const view: Loaded = loaded.state !== 'loading' && loaded.key === requestKey ? loaded : { state: 'loading' }
+
   const body = !identity
     ? <p className="text-[12px] text-muted">{copy.neverEnabled}</p>
-    : loaded.state === 'loading'
+    : view.state === 'loading'
       ? <p className="text-[12px] text-muted">Loading…</p>
-      : loaded.state === 'error'
+      : view.state === 'error'
         ? <p className="text-[12px] text-muted">History is unavailable.</p>
-        : loaded.entries.length === 0
-          ? (loaded.unavailable.length > 0 ? null : <p className="text-[12px] text-muted">{copy.empty}</p>)
+        : view.entries.length === 0
+          ? (view.unavailable.length > 0 ? null : <p className="text-[12px] text-muted">{copy.empty}</p>)
           : <ol className="flex flex-col" aria-label={copy.listLabel}>
-              {loaded.entries.map((entry, index) => {
+              {view.entries.map((entry, index) => {
                 const time = tldrTime(Date.parse(entry.writtenAt), now)
                 // "Current" is per kind: the newest goal is still the current
                 // goal even when several status updates were written after it.
-                const current = loaded.entries.findIndex(other => other.kind === entry.kind) === index
+                const current = view.entries.findIndex(other => other.kind === entry.kind) === index
                 // A completion row's text is the completion note (#1182), so
                 // it must never read as a new goal. In the combined view every
                 // goal row gets a chip, because there it is the minority kind
@@ -198,7 +229,7 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          {identity && loaded.state === 'ready' && loaded.unavailable.map(unavailableKind => (
+          {identity && view.state === 'ready' && view.unavailable.map(unavailableKind => (
             <p key={unavailableKind} role="status" className="mb-3 text-[12px] text-muted">{unavailableKind === 'goal' ? 'Goal' : 'TLDR'} history is unavailable.</p>
           ))}
           {body}
