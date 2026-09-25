@@ -524,7 +524,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | # | Surface (file:line at sweep time) | Gap | Target | Status |
 |---|---|---|---|---|
 | K2-1 | Goal-loop overlay (`features/goal-loop/GoalLoopPane.tsx:34,152`; gate `useKeybinds.ts:524-560`) | `role="dialog"`, but the capture gate eats every key except ⎋ and the toggle chord, so Tab, Enter and Space never reach Pause/Resume/Raise cap/Stop; focus is never moved in | let focus-navigation keys through inside the overlay; focus the first action on open; return focus on close | done (verified; gate admits unmodified Tab/Enter/Space inside the overlay; overlay focuses first action, wraps Tab, restores focus) |
-| K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | todo |
+| K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | done (hover counts only if the pointer moved after the focused pane last changed) |
 | K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | todo |
 | K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
 | K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
@@ -828,6 +828,11 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-2 Enter with the mouse parked over another pane:** leave the mouse
+  resting over pane A's composer (with a draft), move to pane B with ⌥↓
+  (B has a draft, focus not in a text field), and press Enter: B's draft
+  sends, not A's. Moving the mouse over A again and pressing Enter still
+  sends A's (unchanged).
 - **K2-1 Goal loop overlay (⌘⇧G on an agent running a loop):** focus lands
   on the first action (Pause/Resume). Tab and Shift+Tab cycle the buttons,
   Enter/Space press them, Escape closes, and focus returns to the composer.
@@ -1499,3 +1504,10 @@ Sharp corners and one light theme.
   outside it reaches no admitted key). Driven through the REAL router harness.
   Confirm-red: the controls test fails with either useKeybinds or GoalLoopPane
   at HEAD; removing the restore fails the focus-return test.
+- 2026-09-25 K2-2: ruling: hover is current iff the last pointermove is newer
+  than the last change of the FOCUSED pane (one monotonic sequence; handles now
+  carry `key: sessionId` because TileLeaf re-registers a fresh object on every
+  change). Keyed on focus changes, not keypresses, so the
+  submit-active-composer command (a keypress) keeps picking what bare Enter
+  picks. Confirm-red: the keyboard-moved test fails on the pre-change
+  registry; the moved-pointer test pins the behaviour the hover rule exists for.

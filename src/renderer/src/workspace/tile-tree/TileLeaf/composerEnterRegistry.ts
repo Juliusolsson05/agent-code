@@ -1,6 +1,10 @@
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 
 export type ComposerEnterTargetHandle = {
+  /** Stable identity across re-registrations (the session id). TileLeaf
+   *  registers a NEW handle object whenever focus or hover changes, so
+   *  object identity cannot say "the focused pane changed"; this can. */
+  key?: string
   focused: boolean
   hovered: boolean
   hasSubmittableDraft: () => boolean
@@ -14,6 +18,26 @@ export type ComposerEnterTargetHandle = {
 
 const targets = new Set<ComposerEnterTargetHandle>()
 let keydownListener: ((event: KeyboardEvent) => void) | null = null
+let pointerListener: (() => void) | null = null
+
+// Is the hover CURRENT? (K2-2)
+//
+// "Hovered wins over focused" (pickTarget) assumed the pointer's position is
+// always the freshest intent. It is not when the KEYBOARD moved the pane
+// focus: after ⌥↓ to pane B with the mouse resting over pane A's composer,
+// Enter submitted A's draft, or nothing if A was empty. A keyboard user got
+// the wrong pane for the most common action in the app, with no pointer
+// involved at all.
+//
+// So hover only counts if the pointer moved AFTER the focused pane last
+// changed. One monotonic sequence orders the two events; timestamps would
+// tie inside one frame. Keying on focus changes and not on keypresses is
+// deliberate: the submit-active-composer COMMAND is itself a keypress, and
+// must pick exactly what bare Enter picks (see submitActiveComposer).
+let sequence = 0
+let lastPointerMove = 0
+let lastFocusMove = 0
+let focusedKey: string | null = null
 
 function targetElement(target: EventTarget | null): HTMLElement | null {
   return target instanceof HTMLElement ? target : null
@@ -67,6 +91,7 @@ function hasOpenKeyboardOwner(): boolean {
 
 function pickTarget(): ComposerEnterTargetHandle | null {
   let focused: ComposerEnterTargetHandle | null = null
+  const hoverIsCurrent = lastPointerMove > lastFocusMove
   for (const target of targets) {
     // WHY hovered wins over focused: the exact failure this registry fixes is
     // "my visible draft is under the pointer, but DOM focus wandered." If the
@@ -78,7 +103,7 @@ function pickTarget(): ComposerEnterTargetHandle | null {
     // once the pointer is over a composer, Enter should apply to that composer
     // or to nothing. Submitting some other focused pane would make hover intent
     // feel like a trap, especially when speech-to-text left a draft elsewhere.
-    if (target.hovered) return target.hasSubmittableDraft() && !target.blocked?.() ? target : null
+    if (target.hovered && hoverIsCurrent) return target.hasSubmittableDraft() && !target.blocked?.() ? target : null
     if (target.blocked?.()) continue
     if (!target.hasSubmittableDraft()) continue
     if (!focused && target.focused) focused = target
@@ -125,6 +150,10 @@ function ensureListener(): void {
     target.submit()
   }
   document.addEventListener('keydown', keydownListener)
+  pointerListener = () => { lastPointerMove = ++sequence }
+  // Capture + passive: it only records that the pointer moved, never
+  // interferes, and must see moves that a child stops.
+  document.addEventListener('pointermove', pointerListener, { capture: true, passive: true })
 }
 
 /**
@@ -164,12 +193,18 @@ export function registerComposerEnterTarget(
   handle: ComposerEnterTargetHandle,
 ): () => void {
   targets.add(handle)
+  if (handle.focused && handle.key !== undefined && handle.key !== focusedKey) {
+    focusedKey = handle.key
+    lastFocusMove = ++sequence
+  }
   ensureListener()
   return () => {
     targets.delete(handle)
     if (targets.size === 0 && keydownListener) {
       document.removeEventListener('keydown', keydownListener)
       keydownListener = null
+      if (pointerListener) document.removeEventListener('pointermove', pointerListener, { capture: true })
+      pointerListener = null
     }
   }
 }

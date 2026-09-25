@@ -745,6 +745,7 @@ export function TileLeaf({
 
   useEffect(() => {
     return registerComposerEnterTarget({
+      key: sessionId,
       focused: interactive,
       hovered: composerHovered,
       blocked: () => paneHasInteractionOwner(inputRef.current),
@@ -763,7 +764,7 @@ export function TileLeaf({
         void submitCurrentDraft('global-enter')
       },
     })
-  }, [interactive, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
+  }, [sessionId, interactive, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
 
   // Auto-send a clicked prompt suggestion. onApplySuggestion prefills the draft
   // and stashes the text in autoSendPendingRef; this effect waits until the
