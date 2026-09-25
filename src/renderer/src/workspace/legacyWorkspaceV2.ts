@@ -210,14 +210,27 @@ export function legacyMemberships(
     }
   }
 
-  for (const record of Object.values(input.detachedSessions ?? {})) {
-    if (!record || out.has(record.sessionId)) continue
-    if (!liveProjectIds.has(record.projectTabId)) continue
-    if (!hasSessionMeta(input.sessions, record.sessionId)) continue
-    out.set(record.sessionId, {
-      projectId: record.projectTabId,
-      joinedAt: Number.isFinite(record.detachedAt) ? record.detachedAt : 0,
-    })
+  // A damaged ENTRY (null, or no sessionId) still names its session: the
+  // record is keyed by session id. Dropping it made the agent unowned, and the
+  // migration then deleted it, and the next autosave made that permanent (one
+  // agent per damaged entry on the owner's real workspace, #1245 review). It
+  // is re-homed to the active project instead, the way rule 9 re-homes parked
+  // rows; only its placement was lost, never the agent.
+  const rehomeProjectId = liveProjectIds.has(input.activeTabId ?? '') ? input.activeTabId! : tabs[0]?.id
+  for (const [key, record] of Object.entries(input.detachedSessions ?? {})) {
+    const intact = record !== null && typeof record === 'object' && typeof record.sessionId === 'string'
+    const sessionId = intact ? record.sessionId : key
+    if (out.has(sessionId)) continue
+    if (!hasSessionMeta(input.sessions, sessionId)) continue
+    if (intact) {
+      if (!liveProjectIds.has(record.projectTabId)) continue
+      out.set(sessionId, {
+        projectId: record.projectTabId,
+        joinedAt: Number.isFinite(record.detachedAt) ? record.detachedAt : 0,
+      })
+    } else if (rehomeProjectId !== undefined) {
+      out.set(sessionId, { projectId: rehomeProjectId, joinedAt: 0 })
+    }
   }
 
   for (const record of input.buried ?? []) {

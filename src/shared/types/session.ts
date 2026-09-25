@@ -163,6 +163,19 @@ export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
  *  surface. The raw error stays in main's performance journal. */
 export const SESSION_START_FAILED_MESSAGE = 'Session failed to start. Check provider setup and retry.'
 
+/** How MissingWorkspaceDirectoryError's message starts, shared so the
+ *  renderer can recognise it on the far side of IPC.
+ *
+ *  WHY a message prefix and not an error code: `ipcRenderer.invoke` relays
+ *  only the message (wrapped as "Error invoking remote method '…': …"); the
+ *  class, name and any custom field are lost. This is the one start failure
+ *  whose text main deems safe to show (see workspaceDirectory.ts), and the
+ *  one a retry can never fix, so Undo Close must tell it apart from a
+ *  provider failure (#1264 review B, R2-1). Changing the text in one place
+ *  and not the other would silently turn a deleted worktree back into a
+ *  poisoned undo-stack head; sharing the constant prevents that drift. */
+export const MISSING_WORKSPACE_FOLDER_PREFIX = 'Workspace folder is missing: '
+
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
   | 'cancelled'
@@ -591,6 +604,13 @@ export interface AgentSession extends AgentSessionEmitter {
    *  same content-match signal the desktop composer uses. Returns '' when the
    *  headless instance isn't up yet. */
   snapshotScreen?(): string
+
+  /** Optional (Claude today): the screen and the composer's cell-attribute
+   *  counts read from the LIVE buffer at the same instant (#1291/#1309). Not
+   *  the per-frame cached classification the prompt gate uses: the delivery
+   *  rollback verifies its own keystroke 25 ms later, faster than that cache
+   *  moves. Null when the headless instance isn't up. */
+  readComposer?(): { screen: string; attributes: { dim: number; inverse: number; plain: number } | null } | null
 
   /**
    * Optional (Claude today): arm an authoritative prompt-acceptance waiter

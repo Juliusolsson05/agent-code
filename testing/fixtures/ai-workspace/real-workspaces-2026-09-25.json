@@ -1,0 +1,51 @@
+{
+ "source": "Two real workspaces from the owner's ~/.config/agent-code/ai-workspaces.json (13 workspaces, 2026-09-25): workspace/entry ids, timestamps and entry status objects verbatim; names, descriptions and titles replaced by '[redacted ...]' markers and file paths by /redacted/... (private project paths and file names). scope, metadata and git fields omitted.",
+ "state": {
+  "workspaces": [
+   {
+    "workspaceId": "a6bbebdd-b72a-43e0-aaef-1dc3784f4e4e",
+    "name": "[redacted name 23 chars]",
+    "createdAt": "2026-05-17T12:09:23.402Z",
+    "updatedAt": "2026-05-17T12:09:28.321Z",
+    "entries": [
+     {
+      "entryId": "db24406b-f7f2-4b39-8950-db0c54e9dcf8",
+      "path": "/redacted/workspace-0/file-0.md",
+      "title": "[redacted title 23 chars]",
+      "attachedAt": "2026-05-17T12:09:28.321Z",
+      "status": {
+       "exists": true,
+       "readable": true,
+       "staleReason": null,
+       "size": 972,
+       "mtimeMs": 1778595326040.6665
+      }
+     }
+    ],
+    "description": "[redacted description 61 chars]"
+   },
+   {
+    "workspaceId": "9709d6b4-19b6-4452-8689-912fff4f3853",
+    "name": "[redacted name 25 chars]",
+    "createdAt": "2026-05-17T16:24:35.006Z",
+    "updatedAt": "2026-05-17T16:24:44.160Z",
+    "entries": [
+     {
+      "entryId": "8ae14923-c9a6-4ea0-9cd4-7e600d5ccf0d",
+      "path": "/redacted/workspace-1/file-0.md",
+      "title": "[redacted title 20 chars]",
+      "attachedAt": "2026-05-17T16:24:44.104Z",
+      "status": {
+       "exists": true,
+       "readable": true,
+       "staleReason": null,
+       "size": 10547,
+       "mtimeMs": 1779034879695.2463
+      }
+     }
+    ],
+    "description": "[redacted description 82 chars]"
+   }
+  ]
+ }
+}

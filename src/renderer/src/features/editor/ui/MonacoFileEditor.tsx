@@ -342,6 +342,16 @@ export function MonacoFileEditor({
           const unregisterContext = registerEditorLspContext(clientUri, {
             workspaceRoot: lspContext.workspaceRoot,
             openDefinition: lspContext.openDefinition,
+            // #1208: after a server loss, this mount's own open, sent again
+            // with the same (current) authorization for main to re-check.
+            reopen: content => window.api.reopenLspDocument({
+              clientUri,
+              content,
+              language: currentFile.language,
+              workspaceRoot: lspContext.workspaceRoot,
+              filePath: lspContext.filePath,
+              authorization: lspContext.authorization,
+            }),
           })
           markEditorLspModelSynced(clientUri, openedVersion)
           const closeLsp = () => {

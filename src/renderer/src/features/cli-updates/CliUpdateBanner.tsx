@@ -44,7 +44,7 @@ type BannerEntry = {
   undismissable?: boolean
 }
 
-function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry | null {
+export function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry | null {
   const label = cli === 'claude' ? 'Claude Code' : 'Codex'
   switch (state.kind) {
     case 'updating':
@@ -122,9 +122,27 @@ function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry |
           },
         },
       }
+    case 'deferred':
+      // Automatic deferrals stay silent ("we'll do it later" needs no
+      // banner). A deferral of the user's own click is answered (#1243):
+      // before, the banner simply vanished with no update and no reason.
+      if (!state.requestedByUser) return null
+      // Closing the agents does NOT start the update by itself (#1265
+      // review B): nothing re-probes until the next launch. So the row keeps
+      // the same Update now action; with the agents closed it runs, and with
+      // any still open it lands back here.
+      return {
+        tone: 'info',
+        text: `${label} ${state.wantedLatest} is ready, but ${label} agents are running. Close them, then choose Update now (now ${state.from}).`,
+        action: {
+          label: 'Update now',
+          onClick: () => {
+            void window.api.cliUpdatesUpdateNow(cli)
+          },
+        },
+      }
     case 'idle':
     case 'up-to-date':
-    case 'deferred':
     default:
       return null
   }
