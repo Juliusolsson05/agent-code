@@ -247,6 +247,17 @@ export type RecordedPaneOptions = {
    * what is under test, not its 25 s duration.
    */
   portConflict?: true
+  /**
+   * Launch DARK and let the path turn up later (#1114, #1117): the launch
+   * could not resolve OpenCode's database path, so the durable channel starts
+   * closed and the package retries `resolveOpencodeDbPath` on this ladder.
+   * The fresh database is still created and written by the replay, exactly as
+   * the TUI keeps committing to it while the pane cannot read it. The test
+   * controls when the resolver starts answering (it mocks the package's
+   * `resolveOpencodeDbPath`, which the session wires itself and a caller
+   * cannot override through `headlessOptions`).
+   */
+  lateDatabase?: { retryDelaysMs: readonly number[] }
 }
 
 export type RecordedPane = MountedPane & {
@@ -327,6 +338,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       const ownWriter = new LiveFixtureWriter(dbPath, recording.sessionID, sessionRowFor(recording.sessionID))
       scope.onCleanup(() => ownWriter.close())
       writer = ownWriter
+      if (options.lateDatabase) dbPathError = 'opencode db path exited with code 1'
     } else if (typeof options.database === 'string') {
       dbPath = options.database
     } else {
@@ -355,7 +367,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
         env: launchOptions.env,
         sessionID: launchOptions.sessionID,
         server: { url: server.url, username: USERNAME, password: PASSWORD },
-        dbPath,
+        dbPath: options.lateDatabase ? null : dbPath,
         ...(dbPathError ? { dbPathError } : {}),
       }),
       // Heartbeat off: its periodic activity re-publish is not in any
@@ -363,6 +375,7 @@ export function opencodeTerminalPanes(scope: OpencodeTerminalScope) {
       headlessOptions: {
         fetch: nodeHttpFetch, heartbeatMs: 0, durablePollIntervalMs: 40, sseInitialBackoffMs: 20, sseMaxBackoffMs: 80,
         ...(options.portConflict ? { liveConnectDeadlineMs: 250 } : {}),
+        ...(options.lateDatabase ? { dbPathRetryDelaysMs: options.lateDatabase.retryDelaysMs } : {}),
       },
     })
 
