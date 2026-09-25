@@ -65,7 +65,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // pane underneath the command center.
   const commandSessionId = commandTargetSessionId(workspace)
   const cwd = commandSessionId ? workspace.state.sessions[commandSessionId]?.cwd ?? null : null
-  const { response, loading, error, needsPane, loadMore } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
+  const { response, loading, error, needsPane, loadMore, stale } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
   const rows = response?.rows ?? []
 
   useEffect(() => {
@@ -171,6 +171,18 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   }, [onClose, workspace])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // While the rows on screen answer an OLDER query, scope or filter, the
+    // keyboard must not act on them (#1297 review A): Enter resumed a row the
+    // new scope excludes, and an arrow press moved the highlight onto a row
+    // the arriving page then replaced, so Enter resumed a conversation the
+    // user never highlighted. The debounce plus the request is ~120 ms+; the
+    // reset to row 0 (below) already happened when the parameters changed,
+    // so the new page arrives highlighted at its own head. A mouse click on
+    // a visible row is still a deliberate choice and stays allowed.
+    if (stale && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || (e.key === 'Enter' && !focusedControlOwnsEnter(e.target)))) {
+      e.preventDefault()
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setSelected(i => Math.min(rows.length - 1, i + 1))
@@ -191,7 +203,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       const row = rows[selected]
       if (row) void resume(row)
     }
-  }, [rows, selected, resume, loadMore])
+  }, [rows, selected, resume, loadMore, stale])
 
   const previewTarget: PreviewTarget | null = useMemo(() => {
     const row = rows[selected]

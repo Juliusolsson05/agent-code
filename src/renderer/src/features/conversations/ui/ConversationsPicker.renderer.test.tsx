@@ -71,12 +71,12 @@ describe('ConversationsPicker', () => {
     const onClose = vi.fn()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
     await screen.findByText('break down this project')
-    // findByText resolves when the rows PAINT, but the picker resets the
-    // highlight in a passive effect keyed on the list head, and that effect
-    // can still be pending. In CI (run for #1266, 0c962aaa) it flushed after
-    // the ArrowDown below, so Enter resumed row 0. Flush it first, and
-    // confirm the arrow landed before pressing Enter. (Ordering, not a wider
-    // timeout: the 1 s waitFor never had a chance to see the right call.)
+    // findByText resolves when the rows PAINT. When this was written the
+    // picker reset the highlight in a passive effect that could still be
+    // pending; in CI (run for #1266, 0c962aaa) it flushed after the ArrowDown
+    // below, so Enter resumed row 0. Since #1297 the reset runs during render,
+    // so the flush is belt-and-braces; confirming the arrow landed before
+    // Enter is what makes the assertion honest. (No timeout was widened.)
     await act(async () => {})
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
     await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
@@ -243,5 +243,64 @@ describe('ConversationsPicker', () => {
     await act(async () => { useProviderEnablementStore.setState({ enabledKinds: new Set(useProviderEnablementStore.getState().enabledKinds) }) })
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', expect.objectContaining({ kind: 'codex' })))
+  })
+
+  // #1297 review A: while a new scope or query loads, the rows on screen
+  // answer the OLD parameters, and the keyboard must not act on them.
+  function heldList() {
+    const pending: Array<() => void> = []
+    const list = install(vi.fn(async (request: { scope?: string; query?: string }) => {
+      if (request.scope === 'everywhere' || request.query) {
+        await new Promise<void>(resolve => { pending.push(resolve) })
+        // The new page keeps row 0 but has a DIFFERENT row 1.
+        return response({ rows: [rows[0]!, row({ provider: 'codex', nativeId: 'different-row-1', label: 'a different conversation', labelSource: 'first-prompt' })] })
+      }
+      return response()
+    }))
+    return { list, release: () => pending.splice(0).forEach(resolve => resolve()) }
+  }
+
+  it('does not resume a row from the old scope while the new scope loads', async () => {
+    const { list, release } = heldList()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await act(async () => {})
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    release()
+    await screen.findByText('a different conversation')
+  })
+
+  it('does not carry an arrow press on old rows over to the new page', async () => {
+    const { list, release } = heldList()
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    release()
+    const different = await screen.findByText('a different conversation')
+    expect(different.closest('[data-conversation-index]')).toHaveAttribute('aria-selected', 'false')
+    expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  // #1297 review B: pin that the reset still HAPPENS on a new query, and does
+  // not happen when loadMore only appends.
+  it('moves the highlight back to row 0 for a new query', async () => {
+    const { list, release } = heldList()
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    await act(async () => {})
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'something' } })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true'))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'something' })))
+    release()
+    await screen.findByText('a different conversation')
+    expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
   })
 })
