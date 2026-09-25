@@ -21,7 +21,11 @@ const at = (label: string) => recording.events.find(event => event.label === lab
 const headlesses: CodexHeadless[] = []
 afterEach(() => { headlesses.splice(0) })
 
-async function sessionAt(until: number): Promise<{ session: CodexSession; headless: CodexHeadless }> {
+async function sessionWith(bytes: string[]): Promise<{ session: CodexSession; headless: CodexHeadless }> {
+  return sessionAt(Number.POSITIVE_INFINITY, bytes)
+}
+
+async function sessionAt(until: number, bytes?: string[]): Promise<{ session: CodexSession; headless: CodexHeadless }> {
   const listeners = new Set<(data: string) => void>()
   const pty = {
     pid: 1, process: 'codex', cols: recording.cols, rows: recording.rows, handleFlowControl: false,
@@ -33,9 +37,8 @@ async function sessionAt(until: number): Promise<{ session: CodexSession; headle
   headlesses.push(headless)
   const terminal = (headless as unknown as { terminal: { attach(): void; snapshotComposerCells(): unknown } }).terminal
   terminal.attach()
-  for (const event of recording.events) {
-    if (event.dir === 'out' && event.t < until) for (const listener of listeners) listener(event.data!)
-  }
+  const chunks = bytes ?? recording.events.filter(event => event.dir === 'out' && event.t < until).map(event => event.data!)
+  for (const chunk of chunks) for (const listener of listeners) listener(chunk)
   const deadline = Date.now() + 2000
   while (terminal.snapshotComposerCells() === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
   const session = new CodexSession()
@@ -73,6 +76,36 @@ describe('Codex native composer (0.157 recording)', () => {
     const cleared = await sessionAt(at('ctrl-c-2'))
     ;(drafted.session as unknown as { headless: unknown }).headless = cleared.headless
     ;(drafted.session as unknown as { publishNativeComposer(): void }).publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
+  })
+
+  // Steering q40: a draft longer than the package's 12-row composer bound
+  // reads `unknown`, while the legacy screen check still sees `›` over a
+  // status row. `unknown` must not be ready: the paste would land in the
+  // human's draft.
+  const longDraft = ['\x1b[2J\x1b[H› ', ...Array.from({ length: 12 }, () => '  real draft'), '', '  GPT-6-Sol high fast · ~/p'].join('\r\n')
+
+  it('does not write into a draft the composer reading cannot classify', async () => {
+    const { session, headless } = await sessionWith([longDraft])
+    expect(headless.getComposerState()).toBe('unknown')
+    const write = vi.fn(() => true)
+    expect(await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Status?', write } as never))
+      .toMatchObject({ ok: false, stage: 'before-write', disposition: 'retry-after-resolve', promptWritten: false })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('withdraws ready when the composer becomes unclassifiable, without latching occupied', async () => {
+    const readiness: Array<{ ready: boolean; reason?: string }> = []
+    const idle = await sessionAt(at('type-draft'))
+    const session = idle.session as unknown as { composerReady: boolean; headless: unknown; publishNativeComposer(): void; on: CodexSession['on'] }
+    idle.session.on('input-readiness', state => readiness.push(state))
+    session.composerReady = true
+    session.publishNativeComposer()
+    session.headless = (await sessionWith([longDraft])).headless
+    session.publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: false, reason: 'provider-not-ready' })
+    session.headless = idle.headless
+    session.publishNativeComposer()
     expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 })
