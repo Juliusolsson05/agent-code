@@ -520,6 +520,28 @@ describe('#924 fix pass — a busy server is not a wedged one', () => {
     }
   })
 
+  it('lets a tab close through while one of its requests is unanswered', async () => {
+    // Review round 1 (Pi, 5): closing is the third intent besides change and
+    // open, and the user-visible one when a tab is closed mid-hover. It rides
+    // the same fan-out, but nothing closed a document with a request in
+    // flight, so a close that stopped waking the request would wait 15 s.
+    vi.useFakeTimers()
+    try {
+      const { manager } = managerWithServer({ sendRequest: async () => await new Promise(() => {}) })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'text' })
+      const hover = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(1)
+      let closed = false
+      const close = manager.closeDocument('inmemory://a').then(() => { closed = true })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(closed).toBe(true)
+      await expect(hover).resolves.toBeNull()
+      await close
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps no intent bookkeeping for a first open that failed', async () => {
     // Review round 2 (reproduced as written): the shared intent counter was
     // bumped before the server document existed, so a first open whose
