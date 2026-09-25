@@ -14,6 +14,7 @@ import {
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
+import { flushJsonl } from '@main/sessions/jsonlCoalescer.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
 import type {
   SessionKillOptions,
@@ -370,8 +371,20 @@ export function registerSessionIpc(
             })
           }
         : undefined
-      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId,
+      const result = await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId,
         options?.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : undefined)
+      // ORDER BARRIER (#1181): send the committed rows before the answer.
+      // Claude's acceptance IS main seeing the prompt's JSONL line, and that
+      // line is buffered in the JSONL coalescer and sent on the next
+      // setImmediate. The reply to this invoke would otherwise overtake it,
+      // because the await above resumes in a microtask. The renderer removes
+      // its pending "Sending…" row the moment the reply lands. Without this
+      // flush the prompt blinked out of the feed until the batch arrived
+      // (PR #1183 review, Claude 1). Both messages then travel the same
+      // renderer channel in this order. Flushing early costs nothing: it is
+      // the same batch, just sent now, and an empty buffer is a no-op.
+      flushJsonl(sessionId)
+      return result
     },
   )
 
