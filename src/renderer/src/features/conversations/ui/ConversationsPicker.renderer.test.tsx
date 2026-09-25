@@ -287,6 +287,28 @@ describe('ConversationsPicker', () => {
     expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
   })
 
+  // #1297 review C1: the pointer can move the highlight during the wait too.
+  // A hover over an old row used to stick when the new page kept the same
+  // head, so Enter resumed whatever replaced that index.
+  it('does not carry a hover on old rows over to the new page', async () => {
+    const { list, release } = heldList()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    const hovered = screen.getByText('break down this project').closest('[data-conversation-index]')!
+    fireEvent.mouseEnter(hovered)
+    // While stale the highlight does not follow the pointer at all.
+    expect(hovered).toHaveAttribute('aria-selected', 'false')
+    release()
+    const different = await screen.findByText('a different conversation')
+    expect(different.closest('[data-conversation-index]')).toHaveAttribute('aria-selected', 'false')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalled())
+    expect(ws.replaceSession).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ resumeSessionId: 'different-row-1' }))
+  })
+
   // #1297 review B: pin that the reset still HAPPENS on a new query, and does
   // not happen when loadMore only appends.
   it('moves the highlight back to row 0 for a new query', async () => {

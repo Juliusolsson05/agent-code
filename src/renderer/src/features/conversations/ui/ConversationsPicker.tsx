@@ -97,8 +97,18 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // (React's "adjust state when a prop changes") removes the dependence on
   // that React internal: the first paint of a new head already highlights
   // row 0.
+  //
+  // `stale` is in the key too (#1297 review C1): the reset must happen again
+  // when the fresh page LANDS, not only when the parameters change. Anything
+  // that moved the highlight in between pointed at an old row; a new page
+  // that keeps the same head would otherwise keep that index, and Enter
+  // resumed whatever replaced it. loadMore only appends to a fresh list, so
+  // it never flips `stale` and paging keeps the highlight. Today the pointer
+  // is the one thing that could move it (the key guard below stops keys, and
+  // the row's onHover ignores a stale list); this reset is the backstop for
+  // any path added later, not the only guard.
   const headId = response?.rows[0]?.nativeId ?? null
-  const highlightResetKey = JSON.stringify([headId, query, scope, providers.join(','), includeChildren])
+  const highlightResetKey = JSON.stringify([headId, query, scope, providers.join(','), includeChildren, stale])
   const [lastHighlightResetKey, setLastHighlightResetKey] = useState(highlightResetKey)
   if (highlightResetKey !== lastHighlightResetKey) {
     setLastHighlightResetKey(highlightResetKey)
@@ -279,7 +289,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             ) : rows.length === 0 && !loading && !error ? (
               <div className="py-12 text-center text-[12px] text-muted">{query.trim() ? `No conversations match "${query.trim()}".` : 'No conversations recorded for this scope.'}</div>
             ) : rows.map((row, i) => (
-              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} onHover={() => setSelected(i)} onSelect={() => void resume(row)} />
+              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} onHover={() => { if (!stale) setSelected(i) }} onSelect={() => void resume(row)} />
             ))}
           </div>
           <div onMouseDown={splitter.onMouseDown} className={`w-1 flex-shrink-0 cursor-col-resize ${splitter.dragging ? 'bg-accent' : 'bg-border hover:bg-border-hi'}`} />
