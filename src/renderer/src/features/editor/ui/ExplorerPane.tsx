@@ -773,7 +773,13 @@ export function ExplorerPane({
           aria-label={menu.entry ? `Actions for ${menu.entry.name}` : 'Explorer actions'}
           // Popover chrome (plan M4/T1): popover colours + theme shadow, like
           // every other floating menu, instead of surface + shadow-lg.
-          className="fixed z-30 min-w-[160px] rounded-float overflow-hidden border border-popover-border bg-popover-bg py-1 shadow-[0_8px_24px_var(--theme-shadow-color)]"
+          // z-[1150], the DropdownMenu band (UI pass, G-16): at z-30 this was the
+          // only floating menu BELOW the z-40 pane overlays (placement scrim,
+          // dictation chip). Not moved onto DropdownMenu itself: it opens at the
+          // pointer or the tree row (Shift+F10), which Radix DropdownMenu can
+          // only fake with a virtual anchor, and its own roving focus, Escape
+          // and Tab-closes behaviour are already keyboard-complete (M4).
+          className="fixed z-[1150] min-w-[160px] rounded-float overflow-hidden border border-popover-border bg-popover-bg py-1 shadow-[0_8px_24px_var(--theme-shadow-color)]"
           style={{ left: menu.x, top: menu.y }}
           onMouseDown={event => event.stopPropagation()}
           onBlur={event => {
