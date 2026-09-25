@@ -6,6 +6,7 @@ import { parseClaudeComposerState } from 'claude-code-headless'
 import {
   isPasteLike,
   pollClaudeImagesAbsorbed,
+  pasteTailNeedle,
   pollPasteAbsorbed,
 } from '@shared/claude/pasteConfirm.js'
 import type { PromptAcceptanceOutcome, PromptReadinessOutcome } from '@shared/types/session.js'
@@ -235,13 +236,24 @@ async function deliverClaudeImagePrompt(
         message: `Could not write image prompt text to session ${io.sessionId}`,
       })
     }
-    const textAbsorbed = await pollPasteAbsorbed(
-      () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
-      {
-        timeoutMs: remainingBudget(deliveryDeadlineAt, CONFIRM_TIMEOUT_MS),
-        pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
-      },
-    )
+    // WHY a whitespace-only prompt skips the wait: it has no visible tail
+    // (`pasteTailNeedle` is null), and a raw write this short never collapses
+    // into a `[Pasted text #N]` placeholder, so neither absorption signal can
+    // ever fire. Waiting would be a guaranteed 5 s timeout, and the rollback
+    // after it can never see our bytes either (a lone space reads as an empty
+    // composer), so a " " + image send that main delivered became a permanent
+    // do-not-retry failure (#1226 review). Skipping is safe for the reason
+    // the wait exists: whitespace cannot carry an `[Image #N]` literal, so
+    // it cannot move the image baseline below.
+    const textAbsorbed = pasteTailNeedle(io.prompt) === null
+      ? { kind: 'absorbed' as const }
+      : await pollPasteAbsorbed(
+        () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
+        {
+          timeoutMs: remainingBudget(deliveryDeadlineAt, CONFIRM_TIMEOUT_MS),
+          pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
+        },
+      )
     if (textAbsorbed.kind !== 'absorbed') {
       // Same stranded-bytes hazard as the text-only path (#679). Only the
       // TEXT has been written at this point — the image paths follow below —

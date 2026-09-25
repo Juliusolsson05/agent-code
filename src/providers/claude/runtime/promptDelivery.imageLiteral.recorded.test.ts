@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { deliverClaudePrompt } from './promptDelivery.js'
 import type { PromptDeliveryIo } from '@shared/types/providerConfig.js'
@@ -87,4 +87,91 @@ describe('a short image prompt that names an image in its text (#1119)', () => {
     await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
     expect(writes.at(-1)).toBe('\r')
   }, 20_000)
+})
+
+// The #1226 review found the new text wait had two holes that nothing
+// covered: a prompt with no visible text can never confirm, and the
+// timeout/rollback branch the wait makes reachable for EVERY short image
+// prompt had zero tests (deleting it outright left the suite green). These
+// drive the same recorded frame through each shape.
+
+/** A scripted screen: `frameFor` sees every write so far and picks the frame. */
+function scripted(prompt: string, frameFor: (writes: string[]) => string): {
+  io: PromptDeliveryIo; writes: string[]
+} {
+  const writes: string[] = []
+  const io = {
+    sessionId: 'recorded',
+    prompt,
+    imagePaths: ['/tmp/agent-code/recorded-0.png'],
+    write: (data: string) => { writes.push(data); return true },
+    session: {
+      snapshotScreen: () => frameFor(writes),
+      armPromptAcceptance: () => ({
+        promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 1 }),
+        cancel: vi.fn(),
+      }),
+    },
+  } as unknown as PromptDeliveryIo
+  return { io, writes }
+}
+
+const idle = (): string => fixture.deliveries.wrapped.baseline.screen
+
+describe('short image prompts around the text wait (#1226 review)', () => {
+  it('delivers a whitespace-only prompt with an image instead of timing out', async () => {
+    // A lone space has nothing to see, so a wait on it could only time out,
+    // and the rollback cannot see it either: the send used to end in a
+    // permanent do-not-retry. main delivered this shape; so must we.
+    const { io, writes } = scripted(' ', w =>
+      w.some(d => d.includes('.png')) ? frameShowing('[Image #1]') : idle())
+    const started = Date.now()
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
+    // No 5 s wait was burned before the image went in.
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(writes[0]).toBe(' ')
+    expect(writes.at(-1)).toBe('\r')
+  }, 20_000)
+
+  it('writes no second separator after a prompt that already ends in whitespace', async () => {
+    const prompt = 'fix this '
+    const { io, writes } = scripted(prompt, w => {
+      if (w.some(d => d.includes('.png'))) return frameShowing('fix this [Image #1]')
+      return w.includes(prompt) ? frameShowing('fix this') : idle()
+    })
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
+    // Raw text (not bracketed), then the image paste directly, then Enter.
+    expect(writes).toHaveLength(3)
+    expect(writes[0]).toBe(prompt)
+    expect(writes[1]).toContain('/tmp/agent-code/recorded-0.png')
+    expect(writes[2]).toBe('\r')
+  }, 20_000)
+
+  describe('when the text never fully paints', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it('rolls the text back and reports a safe retry, with no image and no Enter', async () => {
+      // The composer shows only part of the text, so the tail never appears
+      // and the wait times out, but the bytes are visibly ours. Rollback
+      // must kill them and the result must say "not sent, safe to retry":
+      // the goal loop, MCP and the renderer all branch on that disposition.
+      vi.useFakeTimers()
+      const { io, writes } = scripted('fix this', w =>
+        w.includes('\x15') ? idle() : w.includes('fix this') ? frameShowing('fix th') : idle())
+      const delivery = deliverClaudePrompt(io)
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(delivery).resolves.toMatchObject({
+        ok: false,
+        stage: 'absorption',
+        code: 'absorption-timeout',
+        retrySafe: true,
+        disposition: 'retry-same-session',
+        promptWritten: false,
+        enterWritten: false,
+      })
+      expect(writes).toContain('\x15')
+      expect(writes.some(d => d.includes('.png'))).toBe(false)
+      expect(writes).not.toContain('\r')
+    })
+  })
 })
