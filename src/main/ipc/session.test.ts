@@ -231,3 +231,104 @@ describe('session:get-screen-debug (#762)', () => {
     }
   })
 })
+
+// #1311 review: raw PTY attaches now outlive the provider process, so they are
+// owned by the renderer page that took them. A reload or a crash never runs
+// the leaf cleanup; its references are released for it.
+describe('raw PTY attach ownership (#1311)', () => {
+  it('releases a page\'s attaches when it reloads or dies, and ignores its late detach', () => {
+    const detached: string[] = []
+    const manager = Object.assign(new EventEmitter(), {
+      attachAgentPty: (sessionId: string) => (sessionId === 'no-backend' ? null : 'replay'),
+      detachAgentPty: (sessionId: string) => { detached.push(sessionId) },
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    const attach = harness.handlers.get('session:agent-pty-attach')!
+    const detach = harness.handlers.get('session:agent-pty-detach')!
+    const announce = harness.handlers.get('session:screen-document')!
+    const sender = Object.assign(new EventEmitter(), { id: 5151 })
+
+    announce({ sender }, 'doc-1')
+    attach({ sender }, 'pane', 'doc-1')
+    attach({ sender }, 'no-backend', 'doc-1')
+    // Re-announcing the live document keeps everything.
+    announce({ sender }, 'doc-1')
+    expect(detached).toEqual([])
+    // A reload: the old page's one real reference is released for it.
+    announce({ sender }, 'doc-2')
+    expect(detached).toEqual(['pane'])
+    // The dead page's late detach must not take the new page's reference.
+    detach({ sender }, 'pane', 'doc-1')
+    expect(detached).toEqual(['pane'])
+
+    attach({ sender }, 'pane', 'doc-2')
+    sender.emit('destroyed')
+    expect(detached).toEqual(['pane', 'pane'])
+  })
+
+  it('passes an ordinary detach through once per attach', () => {
+    const detached: string[] = []
+    const manager = Object.assign(new EventEmitter(), {
+      attachAgentPty: () => 'replay',
+      detachAgentPty: (sessionId: string) => { detached.push(sessionId) },
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    const sender = Object.assign(new EventEmitter(), { id: 5252 })
+    harness.handlers.get('session:screen-document')!({ sender }, 'doc')
+    harness.handlers.get('session:agent-pty-attach')!({ sender }, 'pane', 'doc')
+    harness.handlers.get('session:agent-pty-detach')!({ sender }, 'pane', 'doc')
+    harness.handlers.get('session:agent-pty-detach')!({ sender }, 'pane', 'doc')
+    expect(detached).toEqual(['pane'])
+  })
+
+  // #1311 round 2 (review A): a reload can reuse the webContents id, so the
+  // sender alone cannot tell the old page's queued detach from the new
+  // page's. The page document says which page sent it.
+  it('ignores a delayed detach from the previous document after the new one attached', () => {
+    const detached: string[] = []
+    const attached: string[] = []
+    const manager = Object.assign(new EventEmitter(), {
+      attachAgentPty: (sessionId: string) => { attached.push(sessionId); return 'replay' },
+      detachAgentPty: (sessionId: string) => { detached.push(sessionId) },
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    const attach = harness.handlers.get('session:agent-pty-attach')!
+    const detach = harness.handlers.get('session:agent-pty-detach')!
+    const announce = harness.handlers.get('session:screen-document')!
+    const sender = Object.assign(new EventEmitter(), { id: 5353 })
+
+    announce({ sender }, 'doc-a')
+    attach({ sender }, 'pane', 'doc-a')
+    announce({ sender }, 'doc-b')
+    expect(detached).toEqual(['pane'])
+    attach({ sender }, 'pane', 'doc-b')
+    // Page A's detach, queued before the reload, arrives now.
+    detach({ sender }, 'pane', 'doc-a')
+    expect(detached).toEqual(['pane'])
+    // And a stale attach from page A takes no reference at all.
+    expect(attach({ sender }, 'other', 'doc-a')).toBeNull()
+    expect(attached).toEqual(['pane', 'pane'])
+    detach({ sender }, 'pane', 'doc-b')
+    expect(detached).toEqual(['pane', 'pane'])
+  })
+
+  // Review A mutation: two views of one session on one page (a Spotlight
+  // remount, a duplicate leaf) hold two references.
+  it('counts overlapping attaches of one session on one page', () => {
+    const detached: string[] = []
+    const manager = Object.assign(new EventEmitter(), {
+      attachAgentPty: () => 'replay',
+      detachAgentPty: (sessionId: string) => { detached.push(sessionId) },
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    const sender = Object.assign(new EventEmitter(), { id: 5454 })
+    harness.handlers.get('session:screen-document')!({ sender }, 'doc')
+    harness.handlers.get('session:agent-pty-attach')!({ sender }, 'pane', 'doc')
+    harness.handlers.get('session:agent-pty-attach')!({ sender }, 'pane', 'doc')
+    harness.handlers.get('session:agent-pty-detach')!({ sender }, 'pane', 'doc')
+    expect(detached).toEqual(['pane'])
+    sender.emit('destroyed')
+    expect(detached).toEqual(['pane', 'pane'])
+  })
+})
+
