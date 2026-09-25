@@ -536,6 +536,14 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (11:25) — **No merges this cycle:** 13 PRs are queued or running, and so is main's check of #1258 + #1264.
+  - #1261 flaked a fourth time (#1286) and was re-run. #1300, which fixes it, merges first once green.
+  - **New PRs:**
+    - #1310 fixes #1292: CJK hard wraps, which were missed at 85 of 121 widths.
+    - #1311 fixes the agent half of #1281: a raw PTY view now survives a same-id wake. The plain-terminal half is a recorded residual, since terminals have no detach call.
+    - Each has 3 reviewers.
+  - **#1308 round 1:** the list scrollbar no longer ends recording, and the reviewers' two mutants are now pinned.
+
 - 2026-09-25 (10:50) — **Merged #1258** (`c13de395`, closes #1248) and **#1264** (`a56d696a`, closes #1242).
   - **Process slip (steering q31):** #1264 merged 5 s after #1258 on a tested head that did not contain #1258. Its disposition is corrected, and main's push CI for `a56d696a` is the check of the combination.
   - **Rule from now on:** after a merge, remerge main into the next PR and wait for a fresh gate before merging it. Never two merges off one check. Saved to memory.
