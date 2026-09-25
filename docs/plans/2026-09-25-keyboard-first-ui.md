@@ -466,8 +466,8 @@ entry when it lands.
 | M6 | NewAgentPlacementOverlay | capture ↑↓ Enter Esc; focus never moved; footer px-3 | legend with Kbd; T3 footer | done |
 | M7 | TldrOverlay / GoalLoopPane | hold/latch; no focus | hint chips for release/dismiss | done (goal loop; TLDR peek has no controls) |
 | M8 | GlobalToast / CaffeinateToast | click-only dismiss; caffeinate z-50 under scrim | keyboard dismiss path; layering note (functional part → issue) | done (global + pane toasts; caffeinate layering → issue) |
-| M9 | RenderingDebugInspector | prose "Press Esc" | Kbd | todo |
-| M10 | Chart tooltips, PocketStrip hover | mouse-only | focusable data points only where a keyboard user loses information | todo |
+| M9 | RenderingDebugInspector | prose "Press Esc" | Kbd | done |
+| M10 | Chart tooltips, PocketStrip hover | mouse-only | focusable data points only where a keyboard user loses information | done (no change — see ruling) |
 
 ### Pickers, lists, strips, settings (non-modal)
 
@@ -491,7 +491,7 @@ entry when it lands.
 | N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | todo |
 | N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | done (in M8) |
 | N18 | SettingsBar | caff toggle no aria-pressed | aria-pressed; T4 | todo |
-| N19 | Chart markers (TimeSeriesChart L184) | pointer shortcut by design | leave; note in checklist | todo |
+| N19 | Chart markers (TimeSeriesChart L184) | pointer shortcut by design | leave; note in checklist | done (no change — see ruling) |
 
 Row-highlight variants to converge under T7 (from the sweep): `bg-row-selected-bg`
 (palette, sort, conversations, PromptList, hotkey inputs, ThemePicker),
@@ -778,6 +778,8 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **M9 Rendering debug inspector:** the "Press Esc to exit" line shows the
+  ⎋ chip.
 - **M7 Goal loop (⌘⇧G):** the strip across the pane top and the full
   overlay now use real buttons (were browser-default unstyled buttons):
   ghost xs in the strip, outline in the overlay, Stop in red outline, and
@@ -861,6 +863,14 @@ Sharp corners and one light theme.
   dependency; arrows traverse the grid in DOM order and typeahead works on
   labels — cost if wrong: ↑↓ across a 2-column grid feels linear; a Popover
   primitive would be a second new dependency.
+
+- Ruling (M10/N19): chart hover tooltips, the TimeSeriesChart marker click
+  and the Browser Pocket hover thumbnail stay pointer-only. Each is a
+  shortcut to information that is also on screen as text (chart totals and
+  rows in Usage/Analytics/Performance; the pocket URL in its strip), so a
+  keyboard user loses nothing; making chart points Tab stops would add dozens
+  of stops per chart — cost if wrong: a follow-up for keyboard chart
+  inspection.
 
 ## Execution notes
 
