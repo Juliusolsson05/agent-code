@@ -3,6 +3,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useShallow } from 'zustand/react/shallow'
 
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import { useCommandChordLabel, withChord } from '@renderer/features/command-keybindings/useCommandChord'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // TabBar — one row of tab chrome at the top of the window. Each tab has
@@ -24,6 +25,7 @@ type Props = {
 
 export function TabBar({ workspace, onNewTabRequest }: Props) {
   const { state, activateTab, closeTab } = workspace
+  const newTabChord = useCommandChordLabel('new-tab')
   // Only the running flags affect tab counts. Text, spinner, draft and debug
   // mutations must not render all tab buttons merely because their map changed.
   const runningIds = useAppStore(useShallow(store => Object.keys(store.workspaceRuntimes)
@@ -140,7 +142,8 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
         <button
           type="button"
           onClick={onNewTabRequest}
-          title="New tab (⌘T)"
+          // Live chord (plan H4): a literal "(⌘T)" outlived any rebind.
+          title={withChord('New Tab', newTabChord)}
           className="
             flex items-center justify-center
             w-8 flex-shrink-0

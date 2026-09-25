@@ -4,6 +4,7 @@ import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { useCommandChordLabel, withChord } from '@renderer/features/command-keybindings/useCommandChord'
 
 type Props = {
   fileOrder: string[]
@@ -36,6 +37,7 @@ export function EditorTabs({
   titleForPath,
   actions,
 }: Props) {
+  const saveChord = useCommandChordLabel('save-editor-file')
   const activeTabRef = useRef<HTMLButtonElement | null>(null)
   const tabNames = useMemo(() => {
     const names = new Map(fileOrder.map(path => [path, displayNameForPath(path)]))
@@ -226,7 +228,7 @@ export function EditorTabs({
           type="button"
           disabled={saveDisabled}
           onClick={onSave}
-          title="Save active file (⌘S)"
+          title={withChord('Save active file', saveChord)}
           aria-label="Save active file"
           className="rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
         >

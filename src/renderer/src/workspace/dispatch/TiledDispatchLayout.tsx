@@ -1,3 +1,4 @@
+import { useCommandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
 import { LanePortChip } from '@renderer/features/browser-pocket/ui/LanePortChip'
 import { Fragment, useCallback, useMemo, useRef } from 'react'
 
@@ -254,6 +255,9 @@ function GridRowView({
   onCreateAgentInProject: (tabId: TabId, anchorSessionId: SessionId) => void
   onPickRowProject: (rowIndex: number) => void
 }) {
+  // Live chord for the empty-lane hint (plan H4) — the hint used to say
+  // "press ⌥↓" literally, which lied after a rebind of Select Next Agent.
+  const nextAgentChord = useCommandChordLabel('dispatch-select-next-agent')
   const start = rowStartIndex(grid.rows, rowIndex)
   const end = start + gridRow.length
   const laneWeights = normalizedWeights(
@@ -480,7 +484,9 @@ function GridRowView({
                     // user sees why.
                     hint={
                       focused && !lane?.selectedSessionId && rowOffersAgents
-                        ? 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
+                        ? nextAgentChord
+                          ? `Pick an agent from the strip, or press ${nextAgentChord} for the top of the index`
+                          : 'Pick an agent from the strip'
                         : undefined
                     }
                   />

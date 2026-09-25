@@ -33,7 +33,7 @@ export const globalEditorCommands: CommandDef[] = [
     surface: 'app',
     title: 'Global Editor',
     description:
-      "**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor's workspace tracks the *active tab*'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn't blow up when you move between agents in the same project). Open tabs are remembered per project and restored across app restarts (file contents are re-read from disk; unsaved edits are not persisted).\n\n**Shortcut:** ⌘⇧E.",
+      "**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor's workspace tracks the *active tab*'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn't blow up when you move between agents in the same project). Open tabs are remembered per project and restored across app restarts (file contents are re-read from disk; unsaved edits are not persisted).",
     keywords: ['editor', 'code', 'files', 'global', 'workspace', 'monaco'],
     getState: ({ flags }) => toggle(flags.globalEditorOpen),
     run: ({ ui, flags }) => {
@@ -46,7 +46,7 @@ export const globalEditorCommands: CommandDef[] = [
     surface: 'editor',
     title: 'Save Editor File',
     description:
-      '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.\n\n**Shortcut:** ⌘S.',
+      '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.',
     keywords: ['save', 'write', 'editor', 'file'],
     // Requires an OPEN editor, not merely a project.
     //
@@ -79,7 +79,7 @@ export const globalEditorCommands: CommandDef[] = [
     surface: 'editor',
     title: 'Quick Open File',
     description:
-      "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.\n\n**Shortcut:** ⌘P.",
+      "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.",
     keywords: ['quick open', 'go to file', 'find file', 'fuzzy', 'open file'],
     when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
@@ -105,7 +105,7 @@ export const globalEditorCommands: CommandDef[] = [
     surface: 'editor',
     title: 'Search in Files',
     description:
-      "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 500 matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
+      "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 500 matches / 20k files). Case-sensitivity toggle lives in the overlay.",
     keywords: ['search', 'grep', 'find in files', 'content search', 'ripgrep'],
     when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
@@ -127,7 +127,7 @@ export const globalEditorCommands: CommandDef[] = [
     surface: 'editor',
     title: 'Editor Fullscreen',
     description:
-      '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
+      '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.',
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
     // NO `when`. The ⌘⌥E chord has always meant "give me a big editor" as ONE
     // gesture — it opens the editor straight into fullscreen when closed. That

@@ -391,8 +391,8 @@ entry when it lands.
 | F3 | `useListNavigation` + test | done |
 | F4 | `DialogContent size` presets + close button convergence | done (presets exist; call sites migrate in their S-rows) |
 | F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | done |
-| F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | todo |
-| F7 | `ConfirmDialog` + replace `window.confirm` ×17 | todo |
+| F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | done (fixed-key legends in PathPicker/AgentActivity/BulkSwitch move with their S-rows) |
+| F7 | `ConfirmDialog` + replace `window.confirm` ×17 (destructive: focus Cancel, and never ⌘↩ — steering note 1; quit/close paths stay native — B7) | todo |
 | F8 | `dropdown-menu` primitive (D9) | todo |
 
 ### Dialogs (Radix)
@@ -526,6 +526,13 @@ Sharp corners and one light theme.
   the sidebar and the tab bar — EVERY focus indicator (outline and ring)
   shows the new colour. Open an extension app while it loads: the spinner
   ring is now visible (border-hi track, accent arc).
+- **F6 live chords:** rebind New Tab, Save Editor File, Browser Pocket, Undo
+  Close and Select Next Agent in Settings → Commands & Shortcuts, then check:
+  the no-tabs Welcome button (`New Tab` + chip, accent button, title case),
+  the tab bar `+` tooltip, the editor Save tooltip, the pocket strip
+  "Browser" tooltip, the close toast ("… — <chord> Undo Close"), and the
+  empty focused lane hint all show the NEW chord; unbinding one drops the
+  chord cleanly (no empty parentheses).
 
 ## Tasks
 
@@ -557,6 +564,16 @@ Sharp corners and one light theme.
   textarea or button — the modifier is an explicit commit — cost if wrong:
   ⌘↩ on a focused Cancel commits; judged correct (the user asked to commit).
 
+- Ruling: chords typed into command DESCRIPTIONS (`**Shortcut:** ⌘⇧E.`) are
+  deleted, not resolved — the palette's detail pane already shows the live
+  `command.shortcut` right above the description, so the prose line was a
+  stale duplicate. Fixed, non-rebindable grammar in prose (⌘1–9, ⌘N row
+  numbers) stays literal; rebindable chords in static prose (settings
+  descriptions, the agent control reference) are replaced by the command's
+  name — cost if wrong: slightly less discoverable settings copy.
+- Ruling: hidden duplicate commands' notes ("kept runnable for the ⌥⇧T
+  chord") keep their chord — it records WHY the command exists, not a hint.
+
 ## Execution notes
 
 - Sweep counts: 44 Radix dialogs (45 mounts), 15 hand-rolled overlays/menus,
@@ -574,3 +591,11 @@ Sharp corners and one light theme.
 - 2026-09-25 F3: `lib/useListNavigation.ts` + 13 renderer tests. New module,
   so no pre-change red; instead three mutations were each caught by one test
   (loop default on; Home/End taken from a text field; hover scrolling).
+- 2026-09-25 F4 `4fae4900`, F5 `264a816d`. Steering reviewer (session
+  d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
+  pointers; restored to main in a chore commit. From now on paths are staged
+  explicitly, never `-a`.
+- 2026-09-25 F6: `features/command-keybindings/useCommandChord.ts`; 9 sites
+  resolved live or reworded. Confirm-red observed: WelcomeEmpty test fails
+  on the pre-change component. Existing close-toast tests (default ⌘⇧T) stay
+  green as the default-path regression.

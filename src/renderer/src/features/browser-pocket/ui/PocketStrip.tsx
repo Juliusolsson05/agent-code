@@ -1,5 +1,7 @@
 import { useState } from 'react'
 
+import { useCommandChordLabel, withChord } from '@renderer/features/command-keybindings/useCommandChord'
+
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 
@@ -16,6 +18,7 @@ import { useLanePorts } from '../state/lanePortsStore'
  */
 export function PocketStrip({ sessionId, workspace }: { sessionId: SessionId; workspace: Workspace }) {
   const pocket = workspace.state.sessions[sessionId]?.browserPocket
+  const pocketChord = useCommandChordLabel('toggle-browser-pocket')
   const live = usePocketLive(pocket?.pocketId)
   const ports = useLanePorts(sessionId)
   const [hover, setHover] = useState(false)
@@ -33,7 +36,7 @@ export function PocketStrip({ sessionId, workspace }: { sessionId: SessionId; wo
       }}
       onMouseLeave={() => setHover(false)}
     >
-      <button type="button" className="text-ink-dim hover:text-ink" aria-label="Open browser pocket" title="Open browser pocket (⌘⇧B)" onClick={open}>Browser</button>
+      <button type="button" className="text-ink-dim hover:text-ink" aria-label="Open browser pocket" title={withChord('Open browser pocket', pocketChord)} onClick={open}>Browser</button>
       {primary && (
         <button
           type="button"

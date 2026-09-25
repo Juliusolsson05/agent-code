@@ -850,7 +850,7 @@ export function getSettingsRegistry(
       category: 'experimental',
       title: 'Browser Pocket',
       description:
-        'Attach a browser to an agent (⌘⇧B). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. First enable adds browser tools for new agents. Existing agents show setup in their pocket; attaching tools requires one reload. Agents with tools already attached need no reload.',
+        'Attach a browser to an agent (the Browser Pocket command). It rides in the agent\'s lane, sits beside the agent in Spotlight, and finds the dev servers that lane is running. First enable adds browser tools for new agents. Existing agents show setup in their pocket; attaching tools requires one reload. Agents with tools already attached need no reload.',
       keywords: ['browser', 'preview', 'pocket', 'localhost', 'dev server', 'webview', 'spotlight'],
       metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'experimental' },
       control: {

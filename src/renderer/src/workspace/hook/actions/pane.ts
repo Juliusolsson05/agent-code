@@ -16,6 +16,7 @@ import {
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
+import { currentCommandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
 
 import type {
   SessionId,
@@ -426,7 +427,17 @@ type CommittedClose =
   | { kind: 'session' }
   | { kind: 'tab-removed'; tab: Tab; tabIndex: number }
 
-const UNDO_HINT = ' — ⌘⇧T Undo Close; repeat for earlier closes'
+// WHY a function and not a constant: the hint names Undo Close's CHORD, and
+// that chord is the user's (Settings → Commands & Shortcuts). A module
+// constant froze the default "⌘⇧T" into every close toast forever (plan H4).
+// Read at toast time so a rebind shows up on the next close. Unbound →
+// name the command instead of inventing a chord.
+function undoHint(): string {
+  const chord = currentCommandChordLabel('undo-close')
+  return chord
+    ? ` — ${chord} Undo Close; repeat for earlier closes`
+    : ' — run Undo Close to restore; repeat for earlier closes'
+}
 
 /** Approval uses the list the user SAW for liveness. A gate returns its
  *  post-dialog re-enumeration, whose liveness is NOW; a session approved while
@@ -531,7 +542,7 @@ function describeCommittedClose(commit: CommittedMember, undoRecorded: boolean):
   const { meta, outcome } = commit
   const kindLabel = meta?.kind ?? DEFAULT_PROVIDER
   const cwdBase = meta?.cwd.split('/').filter(Boolean).pop() ?? meta?.cwd ?? 'session'
-  const hint = undoRecorded ? UNDO_HINT : ''
+  const hint = undoRecorded ? undoHint() : ''
   if (outcome.kind === 'session') return `Closed ${kindLabel} session (${cwdBase})${hint}`
   if (!undoRecorded) return null
   if (outcome.kind === 'tab-removed') return `Closed “${outcome.tab.title}”${hint}`
@@ -578,7 +589,7 @@ function describeCloseOperation(
     const count = leftOpen.length
     reasons.push(`${count} ${named ? 'other ' : ''}${count === 1 ? 'session' : 'sessions'} stayed open because ${count === 1 ? 'it' : 'they'} changed or failed to close`)
   }
-  return `Closed ${operation.commits.length} of ${operation.approved.size} listed sessions — ${reasons.join('; ')}${undoRecorded ? UNDO_HINT : ''}`
+  return `Closed ${operation.commits.length} of ${operation.approved.size} listed sessions — ${reasons.join('; ')}${undoRecorded ? undoHint() : ''}`
 }
 
 /**
