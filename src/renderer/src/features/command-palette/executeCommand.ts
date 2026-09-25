@@ -43,6 +43,12 @@ export type CommandInvocationSource =
   | 'native-menu'
   /** The user pressed a configured chord. */
   | 'keybinding'
+  /**
+   * The user picked an item in an agent's right-click menu (#1180). Always
+   * carries an explicit `ctx.target`, so admission is evaluated against the
+   * clicked agent, not the focused one.
+   */
+  | 'context-menu'
   /** App code, a background flow, or a test. Never a user signal. */
   | 'programmatic'
 
@@ -55,6 +61,7 @@ const USER_SOURCES: ReadonlySet<CommandInvocationSource> = new Set([
   'palette',
   'native-menu',
   'keybinding',
+  'context-menu',
 ])
 
 export type CommandDispatchOutcome =

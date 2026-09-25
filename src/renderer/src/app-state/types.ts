@@ -37,7 +37,7 @@ export type UiShellSlice = UiShellState & {
    * CommandContext they cannot cheaply build themselves, so they record the id
    * here and the palette — which owns the context — dispatches it.
    */
-  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source']) => void
+  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source'], target?: SessionId) => void
   clearCommandInvocation: () => void
   openCommandPalette: () => void
   closeCommandPalette: () => void

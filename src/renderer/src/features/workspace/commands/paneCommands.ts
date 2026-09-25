@@ -1,3 +1,4 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
@@ -112,7 +113,25 @@ export const paneCommands: CommandDef[] = [
     title: 'Close Focused Session',
     keywords: ['pane', 'close pane'],
     description: '**What it does:** Closes the **currently targeted session**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** The focused lane\'s agent is the close target.',
-    run: ({ workspace }) => workspace.closeFocused(),
+    // No `when` for the palette (unchanged): closeFocused itself resolves the
+    // focused target and no-ops without one. With an explicit target (#1180)
+    // the command is offered only while that agent still exists.
+    when: ({ workspace, target }) => target === undefined || commandTarget({ workspace, target }) !== null,
+    run: ({ workspace, target }) => {
+      if (target === undefined) {
+        workspace.closeFocused()
+        return
+      }
+      // closeSession, not closeFocused: closeFocused re-resolves FOCUS, which
+      // would close the agent in the focused lane instead of the right-clicked
+      // row. closeSession is the one close path, so every safety rule still
+      // applies unchanged: an idle agent closes with Undo, a live agent or a
+      // linked cascade asks first. A menu click is not pre-confirmation.
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return
+      void workspace.closeSession(sessionId, { killCaller: 'close.context-menu' })
+    },
+    contextMenu: { group: 'close', order: 10, title: 'Close Agent' },
   },
   {
     id: 'linked-agent',
@@ -170,6 +189,35 @@ export const paneCommands: CommandDef[] = [
     },
   },
   {
+    // Pin ONE agent (#1180). The Pin Sessions… modal is a multi-select editor
+    // for the whole pinned list; this is its single-agent counterpart, added
+    // so the right-click menu and the palette offer the same actions (Unpin
+    // Session below was already single-agent). Appends to the end of the
+    // pinned order, which is where the modal would put a newly toggled pin.
+    id: 'pin-agent',
+    category: 'layout-dispatch',
+    surface: 'workspace',
+    title: 'Pin Session',
+    description: '**What it does:** Pins the targeted agent or terminal to the Pinned section at the top of the agent list.\n\n**Use when:** You want one agent always one keystroke away, regardless of project.\n\n**Notes:** Use **Pin Sessions…** to reorder or pin several at once.',
+    keywords: ['pin', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return false
+      // Mirrors pinSession's own guard (dispatch.ts): it silently keeps an
+      // extension view out of the pinned list, so offering Pin for one would
+      // be a menu item that does nothing.
+      const meta = workspace.state.sessions[sessionId]
+      if (!meta || !isProcessSessionKind(meta.kind)) return false
+      return !workspace.state.pinnedSessionIds.includes(sessionId)
+    },
+    run: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return
+      workspace.pinSession(sessionId)
+    },
+    contextMenu: { group: 'identity', order: 30 },
+  },
+  {
     // Quick-remove counterpart to pin-agents. Targets the currently
     // dispatch-focused row so the keyboard-driven flow is "navigate
     // to a pinned row, run Unpin Session." We use the same
@@ -190,16 +238,17 @@ export const paneCommands: CommandDef[] = [
     title: 'Unpin Session',
     description: '**What it does:** Removes the currently focused row\'s agent from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused lane\'s agent is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       return workspace.state.pinnedSessionIds.includes(sessionId)
     },
-    run: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       workspace.unpinSession(sessionId)
     },
+    contextMenu: { group: 'identity', order: 31 },
   },
   {
     id: 'terminal-horizontal',
@@ -394,8 +443,8 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Last Response',
     description: '**What it does:** Copies the **latest assistant response**.\n\n**Use when:** You want the most recent answer quickly.\n\n**Notes:** No picker; copies immediately.',
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       // WHY hide this on non-agent panes: terminal output is not an assistant
       // transcript, and extractLastAssistantText intentionally reads provider
@@ -405,8 +454,8 @@ export const paneCommands: CommandDef[] = [
       // its committed entries, so there is a real last response to copy.
       return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
-    run: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const runtime = workspace.getRuntime(sessionId)
       const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
@@ -414,8 +463,17 @@ export const paneCommands: CommandDef[] = [
       if (text) {
         void navigator.clipboard.writeText(text)
         workspace.showPaneToast(sessionId, 'Copied to clipboard')
+        return
       }
+      // WHY say so instead of the old silent no-op: from the Sessions list
+      // right-click menu (#1180) the target is usually an agent that is not
+      // in a lane, and an agent hibernated since the last restart has never
+      // loaded its transcript into `runtime.entries` — so "nothing to copy" is
+      // a normal outcome there, not an edge case, and a click that does
+      // nothing reads as a broken menu.
+      workspace.showPaneToast(sessionId, 'No response to copy yet — open this agent to load it')
     },
+    contextMenu: { group: 'copy', order: 20 },
   },
   {
     id: 'clear-composer',

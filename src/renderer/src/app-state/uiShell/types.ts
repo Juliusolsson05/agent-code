@@ -15,7 +15,15 @@ import type { ExtensionFailure } from '@renderer/apps/types'
  */
 export type PendingCommandInvocation = {
   id: string
-  source: 'native-menu' | 'keybinding'
+  source: 'native-menu' | 'keybinding' | 'context-menu'
+  /**
+   * The agent the command acts on, when the caller named one (#1180: the
+   * Sessions list right-click menu). Absent means "the focused agent", which is
+   * what every native-menu and keybinding invocation still means. Carried into
+   * `CommandContext.target`; see `commandTarget` for why a vanished target
+   * refuses instead of falling back to focus.
+   */
+  target?: SessionId
   /** Close the palette again once the command has run. True when the palette
    *  was not already open, so a menu click or chord does not leave it visible. */
   closeAfterRun: boolean

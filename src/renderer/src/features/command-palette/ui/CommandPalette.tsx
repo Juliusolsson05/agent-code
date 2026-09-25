@@ -28,6 +28,7 @@ import {
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { targetedCommandContext } from '@renderer/features/command-palette/targetedCommandContext'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {
@@ -1118,6 +1119,24 @@ function OpenCommandPalette({
   // admission only, so hiding a command can no longer disable its menu item.
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
+    const target = pendingMenuCommand.target
+    // #1180: an explicit target (the Sessions list right-click menu) runs the
+    // command against the clicked agent rather than the focused one. Only
+    // THIS host can do that, because it is the only place a full
+    // CommandContext (with its `ui` bucket) exists — which is why the menu
+    // routes its picks through this channel instead of calling `run` itself.
+    const ctx = target === undefined
+      ? commandContext
+      : targetedCommandContext({
+        ctx: commandContext,
+        target,
+        getState: () => useAppStore.getState().workspaceState,
+        getTakeover: () => {
+          const store = useAppStore.getState()
+          return store.workspaceReaderMode ?? store.workspaceSpotlight
+        },
+        showGlobalToast: showToast,
+      })
     void dispatchCommand({
       // The SOURCE travels with the request, so a chord is recorded as a
       // keybinding invocation and a File-menu click as a native-menu one. A
@@ -1125,12 +1144,23 @@ function OpenCommandPalette({
       // like a menu click in personalized history.
       id: pendingMenuCommand.id,
       source: pendingMenuCommand.source,
-      ctx: commandContext,
+      ctx,
       reportError: message => showToast(message, 6000),
       // Without these a contributed keybinding resolved to nothing here, and the
       // outcome — `status: 'unknown'` — is not inspected by the keybinding path, so
       // every manifest-declared shortcut was a silent no-op.
       extraCommands: extensionCommands,
+    }).then(outcome => {
+      // A right-click menu is built from a snapshot and the pick arrives
+      // after the user has been looking at the menu for a while; the agent
+      // may have exited or been reloaded under a new id meanwhile. Fresh
+      // admission refuses that (commandTarget never falls back to focus), and
+      // the user deserves to hear why the click did nothing. Keybindings and
+      // the File menu keep their existing silent refusal — a chord pressed in
+      // the wrong context is common and not worth a toast.
+      if (target === undefined || outcome.status !== 'unavailable') return
+      const gone = !useAppStore.getState().workspaceState.sessions[target]
+      showToast(gone ? 'That agent is no longer open.' : outcome.reason, 4000)
     })
     onMenuCommandHandled()
     // A command that OPENED the palette must not be closed by the "return to

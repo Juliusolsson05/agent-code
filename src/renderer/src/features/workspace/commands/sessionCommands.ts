@@ -1,3 +1,4 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -70,8 +71,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'View Prompts',
     description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Available for providers with transcript parsing support.',
     keywords: ['prompts', 'history', 'user', 'modal', 'session', 'context'],
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -88,11 +89,12 @@ export const sessionCommands: CommandDef[] = [
       // prompts — the modal opens over the TUI pane and mounts nothing on it.
       return getProviderFeatures(kind).promptHistoryExtraction && sessionHasTranscript(meta)
     },
-    run: ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       ui.openViewPrompts(sessionId)
     },
+    contextMenu: { group: 'agent', order: 60, title: 'View Prompts…' },
   },
   {
     // Rewind-to-Prompt — pick a past user prompt and re-home the
@@ -130,8 +132,8 @@ export const sessionCommands: CommandDef[] = [
       'branch',
       'checkpoint',
     ],
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -162,12 +164,13 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       ui.openRewindPrompt(sessionId)
       ui.closePalette()
     },
+    contextMenu: { group: 'agent', order: 50 },
   },
   {
     // Remove Cybersecurity Block — Codex-only recovery that forks the
@@ -560,8 +563,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
     keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'reconnect'],
-    getState: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    getState: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The provider name is CONTEXT — which provider this command would act on —
@@ -571,8 +574,8 @@ export const sessionCommands: CommandDef[] = [
           .shortLabel,
       )
     },
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -586,7 +589,15 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: ({ workspace }) => workspace.reloadFocusedAgent(),
+    // reloadSessionAgent with the resolved id, not reloadFocusedAgent: the
+    // Focused wrapper re-resolves focus, which would reload the focused lane's
+    // agent instead of the right-clicked row (#1180). For the palette the two
+    // are identical — the wrapper is exactly this call with the focused id.
+    run: async ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (sessionId) await workspace.reloadSessionAgent(sessionId)
+    },
+    contextMenu: { group: 'agent', order: 10 },
   },
   {
     id: 'soft-reload-agent',
@@ -669,8 +680,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
     keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi'],
-    getState: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    getState: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The provider name is CONTEXT — which provider this command would act on —
@@ -680,8 +691,8 @@ export const sessionCommands: CommandDef[] = [
           .shortLabel,
       )
     },
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -695,8 +706,8 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: async ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -715,6 +726,7 @@ export const sessionCommands: CommandDef[] = [
         workspace.showPaneToast(sessionId, `copy failed: ${msg}`, 4000)
       }
     },
+    contextMenu: { group: 'copy', order: 10 },
   },
   {
     id: 'duplicate-agent',
@@ -726,11 +738,11 @@ export const sessionCommands: CommandDef[] = [
     title: 'Duplicate Agent',
     description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** The clone lands in the pool with a **new** badge; place it in any lane.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
-    when: ({ workspace }) => {
+    when: ({ workspace, target }) => {
       // Needs a providerSessionId (something on disk to duplicate) AND a
       // transcript adapter able to project it into a new session. Agent-hood
       // alone proves neither.
-      const sessionId = commandTargetSessionId(workspace)
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -739,8 +751,8 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: async ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: async ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -806,6 +818,7 @@ export const sessionCommands: CommandDef[] = [
         console.warn('[duplicate-agent] failed', err)
       }
     },
+    contextMenu: { group: 'agent', order: 40 },
   },
   {
     id: 'switch-provider',
@@ -817,8 +830,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Switch Provider',
     description: '**What it does:** Opens a destination picker for continuing the focused agent with another provider: Claude, Codex, OpenCode, OpenCode Terminal, Grok or Pi.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
     keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'grok', 'pi', 'translate'],
-    getState: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    getState: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The provider name is CONTEXT — which provider this command would act on —
@@ -828,8 +841,8 @@ export const sessionCommands: CommandDef[] = [
           .shortLabel,
       )
     },
-    when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       if (!meta) return false
@@ -840,8 +853,8 @@ export const sessionCommands: CommandDef[] = [
       // provider from declaring the product paths it supports.
       return getProviderFeatures(kind).switchTargets.length > 0
     },
-    run: ({ workspace, ui }) => {
-      const sessionId = commandTargetSessionId(workspace)
+    run: ({ workspace, ui, target }) => {
+      const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       // WHY capture before closing the palette: command targeting in Dispatch
       // can differ from the active grid tab and may change while a modal is
@@ -850,6 +863,7 @@ export const sessionCommands: CommandDef[] = [
       ui.closePalette()
       ui.openProviderSwitchPicker(sessionId)
     },
+    contextMenu: { group: 'agent', order: 20, title: 'Switch Provider…' },
   },
   {
     id: 'toggle-git-bar',
