@@ -9,7 +9,7 @@ import type { TldrRecord } from '@shared/types/tldr'
 
 import { AgentActivityView } from './AgentActivityView'
 
-// What the user SEES and what their keys DO in the full-screen Agent Activity
+// What the user SEES and what their keys DO in Agent Activity
 // (#1170). The sectioning rules are pinned against the recorded corpus in
 // activityRow.test.ts; this file pins the surface on top of them: section
 // order, the Goal name arriving from one batched read, and the keyboard
@@ -92,7 +92,7 @@ async function openView(workspace = fleet()) {
 
 const rowNames = () => screen.getAllByRole('option').map(option => option.getAttribute('data-session-id'))
 
-describe('Agent Activity, full screen', () => {
+describe('Agent Activity', () => {
   it('shows who needs you first, then who is working, then the longest-idle agents first', async () => {
     await openView()
     expect(rowNames()).toEqual(['asking', 'busy', 'idle-old', 'idle-new'])

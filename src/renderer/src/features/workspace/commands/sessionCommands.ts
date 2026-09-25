@@ -276,7 +276,7 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
-    // Agent Activity — full-screen view of every agent in the window, lane or
+    // Agent Activity — a modal view of every agent in the window, lane or
     // pool, sectioned by what it needs (#1170): needs you / working / idle /
     // exited. Always available: it needs nothing focused, and it reads the
     // fleet's notes only while it is open.
@@ -284,7 +284,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'workspace-tools',
     surface: 'app',
     title: 'Open Agent Activity…',
-    description: '**What it does:** Opens a full-screen view of **every agent**, grouped into Needs you, Working, Idle and Exited.\n\n**Use when:** You want to see which agent is waiting for you, what the others are doing, or close several idle ones at once.\n\n**Notes:** Type to filter, Space to select, ⌫ to close. Close Old Agents and Close Idle Orchestration Agents stay as quick one-shot commands.',
+    description: '**What it does:** Opens a view of **every agent**, grouped into Needs you, Working, Idle and Exited.\n\n**Use when:** You want to see which agent is waiting for you, what the others are doing, or close several idle ones at once.\n\n**Notes:** Type to filter, Space to select, ⌫ to close. Close Old Agents and Close Idle Orchestration Agents stay as quick one-shot commands.',
     keywords: [
       'agent',
       'activity',

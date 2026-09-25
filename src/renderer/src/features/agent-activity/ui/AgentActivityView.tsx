@@ -22,19 +22,23 @@ import type { ActivityRow, ActivitySection } from '../model/activityRow'
 import { useFleetNotes } from '../model/useFleetNotes'
 
 // ---------------------------------------------------------------------------
-// Agent Activity, full screen (#1170, Stages 3–5).
+// Agent Activity (#1170, Stages 3–5; modal since #1189).
 //
-// Replaces the 760px AgentActivityModal. The owner's verdict on that one was
+// Replaces the old AgentActivityModal (a flat 760px-wide list; the size was
+// never its problem, see below). The owner's verdict on that one was
 // "ages and just shit across the board", and the decomposition's evidence says
 // why: at 33–48 agents it could not say which agent needed the user, its rows
 // all read as the folder name, and it listed panes rather than agents.
 //
-// WHY a full-viewport Dialog instead of a MainSurface takeover (owner decision
-// 1, mechanism recorded in the decomposition): the Dialog primitive already
-// owns everything a takeover would need rewiring for — the interaction-owner
-// marker that stops keys reaching agents, the focus trap, Escape, and focus
-// restore — and the workspace stays laid out underneath, so no terminal is
-// resized by opening it.
+// WHY a centred Dialog, and not full screen: #1170 shipped it full-viewport,
+// and the owner reversed that in #1189 — covering the whole window hid the
+// very panes it summarises and made a quick check feel like leaving the
+// workspace. The fixes to the old modal were the sectioning, the names and
+// the keyboard, not the size, so it is back to an ordinary modal, just a
+// larger one. It stays a Dialog rather than a MainSurface takeover for the
+// original reason: the primitive already owns the interaction-owner marker
+// that stops keys reaching agents, the focus trap, Escape and focus restore,
+// and the workspace stays laid out underneath, so no terminal is resized.
 //
 // KEYBOARD (one grammar, shown in the footer):
 //   list focused (the default) — ↑/↓ move, Enter focus the agent, Space
@@ -272,10 +276,12 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
       <DialogContent
-        // Full viewport. Every positioning class of the centred primitive is
-        // overridden (cn resolves the conflicts), so this is the same Dialog
-        // with the same input ownership, only sized to the window.
-        className="left-0 top-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none border-0 bg-canvas"
+        // A FIXED height (not max-h), so the dialog does not jump in size as
+        // the filter narrows the list or agents change section while it is
+        // open. 960px fits name, goal, project and state on one row; the
+        // vh/vw caps keep it a modal on a small window. Positioning, surface
+        // and border are the primitive's own (#1189).
+        className="flex h-[min(760px,86vh)] w-[min(960px,94vw)] flex-col overflow-hidden"
         onKeyDown={onListKeyDown}
         onEscapeKeyDown={event => {
           // The first Esc leaves the filter, the second dismisses. One Esc
@@ -290,7 +296,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
         }}
         aria-describedby="agent-activity-summary"
       >
-        <header className="flex-shrink-0 border-b border-border px-6 pb-3 pt-4">
+        <header className="flex-shrink-0 border-b border-border px-4 pb-3 pt-4">
           <div className="flex items-baseline justify-between gap-4">
             <DialogTitle className="text-[15px]">Agent Activity</DialogTitle>
             <DialogDescription id="agent-activity-summary" className="text-[12px] text-muted">
@@ -314,7 +320,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
           role="listbox"
           aria-label="Agents"
           aria-multiselectable="true"
-          className="min-h-0 flex-1 overflow-y-auto px-6 py-2 outline-none"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-2 outline-none"
         >
           {sections.map(({ section, rows: sectionRows }) => {
             if (sectionRows.length === 0 && section !== 'needs-you') return null
@@ -324,7 +330,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
               // readers stopped associating the rows with the list. A labelled
               // group is the ARIA-sanctioned way to section a listbox.
               <section key={section} role="group" aria-label={SECTION_TITLES[section]} className="mb-4">
-                <div className="sticky top-0 z-10 flex items-center justify-between bg-canvas py-1.5">
+                <div className="sticky top-0 z-10 flex items-center justify-between bg-surface py-1.5">
                   <h3 className={cn(
                     'text-[11px] font-medium uppercase tracking-wider',
                     section === 'needs-you' && sectionRows.length > 0 ? 'text-warning' : 'text-muted',
@@ -367,7 +373,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
           )}
         </div>
 
-        <footer className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-border px-6 py-2 text-[11px] text-muted">
+        <footer className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-border px-4 py-2 text-[11px] text-muted">
           <span>↑↓ move · Enter open · Space select · ⌘A select all · ⌫ close · type to filter (Tab back to the list) · Esc dismiss</span>
           {selectedRows.length > 0 ? (
             <button

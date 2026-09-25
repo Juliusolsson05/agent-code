@@ -260,7 +260,7 @@ function OpenCommandPalette({
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
   const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
-  const openTldrHistory = useAppStore(state => state.openTldrHistory)
+  const openReportHistory = useAppStore(state => state.openReportHistory)
   const openConversations = useAppStore(state => state.openConversations)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
@@ -532,7 +532,7 @@ function OpenCommandPalette({
         // structural rather than a visibility tier.
         openCommandPalette: openPaletteAction,
         openViewPrompts,
-        openTldrHistory,
+        openReportHistory,
         openConversations,
         openAgentActivity,
         openKeyboardShortcuts,
@@ -659,7 +659,7 @@ function OpenCommandPalette({
       openMergeProjectTabs,
       onSettingsRequest,
       openViewPrompts,
-      openTldrHistory,
+      openReportHistory,
       openConversations,
       openAgentActivity,
       openCloseOldAgents,

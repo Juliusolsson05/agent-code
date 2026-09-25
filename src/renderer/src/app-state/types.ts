@@ -1,4 +1,4 @@
-import type { PerformancePanelRequest } from './uiShell/types'
+import type { PerformancePanelRequest, ReportHistoryKind } from './uiShell/types'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
@@ -84,8 +84,8 @@ export type UiShellSlice = UiShellState & {
   closeRecordingNotePrompt: () => void
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
-  openTldrHistory: (sessionId: SessionId) => void
-  closeTldrHistory: () => void
+  openReportHistory: (sessionId: SessionId, kind: ReportHistoryKind) => void
+  closeReportHistory: () => void
   openNewAgentPlacement: () => void
   /** Open the placement overlay pre-targeted at a specific project. Used by
    *  the Dispatch header "+"; see `newAgentProjectIntent` for why the target

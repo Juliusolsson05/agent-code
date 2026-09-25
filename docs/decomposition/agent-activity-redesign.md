@@ -276,6 +276,10 @@ Issue: #1170. The three OWNER CALLs above are answered:
    Escape and focus restore, and the workspace underneath stays laid out, so
    no terminal is resized. "Full screen" is what the user sees; the mechanism
    is the one every modal already uses.
+   **Reversed on 2026-09-25 (#1189):** covering the whole window hid the panes
+   the view summarises, so the owner asked for an ordinary modal. It is now
+   a centred 960×760 Dialog (capped at 94vw/86vh). The mechanism argument
+   above still holds, and is why the change was sizing only.
 2. **Close Old Agents and Close Idle Orchestration Agents stay** as they are.
    They are one-shot commands. Unknown 2 is closed as "no"; Stage 6 does not
    fold them in.

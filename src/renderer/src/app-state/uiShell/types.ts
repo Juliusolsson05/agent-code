@@ -5,6 +5,9 @@ import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ExtensionFailure } from '@renderer/apps/types'
 
 
+/** `tldr` is the combined status-and-goal timeline; `goal` is goals alone. */
+export type ReportHistoryKind = 'tldr' | 'goal'
+
 /**
  * A command waiting to be dispatched through the shared execution gateway.
  *
@@ -191,7 +194,10 @@ export type UiShellState = {
     title: string
   } | null
   viewPromptsSessionId: SessionId | null
-  tldrHistorySessionId: SessionId | null
+  /** Which agent's report history is open, and which report (#1190). One
+   * field rather than a flag per kind: the TLDR and Goal histories are the
+   * same dialog over different stores, and only one can be open at a time. */
+  reportHistory: { sessionId: SessionId; kind: ReportHistoryKind } | null
   newAgentPlacementOpen: boolean
   /**
    * Non-null when the placement overlay is open in "Linked Agent"
