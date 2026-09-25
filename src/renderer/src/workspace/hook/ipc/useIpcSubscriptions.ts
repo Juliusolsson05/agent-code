@@ -29,6 +29,11 @@ import {
   withDerivedSessionStatus,
 } from '@renderer/session-runtime/semantic/helpers'
 import { stepLiveSemantic } from '@renderer/session-runtime/ingest/liveSemantic'
+import {
+  OPENCODE_SERVER_UNREACHABLE,
+  PI_BRIDGE_UNREACHABLE,
+  faultRecoveredByDiagnostic,
+} from '@renderer/session-runtime/liveChannelRecovery'
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/session-runtime/semantic/summarize'
 import { isSemanticRawCaptureEnabled } from '@renderer/session-runtime/semantic/rawCapture'
@@ -415,7 +420,6 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 // -----------------------------------------------------------------------------
 
 /** PiSession's marker for "the bridge never connected" (piSession.ts). */
-const PI_BRIDGE_UNREACHABLE = '(provider_bridge_unreachable)'
 
 export function useIpcSubscriptions(
   // WHY feed identity matters: `feed` sits in the effect's dep array, so an
@@ -894,7 +898,7 @@ export function useIpcSubscriptions(
       // port, and the process neither paints nor exits, so this is as
       // permanent as a stopped channel and belongs in the lifetime banner: the
       // alternative is a blank pane with a warning that scrolled away.
-      const serverUnreachable = message.includes('(provider_server_unreachable)')
+      const serverUnreachable = message.includes(OPENCODE_SERVER_UNREACHABLE)
       updateRuntime(sessionId, {
         transcriptStatus: 'error',
         transcriptError: message,
@@ -920,18 +924,19 @@ export function useIpcSubscriptions(
     // else's to clear.
     const offDiagnostic = feed.onSessionTranscriptDiagnostic(({ sessionId, diagnostic }) => {
       if (quarantinesSessionFeed(sessionId)) return
-      const live = diagnostic as { kind?: string; connected?: boolean } | null
+      // Which fault this diagnostic proves recovered is the shared rule the
+      // phone applies too (session-runtime/liveChannelRecovery.ts, #1177).
+      const recovered = faultRecoveredByDiagnostic(diagnostic)
       // Pi's bridge is the same kind of late-connecting live channel, but its
       // "never connected" warning lives in liveChannelWarning (its transcript
       // still works), and it clears the moment the bridge connects.
-      if (live?.kind === 'pi-terminal-live-state' && live.connected === true) {
+      if (recovered === PI_BRIDGE_UNREACHABLE) {
         if (refs.latestRuntimesRef.current[sessionId]?.liveChannelWarning) updateRuntime(sessionId, { liveChannelWarning: null })
         return
       }
-      const faultMarker = live?.kind === 'opencode-terminal-live-state' ? '(provider_server_unreachable)' : undefined
-      if (!faultMarker || live?.connected !== true) return
+      if (recovered === null) return
       const current = refs.latestRuntimesRef.current[sessionId]
-      if (!current?.transcriptChannelError?.includes(faultMarker)) return
+      if (!current?.transcriptChannelError?.includes(recovered)) return
       updateRuntime(sessionId, {
         transcriptChannelError: null,
         transcriptError: null,

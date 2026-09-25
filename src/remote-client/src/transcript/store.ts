@@ -1,6 +1,7 @@
 import { REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { stepLiveSemantic } from '@renderer/session-runtime/ingest/liveSemantic'
+import { faultRecoveredByDiagnostic } from '@renderer/session-runtime/liveChannelRecovery'
 import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import { historyMarkerOf, planLiveEntryTrim, OLDER_PREPEND_TRIM_GRACE_MS } from '@renderer/session-runtime/liveEntryWindow'
 import {
@@ -226,6 +227,17 @@ export class TranscriptStore {
         // Kept raw (the message string): filtering benign variants is a
         // presentation decision that belongs to the UI, not the store.
         this.mutate(e.sessionId, t => ({ ...t, statusError: e.message }))
+      }),
+      feed.onSessionTranscriptDiagnostic(e => {
+        // A live channel that came up late clears the fault it raised on the
+        // error channel above — the desktop's rule, shared (#1177). Until the
+        // phone consumed this channel, a recovered Pi bridge or OpenCode
+        // Terminal server kept its failure (and reload advice) on screen
+        // forever. Only a session the store already holds can carry a fault.
+        const recovered = faultRecoveredByDiagnostic(e.diagnostic)
+        if (!recovered) return
+        if (!this.sessions.get(e.sessionId)?.transcript.statusError?.includes(recovered)) return
+        this.mutate(e.sessionId, t => ({ ...t, statusError: null }))
       }),
       feed.onSessionConditions(e => {
         this.mutate(e.sessionId, t => ({ ...t, conditions: e.snapshot }))

@@ -270,8 +270,9 @@ export class WebSocketSessionFeed implements SessionFeed {
   /**
    * Relayed since #1177, when the phone started sinking from the same
    * main-side tap as the desktop. It used to be a deliberate no-op because
-   * the host never forwarded the channel; a listener that looked wired but
-   * never fired was the kind of silent gap the shared tap removes.
+   * the host never forwarded the channel. The TranscriptStore consumes it to
+   * clear a late live channel's fault the moment it reports connected, the
+   * desktop's rule (session-runtime/liveChannelRecovery.ts).
    */
   onSessionTranscriptDiagnostic(cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
     return this.sub('transcript-diagnostic', cb)
@@ -280,10 +281,14 @@ export class WebSocketSessionFeed implements SessionFeed {
     return this.sub('history-boundary', cb)
   }
   /**
-   * Relayed since #1177 for the same reason as the diagnostic above. Main
-   * flushes the OLD session's buffered rows before this crosses (see
-   * SessionFeedTap), so a listener can trust that every earlier row belongs to
-   * the previous provider session.
+   * Relayed since #1177 for the same reason as the diagnostic above; main
+   * flushes the OLD session's buffered rows before it crosses (see
+   * SessionFeedTap), so a listener could trust that every earlier row belongs
+   * to the previous provider session. The phone's TranscriptStore does NOT
+   * listen today: it follows a provider-session switch through its transcript
+   * roll detection (the `file` riding live frames) and the history-boundary
+   * reset. The desktop consumes the event to rebind the pane's durable
+   * identity, which the phone does not own.
    */
   onSessionProviderSessionChanged(cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
     return this.sub('provider-session-changed', cb)
