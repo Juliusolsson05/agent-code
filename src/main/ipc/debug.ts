@@ -36,12 +36,16 @@ export function registerDebugIpc(
     'debug:append-feed-log',
     async (
       _evt,
-      params: { sessionId: string; entries: FeedDebugPersistEntry[] },
+      params: { sessionId: string; entries: FeedDebugPersistEntry[]; epochMs?: number },
     ) => {
       if (!params?.sessionId || !Array.isArray(params.entries) || params.entries.length === 0) {
         return
       }
-      await queueFeedDebugAppend(params.sessionId, params.entries)
+      await queueFeedDebugAppend(
+        params.sessionId,
+        params.entries,
+        typeof params.epochMs === 'number' ? params.epochMs : undefined,
+      )
     },
   )
 

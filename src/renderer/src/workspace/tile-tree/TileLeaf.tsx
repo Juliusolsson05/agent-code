@@ -243,7 +243,7 @@ export function TileLeaf({
   const acknowledgeSession = useCallback(() => {
     acknowledgeWorkspaceSession(sessionId)
   }, [acknowledgeWorkspaceSession, sessionId])
-  // #1172: the pane header's completion stripes render this same unread marker,
+  // #1172: the pane header's completion outline renders this same unread marker,
   // the one behind Dispatch's NEW badge, so the two surfaces can't disagree.
   // Engagement clears it through acknowledgeSession above; the hook adds "stayed
   // on the pane long enough to see it", and owns what "watching" means.
@@ -425,25 +425,75 @@ export function TileLeaf({
   // precisely what the quarantine exists to prevent. Requiring a live
   // snapshot mirrors what `RemoteServer.applyPermissionReply` already does
   // before it writes.
+  //
+  // WHY BOTH REFUSALS GO TO THE GLOBAL TOAST (#711 item 1)
+  //
+  // This arm is reached by FOUR condition kinds, not one shape (#1110 review
+  // corrected an earlier version of this comment that claimed they were all
+  // modals):
+  //
+  //   - `claude.trust-dialog` and `claude.permission-prompt` are Radix
+  //     modals;
+  //   - `codex.approval` and `claude.resume-prompt` are in-flow STRIPS
+  //     (`layout: 'strip'`, plain `role="group"` divs, no scrim);
+  //
+  // and there is a fifth entry point with no condition surface at all:
+  // `useComposerKeybinds` routes composer ArrowUp/Down here whenever
+  // `hasActionCondition` is true.
+  //
+  // The modal cases are what force the move. `showPaneToast` renders
+  // `PaneToast`, an in-flow sibling inside the pane with no z-index; the
+  // dialog overlay is z-[1100] and 85% opaque, and Radix marks the rest of the
+  // subtree `aria-hidden`. The message was painted under the scrim, inside the
+  // region screen readers are told to ignore. Worse, a modal from a RETAINED
+  // pane (Spotlight keeps the tile tree mounted under `display: none`) portals
+  // to `body` while its pane toast is inside the hidden subtree — invisible
+  // outright. `GlobalToast` is z-[1200], and its own header records this trap.
+  //
+  // For the strip cases the pane toast was readable, and the global toast is
+  // the lesser fit: it is not adjacent to the strip that was clicked. That
+  // cost is accepted because the alternative is branching the surface on the
+  // condition's layout, which would put the same click on two surfaces again —
+  // the exact inconsistency this fixes. Every path here is focus-safe (the
+  // pane root takes `onMouseDown={onFocusRequest}`, strip keyboard handling is
+  // gated on `interactionActive`, and the composer route needs the textarea
+  // focused), so the toast always describes the pane the user is looking at.
+  //
+  // #1070 moved the STRUCTURED refusal here and left this arm behind, which
+  // was worse than either surface on its own: one click produced a readable
+  // message or an invisible one depending on which arm handled it, and this is
+  // the arm a trust dialog uses.
+  //
+  // The vanished-prompt branch moves too. It is in fact not reachable today —
+  // the outlet is fed `normalizedConditions` and renders nothing for a null
+  // snapshot, and the composer route is gated by `hasActionCondition` — so
+  // moving it costs nothing and keeps one click on one surface if it ever
+  // becomes reachable again.
+  //
+  // Duration matches the refusal reporter's: these ask the user to look at
+  // something and decide, which the 2.5s default does not allow.
   const sendConditionKey = useCallback(async (data: string) => {
     acknowledgeSession()
     if (!runtime.conditions) {
-      workspace.showPaneToast(sessionId, 'That prompt is no longer live.')
+      showToast('That prompt is no longer live.', 6000)
       return
     }
     const ok = await feed.sendInput(sessionId, data)
     if (!ok) {
+      // Parity with the structured reporter below: the toast tells the user,
+      // the console says which session, because the toast deliberately carries
+      // no session identity and a 4-pane grid gives it no context (#1110
+      // review).
+      // eslint-disable-next-line no-console
+      console.warn(`[condition ${sessionId.slice(0, 8)}] keystroke refused`)
       // main returns a bare boolean for two disjoint reasons — a prompt
       // delivery holds the write reservation, or there is no backend at all.
       // Only the first is worth retrying, and we cannot tell them apart from
       // here; the message stays honest about that rather than promising a
       // retry that can never work.
-      workspace.showPaneToast(
-        sessionId,
-        'That keystroke did not reach the agent. If it stays stuck, retry the pane.',
-      )
+      showToast('That keystroke did not reach the agent. If it stays stuck, retry the pane.', 6000)
     }
-  }, [acknowledgeSession, feed, runtime.conditions, sessionId, workspace.showPaneToast])
+  }, [acknowledgeSession, feed, runtime.conditions, sessionId, showToast])
 
   const loadOlderHistory = useCallback(async () => {
     await workspace.loadOlderHistory(sessionId)

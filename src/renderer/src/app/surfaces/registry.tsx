@@ -33,7 +33,7 @@ import { AppHostSurface } from '@renderer/apps/surfaces/AppHostSurface'
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
-import { TldrHistorySurface } from '@renderer/features/tldr/surfaces/TldrHistorySurface'
+import { ReportHistorySurface } from '@renderer/features/tldr/surfaces/ReportHistorySurface'
 import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
 import { McpServerDialogSurface } from '@renderer/features/mcp/surfaces/McpServerDialogSurface'
 import { AddSkillDialogSurface } from '@renderer/features/skills/surfaces/AddSkillDialogSurface'
@@ -109,7 +109,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'merge-project-tabs', Component: MergeProjectTabsSurface },
   // Appended per the contract above. Opened only from a session command that
   // closes the palette first, so it stacks over established modals by order.
-  { id: 'tldr-history', Component: TldrHistorySurface },
+  { id: 'tldr-history', Component: ReportHistorySurface },
   // Appended per the contract above (#964). Opened only from a command that
   // closes the palette first, so it stacks over established modals by order.
   { id: 'agent-analytics', Component: AgentAnalyticsSurface },

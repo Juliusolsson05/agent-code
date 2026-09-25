@@ -76,7 +76,8 @@ each agent gets two MCP tools:
 
 Agent Code renders the answers over your panes. Hold **Cmd+G** to see every
 visible agent's goal and **Cmd+L** to see its latest status. **View TLDR
-History** shows how both evolved over the session.
+History** shows how both evolved over the session, and **View Goal History**
+shows the goals alone.
 
 When you accept an agent's work (its PR merged, or you said it is done), the
 agent marks its goal **complete**, and the peek shows its one-line summary.

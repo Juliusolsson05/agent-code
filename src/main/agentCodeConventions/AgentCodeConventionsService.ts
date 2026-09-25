@@ -40,12 +40,12 @@ import {
 } from '@shared/types/providerKind.js'
 import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
-import { isAbsolute, relative, resolve, sep } from 'path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 
 import { atomicWriteTextFile } from '@main/editorFileIO.js'
 import {
   AGENT_CODE_CONVENTIONS_STATE_FILE,
-  AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR,
+  AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIRNAME,
 } from '@main/storage/paths.js'
 import {
   readAgentCodeConventionsState,
@@ -157,7 +157,6 @@ type ServiceOptions = {
   now?: () => Date
   operationId?: () => string
   githubSkillSource?: Pick<GitHubSkillSource, 'discover' | 'acquire'>
-  installedSkillSnapshotRoot?: string
   pathSafety?: SkillPathSafety
 }
 
@@ -235,8 +234,20 @@ export class AgentCodeManagedSkillsService {
     this.now = options.now ?? (() => new Date())
     this.operationId = options.operationId ?? randomUUID
     this.githubSkillSource = options.githubSkillSource ?? new GitHubSkillSource()
+    // WHY the store is always the journal's sibling and cannot be configured
+    // separately (#1206): the journal is the only thing that knows which
+    // snapshots are referenced, and startup sweeps everything it does not
+    // name. A service given a temp journal but the real store (two system
+    // test files did exactly that, by omitting a separate
+    // `installedSkillSnapshotRoot` option) read an empty journal and deleted
+    // every installed skill's snapshot on the developer's machine. The option
+    // was removed rather than kept as an override. A default only fixes the
+    // callers that omit it, while an override can still pair a journal with
+    // a foreign store (review of PR #1211 reproduced exactly that). In the
+    // app this is still `STATE_DIR/managed-skill-snapshots`, so no migration
+    // is needed.
     this.installedSkillPackageStore = new InstalledSkillPackageStore(
-      options.installedSkillSnapshotRoot ?? AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR,
+      join(dirname(this.stateFilePath), AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIRNAME),
     )
     this.installedSkillMaterializer = new InstalledSkillMaterializer(
       this.pathSafety,

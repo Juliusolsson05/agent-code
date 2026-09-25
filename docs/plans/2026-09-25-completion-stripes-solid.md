@@ -1,5 +1,7 @@
 # Completion stripes: vertical, full accent, legible path
 
+> **Superseded visually by #1200** (`docs/plans/2026-09-25-completion-indicator-redesign.md`): the indicator is now the working bar drawn hollow (surface fill, 2px accent ring, accent text). Stripes and plates were removed. The seen/dwell logic below still stands.
+
 Status: user-requested 2026-09-25 · Branch: `fix/completion-stripes-solid` ·
 Issue: #1191 · Follows #1172 / PR #1176 (`docs/plans/2026-09-24-agent-completion-indicator.md`)
 

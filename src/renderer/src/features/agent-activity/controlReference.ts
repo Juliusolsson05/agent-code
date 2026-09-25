@@ -7,7 +7,7 @@ export const controlReference = [
     "id": "agent-activity",
     "title": "Agent Activity",
     "purpose": "See at a glance which agents need the user, which are working and on what, and which are idle or exited and can be closed.",
-    "ui": "Full-screen view with Needs you, Working, Idle and Exited sections, a filter field, and multi-select close.",
+    "ui": "Modal with Needs you, Working, Idle and Exited sections, a filter field, and multi-select close.",
     "prerequisites": "None. Agent names use the Goal and the second line uses the TLDR only for agents with those MCP domains enabled.",
     "workflow": [
       "Open Agent Activity",

@@ -98,7 +98,7 @@ export function AgentTerminalLeaf({
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
   // #1172: the same hook as TileLeaf, so switching a pane between Feed and raw
-  // Terminal view never changes when its completion stripes clear.
+  // Terminal view never changes when its completion outline clears.
   const completionUnseen = runtime.unreadKind !== null
   // Stable so the dwell timer isn't re-armed on every terminal re-render.
   const acknowledgeThisSession = useCallback(() => acknowledgeSession(sessionId), [acknowledgeSession, sessionId])

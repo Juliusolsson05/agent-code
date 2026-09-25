@@ -25,8 +25,11 @@ canonical stores. Provider skill directories are generated artifacts. Editing
 one never imports content back into Agent Code.
 
 Reviewed package bytes live separately under the private, content-addressed
-`managed-skill-snapshots` state directory. The JSON document names an immutable
-manifest digest; it never embeds binary assets or accepts a renderer path. A
+`managed-skill-snapshots` directory, which is always resolved beside the
+`conventions.json` that references it, never from a global default. The
+journal is the only record of which snapshots are still needed, so a journal
+paired with another journal's store would sweep it empty (#1206). The JSON
+document names an immutable manifest digest; it never embeds binary assets or accepts a renderer path. A
 snapshot becomes durable before desired state can reference it, and every read
 rechecks its bounded manifest and hashes.
 

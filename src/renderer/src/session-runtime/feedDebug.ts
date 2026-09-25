@@ -99,16 +99,42 @@ function trimFeedDebugLogToBudget(log: FeedDebugEntry[]): FeedDebugEntry[] {
  *  FEED_DEBUG_LOG_CAP entries and FEED_DEBUG_LOG_MAX_BYTES. Returns a new
  *  runtime ref — reference equality against the input runtime signals
  *  "no-op" to upstream setRuntimes short-circuits. */
+/**
+ * The last epoch minted in this renderer, so the next one is strictly greater.
+ *
+ * WHY an epoch is not simply the first entry's timestamp (#1111 review): the
+ * epoch is the identity of one GENERATION of feed-debug ids. A soft reload
+ * restarts ids at 1, and both main's de-dup cursor and the renderer's settle
+ * guard tell the generations apart by this number alone. A timestamp repeats:
+ * a reset within the same millisecond, or a wall clock stepped backwards,
+ * gave the new generation the old one's epoch. Main then kept the old cursor
+ * and silently dropped the new ids at or below it, the exact loss #770
+ * fixed. Minting max(now, last + 1) keeps the value a real millisecond
+ * timestamp (so `tMs` still reads as elapsed time) while making two
+ * generations in one renderer process impossible to confuse. Across a hard
+ * renderer restart the counter starts over, but the wall clock has moved on
+ * by the restart itself; only a clock rolled back past the previous run's
+ * epoch could collide there.
+ */
+let lastMintedFeedDebugEpoch = 0
+
+function mintFeedDebugEpoch(ts: number): number {
+  lastMintedFeedDebugEpoch = Math.max(ts, lastMintedFeedDebugEpoch + 1)
+  return lastMintedFeedDebugEpoch
+}
+
 export function appendFeedDebugLog(
   current: SessionRuntime,
   input: FeedDebugInput,
 ): SessionRuntime {
   const ts = Date.now()
-  const epoch = current.feedDebugEpochMs ?? ts
+  const epoch = current.feedDebugEpochMs ?? mintFeedDebugEpoch(ts)
   const nextEntry: FeedDebugEntry = {
     id: current.feedDebugNextId,
     ts,
-    tMs: ts - epoch,
+    // Never negative: a minted epoch can sit a millisecond or two past `ts`
+    // when generations start within the same millisecond.
+    tMs: Math.max(0, ts - epoch),
     layer: input.layer,
     kind: input.kind,
     summary: input.summary,

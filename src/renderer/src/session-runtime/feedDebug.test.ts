@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   FEED_DEBUG_LOG_MAX_BYTES,
@@ -92,5 +92,30 @@ describe('appendFeedDebugLog', () => {
     })
     expect(after.feedDebugLog).toHaveLength(1)
     expect(after.feedDebugLog[0]?.summary).toBe('small again')
+  })
+})
+
+describe('feed-debug generation epochs (#1111 review)', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('gives two generations started in the same millisecond different epochs', () => {
+    // The epoch is how main and the settle guard tell a soft reload's fresh
+    // ids from the old ones. Equal epochs made main keep the old cursor and
+    // drop the new generation's ids at or below it.
+    vi.useFakeTimers()
+    vi.setSystemTime(1_790_000_000_000)
+    const before = appendFeedDebugLog(emptyRuntime(), { layer: 'STATE', kind: 'test', summary: 'old' })
+    const after = appendFeedDebugLog(emptyRuntime(), { layer: 'STATE', kind: 'test', summary: 'new' })
+    expect(after.feedDebugEpochMs).not.toBe(before.feedDebugEpochMs)
+    expect(after.feedDebugLog[0]!.tMs).toBe(0)
+  })
+
+  it('still moves forward when the wall clock steps backwards', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_790_000_100_000)
+    const before = appendFeedDebugLog(emptyRuntime(), { layer: 'STATE', kind: 'test', summary: 'old' })
+    vi.setSystemTime(1_790_000_000_000)
+    const after = appendFeedDebugLog(emptyRuntime(), { layer: 'STATE', kind: 'test', summary: 'new' })
+    expect(after.feedDebugEpochMs!).toBeGreaterThan(before.feedDebugEpochMs!)
   })
 })

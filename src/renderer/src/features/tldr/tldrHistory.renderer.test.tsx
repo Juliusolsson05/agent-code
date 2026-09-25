@@ -5,16 +5,24 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { tldrCommands } from './commands'
-import { mergeHistory, TldrHistoryModal } from './TldrHistoryModal'
+import { mergeHistory, ReportHistoryModal } from './ReportHistoryModal'
 import { TldrPane } from './TldrOverlay'
 import { dismissTldr, toggleTldr } from './viewState'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import { useAppStore } from '@renderer/app-state/store'
+import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
+import { ReportHistorySurface } from './surfaces/ReportHistorySurface'
 
 const originalApi = window.api
 afterEach(() => { cleanup(); dismissTldr(); window.api = originalApi })
 
 const entry = (text: string, revision: number): TldrHistoryEntry => ({ text, revision, writtenAt: new Date(Date.now() - revision * 60_000).toISOString() })
 const workspaceWith = (sessions: Record<string, unknown>) => ({ state: { sessions } }) as unknown as Workspace
+
+// The meta row renders its parts (kind chip, Current, age) as separate
+// elements; joined here the way a reader scans them, so an assertion names the
+// parts and their order rather than the markup.
+const metaOf = (item: Element) => [...item.querySelector('[data-slot="history-meta"]')!.children].map(part => part.textContent).join(' · ')
 
 const at = (text: string, revision: number, minutesAgo: number): TldrHistoryEntry => ({ text, revision, writtenAt: new Date(Date.now() - minutesAgo * 60_000).toISOString() })
 
@@ -36,7 +44,7 @@ function historyApi(entries: TldrHistoryEntry[], goals: TldrHistoryEntry[] = [])
 describe('TLDR history', () => {
   it('shows the conversation’s own history newest first and refreshes only for its identity', async () => {
     const api = historyApi([entry('Complete. PR #1 is open.', 3), entry('Store done; building the modal.', 2), entry('Goal: add history.', 1)])
-    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
       pane: { cwd: '/project', kind: 'codex', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr'] },
     })} />)
     const list = await screen.findByRole('list', { name: 'TLDR history' })
@@ -60,12 +68,12 @@ describe('TLDR history', () => {
       [at('Tests pass; opening the PR.', 2, 1), at('Reading the store.', 1, 10)],
       [at('Let users see what each agent is for.', 2, 5), at('Add a history view.', 1, 20)],
     )
-    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
       pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] },
     })} />)
     const list = await screen.findByRole('list', { name: 'TLDR history' })
     expect(api.readGoalHistory).toHaveBeenCalledWith('summary-1')
-    const rows = [...list.querySelectorAll('li')].map(item => ({ text: item.querySelector('p')!.textContent, meta: item.querySelector('span')!.textContent! }))
+    const rows = [...list.querySelectorAll('li')].map(item => ({ text: item.querySelector('p')!.textContent, meta: metaOf(item) }))
     expect(rows.map(row => row.text)).toEqual([
       'Tests pass; opening the PR.', 'Let users see what each agent is for.', 'Reading the store.', 'Add a history view.',
     ])
@@ -94,11 +102,11 @@ describe('TLDR history', () => {
       { ...at('PR #12 merged into main.', 2, 1), completed: true },
       at('Ship goal completion.', 1, 30),
     ])
-    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
       pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['goal'] },
     })} />)
     const list = await screen.findByRole('list', { name: 'TLDR history' })
-    const metas = [...list.querySelectorAll('li')].map(item => item.querySelector('span')!.textContent!)
+    const metas = [...list.querySelectorAll('li')].map(item => metaOf(item))
     expect(metas[0]).toMatch(/^Goal completed · Current · /)
     expect(metas[1]).toMatch(/^Goal · /)
     expect(metas[1]).not.toContain('completed')
@@ -106,7 +114,7 @@ describe('TLDR history', () => {
 
   it('explains an agent that never had TLDR or Goal instead of reading someone else’s history', () => {
     const api = historyApi([])
-    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({ pane: { cwd: '/project', kind: 'claude' } })} />)
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({ pane: { cwd: '/project', kind: 'claude' } })} />)
     expect(screen.getByText('TLDR and Goal have never been enabled for this agent.')).toBeTruthy()
     expect(api.readTldrHistory).not.toHaveBeenCalled()
     expect(api.readGoalHistory).not.toHaveBeenCalled()
@@ -115,7 +123,7 @@ describe('TLDR history', () => {
   it('keeps a readable history visible when the other capability’s history cannot be read', async () => {
     const api = historyApi([at('Reviewing the PR.', 1, 1)])
     api.readGoalHistory.mockRejectedValue(new Error('TLDR history is invalid.'))
-    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({
       pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] },
     })} />)
     const list = await screen.findByRole('list', { name: 'TLDR history' })
@@ -129,18 +137,18 @@ describe('TLDR history', () => {
     failing.readTldrHistory.mockRejectedValue(new Error('TLDR history is invalid.'))
     failing.readGoalHistory.mockRejectedValue(new Error('TLDR history is invalid.'))
     const goalOnly = { pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['goal'] } }
-    const view = render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalOnly)} />)
+    const view = render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalOnly)} />)
     expect(await screen.findByText('History is unavailable.')).toBeTruthy()
     view.unmount()
 
     historyApi([], [])
-    render(<TldrHistoryModal open sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalOnly)} />)
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalOnly)} />)
     expect(await screen.findByText('No TLDR or goal history yet.')).toBeTruthy()
   })
 
-  it('opens from the focused agent and is not offered for a shell', () => {
-    const command = tldrCommands.find(candidate => candidate.id === 'view-tldr-history')!
-    const ui = { closePalette: vi.fn(), openTldrHistory: vi.fn() }
+  it.each([['view-tldr-history', 'tldr'], ['view-goal-history', 'goal']] as const)('%s opens its own history for the focused agent and is not offered for a shell', (id, kind) => {
+    const command = tldrCommands.find(candidate => candidate.id === id)!
+    const ui = { closePalette: vi.fn(), openReportHistory: vi.fn() }
     const workspace = (kind: string) => ({
       state: { activeTabId: 'tab', tabs: [{ id: 'tab' }], sessions: { pane: { cwd: '/project', kind, projectId: 'tab', joinedAt: 0 } }, stage: oneLaneStage('pane'),  pinnedSessionIds: [], },
     }) as unknown as Workspace
@@ -149,7 +157,117 @@ describe('TLDR history', () => {
     expect(command.when?.(context)).toBe(true)
     void command.run(context)
     expect(ui.closePalette).toHaveBeenCalledOnce()
-    expect(ui.openTldrHistory).toHaveBeenCalledWith('pane')
+    expect(ui.openReportHistory).toHaveBeenCalledWith('pane', kind)
+  })
+})
+
+// #1190: the goal view answers "what has this agent been FOR". Its failure
+// modes are showing statuses (the TLDR history's job), losing the completion
+// label, or refetching on every status write while open.
+describe('Goal history', () => {
+  const goalAgent = { pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] } }
+
+  it('lists only goals, newest first, marks the current one and labels completions', async () => {
+    const api = historyApi(
+      [at('Tests pass; opening the PR.', 2, 1), at('Reading the store.', 1, 10)],
+      [{ ...at('PR #12 merged into main.', 3, 2), completed: true }, at('Ship goal completion.', 2, 30), at('Add a history view.', 1, 90)],
+    )
+    render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalAgent)} />)
+    expect(screen.getByRole('dialog', { name: 'Goal History' })).toBeTruthy()
+    const list = await screen.findByRole('list', { name: 'Goal history' })
+    expect(api.readGoalHistory).toHaveBeenCalledWith('summary-1')
+    expect(api.readTldrHistory).not.toHaveBeenCalled()
+    const rows = [...list.querySelectorAll('li')].map(item => ({ text: item.querySelector('p')!.textContent, meta: metaOf(item) }))
+    expect(rows.map(row => row.text)).toEqual(['PR #12 merged into main.', 'Ship goal completion.', 'Add a history view.'])
+    expect(rows[0]!.meta).toMatch(/^Goal completed · Current · /)
+    // Every row here is a goal, so a plain goal carries no kind chip at all.
+    expect(rows[1]!.meta).not.toMatch(/Goal|Current/)
+    expect(rows[2]!.meta).not.toMatch(/Goal|Current/)
+  })
+
+  it('refreshes on its own goal changes and ignores status writes', async () => {
+    const api = historyApi([at('Reading the store.', 1, 10)], [at('Add a history view.', 1, 90)])
+    render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalAgent)} />)
+    await screen.findByRole('list', { name: 'Goal history' })
+    act(() => api.emit('summary-1'))
+    act(() => api.emitGoal('someone-else'))
+    expect(api.readGoalHistory).toHaveBeenCalledTimes(1)
+    act(() => api.emitGoal('summary-1'))
+    await waitFor(() => expect(api.readGoalHistory).toHaveBeenCalledTimes(2))
+  })
+
+  it('says history is unavailable when the goal file cannot be read, and names goals when empty', async () => {
+    const failing = historyApi([at('Reading the store.', 1, 10)])
+    failing.readGoalHistory.mockRejectedValue(new Error('Goal history is invalid.'))
+    const view = render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalAgent)} />)
+    expect(await screen.findByText('History is unavailable.')).toBeTruthy()
+    view.unmount()
+
+    historyApi([at('Reading the store.', 1, 10)], [])
+    render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(goalAgent)} />)
+    expect(await screen.findByText('No goal history yet.')).toBeTruthy()
+  })
+
+  it('explains an agent that never had Goal in goal terms', () => {
+    const api = historyApi([])
+    render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith({ pane: { cwd: '/project', kind: 'claude' } })} />)
+    expect(screen.getByText('Goal has never been enabled for this agent.')).toBeTruthy()
+    expect(api.readGoalHistory).not.toHaveBeenCalled()
+  })
+})
+
+// #1190 review: the transitions around an open (or reopened) dialog. Both
+// failures were reproduced against the first version of this change.
+describe('Report history across a changing request', () => {
+  const agent = (id: string) => ({ [id]: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr', 'goal'] } })
+
+  // A reload/provider switch replaces the session id but carries the
+  // identity (session.ts: the successor inherits `tldrIdentity`, then the
+  // predecessor is deleted). The open request still names the old id.
+  it('keeps showing the conversation’s history when its session is replaced while open', async () => {
+    const api = historyApi([], [at('Add a history view.', 1, 90)])
+    const view = render(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('pane'))} />)
+    await screen.findByRole('list', { name: 'Goal history' })
+    view.rerender(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('successor'))} />)
+    expect(screen.queryByText('Goal has never been enabled for this agent.')).toBeNull()
+    expect(screen.getByRole('list', { name: 'Goal history' }).textContent).toContain('Add a history view.')
+    // Still subscribed under the held identity.
+    act(() => api.emitGoal('summary-1'))
+    await waitFor(() => expect(api.readGoalHistory).toHaveBeenCalledTimes(2))
+  })
+
+  it('never shows one request’s list under another request’s title', async () => {
+    historyApi([at('Reading the store.', 1, 10)], [])
+    const view = render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('pane'))} />)
+    await screen.findByText('Reading the store.')
+    // The goal read never settles, so what is on screen right after the
+    // rerender is exactly the frame the user would see before it does.
+    const api = historyApi([at('Reading the store.', 1, 10)])
+    api.readGoalHistory.mockReturnValue(new Promise(() => {}))
+    view.rerender(<ReportHistoryModal open kind="goal" sessionId="pane" onClose={vi.fn()} workspace={workspaceWith(agent('pane'))} />)
+    expect(screen.getByRole('dialog', { name: 'Goal History' })).toBeTruthy()
+    expect(screen.queryByText('Reading the store.')).toBeNull()
+    expect(screen.getByText('Loading…')).toBeTruthy()
+  })
+
+  // The only new wiring #1190 adds: the command's kind → the store → the
+  // surface → the dialog. Every other test stops at one side of it.
+  it('opens the history kind the store was asked for', async () => {
+    const original = useAppStore.getState()
+    try {
+      const api = historyApi([at('Reading the store.', 1, 10)], [at('Add a history view.', 1, 90)])
+      const workspace = { ...workspaceWith(agent('pane')), runtimes: {} } as unknown as Workspace
+      render(<WorkspaceProvider workspace={workspace}><ReportHistorySurface /></WorkspaceProvider>)
+      expect(screen.queryByRole('dialog')).toBeNull()
+      act(() => useAppStore.getState().openReportHistory('pane', 'goal'))
+      expect(await screen.findByRole('list', { name: 'Goal history' })).toBeTruthy()
+      expect(screen.getByRole('dialog', { name: 'Goal History' })).toBeTruthy()
+      expect(api.readTldrHistory).not.toHaveBeenCalled()
+      act(() => useAppStore.getState().closeReportHistory())
+      expect(screen.queryByRole('dialog')).toBeNull()
+    } finally {
+      useAppStore.setState(original, true)
+    }
   })
 })
 

@@ -66,10 +66,11 @@ export function makeOutletDispatch(
     if (action.kind === 'pty') {
       // The pty arm is NOT reported here. Its caller owns the answer:
       // `onPtyAction` returns void because each surface already reports its
-      // own failed write (the desktop's sendConditionKey shows a pane toast
-      // for main's false; the phone shows the desktop's refusal of an action
-      // it could not match). Reporting it twice would double the message for
-      // the one arm that was never silent.
+      // own failed write (the desktop's sendConditionKey shows it on the
+      // global toast since #711, the same surface this reporter's callers
+      // use; the phone shows the desktop's refusal of an action it could not
+      // match). Reporting it twice would double the message for the one arm
+      // that was never silent.
       await onPtyAction(action)
       return
     }

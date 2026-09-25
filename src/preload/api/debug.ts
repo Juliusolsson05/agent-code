@@ -22,6 +22,10 @@ export const debugApi = {
   appendFeedDebugLog: (params: {
     sessionId: string
     entries: FeedDebugPersistEntry[]
+    /** The renderer generation these ids were minted in. A soft reload
+     *  restarts ids at 1, and main's de-dup cursor would drop them all
+     *  without this (#770). */
+    epochMs?: number
   }): Promise<void> =>
     ipcRenderer.invoke('debug:append-feed-log', params),
 

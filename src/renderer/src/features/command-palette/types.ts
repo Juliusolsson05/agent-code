@@ -1,5 +1,6 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { SessionId } from '@renderer/workspace/types'
+import type { ReportHistoryKind } from '@renderer/app-state/uiShell/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -220,7 +221,7 @@ export type CommandContext = {
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
-    openTldrHistory: (sessionId: string) => void
+    openReportHistory: (sessionId: string, kind: ReportHistoryKind) => void
     openConversations: (opts: { focusSearch: boolean }) => void
     openAgentActivity: () => void
     /** Open the read-only Keyboard Shortcuts reference. */
