@@ -537,6 +537,17 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (15:10) — **Merged: #1308** (`7f273e06`, closes #1272; body rewritten first) and **codex-headless#53** (`d7d7a5d`). The bump is **#1317** (refs #372). #1309 is remerged onto `7f273e06`, with a fresh gate running.
+  - **Third reviewers (q37):**
+    - MERGE-READY: #1257, #1263, #1284, #1287 and #1298, with minors only.
+    - FIX-BEFORE-MERGE: #1286 and #1297, both now fixed.
+      - #1286: creates show the three curated spawn failures (Claude proxy, missing folder, missing CLI, whose sentence now lives in shared), and nothing else.
+      - #1297: a hover on stale rows can't carry over (reset on landing, hover ignored while stale). The integration requirement for #1221 is posted on #1221.
+    - Both C reviewers are on their one verification round.
+  - **codex-headless#54:** round 2 found the cwd forging both hints. Fixed by anchoring the hints to Codex's hint rows, never the status row; the final disposition is posted.
+  - **New #1316** (#1315, the Pi bootstrap waits for its bridge). B's six mutants all now fail tests, and round 2 is out.
+  - **Decision:** a pointer-only bump PR (#1317) relies on the package PR's three reviewers; its diff is one submodule line.
+
 - 2026-09-25 (14:20) — **#1300 merged** (`1d25b0ed`, closes #1261). #1171 closed by hand (same failure). #1308 is remerged onto `1d25b0ed`, with a fresh gate running; it merges next.
   - **Steering q37 (quorum):** #1257, #1263, #1284, #1286, #1287, #1297 and #1298 had only reviewers A and B. None merges without a third. Independent C reviewers (Pi/Grok alternating) are now reviewing each final head. #1297's C must cover stale selection, paging and overlap with #1221, and #1284's C the unreviewed package commit 052a476. #1297's posted two-reviewer disposition got a public correction.
   - **#1297:** the round-2 test now drives a scroll, so it reaches `loadMore` (verified by mutation). Body rewritten; disposition posted but not final until C reports.
