@@ -111,6 +111,10 @@ export type AppRunIncidentKind =
   // operations it names may have completed after exit with no durable result,
   // so a restart that finds one unresolved should look here first (#943).
   | 'control.drain_incomplete'
+  // The control journal was found damaged and recovered (#1240). Context names
+  // the byte-for-byte quarantine copy and, when keyed calls are blocked, the
+  // digest to accept in recovery-accepted.json after reconciling.
+  | 'control.history_recovered'
   | 'orchestration.request_timeout'
   // A renderer mutation answered AFTER its caller gave up. Recovery worked —
   // the child was adopted — but it ran work nobody was waiting on, so the

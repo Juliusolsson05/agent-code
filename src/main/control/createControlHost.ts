@@ -9,7 +9,7 @@ import {
 import { ControlRendererBridge } from './rendererBridge'
 import { windowControlCapabilities } from '@main/window/control'
 import { focusWindow } from '@main/window/focusWindow'
-import { FileControlHistory } from './history/FileControlHistory'
+import { FileControlHistory, type ControlHistoryRecovery } from './history/FileControlHistory'
 import { historyCapabilities } from './history/control'
 import { taskHistoryCapabilities } from './history/tasks'
 import { globalControlCapabilities, type ObserveWindows } from './globalCapabilities'
@@ -31,7 +31,10 @@ export function createControlHost(windowAccess: {
   listWindowIds(): string[]
 }, historyDirectory: string, additionalCapabilities: readonly RegisteredCapability[] | ((ports: {
   invokeTask: (context: ControlContext, request: ControlRequest) => Promise<ControlResult>
-}) => readonly RegisteredCapability[]) = []) {
+}) => readonly RegisteredCapability[]) = [], options: {
+  /** Told when the control journal was recovered from damage (#1240). */
+  onHistoryRecovered?: (recovery: ControlHistoryRecovery) => void
+} = {}) {
   // Inject the window adapter for isolated Electron trials. The production
   // adapter is the existing window registry, never an SDK-owned window store.
   const { getBrowserWindow, windowIdFor, listWindowIds } = windowAccess
@@ -46,7 +49,7 @@ export function createControlHost(windowAccess: {
     const parsed = workspaceObservationSchema.safeParse(result.value)
     return parsed.success ? { windowId, owner, workspace: parsed.data } : { windowId, owner, error: 'Invalid workspace observation' }
   }))
-  const history = new FileControlHistory(historyDirectory)
+  const history = new FileControlHistory(historyDirectory, { onRecovered: options.onHistoryRecovered })
   const instanceId = randomUUID()
   const executor = createControlExecutor({ history, instanceId, id: randomUUID,
     now: () => new Date().toISOString(), catalog: () => registry.list(),
