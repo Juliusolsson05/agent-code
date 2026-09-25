@@ -1819,3 +1819,4 @@ Reviewer focus: A = keyboard, focus and failure paths (Codex). B = tests and int
   primitives not in the original plan, all from the UI pass: Alert,
   EmptyState, Select, SegmentedControl, OptionCards, PanelHeader,
   SectionLabel, PaneDialogHost / pane-dialog.
+- 2026-09-25 Task 9 batch after review: G-28…G-34 (settings bar, feed pager, editor toolbar, data-label casing, placeholders, error wording, row Switch). Full `npm run check` passed apart from one file: `playwrightActions.system.test.ts` timed out in `afterAll` (Chromium teardown, 10 s hook) at load average ~160. That file does not import anything this batch changed, and it passed 11/11 on re-run at load ~47. Recorded here, not rerun into green. Merged origin/main (6 commits, #1252 failed-restart keeps the agent), with no conflicts.
