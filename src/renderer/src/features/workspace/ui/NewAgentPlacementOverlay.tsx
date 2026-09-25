@@ -1,4 +1,5 @@
 import { isAgentProviderKind } from '@shared/types/providerKind'
+import { useWorkspaceSurfaceHidden } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { Button } from '@renderer/components/ui/button'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -75,6 +76,10 @@ export function NewAgentPlacementOverlay({
   // spawn a second unwanted agent. A ref (not state) because the latch needs
   // to gate the synchronous keydown handler path, not trigger a re-render.
   const committingRef = useRef(false)
+  // Which create owns the latch (#1286 review A2). The open effect resets the
+  // latch on every reopen, so an OLD create settling late must not reopen it
+  // for a NEW one still in flight; that let a third Enter start a duplicate.
+  const commitGenerationRef = useRef(0)
 
   // Linked mode offers agent providers only: createLinkedAgent's signature
   // refuses 'terminal' (a shell cannot be an orchestration/linked child).
@@ -122,7 +127,23 @@ export function NewAgentPlacementOverlay({
     // (#865). It honors projectIntent, so "+" on a project header files the
     // session there, and it closes this overlay itself once the session is
     // placed (closeNewAgentPlacement) — which is why onClose is NOT called.
-    void workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined)
+    //
+    // #1270: on failure the creator returns null (its toast says why) and
+    // leaves the overlay open, which is right: the user may retry or pick
+    // another kind. The latch must then open again, or Enter stays dead
+    // while the overlay's owner marker blocks every app shortcut.
+    const generation = ++commitGenerationRef.current
+    const release = () => releaseCommitLatch(generation)
+    void Promise.resolve(workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined))
+      .then(sessionId => { if (!sessionId) release() }, release)
+  }
+
+  // Only a create that did NOT produce a session reopens the latch, and only
+  // if it is still the latest create; a success closes the overlay, and
+  // re-opening resets it (effect below).
+  function releaseCommitLatch(generation: number): void {
+    if (generation !== commitGenerationRef.current) return
+    committingRef.current = false
   }
 
   useEffect(() => {
@@ -134,8 +155,19 @@ export function NewAgentPlacementOverlay({
     committingRef.current = false
   }, [open])
 
+  // #1269: the overlay is mounted inside the retained workspace, which stays
+  // under display:none while Reader, Spotlight, Settings or a fullscreen
+  // editor own the screen, and the Command Palette (not focus-filtered) can
+  // open it there. Hidden, it must own nothing: no capture listener (it ate
+  // Escape/arrows and turned the composer's Enter into "create an agent")
+  // and no owner marker (hasAppInteractionOwner is a querySelector, blind to
+  // display:none, so the marker blocked every shortcut). `open` is kept, so
+  // the picker appears once its surface is visible again.
+  const surfaceHidden = useWorkspaceSurfaceHidden()
+  const active = open && !surfaceHidden
+
   useEffect(() => {
-    if (!open) return
+    if (!active) return
     const handled = new Set(['Escape', 'ArrowUp', 'ArrowDown', 'Enter'])
     const onKeyDown = (event: KeyboardEvent) => {
       if (!handled.has(event.key)) return
@@ -161,15 +193,18 @@ export function NewAgentPlacementOverlay({
     // commitKind closes over props already listed here; listing the function
     // itself would re-register the listener on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kindOptions, linkedAgentParentId, onClose, open, projectIntent, selectedIndex, workspace])
+  }, [active, kindOptions, linkedAgentParentId, onClose, projectIntent, selectedIndex, workspace])
 
   // A project must exist to own the new session; WelcomeEmpty covers the
   // no-project boot, so this overlay simply does not render there.
-  if (!open || !workspace.activeTab) return null
+  if (!active || !workspace.activeTab) return null
 
   return (
     <div
       data-agent-code-interaction-owner="app"
+      // Read by useKeybinds' placement gate: the store flag alone does not
+      // mean this overlay is on screen (#1286 review A).
+      data-new-agent-overlay=""
       className="absolute inset-0 z-40 bg-black/20"
       // The backdrop is the mouse exit. Only a click on the backdrop ITSELF
       // dismisses: a click that bubbled up from the picker must not.

@@ -91,7 +91,7 @@ export type UserMcpResolver = (params: {
 }>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
-import { SESSION_START_FAILED_MESSAGE, type PromptGateState } from '@shared/types/session.js'
+import { PROVIDER_CLI_NOT_FOUND_SUFFIX, SESSION_START_FAILED_MESSAGE, type PromptGateState } from '@shared/types/session.js'
 import {
   isCodexTranscriptObservationEventName,
   isCodexTranscriptObservationSessionId,
@@ -400,7 +400,7 @@ export class ProviderCliNotFoundError extends Error {
   constructor(kind: string) {
     // Names a real place (#995): Setup opens from File › Setup… or the
     // "Open Setup" command, and shows the install command for this CLI.
-    super(`${kind} CLI not found. Open Setup (File › Setup…) to install it or enter its path.`)
+    super(`${kind}${PROVIDER_CLI_NOT_FOUND_SUFFIX}`)
     this.name = 'ProviderCliNotFoundError'
   }
 }

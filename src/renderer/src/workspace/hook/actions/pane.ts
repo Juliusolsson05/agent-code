@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
@@ -63,6 +64,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
+import { curatedSpawnMessage } from '@renderer/workspace/spawn/errorMessage'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -968,13 +970,7 @@ export function usePaneActions(
           builtInMcpOverrides,
         })
       } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : kind === 'terminal'
-              ? 'Failed to create dispatch terminal'
-              : 'Failed to create dispatch agent',
-        )
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err))
         return
       }
 
@@ -1103,13 +1099,11 @@ export function usePaneActions(
         // should be unreachable; it stays because the next stale target must be
         // visible rather than silent.
         //
-        // WHY it also CLOSES the overlay, and unconditionally: a toast alone
-        // left the user in the dead end it was describing. The overlay only
-        // closes on a successful spawn, and `NewAgentPlacementOverlay` latches
-        // `committingRef` before calling this and clears it only in its `open`
-        // effect — so after a failure the overlay is still up with every
-        // gesture latched off, and Escape is the only way out. Advice the user
-        // cannot act on is worse than silence, not better.
+        // WHY it also CLOSES the overlay: the project the user was creating
+        // into is gone, so a retry from this overlay cannot succeed, and
+        // advice the user cannot act on is worse than silence. (Since #1270
+        // the overlay's latch does reopen after a failed create, so this is
+        // no longer the only way out; it is still the right outcome here.)
         //
         // The copy splits on `projectOverride` because the callers are not
         // alike: without one the project came from the focused LANE (Dispatch
@@ -1140,11 +1134,7 @@ export function usePaneActions(
       try {
         sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create dispatch agent',
-        )
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err))
         return null
       }
 
@@ -1188,6 +1178,9 @@ export function usePaneActions(
       // process instead of leaving an unowned live session behind.
       if (!placed) {
         await sessionActions.killSession(sessionId, 'spawn.unplaced', { cwd, kind, providerRuntime })
+        // Say why nothing appeared (#1286 review A3): the overlay stays open
+        // and Enter works again, and without this a retry looked arbitrary.
+        showToast(`Could not create ${kind === 'terminal' ? 'terminal' : 'agent'}: its project was closed while it was starting`)
         return null
       }
       if (placement?.selectCreated !== false) closeNewAgentPlacement()
@@ -1246,11 +1239,7 @@ export function usePaneActions(
       try {
         sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind, providerRuntime })
       } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create linked agent',
-        )
+        showToast(spawnFailureToast('linked agent', err))
         return
       }
 
@@ -1929,3 +1918,19 @@ export function usePaneActions(
 // (U2, #681) — refilling it with a neighbour is precisely the displacement
 // #681 removed. So the whole helper reduced to `clearTiledLaneSessions`, which
 // the three close commits now call directly.
+
+/** What the user sees when creating an agent or terminal fails to spawn.
+ *
+ *  WHY never the rejection's raw text (steering q22, #1270): a raw provider
+ *  exception relayed through IPC can carry environment values, proxy URLs or
+ *  scoped MCP tokens, and main journals it before it rethrows. But the three
+ *  curated failures (Claude proxy startup, a missing workspace folder, a
+ *  missing provider CLI) are safe and name the fix, and without them a
+ *  deleted worktree looked retryable and a missing CLI gave no pointer to
+ *  File › Setup… (#1286 review C1). `spawn` has already mapped its rejection
+ *  through sessionSpawnErrorMessage; this re-reads it with the same
+ *  recognizer, so anything else is still the generic sentence. */
+function spawnFailureToast(what: string, err: unknown): string {
+  const curated = err instanceof Error ? curatedSpawnMessage(err.message) : null
+  return `Could not create ${what}: ${curated ?? SESSION_START_FAILED_MESSAGE}`
+}

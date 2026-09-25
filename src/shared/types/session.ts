@@ -183,6 +183,12 @@ export const MISSING_WORKSPACE_FOLDER_PREFIX = 'Workspace folder is missing: '
  *  only the message text. */
 export const WORKSPACE_READ_ONLY_PREFIX = 'Workspace file is read-only this session: '
 
+/** How ProviderCliNotFoundError's message ends after `<kind>`, shared for
+ *  the same reason as MISSING_WORKSPACE_FOLDER_PREFIX: the renderer must
+ *  recognise this curated, secret-free sentence through the IPC wrapper and
+ *  show it, because it names the fix (File › Setup…) (#1286 review C2). */
+export const PROVIDER_CLI_NOT_FOUND_SUFFIX = ' CLI not found. Open Setup (File › Setup…) to install it or enter its path.'
+
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
   | 'cancelled'
