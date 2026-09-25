@@ -1,6 +1,8 @@
 import { carriedRelationships } from '@renderer/workspace/idRemap'
+import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
+import { MISSING_WORKSPACE_FOLDER_PREFIX, SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { useCallback, useState } from 'react'
 
 import type {
@@ -29,6 +31,11 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 
 type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
+
+/** A respawn either produced a session, failed in a way a retry may fix
+ *  (provider setup, a transient spawn error), or was refused because the
+ *  session's folder is gone, which no retry can fix. */
+type RespawnOutcome = { sessionId: SessionId; spawned: boolean } | 'failed' | 'folder-missing'
 
 /** Where a successful restore sends its old -> new ids. A top-level entry
  *  publishes to the stack; a group member publishes to the stack AND to the
@@ -134,6 +141,7 @@ export function useUndoCloseAction(
   setState: WorkspaceSetState,
   refs: WorkspaceRefs,
   sessionActions: SessionActions,
+  showToast: (message: string, durationMs?: number) => void = () => undefined,
 ): {
   undoClose: () => Promise<void>
   undoCloseCount: number
@@ -151,10 +159,11 @@ export function useUndoCloseAction(
   // the session. Minting the id mirrors openExtensionViewInPane; there is
   // nothing to recover because there was never a process.
   //
-  // Returns null on a spawn failure. `spawned` says whether a backend now
-  // exists that a bail-out must kill.
+  // Returns 'failed' on a spawn failure a retry may fix, and 'folder-missing'
+  // when main refused because the cwd is gone (see RespawnOutcome). `spawned`
+  // says whether a backend now exists that a bail-out must kill.
   const respawn = useCallback(
-    async (meta: SessionMeta): Promise<{ sessionId: SessionId; spawned: boolean } | null> => {
+    async (meta: SessionMeta): Promise<RespawnOutcome> => {
       const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
       if (kind === 'extension-view') {
         return { sessionId: crypto.randomUUID() as SessionId, spawned: false }
@@ -180,8 +189,13 @@ export function useUndoCloseAction(
           builtInMcpOverrides: sessionMcpOverrides(meta),
         })
         return { sessionId, spawned: true }
-      } catch {
-        return null
+      } catch (error) {
+        // The rejection's text is deliberately not kept for the user (steering
+        // q22): it is the raw provider exception relayed through IPC and can
+        // carry environment values or tokens. See restoreFailureMessage.
+        // Only its CLASS is read, and only for the one failure main curates
+        // as safe and that no retry can fix: a deleted cwd (#1264 R2-1).
+        return isMissingFolderError(error) ? 'folder-missing' : 'failed'
       }
     },
     [sessionActions],
@@ -204,7 +218,18 @@ export function useUndoCloseAction(
       if (!refs.stateRef.current.tabs.some(tab => tab.id === projectId)) return 'stale'
 
       const respawned = await respawn(meta)
-      if (!respawned) return 'retryable-failure'
+      if (respawned === 'folder-missing') {
+        // WHY 'stale' and not 'retryable-failure' (#1264 R2-1): the entry
+        // would be pushed back and re-fail forever — a worktree removed after
+        // its branch merged never comes back — so every later Cmd+Shift+T
+        // would pop the same entry and every older close would be
+        // unreachable (the "poisoned stack head" above). Consuming it lets
+        // the walk continue to older entries. The toast names the path main
+        // already quotes (the pane header shows it too), never the spawn text.
+        showToast(folderMissingMessage(`"${sessionDisplayTitle(meta)}"`, meta.cwd), RESTORE_FAILURE_TOAST_MS)
+        return 'stale'
+      }
+      if (respawned === 'failed') return 'retryable-failure'
       const newSessionId = respawned.sessionId
 
       // Set inside the updater and read after. Sound because setState is the
@@ -275,7 +300,7 @@ export function useUndoCloseAction(
       publish({ sessions: new Map([[entry.sessionId, newSessionId]]) })
       return 'restored'
     },
-    [refs.stateRef, respawn, sessionActions, setState],
+    [refs.stateRef, respawn, sessionActions, setState, showToast],
   )
 
   const restoreTabEntry = useCallback(
@@ -303,14 +328,49 @@ export function useUndoCloseAction(
       // sibling it had just started and pushed the entry back) while its
       // detached rows were best-effort. With no tree there is nothing a
       // missing session could corrupt, so the gentler rule covers everyone.
+      let foldersMissing = 0
       for (const member of entry.sessions) {
         const respawned = await respawn(member.meta)
-        if (!respawned) continue
+        if (respawned === 'folder-missing') foldersMissing++
+        if (typeof respawned === 'string') continue
         idMap.set(member.sessionId, respawned.sessionId)
         carried.set(respawned.sessionId, member.meta)
       }
-      // Nothing came back: the entry is still good, the provider is not.
+      // Every member's folder is gone: no retry can bring any of them back,
+      // so consume the entry rather than poison the stack head (#1264 R2-1).
+      // One shared cwd is named; several are not, because the owner's largest
+      // real project spans 22 cwds (21 of them worktrees) and naming the
+      // first implied a single folder (#1264 round-2 review).
+      if (foldersMissing === entry.sessions.length) {
+        const cwds = new Set(entry.sessions.map(member => member.meta.cwd))
+        showToast(
+          cwds.size === 1
+            ? folderMissingMessage(`project "${entry.tab.title}"`, entry.sessions[0].meta.cwd)
+            : `Could not restore project "${entry.tab.title}": their folders no longer exist`,
+          RESTORE_FAILURE_TOAST_MS,
+        )
+        return 'stale'
+      }
+      // Nothing came back: the entry is still good, the provider is not. A
+      // MIX of missing folders and provider failures stays retryable — the
+      // provider failures may yet succeed, and a retry that restores them
+      // then applies the partial rule below to the missing ones.
       if (idMap.size === 0) return 'retryable-failure'
+      // Some came back: the rest are gone (#992's best-effort rule), and the
+      // user must be told which part of the project is missing (#1264 review).
+      // A deleted worktree is not a provider fault, so the reason follows
+      // what actually failed: all-folder, all-provider, or both (#1264
+      // round-2 review: "retry" advice for a member no retry can fix).
+      const missing = entry.sessions.length - idMap.size
+      if (missing > 0) {
+        const providerFailed = missing - foldersMissing
+        const reason = providerFailed === 0
+          ? 'their folders no longer exist'
+          : foldersMissing === 0
+            ? SESSION_START_FAILED_MESSAGE
+            : `${foldersMissing} folder${foldersMissing === 1 ? '' : 's'} no longer exist${foldersMissing === 1 ? 's' : ''}; ${SESSION_START_FAILED_MESSAGE}`
+        showToast(`Could not restore ${missing} of ${entry.sessions.length} agents in project "${entry.tab.title}": ${reason}`, RESTORE_FAILURE_TOAST_MS)
+      }
 
       setState(prev => {
         const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
@@ -350,7 +410,7 @@ export function useUndoCloseAction(
       })
       return 'restored'
     },
-    [respawn, setState],
+    [respawn, setState, showToast],
   )
 
   const restoreSingleEntry = useCallback(
@@ -381,6 +441,13 @@ export function useUndoCloseAction(
     async (entry: ClosedGroup): Promise<RestoreResult> => {
       let remaining: SingleClosedEntry[] = [...entry.entries]
       let restoredAny = false
+      // A member consumed as stale (its project gone, or its folder deleted)
+      // must not come back with the group. Returning 'retryable-failure'
+      // pushes the ORIGINAL group back, so once one member was consumed the
+      // leftover is rebuilt instead, as for a partial restore (#1264 round-2
+      // review: a deleted-folder member was retried, and re-toasted, on
+      // every later ⌘⇧T).
+      let consumedAny = false
       while (remaining.length > 0) {
         const member = remaining[remaining.length - 1]
         remaining = remaining.slice(0, -1)
@@ -390,17 +457,21 @@ export function useUndoCloseAction(
         })
         if (result === 'restored') {
           restoredAny = true
+        } else if (result === 'stale') {
+          consumedAny = true
         } else if (result === 'retryable-failure') {
-          if (!restoredAny) return 'retryable-failure'
+          if (!restoredAny && !consumedAny) return 'retryable-failure'
           const rest = [...remaining, member]
           const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
           refs.undoStackRef.current.push(leftover)
+          // Part of the group came back; say what did not (#1242).
+          showToast(restoreFailureMessage(leftover), RESTORE_FAILURE_TOAST_MS)
           return 'restored'
         }
       }
       return restoredAny ? 'restored' : 'stale'
     },
-    [refs.undoStackRef, restoreSingleEntry],
+    [refs.undoStackRef, restoreSingleEntry, showToast],
   )
 
   const undoClose = useCallback(async () => {
@@ -430,6 +501,10 @@ export function useUndoCloseAction(
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
+        // WHY a toast (#1242): keeping the entry is right (the provider, not
+        // the entry, is broken), but without saying so, every Cmd+Shift+T
+        // after a CLI broke looked like a dead key.
+        showToast(restoreFailureMessage(entry), RESTORE_FAILURE_TOAST_MS)
         if (staleEntryConsumed) {
           bumpUndoCloseVersion(version => version + 1)
         }
@@ -437,11 +512,42 @@ export function useUndoCloseAction(
       }
       staleEntryConsumed = true
     }
-  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreGroupEntry, restoreSingleEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreGroupEntry, restoreSingleEntry, showToast])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.
   const undoCloseCount = refs.undoStackRef.current.length
 
   return { undoClose, undoCloseCount }
+}
+
+/** Warning-grade toasts elsewhere use 6-10 s; the default 2.5 s vanished
+ *  before the sentence could be read (#1264 review). */
+const RESTORE_FAILURE_TOAST_MS = 8000
+
+/** What a failed Undo Close tells the user: which close could not come back,
+ *  and the same safe, actionable sentence main's recovery and the reload
+ *  path show for a provider that would not start. Never the spawn's own
+ *  text (steering q22). */
+function restoreFailureMessage(entry: ClosedEntry): string {
+  const what = entry.type === 'session'
+    ? `"${sessionDisplayTitle(entry.sessionMeta)}"`
+    : entry.type === 'tab'
+      ? `project "${entry.tab.title}"`
+      : `${entry.entries.length} closed item${entry.entries.length === 1 ? '' : 's'}`
+  return `Could not restore ${what}: ${SESSION_START_FAILED_MESSAGE}`
+}
+
+/** A restore whose folder was deleted since the close (typically a worktree
+ *  removed after its branch merged). Quoting the path is safe: it is main's
+ *  own curated message and the pane header already renders it. */
+function folderMissingMessage(what: string, cwd: string): string {
+  return `Could not restore ${what}: its folder no longer exists (${cwd})`
+}
+
+/** Recognise MissingWorkspaceDirectoryError across IPC. The class does not
+ *  survive `ipcRenderer.invoke` (only the wrapped message does), hence the
+ *  shared prefix rather than instanceof. */
+function isMissingFolderError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(MISSING_WORKSPACE_FOLDER_PREFIX)
 }
