@@ -536,6 +536,13 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (12:45) — **Round-2 findings fixed and dispositioned (final round):**
+  - **#1312:** a rejected /model delivery after Stop no longer counts the untouched agents as failed. The modal now pins Return's stop, Escape during /model, stops during later agents and the per-run reset.
+  - **#1311:** attach and detach carry the page document, so a late detach from the dead page can't take the live page's reference. The debug inline terminal detaches only an attach main accepted.
+  - **#1309:** a typed row that matches a known hint ("Press up to edit") is now a draft, not cleared. The `readComposer` adapter is tested.
+  - **#1308:** B's round-2 findings were already fixed in 5077e3a6; disposition posted.
+  - **Queue:** #1300's gate is running on main 3c12bb73; #1301 is next. #1310 is waiting on its 3 final-round reviewers.
+
 - 2026-09-25 (12:20) — **#1310 reworked for steering q34:** only a full row is a hard cut now.
   - A row one cell short is ambiguous, because xterm drops trailing spaces, so it keeps its space. The worst case there is a timeout.
   - The new negative test was red on 85c3490e and is green on d40fec0b.
