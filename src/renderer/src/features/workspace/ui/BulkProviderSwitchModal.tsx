@@ -593,8 +593,18 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       // Clamped so the report can never claim more agents than the batch had:
       // the loop aborted, so everything not already counted is unattempted,
       // and at minimum the one that rejected must show up.
+      //
+      // #1312 round 2 (review A): once the user has pressed Stop, the loop
+      // would never have reached the agents after the one that rejected, so
+      // they are "not attempted", not failures. Only the rejected agent
+      // failed. Without a stop the old reading stands: the rejection cut the
+      // batch short, and every unreached agent is reported as failed.
+      failed += 1
       const remaining = matchingRows.length - delivered - failed
-      failed += remaining > 0 ? remaining : 1
+      if (remaining > 0) {
+        if (stopRequestedRef.current) notAttempted = remaining
+        else failed += remaining
+      }
       if (firstFailure === null) {
         firstFailure = error instanceof Error && error.message.length > 0
           ? error.message
