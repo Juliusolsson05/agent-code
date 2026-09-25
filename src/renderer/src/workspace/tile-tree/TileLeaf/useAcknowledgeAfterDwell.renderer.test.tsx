@@ -92,7 +92,7 @@ describe('useAcknowledgeAfterDwell', () => {
   it('acknowledges at once when the turn ends in a pane the user is already watching', () => {
     const { acknowledge, rerender } = mount({ unread: false })
     advance(SEEN_DWELL_MS + 500)
-    // Synchronous, inside the commit that sets the marker, so the stripes never
+    // Synchronous, inside the commit that sets the marker, so the outline never
     // reach the screen.
     rerender({ sessionId: 'a', focused: true, unread: true })
     expect(acknowledge).toHaveBeenCalledTimes(1)

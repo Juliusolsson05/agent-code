@@ -397,8 +397,8 @@ export type Settings = {
    *  the modal validates before saving. */
   customAppearanceJson: string
   showStatusMode: boolean
-  /** Stripe an agent pane's header while it holds an unseen completion
-   *  (#1172). Gates the stripes only: when a completion counts as seen
+  /** Outline an agent pane's header while it holds an unseen completion
+   *  (#1172, outline since #1200). Gates the outline only: when a completion counts as seen
    *  (engagement, or dwelling on the pane) is the same with it off. */
   showAgentCompletionIndicator: boolean
   showWorktreeBadges: boolean

@@ -19,7 +19,7 @@ import type { SessionRuntime } from './state'
  * put, such as a Dispatch selection the user rests on for 1.5 s, deliberately
  * counts as looking. Shell terminals have no dwell and still clear only on
  * engagement. The same marker drives both the Dispatch NEW badge and the
- * agent pane header's completion stripes, so those two always agree.
+ * agent pane header's completion outline, so those two always agree.
  * Attention outranks ordinary output: once a permission/trust
  * prompt appears, the list should keep showing ACTION until
  * the user opens that agent or the prompt resolves. A later
