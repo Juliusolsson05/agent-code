@@ -132,7 +132,9 @@ export function useBootstrap(
             {
               // v3 files list `projects`; v2 files list `tabs`.
               tabs: (parsed.workspace.projects ?? parsed.workspace.tabs ?? []).length,
-              sessions: Object.keys(parsed.workspace.sessions).length,
+              // `?? {}`: a telemetry attribute must not be what throws a
+              // restorable workspace into the recovery shell (#1245).
+              sessions: Object.keys(parsed.workspace.sessions ?? {}).length,
             },
           )
           canAutosaveBootState =
