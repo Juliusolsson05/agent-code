@@ -536,6 +536,11 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (11:50) — **main CI for #1258 + #1264 is green** (run 36149128459), noted on #1264.
+  - #1261 flaked again, on #1309; it was re-run, and #1300 is still first in the merge order.
+  - **New PR #1312** fixes #1271: a running bulk provider switch can be stopped after the current agent. 3 reviewers.
+  - **#1293 is needs-evidence:** there are no recorded Codex or Claude frames of the dialog or working states to anchor the predicates on.
+
 - 2026-09-25 (11:25) — **No merges this cycle:** 13 PRs are queued or running, and so is main's check of #1258 + #1264.
   - #1261 flaked a fourth time (#1286) and was re-run. #1300, which fixes it, merges first once green.
   - **New PRs:**
