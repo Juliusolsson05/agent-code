@@ -421,6 +421,13 @@ const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
 
 /** PiSession's marker for "the bridge never connected" (piSession.ts). */
 
+/** How long after a completed Claude turn a pane with zero committed JSONL
+ *  entries is declared transcript-disconnected (#290). Generous on purpose: a
+ *  healthy pane has entries before `turn_completed`, so this only has to
+ *  cover the tail watcher's latency, and a false alarm clears itself on the
+ *  first arriving record. */
+const TRANSCRIPT_COMMIT_GRACE_MS = 15_000
+
 export function useIpcSubscriptions(
   // WHY feed identity matters: `feed` sits in the effect's dep array, so an
   // unstable reference would tear down + re-attach every subscription each
@@ -1213,7 +1220,15 @@ export function useIpcSubscriptions(
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           const meta = refs.stateRef.current.sessions[sessionId] ?? null
-          const shouldMarkDisconnected = shouldMarkProviderSessionDisconnected(current, meta)
+          // NOT evaluated here any more (#290). The first proxy header of a
+          // fresh pane arrives before Claude has written a single JSONL line,
+          // so "no committed entries yet" is the normal state at this moment.
+          // Marking it would alarm on every new pane, which is why the old
+          // predicate refused 'ready', and that made it unable to fire in the
+          // real broken state too. The decision moved to the end of a turn:
+          // see `scheduleTranscriptCommitCheck`.
+          void meta
+          const shouldMarkDisconnected = false
           const next = appendFeedDebugLog(
             {
               ...current,
@@ -1556,6 +1571,7 @@ export function useIpcSubscriptions(
       if (pendingStaleQueue !== null) {
         claudeQueueBySession.set(sessionId, pendingStaleQueue)
       }
+      if (semanticEvent.type === 'turn_completed') scheduleTranscriptCommitCheck(sessionId)
       closeSpan({
         sessionId,
         eventType: typeof semanticEvent.type === 'string' ? semanticEvent.type : 'semantic',
@@ -1565,6 +1581,59 @@ export function useIpcSubscriptions(
 
     const semanticEventQueue = new SemanticEventBackpressureQueue()
     let semanticFlushTimer: number | null = null
+    /**
+     * Pending "did this turn ever commit?" checks, one per session (#290).
+     *
+     * WHY at the end of a TURN and after a grace period: Claude writes its
+     * JSONL as the turn happens (the user row at submit, assistant rows as
+     * blocks finish), so by `turn_completed` a healthy pane has entries. A
+     * pane that has finished a turn, waited TRANSCRIPT_COMMIT_GRACE_MS more,
+     * and still has zero entries and no durable transcript id is the recorded
+     * #290 state: live streaming, nothing durable, a resume that will find
+     * nothing. The grace absorbs the tail watcher's latency; the first
+     * arriving record resets the status to 'ready' on its own, so a slow
+     * transcript clears the banner instead of leaving it stuck.
+     *
+     * One pending check per session (the first completed turn starts the
+     * clock; later turns do not push it back), cleared on unmount.
+     */
+    const transcriptCommitChecks = new Map<SessionId, number>()
+    const scheduleTranscriptCommitCheck = (sessionId: SessionId): void => {
+      if (transcriptCommitChecks.has(sessionId)) return
+      const meta = refs.stateRef.current.sessions[sessionId]
+      // Claude only: the proxy-header provisional identity this guards is a
+      // Claude mechanism, and other providers commit on their own schedules.
+      if (!meta || (meta.kind ?? 'claude') !== 'claude') return
+      transcriptCommitChecks.set(sessionId, window.setTimeout(() => {
+        transcriptCommitChecks.delete(sessionId)
+        const current = refs.latestRuntimesRef.current[sessionId]
+        const latestMeta = refs.stateRef.current.sessions[sessionId]
+        if (!current || !shouldMarkProviderSessionDisconnected(current, latestMeta)) return
+        setRuntimes(prev => {
+          const runtime = prev[sessionId]
+          if (!runtime || !shouldMarkProviderSessionDisconnected(runtime, refs.stateRef.current.sessions[sessionId])) return prev
+          const id = latestMeta?.providerSessionId
+          return {
+            ...prev,
+            [sessionId]: appendFeedDebugLog(
+              {
+                ...runtime,
+                transcriptStatus: 'disconnected',
+                transcriptError:
+                  `Claude finished a turn${id ? ` in session ${id}` : ''}, ` +
+                  'but no committed JSONL transcript has arrived. This conversation may not resume.',
+              },
+              {
+                layer: 'SEM',
+                kind: 'transcript_never_committed',
+                summary: 'turn completed · no committed transcript after grace',
+                data: { providerSessionId: id ?? null, graceMs: TRANSCRIPT_COMMIT_GRACE_MS },
+              },
+            ),
+          }
+        })
+      }, TRANSCRIPT_COMMIT_GRACE_MS))
+    }
     const flushSemanticEventQueue = (): void => {
       if (semanticFlushTimer !== null) {
         window.clearTimeout(semanticFlushTimer)
@@ -2795,6 +2864,8 @@ export function useIpcSubscriptions(
       window.clearInterval(orphanSweepTimer)
       window.clearInterval(memoryGaugeTimer)
       if (semanticFlushTimer !== null) window.clearTimeout(semanticFlushTimer)
+      for (const timer of transcriptCommitChecks.values()) window.clearTimeout(timer)
+      transcriptCommitChecks.clear()
       semanticEventQueue.drain()
       offStarted()
       offInputReadiness()

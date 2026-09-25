@@ -167,7 +167,13 @@ export function shouldMarkProviderSessionDisconnected(
 ): boolean {
   if (!meta) return false
   if (hasDurableProviderSession(meta)) return false
-  if (runtime.transcriptStatus === 'loading' || runtime.transcriptStatus === 'ready') return false
+  // 'ready' IS eligible (#290): a fresh live pane sits at 'ready', which is
+  // exactly the state the recorded broken pane was in. The caller decides WHEN
+  // to ask (after a completed turn plus a grace period), which is what keeps
+  // this from alarming on a pane that simply has not written its first line.
+  // 'loading' is a history load in flight; 'error' and 'disconnected' already
+  // say something more specific.
+  if (runtime.transcriptStatus !== 'ready' && runtime.transcriptStatus !== 'idle') return false
   return runtime.lastJsonlEntryAt === null && runtime.totalEntries === 0
 }
 
