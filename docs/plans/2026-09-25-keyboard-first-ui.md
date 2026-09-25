@@ -409,7 +409,7 @@ entry when it lands.
 | S1 | CloseConfirmationDialog (`workspace/ui`) | default focus Cancel; no Enter; no hints | DialogActions (danger, focus Cancel, chips); body px-4 (flush today) | done |
 | S2 | PinAgentsModal (`dispatch-pin`) | ↑↓ j/k Space Enter; bare `<kbd>` legend in body; p-5 | legend → DialogActions legend; useListNavigation; T3 anatomy + header | done |
 | S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | done |
-| S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | todo |
+| S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | done |
 | S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | todo |
 | S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | todo |
 | S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | todo |
@@ -577,6 +577,11 @@ Sharp corners and one light theme.
   lifted row stays solid accent, the cursor row is row-selected + 2px bar;
   the per-row ↑/↓ buttons show an inset focus ring when tabbed to; a
   "Tabs changed…" error shows in red in the footer's left slot.
+- **S4 Agent View Mode (⌥V):** list sits in a padded body (was mx-4 my-4);
+  highlight = row-selected + 2px accent bar (was accent/12); labels 12px
+  medium (not semibold); footer `↑ ↓ move` · `Cancel ⎋` · `Apply ↩` (new
+  button; disabled when the highlighted mode is unavailable); the list gets
+  a focus ring when tabbed back to.
 
 ## Tasks
 
@@ -651,6 +656,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S4: Agent View Mode on useListNavigation (isDisabled skips,
+  opens on the current mode), listbox focus owner, Apply button for Enter.
+  Pattern for pick-one pickers: `↑↓ move` legend + Cancel ⎋ + <Verb> ↩.
+  Confirm-red: 3/3 new tests fail on the pre-change file.
 - 2026-09-25 steering note k2 (valid, both points): S2/S3 focused the
   dialog surface while aria-activedescendant sat on the unfocused listbox,
   and S2's onClick override dropped the highlight move. Fixed: listbox is
