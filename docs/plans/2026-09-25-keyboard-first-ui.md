@@ -421,7 +421,7 @@ entry when it lands.
 | S13 | CloseOldAgentsModal | no Enter; "Esc" header button; raw buttons | DialogActions (danger); remove Esc button; T3/T8; `focus:border-accent` → T4 | done |
 | S14 | CloseCompletedAgentsModal | no Enter; raw header/footer | as S13 | done |
 | S15 | BulkProviderSwitchModal | "Esc" button gets focus; busy blocks Esc silently | DialogActions; busy legend; K1 focus | done |
-| S16 | RootManagementConfirmDialog | checkbox focus; no Enter | DialogActions (confirmDisabled until ack); chips | todo |
+| S16 | RootManagementConfirmDialog | checkbox focus; no Enter | DialogActions (confirmDisabled until ack); chips | done |
 | S17 | MergeProjectTabsModal | select focus; no Enter; mx-4 mt-3 pieces | DialogActions; T3 body | todo |
 | S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | todo |
 | S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | todo |
@@ -633,6 +633,10 @@ Sharp corners and one light theme.
   Bulk's mid-turn/terminals note is its own line above the footer, and
   while a batch runs Cancel is disabled, the ⎋ chip disappears and the
   footer says "Working — closing is paused…". All 860 wide (lg).
+- **S16 Root Agent Code Management confirm:** focus opens on the
+  acknowledgement checkbox (Space ticks); footer `Cancel ⎋` (ghost, was
+  outline) + red `Enable for This Agent` with no ↩ chip, disabled until
+  ticked; width 520 (the `max-w-lg` override is gone).
 
 ## Tasks
 
@@ -707,6 +711,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S16: Root confirm on DialogActions (danger, confirmKey null,
+  confirmDisabled until acknowledged). Confirm-red: the new "no grant from
+  dialog Enter + chips" test fails on the pre-change file. Copy: "Enable for
+  this agent" → "Enable for This Agent".
 - 2026-09-25 S13–S15: bulk family on DialogHeader + DialogActions (danger /
   no commit key), DialogActions gained `cancelDisabled`. Ruling: Close
   Completed keeps NATIVE checkboxes (a checkbox group is fully operable —

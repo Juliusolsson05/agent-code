@@ -1,14 +1,13 @@
 import { useEffect, useId, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
@@ -58,7 +57,10 @@ export function RootManagementConfirmDialog({
         if (!nextOpen) onCancel()
       }}
     >
-      <DialogContent className="max-w-lg">
+      {/* Radix's default mount focus (the first tabbable node) is the
+          acknowledgement checkbox, which is exactly right here: Space ticks
+          it, then Tab reaches the button. Left to the primitive. */}
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Enable Root Agent Code Management?</DialogTitle>
           <DialogDescription asChild>
@@ -134,19 +136,18 @@ export function RootManagementConfirmDialog({
           </div>
         </div>
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={!acknowledged}
-            onClick={onConfirm}
-          >
-            Enable for this agent
-          </Button>
-        </DialogFooter>
+        {/* The broadest grant in the app: NO commit key (confirmKey null), on
+            top of the acknowledgement gate, so neither a reflexive Enter nor a
+            ticked box plus Enter can grant it — the button itself must be
+            pressed. Cancel keeps ⎋. */}
+        <DialogActions
+          tone="danger"
+          confirmKey={null}
+          confirmDisabled={!acknowledged}
+          confirmLabel="Enable for This Agent"
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
       </DialogContent>
     </Dialog>
   )
