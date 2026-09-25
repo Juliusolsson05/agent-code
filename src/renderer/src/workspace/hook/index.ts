@@ -66,6 +66,8 @@ import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { closeIdleOrchestrationAgents as runIdleOrchestrationCleanup } from '@renderer/workspace/idleOrchestrationAgents'
 import { closeAgentActivitySelection as runAgentActivityClose } from '@renderer/workspace/agentActivityClose'
+import { closeCompletedGoalAgents as runCompletedGoalClose } from '@renderer/workspace/completedGoalAgents'
+import type { TldrRecord } from '@shared/types/tldr'
 import { withTerminalLastUsed, withTerminalLastUsedFloor } from '@renderer/workspace/terminalLastUsed'
 import type { AgentActivitySelection } from '@renderer/workspace/agentActivityClose'
 
@@ -951,6 +953,26 @@ export function useWorkspace(
     showToast,
   )
 
+  // Close Completed Agents… (#1182). Wired here like the two bulk closes above
+  // for the global toast and the live refs, plus the lane removal the flow does
+  // afterwards — which is why it sits after dispatchActions. The goal records
+  // come from the modal: it is the one holding them fresh (read on open, kept
+  // current by goal:changed), and the flow reads them again at every kill.
+  const closeCompletedGoalAgents = useCallback(
+    (
+      selection: readonly SessionId[],
+      options: { removeLanes: boolean; readGoals: () => Record<string, TldrRecord> },
+    ) => runCompletedGoalClose(selection, { removeLanes: options.removeLanes }, {
+      readState: () => refs.stateRef.current,
+      readRuntimes: () => refs.latestRuntimesRef.current,
+      readGoals: options.readGoals,
+      closeSession: paneActions.closeSession,
+      removeTiledLane: dispatchActions.removeTiledLane,
+      showToast,
+    }),
+    [dispatchActions.removeTiledLane, paneActions.closeSession, refs, showToast],
+  )
+
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
   // Session events arrive through whichever SessionFeed the app root mounted
   // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
@@ -1062,6 +1084,7 @@ export function useWorkspace(
     closeSession: paneActions.closeSession,
     closeIdleOrchestrationAgents,
     closeAgentActivitySelection,
+    closeCompletedGoalAgents,
     markTerminalUsed,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,

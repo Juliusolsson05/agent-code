@@ -22,6 +22,7 @@ import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPr
 import { ConversationsSurface } from '@renderer/features/conversations/surfaces/ConversationsSurface'
 import { AgentActivitySurface } from '@renderer/features/agent-activity/surfaces/AgentActivitySurface'
 import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/CloseOldAgentsSurface'
+import { CloseCompletedAgentsSurface } from '@renderer/features/workspace/surfaces/CloseCompletedAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
 import { AgentViewModePickerSurface } from '@renderer/features/workspace/surfaces/AgentViewModePickerSurface'
 import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
@@ -84,6 +85,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'conversations', Component: ConversationsSurface },
   { id: 'agent-activity', Component: AgentActivitySurface },
   { id: 'close-old-agents', Component: CloseOldAgentsSurface },
+  { id: 'close-completed-agents', Component: CloseCompletedAgentsSurface },
   { id: 'bulk-provider-switch', Component: BulkProviderSwitchSurface },
   { id: 'agent-view-mode-picker', Component: AgentViewModePickerSurface },
   { id: 'color-flag-picker', Component: ColorFlagPickerSurface },

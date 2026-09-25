@@ -74,7 +74,7 @@ type BuiltInMcpServerFactory = (
 
 export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDependencies & {
   tldrStore?: Pick<TldrStore, 'update'>
-  goalStore?: Pick<TldrStore, 'update'>
+  goalStore?: Pick<TldrStore, 'update' | 'complete'>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge

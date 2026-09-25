@@ -209,6 +209,46 @@ describe('Goal peek', () => {
     expect(goalListeners.size).toBe(0)
   })
 
+  // #1182: the peek is where the user checks "is this one really done" before
+  // the bulk close, so it must show completion with the goal, and drop it the
+  // moment a newer record (the agent's next goal) arrives.
+  it('shows a completed goal with its note and stamp, and drops them when a new goal lands', async () => {
+    render(<TldrPane identity="agent" enabled goalEnabled><div>Feed</div></TldrPane>)
+    act(() => toggleTldr('goal'))
+    await screen.findByText('Goal for agent.')
+    expect(document.querySelector('[data-goal-completed]')).toBeNull()
+
+    act(() => { for (const listener of goalListeners) listener({ identity: 'agent', record: {
+      ...report('Goal for agent.', 2), completedAt: new Date().toISOString(), completionNote: 'PR #12 merged.',
+    } }) })
+    const note = screen.getByRole('note', { name: 'Agent goal' })
+    expect(screen.getByText('✓ Completed')).toBeTruthy()
+    expect(screen.getByText('PR #12 merged.')).toBeTruthy()
+    expect(note.textContent).toContain('Goal set')
+    expect(note.textContent).toContain('Completed just now')
+
+    act(() => { for (const listener of goalListeners) listener({ identity: 'agent', record: report('Start the next feature.', 3) }) })
+    expect(screen.getByText('Start the next feature.')).toBeTruthy()
+    expect(document.querySelector('[data-goal-completed]')).toBeNull()
+    expect(screen.queryByText('PR #12 merged.')).toBeNull()
+  })
+
+  it('drops a completion it was showing when the agent’s Goal is turned off', async () => {
+    const view = render(<TldrPane identity="agent" enabled goalEnabled><div>Feed</div></TldrPane>)
+    act(() => toggleTldr('goal'))
+    await screen.findByText('Goal for agent.')
+    act(() => { for (const listener of goalListeners) listener({ identity: 'agent', record: {
+      ...report('Goal for agent.', 2), completedAt: new Date().toISOString(), completionNote: 'PR #9 merged.',
+    } }) })
+    expect(screen.getByText('PR #9 merged.')).toBeTruthy()
+    // The overlay keeps its last snapshot when the capability turns off; the
+    // text says so, and the completion must not linger beside it.
+    view.rerender(<TldrPane identity="agent" enabled goalEnabled={false}><div>Feed</div></TldrPane>)
+    expect(screen.getByText('Goal is off')).toBeTruthy()
+    expect(document.querySelector('[data-goal-completed]')).toBeNull()
+    expect(screen.queryByText('PR #9 merged.')).toBeNull()
+  })
+
   it('switches a latched TLDR to goals instead of closing it and leaves Cmd+G to the editor', async () => {
     render(<><Harness /><TldrPane identity="agent" enabled goalEnabled={false}><div /></TldrPane><div data-global-editor-input-owner=""><textarea aria-label="Editor" /></div></>)
     act(() => toggleTldr('tldr'))
