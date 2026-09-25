@@ -291,7 +291,9 @@ pending — they stay UNCONFIRMED in the PR body):
   `max-h-[86vh]` for scrolling dialogs. No `max-w-*` fighting the base.
 - **T3 Anatomy** — `DialogHeader` px-4 py-3 (title 13px medium,
   description 11px muted); body `px-4 py-3` (`gap-3` between blocks); list
-  bodies: container `py-1`, rows `px-4 py-1.5`; footer = `DialogActions`
+  bodies: container `py-1`, rows `px-4 py-1.5` — or, for a list inside a
+  bordered `rounded-slab` well within a padded body, rows `px-3 py-1.5`;
+  footer = `DialogActions`
   (px-4 py-3). No whole-content `p-5/p-6`. A body never relies on the
   header's padding for its own inset.
 - **T4 Focus** — `:focus-visible` global outline uses `--theme-focus-ring`;
@@ -400,7 +402,7 @@ entry when it lands.
 | # | Surface (file) | Keys today | Fix | Status |
 |---|---|---|---|---|
 | S1 | CloseConfirmationDialog (`workspace/ui`) | default focus Cancel; no Enter; no hints | DialogActions (danger, focus Cancel, chips); body px-4 (flush today) | done |
-| S2 | PinAgentsModal (`dispatch-pin`) | ↑↓ j/k Space Enter; bare `<kbd>` legend in body; p-5 | legend → DialogActions legend; useListNavigation; T3 anatomy + header | todo |
+| S2 | PinAgentsModal (`dispatch-pin`) | ↑↓ j/k Space Enter; bare `<kbd>` legend in body; p-5 | legend → DialogActions legend; useListNavigation; T3 anatomy + header | done |
 | S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | todo |
 | S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | todo |
 | S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | todo |
@@ -557,6 +559,13 @@ Sharp corners and one light theme.
   the target list and the "Undo Close restores…" note are inset 16px from
   the dialog edge (they ran flush before); width 440; focus ring on Cancel
   at open; `Cancel ⎋` + red `Close 2` with no chip; list rows 12px.
+- **S2 Pin Sessions:** header bar + padded body + footer like every other
+  dialog (no more p-5 card); footer left reads `↑ ↓ move  ␣ toggle  N pinned ·
+  i/N` in 10–11px muted, right `Cancel ⎋` `Pin N Agents ↩`; highlight is the
+  row-selected colour with a 2px accent bar (was surface-hi + 4px bar); the
+  tab chip is a capsule at 10px; End/Home/PgDn move on a long list; the
+  highlight scrolls into view and does not jump when the list scrolls under
+  a still mouse.
 
 ## Tasks
 
@@ -631,6 +640,11 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S2: usePinAgentsKeybinds composes useListNavigation (keeps
+  its selection draft + Enter-commits-draft); modal on header/body/
+  DialogActions with legend + counter in the footer. Confirm-red: End/Home/
+  PageDown and footer-legend tests fail on the pre-change files; j/k+Space
+  test is a guard. #867 focusedCancelEnter suite still green.
 - 2026-09-25 S1: CloseConfirmationDialog on DialogActions (danger,
   confirmKey null) + `focusDialogActionOnOpen` helper extracted into
   dialog-actions (ConfirmDialog migrated onto it). Confirm-red observed for
