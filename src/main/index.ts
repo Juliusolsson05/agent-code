@@ -112,6 +112,7 @@ import {
 import { abandonPendingBequest, recordPendingBequest } from '@main/ipc/window.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/windowRegistry.js'
 import { captureWindowGeometry, restorableBounds } from '@main/window/windowGeometry.js'
@@ -335,6 +336,9 @@ let unregisterExtensionInput: (() => void) | null = null
 let extensionQuitReady = false
 let extensionQuitPending: Promise<void> | null = null
 let sessionForwarder: SessionForwarderControl | null = null
+// The one main-side session feed tap (#1177): ordering, coalescing and the
+// sub-agent watcher, shared by the desktop forwarder and the remote sink.
+let sessionFeedTap: SessionFeedTap | null = null
 
 // A packaged release needs one executable-level smoke test that stops before
 // touching the user's real workspace, process lock, provider CLIs, or network.
@@ -1129,6 +1133,13 @@ async function startApp(): Promise<void> {
   // first thing real-world testing tripped on).
   remoteController = new RemoteController({
     manager,
+    // Resolved at enable time; the tap is built later in startup, at the
+    // forwarder's wiring (see there). Enabling needs a user action on a
+    // window, which cannot happen before that point.
+    getFeedTap: () => {
+      if (!sessionFeedTap) throw new Error('session feed tap is not wired yet')
+      return sessionFeedTap
+    },
     journal: appRunJournal,
     // v2 identity projection: one read model over the persisted workspace
     // (titles, spoken names, tabs, pins) for the remote server's session
@@ -1343,7 +1354,13 @@ async function startApp(): Promise<void> {
   })
   performanceService.mark('app.main.sessionManager.created')
 
-  sessionForwarder = wireSessionForwarder(manager, lspManager)
+  // Built HERE, at the forwarder's old spot, not beside `new SessionManager`:
+  // the tap's manager listeners take the forwarder's former position in each
+  // event's listener list, so every other main subscriber still runs before
+  // or after it exactly as it did.
+  const feedTap = new SessionFeedTap(manager)
+  sessionFeedTap = feedTap
+  sessionForwarder = wireSessionForwarder(manager, lspManager, feedTap)
   registerSessionRoutingIpc(manager, sessionForwarder)
   // CLI auto-updater — constructed AFTER SessionManager because it uses
   // the manager to decide whether an active session of the target kind
@@ -1520,6 +1537,7 @@ async function startApp(): Promise<void> {
   const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
   registerAllIpc({
     manager,
+    sessionFeedTap: feedTap,
     userMcpService,
     updates: { updateService, updateChecks, app: { version: app.getVersion(), isPackaged: app.isPackaged } },
     remoteController,

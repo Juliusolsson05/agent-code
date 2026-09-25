@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { placeHistoryEntries } from './initialHistory'
+import { placeHistoryEntries } from './historyPlacement'
 
 // ---------------------------------------------------------------------------
 // #910 item 2. A pane holds [a,c]. A history chunk arrives as [b,c], with

@@ -42,4 +42,25 @@ export const ipcSessionFeed: SessionFeed = {
   deliverPrompt: (sessionId, prompt, imagePaths, deliveryId) =>
     window.api.deliverPrompt(sessionId, prompt, imagePaths, deliveryId),
   resolveCondition: (sessionId, action) => window.api.resolveCondition(sessionId, action),
+  // The one place this object does more than rename: the contract has one
+  // history call and the preload bridge has two, keyed by whether a cursor
+  // exists. Choosing between them is still delegation (no retry, no
+  // buffering, no reshaping of the reply), and the arguments are exactly the
+  // objects the history actions passed before #1177, so main sees the same
+  // IPC it always did.
+  loadHistory: async request => {
+    // Desktop main cannot resolve history from a session id alone (see
+    // SessionHistoryRequest.transcript), so a request without the durable
+    // identity is a caller bug, reported as a rejection like any failed read.
+    const transcript = request.transcript
+    if (!transcript) throw new Error('Desktop history requires the durable transcript identity.')
+    return request.beforeMarker === undefined
+      ? window.api.loadInitialHistory({ ...transcript, limit: request.limit })
+      : window.api.loadOlderHistory({
+          ...transcript,
+          beforeMarker: request.beforeMarker,
+          beforeOffset: request.beforeOffset,
+          limit: request.limit,
+        })
+  },
 }

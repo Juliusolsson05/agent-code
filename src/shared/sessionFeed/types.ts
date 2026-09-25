@@ -1,8 +1,9 @@
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
-import type { SessionKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
 import type {
   AgentTranscriptEntry,
   AgentTranscriptObservationMetadata,
+  SessionHistoryChunk,
   SessionInputReadiness,
 } from '@shared/types/session.js'
 
@@ -82,7 +83,7 @@ export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
 // Bulk variant used by main during bootstrap bursts. Payload is an
 // array of {entry, file} tuples for a single session — the renderer
 // folds them in one setState instead of paying one render per entry.
-// See main/sessions/jsonlCoalescer.ts for the WHY. Uses the neutral
+// See the JSONL burst coalescing in main/sessions/sessionFeedTap.ts for the WHY. Uses the neutral
 // AgentTranscriptEntry directly; preload's `JsonlEntry` alias of the
 // same type remains at the preload boundary for its other consumers.
 export type SessionJsonlEntriesEvent = {
@@ -261,3 +262,58 @@ export type ResolveConditionResult =
 // framework — re-export rather than move so conditions-core stays the
 // single source of truth.
 export type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
+
+/**
+ * One request shape for every transcript backfill: the initial newest-N page
+ * (no `beforeMarker`) and each older page (`beforeMarker`, plus the
+ * `beforeOffset` of that marker's line when the previous page reported one).
+ *
+ * WHY one type for both pages rather than the desktop's two preload calls:
+ * the phone already spoke one message (`get-history`) for both, and the two
+ * desktop calls differ only in the presence of the cursor. One shape is what
+ * lets a shared ingest core (#1177 Stage 3) page history without knowing the
+ * transport.
+ *
+ * The fields are the UNION of what the two transports actually need — nothing
+ * invented:
+ *   - `sessionId`: the phone's server resolves transcript, kind and cwd from
+ *     the live session; the desktop always has it too.
+ *   - `transcript`: the desktop's main process does NOT resolve by session —
+ *     it reads the durable identity the renderer holds, which is what lets a
+ *     restored, hibernated or recovering pane (no live process, or a scoped
+ *     recovery naming a transcript the store does not hold yet) load history.
+ *     Required by the desktop transport, ignored by the phone's, whose server
+ *     never trusted a client-supplied path.
+ *   - `limit`: absent means the serving side's default (120 initial / 200
+ *     older on both hosts).
+ */
+export type SessionHistoryRequest = {
+  sessionId: string
+  transcript?: {
+    kind: AgentProviderKind
+    cwd: string
+    providerSessionId: string
+  }
+  beforeMarker?: string
+  beforeOffset?: number
+  limit?: number
+}
+
+/**
+ * One page of raw transcript records, in the same shape as live
+ * `jsonl-entries` records' `entry` halves, so both clients run one mapper
+ * path for backfill and live.
+ *
+ * `file` is set only by the phone's host: it names the transcript it read so
+ * the client can discard a page served from a stale post-/clear file cache
+ * (see TranscriptStore.chunkFileConflicts). The desktop reads by explicit
+ * identity and has no such window, so it never sets it.
+ *
+ * Failure is a REJECTED promise carrying the host's message, on both
+ * transports. The desktop's history actions were already written against a
+ * throwing IPC call (and a recovery read that throws when a view goes stale);
+ * keeping that made the desktop migration behaviour-neutral, and kept
+ * IpcSessionFeed a zero-logic delegation. The phone's transport turns its
+ * `{ ok:false, error }` reply into that rejection at its own edge.
+ */
+export type SessionHistoryPage = SessionHistoryChunk & { file?: string }

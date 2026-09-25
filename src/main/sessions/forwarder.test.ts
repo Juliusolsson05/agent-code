@@ -12,9 +12,10 @@ vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { obs
 
 import { wireSessionForwarder } from './forwarder.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
+import { SessionFeedTap } from './sessionFeedTap.js'
 
-it('delivers understood records before a fatal error through both real coalescers', async () => {
-  // Both subscribers deliberately buffer committed entries until setImmediate.
+it('delivers understood records before a fatal error to both real sinks', async () => {
+  // The shared tap deliberately buffers committed entries until setImmediate.
   // An error in the same drain must flush that buffer first, otherwise clients
   // receive the error followed by older successful records and clear its state.
   // Renderer state assertions belong to the IPC DOM harness; this test owns the
@@ -30,12 +31,14 @@ it('delivers understood records before a fatal error through both real coalescer
   // a deliberate assertion about the filter, not incidental scaffolding.
   manager.getSessionKind = () => 'opencode'
   manager.getSpawnKind = () => 'opencode'
-  const remote = new SessionFeedSource(manager)
+  // One tap, two sinks — the production shape (main/index.ts).
+  const tap = new SessionFeedTap(manager)
+  const remote = new SessionFeedSource(manager, tap)
   const remoteEvents: Array<{ channel: string; payload: unknown }> = []
   const desktopEvents: Array<{ channel: string; payload: unknown }> = []
   remote.onEvent((channel, payload) => remoteEvents.push({ channel, payload }))
   wire.receive = (channel, payload) => desktopEvents.push({ channel, payload })
-  const forwarder = wireSessionForwarder(manager, new EventEmitter() as LspManager)
+  const forwarder = wireSessionForwarder(manager, new EventEmitter() as LspManager, tap)
   const entry = { info: { id: 'msg_1', role: 'assistant' }, parts: [{ type: 'text', text: 'Last understood answer' }] }
   try {
     manager.emit('jsonl-entry', { sessionId: 'pane', file: 'provider:session', entry })

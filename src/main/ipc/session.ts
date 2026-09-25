@@ -14,7 +14,7 @@ import {
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
-import { flushJsonl } from '@main/sessions/jsonlCoalescer.js'
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
 import type {
   SessionKillOptions,
@@ -65,6 +65,9 @@ import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 export function registerSessionIpc(
   manager: SessionManager,
   pasteDebugJournals: PasteDebugJournalRegistry,
+  // The shared session feed tap (#1177), for the one ordering barrier this
+  // file owns: deliver-prompt flushes committed rows before replying (#1181).
+  feedTap: Pick<SessionFeedTap, 'flushCommitted'>,
   appRunJournal?: AppRunJournal,
 ): void {
   ipcMain.handle(
@@ -375,7 +378,7 @@ export function registerSessionIpc(
         options?.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : undefined)
       // ORDER BARRIER (#1181): send the committed rows before the answer.
       // Claude's acceptance IS main seeing the prompt's JSONL line, and that
-      // line is buffered in the JSONL coalescer and sent on the next
+      // line is buffered in the session feed tap's JSONL burst and sent on the next
       // setImmediate. The reply to this invoke would otherwise overtake it,
       // because the await above resumes in a microtask. The renderer removes
       // its pending "Sending…" row the moment the reply lands. Without this
@@ -383,7 +386,7 @@ export function registerSessionIpc(
       // (PR #1183 review, Claude 1). Both messages then travel the same
       // renderer channel in this order. Flushing early costs nothing: it is
       // the same batch, just sent now, and an empty buffer is a no-op.
-      flushJsonl(sessionId)
+      feedTap.flushCommitted(sessionId)
       return result
     },
   )

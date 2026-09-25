@@ -15,6 +15,8 @@ import type {
   SessionSubAgentsEvent,
   SessionHistoryBoundaryEvent,
   SessionProviderSessionChangedEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -107,13 +109,15 @@ type Pending = {
 type RemoteReply = Omit<Extract<OutboundFrame, { type: 'reply' }>, 'type' | 'id'>
 
 export class WebSocketSessionFeed implements SessionFeed {
-  private readonly listeners: Record<FeedChannel | 'sub-agents', Set<(e: never) => void>> = {
+  private readonly listeners: Record<FeedChannel, Set<(e: never) => void>> = {
     started: new Set(),
     'input-readiness': new Set(),
     screen: new Set(),
     'jsonl-entries': new Set(),
     'jsonl-error': new Set(),
     'history-boundary': new Set(),
+    'transcript-diagnostic': new Set(),
+    'provider-session-changed': new Set(),
     'semantic-event': new Set(),
     conditions: new Set(),
     'process-state': new Set(),
@@ -122,9 +126,6 @@ export class WebSocketSessionFeed implements SessionFeed {
     // onSessionRemoved — desktop panes learn removal via workspace state);
     // the phone consumes it internally to prune its session list below.
     removed: new Set(),
-    // The server never emits sub-agents in v1 (SessionFeedSource doesn't tap
-    // it yet); the set exists so onSessionSubAgents satisfies the contract
-    // and starts working the moment the server adds the channel.
     'sub-agents': new Set(),
   }
   private readonly sessionListListeners = new Set<(s: RemoteSessionSummary[]) => void>()
@@ -267,30 +268,30 @@ export class WebSocketSessionFeed implements SessionFeed {
     return this.sub('jsonl-error', cb)
   }
   /**
-   * Channel-health diagnostics are not relayed to remote clients yet.
-   *
-   * WHY a no-op rather than a `sub(...)`: the host does not forward this
-   * channel over the websocket, so subscribing would wait for frames that
-   * never arrive and look wired when it is not. The one consumer today (#881,
-   * clearing an OpenCode terminal's "server never answered" banner when the
-   * server turns out to be merely late) concerns a pane the phone does not
-   * render. When the phone does need it, the frame has to be added at the host
-   * first, and this is where it lands.
+   * Relayed since #1177, when the phone started sinking from the same
+   * main-side tap as the desktop. It used to be a deliberate no-op because
+   * the host never forwarded the channel. The TranscriptStore consumes it to
+   * clear a late live channel's fault the moment it reports connected, the
+   * desktop's rule (session-runtime/liveChannelRecovery.ts).
    */
-  onSessionTranscriptDiagnostic(_cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
-    return () => {}
+  onSessionTranscriptDiagnostic(cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
+    return this.sub('transcript-diagnostic', cb)
   }
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
     return this.sub('history-boundary', cb)
   }
   /**
-   * No phone frame, like the transcript diagnostic above: the event rebinds
-   * the desktop pane's durable identity (workspace.json), which the phone
-   * does not own. The phone's transcript already follows the switch through
-   * the history-boundary reset and the new rows that come after it.
+   * Relayed since #1177 for the same reason as the diagnostic above; main
+   * flushes the OLD session's buffered rows before it crosses (see
+   * SessionFeedTap), so a listener could trust that every earlier row belongs
+   * to the previous provider session. The phone's TranscriptStore does NOT
+   * listen today: it follows a provider-session switch through its transcript
+   * roll detection (the `file` riding live frames) and the history-boundary
+   * reset. The desktop consumes the event to rebind the pane's durable
+   * identity, which the phone does not own.
    */
-  onSessionProviderSessionChanged(_cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
-    return () => {}
+  onSessionProviderSessionChanged(cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
+    return this.sub('provider-session-changed', cb)
   }
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub {
     return this.sub('semantic-event', cb)
@@ -412,23 +413,28 @@ export class WebSocketSessionFeed implements SessionFeed {
     }
   }
 
-  /** Transcript backfill (client-specific, beyond SessionFeed — the desktop
-   *  loads history through its own IPC path). beforeMarker absent = initial
-   *  newest-N chunk; present = the page immediately before it. */
-  async getHistory(
-    sessionId: string,
-    opts: { beforeMarker?: string; beforeOffset?: number; limit?: number } = {},
-  ): Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }> {
+  /**
+   * SessionFeed.loadHistory over the one `get-history` message. Replaced the
+   * phone-only `getHistory` extra (#1177) so the desktop and the phone page
+   * history through the same contract.
+   *
+   * `request.transcript` is deliberately NOT sent: the server resolves the
+   * transcript from the live session and must never read a path a client
+   * names. The `{ ok:false, error }` reply becomes a rejection carrying the
+   * server's exact message, because callers match on it (the benign "no
+   * transcript yet" case, REMOTE_HISTORY_TOO_LARGE); see SessionHistoryPage
+   * for why failure is a rejection on every transport.
+   */
+  async loadHistory(request: SessionHistoryRequest): Promise<SessionHistoryPage> {
     const reply = await this.request({
       type: 'get-history',
-      sessionId,
-      beforeMarker: opts.beforeMarker,
-      beforeOffset: opts.beforeOffset,
-      limit: opts.limit,
+      sessionId: request.sessionId,
+      beforeMarker: request.beforeMarker,
+      beforeOffset: request.beforeOffset,
+      limit: request.limit,
     })
-    return reply.ok
-      ? { ok: true, chunk: reply.result as HistoryChunkResult }
-      : { ok: false, error: reply.error ?? 'history unavailable' }
+    if (!reply.ok) throw new Error(reply.error ?? 'history unavailable')
+    return reply.result as HistoryChunkResult
   }
 
   /** pty actions ride the same permission-reply message; exposed for the
@@ -444,7 +450,7 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   // --- internals ---
 
-  private sub<E>(channel: FeedChannel | 'sub-agents', cb: (e: E) => void): Unsub {
+  private sub<E>(channel: FeedChannel, cb: (e: E) => void): Unsub {
     const set = this.listeners[channel] as Set<(e: E) => void>
     set.add(cb)
     return () => set.delete(cb)

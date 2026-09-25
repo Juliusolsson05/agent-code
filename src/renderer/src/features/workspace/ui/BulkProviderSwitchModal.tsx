@@ -29,7 +29,7 @@ import { formatReset, providerLabel as usageProviderLabel } from '@renderer/feat
 import { deriveProviderExhaustion } from '@shared/usage/exhaustion'
 import { estimateLiveEntriesBytes } from '@renderer/session-runtime/liveEntryWindow'
 import { isLimitIdle } from '@renderer/workspace/hook/actions/providerSwitchCore'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 // Switch Agents modal — bulk provider switch + remembered-batch return.

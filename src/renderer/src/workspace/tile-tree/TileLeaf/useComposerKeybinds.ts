@@ -694,7 +694,7 @@ export function useComposerKeybinds({
           // one is running is a no-op rather than a second toast.
           if (e.repeat || isClearingAgentComposer(sessionId)) return
           workspace.showPaneToast(sessionId, "Clearing the agent's composer…")
-          await clearAgentComposer(sessionId)
+          await clearAgentComposer(sessionId, feed)
           return
         }
         blockBackendWrite()

@@ -24,7 +24,7 @@ import {
   buildHistoryScoreMap,
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { dispatchPendingInvocation } from '@renderer/features/command-palette/dispatchPendingInvocation'
 import { useSessionMenuHost } from '@renderer/features/session-context-menu/useSessionMenuHost'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'

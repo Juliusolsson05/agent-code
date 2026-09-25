@@ -16,6 +16,8 @@ import type {
   Unsub,
   SessionHistoryBoundaryEvent,
   SessionProviderSessionChangedEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
 } from '@shared/sessionFeed/types'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
@@ -32,6 +34,7 @@ export type FakeFeedCall =
   | { method: 'sendInput'; sessionId: string; data: string; pasteId: string | undefined }
   | { method: 'deliverPrompt'; sessionId: string; prompt: string }
   | { method: 'resolveCondition'; sessionId: string; action: ConditionCustomAction }
+  | { method: 'loadHistory'; request: SessionHistoryRequest }
 
 export interface FakeSessionFeed extends SessionFeed {
   /** Every command invocation, in order — assert on this. */
@@ -40,6 +43,9 @@ export interface FakeSessionFeed extends SessionFeed {
   nextSendInputResult: boolean
   nextDeliverPromptResult: PromptDeliveryResult
   nextResolveConditionResult: ResolveConditionResult
+  /** The page loadHistory resolves with, or an Error it rejects with (the
+   *  contract reports failure as a rejection on every transport). */
+  nextLoadHistoryResult: SessionHistoryPage | Error
   emitStarted(e: SessionStartedEvent): void
   emitInputReadiness(e: SessionInputReadinessEvent): void
   emitScreen(e: SessionScreenEvent): void
@@ -95,6 +101,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
       acceptance: { kind: 'transport', acceptedAt: 123 },
     },
     nextResolveConditionResult: { ok: true },
+    nextLoadHistoryResult: { entries: [], hasMore: false },
 
     onSessionStarted: cb => subscribe(listeners.started, cb),
     onSessionInputReadiness: cb => subscribe(listeners.inputReadiness, cb),
@@ -121,6 +128,12 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     resolveCondition: async (sessionId, action) => {
       feed.calls.push({ method: 'resolveCondition', sessionId, action })
       return feed.nextResolveConditionResult
+    },
+    loadHistory: async request => {
+      feed.calls.push({ method: 'loadHistory', request })
+      const result = feed.nextLoadHistoryResult
+      if (result instanceof Error) throw result
+      return result
     },
 
     emitStarted: e => emit(listeners.started, e),

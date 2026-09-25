@@ -69,7 +69,7 @@ beforeEach(() => {
   manager.getTranscriptFile = () => '/fixture/native-a.jsonl'
   harness.history.mockReset().mockResolvedValue({ entries: [], hasMore: false })
   forwarder = wireSessionForwarder(manager, new EventEmitter() as LspManager)
-  registerSessionIpc(manager, {} as never)
+  registerSessionIpc(manager, {} as never, { flushCommitted: () => {} })
   registerSessionRoutingIpc(manager, forwarder)
 })
 afterEach(() => {
@@ -264,7 +264,7 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     await real.recover(options)
     registry.createAppWindow()
     const event = { sender: harness.built[0]!.webContents }
-    registerSessionIpc(real, {} as never)
+    registerSessionIpc(real, {} as never, { flushCommitted: () => {} })
     expect(await harness.handlers.get('session:recover')!(event, options)).toMatchObject({ ok: true })
     harness.built[0]!.sent.length = 0
 
@@ -293,7 +293,7 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     const reserved = 'handoff-pane'
     registry.createAppWindow()
     const event = { sender: harness.built[0]!.webContents }
-    registerSessionIpc(real, {} as never)
+    registerSessionIpc(real, {} as never, { flushCommitted: () => {} })
     const lease = registry.claimSessionForWindow(reserved, registry.windowIdFor(event.sender))
     expect(lease).not.toBeNull()
     // No entry, no recovery claim: only the reservation speaks for it.
@@ -315,7 +315,7 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     await real.recover(options)
     const left = registry.createAppWindow()
     const event = { sender: harness.built[0]!.webContents }
-    registerSessionIpc(real, {} as never)
+    registerSessionIpc(real, {} as never, { flushCommitted: () => {} })
     expect(await harness.handlers.get('session:recover')!(event, { ...options, cwd: '/other' })).toMatchObject({ ok: false, code: 'ownership-conflict' })
     expect(registry.captureSessionWindowLease(options.sessionId)).toBeNull()
     real.emit('screen', { sessionId: options.sessionId, plain: 'private', markdown: 'private', recent: 'private', recentMarkdown: 'private' })

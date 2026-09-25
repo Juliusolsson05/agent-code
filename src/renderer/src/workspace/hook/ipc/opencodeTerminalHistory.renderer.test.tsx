@@ -27,6 +27,8 @@ import {
   type RenderedViewPolicy,
 } from '@renderer/workspace/agentDisplayMode'
 import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
+// The desktop feed, which reads through the `window.api` stubs installed below.
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { seedResumedRuntimeFields } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionId } from '@renderer/workspace/types'
@@ -147,7 +149,7 @@ describe('where a history chunk lands in a pane that already holds entries', () 
     await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
     const updateRuntime = (id: SessionId, patch: Partial<SessionRuntime>) =>
       pane.setRuntimes(prev => ({ ...prev, [id]: { ...prev[id]!, ...patch } }))
-    const { result } = renderHook(() => useHistoryActions(pane.setRuntimes, pane.refs, updateRuntime))
+    const { result } = renderHook(() => useHistoryActions(pane.setRuntimes, pane.refs, updateRuntime, ipcSessionFeed))
     const pageOlder = async () => {
       await act(async () => { await result.current.loadOlderHistory(SESSION_ID) })
       return loadOlderHistory.mock.lastCall?.[0].beforeMarker
@@ -215,7 +217,7 @@ describe('paging an OpenCode session back through loadOlderHistory', () => {
 
     const updateRuntime = (id: SessionId, patch: Partial<SessionRuntime>) =>
       pane.setRuntimes(prev => ({ ...prev, [id]: { ...prev[id]!, ...patch } }))
-    const { result } = renderHook(() => useHistoryActions(pane.setRuntimes, pane.refs, updateRuntime))
+    const { result } = renderHook(() => useHistoryActions(pane.setRuntimes, pane.refs, updateRuntime, ipcSessionFeed))
     const pagesNeeded = Math.ceil((fixture.messages.length - INITIAL_LIMIT) / OLDER_PAGE)
     for (let page = 0; page < pagesNeeded + 1 && pane.runtime().hasOlderHistory; page += 1) {
       const cursor = pane.runtime().historyOldestMarker

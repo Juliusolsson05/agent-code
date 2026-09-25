@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { setKeyboardDictationHoldStyle } from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
 
 // Root effect extracted from App.tsx (#494).

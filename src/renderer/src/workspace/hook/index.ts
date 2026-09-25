@@ -2,7 +2,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
@@ -936,7 +936,14 @@ export function useWorkspace(
     [paneActions.closeSession, refs, showToast],
   )
 
-  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
+  // Session events AND history reads arrive through whichever SessionFeed the
+  // app root mounted (desktop: ipcSessionFeed in app/main.tsx; remote client:
+  // its WebSocket feed; tests: FakeSessionFeed). The provider value is a
+  // module const, so identity is stable — which the subscription effect's dep
+  // array requires; see the WHY on useIpcSubscriptions. Read here, before the
+  // history actions, because older-history paging reads through it (#1177).
+  const sessionFeed = useSessionFeed()
+  const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime, sessionFeed)
 
   const { undoClose, undoCloseCount } = useUndoCloseAction(
     state,
@@ -974,12 +981,7 @@ export function useWorkspace(
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
-  // Session events arrive through whichever SessionFeed the app root mounted
-  // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
-  // feed; tests: FakeSessionFeed). The provider value is a module const, so
-  // identity is stable — which the subscription effect's dep array requires;
-  // see the WHY on useIpcSubscriptions.
-  const sessionFeed = useSessionFeed()
+  // `sessionFeed` is read above, next to the history actions.
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   // A terminal's durable last-used record (#1178). One setter for both the
   // foreground hook and the input path below, so the throttle and the

@@ -50,17 +50,11 @@ export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
  *  time: shells have no transcript timestamps to age them by. */
 export type TerminalForegroundRuntime = TerminalForegroundState & { changedAt: number }
 
-export type PickerItem = {
-  id: string
-  label: string
-  description: string
-  selected: boolean
-}
-
-export type SlashPickerState = {
-  visible: boolean
-  items: PickerItem[]
-}
+// The picker shapes live in the SessionFeed contract (they cross the wire in
+// screen snapshots); this re-export was a second, identical declaration until
+// #1177, which let provider code import the type from the workspace store.
+import type { PickerItem, SlashPickerState } from '@shared/sessionFeed/types'
+export type { PickerItem, SlashPickerState }
 
 export type QueuedMessage = {
   content: string

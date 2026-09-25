@@ -1,5 +1,14 @@
 # Remote Mobile Companion
 
+> **Status (2026-09-24, #1177):** partly superseded. The isolation boundary's
+> *capability* wall still holds (the phone's command surface cannot express
+> spawn, kill, raw input or provider switching, and raw PTY never reaches a
+> remote sink). Its *code* rule — remote re-implements what it needs instead of
+> sharing it — is reversed: both clients are fed by one main-side
+> `SessionFeedTap`, run one ingest core and mount one agent feed, because the
+> duplicated copies drifted and the phone rendered worse. See
+> `docs/plans/2026-09-24-phone-shared-rendering.md`.
+
 **Date:** 2026-07-06
 **Status:** Approved design, pending implementation plan
 

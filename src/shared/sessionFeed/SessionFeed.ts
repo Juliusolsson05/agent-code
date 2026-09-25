@@ -4,6 +4,8 @@ import type {
   SessionConditionsEvent,
   SessionExitEvent,
   SessionHistoryBoundaryEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
   SessionProviderSessionChangedEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
@@ -37,6 +39,19 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 // gains capability; remote code importing anything else from core is a
 // boundary violation.
 //
+// Doctrine change (#1177, docs/plans/2026-09-24-phone-shared-rendering.md).
+// The original boundary also said remote must RE-IMPLEMENT whatever core
+// logic it needed rather than share it, and accepted the duplication. The
+// copies drifted, and the phone rendered worse because of it: its main-side
+// feed had none of the desktop's ordering barriers and was missing two
+// channels. Both implementations of this interface are now fed by ONE
+// main-side, transport-neutral SessionFeedTap (main/sessions/sessionFeedTap.ts),
+// so the event ORDER a listener observes is the same on either side by
+// construction. What stays walled is capability, not code: the command
+// surface below is still exactly the remote-safe set, and raw PTY never
+// reaches a remote sink. Shared seams must stay transport-neutral — a
+// parameter that only makes sense for the phone is still a violation.
+//
 // WHY listeners are global (fire for ALL sessions; callers dispatch by
 // `sessionId` in the callback) instead of per-session subscribe(sessionId):
 // this mirrors the existing one-listener-per-event-type shape in
@@ -54,7 +69,10 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 // trust / question dialogs). Session lifecycle (spawn/kill), raw terminal
 // I/O, and provider switching are deliberately ABSENT so a remote transport
 // cannot express them; scope is enforced by the contract's shape, not by
-// runtime checks. Desktop-only surfaces (ghost journal, git worktrees,
+// runtime checks. The one READ beside them, loadHistory (#1177), exposes
+// only transcript content the listeners already stream; it was an ad-hoc
+// extra on the phone's transport and a pair of raw `window.api` calls on the
+// desktop until both moved onto the contract. Desktop-only surfaces (ghost journal, git worktrees,
 // feed-debug, LSP, editor FS) stay on `window.api` — they are not session
 // I/O and the phone must never need them.
 export interface SessionFeed {
@@ -99,4 +117,11 @@ export interface SessionFeed {
     sessionId: string,
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult>
+
+  // --- Reads ---
+
+  /** Transcript backfill: the initial newest-N page, or the page before a
+   *  cursor. Rejects with the host's message on failure. See
+   *  SessionHistoryRequest for why one call covers both pages. */
+  loadHistory(request: SessionHistoryRequest): Promise<SessionHistoryPage>
 }

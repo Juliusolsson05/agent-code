@@ -1,3 +1,4 @@
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import { EditorFsRootRegistry } from './editorFsRootRegistry.js'
 import type { LspManager } from '@main/lspManager.js'
@@ -84,6 +85,8 @@ export type IpcDeps = {
   ghostJournals: GhostJournalRegistry
   dictationDebugJournals: DictationDebugJournalRegistry
   pasteDebugJournals: PasteDebugJournalRegistry
+  /** The one main-side session feed tap (#1177); see registerSessionIpc. */
+  sessionFeedTap: SessionFeedTap
   // Null in a normal build — only constructed when session recording is gated
   // on (main/index.ts). The dev-debug IPC needs it for the Attach-Recording-
   // Note handlers (plan §7b).
@@ -111,7 +114,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc(editorFsRoots)
   registerEditorFsWatchIpc(editorFsRoots)
-  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.appRunJournal)
+  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.sessionFeedTap, deps.appRunJournal)
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()

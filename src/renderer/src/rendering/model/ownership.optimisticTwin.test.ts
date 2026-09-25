@@ -4,11 +4,11 @@ import { collectCommittedCandidates } from '@renderer/rendering/observations/com
 import { collectOptimisticCandidates } from '@renderer/rendering/observations/local'
 import {
   OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS,
-  SUPPRESSION_POLICY,
   buildCommittedOwnership,
   decideLiveCandidate,
 } from '@renderer/rendering/model/ownership'
 import pastedTypedPrompt from '../../../../../testing/fixtures/prompt-acceptance/pasted-typed-prompt-2026-09-20.json'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // #1181: an optimistic prompt row is owned only by a committed user row with
 // the same text that is NOT OLDER than the submit.
@@ -42,7 +42,7 @@ function decide(committedAtMs: number | null, submittedAtMs: number | null) {
   return decideLiveCandidate(
     optimistic!,
     buildCommittedOwnership(committed.candidates),
-    SUPPRESSION_POLICY.claude,
+    getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
   )
 }
 
@@ -90,7 +90,7 @@ describe('optimistic prompt ownership by a committed twin', () => {
     expect(decideLiveCandidate(
       optimistic!,
       buildCommittedOwnership(committed.candidates),
-      SUPPRESSION_POLICY.claude,
+      getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
     )).toMatchObject({ selected: false, reason: 'optimistic-owned-by-committed' })
   })
 })

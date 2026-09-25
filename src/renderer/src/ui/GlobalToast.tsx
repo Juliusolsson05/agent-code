@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
+import { GlobalToastContext } from '@renderer/ui/GlobalToastContext'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -36,17 +37,10 @@ function userMcpUnavailableMessage(servers: readonly { name: string; reason: str
   return `${servers.length} MCP servers weren't attached (${servers.map(server => server.name).join(', ')}). See Settings → MCP.`
 }
 
-type GlobalToastContextValue = {
-  showToast: (message: string, durationMs?: number) => void
-}
-
-const GlobalToastContext = createContext<GlobalToastContextValue>({
-  showToast: () => {},
-})
-
-export function useGlobalToast(): GlobalToastContextValue {
-  return useContext(GlobalToastContext)
-}
+// The context and its hook live in GlobalToastContext.ts (#1177) so rows can
+// raise toasts without importing this provider's store and IPC wiring; the
+// re-export keeps existing desktop-chrome imports working.
+export { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 export function GlobalToastProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null)
