@@ -20,12 +20,16 @@ export function AgentTitlePrompt({
   description,
   onCancel,
   onSave,
+  autoTitleEnabled = false,
+  onResumeAutoTitle,
 }: {
   open: boolean
   initialTitle: string
   description: string
   onCancel: () => void
   onSave: (title: string) => void
+  autoTitleEnabled?: boolean
+  onResumeAutoTitle?: () => void
 }) {
   const [title, setTitle] = useState(initialTitle)
 
@@ -67,11 +71,11 @@ export function AgentTitlePrompt({
               placeholder="e.g. Investigate queued prompt race"
             />
             <p className="mt-2 text-[10px] text-muted">
-              Shown below the pane header and in the Dispatch index.
+              Shown below the pane header and in the Dispatch index.{autoTitleEnabled ? ' Saving or clearing pauses Auto Title for this agent.' : ''}
             </p>
           </div>
 
-          <DialogFooter className="justify-between">
+          <DialogFooter className="justify-between gap-2 flex-wrap">
             <Button
               type="button"
               variant="outline"
@@ -80,6 +84,11 @@ export function AgentTitlePrompt({
             >
               Clear title
             </Button>
+            {autoTitleEnabled && onResumeAutoTitle && (
+              <Button type="button" variant="outline" onClick={onResumeAutoTitle}>
+                Resume Auto Title
+              </Button>
+            )}
             <div className="flex items-center gap-2">
               <Button type="button" variant="outline" onClick={onCancel}>
                 Cancel

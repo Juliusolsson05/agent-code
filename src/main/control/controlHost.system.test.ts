@@ -56,7 +56,7 @@ it('routes real renderer observations across two windows and survives reload wit
         // Filed under this window's one project. Ownership is the row's own
         // \`projectId\` since #992; a row naming no project is unowned, so no
         // index lists it and the control reads below would not see it.
-        activeTabId: id, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex', projectId: id, joinedAt: 0} },
+        activeTabId: id, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex', builtInMcpDomains: ['auto_title'], projectId: id, joinedAt: 0} },
         pinnedSessionIds: []
       }})
       window.addAmbiguousAgent = () => useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: { ...state.sessions, 'right-agent': {cwd: '/ambiguous', kind: 'codex', projectId: id, joinedAt: 1} } }))
@@ -80,6 +80,7 @@ it('routes real renderer observations across two windows and survives reload wit
       app.disableHardwareAcceleration()
       app.on('window-all-closed', () => {})
       const windows = new Map()
+      let loadingWindow = false
       const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
       const deadline = setTimeout(() => { console.error('Control trial deadline'); app.exit(2) }, 25000)
       void app.whenReady().then(async () => {
@@ -87,7 +88,7 @@ it('routes real renderer observations across two windows and survives reload wit
       const host = createControlHost({
         getBrowserWindow: id => windows.get(id) ?? null,
         windowIdFor: sender => [...windows].find(([,window]) => window.webContents === sender)?.[0] ?? null,
-        listWindowIds: () => [...windows.keys()],
+        listWindowIds: () => [...windows.keys(), ...(loadingWindow ? ['loading'] : [])],
       }, ${JSON.stringify(join(directory, 'control-history'))}, applicationIdentityCapabilities())
       const external = new ExternalControlMcpHost(host.forCaller({kind: 'external', id: 'electron-trial'}))
       const boundPort = await external.start(0, 'trial-only-token')
@@ -132,7 +133,14 @@ it('routes real renderer observations across two windows and survives reload wit
         const leftView = await caller.invoke({capabilityId: 'views.preferencesRead', input: {sessionId: 'left-agent'}, owner: left})
         const boundedWait = await caller.invoke({capabilityId: 'observations.wait', input: {waitId: 'missing-task', target: {kind: 'operation', callId: 'absent'}, until: 'settled', timeoutMs: 100}})
         const observe = target => caller.invoke({capabilityId: 'workspace.observe', input: {}, owner: target})
+        const autoTitle = await host.forCaller({kind: 'application', id: 'auto-title-trial'}).invoke({capabilityId: 'agents.autoTitleSet', input: {sessionId: 'right-agent', title: 'Repair bridge routing'}})
+        const autoState = await host.forCaller({kind: 'application', id: 'auto-title-trial'}).invoke({capabilityId: 'agents.autoTitleState', input: {sessionId: 'right-agent'}})
+        loadingWindow = true
+        const targetedAutoState = await host.forCaller({kind: 'application', id: 'auto-title-trial'}).invoke({capabilityId: 'agents.autoTitleState', input: {sessionId: 'right-agent'}, owner: right})
+        loadingWindow = false
+        const externalAutoTitleVisible = listed.tools.some(tool => tool.name === 'ac_agents_auto_title_set')
         const routed = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Routed title'}, requestKey: 'title-intention'})
+        const protectedTitle = await host.forCaller({kind: 'application', id: 'auto-title-trial'}).invoke({capabilityId: 'agents.autoTitleSet', input: {sessionId: 'right-agent', title: 'Should be refused'}})
         const fleet = await caller.invoke({capabilityId: 'agents.search', input: {query: 'Routed title'}})
         await windows.get('left').webContents.executeJavaScript('window.addAmbiguousAgent()')
         const ambiguous = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Wrong'}, requestKey: 'ambiguous-intention'})
@@ -150,7 +158,7 @@ it('routes real renderer observations across two windows and survives reload wit
         await client.close()
         await external.stop()
         const sdkAfterDisable = await host.forCaller({kind: 'application', id: 'after-disable'}).invoke({capabilityId: 'workspace.observe', input: {}, owner: right})
-        console.log('CONTROL_TRIAL=' + JSON.stringify({viewBefore,viewAfter,leftView,tailAll,boundedWait,identity,trialPid:process.pid,changedPreference,stalePreference,preference,toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
+        console.log('CONTROL_TRIAL=' + JSON.stringify({viewBefore,viewAfter,leftView,tailAll,boundedWait,identity,trialPid:process.pid,changedPreference,stalePreference,preference,toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,autoTitle,autoState,targetedAutoState,externalAutoTitleVisible,protectedTitle,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
         host.dispose()
         for (const window of windows.values()) window.destroy()
         clearTimeout(deadline)
@@ -198,6 +206,11 @@ it('routes real renderer observations across two windows and survives reload wit
     expect(evidence.callHistory.value.state).toBe('recorded')
     expect(evidence.sdkAfterDisable).toMatchObject({ok: true, value: {activeTabId: 'right'}})
     expect(evidence.routed).toMatchObject({ok: true, value: {sessionId: 'right-agent', title: 'Routed title'}, operation: {owner: {windowId: 'right'}}})
+    expect(evidence.autoTitle).toMatchObject({ok: true, value: {sessionId: 'right-agent', title: 'Repair bridge routing'}, operation: {owner: {windowId: 'right'}}})
+    expect(evidence.autoState).toMatchObject({ok: true, value: {missing: false}})
+    expect(evidence.targetedAutoState).toMatchObject({ok: true, value: {missing: false}, operation: {owner: {windowId: 'right'}}})
+    expect(evidence.externalAutoTitleVisible).toBe(false)
+    expect(evidence.protectedTitle).toMatchObject({ok: false, error: {code: 'unavailable'}})
     expect(evidence.fleet).toMatchObject({ok: true, value: {total: 1, items: [{sessionId: 'right-agent', title: 'Routed title', owner: {windowId: 'right'}}]}})
     expect(evidence.ambiguous).toMatchObject({ok: false, error: {code: 'ambiguous_owner', outcome: 'not_started'}})
     expect(evidence.first).toMatchObject({ ok: true, value: { activeTabId: 'left' } })

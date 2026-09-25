@@ -7,6 +7,7 @@ import type { UserMcpOverrideKey } from '@shared/userMcp/types.js'
 export type BuiltInMcpDomain =
   | 'tldr'
   | 'goal'
+  | 'auto_title'
   | 'goal_loop'
   | 'ping'
   | 'orchestration'
@@ -24,6 +25,7 @@ export type BuiltInMcpDomain =
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
   'goal',
+  'auto_title',
   'goal_loop',
   'ping',
   'orchestration',
@@ -58,6 +60,7 @@ export const BUILT_IN_MCP_DOMAINS = [
 export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'tldr',
   'goal',
+  'auto_title',
   'goal_loop',
   'orchestration',
   'ai_workspace',
@@ -210,6 +213,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
     'tldr',
     'goal',
+    'auto_title',
     'goal_loop',
     'ping',
     'orchestration',
@@ -251,9 +255,11 @@ export type BuiltInMcpServerConfig = {
   bearerToken?: string
   headers: Record<string, string>
   /**
-   * Present only on a TLDR-enabled registration's own launch config. Provider launchers inject
-   * turn hooks that post to `${baseUrl}/<event>` with this same bearer, so a hook can only ever
-   * read or change its own session's reporting state and is revoked with it.
+   * Present when TLDR, Goal, Auto Title, or Goal Loop needs a turn hook in this
+   * registration's own launch config. The historical field name stays stable
+   * across provider launchers; those hooks post to `${baseUrl}/<event>` with
+   * this same bearer, so a hook can only observe its own session's reporting
+   * and title state and is revoked with the process.
    *
    * WHY it is absent from `sessionServers()`: workflow subagents reuse the parent's token, and
    * enforcing the parent's TLDR on each subagent's turns would block work that owns no summary.

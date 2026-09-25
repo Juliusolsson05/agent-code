@@ -15,6 +15,7 @@ import { PORT_SCAN_SUPPORTED, listListeners, listProcesses, probe as probePort }
 import { registerBrowserPocketIpc } from '@main/ipc/browserPocket.js'
 import type { LanePort } from '@shared/browserPocket/types.js'
 import { TldrEnforcement } from '@main/tldr/enforcement.js'
+import { createAutoTitleControlPort } from '@main/tldr/autoTitleControlPort.js'
 import { GoalLoopStore } from '@main/goalLoop/GoalLoopStore.js'
 import { GoalLoopService } from '@main/goalLoop/GoalLoopService.js'
 import { registerGoalLoopIpc } from '@main/goalLoop/ipc.js'
@@ -1293,10 +1294,13 @@ async function startApp(): Promise<void> {
     applyEmulation: (pocketId, emulation) => browserPockets.applyEmulation(pocketId, emulation),
     setWatchedSessions: sessions => browserPockets.setWatchedSessions(browserPockets.isEnabled() ? sessions : []),
   })
+  const autoTitleControl = createAutoTitleControlPort(controlHost, windowForSession)
   builtInMcpHost.setDependencies({
     browserPockets,
     tldrStore,
     goalStore,
+    setOwnAutoTitle: autoTitleControl.set,
+    getOwnAutoTitleState: autoTitleControl.state,
     tldrEnforcement,
     goalLoopService,
     orchestrationBridge,

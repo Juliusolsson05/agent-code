@@ -64,6 +64,26 @@ it('uses the existing title policy and does not wake agents for metadata reads o
   expect(wake).not.toHaveBeenCalled()
 })
 
+it('routes an application-owned automatic title only to its enabled exact agent', async () => {
+  const { invoke } = setup()
+  useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: {
+    agent: { ...state.sessions.agent, builtInMcpDomains: ['auto_title'] },
+  } }))
+  const auto = (sessionId: string, title: string) => invoke('agents.autoTitleSet', { sessionId, title })
+  expect(await auto('agent', 'Fix prompt queue')).toMatchObject({ ok: false })
+  // The capability is application-only; the external caller above cannot use
+  // it. Its authorized path is covered by the actual capability handler below.
+  const capability = agentControlCapabilities(() => ({ restoreStatus: 'fresh' }) as Workspace)
+    .find(row => row.descriptor.id === 'agents.autoTitleSet')!
+  const appContext = { ...context, caller: { kind: 'application' as const, id: 'auto-title' } }
+  expect(await capability.execute({ sessionId: 'agent', title: 'Fix prompt queue' }, appContext))
+    .toMatchObject({ ok: true, value: { title: 'Fix prompt queue' } })
+  expect(useAppStore.getState().workspaceState.sessions.agent.titleMode).toBe('auto')
+  await invoke('agents.titleSet', { sessionId: 'agent', title: 'Human choice' })
+  expect(await capability.execute({ sessionId: 'agent', title: 'Ignored' }, appContext)).toMatchObject({ ok: false })
+  expect(useAppStore.getState().workspaceState.sessions.agent.title).toBe('Human choice')
+})
+
 // Attachment inputs exercise the actual provider boundary above; unsupported
 // providers must reject before wake, rather than silently discard attachments.
 it('forwards supported attachment paths without changing the app draft, and rejects unsupported providers before wake', async () => {

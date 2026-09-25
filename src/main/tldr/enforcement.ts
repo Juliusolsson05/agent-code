@@ -25,10 +25,12 @@ export const GOAL_NEVER_SET_REASON = 'Agent Code Goal: this agent has no goal ye
 // user's bulk close, with a fresh PR open. The completion is exactly what this
 // prompt may have invalidated, so ask. A pure "thanks" leaves it alone.
 export const GOAL_COMPLETED_CONTEXT = 'Agent Code Goal: your goal is marked complete, and the user uses completed goals to close finished agents. If this message asks for any further work, call goal_set with the goal of that work before starting, which clears the completion. If it only thanks you or asks a question, leave the goal as it is.'
+export const AUTO_TITLE_MISSING_CONTEXT = 'Agent Code Auto Title: this agent has no title yet. Once you understand this substantive task, call title_set with a short current-job label before starting the work.'
+export const AUTO_TITLE_MISSING_REASON = 'Agent Code Auto Title: this agent still has no title. If this was substantive work, call title_set with a short current-job label, then finish.'
 
 /** Which reporting capabilities one registration has. The hooks are shared, so
  * the host tells the policy what each session actually enabled. */
-export type ReportingFeatures = { tldr: boolean; goal: boolean }
+export type ReportingFeatures = { tldr: boolean; goal: boolean; autoTitleMissing?: boolean }
 
 export const TLDR_STALE_REASON = 'Agent Code TLDR: you used tools this turn without updating your TLDR. If this turn changed the task status — an outcome, the next step, or a decision the user must make — call tldr_update now. If nothing changed, finish without updating.'
 
@@ -112,18 +114,20 @@ export class TldrEnforcement {
       // With Goal on, the goal has its own home (#936). Asking for it in the
       // TLDR as well would get it overwritten by the next status update.
       // A missing TLDR is still caught at Stop, with a status-only request.
+      const contexts: string[] = []
       if (features.goal && this.goalStore) {
         if (!(await this.goalStore.lastWrittenAt(identity))) {
-          return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT } }
+          contexts.push(GOAL_SET_CONTEXT)
+        } else if (await this.goalStore.completedAt(identity)) {
+          contexts.push(GOAL_COMPLETED_CONTEXT)
         }
-        return await this.goalStore.completedAt(identity) ? {
-          hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_COMPLETED_CONTEXT },
-        } : {}
+      } else if (features.tldr && !(await this.store.lastWrittenAt(identity))) {
+        contexts.push(TLDR_GOAL_CONTEXT)
       }
-      if (!features.tldr) return {}
-      return await this.store.lastWrittenAt(identity) ? {} : {
-        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: TLDR_GOAL_CONTEXT },
-      }
+      if (features.autoTitleMissing) contexts.push(AUTO_TITLE_MISSING_CONTEXT)
+      return contexts.length > 0 ? {
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: contexts.join('\n\n') },
+      } : {}
     }
 
     if (event === 'post-tool-use') {
@@ -157,6 +161,10 @@ export class TldrEnforcement {
       // The goal has no staleness rule — it changes with direction, not work.
       else if (turn?.toolUsed && Date.parse(lastWrittenAt) < turn.startedAt) reasons.push(TLDR_STALE_REASON)
     }
+    // A missing title gets one opportunity at Stop, combined with Goal/TLDR
+    // rather than its own continuation. Never ask merely because an existing
+    // auto title is stale: the job changes less often than the turn status.
+    if (features.autoTitleMissing) reasons.push(AUTO_TITLE_MISSING_REASON)
     if (reasons.length > 0) return this.block(token, turn, at, reasons.join('\n\n'))
     this.turns.delete(token)
     return {}

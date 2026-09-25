@@ -3,6 +3,7 @@ import {
   REPORTING_DOMAINS, TLDR_INSTRUCTIONS, TLDR_SKILL_DESCRIPTION, TLDR_SKILL_NAME,
   type ReportingDomain,
 } from '@shared/types/tldr.js'
+import { AUTO_TITLE_INSTRUCTIONS, AUTO_TITLE_SKILL_DESCRIPTION, AUTO_TITLE_SKILL_NAME } from '@shared/types/autoTitle.js'
 
 /** One step of the pre-spawn reconcile that did not succeed (#1133).
  * `conventions` is the machine-wide audit of personal/custom/installed skills.
@@ -13,10 +14,10 @@ export type ManagedSkillPreparationFailure = {
   error: unknown
 }
 
-// Product-owned skills (TLDR #888, Goal #936). They ride the same write-ahead
+// Product-owned skills (TLDR #888, Goal #936, Auto Title #1210). They ride the same write-ahead
 // ownership journal as personal skills but belong to an MCP capability, so
 // users cannot create, edit, disable, or delete them, and their names are
-// reserved. One table keeps the two capabilities' guarantees identical: a rule
+// reserved. One table keeps these capabilities' guarantees identical: a rule
 // fixed for one can never be forgotten for the other.
 type ProductSkill = {
   id: string
@@ -24,11 +25,12 @@ type ProductSkill = {
   description: string
   markdown: string
   label: string
-  managedBy: 'tldr' | 'goal'
+  managedBy: 'tldr' | 'goal' | 'auto_title'
 }
 const PRODUCT_SKILLS: readonly ProductSkill[] = [
   { id: 'builtin:agent-code-tldr', name: TLDR_SKILL_NAME, description: TLDR_SKILL_DESCRIPTION, markdown: TLDR_INSTRUCTIONS, label: 'TLDR', managedBy: 'tldr' },
   { id: 'builtin:agent-code-goal', name: GOAL_SKILL_NAME, description: GOAL_SKILL_DESCRIPTION, markdown: GOAL_INSTRUCTIONS, label: 'Goal', managedBy: 'goal' },
+  { id: 'builtin:agent-code-auto-title', name: AUTO_TITLE_SKILL_NAME, description: AUTO_TITLE_SKILL_DESCRIPTION, markdown: AUTO_TITLE_INSTRUCTIONS, label: 'Auto Title', managedBy: 'auto_title' },
 ]
 const productSkillById = (id: string) => PRODUCT_SKILLS.find(skill => skill.id === id)
 const productSkillByName = (name: string) => PRODUCT_SKILLS.find(skill => skill.name === name)
@@ -1088,6 +1090,10 @@ export class AgentCodeManagedSkillsService {
     return this.ensureProductSkill(PRODUCT_SKILLS[1]!)
   }
 
+  ensureAutoTitleSkill(): Promise<void> {
+    return this.ensureProductSkill(PRODUCT_SKILLS[2]!)
+  }
+
   /**
    * The pre-spawn reconcile SessionManager runs before every agent launch
    * (#1133). Resolves with what could not be prepared. It never rejects on a
@@ -1119,7 +1125,7 @@ export class AgentCodeManagedSkillsService {
     for (const domain of REPORTING_DOMAINS) {
       if (!domains?.includes(domain)) continue
       try {
-        await (domain === 'tldr' ? this.ensureTldrSkill() : this.ensureGoalSkill())
+        await (domain === 'tldr' ? this.ensureTldrSkill() : domain === 'goal' ? this.ensureGoalSkill() : this.ensureAutoTitleSkill())
       } catch (error) {
         failures.push({ skill: domain, error })
       }

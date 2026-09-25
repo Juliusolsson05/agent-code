@@ -16,7 +16,7 @@ export const AGENT_CODE_CUSTOM_SKILL_MAX_BYTES = 32 * 1024
 // cap of 50 was invented here; Settings → Skills shows the budget instead.
 
 export type AgentCodeCustomSkill = {
-  managedBy?: 'tldr' | 'goal'
+  managedBy?: 'tldr' | 'goal' | 'auto_title'
   id: string
   name: string
   description: string

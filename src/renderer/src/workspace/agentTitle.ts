@@ -1,4 +1,4 @@
-import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 /**
  * User-authored titles are glance labels, not a second prompt or transcript.
@@ -7,6 +7,7 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
  * persisting half of a surrogate pair when the final character is an emoji.
  */
 export const AGENT_TITLE_MAX_LENGTH = 120
+export const AUTO_AGENT_TITLE_MAX_LENGTH = 60
 
 export function limitAgentTitleLength(value: string): string {
   return Array.from(value).slice(0, AGENT_TITLE_MAX_LENGTH).join('')
@@ -51,15 +52,16 @@ export function setAgentTitleInWorkspace(
   if (!meta) return state
 
   const title = normalizeAgentTitle(value)
-  if (title === null && meta.title === undefined) return state
-  if (title !== null && meta.title === title) return state
+  const titleMode: NonNullable<SessionMeta['titleMode']> = title === null ? 'paused' : 'manual'
+  if (title === null && meta.title === undefined && meta.titleMode === titleMode) return state
+  if (title !== null && meta.title === title && (meta.titleMode === titleMode || meta.titleMode === undefined)) return state
 
   const nextMeta = title === null
     ? (() => {
         const { title: _removed, ...rest } = meta
-        return rest
+        return { ...rest, titleMode }
       })()
-    : { ...meta, title }
+    : { ...meta, title, titleMode }
 
   return {
     ...state,
@@ -68,4 +70,44 @@ export function setAgentTitleInWorkspace(
       [sessionId]: nextMeta,
     },
   }
+}
+
+/** Agent titles have a deliberately tighter shape than manually entered
+ * titles. A tool should return an error for a long or empty suggestion instead
+ * of silently clipping it into a misleading label. One line also prevents a
+ * transcript fragment from making the glance row look like a status report. */
+export function normalizeAutoAgentTitle(value: string): string | null {
+  const title = value.replace(/\s+/gu, ' ').trim()
+  if (!title || [...title].length > AUTO_AGENT_TITLE_MAX_LENGTH
+    || /[\u0000-\u001f\u007f]/u.test(value)) return null
+  return title
+}
+
+export function setAutoAgentTitleInWorkspace(
+  state: WorkspaceState,
+  sessionId: SessionId,
+  value: string,
+): WorkspaceState {
+  const meta = state.sessions[sessionId]
+  const title = normalizeAutoAgentTitle(value)
+  // WHY a legacy nonempty title is locked even with no titleMode: before this
+  // feature all titles were user/creator-owned. Treating absence as auto would
+  // make the first agent call erase those existing labels on upgrade.
+  if (!meta || meta.kind === 'terminal' || !meta.builtInMcpDomains?.includes('auto_title')
+    || !title || (meta.titleMode !== 'auto' && (meta.titleMode || meta.title))) return state
+  if (meta.title === title && meta.titleMode === 'auto') return state
+  return {
+    ...state,
+    sessions: { ...state.sessions, [sessionId]: { ...meta, title, titleMode: 'auto' } },
+  }
+}
+
+export function resumeAutoAgentTitleInWorkspace(state: WorkspaceState, sessionId: SessionId): WorkspaceState {
+  const meta = state.sessions[sessionId]
+  if (!meta || meta.kind === 'terminal' || !meta.builtInMcpDomains?.includes('auto_title')) return state
+  if (meta.titleMode === undefined && meta.title === undefined) return state
+  // Releasing a manual lock must also remove its old title; otherwise the
+  // next agent call cannot tell that the legacy/manual text was surrendered.
+  const { title: _title, titleMode: _mode, ...rest } = meta
+  return { ...state, sessions: { ...state.sessions, [sessionId]: rest } }
 }

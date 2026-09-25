@@ -1373,6 +1373,13 @@ export function useSessionActions(
           // so its durable glance label must follow using the latest state rather
           // than being lost—or resurrected from a stale snapshot—on completion.
           const replacementTitle = prev.sessions[oldId]?.title
+          const replacementTitleMode = prev.sessions[oldId]?.titleMode
+          // The picker can put an unrelated conversation in this same pane.
+          // An automatic title describes the old agent's job, so carrying it
+          // would mislabel the new transcript AND suppress its missing-title
+          // nudge. Manual labels/clears are a person's pane choice and keep
+          // their established replacement behavior.
+          const carryTitle = !(opts?.newConversation && replacementTitleMode === 'auto')
           // `prev.sessions[oldId]` is still readable here: only the local
           // `sessions` copy has had oldId deleted.
           const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
@@ -1419,7 +1426,8 @@ export function useSessionActions(
                 }
               : {}),
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
-            ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
+            ...(carryTitle && replacementTitle !== undefined ? { title: replacementTitle } : {}),
+            ...(carryTitle && replacementTitleMode !== undefined ? { titleMode: replacementTitleMode } : {}),
             // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
             // literal is the successor's OWN freshly-spawned metadata, so any
             // earlier position is overwritten by it — which is exactly how the

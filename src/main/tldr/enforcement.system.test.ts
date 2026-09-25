@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
-import { GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON, TldrEnforcement } from './enforcement.js'
+import { AUTO_TITLE_MISSING_CONTEXT, AUTO_TITLE_MISSING_REASON, GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON, TldrEnforcement } from './enforcement.js'
 import { TldrStore } from './TldrStore.js'
 
 vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: { record: vi.fn() } }))
@@ -19,7 +19,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 // is decided by the rules under test rather than by a same-millisecond tie.
 const settle = () => new Promise(resolve => setTimeout(resolve, 5))
 
-async function setup() {
+async function setup(titleState?: (sessionId: string) => Promise<{ missing: boolean }>) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-hooks-'))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const store = new TldrStore(join(directory, 'tldr.json'))
@@ -28,7 +28,7 @@ async function setup() {
   const goalStore = new TldrStore(join(directory, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
   const host = new BuiltInMcpHttpHost()
   const enforcement = new TldrEnforcement(store, undefined, goalStore)
-  host.setDependencies({ tldrStore: store, goalStore, tldrEnforcement: enforcement })
+  host.setDependencies({ tldrStore: store, goalStore, tldrEnforcement: enforcement, getOwnAutoTitleState: titleState })
   await host.start()
   cleanups.push(() => host.stop())
   const register = (sessionId: string, domains: BuiltInMcpDomain[] = ['tldr'], tldrIdentity = `summary-${sessionId}`) =>
@@ -56,6 +56,34 @@ async function setup() {
 }
 
 describe('TLDR turn hooks through the real MCP host', () => {
+  it('keeps TLDR enforcement responsive when the optional title owner read stalls', async () => {
+    const { register, hook } = await setup(() => new Promise(() => {}))
+    const agent = register('stalled-title', ['tldr', 'auto_title'])
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      const response = await Promise.race([
+        hook(agent, agent.bearerToken, 'stop'),
+        new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('Title lookup held the hook past its budget')), 2_000) }),
+      ])
+      expect(response.body).toEqual({ decision: 'block', reason: TLDR_NEVER_WRITTEN_REASON })
+    } finally { if (deadline) clearTimeout(deadline) }
+  })
+
+  it('reminds an Auto Title-only agent from the renderer state and stops after one continuation', async () => {
+    let missing = true
+    const state = vi.fn(async () => ({ missing }))
+    const { register, hook } = await setup(state)
+    const agent = register('auto', ['auto_title'])
+    expect(agent.tldrHooks?.baseUrl).toMatch(/\/hooks\/tldr$/)
+    expect((await hook(agent, agent.bearerToken, 'user-prompt-submit')).body).toEqual({
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: AUTO_TITLE_MISSING_CONTEXT },
+    })
+    expect((await hook(agent, agent.bearerToken, 'stop')).body).toEqual({ decision: 'block', reason: AUTO_TITLE_MISSING_REASON })
+    expect((await hook(agent, agent.bearerToken, 'stop', { stop_hook_active: true })).body).toEqual({})
+    missing = false
+    expect((await hook(agent, agent.bearerToken, 'user-prompt-submit')).body).toEqual({})
+    expect(state).toHaveBeenCalledWith('auto')
+  })
   it('enforces a whole session lifecycle against the reports its own MCP tool writes', async () => {
     const { register, hook, report } = await setup()
     const agent = register('a')

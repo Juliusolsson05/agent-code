@@ -4,11 +4,14 @@ import {
   AGENT_TITLE_MAX_LENGTH,
   limitAgentTitleLength,
   normalizeAgentTitle,
+  resumeAutoAgentTitleInWorkspace,
+  setAutoAgentTitleInWorkspace,
   setAgentTitleInWorkspace,
 } from '@renderer/workspace/agentTitle'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { carryDurableMeta } from '@renderer/workspace/hook/actions/undoClose'
 
 function stateWithSessions(
   sessions: WorkspaceState['sessions'],
@@ -88,5 +91,46 @@ describe('agent title workspace metadata', () => {
     const titled = setAgentTitleInWorkspace(terminal, 'shell', '  dev server  ')
     expect(titled.sessions.shell?.title).toBe('dev server')
     expect(buildVisibleDispatchRows(titled)[0]).toMatchObject({ agentTitle: 'dev server' })
+  })
+
+  it('lets an enabled agent update its own title while manual edits and clears remain protected', () => {
+    const original = stateWithSessions({ agent: { cwd: '/work/project', kind: 'claude', builtInMcpDomains: ['auto_title'] } })
+    const first = setAutoAgentTitleInWorkspace(original, 'agent', '  Fix queued prompts  ')
+    expect(first.sessions.agent).toMatchObject({ title: 'Fix queued prompts', titleMode: 'auto' })
+    const changed = setAutoAgentTitleInWorkspace(first, 'agent', 'Repair title routing')
+    expect(changed.sessions.agent?.title).toBe('Repair title routing')
+
+    const manual = setAgentTitleInWorkspace(changed, 'agent', 'My label')
+    expect(manual.sessions.agent).toMatchObject({ title: 'My label', titleMode: 'manual' })
+    expect(setAutoAgentTitleInWorkspace(manual, 'agent', 'Ignored')).toBe(manual)
+
+    const cleared = setAgentTitleInWorkspace(manual, 'agent', '')
+    expect(cleared.sessions.agent).toMatchObject({ titleMode: 'paused' })
+    expect(cleared.sessions.agent?.title).toBeUndefined()
+    expect(setAutoAgentTitleInWorkspace(cleared, 'agent', 'Ignored')).toBe(cleared)
+
+    const resumed = resumeAutoAgentTitleInWorkspace(cleared, 'agent')
+    expect(resumed.sessions.agent?.titleMode).toBeUndefined()
+    expect(setAutoAgentTitleInWorkspace(resumed, 'agent', 'New job').sessions.agent?.title).toBe('New job')
+  })
+
+  it('protects legacy titles and never lets an agent title a terminal or disabled pane', () => {
+    const original = stateWithSessions({
+      legacy: { cwd: '/work/project', kind: 'codex', title: 'Human name', builtInMcpDomains: ['auto_title'] },
+      shell: { cwd: '/work/project', kind: 'terminal', builtInMcpDomains: ['auto_title'] },
+      disabled: { cwd: '/work/project', kind: 'pi' },
+    })
+    expect(setAutoAgentTitleInWorkspace(original, 'legacy', 'Ignored')).toBe(original)
+    expect(setAutoAgentTitleInWorkspace(original, 'shell', 'Ignored')).toBe(original)
+    expect(setAutoAgentTitleInWorkspace(original, 'disabled', 'Ignored')).toBe(original)
+  })
+
+  it('keeps a manual clear paused when an agent is restored under a new session ID', () => {
+    const original = stateWithSessions({ agent: { cwd: '/work/project', kind: 'claude', builtInMcpDomains: ['auto_title'] } })
+    const cleared = setAgentTitleInWorkspace(original, 'agent', '')
+    const restored = carryDurableMeta({ cwd: '/work/project', kind: 'claude', builtInMcpDomains: ['auto_title'] }, cleared.sessions.agent!)
+    const afterUndo = stateWithSessions({ replacement: restored })
+    expect(afterUndo.sessions.replacement?.titleMode).toBe('paused')
+    expect(setAutoAgentTitleInWorkspace(afterUndo, 'replacement', 'Wrong title')).toBe(afterUndo)
   })
 })

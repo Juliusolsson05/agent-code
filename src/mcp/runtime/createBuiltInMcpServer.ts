@@ -1,4 +1,5 @@
 import { GOAL_INSTRUCTIONS, TLDR_INSTRUCTIONS, TLDR_MAX_CHARACTERS } from '@shared/types/tldr.js'
+import { AUTO_TITLE_INSTRUCTIONS } from '@shared/types/autoTitle.js'
 import {
   GOAL_LOOP_DEFAULT_MAX_CONTINUATIONS,
   GOAL_LOOP_INSTRUCTIONS,
@@ -154,6 +155,32 @@ export function createBuiltInMcpServer(
     })
   }
 
+  if (scope.domains.includes('auto_title')) {
+    // The bearer registration, not model input, chooses the session. This is
+    // narrower than agents.titleSet (an operator capability that can title any
+    // exact target) and makes the tool safe to offer to ordinary agents.
+    server.registerTool('title_set', {
+      title: 'Set own agent title',
+      description: 'Main pane agent only: set your own short current-job title in 3–7 words, at most 60 characters. Subagents must not call this inherited tool because it targets their parent pane. Call when you understand new substantive work or its direction changes; leave it alone for routine progress. Manual titles and clears are protected.',
+      inputSchema: { title: z.string().min(1).max(120) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, async ({ title }) => {
+      try {
+        const normalized = title.replace(/\s+/gu, ' ').trim()
+        if (!normalized || [...normalized].length > 60 || /[\u0000-\u001f\u007f]/u.test(title)) {
+          throw new Error('Auto Title must be one line of 1–60 characters.')
+        }
+        if (!dependencies.isTitleWriteAuthorized?.()) throw new Error('Auto Title session is no longer active.')
+        if (!dependencies.setOwnAutoTitle) throw new Error('Auto Title is unavailable.')
+        const saved = await dependencies.setOwnAutoTitle(scope.sessionId, normalized, dependencies.isTitleWriteAuthorized)
+        if (!dependencies.isTitleWriteAuthorized()) throw new Error('Auto Title session is no longer active.')
+        return toolText({ ok: true, title: saved })
+      } catch (error) {
+        return { ...toolText({ ok: false, message: error instanceof Error ? error.message : 'Auto Title update failed.' }), isError: true }
+      }
+    })
+  }
+
   if (scope.domains.includes('goal_loop')) {
     registerGoalLoopTools(server, scope, dependencies)
   }
@@ -269,6 +296,7 @@ function builtInInstructions(
 ): string {
   return [
     ...(scope.domains.includes('goal') ? [GOAL_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('auto_title') ? [AUTO_TITLE_INSTRUCTIONS] : []),
     ...(scope.domains.includes('goal_loop') ? [GOAL_LOOP_INSTRUCTIONS] : []),
     ...(scope.domains.includes('tldr') ? [TLDR_INSTRUCTIONS] : []),
     ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),

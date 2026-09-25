@@ -77,6 +77,9 @@ export function carryDurableMeta(spawned: SessionMeta | undefined, closed: Sessi
   return {
     ...(spawned ?? { cwd: closed.cwd, kind: closed.kind ?? DEFAULT_PROVIDER }),
     ...(closed.title ? { title: closed.title } : {}),
+    // A cleared title has no `title` to carry. Its pause still must survive an
+    // undo, or the first resumed agent turn would undo the person's clear.
+    ...(closed.titleMode ? { titleMode: closed.titleMode } : {}),
     // The spoken address. Conditional like every other field here so an
     // unnamed agent (the setting off, or a name never allocated) is restored
     // without an empty identity that the reconciler would then have to heal.
