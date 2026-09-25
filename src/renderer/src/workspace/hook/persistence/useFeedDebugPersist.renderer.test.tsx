@@ -172,4 +172,50 @@ describe('feed debug persistence cadence and durability', () => {
     expect(append).toHaveBeenCalledTimes(1)
     expect(refs.persistedFeedDebugIdRef.current.a).toBe(1)
   })
+
+  it('does not let a write from before a soft reload move the new generation\'s cursor', async () => {
+    // #770 follow-up. A soft reload restarts ids at 1 and deletes both
+    // cursors (session.ts `forgetFeedDebugCursors`, simulated below exactly as
+    // it runs). An append still in flight from the OLD generation used to
+    // resolve afterwards and write its old max id back into the persisted
+    // cursor, so every new entry at or below it was filtered as already
+    // written: the original #770 loss, reopened by timing instead of by the
+    // reload itself.
+    const oldWrite = deferred()
+    append.mockReturnValueOnce(oldWrite.promise)
+    const refs = makeRefs({ a: add(add(add(emptyRuntime(), 'old 1'), 'old 2'), 'old 3') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1000)
+    expect(append).toHaveBeenCalledTimes(1)
+
+    // Soft reload: fresh runtime (ids restart, epoch re-minted later than the
+    // old one) and both cursors dropped.
+    delete refs.persistedFeedDebugIdRef.current.a
+    delete refs.inFlightFeedDebugIdRef.current.a
+    await advance(5)
+    refs.latestRuntimesRef.current = { a: add(add(emptyRuntime(), 'new 1'), 'new 2') }
+    const newEpoch = refs.latestRuntimesRef.current.a!.feedDebugEpochMs
+
+    // The new generation flushes while the old write is still open.
+    await advance(1000)
+    expect(append).toHaveBeenLastCalledWith({
+      sessionId: 'a',
+      epochMs: newEpoch,
+      entries: refs.latestRuntimesRef.current.a!.feedDebugLog,
+    })
+    expect(refs.persistedFeedDebugIdRef.current.a).toBe(2)
+
+    // Now the stale write lands. It must not claim ids 1..3 of the new
+    // generation.
+    await act(async () => { oldWrite.resolve(); await oldWrite.promise })
+    expect(refs.persistedFeedDebugIdRef.current.a).toBe(2)
+
+    refs.latestRuntimesRef.current = { a: add(refs.latestRuntimesRef.current.a!, 'new 3') }
+    await advance(1000)
+    expect(append).toHaveBeenLastCalledWith({
+      sessionId: 'a',
+      epochMs: newEpoch,
+      entries: [refs.latestRuntimesRef.current.a!.feedDebugLog[2]],
+    })
+  })
 })

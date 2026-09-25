@@ -47,6 +47,26 @@ export function selectFeedDebugAppendBatch(
   }
 }
 
+/**
+ * Whether the session is still in the id generation a batch was cut from.
+ *
+ * WHY the settle handlers ask (#770 follow-up): a soft reload restarts ids at
+ * 1 and deletes both cursors, but an append from the OLD generation can still
+ * be in flight. When it settles afterwards, `maxPendingId` is an id from the
+ * old numbering — writing it into the persisted cursor makes every new entry
+ * at or below it look already written, which is #770's silent loss reopened
+ * by timing. The epoch is the generation's identity (minted with the first
+ * entry, re-minted after a reload), so a stale settle is recognised by it and
+ * dropped. Dropping is safe: main keyed that write on the old epoch, and the
+ * new generation's entries are sent on their own.
+ *
+ * A null current epoch means the reload has happened but the new generation
+ * has no entries yet — still not the batch's generation.
+ */
+function isSameGeneration(refs: WorkspaceRefs, sessionId: SessionId, epochMs: number | null): boolean {
+  return (refs.latestRuntimesRef.current[sessionId]?.feedDebugEpochMs ?? null) === epochMs
+}
+
 export function useFeedDebugPersist(refs: WorkspaceRefs): void {
   useEffect(() => {
     const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
@@ -92,13 +112,17 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
           })),
         })
         .then(() => {
+          if (!isSameGeneration(refs, sessionId, epochMs)) return
           refs.persistedFeedDebugIdRef.current[sessionId] = maxPendingId
           if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
             delete refs.inFlightFeedDebugIdRef.current[sessionId]
           }
         })
         .catch(err => {
-          if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
+          if (
+            isSameGeneration(refs, sessionId, epochMs)
+            && refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId
+          ) {
             delete refs.inFlightFeedDebugIdRef.current[sessionId]
           }
           // eslint-disable-next-line no-console
