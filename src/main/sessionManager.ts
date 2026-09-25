@@ -91,7 +91,7 @@ export type UserMcpResolver = (params: {
 }>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
-import type { PromptGateState } from '@shared/types/session.js'
+import { SESSION_START_FAILED_MESSAGE, type PromptGateState } from '@shared/types/session.js'
 import {
   isCodexTranscriptObservationEventName,
   isCodexTranscriptObservationSessionId,
@@ -2119,7 +2119,7 @@ export class SessionManager extends EventEmitter {
         // message is curated and its payload is a path the UI already shows.
         message: error instanceof MissingWorkspaceDirectoryError
           ? error.message
-          : 'Session failed to start. Check provider setup and retry.',
+          : SESSION_START_FAILED_MESSAGE,
       }
     } finally {
       if (this.recoveriesInFlight.get(options.sessionId) === claim) {

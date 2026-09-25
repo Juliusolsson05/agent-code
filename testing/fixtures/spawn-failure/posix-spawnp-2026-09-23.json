@@ -1,0 +1,4 @@
+{
+  "source": "Verbatim from the owner's incident journal ~/.config/agent-code/incidents/runs/2026-09-23T04-48-11-510Z-main-34866-e7d3af/incidents.jsonl (incident 2026-09-23T04-49-31-756Z-810d94, kind renderer.unhandledrejection). This is how a failed spawn reaches the renderer: node-pty's spawn-helper could not start (the x64 rebuild trap), and the IPC rejection wraps the main-side error. Kept as the error text a real respawn failure carries.",
+  "reason": "Error invoking remote method 'session:spawn': Error: posix_spawnp failed."
+}
