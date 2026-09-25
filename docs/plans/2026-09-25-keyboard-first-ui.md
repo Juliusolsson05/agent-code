@@ -422,7 +422,7 @@ entry when it lands.
 | S14 | CloseCompletedAgentsModal | no Enter; raw header/footer | as S13 | done |
 | S15 | BulkProviderSwitchModal | "Esc" button gets focus; busy blocks Esc silently | DialogActions; busy legend; K1 focus | done |
 | S16 | RootManagementConfirmDialog | checkbox focus; no Enter | DialogActions (confirmDisabled until ack); chips | done |
-| S17 | MergeProjectTabsModal | select focus; no Enter; mx-4 mt-3 pieces | DialogActions; T3 body | todo |
+| S17 | MergeProjectTabsModal | select focus; no Enter; mx-4 mt-3 pieces | DialogActions; T3 body | done |
 | S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | todo |
 | S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | todo |
 | S20 | ConversationsPicker | ↑↓ Enter; "esc" label + prose | useListNavigation; legend; T4 input | todo |
@@ -640,6 +640,12 @@ Sharp corners and one light theme.
   acknowledgement checkbox (Space ticks); footer `Cancel ⎋` (ghost, was
   outline) + red `Enable for This Agent` with no ↩ chip, disabled until
   ticked; width 520 (the `max-w-lg` override is gone).
+- **S17 Merge Project Tabs:** one padded body (Keep select, "Merge into it"
+  list) instead of separately-inset pieces; the select uses input colours
+  with a keyboard focus ring; row hover uses the row-hover colour; the
+  "N tabs, M agents move to …" status sits in the footer's left slot;
+  `Cancel ⎋` (ghost, was outline) · `Merge ↩`; 640 wide (md, was 560);
+  title no longer semibold.
 
 ## Tasks
 
@@ -714,6 +720,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S17: Merge on one padded body + DialogActions (Enter merges —
+  nothing closes). Checked the old footer's disabled guards (only Merge's,
+  kept as confirmDisabled) — the k3 lesson, now part of every migration.
+  Confirm-red: the new Enter/chip test fails on the pre-change file.
 - 2026-09-25 steering note k3 (valid, major): the S13/S14 migration passed
   `busy={closing}` but not `cancelDisabled`, so Cancel (and Escape) could
   hide an in-flight destructive batch — the old footers disabled Cancel.

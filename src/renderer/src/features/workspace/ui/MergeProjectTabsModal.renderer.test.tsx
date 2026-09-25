@@ -79,4 +79,14 @@ describe('MergeProjectTabsModal', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Tick at least one tab to merge.')
     expect(screen.getByRole('button', { name: 'Merge' })).toBeDisabled()
   })
+
+  it('merges on Enter from a ticked source and says so on the button (plan S17)', () => {
+    // Merge closes nothing, so Enter may commit it; before, no key did.
+    const onConfirm = vi.fn()
+    render(<MergeProjectTabsModal open tabs={tabs()} initialTargetId="tab-c" onCancel={vi.fn()} onConfirm={onConfirm} />)
+    expect(screen.getByRole('button', { name: 'Merge' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    fireEvent.keyDown(box('A · repo'), { key: 'Enter' })
+    expect(onConfirm).toHaveBeenCalledWith('tab-c', ['tab-a'])
+  })
 })
+
