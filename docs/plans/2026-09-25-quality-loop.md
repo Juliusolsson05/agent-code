@@ -537,6 +537,12 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (14:20) — **#1300 merged** (`1d25b0ed`, closes #1261). #1171 closed by hand (same failure). #1308 is remerged onto `1d25b0ed`, with a fresh gate running; it merges next.
+  - **Steering q37 (quorum):** #1257, #1263, #1284, #1286, #1287, #1297 and #1298 had only reviewers A and B. None merges without a third. Independent C reviewers (Pi/Grok alternating) are now reviewing each final head. #1297's C must cover stale selection, paging and overlap with #1221, and #1284's C the unreviewed package commit 052a476. #1297's posted two-reviewer disposition got a public correction.
+  - **#1297:** the round-2 test now drives a scroll, so it reaches `loadMore` (verified by mutation). Body rewritten; disposition posted but not final until C reports.
+  - **#1287:** misplaced and stale `carryGoalLoops` JSDoc fixed. Body and disposition wait for C.
+  - **New #1315 (P2, C1):** every Pi `orchestration_create_agent` bootstrap fails with "Pi bridge is not connected" (5 of 5 today), and a retry succeeds. Pi delivery doesn't wait for the bridge.
+
 - 2026-09-25 (13:45) — **claude-code-headless #63 merged** (`64fd0eaf`, disposition posted first). #1309 is bumped to it and remerged onto `54287d90`. Its last failure was the #1261 palette flake, which #1300 fixes.
   - **Main CI red on `54287d90`:** `GoalLoopService` 'unrelated traffic cannot renew the screen grace' saw 2 deliveries where 1 was expected. It is not reproducible locally (15 isolated runs, 6 shuffled whole-file runs). Filed **#1314** (C9, suspected fake-timer and real-I/O interleave); timeouts must not be widened.
   - **Steering q36:** the codex-headless#53 fixture held provider instruction text under base64. It is now sanitized byte-for-byte, the commit was amended out of the branch history (head `0800cba`), and the redaction is noted in the PR. Reviewers A and B were re-prompted for their final round. Memory: read the WHOLE fixture before committing.
