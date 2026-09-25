@@ -133,7 +133,9 @@ a running session can move mid-task among Claude Code, Codex, and OpenCode.
   manually saved or cleared title takes priority until **Resume Auto Title**
   is chosen in **Set Title…**. Existing agents pick up the MCP tool and skill on
   their next reload. Claude and Codex receive a missing-title turn reminder;
-  OpenCode, Grok and Pi receive the tool and managed skill without that reminder.
+  OpenCode and Pi receive the tool and managed skill without that reminder.
+  Grok receives the tool and its description; its native skill discovery is not
+  supported yet, so it cannot receive the managed skill or turn reminder.
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates. Reader Mode gives a paginated, distraction-free view
   of long sessions for reviewing what an agent actually did.

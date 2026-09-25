@@ -23,7 +23,7 @@ Users can enable Auto Title for agents. An agent can maintain a short label nami
 2. A title describes the substantive job in roughly 3–7 words. The agent updates it on a new job or direction change, not each response. User accepted 2026-09-24.
 3. Manual set and manual clear pause auto writes; an explicit resume action restores automatic control. Existing titles are treated as manual. User accepted 2026-09-24.
 4. Native titles remain catalog fallbacks; the agent-authored title uses Agent Code's workspace owner. User accepted 2026-09-24.
-5. Hooks nudge a missing title only where verified. A skill/tool remains available on all five MCP routes. User accepted 2026-09-24; precise Grok/OpenCode/Pi hook delivery remains evidence-dependent.
+5. Hooks nudge a missing title only where verified. The tool is available on all five MCP routes; managed skills are delivered where the provider supports personal skills. Grok currently exposes the tool description but does not read Agent Code's managed skill. The user's provider-wide intent was accepted 2026-09-24; this Grok limit was discovered during review and is recorded explicitly.
 
 ## Design
 
@@ -31,7 +31,7 @@ Add `auto_title` to the configurable built-in MCP domains, absent from shipped d
 
 `title_set({title})` takes no session ID. The bearer scope supplies it. The main MCP handler invokes an application-only exact-session control capability; renderer checks current metadata and applies the pure reducer. The main host checks revocation around the request. No native transcript is modified.
 
-Managed skill guidance says to set a short title on understanding a substantive task and update only on a change of job. Extend the existing Claude/Codex turn-hook pipeline for a missing-title nudge without adding an independent Stop loop. Probe Grok's current hook route and the OpenCode/Pi event/extension paths before asserting equivalent enforcement. Keep unverified providers guidance-only with their MCP tool, and report that limit.
+Managed skill guidance says to set a short title on understanding a substantive task and update only on a change of job. Extend the existing Claude/Codex turn-hook pipeline for a missing-title nudge without adding an independent Stop loop. Probe Grok's current hook route and the OpenCode/Pi event/extension paths before asserting equivalent enforcement. Keep unverified providers tool-guided, and report Grok's missing native skill delivery separately.
 
 ## Files
 
@@ -71,3 +71,16 @@ Run focused tests for each stage, then typecheck, lint, build and the project's 
 - 2026-09-24: Stage 0 source/corpus census recorded in decomposition. Fresh worktree from `origin/main`; unrelated root-worktree changes remain untouched.
 - 2026-09-24: Stages 1–3 implemented. Fail-first tests captured missing reducer, control capability, MCP tool, and hook behavior before the implementation. The real two-window Electron control test confirmed exact owner routing and manual precedence; undo/replacement tests confirmed durable title locks. Stage 3 provider verdict is in the decomposition: Claude/Codex have turn reminders; OpenCode/Grok/Pi currently use the tool and managed skill without a turn reminder.
 - 2026-09-24: Typecheck, package build/output verification, and 133 focused tests across 12 files passed. `npm run check` reached the full suite: 6,633 passed, two failed. The command-history storage failure reproduces on clean `origin/main` under Node 25.5.0 (filed as #1212). A legacy settings hydration test timed out only in the feature branch's full parallel run; it passed alone on both branches and in clean main's full run, so its cause remains unresolved. Clean main's full run had a separate extension-frame failure that did not appear on this branch. No production change was inferred from those failures.
+- 2026-09-24: One independent review round (ownership and provider integration) found a stalled-hook path, all-window title routing, old automatic title carryover for unrelated conversations, false Grok skill wording, inherited subagent title access, and a pre-revocation in-flight write. Commit `cd821179` fixes the first three and covers the real Resume Auto Title surface. All 137 focused tests in 13 files, typecheck, and package build/output verification pass after the fixes; reverting each of the three fixes made its regression test fail. Grok wording is corrected here and in README. Transport-level subagent exclusion and in-flight write ordering require provider/retirement contracts beyond this feature and are tracked in #1213 and #1214; Grok skill/hook delivery is #1215.
+
+## Review disposition
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| Optional title read can outwait provider hook deadline | valid | Fixed in `cd821179`; 750 ms fail-open read preserves TLDR/Goal/Goal Loop hook handling. |
+| Title routing observes unrelated loading windows | valid | Fixed in `cd821179`; session window lease selects an explicit registered control owner. |
+| Unrelated conversation inherits previous automatic title | valid | Fixed in `cd821179`; auto provenance/title is dropped for a new conversation. |
+| Grok receives no native managed skill | valid | Documentation corrected; native discovery and hook delivery tracked in #1215. |
+| Subagent can use inherited bearer to title parent pane | valid, provider transport work | Main-agent-only skill/tool guidance added in `cd821179`; hard exclusion tracked in #1213. |
+| Admitted title write can finish after revocation | valid, lifecycle work | New requests are denied; manual precedence and unrelated-conversation reset limit the effect. Atomic ordering tracked in #1214. |
+| Resume UI surface was untested | valid coverage gap | Real surface test added in `cd821179` and mutation checked. |

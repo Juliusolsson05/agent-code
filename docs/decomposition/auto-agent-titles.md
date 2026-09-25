@@ -77,11 +77,13 @@ Use recorded Claude/Codex hook vectors, the existing provider conversation corpu
 ## Stage 3 provider verdict
 
 - Claude and Codex: `src/providers/claude/runtime/claudeSession.ts` and `src/providers/codex/runtime/codexSession.ts` already inject process-local turn hooks from the built-in MCP launch config. The new domain uses those same hooks and their single continuation policy. Real host tests cover a title-only registration and combined Goal/TLDR behavior.
-- Grok: the launched `grok-code-headless` control route in `src/providers/grok/runtime/grokSession.ts` seeds MCP servers but exposes no process-local hook configuration through Agent Code's current adapter. Grok 1.0.30 documents Stop hooks, but using a machine-wide configuration would cross the stop condition above. This provider receives the tool and skill without a turn reminder.
+- Grok: the launched `grok-code-headless` control route in `src/providers/grok/runtime/grokSession.ts` seeds MCP servers but exposes no process-local hook configuration through Agent Code's current adapter. Grok 1.0.30 documents Stop hooks, but using a machine-wide configuration would cross the stop condition above. `src/providers/registry.main.ts` also declares Grok personal-agent skills unsupported, so product skill materialization skips it. This provider receives the tool description and MCP server instructions, with no verified managed-skill delivery or turn reminder.
 - OpenCode: the app observes `session.idle` on its SSE bus, but the current launch path does not inject a process-local, block-capable turn hook. An idle event cannot provide the same bounded Stop continuation. This provider receives the tool and skill without a turn reminder.
 - Pi: the Agent Code bridge extension observes `turn_end`/`agent_settled` and exposes MCP tools, but it has no current title-specific continuation contract. This provider receives the tool and skill without a turn reminder.
 
 The guidance-only limit does not create a second title writer. Any future provider hook must preserve the renderer ownership and one-block-per-turn invariants before enabling a reminder.
+
+Provider-native subagents can inherit the parent pane's MCP bearer (as Workflow agents already do). The tool and managed instructions tell delegated workers not to call `title_set`, but the current transport cannot authenticate a subagent separately from its parent. Hard exclusion needs provider-origin evidence or a narrower inherited MCP grant. A call admitted before bearer revocation can likewise finish its already-started renderer write; new requests after revocation fail. Manual-title precedence and the unrelated-conversation reset still apply at the renderer write. These lifecycle limits need follow-up transport work rather than a second title owner.
 
 ## Graveyard
 
