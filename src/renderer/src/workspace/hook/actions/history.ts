@@ -5,12 +5,16 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
-import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
+import {
+  admitMappedEntries,
+  isPaginationAnchor,
+  reindexToolsAfterMerge,
+  type CommittedSeenLedger,
+} from '@renderer/session-runtime/ingest/committedRecords'
 import {
   isUuidTrimmed,
   noteOlderHistoryPrepend,
   releaseTrimmedUuid,
-  stampHistoryMarker,
 } from '@renderer/session-runtime/liveEntryWindow'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -92,6 +96,11 @@ export function useHistoryActions(
         })
 
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
+        const seenLedger: CommittedSeenLedger = {
+          seen,
+          isTrimmed: uuid => isUuidTrimmed(sessionId, uuid),
+          releaseTrimmed: uuid => releaseTrimmedUuid(sessionId, uuid),
+        }
         const prepend: Entry[] = []
         const worktreesResult = await window.api.gitWorktrees(meta.cwd)
         const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
@@ -134,7 +143,7 @@ export function useHistoryActions(
           // at an earlier byte position. Marker equality would leave selection
           // armed and let a later record move the cursor forward within this
           // page, or prevent its offset from advancing at all on commit.
-          if (mapped.length > 0 && marker && !cursorSelected) {
+          if (!cursorSelected && isPaginationAnchor(mapped, marker)) {
             cursorSelected = true
             oldestMarker = marker
             // The offset of THIS raw line, not the chunk's first: the
@@ -144,25 +153,17 @@ export function useHistoryActions(
             // silently degrade every page to the slow scan.
             oldestOffset = chunk.offsets?.[rawIndex] ?? null
           }
-          for (const entry of mapped) {
-            const uuid = (entry as { uuid?: string }).uuid
-            // ASYMMETRIC dedupe (#375 part B): a uuid the live window
-            // TRIMMED is still in `seen` (it must never re-append at the
-            // tail via a live replay burst), but this older-history path
-            // is exactly how trimmed entries come back — in order, at the
-            // head. So trimmed membership OVERRIDES seen here, and the
-            // uuid leaves the trimmed set as it reloads (it is back in
-            // the window and re-enters the trim cycle normally).
-            if (uuid && seen.has(uuid) && !isUuidTrimmed(sessionId, uuid)) continue
-            if (uuid) {
-              seen.add(uuid)
-              releaseTrimmedUuid(sessionId, uuid)
-            }
-            // Same rider the live/bootstrap sites stamp — a reloaded entry
-            // must be re-trimmable later, which needs its marker back.
-            stampHistoryMarker(entry, marker)
-            prepend.push(entry)
-          }
+          // ASYMMETRIC dedupe (#375 part B), the `older` rule in
+          // session-runtime/ingest/committedRecords.ts: a uuid the live window
+          // TRIMMED is still in `seen` (it must never re-append at the tail via
+          // a live replay burst), but this older-history path is exactly how
+          // trimmed entries come back — in order, at the head. So trimmed
+          // membership OVERRIDES seen here, and the uuid leaves the trimmed
+          // set as it reloads (it is back in the window and re-enters the trim
+          // cycle normally). Reloaded entries get their marker rider back so
+          // they are re-trimmable later. Indexing happens once below, against
+          // the committed window.
+          prepend.push(...admitMappedEntries(mapped, marker, 'older', seenLedger).admitted)
         }
 
         // Suspend live-window trimming for a grace period: the user just
@@ -173,6 +174,7 @@ export function useHistoryActions(
 
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
+          const entries = prepend.length > 0 ? [...prepend, ...current.entries] : current.entries
           // Fold the paged-in entries' tool blocks into the live indices.
           // This was a latent gap (pagination never indexed, so a paged-in
           // tool_result row couldn't resolve its command cross-entry) that
@@ -187,29 +189,27 @@ export function useHistoryActions(
           // in an ordinary session now also indexes what it pages in, so
           // rows that previously painted the degraded generic fallback
           // (Read/Edit/TodoWrite/git/AskUserQuestion cards missing their
-          // source-tool metadata) now render rich. Gating this to post-trim
-          // sessions would preserve a bug purely for behavioral stasis.
-          // Why it can't regress anything else: tool_use ids are
-          // provider-generated and unique within a session, so an old
-          // paged-in block can never collide with (and overwrite) a live
-          // pairing — the only same-id re-index is the reloaded-trimmed-
-          // region case, where re-pointing to the equivalent reloaded block
-          // is exactly the intent. And the toolIndexVersion bump rides a
-          // state update that already replaces the entries array reference,
-          // so Feed re-renders exactly once either way — the bump changes
-          // what the mounted tool rows can RESOLVE, not how often they
-          // paint.
-          let toolIndexChanged = false
-          for (const entry of prepend) {
-            if (indexEntryIntoMaps(entry, current.toolUseIndex, current.toolResultIndex)) {
-              toolIndexChanged = true
-            }
-          }
+          // source-tool metadata) now render rich.
+          //
+          // Since #1177 the fold REBUILDS the indexes in window order instead
+          // of appending the page's blocks (reindexToolsAfterMerge explains
+          // why; the phone already did this). The earlier argument that an
+          // old block can never overwrite a live pairing assumed ids never
+          // repeat; the rebuild is correct either way and identical when they
+          // don't. A page with no tool block leaves the maps and the version
+          // alone. The version bump rides a state update that already
+          // replaces the entries array, so Feed re-renders exactly once either
+          // way — it changes what mounted tool rows can RESOLVE, not how often
+          // they paint.
+          const toolIndexChanged = prepend.length > 0 && reindexToolsAfterMerge(prepend, entries, {
+            toolUseIndex: current.toolUseIndex,
+            toolResultIndex: current.toolResultIndex,
+          })
           return {
             ...prev,
             [sessionId]: {
               ...current,
-              entries: prepend.length > 0 ? [...prepend, ...current.entries] : current.entries,
+              entries,
               toolIndexVersion: toolIndexChanged
                 ? current.toolIndexVersion + 1
                 : current.toolIndexVersion,
