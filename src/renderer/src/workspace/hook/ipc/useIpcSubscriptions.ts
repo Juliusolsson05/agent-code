@@ -919,11 +919,20 @@ export function useIpcSubscriptions(
       // but a history read can: it admits only uuids this pane does not hold
       // and places them in order around the rows it does (placeHistoryEntries).
       // So the reload the message asks the user for is done here, once, the
-      // moment the channel is readable again. A load that succeeds also writes
-      // `ready` over this error (nothing set the lifetime banner above), and
-      // one that fails leaves the error standing, which is still true.
+      // moment the channel is readable again. A load that succeeds writes
+      // `ready` over this error (nothing set the lifetime banner above).
+      //
+      // WHY a failed heal raises the LIFETIME banner (#1229 review): the load
+      // writes its own error, but the next committed row on this now-working
+      // channel writes `ready` over any error that is not a channel error, so
+      // the pane went back to looking whole while the rows committed in the
+      // dark window were still missing. They stay missing until the user
+      // reloads, which is exactly what this message says, so it is the one
+      // that must stand.
       if (message.includes('(db_path_recovered_late)')) {
-        void loadInitialHistoryForSession({ sessionId, refs, setRuntimes })
+        void loadInitialHistoryForSession({ sessionId, refs, setRuntimes }).then(healed => {
+          if (!healed) updateRuntime(sessionId, { transcriptStatus: 'error', transcriptError: message, transcriptChannelError: message })
+        })
       }
     })
 

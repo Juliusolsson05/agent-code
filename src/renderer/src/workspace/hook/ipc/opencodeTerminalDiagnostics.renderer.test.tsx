@@ -286,6 +286,31 @@ describe('an OpenCode Terminal pane whose server never came up (#881)', () => {
       // and no lifetime banner at any point.
       await waitFor(() => pane.surfaces().transcriptStatus === 'ready', 'ready after the heal')
       expect(pane.runtime().transcriptChannelError).toBeFalsy()
+      // The diagnostic did reach the pane (the heal's synchronous `loading`
+      // write replaces it in the same dispatch, so it is never painted), and
+      // it healed exactly once.
+      expect(pane.channels).toContain('session:jsonl-error')
+      expect(history.loadInitialHistory).toHaveBeenCalledTimes(1)
+    } finally {
+      dbPathResolver.answer = null
+    }
+  }, 20_000)
+
+  it('keeps saying rows are missing when the heal itself cannot read the history (#1229 review)', async () => {
+    // A failed heal leaves the dark-window rows missing for the life of the
+    // pane, and the next committed row would otherwise write `ready` over the
+    // load's error. The recovered-late message is the true one, so it becomes
+    // the lifetime banner.
+    const recording = loadLiveFixture('plain.json')
+    dbPathResolver.answer = null
+    const pane = await panes.startRecordedPane(recording, { lateDatabase: { retryDelaysMs: Array(400).fill(25) } })
+    scope.serveHistoryFrom({ error: 'opencode db path exited with code 1' })
+    try {
+      await playReplay(pane.script, pane.writer!, pane.server)
+      dbPathResolver.answer = pane.dbPath
+      await waitFor(() => pane.runtime().transcriptChannelError?.includes('db_path_recovered_late') === true, 'the lifetime banner')
+      expect(pane.surfaces().transcriptStatus).toBe('error')
+      expect(pane.runtime().transcriptChannelError).toContain("missing from this pane's transcript")
     } finally {
       dbPathResolver.answer = null
     }
