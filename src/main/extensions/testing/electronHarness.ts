@@ -306,8 +306,21 @@ void (async () => {
       const oldDocument = child.url
       await win.webContents.executeJavaScript('window.fixtureHarness.render("managed", 0, false, "managed.main", true)')
       await waitFor(win, state => state.messages.some(message => message.kind === 'fixture:mount'), 'managed modal mount')
-      const modal = win.webContents.mainFrame.frames.find(frame => frame.url.startsWith('agent-code-ext://managed/'))!
+      // #1261/#1171: the modal replaces the pane view, and for a moment BOTH
+      // frames can exist. The first managed frame found could be the old pane
+      // document (the one this step later proves is refused), and focusing
+      // it made nativeInput ignore the chord below, since it only forwards
+      // keys while contents.focusedFrame is the live extension frame. So pick
+      // the new document, and do not press until Electron reports it focused.
+      const modal = win.webContents.mainFrame.frames.find(frame => frame.url.startsWith('agent-code-ext://managed/') && frame.url !== oldDocument)!
+      assert.ok(modal, 'the modal document must be a new frame, not the replaced pane view')
       await modal.executeJavaScript('document.body.tabIndex = 0; document.body.focus()')
+      const focusDeadline = performance.now() + 3000
+      while (win.webContents.focusedFrame !== modal) {
+        if (performance.now() > focusDeadline) throw new Error('the modal extension frame never took focus')
+        await new Promise(resolve => setTimeout(resolve, 20))
+        await modal.executeJavaScript('document.body.focus()')
+      }
       await win.webContents.executeJavaScript('window.fixtureHarness.resetInput()')
       win.webContents.send('extensions:native-input', { kind: 'key', url: oldDocument, type: 'keydown', input: { key: 'W', code: 'KeyW', metaKey: true } })
       press('D', ['alt'])
