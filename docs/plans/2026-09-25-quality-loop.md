@@ -344,6 +344,10 @@ The surface list below is B18's starting inventory.
 ### 7.4 Merge gate (all must hold)
 1. CI green (`quality-gate` and `minimum-node-fixture-gate`).
 2. `origin/main` merged in shortly before that CI run; `mergeStateStatus` clean.
+   Mechanical check right before merging: `git fetch origin && git merge-base
+   --is-ancestor origin/main <pr-head>` must succeed. A green head that does
+   not contain the current main needs main merged in and a fresh CI run
+   (#1234 and #1235 were merged without this on 2026-09-25; steering q11).
 3. No unresolved valid blocking finding; disposition table present.
 4. Each regression test mutation-checked.
 5. Closing keywords match what shipped; partly fixed issues get a comment and stay open.
@@ -532,6 +536,18 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (midday):
+  - **Merged:** #1229 (Fixes #1117; package PR opencode-terminal-headless#9 merged first), #1234 (Fixes #678), #1235 (Fixes #731; the on-disk ghost log is removed).
+  - **GATE MISS (steering q11):**
+    - What happened: #1234 and #1235 were merged on green heads that predated #1229 on main, without first merging main into them (§7.4(2)).
+    - Remediation: the combined main `9d446f03` was checked locally. `tsc` is clean, and the full suite has 2 failures, both known local timeouts (workflows control; `store.test`, which passes alone). main CI is being watched.
+    - Rule reinforced: before every merge, check that the PR head contains current origin/main; if not, merge main and wait for fresh CI.
+  - **Opened:**
+    - #1237: #877 live proof. Review fixes: the exact prompt is asserted, and inherited config env is cleared.
+    - #1238 + codex-headless#52: #369. A real leak: about half of real Codex responses have no response-end, so their flows were held until the watchdog. Fixed at the semantic terminal, plus heartbeat gauges.
+    - #1252: Fixes #1239, a P1 from the C3 hunt. Its test runs on the real workspace and the recorded `posix_spawnp` failure.
+  - **Hunts:** C3 and C5 are done (`temp/quality-loop/hunt-c3.md`, `hunt-c5.md`). Filed #1239–#1251.
+  - **#290:** items relabelled needs-owner and needs-evidence, with live-workspace evidence.
 - 2026-09-25 (late morning):
   - **#1236 opened (Fixes #762):** screen IPC by interest.
     - Plan commit first; a recorded-frame fail-first test that is red on main.
