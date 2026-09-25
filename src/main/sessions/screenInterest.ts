@@ -31,20 +31,28 @@ import { ScreenTailHistory } from '@shared/debug/screenTail.js'
 // `will-navigate`. Dropping on navigation start therefore also dropped every
 // lease when a stray link click was blocked and the page never changed, so an
 // open debug panel silently went stale. The preload mints one id per loaded
-// document and sends it with every lease; a lease from a different id proves
-// the old document is gone, whatever event order Electron uses. The cost: after
-// a reload, the dead document's leases survive until the new one takes its
-// first lease or the window closes, which is debug-surface bytes only.
+// document, ANNOUNCES it as soon as it loads (enterDocument), and sends it
+// with every lease. A different id proves the old document is gone, whatever
+// event order Electron uses; messages from one renderer reach main in order,
+// so the announcement lands after the old page's last message and before the
+// new page's first lease. The announcement matters as much as the lease id: a
+// reloaded page that never opens a debug panel would otherwise leave the old
+// page's leases forwarding the heaviest IPC stream forever (steering q15).
 
 export class ScreenInterest {
   private readonly byOwner = new Map<number, Map<string, number>>()
   private readonly totals = new Map<string, number>()
   private readonly documents = new Map<number, string>()
 
-  acquire(owner: number, sessionId: string, document: string): void {
+  /** A document loaded in `owner`; everything an earlier document held is dead. */
+  enterDocument(owner: number, document: string): void {
     const current = this.documents.get(owner)
     if (current !== undefined && current !== document) this.dropOwner(owner)
     this.documents.set(owner, document)
+  }
+
+  acquire(owner: number, sessionId: string, document: string): void {
+    this.enterDocument(owner, document)
     let leases = this.byOwner.get(owner)
     if (!leases) {
       leases = new Map()

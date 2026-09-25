@@ -263,8 +263,7 @@ export function registerSessionIpc(
   // when the webContents is destroyed, because a renderer that dies never
   // runs its cleanup.
   const leaseOwnersWatched = new Set<number>()
-  ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
-    const sender = evt.sender
+  const watchLeaseOwner = (sender: Electron.WebContents): number => {
     const owner = sender.id
     if (!leaseOwnersWatched.has(owner)) {
       leaseOwnersWatched.add(owner)
@@ -273,7 +272,15 @@ export function registerSessionIpc(
         leaseOwnersWatched.delete(owner)
       })
     }
-    screenInterest.acquire(owner, sessionId, document)
+    return owner
+  }
+  // Sent by the preload on every page load, whether or not the page ever
+  // leases: it is what retires a reloaded page's leases (steering q15).
+  ipcMain.handle('session:screen-document', (evt, document: string): void => {
+    screenInterest.enterDocument(watchLeaseOwner(evt.sender), document)
+  })
+  ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
+    screenInterest.acquire(watchLeaseOwner(evt.sender), sessionId, document)
     const screen = manager.getScreenSnapshot(sessionId)
     if (screen) sendToSessionWindow(sessionId, 'session:screen', aliasScreenSnapshotForWire({ sessionId, ...screen }))
   })

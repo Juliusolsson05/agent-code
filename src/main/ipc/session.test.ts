@@ -12,7 +12,9 @@ vi.mock('electron', () => ({
     },
   },
   ipcRenderer: {
-    invoke: (channel: string, ...args: unknown[]) => harness.handlers.get(channel)!({}, ...args),
+    // Asynchronous like the real one: the preload's load-time document
+    // announcement runs at import, before any handler is registered.
+    invoke: async (channel: string, ...args: unknown[]) => harness.handlers.get(channel)?.({}, ...args),
   },
 }))
 
@@ -181,10 +183,19 @@ describe('screen leases (#762)', () => {
     release({ sender }, 'pane', 'doc-1')
     expect(screenInterest.wants('pane')).toBe(false)
 
-    // A reload: the new document's first lease drops what the old one held.
+    // A real reload whose new page never opens a debug panel: its preload's
+    // load-time announcement alone retires the old page's leases, or the
+    // heaviest IPC stream would forward forever (steering q15).
+    const announce = harness.handlers.get('session:screen-document')!
     lease({ sender }, 'old-page', 'doc-1')
-    lease({ sender }, 'pane', 'doc-2')
+    announce({ sender }, 'doc-2')
     expect(screenInterest.wants('old-page')).toBe(false)
+    // Re-announcing the live document (nothing reloaded) keeps its leases,
+    // and the dead page's late release cannot touch them.
+    lease({ sender }, 'pane', 'doc-2')
+    announce({ sender }, 'doc-2')
+    release({ sender }, 'pane', 'doc-1')
+    expect(screenInterest.wants('pane')).toBe(true)
     sender.emit('destroyed')
     expect(screenInterest.wants('pane')).toBe(false)
   })

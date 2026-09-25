@@ -44,6 +44,9 @@ import type {
 // tells main the previous document's screen leases are dead (#762, see
 // main/sessions/screenInterest.ts for why this replaced a navigation event).
 const screenLeaseDocument = globalThis.crypto.randomUUID()
+// Announce the document at load, not at first lease: a reloaded page that
+// never leases must still retire the previous page's leases (steering q15).
+void ipcRenderer.invoke('session:screen-document', screenLeaseDocument).catch(() => undefined)
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
 

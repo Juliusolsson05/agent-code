@@ -18,7 +18,7 @@ All consumers were mapped (file:line in PR #1236's description):
 2. **Lease contract:**
    - `session:screen-lease` acquires a lease and seeds the current screen down the ordinary `session:screen` path, the same seed `session:recover` sends. An idle backend therefore still shows a correct panel.
    - `session:screen-release` releases a lease.
-   - Leases are owned by the calling webContents and the document that took them (a per-load id minted in preload). A lease from a new document (a reload), or destruction, drops all of that owner's earlier leases, because a dying renderer never runs its cleanup. Review amendment: this replaced dropping on `did-start-navigation`, which Chromium fires before the throttle where this app blocks every `will-navigate`, so a blocked link click used to drop live leases. A release the owner does not hold is ignored.
+   - Leases are owned by the calling webContents and the document that took them (a per-load id minted in preload). The preload announces its document on every load, leasing or not; a new document (a reload), or destruction, drops all of that owner's earlier leases, because a dying renderer never runs its cleanup. Review amendment: this replaced dropping on `did-start-navigation`, which Chromium fires before the throttle where this app blocks every `will-navigate`, so a blocked link click used to drop live leases. A release the owner does not hold is ignored.
 3. **Debug bundles** read `session:get-screen-debug`: main's latest raw snapshot plus the tail history.
 4. **Renderer:**
    - The screen handler applies only the screen strings.
