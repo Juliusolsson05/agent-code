@@ -319,6 +319,13 @@ The surface list below is B18's starting inventory.
   per reviewer, following `pr-review`'s template. One-line prompt pointing at it.
 - Focus split: **Codex A** correctness and concurrency; **Codex B** contracts,
   IPC, security and lifecycle; **Pi C** tests and what the user experiences.
+- **Reviewer mix rotates** (owner, 2026-09-25) to spread usage limits across
+  providers: 2 Codex + 1 Pi, three Pi, Pi + Claude, with a Grok reviewer mixed
+  in now and then. Each PR's mix is recorded in its disposition table.
+- **Evidence first, always** (owner, 2026-09-25): understand every error with
+  the staged-decomposition discipline. Measure screens, wire shapes and files
+  on real recordings before building on them, and never guess a mechanism.
+  #1219 needed three attempts because the first two guessed.
 - Every brief requires mutation testing (report surviving mutations) and
   counting real data where behaviour depends on it.
 - List the run after creating children; close any duplicate.
@@ -505,6 +512,13 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — #1219 round 2: the pattern matcher was withdrawn (it matched an
+  earlier part of the same paste); the composer text is now reconstructed from
+  the recorded geometry (full line = divider - 1, calibrated by the Pi
+  reviewer). #1222 (#290 marker slice, Refs not Fixes after steering note 2)
+  opened, under review. Owner: rotate reviewer mixes; evidence first always.
+  A 30-minute watchdog cron (session-only) restarts this loop and nudges the
+  other two if they stall.
 - 2026-09-25 — #1219 round 1: both Codex reviewers found real false-confirmation
   and baseline gaps in the strip-everything approach; replaced with a
   wrap-tolerant pattern (inserted whitespace allowed, missing whitespace not),
