@@ -42,6 +42,7 @@
 // investigations, so 14 days is the explicit floor unless we add an
 // in-app viewer that lets users grow the budget consciously.
 
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
@@ -65,6 +66,62 @@ const FLUSH_INTERVAL_MS = 100
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 
 /**
+ * Per-file byte budget (#1276).
+ *
+ * WHY: the 14-day prune bounds how LONG files live, not how big one gets.
+ * One press whose recorder ran 32.8 h (#1299) wrote a 1.196 GB file, and
+ * 96 % of it was per-chunk and per-sample events: recorder:dataavailable,
+ * the CHUNK layer, deepgram:chunk:*, deepgram:message and AUDIO_LEVEL
+ * `sample`, each several times a second. Only 17 events in the whole file
+ * were lifecycle. 16 MiB holds tens of minutes of full-detail capture,
+ * far more than a normal press, and past it the lifecycle, error and stop
+ * events still land, because those are what an investigation reads.
+ */
+const MAX_JOURNAL_BYTES = 16 * 1024 * 1024
+
+/**
+ * How many journals the registry keeps (#1276). A press id is a fresh UUID
+ * that is never reused, and nothing disposed of them, so a long-running app
+ * kept one writer per press forever. The oldest is flushed and evicted.
+ */
+const MAX_OPEN_JOURNALS = 64
+
+/** The events that repeat per audio chunk or level sample; see
+ *  MAX_JOURNAL_BYTES for the measured share. */
+function isHighFrequency(input: DictationDebugEventInput): boolean {
+  return input.layer === 'CHUNK'
+    || input.event === 'sample'
+    || input.event === 'recorder:dataavailable'
+    || input.event.startsWith('deepgram:chunk:')
+    || input.event === 'deepgram:message'
+    // One per non-final transcript while Deepgram streams (#1301 review A);
+    // `preview:final` and `committed` stay, they are what a reader needs.
+    || (input.layer === 'TRANSCRIPT' && input.event === 'preview:interim')
+}
+
+/**
+ * How often a post-budget summary line is written, in journal time (#1301
+ * review C, steering q29). Dropping the high-frequency events outright hid
+ * the very thing #1299 needs: in the recorded 1.2 GB press, chunks and
+ * non-zero audio levels continued for ~26 h AFTER deepgram:close, and a
+ * single "suppressed" marker at 25 min erased all of it. One summary line per
+ * minute (~300 bytes) keeps that visible — counts per event, the time span,
+ * the highest chunk index and the audio peaks — at ~430 KiB per day.
+ */
+const SUMMARY_INTERVAL_MS = 60_000
+
+type SuppressedSummary = {
+  sinceTMs: number
+  counts: Record<string, number>
+  maxPeak: number
+  nonZeroPeaks: number
+  /** Highest chunk index seen per `layer/event`: the renderer and main count
+   *  from 0 while Deepgram counts from 1, so one merged maximum invented a
+   *  chunk that never existed (#1301 review round 2). */
+  lastChunkIndex: Record<string, number>
+}
+
+/**
  * Append-only writer for a single dictation session's debug log. The
  * companion registry below keeps one per debugSessionId.
  *
@@ -77,15 +134,12 @@ export class DictationDebugJournal {
   private queue: string[] = []
   private timer: NodeJS.Timeout | null = null
   private ensuredDir = false
-  /**
-   * Same overlap guard as the former GhostJournal: `scheduleDrain` arms a timer
-   * and nulls it inside the callback before awaiting `drain()`, so a
-   * new `append` arriving during the drain could in principle schedule
-   * a second drain. This boolean short-circuits that. macOS APFS
-   * serialises `appendFile` at the FS level, but relying on that is
-   * implementation-defined.
-   */
-  private draining = false
+  /** Bytes this writer has accounted for (file + queue); the registry reads it
+   *  when evicting, so a re-created writer keeps the budget even while this
+   *  one's last write is still in flight (#1301 review round 2). */
+  get accountedBytes(): number {
+    return this.bytesQueued
+  }
   /**
    * Wall-clock anchor for `tMs`. Latched on first append rather than
    * in the constructor — a session that never emits an event also
@@ -94,7 +148,35 @@ export class DictationDebugJournal {
    */
   private sessionStartedAtMs: number | null = null
 
-  constructor(private readonly filePath: string) {}
+  /** Bytes in the file plus bytes handed to the writer; see
+   *  MAX_JOURNAL_BYTES. Starts at the file's size when the registry
+   *  re-creates a writer for a press it had evicted, so the cap does not
+   *  restart (#1301 review A/C). */
+  private bytesQueued: number
+  private suppressedHighFrequency = false
+  private summary: SuppressedSummary | null = null
+
+  constructor(
+    private readonly filePath: string,
+    private readonly options: {
+      maxBytes?: number
+      initialBytes?: number
+      /** The press's original `ts` anchor, when re-created for a press whose
+       *  file already exists; see the registry's get(). */
+      initialStartedAtMs?: number | null
+      /** Test seam for a slow or blocked disk; production uses appendFile. */
+      appendFile?: typeof appendFile
+    } = {},
+  ) {
+    this.bytesQueued = options.initialBytes ?? 0
+    // A writer re-created for an evicted press keeps that press's clock
+    // (#1301 review C, round 2): otherwise its tMs restarted at 0, placing
+    // hours-late summaries at the start of the press for any reader ordering
+    // by tMs. It may announce suppression once more; whether the old writer
+    // already did is not knowable without scanning a 16 MiB file, and a
+    // repeated marker misleads nobody.
+    this.sessionStartedAtMs = options.initialStartedAtMs ?? null
+  }
 
   /**
    * Enqueue one event for the next drain. Returns immediately; the
@@ -110,7 +192,47 @@ export class DictationDebugJournal {
       tMs: now - this.sessionStartedAtMs,
       ...input,
     }
-    this.queue.push(JSON.stringify(event) + '\n')
+    if (this.bytesQueued >= (this.options.maxBytes ?? MAX_JOURNAL_BYTES) && isHighFrequency(input)) {
+      if (!this.suppressedHighFrequency) {
+        // Say so once, in the file itself, so a reader knows the per-chunk
+        // trail becomes per-minute summaries here by design.
+        this.suppressedHighFrequency = true
+        this.push({ ts: now, tMs: event.tMs, layer: 'META', event: 'journal:high-frequency-suppressed', data: { afterBytes: this.bytesQueued, summaryIntervalMs: SUMMARY_INTERVAL_MS } })
+      }
+      this.accumulate(input, event.tMs)
+      if (event.tMs - this.summary!.sinceTMs >= SUMMARY_INTERVAL_MS) this.emitSummary(now, event.tMs)
+      return
+    }
+    // A kept event (a close, an error, an outcome) lands AFTER the summary of
+    // what came before it, so the file stays in time order.
+    if (this.summary) this.emitSummary(now, event.tMs)
+    this.push(event)
+  }
+
+  private accumulate(input: DictationDebugEventInput, tMs: number): void {
+    const summary = this.summary ??= { sinceTMs: tMs, counts: {}, maxPeak: 0, nonZeroPeaks: 0, lastChunkIndex: {} }
+    const key = `${input.layer}/${input.event}`
+    summary.counts[key] = (summary.counts[key] ?? 0) + 1
+    const data = input.data ?? {}
+    if (typeof data.peak === 'number' && data.peak > 0) {
+      summary.nonZeroPeaks += 1
+      if (data.peak > summary.maxPeak) summary.maxPeak = data.peak
+    }
+    const index = typeof data.chunkIndex === 'number' ? data.chunkIndex : typeof data.pendingChunkIndex === 'number' ? data.pendingChunkIndex : null
+    if (index !== null && (summary.lastChunkIndex[key] === undefined || index > summary.lastChunkIndex[key]!)) summary.lastChunkIndex[key] = index
+  }
+
+  private emitSummary(now: number, untilTMs: number): void {
+    const summary = this.summary
+    if (!summary) return
+    this.summary = null
+    this.push({ ts: now, tMs: untilTMs, layer: 'META', event: 'journal:high-frequency-summary', data: { ...summary, untilTMs } })
+  }
+
+  private push(event: DictationDebugEvent): void {
+    const line = JSON.stringify(event) + '\n'
+    this.bytesQueued += Buffer.byteLength(line)
+    this.queue.push(line)
     this.scheduleDrain()
   }
 
@@ -119,6 +241,8 @@ export class DictationDebugJournal {
    * queued event reaches disk before `app.exit`.
    */
   async flush(): Promise<void> {
+    // The tail since the last summary is exactly what a quit would lose.
+    if (this.summary && this.sessionStartedAtMs !== null) this.emitSummary(Date.now(), Date.now() - this.sessionStartedAtMs)
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = null
@@ -134,16 +258,25 @@ export class DictationDebugJournal {
     }, FLUSH_INTERVAL_MS)
   }
 
-  private async drain(): Promise<void> {
-    if (this.draining) return
+  /**
+   * Drains are CHAINED, not skipped (#1301 review round 2). The old guard
+   * returned at once while a timed drain was writing, so a flush() during a
+   * slow append resolved before that append landed: an eviction or a clean
+   * quit could exit with the batch (and the summary in it) unwritten. Each
+   * drain now waits for the one before it, and flush() awaits the chain.
+   */
+  private drainChain: Promise<void> = Promise.resolve()
+
+  private drain(): Promise<void> {
+    const next = this.drainChain.then(() => this.drainOnce())
+    this.drainChain = next.catch(() => undefined)
+    return next
+  }
+
+  private async drainOnce(): Promise<void> {
     if (this.queue.length === 0) return
-    this.draining = true
-    try {
-      const batch = this.queue.splice(0).join('')
-      await this.appendRaw(batch)
-    } finally {
-      this.draining = false
-    }
+    const batch = this.queue.splice(0).join('')
+    await this.appendRaw(batch)
     // A write that arrived during the drain may have armed the timer;
     // if not, arm it now so late arrivals get picked up.
     if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
@@ -151,7 +284,7 @@ export class DictationDebugJournal {
 
   private async appendRaw(content: string): Promise<void> {
     try {
-      await appendFile(this.filePath, content, { mode: 0o600 })
+      await (this.options.appendFile ?? appendFile)(this.filePath, content, { mode: 0o600 })
     } catch {
       // Directory-creation only needed on first-ever write for this
       // session. Once it succeeds, every subsequent append hits the
@@ -160,7 +293,7 @@ export class DictationDebugJournal {
       if (!this.ensuredDir) {
         await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 })
         this.ensuredDir = true
-        await appendFile(this.filePath, content, { mode: 0o600 })
+        await (this.options.appendFile ?? appendFile)(this.filePath, content, { mode: 0o600 })
       } else {
         // Already ensured the dir — re-throw so the caller's logs see
         // the real fs error. Swallowing would silently lose events.
@@ -182,8 +315,24 @@ export class DictationDebugJournalRegistry {
   get(debugSessionId: string): DictationDebugJournal {
     let j = this.journals.get(debugSessionId)
     if (!j) {
-      j = new DictationDebugJournal(dictationDebugLogPath(debugSessionId))
+      const path = dictationDebugLogPath(debugSessionId)
+      // An evicted writer's last write may still be in flight, so the file
+      // can be smaller than what that writer accounted for; take the larger.
+      const inFlight = this.evictedBytes.get(debugSessionId)
+      const evicted = inFlight ? Math.max(0, ...inFlight.values()) : 0
+      j = new DictationDebugJournal(path, {
+        initialBytes: Math.max(existingSize(path), evicted),
+        initialStartedAtMs: existingStartedAt(path),
+        appendFile: this.options.appendFile,
+      })
       this.journals.set(debugSessionId, j)
+      // Insertion order is age: evict the oldest press (flushing it first),
+      // never the one just asked for. See MAX_OPEN_JOURNALS.
+      while (this.journals.size > MAX_OPEN_JOURNALS) {
+        const oldest = this.journals.keys().next().value
+        if (oldest === undefined || oldest === debugSessionId) break
+        this.dispose(oldest)
+      }
     }
     return j
   }
@@ -199,14 +348,44 @@ export class DictationDebugJournalRegistry {
         console.warn('[dictationJournal] flush error:', err)
       }),
     )
-    await Promise.all(drains)
+    // Writes started by eviction (dispose) belong to the shutdown drain too
+    // (#1301 review A/B): the evicted writer is no longer in the map.
+    await Promise.all([...drains, ...this.disposing])
+  }
+
+  /** Flushes started by dispose(), until they settle; see flushAll. */
+  private readonly disposing = new Set<Promise<void>>()
+  /** Accounted bytes of evicted writers whose final flush has not landed;
+   *  see get(). Entries leave when that flush settles, so this stays small. */
+  private readonly evictedBytes = new Map<string, Map<DictationDebugJournal, number>>()
+
+  constructor(private readonly options: { appendFile?: typeof appendFile } = {}) {}
+
+  get size(): number {
+    return this.journals.size
   }
 
   dispose(debugSessionId: string): void {
     const j = this.journals.get(debugSessionId)
     if (!j) return
-    void j.flush().catch(err => {
+    // EVERY evicted writer of this press whose flush is in flight counts
+    // (steering q30): writes can land in any order, so the one that finishes
+    // first may be the small one while a 16 MiB batch is still pending.
+    const inFlight = this.evictedBytes.get(debugSessionId) ?? new Map<DictationDebugJournal, number>()
+    inFlight.set(j, j.accountedBytes)
+    this.evictedBytes.set(debugSessionId, inFlight)
+    const flushing = j.flush().catch(err => {
       console.warn('[dictationJournal] dispose flush error:', err)
+    })
+    this.disposing.add(flushing)
+    void flushing.finally(() => {
+      this.disposing.delete(flushing)
+      // Only THIS writer's entry; another evicted writer of the same press may
+      // still be writing, and dropping its count let a later writer start
+      // below the budget (steering q30).
+      const remaining = this.evictedBytes.get(debugSessionId)
+      remaining?.delete(j)
+      if (remaining?.size === 0) this.evictedBytes.delete(debugSessionId)
     })
     this.journals.delete(debugSessionId)
   }
@@ -250,3 +429,37 @@ export async function pruneOldDictationDebugLogs(): Promise<void> {
     }
   }
 }
+
+/** The journal's current size, so a writer re-created for an evicted press
+ *  keeps its budget. Synchronous: it runs once per writer creation, and the
+ *  registry's `get` is synchronous by contract. */
+function existingSize(path: string): number {
+  try {
+    return statSync(path).size
+  } catch {
+    return 0
+  }
+}
+
+/** The `ts` of the file's first event: the press's clock anchor (tMs 0).
+ *  Reads only the first line; null when the file is absent or unreadable,
+ *  in which case the next event starts the clock as before. */
+function existingStartedAt(path: string): number | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(path, 'r')
+    // Only the prefix: every event is serialized `{"ts":…,"tMs":…,…}` (see
+    // append), and a first line can be far longer than any fixed read.
+    const head = Buffer.alloc(64)
+    const read = readSync(fd, head, 0, head.length, 0)
+    const match = /^\{"ts":(\d+),"tMs":(\d+)/.exec(head.subarray(0, read).toString('utf8'))
+    return match ? Number(match[1]) - Number(match[2]) : null
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* nothing to release */ }
+    }
+  }
+}
+
