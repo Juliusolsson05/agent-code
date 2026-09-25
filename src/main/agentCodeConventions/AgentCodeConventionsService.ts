@@ -40,12 +40,12 @@ import {
 } from '@shared/types/providerKind.js'
 import type { ManagedAgentSkillLocations } from '@shared/types/agentSkills.js'
 import { homedir } from 'os'
-import { isAbsolute, relative, resolve, sep } from 'path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 
 import { atomicWriteTextFile } from '@main/editorFileIO.js'
 import {
   AGENT_CODE_CONVENTIONS_STATE_FILE,
-  AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR,
+  AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIRNAME,
 } from '@main/storage/paths.js'
 import {
   readAgentCodeConventionsState,
@@ -235,8 +235,17 @@ export class AgentCodeManagedSkillsService {
     this.now = options.now ?? (() => new Date())
     this.operationId = options.operationId ?? randomUUID
     this.githubSkillSource = options.githubSkillSource ?? new GitHubSkillSource()
+    // WHY the store defaults to the journal's directory, never a global path
+    // (#1206): the journal is the only thing that knows which snapshots are
+    // referenced, and startup sweeps everything it does not name. A service
+    // given a temp journal but the real store (two system test files did
+    // exactly that) read an empty journal and deleted every installed
+    // skill's snapshot on the developer's machine. Deriving the store from
+    // `stateFilePath` makes journal and store one unit. In the app this is
+    // still `STATE_DIR/managed-skill-snapshots`, so no migration is needed.
     this.installedSkillPackageStore = new InstalledSkillPackageStore(
-      options.installedSkillSnapshotRoot ?? AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR,
+      options.installedSkillSnapshotRoot
+        ?? join(dirname(this.stateFilePath), AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIRNAME),
     )
     this.installedSkillMaterializer = new InstalledSkillMaterializer(
       this.pathSafety,

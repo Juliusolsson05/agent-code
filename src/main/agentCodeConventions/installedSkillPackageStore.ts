@@ -10,7 +10,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import { readBoundedFile } from '@main/editorFileIO.js'
 import type { AgentCodeInstalledSkillFileRecord } from '@shared/types/agentCodeConventions.js'
@@ -94,10 +94,7 @@ export class InstalledSkillPackageStore {
     if (manifestDigest(files) !== digest) {
       throw new Error('Installed skill snapshot digest does not match its manifest')
     }
-    await this.assertRootIsSafe()
-    const directory = this.snapshotDirectory(digest)
-    await this.assertDirectChild(directory)
-    await assertSnapshotDirectory(directory)
+    const directory = await this.recordedSnapshotDirectory(digest)
     await verifyDirectory(directory, files)
   }
 
@@ -107,10 +104,7 @@ export class InstalledSkillPackageStore {
   ): Promise<Buffer> {
     assertDigest(digest)
     if (!isSafeAgentCodeInstalledSkillPath(file.path)) throw new Error('Unsafe installed skill package path')
-    await this.assertRootIsSafe()
-    const directory = this.snapshotDirectory(digest)
-    await this.assertDirectChild(directory)
-    await assertSnapshotDirectory(directory)
+    const directory = await this.recordedSnapshotDirectory(digest)
     const target = join(directory, ...file.path.split('/'))
     await assertNoLinksBetween(directory, target)
     const read = await readBoundedFile(target, AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)
@@ -284,6 +278,37 @@ export class InstalledSkillPackageStore {
       throw new Error('Installed skill snapshot root is not a regular directory')
     }
     await chmod(this.root, 0o700)
+  }
+
+  /**
+   * Resolves the snapshot a journal record points at, for reading.
+   *
+   * WHY ENOENT is translated here (#1206): `verify` failures end up on every
+   * provider row of the skill in Settings → Skills, and the raw
+   * `ENOENT … lstat '<64-hex path>'` made a healthy provider copy look broken
+   * while naming a path the user had never heard of. Whether the snapshot
+   * directory, the whole store or its parent is gone, the meaning is the
+   * same: the provider copy may be fine, but Agent Code can no longer prove,
+   * update or cleanly remove it. WHY only for these reads and not inside
+   * `assertSnapshotDirectory`: that one also guards nested directories and
+   * quarantines mid-cleanup, where "missing from the store" would be false.
+   * Other errnos (EACCES, ELOOP…) stay raw because they are environment
+   * faults worth seeing verbatim.
+   */
+  private async recordedSnapshotDirectory(digest: string): Promise<string> {
+    const directory = this.snapshotDirectory(digest)
+    try {
+      await this.assertRootIsSafe()
+      await this.assertDirectChild(directory)
+      await assertSnapshotDirectory(directory)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      throw new Error(
+        `Agent Code's reviewed copy of this skill is missing from ${basename(this.root)}, `
+        + 'so this copy can no longer be verified or updated',
+      )
+    }
+    return directory
   }
 
   private async assertRootIsSafe(): Promise<void> {
