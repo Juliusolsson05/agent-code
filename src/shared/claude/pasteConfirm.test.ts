@@ -232,6 +232,34 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     }
   })
 
+  // Steering q33: a ZWJ emoji is ONE grapheme and two cells (Ink's
+  // string-width measures clusters). Counting its code points made a soft
+  // wrap look full, dropped the real space, and confirmed a different paste.
+  it('never confirms early across a soft wrap after a ZWJ emoji run', () => {
+    const shown = `${'👩‍💻'.repeat(5)} abcdefgh`
+    const other = `${'👩‍💻'.repeat(5)}abcdefgh`
+    for (let cols = 20; cols <= 40; cols += 1) {
+      expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, shown)), pasteTailNeedle(other), 0, false)).toBeNull()
+    }
+  })
+
+  // Only a variation-selector emoji is swept positively. npm wrap-ansi 7
+  // (hard: true) splits ZWJ and skin-tone sequences mid-cluster across rows;
+  // Claude runs on Bun, whose Ink uses Bun.wrapAnsi, and how THAT splits a
+  // cluster is unknown without a recorded frame. A missed confirmation there
+  // is a timeout, the safe direction; the early-confirmation case above is
+  // the one that must hold, and does.
+  it('confirms a wrapped run of variation-selector emoji', () => {
+    for (const prompt of ['❤️'.repeat(40)]) {
+      const tail = pasteTailNeedle(prompt)
+      const missed: number[] = []
+      for (let cols = 20; cols <= 140; cols += 1) {
+        if (pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, prompt)), tail, 0, false) !== 'inline') missed.push(cols)
+      }
+      expect(missed).toEqual([])
+    }
+  })
+
   it('keeps the space of a soft wrap between a long word and a CJK word', () => {
     const prompt = `${'a'.repeat(101)} 你好吗`
     expect(activeClaudeComposerText(screenAt(20, prompt))).toContain(' 你好吗')

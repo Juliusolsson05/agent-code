@@ -188,9 +188,9 @@ export function activeClaudeComposerText(screen: string): string {
     // costs only a timeout. So the short case counts as a hard cut only when
     // the row itself ends in a wide character (a run of CJK, which has no
     // spaces to wrap at). A full row (width - 1) is a hard cut as before.
-    const firstChar = content.length > 0 ? String.fromCodePoint(content.codePointAt(0)!) : ''
+    const firstChar = graphemes(content)[0] ?? ''
     const previousCells = displayWidth(previous)
-    const lastChar = previous.length > 0 ? Array.from(previous).at(-1)! : ''
+    const lastChar = graphemes(previous).at(-1) ?? ''
     const hardCut = width !== null && content.length > 0 && !/^\s/u.test(content) && (
       previousCells >= width - 1
       || (previousCells + displayWidth(firstChar) > width - 1 && displayWidth(lastChar) === 2)
@@ -396,12 +396,32 @@ export function pollPasteAbsorbed(
  */
 function displayWidth(text: string): number {
   let cells = 0
-  for (const char of text) {
-    const code = char.codePointAt(0)!
-    if (/\p{Mn}|\p{Me}/u.test(char) || code === 0x200d || (code >= 0xfe00 && code <= 0xfe0f)) continue
-    cells += isWide(code) ? 2 : 1
-  }
+  for (const cluster of graphemes(text)) cells += clusterWidth(cluster)
   return cells
+}
+
+/**
+ * Width of ONE grapheme cluster, the unit Ink's string-width (and so Claude's
+ * wrapping) measures (steering q33). Measuring code points instead made a ZWJ
+ * sequence like 👩‍💻 four cells instead of two, which made a soft wrap look
+ * full, dropped its real space and confirmed a different paste.
+ *   - an emoji sequence (ZWJ, VS16 presentation, skin tone) is 2;
+ *   - VS15 asks for text presentation, 1;
+ *   - otherwise the cluster's first code point decides (a combining mark
+ *     rides on its base and adds nothing).
+ */
+function clusterWidth(cluster: string): number {
+  const first = cluster.codePointAt(0)!
+  if (cluster.includes('\ufe0e')) return 1
+  if (cluster.includes('\u200d') || cluster.includes('\ufe0f') || /[\u{1f3fb}-\u{1f3ff}]/u.test(cluster)) return 2
+  if (/^\p{Mn}|^\p{Me}/u.test(cluster)) return 0
+  return isWide(first) ? 2 : 1
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+function graphemes(text: string): string[] {
+  return Array.from(graphemeSegmenter.segment(text), part => part.segment)
 }
 
 function isWide(code: number): boolean {
