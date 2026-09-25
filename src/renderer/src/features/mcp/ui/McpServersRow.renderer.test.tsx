@@ -8,6 +8,7 @@ import { useProviderEnablementStore } from '@renderer/features/providers/store'
 import type { ProviderEnablementSnapshot } from '@shared/types/providerEnablement'
 import type { UserMcpServerView } from '@shared/userMcp/types'
 
+import { ConfirmHost } from '@renderer/components/ui/confirm-dialog'
 import { McpServerDialog } from './McpServerDialog'
 import { McpServersRow } from './McpServersRow'
 import { useAppStore } from '@renderer/app-state/store'
@@ -99,6 +100,9 @@ describe('Settings → MCP grid', () => {
     render(<McpServersRow settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
     expect(screen.queryByRole('checkbox', { name: 'linear for new Codex agents' })).toBeNull()
     expect(screen.getByLabelText('Codex does not support SSE servers')).toBeTruthy()
+    // K2-16: the reason is also VISIBLE text under the row, not only a label
+    // on an unfocusable cell.
+    expect(screen.getByText(/Codex: Codex does not support SSE servers/)).toBeVisible()
   })
 
   it('writes a user-server provider choice to main, not to renderer Settings', () => {
@@ -111,6 +115,18 @@ describe('Settings → MCP grid', () => {
 })
 
 describe('MCP server dialog', () => {
+  it('says in visible text why a provider cannot be attached (K2-11)', () => {
+    // The reason lived only in a hover title on a DISABLED checkbox, which is
+    // out of the Tab order: unreachable by keyboard or screen reader.
+    const sse = { type: 'sse' as const, url: 'http://localhost:9/sse' }
+    useUserMcpStore.setState({ snapshot: { servers: [server({ entry: sse, transport: 'sse' })], native: [], claudeManagedPolicy: false } })
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    expect(screen.getByLabelText('Attach to Codex')).toBeDisabled()
+    expect(screen.getByText(/Codex not available: Codex does not support SSE servers/)).toBeVisible()
+    expect(document.querySelector('label[title]')).toBeNull()
+  })
+
   it('never renders a stored secret, only its hint', () => {
     useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
     render(<McpServerDialog />)
@@ -130,6 +146,47 @@ describe('MCP server dialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0].secrets).toEqual({})
+  })
+
+  it('asks before Escape discards a SECRET-ONLY edit (steering note k5)', async () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<><McpServerDialog /><ConfirmHost /></>)
+    const field = screen.getByLabelText('Secret beeper-authorization')
+    fireEvent.change(field, { target: { value: 'new-token' } })
+    fireEvent.keyDown(field, { key: 'Escape' })
+    expect(await screen.findByRole('dialog', { name: 'Discard this MCP server config?' })).toBeInTheDocument()
+    expect(useAppStore.getState().mcpServerDialog).not.toBeNull()
+    // Settle the app-wide confirm so it cannot leak into the next test.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard Changes' })) })
+  })
+
+  it('treats a secret typed and emptied again as no change, and closes without asking', async () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<><McpServerDialog /><ConfirmHost /></>)
+    const field = screen.getByLabelText('Secret beeper-authorization')
+    fireEvent.change(field, { target: { value: 'x' } })
+    fireEvent.change(field, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await vi.waitFor(() => expect(useAppStore.getState().mcpServerDialog).toBeNull())
+  })
+
+  it('cannot be closed by Cancel or Escape while an edit is saving (steering note k5)', async () => {
+    let settle!: () => void
+    api.userMcpSave.mockReturnValue(new Promise(resolve => {
+      settle = () => resolve({ ok: true, snapshot: { servers: [server()], native: [], claudeManagedPolicy: false } })
+    }))
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    // Save WITHOUT edits, so nothing is dirty: only the in-flight guard can
+    // be what keeps the dialog open below (a dirty draft would also hold it,
+    // by asking — which would make this test prove the wrong thing).
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    await vi.waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(useAppStore.getState().mcpServerDialog).not.toBeNull()
+    await act(async () => { settle() })
   })
 
   it('refuses to save over a server that changed elsewhere while the editor was open (review round 1)', () => {
@@ -175,9 +232,22 @@ describe('MCP server dialog', () => {
     fireEvent.change(box, { target: { value: box.value.replace('23373', '23374') } })
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })
     vi.useRealTimers()
-    fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Server' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0].secrets).toEqual({ 'beeper-authorization': TOKEN })
+  })
+
+  it('asks before Escape discards a pasted config, and labels Add Server ⌘↩ (plan S31)', async () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'add' } })
+    render(<><McpServerDialog /><ConfirmHost /></>)
+    const paste = screen.getByLabelText('MCP server config')
+    fireEvent.change(paste, { target: { value: '{"mcpServers":{}}' } })
+    expect(screen.getByRole('button', { name: 'Add Server' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⌘↩')
+    fireEvent.keyDown(paste, { key: 'Escape' })
+    expect(await screen.findByRole('dialog', { name: 'Discard this MCP server config?' })).toBeInTheDocument()
+    expect(useAppStore.getState().mcpServerDialog).not.toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard Changes' })) })
+    await vi.waitFor(() => expect(useAppStore.getState().mcpServerDialog).toBeNull())
   })
 
   it('adds every server found in a pasted snippet, with its lifted secrets', async () => {
@@ -206,7 +276,7 @@ describe('MCP server dialog', () => {
     expect((card as HTMLInputElement).value).toBe('beeper')
     // The lifted token no longer shows in the paste box (review round 1).
     expect((screen.getByLabelText('MCP server config') as HTMLTextAreaElement).value).not.toContain(TOKEN)
-    fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Server' }))
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0]).toMatchObject({
       name: 'beeper',

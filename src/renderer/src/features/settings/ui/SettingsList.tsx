@@ -1,4 +1,5 @@
 import { useAppStore } from '@renderer/app-state/hooks'
+import { OptionCards } from '@renderer/components/ui/option-cards'
 import { McpServersRow } from '@renderer/features/mcp/ui/McpServersRow'
 import { SkillsGrid } from '@renderer/features/skills/ui/SkillsGrid'
 import { UpdateChannelRow } from '@renderer/features/settings/ui/UpdateChannelRow'
@@ -163,8 +164,14 @@ function SettingRow({
           <SettingMetadataBadges definition={definition} />
 
           {control.type === 'toggle' ? (
+            // A real SWITCH (plan N14): it was a button whose text said
+            // Enabled/Disabled, so assistive tech heard a button named
+            // "Enabled" with no on/off state. Space/Enter toggle natively.
             <Button
               variant="outline"
+              role="switch"
+              aria-checked={control.getValue(settings)}
+              aria-label={definition.title}
               onClick={() =>
                 void control.onToggle(
                   context,
@@ -185,35 +192,15 @@ function SettingRow({
           ) : null}
 
           {control.type === 'select' ? (
-            <div
-              className="grid gap-1.5"
-              style={{
-                gridTemplateColumns: `repeat(${control.columns ?? 1}, minmax(0, 1fr))`,
-              }}
-            >
-              {control.options.map(option => {
-                const active = control.getValue(settings) === option.value
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => void control.onSelect(context, option.value)}
-                    className={`rounded-control border px-3 py-2 text-left ${
-                      active
-                        ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
-                        : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
-                    }`}
-                  >
-                    <div className="text-[11px]">{option.label}</div>
-                    {option.description ? (
-                      <div className={`mt-1 text-[10px] ${active ? 'text-control-active-fg/80' : 'text-muted'}`}>
-                        {option.description}
-                      </div>
-                    ) : null}
-                  </button>
-                )
-              })}
-            </div>
+            // A RADIO GROUP of cards (plan N14, steering k9): the shared
+            // OptionCards (UI pass, G-17), which owns the keyboard contract.
+            <OptionCards
+              label={definition.title}
+              value={control.options.some(option => option.value === control.getValue(settings)) ? control.getValue(settings) : null}
+              options={control.options}
+              columns={control.columns ?? 1}
+              onChange={next => void control.onSelect(context, next)}
+            />
           ) : null}
 
           {control.type === 'hotkey' ? (
@@ -343,7 +330,7 @@ function SettingMetadataBadges({ definition }: { definition: SettingDefinition }
       {badges.map(badge => (
         <span
           key={badge}
-          className="rounded-chip border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted"
+          className="rounded-chip border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[10px] uppercase tracking-wider text-muted"
         >
           {badge}
         </span>

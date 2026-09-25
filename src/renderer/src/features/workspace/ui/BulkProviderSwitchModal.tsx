@@ -1,13 +1,19 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
+import { Input } from '@renderer/components/ui/input'
+import { Select } from '@renderer/components/ui/select'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, pluralAgents, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import {
@@ -671,7 +677,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       }}
     >
       <DialogContent
-        className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden"
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onEscapeKeyDown={event => {
           if (locked) event.preventDefault()
           // During a provider batch or the /model fan-out, Escape asks to stop
@@ -687,40 +694,32 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           if (locked) event.preventDefault()
         }}
       >
+        {/* Standard header (plan T3). The "Esc" button that sat beside the
+            title is gone: a second Cancel that named a key. It also received
+            Radix's mount focus, so the dialog opened on "Esc". */}
+        <DialogHeader>
+          <DialogTitle>Switch Agents to Another Provider</DialogTitle>
+          <DialogDescription>
+            Move a batch of agents between Claude, Codex, and OpenCode — e.g. when you
+            hit a usage limit. History is translated; the originals stay native.
+          </DialogDescription>
+        </DialogHeader>
         <div className="flex-shrink-0 border-b border-border px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <DialogTitle>Switch Agents to Another Provider</DialogTitle>
-              <DialogDescription>
-                Move a batch of agents between Claude, Codex, and OpenCode — e.g. when you
-                hit a usage limit. History is translated; the originals stay native.
-              </DialogDescription>
-            </div>
-            <button
-              type="button"
-              onClick={requestClose}
-              disabled={locked}
-              className="rounded-control px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
-            >
-              Esc
-            </button>
-          </div>
-
           {batch && (
-            <div className="rounded-slab mt-3 flex items-center justify-between gap-3 border border-border bg-canvas px-3 py-2">
+            <div className="rounded-slab flex items-center justify-between gap-3 border border-border bg-canvas px-3 py-2">
               <div className="min-w-0 text-[11px] text-ink-dim">
                 <span className="text-ink">↩ Last batch</span> — {batch.agents.length} agent
                 {batch.agents.length === 1 ? '' : 's'} · {providerLabel(batch.sourceKind)} →{' '}
                 {providerLabel(batch.targetKind)} · {relativeTime(batch.switchedAt)}
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={() => void runReturn()}
                 disabled={locked}
-                className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
+                variant="outline" size="sm" className="flex-shrink-0"
               >
                 {busy ? 'Working…' : `Return ${batch.agents.length}`}
-              </button>
+              </Button>
             </div>
           )}
 
@@ -740,13 +739,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             </div>
           )}
 
-          <div className="mt-4 grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)] gap-3">
+          <div className={`${batch || exhaustedProviders.length > 0 ? 'mt-4' : ''} grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)] gap-3`}>
             <div>
               <label className="block text-[10px] uppercase tracking-wider text-muted">
                 Switch
               </label>
               <div className="mt-1">
-                <select
+                <Select
                   value={directionKey}
                   onChange={e => {
                     setDirectionChoice(e.target.value)
@@ -756,43 +755,28 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                     setSourceConfirmArmed(false)
                     setConfirmedSessionIds(null)
                   }}
-                  className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
+                  aria-label="Switch direction"
+                  
                 >
                   {directions.map(item => (
                     <option key={item.key} value={item.key}>
                       {providerLabel(item.source)} → {providerLabel(item.target)}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
             </div>
 
             <div>
               <div className="text-[10px] uppercase tracking-wider text-muted">Project scope</div>
-              <div className="mt-1 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => changeScopeMode('all')}
-                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
-                    scopeMode === 'all'
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
-                  }`}
-                >
-                  All projects
-                </button>
-                <button
-                  type="button"
-                  onClick={() => changeScopeMode('selected')}
-                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
-                    scopeMode === 'selected'
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
-                  }`}
-                >
-                  Selected projects
-                </button>
-              </div>
+              {/* The shared segmented look (UI pass, G-10). */}
+              <SegmentedControl
+                className="mt-1"
+                label="Project scope"
+                value={scopeMode}
+                onChange={changeScopeMode}
+                options={[{ value: 'all', label: 'All Projects' }, { value: 'selected', label: 'Selected Projects' }] as const}
+              />
             </div>
           </div>
 
@@ -803,7 +787,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   type="checkbox"
                   checked={compactOnArrival}
                   onChange={e => setCompactOnArrivalChoice(e.target.checked)}
-                  className="mt-0.5 accent-current"
+                  className="mt-0.5"
                 />
                 <span>
                   Compact on arrival with {targetLabel}
@@ -830,7 +814,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   setSourceConfirmArmed(false)
                   setConfirmedSessionIds(null)
                 }}
-                className="mt-0.5 accent-current disabled:opacity-50"
+                className="mt-0.5 disabled:opacity-50"
               />
               <span className={sourceExhausted ? 'text-muted' : undefined}>
                 Compact on source first (uses {sourceLabel} quota)
@@ -861,16 +845,16 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   Only one {sourceLabel} model family is exhausted — a model switch
                   keeps every agent where it is.
                 </div>
-                <button
+                <Button
                   type="button"
                   onClick={() => void runModelSwitch()}
                   disabled={locked || matchingRows.length === 0 || !direction}
-                  className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
+                  variant="outline" size="sm" className="flex-shrink-0"
                 >
                   {switchingModel
                     ? 'Sending…'
                     : `Switch ${pluralAgents(matchingRows.length)} to another ${sourceLabel} model`}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -883,30 +867,23 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 <div className="text-[11px] text-ink">Projects</div>
                 {scopeMode === 'selected' && (
                   <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={selectAllProjects}
-                      className="px-1.5 py-0.5 text-[10px] text-ink-dim hover:text-ink"
-                    >
-                      all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={clearProjects}
-                      className="px-1.5 py-0.5 text-[10px] text-ink-dim hover:text-ink"
-                    >
-                      clear
-                    </button>
+                    <Button type="button" variant="ghost" size="xs" onClick={selectAllProjects}>
+                      All
+                    </Button>
+                    <Button type="button" variant="ghost" size="xs" onClick={clearProjects}>
+                      Clear
+                    </Button>
                   </div>
                 )}
               </div>
               {scopeMode === 'selected' && projects.length > 8 && (
-                <input
+                <Input
                   type="text"
                   value={projectFilter}
                   onChange={e => changeProjectFilter(e.target.value)}
-                  placeholder="Filter projects"
-                  className="rounded-control mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
+                  placeholder="Filter projects…"
+                  aria-label="Filter projects"
+                  className="mt-2"
                 />
               )}
             </div>
@@ -924,7 +901,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                       key={project.tabId}
                       className={`
                         flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0
-                        ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}
+                        ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-row-hover-bg'}
                       `}
                     >
                       <input
@@ -932,7 +909,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                         disabled={disabled}
                         checked={scopeMode === 'all' || selected}
                         onChange={() => toggleProject(project.tabId)}
-                        className="mt-0.5 accent-current disabled:opacity-50"
+                        className="mt-0.5 disabled:opacity-50"
                       />
                       <span className="min-w-0 flex-1">
                         {/* The Dispatch vocabulary (A · title), so this picker
@@ -1013,50 +990,46 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           </div>
         </div>
 
-        <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
-          <div className="text-[10px] text-muted">
-            {midTurnCount > 0
-              ? `⚠ ${midTurnCount} of ${matchingRows.length} are mid-turn and will be skipped until idle; agents stopped by a usage limit are included.`
-              : 'Terminals are never switched.'}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              // While a provider batch or the /model fan-out runs, Cancel is the
-              // way out (#1271): it
-              // stops the batch after the agent in flight instead of closing
-              // a modal whose loop would keep running unseen.
-              onClick={locked ? requestStop : requestClose}
-              disabled={locked && stopRequested}
-              className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
-            >
-              {locked ? (stopRequested ? 'Stopping after this agent…' : 'Stop after this agent') : 'Cancel'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void runSwitch()}
-              // `locked`, matching the handler: with `busy` alone the button
-              // stayed enabled during a /model fan-out while runSwitch refused
-              // the click, so it looked available and did nothing.
-              disabled={locked || matchingRows.length === 0 || !direction}
-              className={`rounded-control
-                px-3 py-1.5 text-[11px] border
-                ${matchingRows.length > 0
-                  ? 'border-accent/60 bg-accent/10 text-accent hover:bg-accent/20'
-                  : 'border-border text-muted opacity-60 cursor-not-allowed'}
-              `}
-            >
-              {busy
-                ? 'Switching…'
-                : sourceConfirmArmed && compactOnSource
-                  // The armed label names the expensive half of what the click
-                  // does. "Switch N to Claude" would hide the fact that the
-                  // press also spends the source provider's quota.
-                  ? `Compact ${pluralAgents(matchingRows.length)} on ${sourceLabel} and switch`
-                  : `Switch ${pluralAgents(matchingRows.length)} to ${targetLabel}`}
-            </button>
-          </div>
+        {/* The skip/terminals note gets its own status line: the footer's
+            left slot is one truncating line, and "N are mid-turn and will be
+            skipped" is not something to cut off. */}
+        <div className="flex-shrink-0 border-t border-border px-4 py-2 text-[11px] text-muted">
+          {midTurnCount > 0
+            ? `⚠ ${midTurnCount} of ${matchingRows.length} are mid-turn and will be skipped until idle; agents stopped by a usage limit are included.`
+            : 'Terminals are never switched.'}
         </div>
+        {/* No commit key (confirmKey null): the button spends provider quota
+            on a whole batch, and in the armed state a SECOND press compacts
+            on the source too — neither should be one reflexive Enter from
+            the direction select. While a batch runs the dialog refuses to
+            close, so Cancel becomes "Stop after this agent" (#1312) and drops
+            its ⎋ chip (escapeCancels) — the chip must not promise an exit
+            that Escape is currently refusing. */}
+        <DialogActions
+          confirmKey={null}
+          confirmDisabled={locked || matchingRows.length === 0 || !direction}
+          confirmLabel={
+            busy
+              ? 'Switching…'
+              : sourceConfirmArmed && compactOnSource
+                // The armed label names the expensive half of what the click
+                // does. "Switch N to Claude" would hide the fact that the
+                // press also spends the source provider's quota.
+                ? `Compact ${pluralAgents(matchingRows.length)} on ${sourceLabel} and switch`
+                : `Switch ${pluralAgents(matchingRows.length)} to ${targetLabel}`
+          }
+          onConfirm={() => void runSwitch()}
+          // While a provider batch, the /model fan-out or a Return runs,
+          // Cancel is the way out (#1271, #1312): it stops the batch after the
+          // agent in flight instead of closing a modal whose loop would keep
+          // running unseen. Escape does the same (onEscapeKeyDown above), but
+          // the ⎋ chip stays off while locked: Escape stops, it does not close.
+          onCancel={locked ? requestStop : requestClose}
+          cancelLabel={locked ? (stopRequested ? 'Stopping after this agent…' : 'Stop after this agent') : 'Cancel'}
+          cancelDisabled={locked && stopRequested}
+          escapeCancels={!locked}
+          legend={locked ? <span>Working — closing is paused until this batch settles.</span> : undefined}
+        />
       </DialogContent>
     </Dialog>
   )

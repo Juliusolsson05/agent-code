@@ -14,21 +14,21 @@ export function pocketMenuTemplate(state: PocketMenuState, choose: (action: Pock
   return [
     item('Back', 'back', state.canGoBack),
     item('Forward', 'forward', state.canGoForward),
-    item('Pick element for agent', 'pick', state.hasPage),
-    item('Open in default browser', 'external', state.hasPage),
+    item('Pick Element for Agent', 'pick', state.hasPage),
+    item('Open in Default Browser', 'external', state.hasPage),
     { type: 'separator' },
     { label: 'Viewport', submenu: [
-      radio('Fit pane', 'device:fill', state.viewport === 'fill'),
+      radio('Fit Pane', 'device:fill', state.viewport === 'fill'),
       ...(Object.keys(DEVICE_PRESETS) as DevicePresetId[]).map(id => radio(`${DEVICE_PRESETS[id].label} — ${DEVICE_PRESETS[id].width} × ${DEVICE_PRESETS[id].height}`, `device:${id}`, state.viewport === id)),
-      { type: 'separator' }, item('Rotate device', 'rotate', state.viewport in DEVICE_PRESETS),
+      { type: 'separator' }, item('Rotate Device', 'rotate', state.viewport in DEVICE_PRESETS),
     ] },
     { label: 'Appearance', submenu: (['system', 'light', 'dark'] as const).map(s => radio(s[0]!.toUpperCase() + s.slice(1), `scheme:${s}`, state.colorScheme === s)) },
-    { label: `Page zoom (${Math.round(state.zoom * 100)}%)`, submenu: [item('Zoom in', 'zoom-in'), item('Zoom out', 'zoom-out'), item('Actual size', 'zoom-reset')] },
-    { label: 'Cookies and storage', submenu: [radio('This agent only', 'profile:lane', state.profile === 'lane'), radio('Shared with project', 'profile:project', state.profile === 'project'), { type: 'separator' }, item('Clear cookies and storage…', 'clear-storage')] },
+    { label: `Page Zoom (${Math.round(state.zoom * 100)}%)`, submenu: [item('Zoom In', 'zoom-in'), item('Zoom Out', 'zoom-out'), item('Actual Size', 'zoom-reset')] },
+    { label: 'Cookies and Storage', submenu: [radio('This Agent Only', 'profile:lane', state.profile === 'lane'), radio('Shared with Project', 'profile:project', state.profile === 'project'), { type: 'separator' }, item('Clear Cookies and Storage…', 'clear-storage')] },
     { type: 'separator' },
-    item('Reload without cache', 'reload', state.hasPage), item('Open DevTools', 'devtools', state.hasPage),
-    item('Agent browser setup…', 'setup'),
-    { type: 'separator' }, item('Remove pocket and its private storage…', 'detach'),
+    item('Reload Without Cache', 'reload', state.hasPage), item('Open DevTools', 'devtools', state.hasPage),
+    item('Agent Browser Setup…', 'setup'),
+    { type: 'separator' }, item('Remove Pocket and Its Private Storage…', 'detach'),
   ]
 }
 
@@ -74,7 +74,7 @@ export function attachGuestContextMenu(guest: Electron.WebContents): void {
       items.push({ type: 'separator' })
     }
     if (params.linkURL && isAllowedTopLevelUrl(params.linkURL)) {
-      items.push({ label: 'Open link in default browser', click: () => { void shell.openExternal(params.linkURL) } }, { label: 'Copy link address', click: () => clipboard.writeText(params.linkURL) }, { type: 'separator' })
+      items.push({ label: 'Open Link in Default Browser', click: () => { void shell.openExternal(params.linkURL) } }, { label: 'Copy Link Address', click: () => clipboard.writeText(params.linkURL) }, { type: 'separator' })
     }
     const alive = (fn: () => void) => () => { if (!guest.isDestroyed()) fn() }
     const loading = guest.isLoading()
@@ -82,7 +82,7 @@ export function attachGuestContextMenu(guest: Electron.WebContents): void {
       { label: 'Back', enabled: guest.navigationHistory.canGoBack(), click: alive(() => guest.navigationHistory.goBack()) },
       { label: 'Forward', enabled: guest.navigationHistory.canGoForward(), click: alive(() => guest.navigationHistory.goForward()) },
       { label: loading ? 'Stop' : 'Reload', click: alive(() => loading ? guest.stop() : guest.reload()) },
-      { type: 'separator' }, { label: 'Inspect element', click: alive(() => guest.inspectElement(params.x, params.y)) },
+      { type: 'separator' }, { label: 'Inspect Element', click: alive(() => guest.inspectElement(params.x, params.y)) },
     )
     const window = guest.hostWebContents && BrowserWindow.fromWebContents(guest.hostWebContents)
     if (window) Menu.buildFromTemplate(items).popup({ window, frame: params.frame ?? undefined })

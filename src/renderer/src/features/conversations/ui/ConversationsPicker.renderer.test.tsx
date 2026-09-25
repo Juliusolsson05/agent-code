@@ -122,7 +122,7 @@ describe('ConversationsPicker', () => {
     install()
     const ws = workspace({ activeTab: null, newTab: vi.fn(async () => { throw new Error('newTab already toasted this') }) })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     await waitFor(() => expect(ws.newTab).toHaveBeenCalled())
@@ -135,7 +135,7 @@ describe('ConversationsPicker', () => {
     const ws = workspace({ state: { ...base.state, stage: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 } } })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
     // Without a pane only the everywhere scope lists rows.
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     expect(await screen.findByText(/no agent pane is selected/)).toBeInTheDocument()
@@ -158,7 +158,7 @@ describe('ConversationsPicker', () => {
     const ws = workspace()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
-    const chip = screen.getByRole('button', { name: 'everywhere' })
+    const chip = screen.getByRole('button', { name: 'Everywhere' })
 
     // `true` = the default survived, which is what lets a real browser deliver
     // the chip's own click.
@@ -265,7 +265,7 @@ describe('ConversationsPicker', () => {
     const ws = workspace()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
     await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     await act(async () => {})
@@ -278,7 +278,7 @@ describe('ConversationsPicker', () => {
     const { list, release } = heldList()
     render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
     await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
     release()
@@ -295,10 +295,11 @@ describe('ConversationsPicker', () => {
     const ws = workspace()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
     await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
     const hovered = screen.getByText('break down this project').closest('[data-conversation-index]')!
-    fireEvent.mouseEnter(hovered)
+    // mousemove: the shared list rows follow the pointer on mousemove (#1221).
+    fireEvent.mouseMove(hovered)
     // While stale the highlight does not follow the pointer at all.
     expect(hovered).toHaveAttribute('aria-selected', 'false')
     release()
@@ -318,7 +319,7 @@ describe('ConversationsPicker', () => {
     await act(async () => {})
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
     await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'something' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search conversations' }), { target: { value: 'something' } })
     await waitFor(() => expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true'))
     await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'something' })))
     release()
@@ -336,7 +337,7 @@ describe('ConversationsPicker', () => {
     const ws = workspace()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
     // Scrolling the old list asks for more while the new scope loads. A
     // scroll, not ArrowDown: the stale key guard swallows ArrowDown before it
     // reaches loadMore, so an arrow press never exercised this guard (#1297
@@ -349,6 +350,63 @@ describe('ConversationsPicker', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     await act(async () => {})
     expect(ws.replaceSession).not.toHaveBeenCalled()
+  })
+
+  // #1297 review C2: the shared list keys (#1221) added PageDown/PageUp,
+  // Home/End and ⌃N/⌃P. While stale, none of them may move the highlight.
+  it('ignores every list key while the rows are stale', async () => {
+    const { list, release } = heldList()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'everywhere' })))
+    const listbox = screen.getByRole('listbox', { name: 'Conversations' })
+    for (const key of [{ key: 'PageDown' }, { key: 'End' }, { key: 'n', ctrlKey: true }, { key: 'ArrowDown' }]) fireEvent.keyDown(listbox, key)
+    expect(document.querySelector('[data-conversation-index="0"]')).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(listbox, { key: 'Enter' })
+    await act(async () => {})
+    expect(ws.replaceSession).not.toHaveBeenCalled()
+    release()
+    await screen.findByText('a different conversation')
+  })
+
+  // Plan S20: the shared list keys, the right focus owner in each mode, chips
+  // instead of prose, and a keyboard-resizable splitter.
+  it('opens Search in a combobox that owns the highlight, and ↓ moves it', async () => {
+    install()
+    render(<ConversationsPicker open focusSearch workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('Project context bootstrapping')
+    const input = screen.getByRole('combobox', { name: 'Search conversations' })
+    expect(document.activeElement).toBe(input)
+    expect(input).toHaveAttribute('aria-activedescendant', 'conversation-0')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input).toHaveAttribute('aria-activedescendant', 'conversation-1')
+  })
+
+  it('opens Resume on the listbox, where End jumps and Enter resumes that row', async () => {
+    install()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('Project context bootstrapping')
+    const listbox = screen.getByRole('listbox', { name: 'Conversations' })
+    expect(document.activeElement).toBe(listbox)
+    fireEvent.keyDown(listbox, { key: 'End' })
+    expect(listbox).toHaveAttribute('aria-activedescendant', 'conversation-2')
+    fireEvent.keyDown(listbox, { key: 'Enter' })
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo', expect.objectContaining({ resumeSessionId: '6861f23d-0000-4000-8000-000000000000' })))
+  })
+
+  it('shows the keys as chips and resizes the list from the keyboard', async () => {
+    install()
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('Project context bootstrapping')
+    expect(screen.queryByText(/↑↓ ↵ resume/)).toBeNull()
+    expect(screen.getByText('resume')).toBeInTheDocument()
+    const splitter = screen.getByRole('separator', { name: 'Resize conversation list' })
+    const before = Number(splitter.getAttribute('aria-valuenow'))
+    fireEvent.keyDown(splitter, { key: 'ArrowRight' })
+    expect(Number(splitter.getAttribute('aria-valuenow'))).toBe(before + 24)
   })
 })
 

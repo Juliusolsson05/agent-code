@@ -45,7 +45,7 @@ describe('AgentCodeConventionsRow', () => {
     expect(await screen.findByText('Status: Disabled')).toBeTruthy()
     expect(audit).toHaveBeenCalledOnce()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit conventions…' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Conventions…' }))
     expect(await screen.findByRole('dialog', { name: 'Agent Code Conventions' })).toBeTruthy()
     expect(screen.getByText(/Global CLI skills may apply outside Agent Code/)).toBeTruthy()
   })

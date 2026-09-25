@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentCodeConventionsSnapshot } from '@shared/types/agentCodeConventions.js'
@@ -63,6 +63,35 @@ describe('AgentCodeConventionsEditorModal', () => {
     expect(await screen.findByText(/Agent Code will reconcile before starting new agents/)).toBeTruthy()
   })
 
+  it('saves on ⌘↩ from the rules editor and says so on the button (plan S28)', async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, snapshot: { ...snapshot(), revision: 5, markdown: '# Rules' } })
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveAgentCodeConventions: save } })
+    render(<AgentCodeConventionsEditorModal open snapshot={snapshot()} onOpenChange={vi.fn()} onSnapshot={vi.fn()} />)
+    const rules = screen.getByLabelText('Convention rules')
+    fireEvent.change(rules, { target: { value: '# Rules' } })
+    expect(screen.getByRole('button', { name: 'Save Changes' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⌘↩')
+    expect(fireEvent.keyDown(rules, { key: 'Enter' })).toBe(true) // newline
+    expect(save).not.toHaveBeenCalled()
+    fireEvent.keyDown(rules, { key: 'Enter', metaKey: true })
+    await waitFor(() => expect(save).toHaveBeenCalledOnce())
+  })
+
+  it('cannot be closed by Cancel or Escape while a save is in flight (steering note k5)', async () => {
+    let settle!: () => void
+    const save = vi.fn(() => new Promise(resolve => { settle = () => resolve({ ok: true, snapshot: { ...snapshot(), revision: 5 } }) }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveAgentCodeConventions: save } })
+    const onOpenChange = vi.fn()
+    render(<AgentCodeConventionsEditorModal open snapshot={snapshot()} onOpenChange={onOpenChange} onSnapshot={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    await Promise.resolve()
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+    await act(async () => { settle() })
+  })
+
   it('uses main for the exact generated preview', async () => {
     const preview = vi.fn().mockResolvedValue({
       ok: true,
@@ -83,10 +112,10 @@ describe('AgentCodeConventionsEditorModal', () => {
         onSnapshot={vi.fn()}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Preview generated skill' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Generated Skill' }))
     expect(await screen.findByText(/name: agent-code-conventions/)).toBeTruthy()
     expect(preview).toHaveBeenCalledWith('# Rules')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to editor' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Editor' }))
     expect(screen.getByText(/Keep conventions concise/)).toBeTruthy()
   })
 
@@ -116,11 +145,11 @@ describe('AgentCodeConventionsEditorModal', () => {
     )
     const editor = screen.getByLabelText('Convention rules')
     fireEvent.change(editor, { target: { value: '# Unsaved draft' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
 
     expect(await screen.findByText(/newer saved version/)).toBeTruthy()
     expect(editor).toHaveValue('# Unsaved draft')
-    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Latest' }))
     expect(editor).toHaveValue('# Saved elsewhere')
   })
 })

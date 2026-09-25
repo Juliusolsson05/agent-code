@@ -16,7 +16,9 @@ export function SettingsSearch({ value, onChange }: Props) {
         type="text"
         value={value}
         onChange={event => onChange(event.target.value)}
-        placeholder="Search settings"
+        // Every search/filter placeholder ends in "…" (ledger G-32): it is
+        // the field inviting input, like "Search in files…".
+        placeholder="Search settings…"
       />
     </div>
   )

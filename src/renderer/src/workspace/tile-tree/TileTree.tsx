@@ -159,7 +159,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
       <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))} goalEnabled={Boolean(meta?.builtInMcpDomains?.includes('goal'))}>
         {/* Goal Loop strip/overlay rides inside TldrPane's relative container;
             keyed by sessionId because the loop's actuator is the session. */}
-        <GoalLoopPane sessionId={renderedSessionId} />
+        <GoalLoopPane sessionId={renderedSessionId} focused={sessionId === focusedSessionId} />
         <MountedAgentTerminalOwner sessionId={renderedSessionId}>
           <AgentTerminalLeaf
             sessionId={renderedSessionId}
@@ -183,7 +183,7 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
 
   return (
     <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))} goalEnabled={Boolean(meta?.builtInMcpDomains?.includes('goal'))}>
-      <GoalLoopPane sessionId={renderedSessionId} />
+      <GoalLoopPane sessionId={renderedSessionId} focused={sessionId === focusedSessionId} />
       <TileLeaf
         sessionId={renderedSessionId}
         runtime={runtime}

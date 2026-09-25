@@ -252,8 +252,11 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // --- Layout modes (⌘) ---------------------------------------------------
     // These two SHOULD have been ⌘D → ⌘⇧D, base → tiled variant, matching the
     // shift-means-more rule used everywhere else in this block. They are not,
-    // because ⌘⇧D is the voice dictation hotkey (DEFAULT_SETTINGS
+    // because ⌘⇧D WAS the voice dictation hotkey (DEFAULT_SETTINGS
     // .dictationShortcut) and `check:keybindings` rejected the pairing.
+    // The dictation default has since moved to `Fn` (DEFAULT_DICTATION_HOTKEY
+    // in lib/hotkeyBinding.ts), so ⌘⇧D is free of the DEFAULT today — but a
+    // user can still bind dictation to it, so the history below stands.
     //
     // Worth recording HOW that was caught, because it nearly was not: the
     // chords in this block were probed against `findBindingOwners` before

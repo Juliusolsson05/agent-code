@@ -1,13 +1,16 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Alert } from '@renderer/components/ui/alert'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
   AGENT_CODE_CONVENTIONS_STARTER,
@@ -94,8 +97,19 @@ export function AgentCodeConventionsEditorModal({
   const conflicts = shownSnapshot.targets.filter(target =>
     (target.state === 'conflict' || target.state === 'retired') && target.conflictFingerprint)
 
-  const requestClose = (nextOpen: boolean) => {
-    if (!nextOpen && dirty && !window.confirm('Discard unsaved convention changes?')) return
+  // Async since window.confirm was replaced by requestConfirm (plan D8).
+  // Radix calls this for Escape and the corner close alike, so a one-press
+  // Escape can never silently drop an edited draft (B7's D3 condition).
+  const requestClose = async (nextOpen: boolean) => {
+    // In flight (save / clear / preview), nothing hides the dialog (steering
+    // note k5, the k3 rule): a save that lands after closure — or a revision
+    // conflict it reports — would otherwise be invisible.
+    if (!nextOpen && busy) return
+    if (!nextOpen && dirty && !(await requestConfirm({
+      title: 'Discard unsaved convention changes?',
+      confirmLabel: 'Discard Changes',
+      tone: 'danger',
+    }))) return
     onOpenChange(nextOpen)
   }
 
@@ -158,7 +172,7 @@ export function AgentCodeConventionsEditorModal({
       : base.enabled
         ? 'Disable conventions and clear the saved rules? Managed copies will be removed first.'
         : 'Clear the saved convention rules?'
-    if (!window.confirm(clearConfirmation)) return
+    if (!(await requestConfirm({ title: clearConfirmation, confirmLabel: 'Clear Rules', tone: 'danger' }))) return
     setBusy(true)
     setError(null)
     setRevisionConflict(false)
@@ -196,8 +210,8 @@ export function AgentCodeConventionsEditorModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={requestClose}>
-      <DialogContent className="flex max-h-[88vh] w-[min(780px,94vw)] flex-col overflow-hidden font-code">
+    <Dialog open={open} onOpenChange={next => void requestClose(next)}>
+      <DialogContent className="flex max-h-[86vh] w-[min(780px,94vw)] flex-col overflow-hidden font-code">
         <DialogHeader>
           <DialogTitle>Agent Code Conventions</DialogTitle>
           <DialogDescription>
@@ -215,7 +229,7 @@ export function AgentCodeConventionsEditorModal({
             <div className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-between text-[11px] text-muted">
                 <span>Generated SKILL.md preview</span>
-                <button type="button" className="rounded-control border border-control-border px-2 py-1" onClick={() => setPreview(null)}>Back to editor</button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setPreview(null)}>Back to Editor</Button>
               </div>
               {/* Same as the custom-skill preview: this is what Save & Enable
                   writes into every provider's skills directory (#1049
@@ -250,21 +264,25 @@ export function AgentCodeConventionsEditorModal({
           )}
 
           <div className="flex flex-wrap gap-2">
-            <button
+            <Button
               type="button"
-              className="rounded-control border border-control-border px-2 py-1 text-[11px]"
-              onClick={() => {
-                if (markdown.trim() && !window.confirm('Replace the current draft with the starter conventions?')) return
+              variant="outline" size="xs"
+              onClick={async () => {
+                if (markdown.trim() && !(await requestConfirm({
+                  title: 'Replace the current draft with the starter conventions?',
+                  confirmLabel: 'Replace Draft',
+                  tone: 'danger',
+                }))) return
                 setMarkdown(AGENT_CODE_CONVENTIONS_STARTER)
                 setWarnings([])
                 setPreview(null)
               }}
             >
-              Insert starter
-            </button>
-            <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void showPreview()}>
-              Preview generated skill
-            </button>
+              Insert Starter
+            </Button>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
+              Preview Generated Skill
+            </Button>
           </div>
 
           {shownSnapshot.targets.length > 0 ? (
@@ -281,13 +299,17 @@ export function AgentCodeConventionsEditorModal({
                   <span className="min-w-0 flex-1 truncate text-muted">{withVisibleControls(target.displayPath || target.id)} · {target.state}</span>
                   {(target.state === 'conflict' || target.state === 'retired') ? (
                     <>
-                      <button type="button" className="rounded-control border border-control-border px-1.5 py-0.5" onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}>Reveal</button>
+                      <Button type="button" variant="outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}>Reveal</Button>
                       {target.canOverwrite && target.conflictFingerprint ? (
-                        <button
+                        <Button
                           type="button"
-                          className="rounded-control border border-danger px-1.5 py-0.5 text-danger"
-                          onClick={() => {
-                            if (!window.confirm(`Replace the reviewed file at ${withVisibleControls(target.displayPath)}?`)) return
+                          variant="destructive-outline" size="xs"
+                          onClick={async () => {
+                            if (!(await requestConfirm({
+                              title: `Replace the reviewed file at ${withVisibleControls(target.displayPath)}?`,
+                              confirmLabel: 'Replace File',
+                              tone: 'danger',
+                            }))) return
                             const next = [
                               ...overwriteApprovals.filter(value => value.targetId !== target.id),
                               { targetId: target.id, expectedConflictFingerprint: target.conflictFingerprint! },
@@ -296,8 +318,8 @@ export function AgentCodeConventionsEditorModal({
                             void save(next)
                           }}
                         >
-                          Replace reviewed file
-                        </button>
+                          Replace Reviewed File
+                        </Button>
                       ) : null}
                       {target.conflictFingerprint ? (
                         <label className="flex items-center gap-1 text-danger">
@@ -321,12 +343,12 @@ export function AgentCodeConventionsEditorModal({
             </div>
           ) : null}
 
-          {error ? <div role="alert" className="rounded-slab border border-danger px-2 py-1 text-[11px] text-danger">{error}</div> : null}
+          {error ? <Alert>{error}</Alert> : null}
           {notice ? <div role="status" className="rounded-slab border border-accent px-2 py-1 text-[11px] text-accent">{notice}</div> : null}
 
           {revisionConflict ? (
             <div className="flex gap-2">
-              <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => {
+              <Button type="button" variant="outline" size="sm" onClick={() => {
                 // The conflict response is already the authoritative latest
                 // snapshot. Do not depend on React finishing the parent prop
                 // round-trip before this button is clicked.
@@ -338,23 +360,40 @@ export function AgentCodeConventionsEditorModal({
                 setConflictSnapshot(null)
                 setError(null)
                 setRevisionConflict(false)
-              }}>Reload latest</button>
-              <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy draft</button>
+              }}>Reload Latest</Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy Draft</Button>
             </div>
           ) : null}
         </div>
 
-        <DialogFooter className="justify-between">
-          <button type="button" disabled={busy || (!base.markdown && conflicts.length === 0)} onClick={() => void clear()} className="rounded-control border border-danger px-2 py-1 text-[11px] text-danger disabled:opacity-40">
-            {base.enabled ? 'Disable and clear' : abandonApprovals.length > 0 ? 'Leave selected and clear' : 'Clear saved rules'}
-          </button>
-          <div className="flex gap-2">
-            <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => requestClose(false)}>Cancel</button>
-            <button type="button" disabled={busy} className="rounded-control border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
-              {enabled && !base.enabled ? 'Save & Enable' : 'Save changes'}
-            </button>
-          </div>
-        </DialogFooter>
+        {/* Shared footer (plan S28): ⌘↩ saves (the rules textarea owns plain
+            Enter), Cancel ⎋ goes through requestClose so a dirty draft asks
+            first (B7's D3 condition, since F7). The destructive Clear rides at
+            the far left as a red-outline extra. Guards carried over from the
+            hand-built footer (k3): Save and Clear wait while busy — and since
+            steering note k5, Cancel and Escape wait too (requestClose refuses
+            while busy), so a save's result is never hidden by a close. */}
+        <DialogActions
+          confirmLabel={enabled && !base.enabled ? 'Save & Enable' : 'Save Changes'}
+          confirmKey="Cmd+Enter"
+          confirmDisabled={busy}
+          onConfirm={() => void save()}
+          onCancel={() => void requestClose(false)}
+          cancelDisabled={busy}
+          escapeCancels={!busy}
+          extraActions={
+            <Button
+              type="button"
+              variant="destructive-outline"
+              size="sm"
+              className="mr-auto"
+              disabled={busy || (!base.markdown && conflicts.length === 0)}
+              onClick={() => void clear()}
+            >
+              {base.enabled ? 'Disable and Clear' : abandonApprovals.length > 0 ? 'Leave Selected and Clear' : 'Clear Saved Rules'}
+            </Button>
+          }
+        />
       </DialogContent>
     </Dialog>
   )

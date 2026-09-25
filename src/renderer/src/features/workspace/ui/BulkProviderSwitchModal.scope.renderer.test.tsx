@@ -83,7 +83,7 @@ describe('BulkProviderSwitchModal project scope', () => {
     render(<BulkProviderSwitchModal open workspace={workspaceFixture()} onClose={() => {}} />)
 
     expect(screen.getByText('Will switch · 3 agents')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Selected projects' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Selected Projects' }))
     expect(screen.getByText(/No Codex agents match the current scope/i)).toBeInTheDocument()
 
     // Two project entries, named like the Dispatch index. The old behaviour

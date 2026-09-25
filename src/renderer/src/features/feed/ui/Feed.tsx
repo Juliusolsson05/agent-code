@@ -1187,7 +1187,34 @@ function FeedImpl({
                             // into itself. See features/reply-to-selection/lib/
                             // quoteScope.ts for the full reasoning.
                             data-quote-scope={sessionId}
-                            className="h-full overflow-auto @container"
+                            // A keyboard Tab stop (ledger N13 / K2-4). The feed
+                            // holds buttons, so Chromium's "scrollers without
+                            // focusable children are focusable" rule never
+                            // applied, and a keyboard user could not scroll the
+                            // transcript at all: no arrows, no PgUp/PgDn, and
+                            // End (jump-latest) only fired by accident when
+                            // focus happened to sit on a feed button.
+                            //
+                            // WHY this is safe for the mouse path: clicking the
+                            // feed now focuses this scroller instead of <body>,
+                            // but useTypeToFocus already routes printable keys
+                            // from any non-editable target to the composer, so
+                            // "click the feed, start typing" still types into
+                            // the prompt. :focus-visible stays off on a mouse
+                            // click, so no ring appears either. Space is a
+                            // printable key and goes to the composer, so PgDn,
+                            // not Space, pages down.
+                            tabIndex={0}
+                            role="region"
+                            aria-label="Conversation"
+                            className="h-full overflow-auto @container outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+                            onKeyDown={event => {
+                              // Keyboard scrolling is engagement exactly as a
+                              // wheel is: it means "I am reading back". Only
+                              // keys on the scroller itself count; a key
+                              // pressed inside a feed control is that control's.
+                              if (event.target === event.currentTarget) onUserEngagement?.()
+                            }}
                             onWheel={() => {
                               onUserEngagement?.()
                             }}

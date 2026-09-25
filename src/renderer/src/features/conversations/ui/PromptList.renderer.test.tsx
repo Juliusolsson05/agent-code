@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { useListNavigation } from '@renderer/lib/useListNavigation'
+
 import { formatPromptTime, PromptList } from './PromptList'
 
 describe('PromptList', () => {
@@ -16,13 +18,21 @@ describe('PromptList', () => {
     expect(screen.getAllByRole('listitem')[0]).toHaveTextContent('#40')
   })
 
-  it('renders unknown times honestly and forwards selection', () => {
+  it('renders unknown times honestly and, when interactive, is a listbox of options that forwards selection', () => {
+    // Interactive mode (Rewind to Prompt): listbox/option roles, because the
+    // old listitem + aria-selected combination is not valid ARIA and the
+    // highlight was announced as nothing (plan S7).
     const onSelect = vi.fn()
-    render(<PromptList prompts={[{ text: 'a', timestamp: null }]} selectedIndex={0} onSelect={onSelect} emptyMessage="none" />)
+    function Interactive() {
+      const nav = useListNavigation({ count: 1, onActivate: onSelect, idPrefix: 'p' })
+      return <PromptList prompts={[{ text: 'a', timestamp: null }]} nav={nav} emptyMessage="none" />
+    }
+    render(<Interactive />)
     expect(screen.getByText('unknown time')).toBeInTheDocument()
+    expect(screen.getByRole('listbox')).toHaveAttribute('aria-activedescendant', 'p-0')
     fireEvent.click(screen.getByText('a'))
     expect(onSelect).toHaveBeenCalledWith(0)
-    expect(screen.getByRole('listitem')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'true')
   })
 
   it('shows the empty message when there is nothing to list', () => {

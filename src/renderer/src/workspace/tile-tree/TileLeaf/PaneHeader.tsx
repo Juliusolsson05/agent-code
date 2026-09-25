@@ -167,14 +167,14 @@ export function PaneHeader({
             container-query pattern for narrow tiles. */}
         <div className={`@container flex flex-1 items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
           {paneLabel && (
-            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[10px] font-semibold tabular-nums">
               {paneLabel}
             </span>
           )}
           {badge}
           {/* truncate-START: every pane shares the leading path segments, so
               clipping the end hid the one part that identifies this agent. */}
-          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+          <span className="truncate-start" title={projectDir ?? 'No project folder'}>
             {/* The inner dir="ltr" is required, not decorative: the outer
                 element's rtl direction picks WHICH edge clips, and without
                 this the path's own characters are reordered with it. */}
@@ -227,7 +227,7 @@ export function PaneHeader({
             <button type="button" disabled={routingGap.phase === 'refreshing'}
               className="flex-shrink-0 underline disabled:opacity-50"
               onClick={event => { event.stopPropagation(); requestSessionRoutingRefresh(sessionId) }}>
-              Refresh view
+              Refresh View
             </button>
           )}
         </div>

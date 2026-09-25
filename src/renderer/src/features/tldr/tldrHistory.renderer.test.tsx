@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TldrHistoryEntry, TldrUpdate } from '@shared/types/tldr'
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -60,6 +60,22 @@ describe('TLDR history', () => {
     expect(api.readTldrHistory).toHaveBeenCalledTimes(1)
     act(() => api.emit('summary-1'))
     await waitFor(() => expect(api.readTldrHistory).toHaveBeenCalledTimes(2))
+  })
+
+  it('opens focused on the scrollable history and closes from one Close ⎋ (plan S33)', async () => {
+    historyApi([entry('Complete.', 1)])
+    const onClose = vi.fn()
+    render(<ReportHistoryModal open kind="tldr" sessionId="pane" onClose={onClose} workspace={workspaceWith({
+      pane: { cwd: '/project', kind: 'codex', tldrIdentity: 'summary-1', builtInMcpDomains: ['tldr'] },
+    })} />)
+    await screen.findByRole('list', { name: 'TLDR history' })
+    const scroller = screen.getByLabelText('History')
+    expect(document.activeElement).toBe(scroller)
+    expect(scroller).toHaveAttribute('tabindex', '0')
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    fireEvent.click(close)
+    expect(onClose).toHaveBeenCalled()
   })
 
   it('interleaves goal changes with status by time and marks the current one of each kind', async () => {

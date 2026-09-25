@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
@@ -27,11 +27,21 @@ const appState = vi.hoisted(() => ({
 vi.mock('@renderer/app-state/hooks', () => ({
   useAppStore: (selector: (state: typeof appState) => unknown) => selector(appState),
 }))
-vi.mock('@renderer/features/shared/SplitHandle', () => ({
-  SplitHandle: ({ orientation }: { orientation?: string }) => (
-    <div data-testid="split-handle" data-orientation={orientation ?? 'vertical'} />
-  ),
-}))
+// The REAL handle, wrapped in a testid'd box. The wrapper keeps the structural
+// tests' "which dividers exist" query cheap, and the real handle inside is what
+// the keyboard tests press arrows on: a stub that never rendered the separator
+// would let a layout that forgot `onKeyboardDelta` pass (that is how all three
+// tiled splitters shipped mouse-only, ledger N4).
+vi.mock('@renderer/features/shared/SplitHandle', async importOriginal => {
+  const actual = await importOriginal<typeof import('@renderer/features/shared/SplitHandle')>()
+  return {
+    SplitHandle: (props: Parameters<typeof actual.SplitHandle>[0]) => (
+      <div data-testid="split-handle" data-orientation={props.orientation ?? 'vertical'}>
+        <actual.SplitHandle {...props} />
+      </div>
+    ),
+  }
+})
 vi.mock('@renderer/features/shared/useResizableSplitter', () => ({
   useResizableSplitter: () => ({ dragging: false, onMouseDown: vi.fn(), cursorLock: null }),
 }))
@@ -123,6 +133,9 @@ function renderGrid(tiled: TiledDispatchState) {
   const selectTiledLaneSession = vi.fn().mockResolvedValue(undefined)
   const setTiledFocusedLane = vi.fn()
   const toggleDispatchRowExpandedParent = vi.fn()
+  const setDispatchRowHeights = vi.fn()
+  const setDispatchRowIndexFraction = vi.fn()
+  const setDispatchLaneWeights = vi.fn()
   const state: WorkspaceState = {
     ...FIXTURE.state,
     stage: tiled,
@@ -137,9 +150,9 @@ function renderGrid(tiled: TiledDispatchState) {
     selectGridRelatedSession: vi.fn(),
     setTiledFocusedLane,
     selectTiledLaneSession,
-    setDispatchRowHeights: vi.fn(),
-    setDispatchRowIndexFraction: vi.fn(),
-    setDispatchLaneWeights: vi.fn(),
+    setDispatchRowHeights,
+    setDispatchRowIndexFraction,
+    setDispatchLaneWeights,
     setDispatchRowCapChildren: vi.fn(),
     toggleDispatchRowExpandedParent,
   } as unknown as Workspace
@@ -155,6 +168,9 @@ function renderGrid(tiled: TiledDispatchState) {
     selectTiledLaneSession,
     setTiledFocusedLane,
     toggleDispatchRowExpandedParent,
+    setDispatchRowHeights,
+    setDispatchRowIndexFraction,
+    setDispatchLaneWeights,
   }
 }
 
@@ -431,5 +447,76 @@ describe('Grid Dispatch layout', () => {
 
     expect(getAllByTestId('row-index')).toHaveLength(1)
     expect(getAllByTestId('lane-agent')).toHaveLength(laneIds.length)
+  })
+  describe('splitters answer the arrow keys (plan K7, ledger N4)', () => {
+    // Every tiled splitter was drag-only: no tab stop, no label, no keys. A
+    // keyboard user could build a 2x2 grid but never resize any of it. These
+    // press real keys on the real separators and assert the WRITE, because the
+    // write is the contract; the pixel result is the layout's job.
+    const twoByTwo: TiledDispatchState = {
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 0,
+    }
+
+    it('moves a lane boundary by one step and leaves the other row alone', () => {
+      const { getByRole, setDispatchLaneWeights } = renderGrid(twoByTwo)
+      // Row 2's boundary: lanes 3 and 4. Its write must keep row 1's slice.
+      const handle = getByRole('separator', { name: 'Resize lanes 3 and 4' })
+      expect(handle.tabIndex).toBe(0)
+
+      fireEvent.keyDown(handle, { key: 'ArrowRight' })
+
+      expect(setDispatchLaneWeights).toHaveBeenCalledTimes(1)
+      const written = setDispatchLaneWeights.mock.calls[0]![0] as number[]
+      // Row 1 had no stored weights, so it is materialized as "even" (1, 1);
+      // weights are relative within a row, not shares of the grid.
+      expect(written.slice(0, 2)).toEqual([1, 1])
+      expect(written[2]).toBeCloseTo(0.52)
+      expect(written[3]).toBeCloseTo(0.48)
+    })
+
+    it('stops a lane at the same minimum the drag stops at', () => {
+      const { getByRole, setDispatchLaneWeights } = renderGrid({
+        ...twoByTwo,
+        // Row 1's left lane is already at the lane minimum (0.08 of 1).
+        laneWeights: [0.08, 0.92, 1, 1],
+      })
+      fireEvent.keyDown(getByRole('separator', { name: 'Resize lanes 1 and 2' }), { key: 'ArrowLeft' })
+
+      const written = setDispatchLaneWeights.mock.calls[0]![0] as number[]
+      expect(written[0]).toBeCloseTo(0.08)
+      expect(written[1]).toBeCloseTo(0.92)
+    })
+
+    it('moves a row boundary the way the arrow points', () => {
+      const { getByRole, setDispatchRowHeights } = renderGrid(twoByTwo)
+      const handle = getByRole('separator', { name: 'Resize rows 1 and 2' })
+      expect(handle.getAttribute('aria-orientation')).toBe('horizontal')
+
+      fireEvent.keyDown(handle, { key: 'ArrowUp' })
+      const up = setDispatchRowHeights.mock.calls[0]![0] as number[]
+      expect(up[0]).toBeCloseTo(0.48)
+      expect(up[1]).toBeCloseTo(0.52)
+
+      // A horizontal divider ignores ←/→: those belong to whatever the user
+      // would reach next, and a no-op write would still be a persisted write.
+      fireEvent.keyDown(handle, { key: 'ArrowRight' })
+      expect(setDispatchRowHeights).toHaveBeenCalledTimes(1)
+    })
+
+    it('widens a row s agent list and clamps at the reducer s maximum', () => {
+      const { getByRole, setDispatchRowIndexFraction } = renderGrid({
+        ...twoByTwo,
+        rows: [{ length: 2, indexFraction: 0.4 }, { length: 2 }],
+      })
+      fireEvent.keyDown(getByRole('separator', { name: 'Resize row 2 agent list' }), { key: 'ArrowRight' })
+      expect(setDispatchRowIndexFraction).toHaveBeenLastCalledWith(1, 0.18 + 0.02)
+
+      const first = getByRole('separator', { name: 'Resize row 1 agent list' })
+      expect(first.getAttribute('aria-valuemax')).toBe('40')
+      fireEvent.keyDown(first, { key: 'ArrowRight' })
+      expect(setDispatchRowIndexFraction).toHaveBeenLastCalledWith(0, 0.4)
+    })
   })
 })

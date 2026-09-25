@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
+
 import { fuzzyMatch } from '@renderer/features/command-palette/lib/rankCommands'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
@@ -52,7 +55,6 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [selectedIndex, setSelectedIndex] = useState(0)
   const [loading, setLoading] = useState(true)
   const [openingPath, setOpeningPath] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -66,7 +68,6 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
     setLoadError(null)
     setOpenError(null)
     setQuery('')
-    setSelectedIndex(0)
     setLoading(true)
     void window.api
       .editorListFilesRecursive({ root })
@@ -84,7 +85,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
       .catch(err => {
         if (stale) return
         setLoading(false)
-        setLoadError(err instanceof Error ? err.message : 'Failed to index project files.')
+        setLoadError(err instanceof Error ? err.message : 'Could not index project files.')
       })
     return () => {
       stale = true
@@ -120,22 +121,20 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
     return scored.slice(0, MAX_VISIBLE).map(entry => entry.path)
   }, [files, query])
 
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [query])
+  // The shared list keys (plan K5/S22): ↑↓ ⌃N⌃P PgUp PgDn Enter, reset on a
+  // new query or root, clamp as matches shrink, scroll-into-view, mousemove
+  // hover. Home/End stay with the input's caret. Positional, not keyed: a
+  // new query REPLACES the ranking, so following an item across it would be
+  // wrong.
+  const nav = useListNavigation({
+    count: matches.length,
+    resetKey: `${root}\u0000${query}`,
+    onActivate: index => void openSelected(matches[index]),
+    idPrefix: 'quick-open-option',
+  })
+  const selectedIndex = nav.index
 
-  useEffect(() => {
-    setSelectedIndex(index => Math.max(0, Math.min(index, matches.length - 1)))
-  }, [matches.length])
-
-  useEffect(() => {
-    const selected = listRef.current?.querySelector<HTMLElement>(
-      `[data-quick-open-index="${selectedIndex}"]`,
-    )
-    selected?.scrollIntoView({ block: 'nearest' })
-  }, [selectedIndex])
-
-  const openSelected = async (path: string | undefined) => {
+  async function openSelected(path: string | undefined) {
     if (!path || loading || openingPath) return
     setOpeningPath(path)
     setOpenError(null)
@@ -160,7 +159,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="left-1/2 top-[12vh] flex w-[520px] max-w-[90vw] -translate-x-1/2 translate-y-0 flex-col overflow-hidden p-0 font-code">
+      <DialogContent className="top-[12vh] flex translate-y-0 flex-col overflow-hidden p-0 font-code">
         <DialogTitle className="sr-only">Quick Open File</DialogTitle>
         <DialogDescription className="sr-only">
           Type part of a file name or path, then use the arrow keys and Enter to open it.
@@ -173,31 +172,16 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
           aria-autocomplete="list"
           aria-expanded="true"
           aria-controls="quick-open-results"
-          aria-activedescendant={
-            matches[selectedIndex] ? `quick-open-option-${selectedIndex}` : undefined
-          }
+          aria-activedescendant={matches[selectedIndex] ? nav.activeId : undefined}
           value={query}
           onChange={event => {
             setQuery(event.target.value)
             setOpenError(null)
           }}
-          onKeyDown={event => {
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              onClose()
-            } else if (event.key === 'ArrowDown') {
-              event.preventDefault()
-              if (matches.length > 0) {
-                setSelectedIndex(prev => Math.min(prev + 1, matches.length - 1))
-              }
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault()
-              setSelectedIndex(prev => Math.max(prev - 1, 0))
-            } else if (event.key === 'Enter') {
-              event.preventDefault()
-              void openSelected(matches[selectedIndex])
-            }
-          }}
+          // No Escape branch any more: it duplicated Radix's own dismissal
+          // (components/ui/README: features add no Escape listener), so one
+          // key ran two closes.
+          onKeyDown={event => { nav.onKeyDown(event) }}
           placeholder="Go to file…"
           className="border-b border-border bg-canvas px-3 py-2 text-[13px] text-ink outline-none placeholder:text-muted"
         />
@@ -228,18 +212,15 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
               return (
                 <button
                   key={path}
-                  id={`quick-open-option-${index}`}
                   type="button"
+                  {...nav.getItemProps(index)}
                   tabIndex={-1}
                   role="option"
                   aria-selected={selected}
                   aria-busy={openingPath === path || undefined}
                   data-quick-open-index={index}
-                  onClick={() => void openSelected(path)}
-                  onMouseDown={event => event.preventDefault()}
-                  onMouseEnter={() => setSelectedIndex(index)}
-                  className={`flex w-full items-center gap-2 px-3 py-1 text-left text-[12px] ${
-                    selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'
+                  className={`flex w-full items-center gap-2 border-l-2 px-3 py-1 text-left text-[12px] ${
+                    selected ? 'border-l-accent bg-row-selected-bg text-ink' : 'border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                   } ${openingPath && openingPath !== path ? 'opacity-50' : ''}`}
                 >
                   <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
@@ -266,6 +247,12 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
             Index truncated at 20k files — results may be incomplete.
           </div>
         )}
+        {/* The keys were described only to screen readers (sr-only
+            description). One quiet chip strip, the palette-overlay form of
+            the footer legend (plan H3): no buttons here, so no DialogActions. */}
+        <div className="flex items-center border-t border-border px-3 py-1 text-[10px] text-muted">
+          <KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'open' }, { keys: ['Escape'], label: 'close' }]} />
+        </div>
         {partialErrorCount > 0 && (
           <div
             role="status"

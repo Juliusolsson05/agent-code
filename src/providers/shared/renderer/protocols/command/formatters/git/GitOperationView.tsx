@@ -396,7 +396,7 @@ export const GitCommitCard = memo(function GitCommitCard({
         </div>
       )}
       {result.body && (
-        <pre className="font-code text-[11.5px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0">
+        <pre className="font-code text-[11px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0">
           {result.body}
         </pre>
       )}
@@ -527,7 +527,7 @@ export const GitAddCard = memo(function GitAddCard({
       {trimmed && (
         // If git actually produced output (errors, hints), show it so
         // we don't hide anything from the user.
-        <pre className="font-code text-[11.5px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 mt-1.5">
+        <pre className="font-code text-[11px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 mt-1.5">
           {trimmed}
         </pre>
       )}
@@ -579,11 +579,11 @@ export const GitLogCard = memo(function GitLogCard({
               <span className="font-code text-[11px] text-accent tabular-nums">
                 {e.sha.slice(0, 7)}
               </span>
-              <span className="text-ink text-[12.5px] truncate min-w-0 flex-1">
+              <span className="text-ink text-[12px] truncate min-w-0 flex-1">
                 {e.subject}
               </span>
               {e.author && (
-                <span className="text-muted text-[10.5px] whitespace-nowrap">
+                <span className="text-muted text-[10px] whitespace-nowrap">
                   {e.author.replace(/ <[^>]+>$/, '')}
                 </span>
               )}
@@ -619,7 +619,7 @@ export const GitPushCard = memo(function GitPushCard({
       <GitCardHeader
         sub={intent.force ? 'push --force' : 'push'}
         badges={r.remoteUrl && (
-          <span className="font-code text-[10.5px] text-muted truncate max-w-[240px]">
+          <span className="font-code text-[10px] text-muted truncate max-w-[240px]">
             {r.remoteUrl}
           </span>
         )}
@@ -627,7 +627,7 @@ export const GitPushCard = memo(function GitPushCard({
       {r.upToDate ? (
         <div className="text-muted text-[12px] italic">everything up to date</div>
       ) : r.refs.length === 0 ? (
-        <pre className="font-code text-[11.5px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0">
+        <pre className="font-code text-[11px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0">
           {stripAnsi(output).trim() || '(no output)'}
         </pre>
       ) : (
@@ -764,9 +764,9 @@ function GitWorkflowCard({
       <GitCardHeader
         sub={workflowTitle(intent)}
         badges={allStepsProven
-          ? <span className="text-[10.5px] uppercase tracking-wide text-muted">complete</span>
+          ? <span className="text-[10px] uppercase tracking-wider text-muted">complete</span>
           : status === 'unknown'
-            ? <span className="text-[10.5px] uppercase tracking-wide text-muted">exit code unavailable</span>
+            ? <span className="text-[10px] uppercase tracking-wider text-muted">exit code unavailable</span>
             : null}
       />
       {summaries.length > 0 ? (
@@ -780,13 +780,13 @@ function GitWorkflowCard({
             <span className={allStepsProven ? 'text-success' : 'text-muted'}>
               {allStepsProven ? '✓' : '•'}
             </span>
-            <span className="font-code text-[11.5px] text-ink-dim truncate" title={step.command}>
+            <span className="font-code text-[11px] text-ink-dim truncate" title={step.command}>
               {step.command}
             </span>
           </li>
         ))}
       </ol>
-      <pre className="font-code text-[11.5px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 mt-2">
+      <pre className="font-code text-[11px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 mt-2">
         {inline.text ? `${inline.text}${inline.hasNext ? '\n…' : ''}` : '(no output)'}
       </pre>
       {partial ? <PartialPreviewNotice /> : null}

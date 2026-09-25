@@ -1,13 +1,13 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { Alert } from '@renderer/components/ui/alert'
 import type { ConversationPrompt } from '@shared/conversations/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
@@ -101,7 +101,8 @@ export function ViewPromptsModal({
       }}
     >
       <DialogContent
-        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
           // WHY focus the scroll region instead of the first footer button:
           // this surface is primarily a reading/scrolling tool. Radix still
@@ -120,15 +121,18 @@ export function ViewPromptsModal({
           </DialogDescription>
         </DialogHeader>
 
+        {/* The scroller is the keyboard target of a READ-ONLY viewer: focused
+            on open, ↑↓/PgUp/PgDn/Home/End scroll it natively. A Tab stop
+            (was -1, so Shift+Tab from Close could never get back) with a
+            visible ring (was outline-none with no replacement — plan T4). */}
         <div
           ref={scrollerRef}
-          tabIndex={-1}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none"
+          tabIndex={0}
+          aria-label="Prompts"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         >
           {loadError && (
-            <div role="alert" className="mb-3 rounded-slab border border-danger/40 bg-danger/10 px-3 py-2 text-[12px] text-danger">
-              {loadError}
-            </div>
+            <Alert className="mb-3">{loadError}</Alert>
           )}
           <PromptList
             prompts={prompts}
@@ -136,18 +140,10 @@ export function ViewPromptsModal({
           />
         </div>
 
-        <DialogFooter className="justify-between">
-          <div className="text-[11px] text-muted">
-            {loading ? 'Loading prompts…' : `${prompts.length} ${prompts.length === 1 ? 'prompt' : 'prompts'}`}
-          </div>
-          <Button
-            type="button"
-            onClick={onClose}
-            variant="outline"
-          >
-            Close
-          </Button>
-        </DialogFooter>
+        {/* Close-only viewer: one ghost `Close ⎋` (plan H5). */}
+        <DialogActions onCancel={onClose} cancelLabel="Close">
+          {loading ? 'Loading prompts…' : `${prompts.length} ${prompts.length === 1 ? 'prompt' : 'prompts'}`}
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )

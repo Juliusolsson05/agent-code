@@ -1,4 +1,5 @@
-import { focusedControlOwnsEnter, focusedControlOwnsSpace } from '@renderer/components/ui/dialog-actions'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
+import { useListNavigation, type ListItemProps } from '@renderer/lib/useListNavigation'
 import { useCallback, useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
@@ -40,6 +41,8 @@ export type UsePinAgentsKeybindsResult = {
   setFocusedIndex: (index: number) => void
   toggle: (sessionId: SessionId) => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
+  /** Hover/click/scroll wiring for row `index` (from useListNavigation). */
+  getRowProps: (index: number) => ListItemProps
 }
 
 export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
@@ -49,37 +52,21 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
   onCommit,
 }: UsePinAgentsKeybindsArgs<R>): UsePinAgentsKeybindsResult {
   const [selectedIds, setSelectedIds] = useState<SessionId[]>(initialSelectedIds)
-  const [focusedIndex, setFocusedIndex] = useState(0)
 
-  // When the modal opens we re-seed both the selection and the
-  // focused row. Without this, opening the modal twice in a row
-  // would carry over the previous attempt's draft state — closing
-  // with Escape is supposed to mean "throw the draft away," but
-  // without re-seeding on `open` transitions the React state is
-  // simply preserved across mount cycles whenever the component
-  // doesn't get remounted (and as a child of a `open && ...` gate
-  // in the parent, it does get remounted — but defending against
-  // future refactors is cheap here).
+  // When the modal opens we re-seed the selection. Without this, opening the
+  // modal twice in a row would carry over the previous attempt's draft state
+  // — closing with Escape is supposed to mean "throw the draft away," and the
+  // React state is otherwise preserved whenever the component is not
+  // remounted. (The highlight is re-seeded by useListNavigation's resetKey.)
   useEffect(() => {
     if (!open) return
     setSelectedIds(initialSelectedIds)
-    setFocusedIndex(0)
     // initialSelectedIds intentionally NOT in deps: only re-seed on
     // open transitions, not on every re-render of the parent. The
     // user editing their selection inside the modal would otherwise
     // get reset every time the workspace state advanced.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
-
-  // Clamp focus into range when rows shrink under us (e.g. an
-  // agent died while the modal is open and the parent rebuilds its
-  // candidate list).
-  useEffect(() => {
-    setFocusedIndex(prev => {
-      if (rows.length === 0) return 0
-      return Math.min(prev, rows.length - 1)
-    })
-  }, [rows.length])
 
   const toggle = useCallback(
     (sessionId: SessionId) => {
@@ -93,50 +80,59 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
     [],
   )
 
+  // Movement, Enter and Space go through the ONE list implementation
+  // (lib/useListNavigation, keyboard-first plan K5). What this hook still owns
+  // is the part that is Pin-specific: the ordered selection draft and what
+  // Enter means (commit the draft, not "activate a row").
+  //
+  // jk: this dialog has no text input, so j/k are free — they were already
+  // bound here before the shared hook existed, and dropping them would be a
+  // regression for anyone who learned them.
+  //
+  // The #867 rules (a focused Cancel/Done owns its own Enter and Space) are
+  // enforced inside useListNavigation now, via the same predicates.
+  const nav = useListNavigation({
+    count: rows.length,
+    resetKey: open,
+    jk: true,
+    onActivate: () => onCommit(selectedIds),
+    onToggle: index => {
+      const row = rows[index]
+      if (row) toggle(row.sessionId)
+    },
+    // A click edits the draft (toggle), it does not commit it.
+    onItemClick: index => {
+      const row = rows[index]
+      if (row) toggle(row.sessionId)
+    },
+  })
+
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       // Escape deliberately belongs to DialogContent. Keeping it here would
       // make this feature's key handler race Radix's close/focus-restoration
       // path and can call the owner twice for one key press.
-      if (event.key === 'Enter') {
-        // A focused footer button owns its own Enter (#867). Without this,
-        // Tab to Cancel and Enter SAVED the unpinning the user was
-        // abandoning — and with nothing selected it committed an empty list,
-        // which is what `DialogActions`' `confirmDisabled` exists to prevent.
+      //
+      // Enter with an EMPTY list still commits: useListNavigation skips
+      // activation when there are no rows, but "no candidates" + Enter here
+      // has always meant "save the (empty) pin list", so it is kept.
+      if (rows.length === 0 && event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
         if (focusedControlOwnsEnter(event.target)) return
         event.preventDefault()
         onCommit(selectedIds)
         return
       }
-      if (event.key === 'ArrowDown' || (event.key === 'j' && !event.metaKey && !event.ctrlKey)) {
-        event.preventDefault()
-        setFocusedIndex(prev => {
-          if (rows.length === 0) return 0
-          return Math.min(rows.length - 1, prev + 1)
-        })
-        return
-      }
-      if (event.key === 'ArrowUp' || (event.key === 'k' && !event.metaKey && !event.ctrlKey)) {
-        event.preventDefault()
-        setFocusedIndex(prev => Math.max(0, prev - 1))
-        return
-      }
-      if (event.key === ' ') {
-        // The same rule as Enter above, and for the same reason — this one was
-        // missed the first time (#867 review). Space is a BUTTON's activation
-        // key, so `preventDefault()` here suppressed Cancel and Done while
-        // this handler toggled the highlighted row instead: with Cancel
-        // focused, Space silently changed a pin the user was not looking at
-        // and the button they pressed did nothing.
-        if (focusedControlOwnsSpace(event.target)) return
-        event.preventDefault()
-        const row = rows[focusedIndex]
-        if (row) toggle(row.sessionId)
-        return
-      }
+      nav.onKeyDown(event)
     },
-    [focusedIndex, onCommit, rows, selectedIds, toggle],
+    [nav, onCommit, rows.length, selectedIds],
   )
 
-  return { selectedIds, focusedIndex, setFocusedIndex, toggle, onKeyDown }
+  return {
+    selectedIds,
+    focusedIndex: nav.index,
+    setFocusedIndex: nav.setIndex,
+    toggle,
+    onKeyDown,
+    getRowProps: nav.getItemProps,
+  }
 }

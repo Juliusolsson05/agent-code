@@ -8,10 +8,20 @@
 // Because the component is gated on truthy `message`, React
 // unmounts+remounts the node when the message flips from null →
 // value → null, which restarts the animation cleanly.
+import { PANE_DIALOG_LAYERS } from '@renderer/components/ui/pane-dialog'
+import { cn } from '@renderer/lib/utils'
+
 export function PaneToast({ message }: { message: string | null }) {
-  if (!message) return null
+  // A LIVE REGION that is always mounted (plan N17): a region that appears
+  // together with its text is not announced by screen readers — the region
+  // must exist before its content changes. When there is no message it
+  // collapses to sr-only, so the pane gains no height.
+  if (!message) return <div role="status" aria-live="polite" className="sr-only" />
   return (
-    <div className="flex-shrink-0 flex justify-center px-3 py-1.5 border-t border-border bg-surface">
+    // `relative` + the feedback layer: readable ABOVE a pane-scoped condition
+    // dialog's scrim (#713; see PANE_DIALOG_LAYERS). It is harmless when no
+    // dialog is up, since nothing else in the pane is stacked.
+    <div role="status" aria-live="polite" className={cn('relative flex-shrink-0 flex justify-center px-3 py-1.5 border-t border-border bg-surface', PANE_DIALOG_LAYERS.feedback)}>
       {/* WHY this deliberately borrows the modest chrome radius even though
           the status itself is not interactive: PaneToast is embedded between
           bordered pane regions, with no shadow or scrim. `rounded-float`
@@ -30,7 +40,7 @@ export function PaneToast({ message }: { message: string | null }) {
           the pane; the full DOM text remains available to assistive tech and
           `title` preserves mouse inspection of the clipped remainder. */}
       <span
-        className="toast-enter line-clamp-3 min-w-0 max-w-full rounded-control px-3 py-0.5 text-center font-code text-[11px] font-semibold text-white [overflow-wrap:anywhere] bg-accent/80"
+        className="toast-enter line-clamp-3 min-w-0 max-w-full rounded-control px-3 py-0.5 text-center font-code text-[11px] font-semibold text-accent-fg [overflow-wrap:anywhere] bg-accent/80"
         title={message}
       >
         {message}

@@ -174,15 +174,41 @@ describe('Settings → Skills grid (#1161)', () => {
     expect(screen.getByText('proposed by an agent · review')).toBeTruthy()
   })
 
-  it('lists skills other tools installed, and hides one per viewer', () => {
+  it('lists skills other tools installed, and hides one per viewer', async () => {
     const onChange = vi.fn()
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={onChange} />)
     fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))
     expect(screen.getByText('grill-me')).toBeTruthy()
     expect(screen.getByText(/npx skills · mattpocock\/skills/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Actions for grill-me' }))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Hide' }))
-    expect(onChange).toHaveBeenCalledWith({ hiddenExternalSkills: ['claude-personal-skills:grill-me'] })
+    // Opened and chosen from the KEYBOARD (plan M2): the old hand-rolled menu
+    // had no key handling at all, so Enter on ⋯ did nothing a keyboard user
+    // could follow and there was no way to reach an item.
+    const trigger = screen.getByRole('button', { name: 'Actions for grill-me' })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'Hide' }), { key: 'Enter' })
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ hiddenExternalSkills: ['claude-personal-skills:grill-me'] }))
+  })
+
+  it('says in words what the ● / — provider cells mean (K2-18)', () => {
+    // They explained themselves only in hover titles on non-focusable cells.
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))
+    expect(screen.getByText('● agents of that provider load it · — not in a folder that provider reads')).toBeVisible()
+    expect(screen.getAllByText(/^(loaded by|not read by) /).length).toBeGreaterThan(0)
+  })
+
+  it('closes the ⋯ menu on Escape and puts focus back on ⋯', async () => {
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))
+    const trigger = screen.getByRole('button', { name: 'Actions for grill-me' })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    const first = await screen.findAllByRole('menuitem')
+    await waitFor(() => expect(document.activeElement).toBe(first[0]))
+    fireEvent.keyDown(first[0], { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
   it('shows the context budget instead of a count limit', () => {
@@ -199,7 +225,7 @@ describe('Add skills dialog (#1161)', () => {
     fireEvent.change(input, { target: { value: 'npx skills add anthropics/skills --skill docx -a codex' } })
     expect(screen.getByText(/Understood: source anthropics\/skills · skills: docx · agents: codex/)).toBeTruthy()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Find skills' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Find Skills' }))
     })
     expect(api.discoverAgentCodeGitHubSkills).toHaveBeenCalledWith('npx skills add anthropics/skills --skill docx -a codex')
     // `--skill docx` preselects it; `-a codex` ticks only Codex.
@@ -207,7 +233,7 @@ describe('Add skills dialog (#1161)', () => {
     expect((screen.getByRole('checkbox', { name: 'Install for Codex' }) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByRole('checkbox', { name: 'Install for Claude' }) as HTMLInputElement).checked).toBe(false)
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Install 1 skill' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Install 1 Skill' }))
     })
     expect(api.installAgentCodeGitHubSkills).toHaveBeenCalledWith({
       expectedRevision: 7,
@@ -222,7 +248,28 @@ describe('Add skills dialog (#1161)', () => {
     useAppStore.setState({ addSkillDialog: { initialInput: 'https://gitlab.com/o/r' } })
     render(<AddSkillDialog />)
     expect(screen.getByText(/GitHub only for now/)).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'Find skills' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Find Skills' }) as HTMLButtonElement).disabled).toBe(true)
     expect(api.discoverAgentCodeGitHubSkills).not.toHaveBeenCalled()
   })
+
+  // Plan S32: Enter in the source field finds (and Find says so), Install is a
+  // deliberate press, and a running find/install cannot be hidden.
+  it('labels Find Skills ↩, gives Install no key, and holds the dialog while finding', async () => {
+    let settle!: () => void
+    api.discoverAgentCodeGitHubSkills.mockImplementationOnce(() => new Promise(resolve => {
+      settle = () => resolve({ ok: true, discovery: discovery() })
+    }))
+    useAppStore.setState({ addSkillDialog: { initialInput: 'anthropics/skills' } })
+    render(<AddSkillDialog />)
+    expect(screen.getByRole('button', { name: 'Find Skills' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    expect(screen.getByRole('button', { name: /^Install/ }).querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Install command or source' }), { key: 'Enter' })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(useAppStore.getState().addSkillDialog).not.toBeNull()
+    await act(async () => { settle() })
+  })
 })
+

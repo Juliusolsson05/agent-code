@@ -1,10 +1,11 @@
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 type PermissionPromptState = {
@@ -27,6 +28,9 @@ export function PermissionPromptModal({ state, onSend }: Props) {
   const deny = () => { void onSend('3\r') }
   const title = state.title ?? 'Claude is requesting permission'
 
+  // The app's dialog grammar (UI pass), like TrustDialogModal: header, px-4
+  // body, shared footer with Title Case labels ("deny" / "approve" were
+  // lowercase) and key chips. Approve keeps initial focus, as before.
   return (
     <Dialog
       open
@@ -35,7 +39,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
       }}
     >
       <DialogContent
-        className="modal-pop w-[520px] max-w-[calc(100vw-64px)] p-6"
+        className="modal-pop"
         onPointerDownOutside={event => {
           // A permission decision must be explicit. Escape is a documented
           // deny shortcut, but an accidental backdrop click must not send a
@@ -43,59 +47,38 @@ export function PermissionPromptModal({ state, onSend }: Props) {
           event.preventDefault()
         }}
       >
-        <div className="flex items-start gap-3 mb-4">
-          <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
-          <div>
-            <DialogTitle className="text-[14px] font-semibold leading-[1.3]">
-              {withVisibleControls(title)}
-            </DialogTitle>
-            <DialogDescription className="sr-only">
-              Review the requested tool and choose whether Claude may continue.
-            </DialogDescription>
-            {state.toolName && (
-              <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-muted">
-                {state.toolName}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">
+        <DialogHeader>
+          <DialogTitle>{withVisibleControls(title)}</DialogTitle>
+          <DialogDescription>
+            {state.toolName ? `Tool: ${state.toolName}` : 'Review the request and choose whether Claude may continue.'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2 px-4 py-3 text-[12px] leading-[1.6] text-ink-dim">
           {state.command && (
-            <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
+            <pre className="overflow-x-auto whitespace-pre-wrap rounded-slab bg-code-bg px-3 py-2 font-code text-[12px] text-accent">
               {withVisibleControls(state.command)}
             </pre>
           )}
           {state.options && state.options.length > 0 && (
-            <div className="space-y-1 text-[11.5px] text-muted">
+            <ol className="flex flex-col gap-1 text-[11px] text-muted">
               {state.options.map((option, index) => (
-                <div
+                <li
                   key={`${option.key}:${option.label}`}
                   className={index === state.selectedIndex ? 'text-ink' : undefined}
                 >
                   {option.key}. {withVisibleControls(option.label)}
-                </div>
+                </li>
               ))}
-            </div>
+            </ol>
           )}
         </div>
-
-        <div className="flex justify-end gap-2 mt-6 pl-6">
-          <Button
-            type="button"
-            onClick={deny}
-            variant="outline"
-          >
-            deny
-          </Button>
-          <Button
-            type="button"
-            onClick={approve}
-            autoFocus
-          >
-            approve
-          </Button>
-        </div>
+        <DialogActions
+          onCancel={deny}
+          cancelLabel="Deny"
+          confirmLabel="Approve"
+          onConfirm={approve}
+          initialFocus="confirm"
+        />
       </DialogContent>
     </Dialog>
   )

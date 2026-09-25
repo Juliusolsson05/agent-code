@@ -1,9 +1,8 @@
-import { Button } from '@renderer/components/ui/button'
+import { DialogActions, focusDialogActionOnOpen } from '@renderer/components/ui/dialog-actions'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
@@ -23,9 +22,11 @@ export function ConfirmDeleteDialog({ path, dirtyPaths, onCancel, onConfirm }: P
   const dirtyCount = dirtyPaths.length
   return (
     <Dialog open onOpenChange={open => !open && onCancel()}>
-      <DialogContent className="w-[min(460px,92vw)]">
+      {/* Destructive (plan K1): focus on Cancel (it had autoFocus), no
+          commit key — Tab to Delete, or click. */}
+      <DialogContent size="sm" onOpenAutoFocus={focusDialogActionOnOpen('cancel')}>
         <DialogHeader>
-          <DialogTitle>Delete from disk?</DialogTitle>
+          <DialogTitle>Delete from Disk?</DialogTitle>
           <DialogDescription>
             {/* `report.txt<U+200B>` and `report.txt` are different files and
                 render identically; this dialog authorises deleting one of
@@ -37,7 +38,7 @@ export function ConfirmDeleteDialog({ path, dirtyPaths, onCancel, onConfirm }: P
           </DialogDescription>
         </DialogHeader>
         {dirtyCount > 0 ? (
-          <div className="max-h-28 overflow-auto px-4 pb-3 font-code text-[10px] text-danger">
+          <div className="max-h-28 overflow-auto px-4 py-3 font-code text-[11px] text-danger">
             {dirtyPaths.map(dirtyPath => (
               <div key={dirtyPath} className="truncate" title={dirtyPath}>
                 {withVisibleControls(dirtyPath)}
@@ -45,14 +46,13 @@ export function ConfirmDeleteDialog({ path, dirtyPaths, onCancel, onConfirm }: P
             ))}
           </div>
         ) : null}
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onCancel} autoFocus>
-            Cancel
-          </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm}>
-            {dirtyCount > 0 ? 'Delete & Discard' : 'Delete'}
-          </Button>
-        </DialogFooter>
+        <DialogActions
+          tone="danger"
+          confirmKey={null}
+          confirmLabel={dirtyCount > 0 ? 'Delete & Discard' : 'Delete'}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
       </DialogContent>
     </Dialog>
   )

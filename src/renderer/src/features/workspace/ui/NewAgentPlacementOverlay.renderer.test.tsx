@@ -87,6 +87,51 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
     expect(createDetachedDispatchAgent).toHaveBeenCalledWith({ kind: 'terminal', providerRuntime: undefined }, projectIntent)
     expect(workspace.splitFocused).not.toHaveBeenCalled()
   })
+
+  // Plan M6: the list keys clamp (it wrapped), Home/End jump, the listbox owns
+  // the highlight, and the keys are shown in the card's footer.
+  it('clamps at the ends, jumps with End, announces the highlight, and shows its keys', () => {
+    const createDetachedDispatchAgent = vi.fn(async () => undefined)
+    const workspace = {
+      activeTab: { id: 'tab-1', title: 'Project' },
+      state: { activeTabId: 'tab-1', tabs: [{ id: 'tab-1', title: 'Project' }], sessions: {} },
+      createDetachedDispatchAgent,
+    } as unknown as Workspace
+    render(<NewAgentPlacementOverlay open workspace={workspace} onClose={vi.fn()} linkedAgentParentId={null} projectIntent={null} />)
+    const list = screen.getByRole('listbox', { name: 'Agent type' })
+    expect(document.activeElement).toBe(list)
+    fireEvent.keyDown(document, { key: 'ArrowUp' })
+    expect(list).toHaveAttribute('aria-activedescendant', 'new-agent-kind-0') // clamped, not wrapped
+    fireEvent.keyDown(document, { key: 'End' })
+    const options = screen.getAllByRole('option')
+    expect(list).toHaveAttribute('aria-activedescendant', `new-agent-kind-${options.length - 1}`)
+    expect(screen.getByText('create')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+  })
+
+  it('lets Enter on a focused Cancel cancel, and never create an agent (steering note k8)', () => {
+    const createDetachedDispatchAgent = vi.fn(async () => undefined)
+    const onClose = vi.fn()
+    const workspace = {
+      activeTab: { id: 'tab-1', title: 'Project' },
+      state: { activeTabId: 'tab-1', tabs: [{ id: 'tab-1', title: 'Project' }], sessions: {} },
+      createDetachedDispatchAgent,
+    } as unknown as Workspace
+    render(<NewAgentPlacementOverlay open workspace={workspace} onClose={onClose} linkedAgentParentId={null} projectIntent={null} />)
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    cancel.focus()
+    // true = default NOT prevented, so the real browser still delivers
+    // Cancel's click; happy-dom does not synthesize it, hence the click below.
+    expect(fireEvent.keyDown(cancel, { key: 'Enter' })).toBe(true)
+    expect(createDetachedDispatchAgent).not.toHaveBeenCalled()
+    fireEvent.click(cancel)
+    expect(onClose).toHaveBeenCalled()
+    // Space on Cancel is untouched by the overlay's capture listener too.
+    expect(fireEvent.keyDown(cancel, { key: ' ' })).toBe(true)
+    // …and Enter from the list still creates.
+    fireEvent.keyDown(screen.getByRole('listbox', { name: 'Agent type' }), { key: 'Enter' })
+    expect(createDetachedDispatchAgent).toHaveBeenCalledOnce()
+  })
 })
 
 function stubWorkspace(createDetachedDispatchAgent: ReturnType<typeof vi.fn>): Workspace {

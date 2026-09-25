@@ -90,7 +90,7 @@ export function DictationHistoryRow() {
   }
 
   if (!snapshot) {
-    return <div className="text-[11px] text-muted italic">Loading dictation history…</div>
+    return <div role="status" className="text-[11px] text-muted">Loading dictation history…</div>
   }
 
   const { stats, entries } = snapshot
@@ -102,9 +102,9 @@ export function DictationHistoryRow() {
         <StatTile label="Words" value={formatNumber(stats.lifetimeWords)} />
         <StatTile label="Sessions" value={formatNumber(stats.lifetimeSessions)} />
         <div className="rounded-control border border-control-border bg-control-bg px-2 py-1.5">
-          <div className="text-[10px] uppercase tracking-wide text-muted">Words/min</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted">Words/min</div>
           <div
-            className="font-code text-[15px] text-ink"
+            className="font-code text-[18px] font-semibold tabular-nums text-ink"
             // The denominator is hold time, not true speaking time — it
             // includes recorder start-up and any silence before release, so
             // the figure reads slightly low. Say so rather than fudge it.
@@ -129,7 +129,7 @@ export function DictationHistoryRow() {
         </div>
       ) : (
         <>
-          <div className="text-[10px] uppercase tracking-wide text-muted">
+          <div className="text-[10px] uppercase tracking-wider text-muted">
             Recent — last {stats.retainedEntries}
           </div>
           {/* Bounded, matching the keybinding list's precedent in
@@ -257,8 +257,8 @@ export function DictationHistoryRow() {
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-control border border-control-border bg-control-bg px-2 py-1.5">
-      <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
-      <div className="font-code text-[15px] text-ink">{value}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+      <div className="font-code text-[18px] font-semibold tabular-nums text-ink">{value}</div>
     </div>
   )
 }

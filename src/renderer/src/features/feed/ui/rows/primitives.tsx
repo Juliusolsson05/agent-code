@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 
 // Layout primitives used by multiple row components.
 //
@@ -25,6 +25,53 @@ import type { ReactNode } from 'react'
  */
 export const feedDisclosureClass =
   'inline-flex items-center min-h-[44px] px-1 -mx-1 text-[11px] text-muted hover:text-ink active:text-ink cursor-pointer select-none'
+
+/**
+ * The feed's previous / next pair for paged tool output (code blocks, long
+ * text, multi-edit chunks).
+ *
+ * WHY both buttons stay MOUNTED and an end is `aria-disabled` (ledger G-36):
+ * the three pagers each rendered a button only while it had somewhere to go.
+ * Pressing "next" onto the last page therefore unmounted the button under
+ * the keyboard user's focus. Focus fell to <body>, and the next Tab restarted
+ * from the top of the whole document, far from the output being read.
+ * `disabled` would not help: a disabled button drops focus the same way.
+ * `aria-disabled` keeps it focusable and announced as unavailable, and the
+ * click is a no-op.
+ *
+ * `nextRef` lets an opener (a code block's "view paged content") hand focus
+ * to the pager it just revealed.
+ */
+export function FeedPagerButtons({ hasPrevious, hasNext, onPrevious, onNext, nextRef }: {
+  hasPrevious: boolean
+  hasNext: boolean
+  onPrevious: () => void
+  onNext: () => void
+  nextRef?: Ref<HTMLButtonElement>
+}) {
+  const end = 'aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:text-muted'
+  return (
+    <>
+      <button
+        type="button"
+        className={`${feedDisclosureClass} ${end}`}
+        aria-disabled={!hasPrevious || undefined}
+        onClick={() => { if (hasPrevious) onPrevious() }}
+      >
+        previous
+      </button>
+      <button
+        ref={nextRef}
+        type="button"
+        className={`${feedDisclosureClass} ${end}`}
+        aria-disabled={!hasNext || undefined}
+        onClick={() => { if (hasNext) onNext() }}
+      >
+        next
+      </button>
+    </>
+  )
+}
 
 /**
  * UserBand — a horizontal highlight band that sits behind a *user

@@ -2,12 +2,13 @@ import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKin
 import type { RewindPrompt } from '@shared/types/transcriptRewind'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
@@ -60,6 +61,7 @@ export function RewindToPromptModal({
   onClose,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const provider = meta?.kind ?? DEFAULT_PROVIDER
   const providerSessionId = meta ? resumableProviderSessionId(meta) : null
@@ -103,17 +105,28 @@ export function RewindToPromptModal({
     }
   }, [cwd, open, provider, providerSessionId])
 
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  // Reset selection when the prompt list grows/shrinks under us.
+  // The shared list keys (plan K5): ↑↓ ⌃N⌃P Home End PgUp PgDn Enter, clamp
+  // when the list shrinks, hover via mousemove, scroll-into-view. Declared
+  // before the early return below because hooks cannot follow it; `confirm`
+  // is a hoisted function declaration, called only at event time.
+  const nav = useListNavigation({
+    count: prompts.length,
+    resetKey: `${open}:${sessionId}`,
+    onActivate: index => void confirm(index),
+    idPrefix: 'rewind-prompt',
+  })
+  const selectedIndex = nav.index
+
+  // Prompts load asynchronously, so at open there is no listbox yet and the
+  // scroller holds focus (see onOpenAutoFocus). When the list arrives, hand
+  // focus to the listbox — the only element whose aria-activedescendant is
+  // announced — but only if focus is still parked on the scroller, so a user
+  // who already tabbed to Cancel is not yanked back.
+  const hasPrompts = prompts.length > 0
   useEffect(() => {
-    if (prompts.length === 0) {
-      setSelectedIndex(0)
-      return
-    }
-    if (selectedIndex >= prompts.length) {
-      setSelectedIndex(prompts.length - 1)
-    }
-  }, [prompts.length, selectedIndex])
+    if (!open || !hasPrompts) return
+    if (document.activeElement === scrollerRef.current) listRef.current?.focus()
+  }, [hasPrompts, open])
 
   // The list renders text and time; the address stays in `prompts` at the
   // same index, which is what confirm() reads.
@@ -137,7 +150,7 @@ export function RewindToPromptModal({
 
   // Takes the index explicitly so a click confirms the clicked row even when
   // the highlight state has not caught up with it in this render.
-  const confirm = async (index = selectedIndex) => {
+  async function confirm(index = selectedIndex) {
     const target = prompts[index] ?? null
     if (!target || !sessionId) return
     onClose()
@@ -157,10 +170,15 @@ export function RewindToPromptModal({
       }}
     >
       <DialogContent
-        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
+          // The LISTBOX is the focus owner (it carries aria-activedescendant —
+          // focus-owner invariant, useListNavigation). While prompts are still
+          // loading there is no listbox yet; the scroller takes focus and the
+          // key handler below (on the scroller, bubbling) works either way.
           event.preventDefault()
-          scrollerRef.current?.focus()
+          ;(listRef.current ?? scrollerRef.current)?.focus()
         }}
       >
         <DialogHeader>
@@ -171,6 +189,12 @@ export function RewindToPromptModal({
                   back to a chosen prompt (#1049 re-review). */}
               <div>{meta.kind ?? DEFAULT_PROVIDER} · {withVisibleControls(cwdBase)}</div>
               <div className="mt-0.5 truncate text-[10px]">{withVisibleControls(meta.cwd)}</div>
+              {/* Moved up from the footer, where it shared a two-line left
+                  slot with the count; it is the one sentence a user must read
+                  BEFORE pressing Enter, so it belongs above the list. */}
+              <div className="mt-1 text-[11px]">
+                Choosing a prompt rewinds this pane to that point. The original transcript is not touched.
+              </div>
             </div>
           </DialogDescription>
         </DialogHeader>
@@ -178,64 +202,31 @@ export function RewindToPromptModal({
         <div
           ref={scrollerRef}
           tabIndex={-1}
-          onKeyDown={e => {
-            if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
-              e.preventDefault()
-              setSelectedIndex(i => Math.min(prompts.length - 1, i + 1))
-              return
-            }
-            if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) {
-              e.preventDefault()
-              setSelectedIndex(i => Math.max(0, i - 1))
-              return
-            }
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              void confirm()
-            }
-          }}
+          onKeyDown={nav.onKeyDown}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none"
         >
           <PromptList
             prompts={rows}
-            selectedIndex={selectedIndex}
-            onHover={setSelectedIndex}
-            onSelect={index => {
-              setSelectedIndex(index)
-              void confirm(index)
-            }}
+            nav={nav}
+            listRef={listRef}
+            label="Prompts to rewind to"
             emptyMessage={loading ? 'Reading transcript prompts…' : loadError ?? 'No rewindable prompts found for this session.'}
           />
         </div>
 
-        <DialogFooter className="justify-between text-[11px] text-muted">
-          <div className="flex flex-col gap-0.5">
-            <span>
-              {loading
-                ? 'Reading transcript prompts…'
-                : `${prompts.length} prompt${prompts.length === 1 ? '' : 's'}`}
-            </span>
-            <span className="text-[10px] text-muted/70">
-              Selecting a prompt rewinds THIS pane to that point. The original transcript is not touched.
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              onClick={onClose}
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void confirm()}
-              disabled={!selected}
-            >
-              Rewind here
-            </Button>
-          </div>
-        </DialogFooter>
+        {/* Chips on the buttons that perform Escape and Enter; ↑↓ is the
+            only legend item (plan H2/H3). confirmOnEnter={false}: the list
+            owns Enter. */}
+        <DialogActions
+          confirmLabel="Rewind Here"
+          onConfirm={() => void confirm()}
+          onCancel={onClose}
+          confirmOnEnter={false}
+          confirmDisabled={!selected}
+          legend={<KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }]} />}
+        >
+          {loading ? 'Reading transcript prompts…' : `${prompts.length} prompt${prompts.length === 1 ? '' : 's'}`}
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )

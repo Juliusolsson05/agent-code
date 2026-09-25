@@ -62,7 +62,7 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
         </div>
         {/* Failure is always visible without expansion (plan hard rule). */}
         {model.errorSummary ? (
-          <div className="text-red-400 text-[12px]" role="status">
+          <div className="text-danger text-[12px]" role="status">
             {model.errorSummary}
           </div>
         ) : null}

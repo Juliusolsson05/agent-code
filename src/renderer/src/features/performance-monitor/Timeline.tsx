@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import type { ReactNode } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import type { MonitorHistoryPage, MonitorHistoryPoint } from '@shared/performance/monitorHistory.js'
@@ -117,11 +118,23 @@ export function Timeline({ incidents }: { incidents: MonitorIncidentSummary[] })
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="font-medium">History</h2><p className="mt-1 text-[11px] text-muted">{page ? `${new Date(page.from).toLocaleString()} – ${live ? 'now' : new Date(page.to).toLocaleString()} · ${page.resolution} samples, peak per bucket` : 'Local rollups kept for up to 7 days.'}</p></div>
       <div className="flex flex-wrap items-center gap-1">
-        {ranges.map(option => <Button key={option.label} size="sm" variant={range === option ? 'secondary' : 'ghost'} aria-pressed={range === option} onClick={() => { setRange(option); setRevision(value => value + 1) }}>{option.label}</Button>)}
+        {/* The shared SegmentedControl (ledger G-37): a single choice drawn as
+            loose secondary/ghost Buttons was the only range picker in the app
+            not using it. `pressed` semantics, because each range change reads
+            history from disk, and arrow-to-select would fire one read per step. */}
+        {/* h-7: level with the sm Buttons (Earlier / Later / Pause) in the
+            same toolbar; the group's segments stretch to it. */}
+        <SegmentedControl
+          className="h-7"
+          label="History range"
+          value={range.label}
+          onChange={label => { setRange(ranges.find(option => option.label === label) ?? ranges[0]); setRevision(value => value + 1) }}
+          options={ranges.map(option => ({ value: option.label, label: option.label }))}
+        />
         <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
         <Button size="sm" variant="outline" onClick={() => pan(-1)} aria-label="Show earlier">← Earlier</Button>
         <Button size="sm" variant="outline" disabled={live} onClick={() => pan(1)} aria-label="Show later">Later →</Button>
-        <Button size="sm" variant={live ? 'secondary' : 'default'} onClick={() => { if (live) { setTo(Date.now()); setLive(false) } else { setLive(true); setRevision(value => value + 1) } }}>{live ? 'Pause' : 'Back to live'}</Button>
+        <Button size="sm" variant={live ? 'secondary' : 'default'} onClick={() => { if (live) { setTo(Date.now()); setLive(false) } else { setLive(true); setRevision(value => value + 1) } }}>{live ? 'Pause' : 'Back to Live'}</Button>
       </div>
     </div>
     {!page ? <p role="status" className="text-muted">{error ? 'History is temporarily unavailable. Live monitoring continues.' : 'Loading local history…'}</p> : <>

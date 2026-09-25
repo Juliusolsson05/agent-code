@@ -192,12 +192,13 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   // copy-assistant / copy-code-block (2)
   'copy-assistant-message',
   'copy-code-block',
-  // prompt templates + api key vault + reply to selection (5)
+  // prompt templates + api key vault + reply to selection + reader quote (6)
   'manage-prompt-templates',
   'prompt-template',
   'save-composer-as-prompt-template',
   'api-key-vault',
   'reply-to-selection',
+  'reply-to-reader-message',
   // agent status / remote (2)
   'show-agent-status',
   'toggle-remote-panel',
@@ -305,7 +306,7 @@ describe('built-in command catalog — baseline characterization', () => {
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(134)
+    expect(builtInCommandCatalog).toHaveLength(135)
   })
 
   it('reports no structural defects', () => {
@@ -349,9 +350,9 @@ describe('generated per-provider split commands', () => {
     // then up by the seven Browser Pocket commands (#1142), then up by the
     // three skills commands (#1161), then up by Close Completed Agents…
     // (#1182), then up by Pin Session (#1180), then up by View Goal History
-    // (#1190).
+    // (#1190), then up by Reply to Reader Message (#1221, K2-4).
     // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(126)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(127)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -504,9 +505,9 @@ describe('governance targets', () => {
     // generated from AGENT_PROVIDER_KINDS like Grok's). Then `skills`,
     // `add-skill` and `check-skill-updates` (#1161). Then
     // `close-completed-agents` (#1182). Then `pin-agent` (#1180). Then
-    // `view-goal-history` (#1190).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 62).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(134)
+    // `view-goal-history` (#1190). Then `reply-to-reader-message` (#1221, K2-4).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 62).toBe(103)
+    expect(builtInCommandCatalog).toHaveLength(135)
   })
 })
 

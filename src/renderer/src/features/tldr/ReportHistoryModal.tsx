@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { TldrHistoryEntry } from '@shared/types/tldr'
 import type { ReportHistoryKind } from '@renderer/app-state/uiShell/types'
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { cn } from '@renderer/lib/utils'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -223,20 +222,36 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
           The column layout plus `min-h-0 flex-1` makes the list the only
           scrolling region, so the header and Close stay put however long the
           history is, instead of a fixed 60vh box floating between them. */}
-      <DialogContent className="flex max-h-[80vh] w-[min(640px,92vw)] flex-col overflow-hidden">
+      <DialogContent
+        size="md"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
+        onOpenAutoFocus={event => {
+          // A read-only viewer (plan S33, same as View Prompts): focus the
+          // history so ↑↓/PgUp/PgDn scroll it at once. Radix's default was the
+          // footer's Close, where the arrows do nothing.
+          event.preventDefault()
+          ;(event.currentTarget as HTMLElement | null)
+            ?.querySelector<HTMLElement>('[data-report-history-scroller]')
+            ?.focus()
+        }}
+      >
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <div
+          data-report-history-scroller
+          tabIndex={0}
+          aria-label="History"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        >
           {identity && view.state === 'ready' && view.unavailable.map(unavailableKind => (
             <p key={unavailableKind} role="status" className="mb-3 text-[12px] text-muted">{unavailableKind === 'goal' ? 'Goal' : 'TLDR'} history is unavailable.</p>
           ))}
           {body}
         </div>
-        <DialogFooter className="flex-shrink-0">
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
+        {/* Close-only viewer: one ghost `Close ⎋` (plan H5; was outline). */}
+        <DialogActions onCancel={onClose} cancelLabel="Close" />
       </DialogContent>
     </Dialog>
   )

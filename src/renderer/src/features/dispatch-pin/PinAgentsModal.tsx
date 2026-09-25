@@ -2,8 +2,10 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { KbdLegend } from '@renderer/components/ui/kbd'
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId } from '@renderer/workspace/types'
@@ -58,7 +60,7 @@ export function PinAgentsModal({
   onCancel,
   onConfirm,
 }: Props) {
-  const { selectedIds, focusedIndex, setFocusedIndex, toggle, onKeyDown } =
+  const { selectedIds, focusedIndex, onKeyDown, getRowProps } =
     usePinAgentsKeybinds({
       rows,
       initialSelectedIds,
@@ -67,7 +69,7 @@ export function PinAgentsModal({
     })
 
   const selectedSet = new Set(selectedIds)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   return (
     <Dialog
@@ -77,36 +79,48 @@ export function PinAgentsModal({
       }}
     >
       <DialogContent
-        ref={dialogRef}
-        tabIndex={-1}
         onKeyDown={onKeyDown}
         onOpenAutoFocus={event => {
           // WHY this dialog needs what its two siblings already had (#867
           // review): Radix's FocusScope focuses the first TABBABLE node on
           // mount. Taking the rows out of the tab order made that node
           // CANCEL — so on a fresh open, the Enter this dialog advertises as
-          // "commit" was handed to Cancel and threw the pins away. Nothing in
-          // here ever moves DOM focus, so no arrow key could rescue it.
+          // "commit" was handed to Cancel and threw the pins away.
+          //
+          // Focus goes to the LISTBOX, not the dialog surface: it carries
+          // aria-activedescendant, which only announces from the focused
+          // element (focus-owner invariant, lib/useListNavigation header).
+          // Keys still reach onKeyDown above by bubbling.
           event.preventDefault()
-          dialogRef.current?.focus()
+          listRef.current?.focus()
         }}
-        className="flex max-h-[80vh] w-[520px] max-w-[calc(100vw-64px)] flex-col p-5"
+        // Standard anatomy (plan T3): header / padded body / DialogActions.
+        // It used to pad the WHOLE content (p-5) with a bespoke title and a
+        // legend row in the body, so it matched no sibling dialog.
+        className="flex max-h-[86vh] flex-col"
       >
-        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Sessions</DialogTitle>
-        <DialogDescription className="sr-only">
-          Choose the agents pinned in Dispatch. Space toggles and Enter commits.
-        </DialogDescription>
+        <DialogHeader>
+          <DialogTitle>Pin Sessions</DialogTitle>
+          <DialogDescription className="sr-only">
+            Choose the agents pinned in Dispatch. Space toggles and Enter commits.
+          </DialogDescription>
+        </DialogHeader>
 
+        <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
         {/* Roving focus: the rows left the tab order, so the highlight has to be
             announced instead of focused. `aria-activedescendant` on the
             listbox is what tells a screen reader which option the arrows are
             on — without it the highlight is a CSS class and nothing else
             (#867 review). */}
         <div
+          ref={listRef}
           role="listbox"
+          // One Tab stop (plan K4) so Shift+Tab from the footer returns here.
+          tabIndex={0}
           aria-label="Agents to pin"
+          aria-multiselectable
           aria-activedescendant={rows[focusedIndex] ? `pin-agents-row-${rows[focusedIndex]!.sessionId}` : undefined}
-          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas"
+          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas py-1 outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           {rows.length === 0 ? (
             <div className="px-3 py-4 text-[12px] text-muted">
@@ -116,10 +130,14 @@ export function PinAgentsModal({
             rows.map((row, index) => {
               const isSelected = selectedSet.has(row.sessionId)
               const isFocused = index === focusedIndex
+              // Hover (mousemove), click (highlight + toggle, via the hook's
+              // onItemClick), no focus theft on mousedown, and keyboard
+              // scroll-into-view all come from useListNavigation.
               return (
                 <button
                   key={row.sessionId}
                   type="button"
+                  {...getRowProps(index)}
                   id={`pin-agents-row-${row.sessionId}`}
                   role="option"
                   aria-selected={isSelected}
@@ -129,25 +147,9 @@ export function PinAgentsModal({
                   // FOCUSED one — so the user would act on a row other than the
                   // one the dialog is showing as chosen, whatever Enter does.
                   tabIndex={-1}
-                  // The other half, and the one `tabIndex={-1}` does NOT buy:
-                  // Chromium focuses a button on CLICK whatever its tabindex.
-                  // A clicked row then held focus and owned every following
-                  // Enter, so the commit bowed out and the surviving default
-                  // re-clicked the row — Enter looked like it undid the click.
-                  // Preventing mousedown's default keeps focus on the dialog
-                  // and still fires onClick.
-                  onMouseDown={event => event.preventDefault()}
-                  onClick={() => {
-                    setFocusedIndex(index)
-                    toggle(row.sessionId)
-                  }}
-                  onMouseEnter={() => setFocusedIndex(index)}
                   className={`
-                    w-full flex items-center gap-3 px-3 py-2 border-l-4
-                    border-b border-border last:border-b-0 text-left
-                    ${isFocused
-                      ? 'border-l-accent text-ink bg-surface-hi'
-                      : 'border-l-transparent text-ink hover:bg-surface'}
+                    w-full flex items-center gap-3 px-3 py-1.5 border-l-2 text-left text-ink
+                    ${isFocused ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent hover:bg-row-hover-bg'}
                   `}
                 >
                   <span
@@ -159,15 +161,15 @@ export function PinAgentsModal({
                   >
                     {isSelected ? '★' : '·'}
                   </span>
-                  <span className="w-6 flex-shrink-0 text-[10px] tabular-nums opacity-70">
+                  <span className="w-6 flex-shrink-0 text-[10px] tabular-nums text-muted">
                     {tabIndexLabel(row.tabIndex)}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[12px]">
                     {withVisibleControls(row.title)}
                   </span>
                   <span
-                    className="rounded-control
-                      flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
+                    className="rounded-chip
+                      flex-shrink-0 px-1.5 py-px text-[10px] font-code
                       leading-none text-muted border border-border bg-surface-hi
                       truncate max-w-[160px]
                     "
@@ -180,30 +182,22 @@ export function PinAgentsModal({
             })
           )}
         </div>
-
-        <div className="mt-4 flex flex-shrink-0 items-center justify-between text-[10px] text-muted">
-          {/* Selection counter on the left, key legend on the right.
-              Legend stays compact — no separate help dialog because the
-              three bindings ARE the entire interaction surface. */}
-          <span className="tabular-nums">
-            {selectedIds.length} pinned · {focusedIndex + 1}/{Math.max(1, rows.length)}
-          </span>
-          <span className="flex items-center gap-3">
-            <span><kbd>Space</kbd> toggle</span>
-            <span><kbd>Enter</kbd> commit</span>
-            <span><kbd>Esc</kbd> cancel</span>
-          </span>
         </div>
+
         {/* WHY this footer had to exist: rows toggle on click, but `onCommit`
             fired ONLY from the Enter branch of usePinAgentsKeybinds. A mouse
             user could build an entire selection and then have no way to save
             it — and the only pointer-reachable exit, clicking the backdrop,
-            ran onCancel and silently discarded the whole draft. The key legend
-            above stays because those bindings are still real; it just is not
-            the only way out any more.
+            ran onCancel and silently discarded the whole draft.
+
+            The key legend moved here from a row in the body (plan H3): ↑↓ and
+            Space have no button, so they are the legend; Enter and Escape
+            are chips on the buttons they perform. The counter rides in the
+            same left slot.
 
             confirmOnEnter is false because the row list already owns Enter via
-            usePinAgentsKeybinds — wiring it here too would commit twice. */}
+            usePinAgentsKeybinds — wiring it here too would commit twice. The
+            ↩ chip still shows, because Enter still commits. */}
         <DialogActions
           confirmLabel={
             selectedIds.length === 1 ? 'Pin 1 Agent' : `Pin ${selectedIds.length} Agents`
@@ -214,7 +208,12 @@ export function PinAgentsModal({
           onConfirm={() => onConfirm(selectedIds)}
           onCancel={onCancel}
           confirmOnEnter={false}
-        />
+          legend={<KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Space'], label: 'toggle' }]} />}
+        >
+          <span className="tabular-nums">
+            {selectedIds.length} pinned · {Math.min(focusedIndex + 1, Math.max(1, rows.length))}/{Math.max(1, rows.length)}
+          </span>
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )

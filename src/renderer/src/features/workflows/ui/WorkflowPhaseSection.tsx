@@ -50,7 +50,7 @@ export function WorkflowPhaseSection({
           />
         ))}
         {agents.length === 0 ? (
-          <div className="px-1 py-1 text-[11px] italic text-muted">Waiting for agents…</div>
+          <div role="status" className="px-1 py-1 text-[11px] text-muted">Waiting for agents…</div>
         ) : null}
       </div>
     </section>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Button } from '@renderer/components/ui/button'
 import { Sparkline } from '@renderer/components/charts/Sparkline'
 import { providerLabel } from '@renderer/workspace/tile-tree/TileLeaf/labels'
@@ -67,8 +68,8 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
           ))}
         </div>
       </header>
-      {!usage ? <p className="px-3 py-6 text-center text-[11px] text-muted" role="status">Waiting for the first process sample…</p>
-        : !rows.length ? <p className="px-3 py-6 text-center text-[11px] text-muted" role="status">No agents are running.</p> : (
+      {!usage ? <EmptyState role="status">Waiting for the first process sample…</EmptyState>
+        : !rows.length ? <EmptyState role="status">No agents are running.</EmptyState> : (
           <div className="min-h-0 overflow-auto">
             <table className="w-full text-left text-[11px] tabular-nums">
               <thead className="sticky top-0 bg-surface text-[10px] text-muted">
@@ -92,7 +93,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
                     <tr key={session.sessionId} className="group border-t border-border hover:bg-row-hover-bg">
                       <td className="max-w-0 px-3 py-1.5">
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className={`flex-shrink-0 rounded-chip border px-1 text-[9px] font-semibold leading-[14px] ${identity?.label ? 'border-current/30 text-ink' : 'border-border text-muted'}`}
+                          <span className={`flex-shrink-0 rounded-chip border px-1 text-[10px] font-semibold leading-[14px] ${identity?.label ? 'border-current/30 text-ink' : 'border-border text-muted'}`}
                             title={identity?.label ? undefined : 'Not placed in this window'}>{identity?.label ?? '—'}</span>
                           <div className="min-w-0">
                             <div className="truncate text-ink" title={name}>{name}</div>
@@ -114,7 +115,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
                           <span className="w-[30px] flex-shrink-0 text-right text-[10px] text-muted">{(shareOfApp * 100).toFixed(0)}%</span>
                         </div>
                       </td>
-                      <td className={`px-2 py-1.5 text-right ${change.tone === 'up' ? 'text-warning-fg' : change.tone === 'down' ? 'text-success-fg' : 'text-muted'}`}>{change.text}</td>
+                      <td className={`px-2 py-1.5 text-right ${change.tone === 'up' ? 'text-warning' : change.tone === 'down' ? 'text-success' : 'text-muted'}`}>{change.text}</td>
                       <td className="px-2 py-1.5 text-right text-ink-dim">{formatCpu(session.cpuPercent)}</td>
                       <td className="px-2 py-1.5 text-right text-ink-dim">{session.processCount}</td>
                       <td className="px-2 py-1.5">
@@ -135,7 +136,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
             </table>
             {rows.length > COLLAPSED_ROWS ? (
               <div className="border-t border-border px-3 py-1.5">
-                <Button size="xs" variant="ghost" onClick={() => setExpanded(value => !value)}>{expanded ? 'Show top 10' : `Show all ${rows.length}`}</Button>
+                <Button size="xs" variant="ghost" onClick={() => setExpanded(value => !value)}>{expanded ? 'Show Top 10' : `Show All ${rows.length}`}</Button>
               </div>
             ) : null}
           </div>

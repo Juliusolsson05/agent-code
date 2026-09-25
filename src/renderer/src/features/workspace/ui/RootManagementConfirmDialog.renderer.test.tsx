@@ -22,7 +22,7 @@ describe('Root Agent Code Management confirmation', () => {
     expect(screen.getByText('What this turns on')).toBeInTheDocument()
     expect(screen.getByText('Why this is usually the wrong switch')).toBeInTheDocument()
 
-    const enable = screen.getByRole('button', { name: 'Enable for this agent' })
+    const enable = screen.getByRole('button', { name: 'Enable for This Agent' })
     expect(enable).toBeDisabled()
     fireEvent.click(enable)
     expect(onConfirm).not.toHaveBeenCalled()
@@ -71,4 +71,18 @@ describe('Root Agent Code Management confirmation', () => {
     expect(onCancel).toHaveBeenCalledOnce()
     expect(onConfirm).not.toHaveBeenCalled()
   })
+
+  it('never grants from a dialog-level Enter, even once acknowledged, and shows no Enter chip (plan S16)', () => {
+    const onConfirm = vi.fn()
+    render(<RootManagementConfirmDialog open agentLabel="codex · app" description="/work/app" onCancel={vi.fn()} onConfirm={onConfirm} />)
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(onConfirm).not.toHaveBeenCalled()
+    const enable = screen.getByRole('button', { name: 'Enable for This Agent' })
+    expect(enable.querySelector('[data-slot="kbd"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    fireEvent.click(enable)
+    expect(onConfirm).toHaveBeenCalledOnce()
+  })
 })
+

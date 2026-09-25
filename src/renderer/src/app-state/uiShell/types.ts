@@ -239,7 +239,7 @@ export type UiShellState = {
    * derives `cwd` from the FOCUSED session, which is in the wrong project
    * here. Dispatch agents are detached and never inserted into `tab.root`, so
    * a project whose grid leaves are all closed has no cwd to fall back on and
-   * the spawn fails with "no project directory found". A session from the
+   * the spawn fails with "no project folder found". A session from the
    * clicked group is a correct and always-present source.
    */
   newAgentProjectIntent: { tabId: TabId; anchorSessionId: SessionId } | null

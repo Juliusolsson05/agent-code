@@ -60,7 +60,7 @@ export function sessionSpawnErrorMessage(
   const raw =
     err instanceof Error && err.message.length > 0
       ? err.message
-      : String(err || `Failed to start ${kind}`)
+      : String(err || `Could not start ${kind}.`)
   if (
     kind === 'claude' &&
     useProxy &&

@@ -63,15 +63,39 @@ describe('UsageModal', () => {
 
   it('renders a rail entry per source and details for the selected one', async () => {
     render(<UsageModal open onClose={() => {}} />)
-    expect(await screen.findByRole('option', { name: /Claude/ })).toBeTruthy()
-    expect(screen.getByRole('option', { name: /Codex/ })).toBeTruthy()
+    expect(await screen.findByRole('tab', { name: /Claude/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Codex/ })).toBeTruthy()
     // Claude is selected by default; its row label is visible in the detail pane.
     expect(screen.getByText('Current week (all models)')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('option', { name: /Codex/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }))
     await waitFor(() => {
       expect(screen.getByText('Provider rejected the current auth token.')).toBeTruthy()
     })
+  })
+
+  // Plan S34: the rail is a tablist — one Tab stop, arrows move focus WITH
+  // the selection — and ⌘[ / ⌘] cycle providers from anywhere (D5).
+  it('is one Tab stop whose arrows move focus and selection together', async () => {
+    render(<UsageModal open onClose={() => {}} />)
+    const claude = await screen.findByRole('tab', { name: /Claude/ })
+    const codex = screen.getByRole('tab', { name: /Codex/ })
+    expect(claude).toHaveAttribute('tabindex', '0')
+    expect(codex).toHaveAttribute('tabindex', '-1')
+    claude.focus()
+    fireEvent.keyDown(claude, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(codex)
+    expect(codex).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('cycles providers with ⌘] from anywhere in the dialog and closes from the corner ⎋', async () => {
+    render(<UsageModal open onClose={() => {}} />)
+    const claude = await screen.findByRole('tab', { name: /Claude/ })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: ']', code: 'BracketRight', metaKey: true })
+    expect(screen.getByRole('tab', { name: /Codex/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: '[', code: 'BracketLeft', metaKey: true })
+    expect(claude).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Close' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
   })
 
   it('shows the empty state linking to settings when no source is active', async () => {

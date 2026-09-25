@@ -6,10 +6,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { applyUserMcpResult, useUserMcpSnapshot } from '@renderer/features/mcp/store'
@@ -44,15 +45,42 @@ export function McpServerDialog() {
   const editing = target?.mode === 'edit'
     ? snapshot?.servers.find(server => server.id === target.serverId) ?? null
     : null
+  // A pasted or edited config is REAL typed input (B7's condition on plan
+  // D3): Escape, an outside click and Cancel all route through requestClose,
+  // which asks before discarding it. The child reports its dirtiness through
+  // a ref because only it knows what "unchanged" means (empty paste vs the
+  // opened entry), and a ref keeps that report from re-rendering the host.
+  const dirtyRef = useRef(false)
+  // In-flight persistence holds the dialog (steering note k5, the k3 rule):
+  // Add saves several servers one by one and Edit awaits main's verdict, so
+  // closing mid-save would hide partial success or a failure. Every close
+  // path — Escape, outside click, Cancel — funnels through requestClose.
+  const savingRef = useRef(false)
+  const requestClose = async () => {
+    if (savingRef.current) return
+    if (dirtyRef.current && !(await requestConfirm({
+      title: 'Discard this MCP server config?',
+      description: 'What you pasted or edited here will be lost.',
+      confirmLabel: 'Discard Changes',
+      tone: 'danger',
+    }))) return
+    dirtyRef.current = false
+    close()
+  }
+  const reportDirty = (dirty: boolean) => { dirtyRef.current = dirty }
+  const reportSaving = (saving: boolean) => { savingRef.current = saving }
 
   return (
-    <Dialog open={target !== null} onOpenChange={open => { if (!open) close() }}>
-      <DialogContent className="max-w-2xl">
-        {target?.mode === 'add' ? <AddServer onDone={close} /> : null}
-        {target?.mode === 'edit' && editing ? <EditServer key={editing.id} server={editing} onDone={close} /> : null}
+    <Dialog open={target !== null} onOpenChange={open => { if (!open) void requestClose() }}>
+      {/* size md: the old `max-w-2xl` was a no-op against the base 520px
+          width, so this dialog rendered narrower than its author intended
+          (plan T2). */}
+      <DialogContent size="md">
+        {target?.mode === 'add' ? <AddServer onDone={close} onCancel={() => void requestClose()} onDirty={reportDirty} onSaving={reportSaving} /> : null}
+        {target?.mode === 'edit' && editing ? <EditServer key={editing.id} server={editing} onDone={close} onCancel={() => void requestClose()} onDirty={reportDirty} onSaving={reportSaving} /> : null}
         {target?.mode === 'edit' && !editing ? (
           <DialogHeader>
-            <DialogTitle>Server not found</DialogTitle>
+            <DialogTitle>Server Not Found</DialogTitle>
             <DialogDescription>It may have been deleted in another window.</DialogDescription>
           </DialogHeader>
         ) : null}
@@ -68,13 +96,15 @@ type Draft = {
   secrets: Record<string, string>
 }
 
-function AddServer({ onDone }: { onDone: () => void }) {
+function AddServer({ onDone, onCancel, onDirty, onSaving }: { onDone: () => void; onCancel: () => void; onDirty: (dirty: boolean) => void; onSaving: (saving: boolean) => void }) {
   const [text, setText] = useState('')
+  useEffect(() => { onDirty(text.trim().length > 0) }, [onDirty, text])
   const [candidates, setCandidates] = useState<UserMcpImportCandidate[]>([])
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [parseError, setParseError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  useEffect(() => { onSaving(saving) }, [onSaving, saving])
   // True from a keystroke until main answers for that text. Add is refused
   // meanwhile so it can never save a parse of text the user already changed
   // (review round 1: a token deleted from the box was still saved).
@@ -215,7 +245,7 @@ function AddServer({ onDone }: { onDone: () => void }) {
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Add MCP server</DialogTitle>
+        <DialogTitle>Add MCP Server</DialogTitle>
         <DialogDescription>
           Paste the config from the server&apos;s README. mcpServers blocks, VS Code servers/inputs and single entries all work.
         </DialogDescription>
@@ -252,12 +282,17 @@ function AddServer({ onDone }: { onDone: () => void }) {
         ) : null}
         {saveError ? <div className="text-danger">{saveError}</div> : null}
       </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onDone}>Cancel</Button>
-        <Button disabled={saving || parsing || pending === 0} onClick={() => void save()}>
-          {pending > 1 ? `Add ${pending} servers` : 'Add server'}
-        </Button>
-      </DialogFooter>
+      {/* ⌘↩ adds (the config textarea owns plain Enter). Guards carried
+          over (k3): Add waits for saving/parsing and a parsed candidate. */}
+      <DialogActions
+        confirmLabel={pending > 1 ? `Add ${pending} Servers` : 'Add Server'}
+        confirmKey="Cmd+Enter"
+        confirmDisabled={saving || parsing || pending === 0}
+        onConfirm={() => void save()}
+        onCancel={onCancel}
+        cancelDisabled={saving}
+        escapeCancels={!saving}
+      />
     </>
   )
 }
@@ -288,7 +323,7 @@ function CandidateCard({
         <span className="text-muted">{transport ?? 'unknown transport'}</span>
         <span className="ml-auto flex items-center gap-3">
           {USER_MCP_PROVIDERS.map(provider => (
-            <label key={provider} className="flex items-center gap-1" title={support[provider].ok ? undefined : support[provider].reason}>
+            <label key={provider} className="flex items-center gap-1">
               <Check
                 checked={draft.providers[provider]}
                 disabled={!support[provider].ok}
@@ -300,6 +335,7 @@ function CandidateCard({
           ))}
         </span>
       </div>
+      <UnsupportedProviderNotes support={support} />
       {entryProblems.map(problem => <div key={problem.message} className="mt-1 text-warning">⚠ {problem.message}</div>)}
       {candidate.inputs.length > 0 ? (
         <SecretFields
@@ -318,7 +354,7 @@ function editableFingerprint(server: UserMcpServerView): string {
   return JSON.stringify([server.name, server.enabled, server.providers, server.entry, server.inputs])
 }
 
-function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () => void }) {
+function EditServer({ server, onDone, onCancel, onDirty, onSaving }: { server: UserMcpServerView; onDone: () => void; onCancel: () => void; onDirty: (dirty: boolean) => void; onSaving: (saving: boolean) => void }) {
   // Review round 1: the form is initialized once, but `server` keeps updating
   // from the broadcast. Saving a form opened before another window (or an
   // agent with MCP Servers) changed the same server would write the old entry
@@ -327,12 +363,27 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
   const [openedAs] = useState(() => editableFingerprint(server))
   const changedElsewhere = editableFingerprint(server) !== openedAs
   const [name, setName] = useState(server.name)
-  const [json, setJson] = useState(() => JSON.stringify(server.entry, null, 2))
+  const [openedJson] = useState(() => JSON.stringify(server.entry, null, 2))
+  const [json, setJson] = useState(openedJson)
   const [providers, setProviders] = useState(server.providers)
   const [secretEdits, setSecretEdits] = useState<Record<string, string>>({})
+  // Dirty = any local change, SECRETS INCLUDED (steering note k5: a
+  // secret-only edit was discarded by Escape without asking). SecretFields
+  // keeps a key only while its field holds an edit — typing then emptying a
+  // field deletes the key (a revert, not a change), while an explicit Clear
+  // stores '' (a real change: it will delete the stored secret).
+  useEffect(() => {
+    onDirty(
+      json !== openedJson
+      || name !== server.name
+      || JSON.stringify(providers) !== JSON.stringify(server.providers)
+      || Object.keys(secretEdits).length > 0,
+    )
+  }, [json, name, onDirty, openedJson, providers, secretEdits, server.name, server.providers])
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [saving, setSaving] = useState(false)
+  useEffect(() => { onSaving(saving) }, [onSaving, saving])
 
   const parsed = useMemo((): { entry: UserMcpServerEntry | null; error: string | null } => {
     try {
@@ -396,7 +447,7 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Edit MCP server</DialogTitle>
+        <DialogTitle>Edit MCP Server</DialogTitle>
         <DialogDescription>Changes apply to new agents, and to existing agents when they reload.</DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-3 px-4 py-3 text-[11px]">
@@ -408,7 +459,7 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
           <span className="text-muted">Transport: {transport ?? '—'}</span>
           <span className="ml-auto flex items-center gap-3">
             {USER_MCP_PROVIDERS.map(provider => (
-              <label key={provider} className="flex items-center gap-1" title={support[provider].ok ? undefined : support[provider].reason}>
+              <label key={provider} className="flex items-center gap-1">
                 <Check
                   checked={providers[provider] && support[provider].ok}
                   disabled={!support[provider].ok}
@@ -420,6 +471,7 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
             ))}
           </span>
         </div>
+        <UnsupportedProviderNotes support={support} />
         <Textarea
           value={json}
           onChange={event => setJson(event.target.value)}
@@ -452,16 +504,24 @@ function EditServer({ server, onDone }: { server: UserMcpServerView; onDone: () 
         ) : null}
 
       </div>
-      <DialogFooter>
-        {confirmDelete ? (
-          <Button variant="destructive" onClick={() => void remove()}>Delete {server.name}</Button>
+      {/* ⌘↩ saves (the config textarea owns plain Enter). Delete stays a
+          deliberate two-step at the far left — never a key. Guards carried
+          over (k3): Save waits for saving, a parsed entry and no remote
+          change. */}
+      <DialogActions
+        confirmLabel="Save"
+        confirmKey="Cmd+Enter"
+        confirmDisabled={saving || !parsed.entry || changedElsewhere}
+        onConfirm={() => void save()}
+        onCancel={onCancel}
+        cancelDisabled={saving}
+        escapeCancels={!saving}
+        extraActions={confirmDelete ? (
+          <Button variant="destructive" size="sm" className="mr-auto" onClick={() => void remove()}>Delete {server.name}</Button>
         ) : (
-          <Button variant="destructive-outline" onClick={() => setConfirmDelete(true)}>Delete…</Button>
+          <Button variant="destructive-outline" size="sm" className="mr-auto" onClick={() => setConfirmDelete(true)}>Delete…</Button>
         )}
-        <span className="flex-1" />
-        <Button variant="outline" onClick={onDone}>Cancel</Button>
-        <Button disabled={saving || !parsed.entry || changedElsewhere} onClick={() => void save()}>Save</Button>
-      </DialogFooter>
+      />
     </>
   )
 }
@@ -559,4 +619,31 @@ function SignInHelp({ name, url }: { name: string; url: string }) {
 
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:=-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * Why a provider's checkbox is locked, as VISIBLE text (K2-11).
+ *
+ * The reason ("Codex cannot pass a secret named GITHUB_TOKEN", "… does not
+ * support this transport") lived only in the label's hover `title`, and a
+ * disabled checkbox is out of the Tab order. So a keyboard or screen reader
+ * user met a locked control with no reachable explanation at all, and a mouse
+ * user had to find it by hovering. It is the answer to "why can't I attach
+ * this here?", so it is shown under the row for everyone.
+ */
+function UnsupportedProviderNotes({ support }: { support: ReturnType<typeof providerSupportForEntry> }) {
+  const notes = USER_MCP_PROVIDERS.flatMap(provider => {
+    const entry = support[provider]
+    return entry.ok ? [] : [{ provider, reason: entry.reason }]
+  })
+  if (notes.length === 0) return null
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5 text-muted">
+      {notes.map(note => (
+        <li key={note.provider}>
+          {PROVIDER_LABEL[note.provider]} not available: {note.reason}
+        </li>
+      ))}
+    </ul>
+  )
 }

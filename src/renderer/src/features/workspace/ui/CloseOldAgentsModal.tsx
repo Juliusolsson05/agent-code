@@ -1,4 +1,7 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
+import { Input } from '@renderer/components/ui/input'
+import { Select } from '@renderer/components/ui/select'
 import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { closeGrantedSessions } from '@renderer/workspace/bulkClose'
@@ -9,12 +12,15 @@ import {
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
+import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import {
@@ -319,7 +325,9 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     setIncludeLive(false)
     setProjectFilter('')
     setClosing(false)
-    requestAnimationFrame(() => inputRef.current?.focus())
+    // (Initial focus moved to DialogContent's onOpenAutoFocus: the rAF here
+    // raced Radix's own mount focus, which landed on the header's "Esc"
+    // button first.)
   }, [open])
 
   // Recompute ages while the modal is open so a borderline row ages into the
@@ -462,48 +470,68 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden">
+      <DialogContent
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
+        // IN-FLIGHT EXIT INVARIANT (steering note k3): while the batch close
+        // runs, NO path may hide the dialog — not Cancel (disabled below), not
+        // Escape, not an outside click. The old footer disabled Cancel while
+        // closing; the first DialogActions migration passed only `busy`, which
+        // disables the CONFIRM, so Cancel hid a destructive batch that was
+        // still killing agents and made the result look cancelled. Same model
+        // as Bulk Provider Switch: cancelDisabled + escapeCancels + these two
+        // guards.
+        onEscapeKeyDown={event => { if (closing) event.preventDefault() }}
+        onInteractOutside={event => { if (closing) event.preventDefault() }}
+        onOpenAutoFocus={event => {
+          // Focus the threshold: it is what the user came to change. Radix
+          // would otherwise focus the first tabbable node.
+          event.preventDefault()
+          inputRef.current?.focus()
+        }}
+      >
+        {/* Standard header (plan T3). The "Esc" BUTTON that sat here is gone:
+            it was a second, differently-styled Cancel that described a KEY
+            rather than an action — the footer's `Cancel ⎋` is the exit, and
+            the chip is where the key hint lives (plan H5). */}
+        <DialogHeader>
+          <DialogTitle>Close Old Agents</DialogTitle>
+          <DialogDescription>
+            Close agents and terminals that have been inactive past the threshold.
+            Running agents, terminals with a command in progress, and terminals
+            not observed since the app started are excluded unless explicitly
+            included.
+          </DialogDescription>
+        </DialogHeader>
         <div className="flex-shrink-0 border-b border-border px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <DialogTitle>Close Old Agents</DialogTitle>
-              <DialogDescription>
-                Close agents and terminals that have been inactive past the threshold.
-              </DialogDescription>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-control px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
-            >
-              Esc
-            </button>
-          </div>
-
-          <div className="mt-4 grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)] gap-3">
+          <div className="grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)] gap-3">
             <div>
               <label className="block text-[10px] uppercase tracking-wider text-muted">
                 Inactive for more than
               </label>
               <div className="mt-1 flex items-center gap-2">
-                <input
+                <Input
                   ref={inputRef}
                   type="number"
                   min="1"
                   step="1"
                   value={thresholdValue}
                   onChange={e => setThresholdValue(e.target.value)}
-                  className="rounded-control w-24 px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
+                  aria-label="Inactive for more than"
+                  // T4: `focus:border-accent` (any focus, accent colour) →
+                  // the input focus tokens on :focus-visible, like <Input>.
+                  className="w-24"
                 />
-                <select
+                <Select
                   value={thresholdUnit}
                   onChange={e => setThresholdUnit(e.target.value as ThresholdUnit)}
-                  className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
+                  aria-label="Threshold unit"
+                  
                 >
                   <option value="minutes">minutes</option>
                   <option value="hours">hours</option>
                   <option value="days">days</option>
-                </select>
+                </Select>
               </div>
               {!thresholdValid && (
                 <div className="mt-1 text-[10px] text-danger">
@@ -516,36 +544,20 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
               <div className="text-[10px] uppercase tracking-wider text-muted">
                 Project scope
               </div>
-              <div className="mt-1 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setScopeMode('all')}
-                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
-                    scopeMode === 'all'
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
-                  }`}
-                >
-                  All projects
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setScopeMode('selected')}
-                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
-                    scopeMode === 'selected'
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
-                  }`}
-                >
-                  Selected projects
-                </button>
-              </div>
+              {/* The shared segmented look (UI pass, G-10); toggle-button
+                  semantics as before (aria-pressed, each a Tab stop). */}
+              <SegmentedControl
+                className="mt-1"
+                label="Project scope"
+                value={scopeMode}
+                onChange={setScopeMode}
+                options={[{ value: 'all', label: 'All Projects' }, { value: 'selected', label: 'Selected Projects' }] as const}
+              />
               <label className="mt-3 flex items-center gap-2 text-[11px] text-ink-dim">
                 <input
                   type="checkbox"
                   checked={includeLive}
                   onChange={e => setIncludeLive(e.target.checked)}
-                  className="accent-current"
                 />
                 Include agents that are currently running
               </label>
@@ -560,30 +572,23 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 <div className="text-[11px] text-ink">Projects</div>
                 {scopeMode === 'selected' && (
                   <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={selectAllProjects}
-                      className="px-1.5 py-0.5 text-[10px] text-ink-dim hover:text-ink"
-                    >
-                      all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={clearProjects}
-                      className="px-1.5 py-0.5 text-[10px] text-ink-dim hover:text-ink"
-                    >
-                      clear
-                    </button>
+                    <Button type="button" variant="ghost" size="xs" onClick={selectAllProjects}>
+                      All
+                    </Button>
+                    <Button type="button" variant="ghost" size="xs" onClick={clearProjects}>
+                      Clear
+                    </Button>
                   </div>
                 )}
               </div>
               {scopeMode === 'selected' && projects.length > 8 && (
-                <input
+                <Input
                   type="text"
                   value={projectFilter}
                   onChange={e => setProjectFilter(e.target.value)}
-                  placeholder="Filter projects"
-                  className="rounded-control mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
+                  placeholder="Filter projects…"
+                  aria-label="Filter projects"
+                  className="mt-2"
                 />
               )}
             </div>
@@ -601,7 +606,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                       key={project.tabId}
                       className={`
                         flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0
-                        ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}
+                        ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-row-hover-bg'}
                       `}
                     >
                       <input
@@ -609,7 +614,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                         disabled={disabled}
                         checked={scopeMode === 'all' || selected}
                         onChange={() => toggleProject(project.tabId)}
-                        className="mt-0.5 accent-current disabled:opacity-50"
+                        className="mt-0.5 disabled:opacity-50"
                       />
                       <span className="min-w-0 flex-1">
                         {/* The Dispatch vocabulary (A · title), so this picker
@@ -687,9 +692,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
                       {row.livenessUnknown ? (
-                        <div className="text-[11px] text-warning" title="Not observed since the app started, so it may still be running a command. Wake it to check, or tick Include running to close it anyway.">
-                          not observed yet
-                        </div>
+                        // The guidance is VISIBLE (K2-20). It was only a hover
+                        // title on a non-focusable div, and it is the one
+                        // thing that tells the user how to proceed with this
+                        // row.
+                        <>
+                          <div className="text-[11px] text-warning">not observed yet</div>
+                          <div className="text-[10px] leading-snug text-muted">
+                            may still be running · wake it, or include running agents
+                          </div>
+                        </>
                       ) : row.isLive ? (
                         <div className="text-[11px] text-danger">running</div>
                       ) : null}
@@ -713,38 +725,26 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
           </div>
         </div>
 
-        <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
-          <div className="text-[10px] text-muted">
-            Running agents, terminals with a command in progress, and terminals not observed since the app started are excluded unless explicitly included.
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={closing}
-              className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void closeMatchingAgents()}
-              disabled={closing || matchingRows.length === 0 || !thresholdValid}
-              className={`rounded-control
-                px-3 py-1.5 text-[11px] border
-                ${matchingRows.length > 0 && thresholdValid
-                  ? 'border-danger-border bg-danger-soft text-danger hover:bg-danger-soft/80'
-                  : 'border-border text-muted opacity-60 cursor-not-allowed'}
-              `}
-            >
-              {closing
-                ? 'Closing…'
-                : liveMatchCount > 0
-                  ? `Close ${matchingRows.length} Agents, Including ${liveMatchCount} Running`
-                  : `Close ${matchingRows.length} Agent${matchingRows.length === 1 ? '' : 's'}`}
-            </button>
-          </div>
-        </div>
+        {/* DESTRUCTIVE and bulk (plan K1): no commit key. Focus opens in
+            the threshold field, and Enter there must never close a batch of
+            agents; the red button is Tab-then-Enter or a click. Cancel keeps
+            ⎋. The exclusion note that lived here moved into the header
+            description — a footer left slot is one truncating line. */}
+        <DialogActions
+          tone="danger"
+          confirmKey={null}
+          busy={closing}
+          confirmDisabled={matchingRows.length === 0 || !thresholdValid}
+          confirmLabel={
+            liveMatchCount > 0
+              ? `Close ${matchingRows.length} Agents, Including ${liveMatchCount} Running`
+              : `Close ${matchingRows.length} Agent${matchingRows.length === 1 ? '' : 's'}`
+          }
+          onConfirm={() => void closeMatchingAgents()}
+          onCancel={onClose}
+          cancelDisabled={closing}
+          escapeCancels={!closing}
+        />
       </DialogContent>
     </Dialog>
   )

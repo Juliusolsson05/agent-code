@@ -10,6 +10,10 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { Button } from '@renderer/components/ui/button'
+import { EmptyState } from '@renderer/components/ui/empty-state'
+import { Kbd } from '@renderer/components/ui/kbd'
+import { eventMatchesKeybinding } from '@shared/keybindings'
 import { DEFAULT_PROVIDER, isAgentProviderKind, isAgentSessionKind } from '@shared/types/providerKind'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 import {
@@ -24,6 +28,7 @@ import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
+import { clearReaderMessage, setReaderMessage } from '@renderer/features/reply-to-selection/lib/readerMessageStash'
 
 // ReaderView — single-message read mode for a focused session.
 //
@@ -41,6 +46,16 @@ import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 // which session they're reading without leaving Reader Mode.
 
 const REMARK_PLUGINS = [remarkGfm]
+
+// Reader's history keys, as canonical bindings. ONE definition drives both the
+// document listener and the chips on the Older/Newer buttons (plan H2: a chip
+// appears only where its key really acts). The buttons used to read "↑ Older"
+// / "↓ Newer" while the listener needed ⌥↑/⌥↓, so the hint taught a key that
+// did nothing; a plain arrow belongs to the scroller. These are Reader-local,
+// not commands in the keybinding catalog, so they are not rebindable and a
+// literal is the source of truth.
+const READER_OLDER_KEY = 'Alt+Up'
+const READER_NEWER_KEY = 'Alt+Down'
 
 // Markdown renderer pieces — mirrored from Feed.tsx so the typography
 // in Reader matches an assistant message in the normal feed exactly.
@@ -253,6 +268,18 @@ function ReaderBody({
   const canSelectNewer = selectedIndex >= 0 && selectedIndex < messages.length - 1
   const text = selectedMessage?.text ?? null
 
+  // Publish the selected message for "Reply to Reader Message" (K2-4; the
+  // stash has the WHY). A usage-limit notice is not quotable text, so it
+  // publishes nothing, the same as the article's data-quote-scope below.
+  // The message id is part of the key so moving Older/Newer republishes.
+  const publishedText = selectedMessage && !selectedMessage.notice && text ? text : null
+  const publishedId = selectedMessage?.id ?? null
+  useEffect(() => {
+    if (!publishedText || !publishedId) { clearReaderMessage(sessionId); return }
+    setReaderMessage({ sessionId, messageId: publishedId, text: publishedText })
+    return () => clearReaderMessage(sessionId)
+  }, [sessionId, publishedId, publishedText])
+
   // WHY selection is read through refs inside the keydown handler
   // instead of closing over `messages`/`selectedIndex` directly:
   //   messages recomputes on every semantic text delta (the live
@@ -330,13 +357,14 @@ function ReaderBody({
       // cannot protect the dialog from Reader. The mounted interaction-owner
       // marker is the shared synchronous source of truth for that priority.
       if (hasAppInteractionOwner()) return
-      if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
-      if (event.key === 'ArrowUp') {
+      // eventMatchesKeybinding requires the EXACT modifier set, so ⌥⇧↑ or
+      // ⌘⌥↑ still pass through to whatever else binds them.
+      if (eventMatchesKeybinding(event, READER_OLDER_KEY)) {
         event.preventDefault()
         selectOlder()
         return
       }
-      if (event.key === 'ArrowDown') {
+      if (eventMatchesKeybinding(event, READER_NEWER_KEY)) {
         event.preventDefault()
         selectNewer()
       }
@@ -413,8 +441,10 @@ function ReaderBody({
           </article>
         </div>
       ) : (
-        <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center text-muted text-[12px] font-code">
-          no assistant message yet
+        // The shared "nothing here" sentence (G-39): it was lowercase with no
+        // period. The flex box only centres it in the reading area.
+        <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center font-code">
+          <EmptyState>No assistant message yet.</EmptyState>
         </div>
       )}
       {/* Pane toast, rendered here as well as in TileLeaf.
@@ -462,32 +492,40 @@ function ReaderHeader({
           Reader
         </span>
         <div className="flex items-center gap-1">
-          <button
+          {/* Plain actions, so the shared outline Button (review C10 on
+              PR #1221). They were a hand-rolled bordered style whose hover
+              only moved the border, beside `Button outline` everywhere else.
+              The pills' own padding (py-1, 11px, h-auto), not the xs 24px
+              height, keeps them level with the session pills to the right:
+              xs came out ~2px shorter than the pills' ~26px (round-2
+              review C). The pills stay bespoke because they are toggles
+              (G-9's exception list). */}
+          <Button
             type="button"
+            variant="outline"
+            size="xs"
+            className="h-auto gap-1.5 py-1 text-[11px]"
             onClick={onSelectOlder}
             disabled={!canSelectOlder}
-            className={`rounded-control px-2 py-1 text-[11px] font-code border ${
-              canSelectOlder
-                ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
-                : 'bg-canvas text-muted border-border opacity-50 cursor-default'
-            }`}
             aria-label="Show older assistant message"
+            aria-keyshortcuts="Alt+ArrowUp"
           >
-            ↑ Older
-          </button>
-          <button
+            Older
+            <Kbd binding={READER_OLDER_KEY} />
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="xs"
+            className="h-auto gap-1.5 py-1 text-[11px]"
             onClick={onSelectNewer}
             disabled={!canSelectNewer}
-            className={`rounded-control px-2 py-1 text-[11px] font-code border ${
-              canSelectNewer
-                ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
-                : 'bg-canvas text-muted border-border opacity-50 cursor-default'
-            }`}
             aria-label="Show newer assistant message"
+            aria-keyshortcuts="Alt+ArrowDown"
           >
-            ↓ Newer
-          </button>
+            Newer
+            <Kbd binding={READER_NEWER_KEY} />
+          </Button>
           <span className="px-2 text-[10px] font-code uppercase tracking-wider text-muted select-none">
             {position}
           </span>
@@ -502,8 +540,11 @@ function ReaderHeader({
                 <button
                   key={sessionId}
                   type="button"
+                  // Same as Spotlight's pills (N5): one pill is the agent being
+                  // read, which the accent fill alone never announced.
+                  aria-current={active ? 'true' : undefined}
                   onClick={() => workspace.setReaderModeSession(sessionId)}
-                  className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                  className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                     active
                       ? 'bg-accent text-accent-fg border-accent'
                       : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Input } from '@renderer/components/ui/input'
 
 /**
  * One extension-contributed setting row.
@@ -81,7 +82,7 @@ export function ExtensionSettingRow({ extensionId, settingId, valueType, default
       ) : null}
 
       {valueType === 'number' ? (
-        <input
+        <Input
           type="number"
           value={String(value)}
           onChange={event => {
@@ -90,17 +91,17 @@ export function ExtensionSettingRow({ extensionId, settingId, valueType, default
             // would reject it anyway, and clobbering the value mid-edit is hostile.
             if (Number.isFinite(parsed)) persist(parsed)
           }}
-          className="w-full border border-input-border bg-input-bg px-2 py-1.5 text-[13px] text-ink outline-none focus:border-input-border-focus"
+          
         />
       ) : null}
 
       {valueType === 'string' ? (
-        <input
+        <Input
           type="text"
           value={String(value)}
           onChange={event => persist(event.target.value)}
           spellCheck={false}
-          className="w-full border border-input-border bg-input-bg px-2 py-1.5 text-[13px] text-ink outline-none focus:border-input-border-focus"
+          
         />
       ) : null}
 

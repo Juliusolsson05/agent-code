@@ -5,9 +5,14 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Input } from '@renderer/components/ui/input'
+import { Kbd } from '@renderer/components/ui/kbd'
+import { sectionCycleTarget } from '@renderer/lib/sectionCycle'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
@@ -102,6 +107,16 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
     <div
       {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
       className="h-full min-h-0 min-w-0 bg-canvas"
+      // ⌘[ / ⌘] step categories from anywhere on the page (plan D5) — also
+      // the only category navigation on a window narrower than `md`, where
+      // the sidebar is hidden. Yields inside code editors and textareas.
+      onKeyDown={event => {
+        const ids: Array<SettingCategoryId | 'all'> = ['all', ...SETTING_CATEGORIES.map(category => category.id)]
+        const next = sectionCycleTarget(event, Math.max(0, ids.indexOf(selectedCategory)), ids.length)
+        if (next === null) return
+        event.preventDefault()
+        setSelectedCategory(ids[next]!)
+      }}
     >
       <div className="flex h-full min-h-0 min-w-0 border-t border-panel-border">
         <SettingsSidebar
@@ -118,8 +133,11 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
                 Search, browse, and change application defaults.
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={onClose}>
+            {/* Escape closes Settings (useKeybinds' focus-mode handler), so the
+                button says so (plan H2). Ghost, the close-only idiom (H5). */}
+            <Button variant="ghost" size="sm" onClick={onClose}>
               Close
+              <Kbd binding="Escape" />
             </Button>
           </div>
 
@@ -189,7 +207,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   )
 }
 
-function ThemeEditorModal({
+export function ThemeEditorModal({
   theme,
   onClose,
   onSave,
@@ -205,10 +223,24 @@ function ThemeEditorModal({
   // Tokyonight user into an unrecognizable palette the moment they saved. It
   // is also the ONLY way to reach built-in palette values at all — they exist
   // solely as CSS in [data-mode] blocks (see savedThemes.ts).
-  const [draft, setDraft] = useState(
+  const [initialDraft] = useState(
     () => theme?.json ?? stringifyCustomAppearance(readAppliedAppearance()),
   )
+  const [draft, setDraft] = useState(initialDraft)
   const [name, setName] = useState(theme?.name ?? '')
+  // The JSON draft is REAL typed input (B7's condition on plan D3): Escape,
+  // an outside click and Cancel all route through requestClose, which asks
+  // before discarding edits and closes at once when there are none.
+  const dirty = draft !== initialDraft || name !== (theme?.name ?? '')
+  const requestClose = async () => {
+    if (dirty && !(await requestConfirm({
+      title: 'Discard theme changes?',
+      description: 'The edited JSON and name will be lost.',
+      confirmLabel: 'Discard Changes',
+      tone: 'danger',
+    }))) return
+    onClose()
+  }
   const [view, setView] = useState<'json' | 'schema'>('json')
   const [error, setError] = useState<string | null>(null)
 
@@ -233,11 +265,15 @@ function ThemeEditorModal({
     <Dialog
       open
       onOpenChange={nextOpen => {
-        if (!nextOpen) onClose()
+        if (!nextOpen) void requestClose()
       }}
     >
-      <DialogContent className="flex h-[calc(100vh-3rem)] max-h-[760px] w-[calc(100vw-3rem)] max-w-4xl flex-col overflow-hidden border-popover-border bg-popover-bg p-0">
-        <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
+      {/* Sized to the window like Settings itself (an editor, not a form):
+          a deliberate non-preset width (plan T2). The standard surface and
+          header replace the popover/panel-header colours only this dialog
+          used (plan T3). */}
+      <DialogContent className="flex h-[calc(100vh-3rem)] max-h-[760px] w-[calc(100vw-3rem)] max-w-4xl flex-col overflow-hidden">
+        <DialogHeader className="flex items-center justify-between gap-3">
           <div>
             <DialogTitle>
               {theme ? 'Edit Theme' : 'New Theme'}
@@ -246,30 +282,23 @@ function ThemeEditorModal({
               Name your color scheme and define its application tokens as validated JSON.
             </DialogDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              onClick={() => setView(view === 'json' ? 'schema' : 'json')}
-              variant="secondary"
-              size="sm"
-            >
-              {view === 'json' ? 'Show Schema' : 'Show JSON'}
-            </Button>
-            <Button
-              type="button"
-              onClick={onClose}
-              variant="secondary"
-              size="sm"
-            >
-              Close
-            </Button>
-          </div>
-        </div>
+          {/* The header "Close" button that sat here is gone: a second exit
+              beside the footer's Cancel ⎋ (plan H5). */}
+          <Button
+            type="button"
+            onClick={() => setView(view === 'json' ? 'schema' : 'json')}
+            variant="ghost"
+            size="sm"
+            aria-pressed={view === 'schema'}
+          >
+            {view === 'json' ? 'Show Schema' : 'Show JSON'}
+          </Button>
+        </DialogHeader>
 
-        <div className="flex items-center gap-3 border-b border-panel-border px-4 py-3">
+        <div className="flex items-center gap-3 border-b border-border px-4 py-3">
           <label
             htmlFor="theme-name"
-            className="text-[11px] uppercase tracking-wider text-muted"
+            className="text-[10px] uppercase tracking-wider text-muted"
           >
             Name
           </label>
@@ -290,7 +319,7 @@ function ThemeEditorModal({
           />
         </div>
 
-        <div className="min-h-0 flex-1 px-4 py-4">
+        <div className="min-h-0 flex-1 px-4 py-3">
           {view === 'json' ? (
             <Textarea
               value={draft}
@@ -308,24 +337,23 @@ function ThemeEditorModal({
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-panel-border bg-panel-header-bg px-4 py-3">
-          <div className="min-w-0 text-[11px] text-danger">{error ?? ''}</div>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              Cancel
+        {/* ⌘↩ saves & applies (the JSON textarea owns plain Enter). Save a
+            Copy is only offered when editing — "save a copy" of a theme that
+            does not exist yet is just "save". The save error rides in the
+            left slot. */}
+        <DialogActions
+          confirmLabel="Save & Apply"
+          confirmKey="Cmd+Enter"
+          onConfirm={() => save(false)}
+          onCancel={() => void requestClose()}
+          extraActions={theme ? (
+            <Button type="button" variant="ghost" size="sm" onClick={() => save(true)}>
+              Save a Copy
             </Button>
-            {/* Only offered when editing — "save a copy" of a theme that does
-                not exist yet is just "save". */}
-            {theme ? (
-              <Button type="button" variant="secondary" onClick={() => save(true)}>
-                Save a copy
-              </Button>
-            ) : null}
-            <Button type="button" onClick={() => save(false)}>
-              Save &amp; apply
-            </Button>
-          </div>
-        </div>
+          ) : null}
+        >
+          {error ? <span className="text-danger">{error}</span> : null}
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )

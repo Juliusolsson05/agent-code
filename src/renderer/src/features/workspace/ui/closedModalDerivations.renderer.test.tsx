@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -154,6 +154,65 @@ describe('closed workspace modal derivations', () => {
   )
 })
 
+// Plan S13/S15: the bulk dialogs lost their header "Esc" BUTTON (a second
+// Cancel that named a key, and the node Radix focused on open), gained the
+// shared footer (Cancel ⎋), and advertise NO commit key on their batch
+// button — neither a bulk close nor a quota-spending bulk switch may be one
+// reflexive Enter away.
+describe('bulk dialogs: one exit, key chips, no key on the batch action', () => {
+  it.each([
+    { name: 'CloseOldAgentsModal', Component: CloseOldAgentsModal, confirm: /^Close \d+ Agent/ },
+    { name: 'BulkProviderSwitchModal', Component: BulkProviderSwitchModal, confirm: /^Switch / },
+  ])('$name', ({ Component, confirm }) => {
+    render(<Component open workspace={replaceRuntime(workspaceFixture(), false)} onClose={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Esc' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getByRole('button', { name: confirm }).querySelector('[data-slot="kbd"]')).toBeNull()
+  })
+
+  it('Close Old Agents cannot be hidden by Cancel or Escape while its close batch runs (steering note k3)', async () => {
+    const onClose = vi.fn()
+    const workspace = replaceRuntime(workspaceFixture(), false)
+    // The batch hangs on its first kill until we say so — the in-flight window.
+    let settle!: () => void
+    ;(workspace.closeSession as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(resolve => { settle = () => resolve(true) }),
+    )
+    render(<CloseOldAgentsModal open workspace={workspace} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: /^Close 1 Agent/ }))
+    const cancel = await screen.findByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.click(cancel)
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await act(async () => { settle?.() })
+  })
+
+  it('Close Old Agents says how to proceed with a terminal it has not observed (K2-20)', () => {
+    // A terminal whose foreground was never reported since launch is treated
+    // as possibly running. The "what now" guidance was only a hover title on
+    // a non-focusable cell.
+    const base = workspaceFixture()
+    const workspace = {
+      ...base,
+      state: { ...base.state, sessions: { agent: { ...base.state.sessions.agent!, kind: 'terminal' as const, lastUsedAt: Date.now() - 8 * 60 * 60 * 1000 } } },
+      runtimes: { agent: { ...emptyRuntime(), turnStartedAt: Date.now() - 8 * 60 * 60 * 1000 } },
+    } as unknown as Workspace
+    render(<CloseOldAgentsModal open workspace={workspace} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include agents that are currently running' }))
+    expect(screen.getByText('not observed yet')).toBeVisible()
+    expect(screen.getByText(/wake it, or include running agents/)).toBeVisible()
+    expect(screen.getByText('not observed yet').hasAttribute('title')).toBe(false)
+  })
+
+  it('Close Old Agents opens with focus in the threshold field', () => {
+    render(<CloseOldAgentsModal open workspace={replaceRuntime(workspaceFixture(), false)} onClose={vi.fn()} />)
+    expect(document.activeElement).toBe(screen.getByRole('spinbutton', { name: 'Inactive for more than' }))
+  })
+})
+
 describe('Agent Activity rows keep the keys on the highlighted row (#867 review)', () => {
   it('keeps the per-row close button out of the tab order and out of click focus', () => {
     // The keys act on the HIGHLIGHTED row from the list container. A row
@@ -164,7 +223,7 @@ describe('Agent Activity rows keep the keys on the highlighted row (#867 review)
     const workspace = replaceRuntime(workspaceFixture(), false)
     const mounted = render(<AgentActivityView open workspace={workspace} onClose={vi.fn()} />)
 
-    const close = screen.getByRole('button', { name: 'Close' })
+    const close = screen.getByRole('button', { name: 'Close terminal-perf' })
     expect(close.getAttribute('tabindex')).toBe('-1')
     // `false` = the default was prevented, which is what stops a real browser
     // moving focus to the button on click.
