@@ -49,6 +49,11 @@ export function WorktreeBadge({
 
   return (
     <span
+      // `text-white` is deliberate, not a missing token: the badge colour
+      // comes from worktreeBadgeColor's FIXED palette of dark shades, never
+      // a user colour, and every entry clears WCAG AA against white (lowest
+      // is #c026d3 at 4.71:1, checked in the UI pass, G-22). A palette
+      // addition must keep that true.
       className={`${widthClasses} truncate rounded-control px-1.5 py-[1px] text-[10px] font-code leading-none text-white`}
       style={{ backgroundColor: color ?? undefined }}
       title={title}
