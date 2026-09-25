@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
   UsageProviderSnapshot,
@@ -9,12 +9,12 @@ import type {
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { sectionCycleTarget } from '@renderer/lib/sectionCycle'
 import { useAppStore } from '@renderer/app-state/hooks'
 import {
   formatMoney,
@@ -166,18 +166,39 @@ export function UsageModal({ open, onClose }: Props) {
     void refresh(false)
   }, [open])
 
-  // Keyboard rail navigation: ↑/↓ move the selection; the rail is the only
-  // list-like element in the dialog, so the keys are unambiguous.
-  const onKeyDown = (event: React.KeyboardEvent) => {
+  // The provider rail is a vertical TABLIST (plan S34): each entry switches
+  // the detail pane, so it follows the APG tabs pattern — roving tabindex
+  // (one Tab stop for the whole rail), ↑↓ move AND select, Home/End jump,
+  // wrap at the ends (tabs are a cycle; plan D4's clamp is for lists).
+  // Before: every entry was its own Tab stop and the arrows moved the
+  // selection without moving focus, so the focus ring and the selection
+  // sat on different providers.
+  const railRefs = useRef(new Map<string, HTMLButtonElement>())
+  const activeIndex = Math.max(0, railEntries.findIndex(entry => entry.id === activeId))
+  const selectRailIndex = (index: number, focus: boolean) => {
+    const entry = railEntries[((index % railEntries.length) + railEntries.length) % railEntries.length]
+    if (!entry) return
+    setSelected(entry.id)
+    if (focus) railRefs.current.get(entry.id)?.focus()
+  }
+  const onRailKeyDown = (event: React.KeyboardEvent) => {
     if (railEntries.length === 0) return
-    const currentIndex = railEntries.findIndex(entry => entry.id === activeId)
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setSelected(railEntries[(currentIndex + 1) % railEntries.length].id)
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setSelected(railEntries[(currentIndex - 1 + railEntries.length) % railEntries.length].id)
-    }
+    const next =
+      event.key === 'ArrowDown' ? activeIndex + 1
+        : event.key === 'ArrowUp' ? activeIndex - 1
+          : event.key === 'Home' ? 0
+            : event.key === 'End' ? railEntries.length - 1
+              : null
+    if (next === null) return
+    event.preventDefault()
+    selectRailIndex(next, true)
+  }
+  // ⌘[ / ⌘] from ANYWHERE in the dialog (plan D5), without moving focus.
+  const onDialogKeyDown = (event: React.KeyboardEvent) => {
+    const target = sectionCycleTarget(event, activeIndex, railEntries.length)
+    if (target === null) return
+    event.preventDefault()
+    selectRailIndex(target, false)
   }
 
   return (
@@ -187,11 +208,18 @@ export function UsageModal({ open, onClose }: Props) {
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[88vh] w-[min(760px,calc(100vw-2rem))] flex-col">
-        <DialogHeader className="flex-row items-center justify-between gap-4">
+      <DialogContent
+        size="lg"
+        className="flex max-h-[88vh] flex-col"
+        // No footer, so the standard corner `× ⎋` is the exit (plan H5) — it
+        // replaces the lowercase "close" button that sat in the header.
+        showCloseButton
+        onKeyDown={onDialogKeyDown}
+      >
+        <DialogHeader className="flex flex-row items-center justify-between gap-4 pr-20">
           <div>
-            <DialogTitle className="font-semibold">Usage</DialogTitle>
-            <DialogDescription className="mt-0.5 text-[10px]">
+            <DialogTitle>Usage</DialogTitle>
+            <DialogDescription className="mt-0.5">
               {fetchedLabel
                 ? `${railEntries.length} providers · fetched ${fetchedLabel}`
                 : `${sources.length} providers`}
@@ -202,21 +230,16 @@ export function UsageModal({ open, onClose }: Props) {
               type="button"
               disabled={loading}
               onClick={() => void refresh(true)}
-              variant="secondary"
+              variant="ghost"
               size="sm"
               className="disabled:cursor-wait"
             >
-              refresh
+              Refresh
             </Button>
-            <DialogClose asChild>
-              <Button type="button" variant="secondary" size="sm">
-                close
-              </Button>
-            </DialogClose>
           </div>
         </DialogHeader>
 
-        <div className="overflow-auto p-4" onKeyDown={onKeyDown}>
+        <div className="overflow-auto px-4 py-3">
           {error ? (
             <div className="rounded-slab mb-3 border border-danger bg-danger/10 px-3 py-2 text-[11px] text-danger">
               {error}
@@ -242,24 +265,38 @@ export function UsageModal({ open, onClose }: Props) {
             </div>
           ) : (
             <div className="grid grid-cols-[200px_minmax(0,1fr)] gap-3">
-              <div className="flex flex-col gap-1 border-r border-border pr-3" role="listbox">
+              <div
+                className="flex flex-col gap-1 border-r border-border pr-3"
+                role="tablist"
+                aria-orientation="vertical"
+                aria-label="Providers"
+                onKeyDown={onRailKeyDown}
+              >
                 {railEntries.map(entry => {
                   const isActive = entry.id === activeId
                   const percent = entry.provider ? worstPercent(entry.provider) : null
                   return (
                     <button
                       key={entry.id}
+                      ref={element => {
+                        if (element) railRefs.current.set(entry.id, element)
+                        else railRefs.current.delete(entry.id)
+                      }}
                       type="button"
-                      role="option"
+                      role="tab"
                       aria-selected={isActive}
+                      tabIndex={isActive ? 0 : -1}
                       onClick={() => setSelected(entry.id)}
+                      // rounded-control, not rounded-chip: these are interactive
+                      // option rows (radius table), and at the Round corner tier
+                      // `chip` rendered each 200px entry as a stadium.
                       className={
                         isActive
-                          ? 'rounded-chip border border-border bg-surface-hi px-2 py-1.5 text-left text-[11px] text-ink'
-                          : 'rounded-chip border border-transparent px-2 py-1.5 text-left text-[11px] text-muted hover:bg-surface-hi'
+                          ? 'rounded-control border border-border bg-row-selected-bg px-2 py-1.5 text-left text-[11px] text-ink outline-none focus-visible:ring-1 focus-visible:ring-focus-ring'
+                          : 'rounded-control border border-transparent px-2 py-1.5 text-left text-[11px] text-muted outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring'
                       }
                     >
-                      <span className="font-semibold">{providerLabel(entry.id)}</span>
+                      <span className="font-medium">{providerLabel(entry.id)}</span>
                       <span
                         className={`ml-2 ${entry.provider ? railToneClass(entry.provider) : 'text-muted'}`}
                       >

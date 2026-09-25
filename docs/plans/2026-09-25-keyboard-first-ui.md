@@ -165,8 +165,10 @@ the PR body lists them.
 4. **List edges** — *Default: lists clamp at the ends, menus wrap* (WAI-ARIA
    APG listbox vs menu). Today 14 lists clamp and 7 wrap (PathInput,
    placement overlay, Usage rail, Explorer menu, lane ⌥↑↓, sort menu); the
-   two wrapping LISTS (PathInput, placement, Usage rail) change to clamp;
-   lane ⌥↑↓ is a workspace grammar, not a list, and keeps wrapping.
+   two wrapping LISTS (PathInput, placement) change to clamp; the Usage rail
+   turned out to be a vertical TABLIST (it switches the detail pane) and
+   keeps wrapping, as tabs do; lane ⌥↑↓ is a workspace grammar, not a list,
+   and keeps wrapping.
    Alternative: wrap everywhere.
 5. **Sections/tabs inside a dialog** (Settings, Usage rail, Analytics,
    Performance, Remote) — *Default: ⌘[ / ⌘] cycle sections from anywhere in
@@ -439,7 +441,7 @@ entry when it lands.
 | S31 | McpServerDialog | textarea autoFocus; `max-w-2xl` no-op (renders 520) | size md; ⌘↵ confirm chip | done |
 | S32 | AddSkillDialog | Enter = find; square inputs/cards | T1 tokens; legend (↵ find); DialogActions | done |
 | S33 | ReportHistoryModal | no keys; outline Close | Close ⎋ ghost; scroller focus T4 | done |
-| S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | todo |
+| S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | done |
 | S35 | AgentAnalyticsModal | "close" button; p-4 | as S34 | todo |
 | S36 | KeyVaultModal | Enter in inputs; window.confirm; prose footer | ConfirmDialog; Close ⎋ | todo |
 | S37 | RemotePanel | ✕ raw button gets focus | Close ⎋; T3 | todo |
@@ -726,6 +728,12 @@ Sharp corners and one light theme.
 - **S41 Workflow History:** body inset px-4 (was p-3); "Show 50 More" is the
   standard outline button; corner `× ⎋` (this dialog has no footer — the
   rule: a corner close only where no footer exists).
+- **S34 Usage (⌘⇧U):** the header's lowercase "refresh"/"close" became a
+  ghost `Refresh` and the corner `× ⎋`; the provider rail is one Tab stop —
+  ↑↓ move the focus ring AND the selection together, Home/End jump — and
+  ⌘[ / ⌘] switch provider from anywhere; rail entries use the control radius
+  (were pill-shaped at Round corners) and the row-highlight colours; body
+  py-3; title not semibold; 860 wide.
 
 ## Tasks
 
@@ -800,6 +808,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S34: Usage rail → APG vertical tablist (roving tabindex,
+  arrows move focus + selection, wrap), `lib/sectionCycle.ts` for D5 ⌘[/⌘]
+  (yields in textarea/Monaco/contenteditable per B7; unit-tested), corner
+  close replaces the header "close". Ruling: the rail wraps (tablist, not a
+  list) — D4 text corrected. Confirm-red: the 2 new tests and the updated
+  role test fail on the pre-change file.
 - 2026-09-25 S33/S41: history viewers — Report History focuses a tabbable
   scroller + close-only footer; Workflow History anatomy padding, md
   preset, Button for Show More (label title-cased; test updated). Rule
