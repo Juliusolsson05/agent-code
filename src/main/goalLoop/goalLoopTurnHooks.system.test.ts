@@ -159,7 +159,8 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     // Unknown is not "nothing running". Both shapes reach the loop as a Stop
     // (a missed turn end stalls the loop, #1028), and before this the host
     // turned each into a report that released the hold into the very gap it
-    // protects: a body that did not parse, and a list with no readable entry.
+    // protects: a body that did not parse, a list with no readable entry,
+    // and a list with only SOME readable entries.
     const recorded = JSON.parse(readFileSync(
       new URL('../../../testing/fixtures/goal-loop-stop-hooks/claude-2.1.282.json', import.meta.url), 'utf8',
     )) as Record<string, unknown>
@@ -171,6 +172,13 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
 
     await hook(config!, 'user-prompt-submit')
     await hook(config!, 'stop', { session_id: 'claude-session', background_tasks: [{ type: 7 }, null] })
+    // A PARTLY readable list is unknown too: the readable monitor alone would
+    // not hold, and the unreadable entry may be the workflow still running.
+    await hook(config!, 'user-prompt-submit')
+    await hook(config!, 'stop', {
+      session_id: 'claude-session',
+      background_tasks: [{ type: 'monitor', status: 'running' }, { type: 'workflow', status: null }],
+    })
     const unparseable = await fetch(`${config!.tldrHooks!.baseUrl}/stop`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${config!.bearerToken}` },

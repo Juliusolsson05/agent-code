@@ -129,11 +129,14 @@ function readBackgroundTasks(input: unknown): Array<{ type: string; status: stri
       ? [{ type: (task as { type: string }).type, status: (task as { status: string }).status }]
       : []
   ))
-  // WHY a list with entries but none readable is unknown, not empty (#1224
-  // review): `[]` releases the loop's hold, so coercing an unreadable report
-  // to "nothing running" types the continuation into the gap the hold exists
-  // for. 2.1.282 always sets both strings, so this only guards a future shape.
-  return raw.length > 0 && tasks.length === 0 ? undefined : tasks
+  // WHY ANY unreadable entry makes the whole report unknown (#1224 review,
+  // steering note q5): the loop holds only while some entry wakes the agent,
+  // so dropping an entry it cannot read can turn "a workflow is still
+  // running" into "only a monitor is running", which releases the hold into
+  // the gap it exists for. Unknown keeps the last report, and that report's
+  // own 45-minute window still bounds it. 2.1.282 always sets both strings,
+  // so this only guards a future or corrupted shape.
+  return tasks.length === raw.length ? tasks : undefined
 }
 
 export class BuiltInMcpHttpHost {
