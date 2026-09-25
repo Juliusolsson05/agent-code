@@ -14,8 +14,21 @@ vi.mock('@main/workspaceDirectory.js', async () => (await import('./testing/open
 vi.mock('@main/setup/toolchain.js', async () => (await import('./testing/opencodeTerminalMainStandIns')).toolchainStandIn)
 vi.mock('@main/performance/PerformanceService.js', async () => (await import('./testing/opencodeTerminalMainStandIns')).performanceServiceStandIn)
 vi.mock('@main/storage/feedDebugLog.js', async () => (await import('./testing/opencodeTerminalMainStandIns')).feedDebugLogStandIn)
+// The session wires `resolveOpencodeDbPath` itself (the app owns every child
+// process, so the package asks the app to re-run `opencode db path`). A pane
+// that launched dark recovers through exactly this call, so the late-recovery
+// case below controls when it starts answering. Every other case in this file
+// passes its database through the launch and never calls it.
+const dbPathResolver = vi.hoisted(() => ({ answer: null as string | null }))
+vi.mock('opencode-terminal-headless', async importOriginal => ({
+  ...(await importOriginal<typeof import('opencode-terminal-headless')>()),
+  resolveOpencodeDbPath: async () => {
+    if (dbPathResolver.answer === null) throw new Error('opencode db path exited with code 1')
+    return dbPathResolver.answer
+  },
+}))
 
-import { loadLiveFixture, type LiveFixture } from 'opencode-terminal-headless/testing'
+import { loadLiveFixture, playReplay, type LiveFixture } from 'opencode-terminal-headless/testing'
 
 import { managedTranscriptUnavailableReason } from '@renderer/workspace/agentManagementMcp'
 import { hydrateTranscriptWithoutWaking } from '@renderer/workspace/hook/actions/hydrateTranscript'
@@ -235,9 +248,85 @@ describe('an OpenCode Terminal pane whose server never came up (#881)', () => {
       })
     })
 
-    expect(pane.runtime().transcriptError).toContain(code)
+    // `db_path_recovered_late` also starts the #1117 heal (a history reload),
+    // so its transcriptError is the reload's to settle; the case below pins
+    // where that ends. What both codes share, and what this case is about, is
+    // that neither ever reaches the lifetime banner.
+    if (code === 'db_path_retrying') expect(pane.runtime().transcriptError).toContain(code)
     expect(pane.runtime().transcriptChannelError).toBeFalsy()
   })
+
+  it('heals the rows committed while the database path was unavailable (#1117)', async () => {
+    // The package opens the channel late and positions it at the database's
+    // CURRENT head, so every row the TUI committed while the pane was dark
+    // counts as already seen and is never emitted: the prompt and its answer
+    // are simply missing. The package cannot tell those rows from last
+    // week's; the app can, because a history read dedupes by uuid against
+    // what the pane already holds. So `db_path_recovered_late` is answered
+    // with one, and the pane ends whole instead of telling the user to reload.
+    const recording = loadLiveFixture('plain.json')
+    dbPathResolver.answer = null
+    const pane = await panes.startRecordedPane(recording, { lateDatabase: { retryDelaysMs: Array(400).fill(25) } })
+    const history = scope.serveHistoryFrom(pane.dbPath!)
+    try {
+      // The whole recorded turn is committed while the channel is dark.
+      await playReplay(pane.script, pane.writer!, pane.server)
+      expect(pane.runtime().entries.filter(entry => entry.type === 'user')).toHaveLength(0)
+
+      dbPathResolver.answer = pane.dbPath
+      await waitFor(() => pane.runtime().transcriptError?.includes('db_path_recovered_late') === true
+        || history.loadInitialHistory.mock.calls.length > 0, 'the late recovery')
+      await waitFor(() => pane.runtime().entries.some(entry => entry.type === 'user'), 'the dark-window prompt')
+
+      const userTexts = pane.runtime().entries
+        .filter(entry => entry.type === 'user')
+        .map(entry => JSON.stringify(entry.message))
+      expect(userTexts.some(text => text.includes(recording.prompts[0]!.text))).toBe(true)
+      // Healed means healed: no error left standing over a whole transcript,
+      // and no lifetime banner at any point.
+      await waitFor(() => pane.surfaces().transcriptStatus === 'ready', 'ready after the heal')
+      expect(pane.runtime().transcriptChannelError).toBeFalsy()
+      // The diagnostic did reach the pane (the heal's synchronous `loading`
+      // write replaces it in the same dispatch, so it is never painted), and
+      // it healed exactly once.
+      expect(pane.channels).toContain('session:jsonl-error')
+      expect(history.loadInitialHistory).toHaveBeenCalledTimes(1)
+    } finally {
+      dbPathResolver.answer = null
+    }
+  }, 20_000)
+
+  it('keeps saying rows are missing when the heal itself cannot read the history (#1229 review)', async () => {
+    // A failed heal leaves the dark-window rows missing for the life of the
+    // pane, and the next committed row would otherwise write `ready` over the
+    // load's error. The recovered-late message is the true one, so it becomes
+    // the lifetime banner.
+    const recording = loadLiveFixture('plain.json')
+    dbPathResolver.answer = null
+    const pane = await panes.startRecordedPane(recording, { lateDatabase: { retryDelaysMs: Array(400).fill(25) } })
+    scope.serveHistoryFrom({ error: 'opencode db path exited with code 1' })
+    try {
+      await playReplay(pane.script, pane.writer!, pane.server)
+      dbPathResolver.answer = pane.dbPath
+      await waitFor(() => pane.runtime().transcriptChannelError?.includes('db_path_recovered_late') === true, 'the lifetime banner')
+      expect(pane.surfaces().transcriptStatus).toBe('error')
+      expect(pane.runtime().transcriptChannelError).toContain("missing from this pane's transcript")
+
+      // #1229 review, round 2: a later read that succeeds (a retry, a reload,
+      // a parent's hydrate) has the dark-window rows, so the banner's claim
+      // is now false and must not keep the pane "unavailable" to parents.
+      scope.serveHistoryFrom(pane.dbPath!)
+      await act(async () => {
+        await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
+      })
+      expect(pane.runtime().entries.some(entry => entry.type === 'user')).toBe(true)
+      expect(pane.runtime().transcriptChannelError).toBeFalsy()
+      expect(pane.surfaces().transcriptStatus).toBe('ready')
+      expect(managedTranscriptUnavailableReason(pane.runtime(), pane.meta)).not.toBe('transcript_unavailable')
+    } finally {
+      dbPathResolver.answer = null
+    }
+  }, 20_000)
 
   it('is not cleared by a live-state that is still DOWN', async () => {
     // Only a connection clears this. A `connected: false` diagnostic is the

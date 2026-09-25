@@ -84,6 +84,24 @@ function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
   }
 }
 
+/**
+ * The lifetime channel error that survives a SUCCESSFUL history read.
+ *
+ * WHY the late-recovery banner is the exception (#1229 review, round 2):
+ * OpenCode's `db_path_recovered_late` says rows committed while the database
+ * path was unavailable are missing, and when the heal read fails that is set
+ * as the lifetime banner (useIpcSubscriptions). A later read that succeeds —
+ * a retry, a reload, a parent's hydrate — has now read those rows, so the
+ * banner's claim is false; keeping it left Agent Status and every parent's
+ * `transcript_unavailable` over a complete transcript. Every other channel
+ * error describes the live channel, which a snapshot cannot certify, and
+ * stays.
+ */
+function channelErrorAfterRead(error: string | null | undefined): string | null {
+  if (!error) return null
+  return error.includes('(db_path_recovered_late)') ? null : error
+}
+
 export async function loadInitialHistoryForSession({
   sessionId,
   refs,
@@ -443,9 +461,12 @@ export async function loadInitialHistoryForSession({
           // The projection can remain readable after the event reader stops
           // for good. Snapshot success repairs a history failure only; it
           // cannot certify ongoing observation or follow TUI navigation.
-          transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+          // The one lifetime banner a successful read DOES disprove is the
+          // late-recovery hole (channelErrorAfterRead).
+          transcriptStatus: channelErrorAfterRead(current.transcriptChannelError) ? 'error' : 'ready',
           transcriptStatusChangedAt: Date.now(),
-          transcriptError: current.transcriptChannelError ?? null,
+          transcriptError: channelErrorAfterRead(current.transcriptChannelError),
+          transcriptChannelError: channelErrorAfterRead(current.transcriptChannelError),
           workActivity,
           workContext,
           toolUseIndex,

@@ -63,6 +63,7 @@ import {
   type CommittedSeenLedger,
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   ghostsFromSemanticTurn,
@@ -897,6 +898,38 @@ export function useIpcSubscriptions(
         transcriptError: message,
         ...((channelStopped || sessionSwitched || serverUnreachable) ? { transcriptChannelError: message } : {}),
       })
+      // #1117. The late-opened channel is positioned at the database's
+      // current head, so everything the TUI committed while the path was
+      // unavailable counts as already seen and is never emitted. The package
+      // cannot heal that — it cannot tell a dark-window row from last week's —
+      // but a history read can: it admits only uuids this pane does not hold
+      // and places them in order around the rows it does (placeHistoryEntries).
+      // So the reload the message asks the user for is done here, once, the
+      // moment the channel is readable again. A load that succeeds writes
+      // `ready` over this error (nothing set the lifetime banner above).
+      //
+      // WHY a failed heal raises the LIFETIME banner (#1229 review): the load
+      // writes its own error, but the next committed row on this now-working
+      // channel writes `ready` over any error that is not a channel error, so
+      // the pane went back to looking whole while the rows committed in the
+      // dark window were still missing. They stay missing until the user
+      // reloads, which is exactly what this message says, so it is the one
+      // that must stand.
+      if (message.includes('(db_path_recovered_late)')) {
+        void loadInitialHistoryForSession({ sessionId, refs, setRuntimes }).then(healed => {
+          if (healed) return
+          // Only onto a pane that still exists: updateRuntime would create an
+          // orphan runtime for one closed while the heal was in flight.
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            return {
+              ...prev,
+              [sessionId]: { ...current, transcriptStatus: 'error', transcriptError: message, transcriptChannelError: message },
+            }
+          })
+        })
+      }
     })
 
     // #881. The one diagnostic the renderer acts on, and the reason the
