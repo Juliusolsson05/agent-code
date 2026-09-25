@@ -403,7 +403,7 @@ entry when it lands.
 |---|---|---|---|---|
 | S1 | CloseConfirmationDialog (`workspace/ui`) | default focus Cancel; no Enter; no hints | DialogActions (danger, focus Cancel, chips); body px-4 (flush today) | done |
 | S2 | PinAgentsModal (`dispatch-pin`) | ↑↓ j/k Space Enter; bare `<kbd>` legend in body; p-5 | legend → DialogActions legend; useListNavigation; T3 anatomy + header | done |
-| S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | todo |
+| S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | done |
 | S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | todo |
 | S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | todo |
 | S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | todo |
@@ -566,6 +566,12 @@ Sharp corners and one light theme.
   tab chip is a capsule at 10px; End/Home/PgDn move on a long list; the
   highlight scrolls into view and does not jump when the list scrolls under
   a still mouse.
+- **S3 Reorder Tabs:** standard anatomy at 440 wide; footer legend reads
+  `↑ ↓ select  ↩ pick up` while browsing and `↑ ↓ move tab  ⎋ put down` with
+  a tab lifted; `Done` gains its ↩ chip only while a tab is lifted; the
+  lifted row stays solid accent, the cursor row is row-selected + 2px bar;
+  the per-row ↑/↓ buttons show an inset focus ring when tabbed to; a
+  "Tabs changed…" error shows in red in the footer's left slot.
 
 ## Tasks
 
@@ -640,6 +646,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S3: Reorder Tabs keeps its two-phase handler (a list hook
+  would not model pick/move), gains Home/End in both phases, phase-aware
+  legend and Done chip, standard anatomy. Confirm-red: all 3 new tests fail
+  on the pre-change file.
 - 2026-09-25 S2: usePinAgentsKeybinds composes useListNavigation (keeps
   its selection draft + Enter-commits-draft); modal on header/body/
   DialogActions with legend + counter in the footer. Confirm-red: End/Home/

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
-import { Button } from '@renderer/components/ui/button'
+import { DialogActions, focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { KbdLegend } from '@renderer/components/ui/kbd'
 import type { TabId } from '@renderer/workspace/types'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
@@ -65,7 +66,7 @@ export function ReorderTabsModal({
   )
 
   const moveCursor = useCallback(
-    (delta: -1 | 1) => {
+    (delta: number) => {
       setError(null)
       setCursorTabId(prevId => {
         const index = draftTabs.findIndex(tab => tab.id === prevId)
@@ -119,14 +120,15 @@ export function ReorderTabsModal({
   )
 
   const movePickedTab = useCallback(
-    (delta: -1 | 1) => {
+    (delta: number) => {
       if (!movingTabId) return
       setError(null)
       setDraftTabs(prev => {
         const index = prev.findIndex(tab => tab.id === movingTabId)
         if (index < 0) return prev
-        const nextIndex = index + delta
-        if (nextIndex < 0 || nextIndex >= prev.length) return prev
+        // Clamped, so Home/End (delta ±length) land the tab at an end.
+        const nextIndex = Math.max(0, Math.min(prev.length - 1, index + delta))
+        if (nextIndex === index) return prev
         const next = [...prev]
         const [tab] = next.splice(index, 1)
         next.splice(nextIndex, 0, tab)
@@ -194,9 +196,19 @@ export function ReorderTabsModal({
         } else {
           moveCursor(1)
         }
+        return
+      }
+      // Home/End (plan K5): jump the cursor to an end while browsing, or send
+      // the PICKED tab to the top/bottom while moving — "move this tab to
+      // the front" was N presses of ↑ before.
+      if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault()
+        const delta = (e.key === 'Home' ? -1 : 1) * draftTabs.length
+        if (movingTabId) movePickedTab(delta)
+        else moveCursor(delta)
       }
     },
-    [confirm, cursorIndex, cursorTabId, moveCursor, movePickedTab, movingTabId],
+    [confirm, cursorIndex, cursorTabId, draftTabs.length, moveCursor, movePickedTab, movingTabId],
   )
 
   return (
@@ -222,12 +234,18 @@ export function ReorderTabsModal({
           event.preventDefault()
           setMovingTabId(null)
         }}
-        className="flex max-h-[80vh] w-[460px] max-w-[calc(100vw-64px)] flex-col p-5"
+        size="sm"
+        // Standard anatomy (plan T3) instead of the whole-content p-5 card.
+        className="flex max-h-[80vh] flex-col"
       >
-        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Reorder Tabs</DialogTitle>
-        <DialogDescription className="sr-only">
-          Select a tab, then use arrow keys to move it. Enter confirms the order.
-        </DialogDescription>
+        <DialogHeader>
+          <DialogTitle>Reorder Tabs</DialogTitle>
+          <DialogDescription className="sr-only">
+            Select a tab, then use arrow keys to move it. Enter confirms the order.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
 
         {/* Roving focus: the rows left the tab order, so the cursor has to be
             announced rather than focused (#867 review). */}
@@ -238,6 +256,10 @@ export function ReorderTabsModal({
           className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas"
         >
           {draftTabs.map((tab, index) => {
+            // (row highlight: T7 — row-selected + 2px accent bar for the
+            // cursor; the PICKED row keeps solid accent, because "this tab is
+            // lifted and moving" is a different state from "the cursor is
+            // here" and must not look like a hover.)
             const cursor = tab.id === cursorTabId
             const moving = tab.id === movingTabId
             const active = tab.id === activeTabId
@@ -274,13 +296,13 @@ export function ReorderTabsModal({
                   if (movingTabId) setMovingTabId(tab.id)
                 }}
                 className={`
-                  min-w-0 flex-1 flex items-center gap-3 px-3 py-2 border-l-4
+                  min-w-0 flex-1 flex items-center gap-3 px-3 py-1.5 border-l-2
                   text-left
                   ${moving
                     ? 'border-l-accent bg-accent text-accent-fg'
                     : cursor
-                      ? 'border-l-accent text-ink bg-surface-hi'
-                      : 'border-l-transparent text-ink hover:bg-surface'}
+                      ? 'border-l-accent text-ink bg-row-selected-bg'
+                      : 'border-l-transparent text-ink hover:bg-row-hover-bg'}
                 `}
               >
                 <span className="w-6 flex-shrink-0 text-[10px] tabular-nums opacity-70">
@@ -304,7 +326,7 @@ export function ReorderTabsModal({
                   aria-label={`Move ${tab.title} up`}
                   disabled={index === 0}
                   onClick={() => moveTabById(tab.id, -1)}
-                  className="w-7 shrink-0 border-l border-border text-[11px] leading-none text-muted hover:bg-surface-hi hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+                  className="w-7 shrink-0 border-l border-border text-[11px] leading-none text-muted outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring disabled:opacity-30 disabled:hover:bg-transparent"
                 >
                   ↑
                 </button>
@@ -313,7 +335,7 @@ export function ReorderTabsModal({
                   aria-label={`Move ${tab.title} down`}
                   disabled={index === draftTabs.length - 1}
                   onClick={() => moveTabById(tab.id, 1)}
-                  className="w-7 shrink-0 border-l border-border text-[11px] leading-none text-muted hover:bg-surface-hi hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+                  className="w-7 shrink-0 border-l border-border text-[11px] leading-none text-muted outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring disabled:opacity-30 disabled:hover:bg-transparent"
                 >
                   ↓
                 </button>
@@ -322,26 +344,33 @@ export function ReorderTabsModal({
           })}
         </div>
 
-        <div className="mt-4 flex flex-shrink-0 items-center justify-between">
-          <div className="min-w-0 flex-1 truncate pr-3 text-[10px] text-muted tabular-nums">
-            {error ?? `${cursorIndex >= 0 ? cursorIndex + 1 : 0}/${draftTabs.length}`}
-          </div>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              onClick={onCancel}
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={confirm}
-            >
-              Done
-            </Button>
-          </div>
         </div>
+
+        {/* The legend follows the phase, because the same keys mean different
+            things in each (plan H3): browsing, ↑↓ move the cursor and Enter
+            PICKS; with a tab picked, ↑↓ move that tab and Escape puts it
+            down. Done's ↩ chip likewise appears only while a tab is picked —
+            before that, Enter picks rather than commits, and a chip claiming
+            otherwise would be a lie. confirmOnEnter is false because the
+            list's own handler owns Enter in both phases. */}
+        <DialogActions
+          confirmLabel="Done"
+          onConfirm={confirm}
+          onCancel={onCancel}
+          confirmOnEnter={false}
+          confirmKey={movingTabId ? 'Enter' : null}
+          legend={
+            <KbdLegend
+              items={movingTabId
+                ? [{ keys: ['Up', 'Down'], label: 'move tab' }, { keys: ['Escape'], label: 'put down' }]
+                : [{ keys: ['Up', 'Down'], label: 'select' }, { keys: ['Enter'], label: 'pick up' }]}
+            />
+          }
+        >
+          <span className={error ? 'text-danger' : 'tabular-nums'}>
+            {error ?? `${cursorIndex >= 0 ? cursorIndex + 1 : 0}/${draftTabs.length}`}
+          </span>
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )
