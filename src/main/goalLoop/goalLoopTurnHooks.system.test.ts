@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -131,6 +132,66 @@ describe('goal loop turn boundary through the real MCP host (#1024)', () => {
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
     await settle()
     expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for background work the real Stop payload reports, then continues on the Stop that clears it (#1138)', async () => {
+    // Unedited Stop bodies from Claude Code 2.1.282 (testing/fixtures/
+    // goal-loop-stop-hooks/), posted over real HTTP: the host must carry
+    // `background_tasks` through to the loop, which it used to drop.
+    const recorded = JSON.parse(readFileSync(
+      new URL('../../../testing/fixtures/goal-loop-stop-hooks/claude-2.1.282.json', import.meta.url), 'utf8',
+    )) as Record<string, unknown>
+    const { host, loops, deliver, hook } = await setup()
+    const [config] = host.registerSession({ sessionId: 's1', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await hook(config!, 'post-tool-use')
+    await hook(config!, 'stop', recorded.backgroundShellRunning)
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+
+    // The task-notification turn: its prompt, then its Stop with nothing left.
+    await hook(config!, 'user-prompt-submit')
+    await hook(config!, 'stop', recorded.nothingPending)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps holding through a Stop whose background report the host cannot read (#1224 review)', async () => {
+    // Unknown is not "nothing running". Both shapes reach the loop as a Stop
+    // (a missed turn end stalls the loop, #1028), and before this the host
+    // turned each into a report that released the hold into the very gap it
+    // protects: a body that did not parse, a list with no readable entry,
+    // and a list with only SOME readable entries.
+    const recorded = JSON.parse(readFileSync(
+      new URL('../../../testing/fixtures/goal-loop-stop-hooks/claude-2.1.282.json', import.meta.url), 'utf8',
+    )) as Record<string, unknown>
+    const { host, loops, deliver, hook } = await setup()
+    const [config] = host.registerSession({ sessionId: 's5', cwd: '/project', providerKind: 'claude', domains: ['goal_loop'] })
+    await loops.startLoop('s5', { goal: 'G.', loopPrompt: 'P.' })
+    await hook(config!, 'post-tool-use')
+    await hook(config!, 'stop', recorded.backgroundShellRunning)
+
+    await hook(config!, 'user-prompt-submit')
+    await hook(config!, 'stop', { session_id: 'claude-session', background_tasks: [{ type: 7 }, null] })
+    // A PARTLY readable list is unknown too: the readable monitor alone would
+    // not hold, and the unreadable entry may be the workflow still running.
+    await hook(config!, 'user-prompt-submit')
+    await hook(config!, 'stop', {
+      session_id: 'claude-session',
+      background_tasks: [{ type: 'monitor', status: 'running' }, { type: 'workflow', status: null }],
+    })
+    const unparseable = await fetch(`${config!.tldrHooks!.baseUrl}/stop`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${config!.bearerToken}` },
+      body: '{"session_id": "claude-session", "background_tasks": [',
+    })
+    expect(unparseable.status).toBe(200)
+    await settle()
+    expect(deliver).not.toHaveBeenCalled()
+
+    // A readable empty list is the real "nothing left", and releases it.
+    await hook(config!, 'user-prompt-submit')
+    await hook(config!, 'stop', recorded.nothingPending)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
   })
 
   it('does not treat a Stop that TLDR enforcement blocked as a turn end', async () => {

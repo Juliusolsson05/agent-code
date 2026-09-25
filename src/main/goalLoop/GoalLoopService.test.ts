@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +8,7 @@ import type { SessionManager } from '@main/sessionManager.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import { buildGoalLoopContinuationPrompt } from '@mcp/shared/goalLoopPrompt.js'
 import {
-  GOAL_LOOP_ACTIVITY_GRACE_MS, GOAL_LOOP_HOLD_STALL_MS, GOAL_LOOP_QUIET_TURN_MS, GoalLoopService,
+  GOAL_LOOP_ACTIVITY_GRACE_MS, GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS, GOAL_LOOP_HOLD_LIMIT_MS, GOAL_LOOP_HOLD_STALL_MS, GOAL_LOOP_QUIET_TURN_MS, GoalLoopService,
 } from './GoalLoopService.js'
 import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
@@ -26,7 +27,7 @@ async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as Pro
   const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver, getProcessStateSnapshot: () => processState }) as FakeManager
   const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') })
   await svc.start()
-  return { svc, manager, deliver, processState }
+  return { svc, manager, deliver, processState, storePath: join(directory, 'goal-loop.json') }
 }
 const idleTurn = (manager: FakeManager) => manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed' } })
 // The sequence the session's feed log recorded 4–60 ms before EVERY sampled
@@ -895,5 +896,195 @@ describe('GoalLoopService hook turns that end without a Stop (#1028 review)', ()
     pauseResume(svc)
     await vi.advanceTimersByTimeAsync(0)
     expect(deliver).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Real Stop hook bodies from Claude Code 2.1.282 (#1138), captured unedited
+// with a command Stop hook in headless runs. `background_tasks` is the CLI's
+// own "paused waiting for background work to wake it" signal.
+const recordedStops = JSON.parse(readFileSync(
+  new URL('../../../testing/fixtures/goal-loop-stop-hooks/claude-2.1.282.json', import.meta.url),
+  'utf8',
+)) as Record<'nothingPending' | 'backgroundShellRunning' | 'asyncSubagentRunning' | 'afterSubagentFinishedLeftoverShell', { background_tasks: Array<{ type: string; status: string }> }>
+
+describe('GoalLoopService and background work the agent is waiting on (#1138)', () => {
+  const stopWith = (svc: GoalLoopService, body: { background_tasks?: Array<{ type: string; status: string }> }) =>
+    svc.observeProviderHook('s1', 'stop', { blocked: false, backgroundTasks: body.background_tasks })
+
+  it('holds the continuation while a background shell the agent launched is running', async () => {
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.backgroundShellRunning)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    // Observed live 2026-09-22: continuations delivered here got "still
+    // waiting" and burned the budget.
+    expect(deliver).not.toHaveBeenCalled()
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+
+    // The task-notification wakes the agent; that turn's Stop has nothing left.
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.nothingPending)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('holds for an async subagent too', async () => {
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.asyncSubagentRunning)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
+  it('continues as before when the CLI does not report background work at all', async () => {
+    // An older CLI sends no field. Missing means unknown, not "none", and
+    // unknown keeps today's behaviour.
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, {})
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not hold on a monitor_mcp/monitor_ws task, which never finishes', async () => {
+    // The CLI names those two task kinds "monitor" on the wire. The Monitor
+    // TOOL is not one of them: it arrives as "shell" (see the persistent
+    // monitor case below).
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, { background_tasks: [{ type: 'monitor', status: 'running' }] })
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  // Every wire name the loop holds on, spelled as 2.1.282's own type map
+  // spells it (local_workflow→"workflow", mcp_task→"MCP task"), and the
+  // "pending" status the CLI's filter also emits. A typo in any of them
+  // degrades silently to no hold, so each is pinned here.
+  it.each([
+    ['workflow', 'running'],
+    ['MCP task', 'running'],
+    ['shell', 'pending'],
+  ])('holds for a %s task that is %s', async (type, status) => {
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, { background_tasks: [{ type, status }] })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
+  it('keeps holding when the notification turn ends with a leftover shell still running', async () => {
+    // The recorded case: the subagent's notification turn ended while a shell
+    // the agent had started earlier was still listed. Each Stop REPLACES the
+    // report, so the hold survives until a Stop lists nothing.
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.asyncSubagentRunning)
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.afterSubagentFinishedLeftoverShell)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(deliver).not.toHaveBeenCalled()
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.nothingPending)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps the hold when a Stop arrives without a readable report', async () => {
+    // An unparseable Stop body is forwarded blind so the turn end is not
+    // missed. Reading it as "nothing running" typed the continuation into
+    // the very gap the hold protects (#1224 review).
+    const { svc, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.backgroundShellRunning)
+    stopWith(svc, {})
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
+  it('drops the hold when the process dies, so a restarted session is not born held', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    stopWith(svc, recordedStops.backgroundShellRunning)
+    manager.emit('exit', { sessionId: 's1' })
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
+    svc.control('s1', { action: 'resume' })
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+  })
+
+  describe('bounded by GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS', () => {
+    let warn: ReturnType<typeof vi.spyOn>
+    afterEach(() => { vi.useRealTimers(); warn.mockRestore() })
+
+    it('waits out a long background agent without a silence pause', async () => {
+      // Background implementers routinely run 20–40 minutes with no turn in
+      // between. A stall pause would leave the loop paused when the
+      // notification turn arrives, so nothing would continue it.
+      const { svc, deliver } = await service()
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers()
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      stopWith(svc, recordedStops.asyncSubagentRunning)
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_HOLD_STALL_MS + 5 * 60_000)
+      expect(deliver).not.toHaveBeenCalled()
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+    })
+
+    it('keeps an unattended loop moving beside a shell that never ends (a persistent Monitor)', async () => {
+      // The Monitor tool is a local_bash task, so 2.1.282 reports it as
+      // "shell" with no kind: the loop cannot tell it from a build. Under the
+      // absolute limit alone this parked the loop for two hours, paused it as
+      // an error, and re-parked it after every Resume. Now each report
+      // expires, a continuation lands (at worst the agent says "still
+      // waiting" once), and the loop never pauses.
+      const persistentMonitor = { background_tasks: [{ type: 'shell', status: 'running' }] }
+      const { svc, deliver, storePath } = await service()
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers()
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      stopWith(svc, persistentMonitor)
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS - 60_000)
+      expect(deliver).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(2 * 60_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+      // The delivery persists the loop with real file I/O, which fake timers
+      // never advance; until it lands the service parks new triggers. Let it
+      // finish, as it would in the minutes a real turn takes.
+      await vi.waitFor(() => expect(readFileSync(storePath, 'utf8')).toMatch(/"continuationsDelivered":\s*1/))
+
+      // The continuation's own turn ends with the monitor still listed: a
+      // fresh window, not an immediate second prompt, and still no pause.
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      stopWith(svc, persistentMonitor)
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS - 60_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2 * 60_000)
+      expect(deliver).toHaveBeenCalledTimes(2)
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+    })
+
+    it('stops exempting a later silent turn from the stall pause once the report expires', async () => {
+      // The notification turn starts and then ends through Esc or an API
+      // error, which fire no Stop. The report is stale, and it used to keep
+      // suppressing the 30-minute silence pause until the 2-hour limit.
+      const { svc } = await service()
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers()
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      stopWith(svc, recordedStops.backgroundShellRunning)
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      svc.observeProviderHook('s1', 'user-prompt-submit')
+      await vi.advanceTimersByTimeAsync(GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS)
+      expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' })
+      expect(GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS + 10 * 60_000).toBeLessThan(GOAL_LOOP_HOLD_LIMIT_MS)
+    })
   })
 })
