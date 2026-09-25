@@ -4,6 +4,10 @@ export type ComposerEnterTargetHandle = {
   focused: boolean
   hovered: boolean
   hasSubmittableDraft: () => boolean
+  /** True while a pane-scoped dialog covers this composer (#713). A blocked
+   *  composer is never an Enter target, hovered or focused: its draft is under
+   *  a scrim, behind a prompt that is waiting for an answer. */
+  blocked?: () => boolean
   focus: () => void
   submit: () => void
 }
@@ -74,7 +78,8 @@ function pickTarget(): ComposerEnterTargetHandle | null {
     // once the pointer is over a composer, Enter should apply to that composer
     // or to nothing. Submitting some other focused pane would make hover intent
     // feel like a trap, especially when speech-to-text left a draft elsewhere.
-    if (target.hovered) return target.hasSubmittableDraft() ? target : null
+    if (target.hovered) return target.hasSubmittableDraft() && !target.blocked?.() ? target : null
+    if (target.blocked?.()) continue
     if (!target.hasSubmittableDraft()) continue
     if (!focused && target.focused) focused = target
   }

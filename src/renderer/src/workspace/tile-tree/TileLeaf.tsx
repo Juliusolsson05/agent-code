@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { paneHasInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { PaneDialogHostProvider } from '@renderer/components/ui/pane-dialog'
 import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
@@ -124,7 +126,17 @@ export function TileLeaf({
   showWorktreeBadges = true,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const paneRef = useRef<HTMLDivElement>(null)
+  const paneRef = useRef<HTMLDivElement | null>(null)
+  // The same node as paneRef, held in STATE for the pane-dialog host (#713):
+  // a condition dialog portals into it, and a ref alone would not re-render
+  // the host once the node exists, so a prompt present at first mount would
+  // never appear.
+  const [paneElement, setPaneElement] = useState<HTMLDivElement | null>(null)
+  const setPaneNode = useCallback((node: HTMLDivElement | null) => {
+    paneRef.current = node
+    setPaneElement(node)
+  }, [])
+  const focusComposer = useCallback(() => inputRef.current?.focus(), [])
   const { showToast } = useGlobalToast()
   // Session input goes through the injected SessionFeed (not window.api):
   // the send path below is the composer submit for a REAL agent session, and
@@ -735,6 +747,7 @@ export function TileLeaf({
     return registerComposerEnterTarget({
       focused: interactive,
       hovered: composerHovered,
+      blocked: () => paneHasInteractionOwner(inputRef.current),
       hasSubmittableDraft: () => {
         // Slash mode is PTY-owned: Enter commits Claude Code's highlighted
         // slash command, not Agent Code's normal prompt submit. The textarea
@@ -842,10 +855,13 @@ export function TileLeaf({
     // first in DOM order — the Spotlight one, because MainSurface renders the
     // takeover surface BEFORE the retained workspace. Keep that order.
     <div
-      ref={paneRef}
+      ref={setPaneNode}
       data-pane-id={sessionId}
+      // `relative`: the containing block for pane-scoped condition dialogs
+      // and their scrim (#713). The pane fills its lane exactly, so this
+      // changes no descendant's position box.
       className={`
-        flex flex-col h-full min-h-0 min-w-0
+        relative flex flex-col h-full min-h-0 min-w-0
         border ${focused ? 'border-accent' : 'border-border'}
         bg-canvas
       `}
@@ -945,6 +961,10 @@ export function TileLeaf({
         </div>
       )}
 
+      {/* Pane-scoped: every modal condition view (trust, permission,
+          questions) renders inside THIS pane instead of taking over the app
+          (#713). See components/ui/pane-dialog.tsx for the keyboard contract. */}
+      <PaneDialogHostProvider container={paneElement} active={interactive} restoreFocus={focusComposer}>
       <ProviderConditionOutlet
         sessionId={sessionId}
         conditions={feedModel.normalizedConditions}
@@ -974,6 +994,7 @@ export function TileLeaf({
         }}
         interactionActive={interactive}
       />
+      </PaneDialogHostProvider>
 
       <PaneToast message={runtime.paneToast} />
 

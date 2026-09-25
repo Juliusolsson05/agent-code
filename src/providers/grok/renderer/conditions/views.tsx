@@ -56,7 +56,7 @@ function ConditionButtons({
   actions: ConditionAction[]
   dispatch: (action: ConditionAction) => Promise<void>
 }) {
-  // autoFocus the first non-destructive action so Enter accepts, not cancels —
+  // Initially focus the first non-destructive action so Enter accepts, not cancels —
   // matches the trust-dialog convention.
   const firstPrimaryIdx = actions.findIndex(action => !isRejectAction(action))
   return (
@@ -67,7 +67,8 @@ function ConditionButtons({
           <Button
             key={action.kind === 'custom' ? action.id : `pty-${i}`}
             type="button"
-            autoFocus={i === firstPrimaryIdx}
+            // data-autofocus (not autoFocus): see pane-dialog.tsx (#713).
+            data-autofocus={i === firstPrimaryIdx ? '' : undefined}
             onClick={() => {
               void dispatch(action)
             }}
@@ -97,7 +98,7 @@ function ConditionShell({
   return (
     <Dialog open>
       <DialogContent
-        className="modal-pop w-[480px] max-w-[calc(100vw-64px)] p-6"
+        className="modal-pop w-[480px] max-w-[calc(100%-4rem)] p-6"
         onEscapeKeyDown={event => event.preventDefault()}
         onPointerDownOutside={event => event.preventDefault()}
       >

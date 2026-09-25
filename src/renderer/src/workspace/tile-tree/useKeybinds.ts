@@ -9,7 +9,7 @@ import type { BindingContext, CommandBindingDefault } from '@renderer/features/c
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
-import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { hasAppInteractionOwner, isInPaneInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import { selectVisibleDispatchRow } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -610,6 +610,12 @@ export function useKeybinds(
         if (shouldPreventOwnedApplicationShortcut(e)) e.preventDefault()
         return
       }
+      // A pane-scoped condition dialog (#713) owns the UNMODIFIED keys aimed
+      // inside it: Enter/Space on its buttons, Escape to decline, arrows,
+      // letters. Modified chords fall through on purpose. Unlike an app modal,
+      // the rest of the workspace is live, and ⌥↓ / ⌘T are how a keyboard user
+      // leaves a prompt waiting in this pane and goes on working elsewhere.
+      if (isInPaneInteractionOwner(e.target) && !cmd && !alt && !e.ctrlKey) return
       // Unified placement-overlay predicate — matches App.tsx's
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.

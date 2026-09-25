@@ -35,7 +35,7 @@ export function PermissionPromptModal({ state, onSend }: Props) {
       }}
     >
       <DialogContent
-        className="modal-pop w-[520px] max-w-[calc(100vw-64px)] p-6"
+        className="modal-pop w-[520px] max-w-[calc(100%-4rem)] p-6"
         onPointerDownOutside={event => {
           // A permission decision must be explicit. Escape is a documented
           // deny shortcut, but an accidental backdrop click must not send a
@@ -91,7 +91,9 @@ export function PermissionPromptModal({ state, onSend }: Props) {
           <Button
             type="button"
             onClick={approve}
-            autoFocus
+            // data-autofocus, not autoFocus: this modal may render pane-scoped
+            // in a background pane, where React autoFocus would steal focus (#713).
+            data-autofocus
           >
             approve
           </Button>

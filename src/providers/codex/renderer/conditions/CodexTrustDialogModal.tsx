@@ -44,7 +44,7 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
       if (!nextOpen) decline()
     }}>
       <DialogContent
-        className="modal-pop w-[480px] max-w-[calc(100vw-64px)] p-6"
+        className="modal-pop w-[480px] max-w-[calc(100%-4rem)] p-6"
         onPointerDownOutside={event => event.preventDefault()}
       >
         <div className="flex items-start gap-3 mb-4">
@@ -80,7 +80,9 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
           <Button
             type="button"
             onClick={accept}
-            autoFocus
+            // data-autofocus, not autoFocus: this modal may render pane-scoped
+            // in a background pane, where React autoFocus would steal focus (#713).
+            data-autofocus
           >
             trust directory
           </Button>

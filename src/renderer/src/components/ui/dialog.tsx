@@ -2,6 +2,11 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import * as React from 'react'
 
 import { Kbd } from '@renderer/components/ui/kbd'
+import {
+  PaneDialogContent,
+  PaneDialogContext,
+  PaneDialogHostContext,
+} from '@renderer/components/ui/pane-dialog'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import { cn } from '@renderer/lib/utils'
 
@@ -13,7 +18,27 @@ import { cn } from '@renderer/lib/utils'
 // logic. The previous modals each reimplemented a different subset and leaked
 // input into agent panes. We locally own the styling/composition source while
 // delegating those hard interaction mechanics to the focused primitive.
-const Dialog = DialogPrimitive.Root
+// Inside a PaneDialogHostProvider (TileLeaf's condition outlet) the dialog is
+// pane-scoped and Radix is not mounted at all: see pane-dialog.tsx for why
+// Radix's document-level layer cannot be used there (#713). Everywhere else
+// this is exactly Radix Root, as before.
+//
+// Pane mode supports the CONTROLLED shape the condition modals use (`open` +
+// `onOpenChange`). `open === false` renders nothing; an uncontrolled
+// `defaultOpen` dialog is not a pane-dialog use and is shown open.
+function Dialog(props: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  const host = React.useContext(PaneDialogHostContext)
+  const titleId = React.useId()
+  const descriptionId = React.useId()
+  const { onOpenChange } = props
+  const pane = React.useMemo(
+    () => ({ onOpenChange, titleId, descriptionId }),
+    [onOpenChange, titleId, descriptionId],
+  )
+  if (!host) return <DialogPrimitive.Root {...props} />
+  if (props.open === false) return null
+  return <PaneDialogContext.Provider value={pane}>{props.children}</PaneDialogContext.Provider>
+}
 const DialogTrigger = DialogPrimitive.Trigger
 const DialogClose = DialogPrimitive.Close
 
@@ -67,13 +92,50 @@ type DialogContentProps = React.ComponentPropsWithoutRef<
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, showCloseButton = false, size = 'default', ...props }, ref) => (
+>(({ className, children, showCloseButton = false, size = 'default', ...props }, ref) => {
+  const host = React.useContext(PaneDialogHostContext)
+  const pane = React.useContext(PaneDialogContext)
+  if (host && pane) {
+    // Radix-only props have no meaning without Radix's layer: outside
+    // interaction never dismisses a pane dialog, Escape is element-level, and
+    // initial focus follows `data-autofocus` (pane-dialog.tsx).
+    const {
+      onOpenAutoFocus: _openAutoFocus,
+      onCloseAutoFocus: _closeAutoFocus,
+      onEscapeKeyDown: _escape,
+      onPointerDownOutside: _pointerOutside,
+      onInteractOutside: _interactOutside,
+      onFocusOutside: _focusOutside,
+      forceMount: _forceMount,
+      ...rest
+    } = props
+    return (
+      <PaneDialogContent ref={ref} host={host} pane={pane} sizeClassName={dialogSizes[size]} className={className} {...rest}>
+        {children}
+      </PaneDialogContent>
+    )
+  }
+  const { onOpenAutoFocus, ...contentProps } = props
+  return (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
       data-slot="dialog-content"
-      {...props}
+      {...contentProps}
+      // `data-autofocus` names the initial control in BOTH modes. React's
+      // `autoFocus` cannot be used by anything that may render pane-scoped:
+      // it focuses on mount regardless, stealing focus from the pane the user
+      // is actually in (pane-dialog.tsx). Radix's own default (first
+      // tabbable) still applies when nothing is marked.
+      onOpenAutoFocus={event => {
+        onOpenAutoFocus?.(event)
+        if (event.defaultPrevented) return
+        const marked = (event.target as HTMLElement | null)?.querySelector?.<HTMLElement>('[data-autofocus]')
+        if (!marked) return
+        event.preventDefault()
+        marked.focus()
+      }}
       // WHY ownership lives on the primitive rather than every feature:
       // Content is mounted for exactly the interval in which Radix traps focus.
       // Global DOM and native-IPC input routers can synchronously query this
@@ -109,7 +171,8 @@ const DialogContent = React.forwardRef<
       ) : null}
     </DialogPrimitive.Content>
   </DialogPortal>
-))
+  )
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
@@ -143,27 +206,45 @@ DialogFooter.displayName = 'DialogFooter'
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Title
-    ref={ref}
-    data-slot="dialog-title"
-    className={cn('text-[13px] font-medium text-ink', className)}
-    {...props}
-  />
-))
+>(({ className, asChild: _asChild, ...props }, ref) => {
+  // Pane mode has no Radix context to register the title with, so the id the
+  // pane dialog's aria-labelledby points at is applied here instead.
+  const pane = React.useContext(PaneDialogContext)
+  const host = React.useContext(PaneDialogHostContext)
+  if (pane && host) {
+    return <h2 ref={ref} id={pane.titleId} data-slot="dialog-title" className={cn('text-[13px] font-medium text-ink', className)} {...props} />
+  }
+  return (
+    <DialogPrimitive.Title
+      ref={ref}
+      data-slot="dialog-title"
+      className={cn('text-[13px] font-medium text-ink', className)}
+      asChild={_asChild}
+      {...props}
+    />
+  )
+})
 DialogTitle.displayName = DialogPrimitive.Title.displayName
 
 const DialogDescription = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Description
-    ref={ref}
-    data-slot="dialog-description"
-    className={cn('mt-1 text-[11px] text-muted', className)}
-    {...props}
-  />
-))
+>(({ className, asChild: _asChild, ...props }, ref) => {
+  const pane = React.useContext(PaneDialogContext)
+  const host = React.useContext(PaneDialogHostContext)
+  if (pane && host) {
+    return <p ref={ref} id={pane.descriptionId} data-slot="dialog-description" className={cn('mt-1 text-[11px] text-muted', className)} {...props} />
+  }
+  return (
+    <DialogPrimitive.Description
+      ref={ref}
+      data-slot="dialog-description"
+      className={cn('mt-1 text-[11px] text-muted', className)}
+      asChild={_asChild}
+      {...props}
+    />
+  )
+})
 DialogDescription.displayName = DialogPrimitive.Description.displayName
 
 export {

@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import type { RefObject } from 'react'
 
-import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { hasAppInteractionOwner, paneHasInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { SessionId } from '@renderer/workspace/types'
 
 // Type-to-focus: when the user starts typing anywhere in the
@@ -74,6 +74,9 @@ export function useTypeToFocus({
         if (target.isContentEditable) return
       }
       if (hasAppInteractionOwner()) return
+      // A pane-scoped condition dialog (#713) covers this composer: the key is
+      // the dialog's, or nobody's, never the hidden draft's.
+      if (paneHasInteractionOwner(inputRef.current)) return
 
       const el = inputRef.current
       if (!el) return

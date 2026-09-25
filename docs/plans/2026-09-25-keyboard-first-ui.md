@@ -509,7 +509,7 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 
 | # | Item | Status |
 |---|---|---|
-| X1 | #713 condition modal scoped to its pane (keyboard side; tell B7) | todo |
+| X1 | #713 condition modal scoped to its pane (keyboard side; tell B7) | done (B7 told; pane-scoped Dialog via PaneDialogHostProvider; pane toast above the scrim per k9) |
 | X2 | `font-mono` → `font-code` sweep (T6) | done (0 class uses left: Dictation guide names → emphasis, keys → Kbd; debug table → font-code) |
 | X3 | `focus:border-accent` / `outline-none` sweep (T4) | done (4 `focus:border-accent` inputs → control focus form; Apps settings raw controls → Button/Input; exemptions recorded in Execution notes) |
 | X4 | Stale comments (`defaults.ts` dictation) | done |
@@ -828,6 +828,18 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **X1 / #713 Provider trust / permission / question prompts:** they now
+  appear INSIDE the agent's pane, with a scrim over that pane only. The
+  tab bar, other panes, the palette and every shortcut keep working.
+  **Check, with two panes, the second one showing a trust prompt:**
+  (1) working in pane 1 is uninterrupted: focus stays, typing works,
+  and Escape still interrupts that agent; (2) clicking pane 1 does NOT
+  decline pane 2's prompt; (3) moving to pane 2 (click or ⌥↓) puts focus on
+  the prompt's main button; (4) Escape there declines; (5) after answering,
+  focus is back in pane 2's composer; (6) a refusal toast in pane 2 is
+  readable above the scrim; (7) the prompt fits a narrow lane (it caps to
+  the pane and scrolls); (8) Spotlight shows the prompt once, not twice;
+  (9) the phone still shows it full-screen.
 - **X2 Dictation guide (Settings › Voice Dictation › guide):** Deepgram and
   Settings names are bold text in the app font (were monospace); ⌘⇧D and fn
   are key chips.
@@ -952,7 +964,13 @@ Sharp corners and one light theme.
       spacing rhythm, radius tiers, button variants, headers, empty/loading/
       error states, copy (sentence case, ellipsis, labels), alignment, and
       density. Rows are added as `G-*` in the ledger after task 7.
-- [ ] 9. Plan-vs-built, full checks, review round (2 Codex + 1 Pi, own
+- [ ] 9. **Open-ended UI/UX improvement** (owner, 2026-09-25: "you are going
+      to continue to do UI and UX work and improvements all night so there is
+      almost no goal post"). After Tasks 7–8 the loop keeps finding and fixing
+      UI/UX inconsistencies, one surface per commit, each with ledger rows
+      (`G-*`). The review round (Task 10) runs at a natural checkpoint and
+      again whenever the owner asks. It is not a stop sign.
+- [ ] 10. Plan-vs-built, full checks, review round (2 Codex + 1 Pi, own
       detached worktrees), at most one verification round. Leave the PR
       open, green, reviewed.
 
@@ -1415,3 +1433,22 @@ Sharp corners and one light theme.
   guard fails the control test.
 - 2026-09-25 merge: origin/main (8 commits: goal-loop background hold, Claude
   image-literal delivery) merged clean; no submodule drift; tsc green.
+- 2026-09-25 X1 (#713): design recorded in `components/ui/pane-dialog.tsx`.
+  Ruling: pane mode does NOT use Radix. Its DismissableLayer
+  preventDefaults every document Escape while it is the top layer (the
+  composer then bails on defaultPrevented), and non-modal Radix declines on
+  focus-outside. Cost if wrong: our pane dialog lacks Radix's nested-layer
+  arbitration, which condition prompts do not use. Ownership: new PANE marker
+  (`isInPaneInteractionOwner` / `paneHasInteractionOwner`) consulted by
+  type-to-focus, paste-to-focus, the composer Enter registry (`blocked`) and
+  the workspace router (unmodified keys only; modified chords stay live so
+  the user can leave the pane). Providers moved from React `autoFocus` to
+  `data-autofocus` (honoured in both modes). Steering k9: the pane toast sits
+  on `PANE_DIALOG_LAYERS.feedback` above scrim/content. Refusals still go to
+  the GLOBAL toast (TileLeaf's #1099 comment); now that the pane toast is
+  readable, moving them back is a possible follow-up, not done. Confirm-red:
+  all 6 pane-dialog tests fail with dialog.tsx / PaneToast at HEAD; removing
+  the registry `blocked` skip fails the Enter test. NOT covered by a test: the
+  useKeybinds unmodified-key yield (reasoned; the router needs a full
+  workspace harness). Dictation hotkey targeting a covered composer is not
+  gated (low risk; recorded).
