@@ -1,10 +1,17 @@
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
+  activeClaudeComposerText,
   extractActiveClaudeComposer,
   imagePlaceholderCount,
   pasteAbsorbedVia,
+  pasteTailNeedle,
   placeholderCount,
+  pollPasteAbsorbed,
 } from './pasteConfirm.js'
 import { isPasteLike } from './pasteConfirm.js'
 
@@ -105,5 +112,120 @@ describe('Claude collapsed-paste placeholder counting', () => {
 
   it('does not count prompt prose that merely mentions a paste', () => {
     expect(placeholderCount('❯ explain what [Pasted text means')).toBe(0)
+  })
+})
+
+// wrap-ansi 7 ships no types; this is the one call signature the test needs,
+// the same options Ink passes. Loaded with require because v7 is CommonJS.
+const wrapAnsi = createRequire(import.meta.url)('wrap-ansi') as (
+  input: string,
+  columns: number,
+  options: { trim: boolean; hard: boolean },
+) => string
+
+describe('inline paste tail through a HARD wrap (#1118)', () => {
+  // The chrome around the composer comes from a real recorded frame
+  // (testing/fixtures/image-absorption, Claude Code 2.1.278): the dividers,
+  // the `❯ ` first-line prefix and the two-space continuation indent. Only the
+  // composer body is re-rendered, at each width, with the wrap Claude's Ink
+  // actually applies: `wrapAnsi(text, width, { trim: false, hard: true })`
+  // (vendor/claude-code-src/full/ink/wrap-text.ts). Ink binds Bun.wrapAnsi when
+  // it exists and the npm wrap-ansi otherwise; both honour `hard`, which is the
+  // property that matters: a token longer than the line is cut mid-token.
+  const fixture = JSON.parse(readFileSync(
+    fileURLToPath(new URL('../../../testing/fixtures/image-absorption/wrapped-image-pill-2026-09-21.json', import.meta.url)),
+    'utf8',
+  )) as { deliveries: { wrapped: { after: { screen: string } } } }
+  const recorded = fixture.deliveries.wrapped.after.screen.split('\n')
+  const isDivider = (line: string): boolean => /^─{10,}$/u.test(line)
+  const top = recorded.findIndex(isDivider)
+  const bottom = recorded.findIndex((line, i) => i > top && isDivider(line))
+
+  function screenAt(cols: number, composerText: string): string {
+    const body = composerText.length === 0
+      ? ['❯']
+      // Geometry calibrated against both recorded frames (#1219 review, Pi
+      // F3): the prompt marker is `❯` + NO-BREAK SPACE, continuation lines
+      // indent two spaces, and the body is the pane width MINUS THREE (61
+      // columns in the 64-column recording). So a full composer line is one
+      // column shorter than the divider. An earlier cols-2 geometry hid that.
+      : wrapAnsi(composerText, cols - 3, { trim: false, hard: true })
+        .split('\n')
+        .map((line, i) => (i === 0 ? '❯\u00a0' : '  ') + line)
+    const divider = '─'.repeat(cols)
+    return [...recorded.slice(0, top), divider, ...body, divider, ...recorded.slice(bottom + 1)].join('\n')
+  }
+
+  // The issue's repro: a prompt ending in an absolute path, long enough to be
+  // paste-like but too short for Claude to collapse, so the inline tail is the
+  // only signal. Absorption was never detected at 14 of 81 widths.
+  const prompt = 'please review /Users/juliusolsson/Desktop/Development/agent-code/src/providers/claude/runtime/promptDelivery.ts'
+
+  it('confirms absorption at every pane width from 20 to 140 columns', () => {
+    const tail = pasteTailNeedle(prompt)
+    const missed: number[] = []
+    for (let cols = 20; cols <= 140; cols += 1) {
+      const baseline = activeClaudeComposerText(screenAt(cols, ''))
+      const baseCount = placeholderCount(baseline)
+      const after = activeClaudeComposerText(screenAt(cols, prompt))
+      if (pasteAbsorbedVia(after, tail, baseCount, false) !== 'inline') missed.push(cols)
+    }
+    expect(missed).toEqual([])
+  })
+
+  it('still refuses a composer that holds only the start of the prompt', () => {
+    // The tail is what proves the WHOLE paste landed. A composer still
+    // receiving the paste shows its head, and must not confirm.
+    const tail = pasteTailNeedle(prompt)
+    for (const cols of [48, 94]) {
+      const partial = activeClaudeComposerText(screenAt(cols, prompt.slice(0, prompt.length - 30)))
+      expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
+    }
+  })
+
+  it('does not confirm a paste whose whitespace the composer does not show', () => {
+    // Review round 1 (A): a wrap only ever ADDS whitespace. The withdrawn
+    // strip-everything cut also accepted MISSING whitespace, so `foo\nbar`
+    // "landed" on a composer showing `foobar` and Enter was sent.
+    const tail = pasteTailNeedle('foo\nbar')
+    expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(80, 'foobar')), tail, 0, false)).toBeNull()
+    expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(80, 'foo bar')), tail, 0, false)).toBe('inline')
+  })
+
+  it('does not confirm a pending paste on an unrelated recorded composer', () => {
+    // Review round 1 (A), built from the recorded pair itself: the composer
+    // shows `… opencode [Image` / `  #1]` for a DIFFERENT prompt, while the
+    // pending payload is `opencode[\nImage#1]`. Stripped, the two were equal.
+    const recordedAfter = activeClaudeComposerText(fixture.deliveries.wrapped.after.screen)
+    const tail = pasteTailNeedle('opencode[\nImage#1]')
+    expect(pasteAbsorbedVia(recordedAfter, tail, 0, false)).toBeNull()
+  })
+
+  it('does not confirm a second paste on a hard-wrapped tail that was already there', async () => {
+    // Review round 1 (B): the composer already holds this payload's tail,
+    // hard-wrapped. The baseline must recognise it despite the wrap, or an
+    // unchanged screen confirms the new paste before it lands.
+    const already = screenAt(48, prompt)
+    const outcome = await pollPasteAbsorbed(() => already, already, prompt, { timeoutMs: 30, pollIntervalMs: 5 })
+    expect(outcome).toEqual({ kind: 'timeout' })
+  })
+
+  it('does not confirm on an earlier part of the paste that has a space the tail lacks', () => {
+    // Review round 2 (A): the payload's first line `abcdefghijkl mnopqrstuvwx`
+    // has painted, and its real tail `abcdefghijklmnopqrstuvwx` has not. A
+    // matcher that let whitespace appear anywhere confirmed here and sent
+    // Enter before the tail arrived.
+    const t = 'abcdefghijklmnopqrstuvwx'
+    const tail = pasteTailNeedle(`abcdefghijkl mnopqrstuvwx\n${t}`)
+    const partial = activeClaudeComposerText(screenAt(80, 'abcdefghijkl mnopqrstuvwx'))
+    expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
+  })
+
+  it('does not read a soft-wrapped recorded pill as a tail without its space', () => {
+    // Review round 2 (A), on the recorded frame: `[Image` / `  #1]` is a soft
+    // wrap of `[Image #1]`, not `Image#1`.
+    const recorded = activeClaudeComposerText(fixture.deliveries.wrapped.after.screen)
+    expect(recorded).toContain('[Image #1]')
+    expect(pasteAbsorbedVia(recorded, pasteTailNeedle('Image#1\n'), 0, false)).toBeNull()
   })
 })
