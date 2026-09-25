@@ -164,7 +164,7 @@ describe('pane-scoped condition dialogs (#713)', () => {
     composerB.focus()
     flushFrames()
 
-    const dialog = screen.getByRole('dialog', { name: 'Trust This Folder?' })
+    const dialog = screen.getByRole('dialog', { name: 'Trust this folder?' })
     expect(dialog.closest('[data-pane-id]')?.getAttribute('data-pane-id')).toBe('pane-a')
     // No APP owner: every global router stays live for the other panes.
     expect(hasAppInteractionOwner()).toBe(false)

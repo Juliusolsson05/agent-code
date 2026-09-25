@@ -95,7 +95,7 @@ describe('ConversationsPicker', () => {
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', "Couldn't resume Project context bootstrapping: Session failed to start. Check provider setup and retry."))
+    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', "Could not resume Project context bootstrapping: Session failed to start. Check provider setup and retry."))
     // Never the raw IPC rejection: it can carry environment values or tokens.
     expect(JSON.stringify(ws.showPaneToast.mock.calls)).not.toContain('posix_spawnp')
     expect(JSON.stringify(ws.showPaneToast.mock.calls)).not.toContain('Error invoking remote method')
@@ -107,7 +107,7 @@ describe('ConversationsPicker', () => {
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', "Couldn't resume Project context bootstrapping in this pane."))
+    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', "Could not resume Project context bootstrapping in this pane."))
   })
 
   it('does not leave an unhandled rejection when a new-tab resume fails (#1262 review A)', async () => {
@@ -179,7 +179,7 @@ describe('ConversationsPicker', () => {
   it('distinguishes a listing failure from an empty result', async () => {
     install(vi.fn(async () => { throw new Error('sqlite locked') }))
     const first = render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
-    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load conversations/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not load conversations/i)
     first.unmount()
     install(vi.fn(async () => response({ rows: [], total: 0, hiddenChildren: 0 })))
     render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)

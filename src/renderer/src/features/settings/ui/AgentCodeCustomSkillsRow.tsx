@@ -347,7 +347,7 @@ function AgentCodeCustomSkillsModal({
     <Dialog open={open} onOpenChange={next => void requestClose(next)}>
       <DialogContent className="flex max-h-[86vh] w-[min(880px,95vw)] flex-col overflow-hidden font-code">
         <DialogHeader>
-          <DialogTitle>{draft ? (draft.skillId ? `Edit ${draft.name}` : 'New custom skill') : 'Custom Skills'}</DialogTitle>
+          <DialogTitle>{draft ? (draft.skillId ? `Edit ${draft.name}` : 'New Custom Skill') : 'Custom Skills'}</DialogTitle>
           <DialogDescription>
             Only personal skills created here are listed. External and project-local skills remain outside Agent Code management.
           </DialogDescription>
