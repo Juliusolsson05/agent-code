@@ -1163,6 +1163,28 @@ Reviewer focus: A = keyboard, focus and failure paths (Codex). B = tests and int
 | C10 — Reader Older/Newer are hand-rolled buttons | valid | fixed in `1910944d`: outline `Button`; the session pills stay bespoke as toggles (G-9) |
 | C mutations — busy chip and `tabFills` wiring survived | valid | fixed in `dc67b56d`: tests; each `tabFills` clause is now caught |
 
+### Round 2 (the last allowed): 2 Codex + 1 Pi on the post-review batch `2409875a..7aaa869a`
+
+Scope: G-28 … G-42, K2-4, and the round-1 fix commits. Before the round, steering k12 found and fixed a K2-4 wrong-agent case (`7aaa869a`). All three reviewers returned FIX-BEFORE-MERGE, and every valid finding is fixed. There is no round 3.
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| A-P1: with two prompts stacked in one pane, the older one stays Tab-reachable, and closing the newer one strands focus | valid (edge: ConditionOutlet renders every visible condition) | fixed in `14d6e54b`: only the newest prompt is live; closing it focuses the prompt beneath. Test fails on the old code, and each half is mutation-checked |
+| A-P2: a rejected or phase-stable goal-loop call leaves the focus carry armed for a later, unrelated phase change | valid | fixed in `0560298b`: `useSwapFocus.cancel()` on rejection or an unchanged phase; tests for both, plus "one press carries once" |
+| A / B / C: the pager's end no-op is unasserted (guard mutations survive) | valid | fixed in `43dd32e4`: the page and range must be unchanged after a disabled-end click. `hasNext` is caught; `hasPrevious` is an equivalent mutant (every caller clamps) |
+| A: dropping the post-swap `pending = null` survives | valid | fixed in `0560298b` (the second phase change must not carry again) |
+| A (suspicion): passive-effect publish vs a palette preview while streaming | overstated | declined: no user-visible ordering was established; `run` re-reads the stash |
+| B: making `clearReaderMessage` unconditional survives | overstated | declined: React runs a commit's cleanups before its new effects, so the old-body clear can never follow the new-body publish |
+| B (suspicion): the control reference lacks the new command | valid | fixed in `43dd32e4` |
+| C1: Agent Analytics ranges mixed ("All Time" beside "7 days") | valid | fixed in `43dd32e4`: reverted to "All time". Ruling: range options read as values and stay sentence case; the G-31 row is corrected |
+| C2: 29 "Could not …" without the final period; G-33 over-claimed | valid | fixed in `43dd32e4`: the 18 plain-ended ones. Ones ending in an interpolated error keep its punctuation; the ledger and checklist now say so |
+| C4: two hand-rolled empty states missed | valid | fixed in `43dd32e4` |
+| C5: UserBand's doc comment was detached by the pager insert | valid | fixed in `43dd32e4` |
+| C6: the unsupported-Caffeinate tooltip wiring is untested | valid | fixed in `43dd32e4` |
+| C7: stale "Copy in" comment | valid | fixed in `43dd32e4` |
+| C (suspicion): Reader Older/Newer ~2px shorter than the pills (my C10 "level" claim was wrong) | valid | fixed in `43dd32e4`: the pills' own padding |
+| C (suspicions): Performance/report range copy lowercase; SubagentMiniFeed "no activity yet…"; Round switch is a capsule | overstated | declined: covered by the new range ruling, the G-29 feed-voice ruling, and the owner's Sharp/Round check |
+
 ## Tasks
 
 - [x] 1. Plan committed, draft PR open, B7 told — hands the ledger to task 2.
