@@ -41,10 +41,15 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
   const goalsRef = useRef(goals)
   goalsRef.current = goals
   const [loaded, setLoaded] = useState<Loaded>({ state: 'loading' })
-  // Rows the user UNticked. Stored as the exception rather than the selection
-  // so a row that becomes complete while the modal is open arrives ticked,
-  // matching every row that was there on open.
-  const [unticked, setUnticked] = useState<Set<SessionId>>(() => new Set())
+  // Explicit user choices, keyed by session. A row without one takes its
+  // default: ticked when selectable, so a completion that lands while the
+  // modal is open arrives ticked like every row that was there on open.
+  const [choices, setChoices] = useState<Map<SessionId, boolean>>(() => new Map())
+  // Rows the user has seen blocked (running, or tied to an open orchestration
+  // run). Once blocked, a row defaults to UNticked even after it clears
+  // (#1184 review): a row the user watched say "running" must not tick itself
+  // and grow the Close count without them doing anything.
+  const [seenBlocked, setSeenBlocked] = useState<Set<SessionId>>(() => new Set())
   const [removeLanes, setRemoveLanes] = useState(true)
   const [closing, setClosing] = useState(false)
 
@@ -90,31 +95,27 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, identityKey])
 
-  // Each opening starts from "everything ticked, lanes removed": a choice made
-  // for last week's batch says nothing about today's.
-  useEffect(() => {
-    if (!open) return
-    setUnticked(new Set())
-    setRemoveLanes(true)
-  }, [open])
-
   const rows = useMemo(
     () => completedGoalRows(workspace.state, workspace.runtimes, goals),
     [workspace.state, workspace.runtimes, goals],
   )
-  const selected = rows.filter(row => !row.live && !unticked.has(row.sessionId))
+  useEffect(() => {
+    const blocked = rows.filter(row => row.blocked !== null && !seenBlocked.has(row.sessionId))
+    if (blocked.length === 0) return
+    setSeenBlocked(previous => new Set([...previous, ...blocked.map(row => row.sessionId)]))
+  }, [rows, seenBlocked])
 
-  const toggle = useCallback((sessionId: SessionId) => {
-    setUnticked(previous => {
-      const next = new Set(previous)
-      if (next.has(sessionId)) next.delete(sessionId)
-      else next.add(sessionId)
-      return next
-    })
-  }, [])
+  const isChecked = useCallback((row: CompletedGoalRow) =>
+    row.blocked === null && (choices.get(row.sessionId) ?? !seenBlocked.has(row.sessionId)),
+  [choices, seenBlocked])
+  const selected = rows.filter(isChecked)
+
+  const toggle = useCallback((row: CompletedGoalRow) => {
+    setChoices(previous => new Map(previous).set(row.sessionId, !isChecked(row)))
+  }, [isChecked])
 
   const closeSelected = useCallback(async () => {
-    if (closing || selected.length === 0) return
+    if (closing || selected.length === 0 || loaded.state !== 'ready') return
     setClosing(true)
     try {
       // THE GRANT is the ticked rows the user is looking at. The flow re-judges
@@ -128,9 +129,12 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
     } finally {
       setClosing(false)
     }
-  }, [closing, onClose, removeLanes, selected, workspace])
+  }, [closing, loaded.state, onClose, removeLanes, selected, workspace])
 
-  const runningCount = rows.filter(row => row.live).length
+  const blockedCount = rows.filter(row => row.blocked !== null).length
+  // The close acts only on a fresh read: until then the list is incomplete,
+  // and after a failed read it cannot be trusted at all.
+  const ready = loaded.state === 'ready'
   const emptyText = loaded.state === 'loading'
     ? 'Loading goals…'
     : loaded.state === 'error'
@@ -147,6 +151,11 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
           </DialogDescription>
         </div>
 
+        {loaded.state === 'error' && rows.length > 0 && (
+          <div role="alert" className="flex-shrink-0 border-b border-border px-4 py-2 text-[11px] text-danger">
+            Goals could not be read, so this list may be out of date. Nothing can be closed from it.
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Completed agents">
           {rows.length === 0 ? (
             <div className="px-4 py-10 text-center text-[12px] text-muted">{emptyText}</div>
@@ -154,7 +163,7 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
             <CompletedRow
               key={row.sessionId}
               row={row}
-              checked={!row.live && !unticked.has(row.sessionId)}
+              checked={isChecked(row)}
               onToggle={toggle}
             />
           ))}
@@ -171,9 +180,9 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
             Also remove their lanes
           </label>
           <div className="flex items-center gap-2">
-            {runningCount > 0 && (
+            {blockedCount > 0 && (
               <span className="text-[10px] text-muted">
-                {runningCount} running {runningCount === 1 ? 'agent stays' : 'agents stay'} open
+                {blockedCount} {blockedCount === 1 ? 'agent stays' : 'agents stay'} open
               </span>
             )}
             <button
@@ -187,9 +196,9 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={() => void closeSelected()}
-              disabled={closing || selected.length === 0}
+              disabled={closing || selected.length === 0 || !ready}
               className={`rounded-control border px-3 py-1.5 text-[11px] ${
-                selected.length > 0
+                selected.length > 0 && ready
                   ? 'border-danger-border bg-danger-soft text-danger hover:bg-danger-soft/80'
                   : 'cursor-not-allowed border-border text-muted opacity-60'
               }`}
@@ -203,21 +212,29 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
   )
 }
 
-function CompletedRow({ row, checked, onToggle }: { row: CompletedGoalRow; checked: boolean; onToggle: (sessionId: SessionId) => void }) {
+const BLOCKED_LABELS: Record<NonNullable<CompletedGoalRow['blocked']>, string> = {
+  running: 'running',
+  'workers-open': 'workers still open',
+  'coordinator-open': 'coordinator still open',
+}
+
+function CompletedRow({ row, checked, onToggle }: { row: CompletedGoalRow; checked: boolean; onToggle: (row: CompletedGoalRow) => void }) {
   const completedAt = Date.parse(row.completedAt)
   return (
     <label
       role="listitem"
       data-session-id={row.sessionId}
-      className={`flex items-start gap-3 border-b border-border px-4 py-2.5 last:border-b-0 ${row.live ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}`}
+      className={`flex items-start gap-3 border-b border-border px-4 py-2.5 last:border-b-0 ${row.blocked ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}`}
     >
       <input
         type="checkbox"
         checked={checked}
-        // A running agent is not finished, whatever its record says; it is
-        // listed so the user knows why it is not in the count.
-        disabled={row.live}
-        onChange={() => onToggle(row.sessionId)}
+        // A running agent is not finished, whatever its record says, and an
+        // agent tied to an open orchestration run cannot close without
+        // orphaning the other end. Listed so the user knows why it is not in
+        // the count.
+        disabled={row.blocked !== null}
+        onChange={() => onToggle(row)}
         aria-label={`Close ${row.title}`}
         className="mt-0.5 accent-current disabled:opacity-50"
       />
@@ -236,8 +253,8 @@ function CompletedRow({ row, checked, onToggle }: { row: CompletedGoalRow; check
         </span>
       </span>
       <span className="w-[110px] flex-shrink-0 text-right text-[10px] text-muted">
-        {row.live
-          ? <span className="text-[11px] text-danger">running</span>
+        {row.blocked
+          ? <span className="text-[11px] text-danger">{BLOCKED_LABELS[row.blocked]}</span>
           : Number.isFinite(completedAt) ? `completed ${relativeTime(completedAt)}` : null}
       </span>
     </label>

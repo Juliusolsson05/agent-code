@@ -10,6 +10,7 @@ import {
   hasGoalReportingAgents,
   laneIndicesToRemove,
 } from '@renderer/workspace/completedGoalAgents'
+import type { CompletedGoalCloseDeps } from '@renderer/workspace/completedGoalAgents'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { TldrRecord } from '@shared/types/tldr'
 import type { Entry } from '@shared/types/transcript'
@@ -88,13 +89,14 @@ function mountRun(options: { lanes?: WorkspaceState['stage'] } = {}) {
   const removeTiledLane = vi.fn((laneIndex: number) => {
     harness.setState(prev => ({ ...prev, stage: removeLaneFromGrid(prev.stage, laneIndex) ?? prev.stage }))
   })
-  const run = (selection: string[], removeLanes = true) => closeCompletedGoalAgents(selection, { removeLanes }, {
+  const run = (selection: string[], removeLanes = true, overrides: Partial<CompletedGoalCloseDeps> = {}) => closeCompletedGoalAgents(selection, { removeLanes }, {
     readState: () => refs.stateRef.current,
     readRuntimes: () => refs.latestRuntimesRef.current,
     readGoals: () => goals,
     closeSession: harness.actions.closeSession,
     removeTiledLane,
     showToast,
+    ...overrides,
   })
   const setGoal = (identity: string, record: TldrRecord) => { goals = { ...goals, [identity]: record } }
   return { harness, refs, showToast, removeTiledLane, run, setGoal, getGoals: () => goals }
@@ -176,6 +178,86 @@ describe('Close Completed Agents', () => {
     expect(await run(['b', 'c'])).toBeNull()
     expect(killOwnedSession).not.toHaveBeenCalled()
     expect(showToast).toHaveBeenLastCalledWith('No completed agents left to close.')
+  })
+})
+
+// #1184 review: Close Idle Orchestration Agents' owner rule, both directions.
+describe('Close Completed Agents with orchestration runs', () => {
+  function withRun(workerRunning: boolean) {
+    const run = mountRun({ lanes: { lanes: [{ selectedSessionId: 'k' }], rows: [{ length: 1 }], focusedLane: 0 } })
+    run.harness.setState(prev => ({
+      ...prev,
+      sessions: {
+        ...prev.sessions,
+        k: { cwd: '/repo', kind: 'claude', title: 'Coordinator', tldrIdentity: 'id-k', builtInMcpDomains: ['goal'], projectId: 'tab', joinedAt: 5 },
+        w: { cwd: '/repo/.worktrees/w', kind: 'codex', title: 'Worker', tldrIdentity: 'id-w', builtInMcpDomains: ['goal'], orchestrationParentId: 'k', orchestrationRootId: 'k', projectId: 'tab', joinedAt: 6 },
+      },
+    }))
+    run.setGoal('id-k', done('Coordinate the review.', 'Run finished.'))
+    run.setGoal('id-w', done('Review the PR.', 'Review posted.'))
+    run.refs.latestRuntimesRef.current = { ...run.refs.latestRuntimesRef.current, k: idle(), w: workerRunning ? working() : idle() }
+    return run
+  }
+
+  it('lists a coordinator with a running worker as blocked, and its idle workers under a blocked coordinator too', () => {
+    const { harness, refs, getGoals } = withRun(true)
+    const rows = completedGoalRows(harness.getState(), refs.latestRuntimesRef.current, getGoals())
+    expect(Object.fromEntries(rows.filter(row => row.sessionId === 'k' || row.sessionId === 'w').map(row => [row.sessionId, row.blocked])))
+      .toEqual({ k: 'workers-open', w: 'running' })
+  })
+
+  it('closes a finished run worker-first when both are ticked', async () => {
+    const { run } = withRun(false)
+    await run(['k', 'w'])
+    expect(killed()).toEqual(['w', 'k'])
+  })
+
+  it('blocks an idle completed worker while its coordinator is still running', () => {
+    const { harness, refs, getGoals } = withRun(false)
+    refs.latestRuntimesRef.current = { ...refs.latestRuntimesRef.current, k: working() }
+    const rows = completedGoalRows(harness.getState(), refs.latestRuntimesRef.current, getGoals())
+    expect(Object.fromEntries(rows.filter(row => row.sessionId === 'k' || row.sessionId === 'w').map(row => [row.sessionId, row.blocked])))
+      .toEqual({ k: 'running', w: 'coordinator-open' })
+  })
+
+  it('keeps both ends of a run whose coordinator starts working after the click', async () => {
+    const { harness, refs, run } = withRun(false)
+    // The flow's own read happened at the click, with everything idle; the
+    // executor's live refs, read at each kill boundary, now show the
+    // coordinator coordinating again.
+    const atClick = refs.latestRuntimesRef.current
+    refs.latestRuntimesRef.current = { ...atClick, k: working() }
+    await run(['k', 'w'], true, { readRuntimes: () => atClick })
+    expect(killed()).toEqual([])
+    expect(harness.getState().sessions.w).toBeDefined()
+    expect(harness.getState().sessions.k).toBeDefined()
+  })
+
+  it('keeps a worker whose coordinator the user unticked, and a coordinator whose worker they unticked', async () => {
+    const first = withRun(false)
+    await first.run(['w'])
+    expect(killed()).toEqual([])
+    expect(first.harness.getState().sessions.w).toBeDefined()
+
+    killOwnedSession.mockClear()
+    const second = withRun(false)
+    await second.run(['k'])
+    expect(killed()).toEqual([])
+    expect(second.harness.getState().sessions.k).toBeDefined()
+  })
+})
+
+describe('Close Completed Agents lane report', () => {
+  it('says the lanes stayed when the layout changed during the close', async () => {
+    const { harness, showToast, run } = mountRun()
+    killOwnedSession.mockImplementation(async () => {
+      // The user presses New Lane while the close runs.
+      harness.setState(prev => ({ ...prev, stage: { ...prev.stage, lanes: [...prev.stage.lanes, {}], rows: [{ length: prev.stage.lanes.length + 1 }] } }))
+      return true
+    })
+    await run(['a'])
+    expect(killed()).toEqual(['a'])
+    expect(showToast).toHaveBeenLastCalledWith('Closed 1 completed agent. Lanes were left in place because the layout changed meanwhile.', 6000)
   })
 })
 

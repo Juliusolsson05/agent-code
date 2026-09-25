@@ -25,6 +25,14 @@ import type { TldrRecord } from '@shared/types/tldr'
 // task, which only the agent that did the work can make. Idleness says nothing
 // about it — an agent waiting on review is idle and very much not done.
 //
+// WHY this list does not try to spot "the user wrote to it after it completed"
+// (#1184 review): the only runtime clocks for that, turnStartedAt and
+// submittedAt, reset to null when a turn goes idle, so an idle agent carries
+// no trace of a later turn; the durable answer lives in transcript parsing.
+// That case is handled where it happens instead: the prompt hook tells a
+// completed agent to set a new goal before any further work
+// (enforcement.ts GOAL_COMPLETED_CONTEXT), which removes it from this list.
+//
 // WHY goal records arrive as an argument: they live in main (goal.json) and
 // reach the renderer asynchronously. The kill-boundary check below must be
 // synchronous, so the modal keeps the latest records in memory (read on open,
@@ -48,6 +56,16 @@ export type CompletedGoalRow = {
   /** Working right now. Listed but never selectable: an agent that is still
    *  doing something is not finished whatever its goal record says. */
   live: boolean
+  /**
+   * Why this row cannot be ticked, or null when it can.
+   *
+   * `running`: see `live`. `workers-open`: an orchestration coordinator whose
+   * workers are not all closing with it. `coordinator-open`: a worker whose
+   * coordinator stays open and may still be waiting on it. Both orchestration
+   * rules are Close Idle Orchestration Agents' (#960), for its reason: closing
+   * either end of a live run orphans the other (#1184 review).
+   */
+  blocked: 'running' | 'workers-open' | 'coordinator-open' | null
 }
 
 /**
@@ -115,7 +133,67 @@ function rowFor(
     // The same predicate closeSession applies at the kill boundary, so the
     // list can never offer something the executor would then refuse.
     live: isSessionLiveForClose(runtimes, sessionId),
+    blocked: null,
   }
+}
+
+/** Orchestration workers of `ownerId` still in the workspace. A malformed
+ *  self-reference is not a child (same rule as idleOrchestrationAgents). */
+function openWorkers(state: WorkspaceState, ownerId: SessionId): SessionId[] {
+  return Object.entries(state.sessions)
+    .filter(([id, meta]) => id !== ownerId && meta.orchestrationParentId === ownerId)
+    .map(([id]) => id)
+}
+
+/** The coordinator that still owns this worker, when it is still open. */
+function openCoordinator(state: WorkspaceState, meta: SessionMeta, sessionId: SessionId): SessionId | null {
+  const parent = meta.orchestrationParentId
+  return parent && parent !== sessionId && state.sessions[parent] ? parent : null
+}
+
+/**
+ * Which of `candidates` may not close, and why, if exactly the rest close
+ * together (#1184 review).
+ *
+ * Orchestration closure, to a fixed point: a coordinator may close only if
+ * every open worker of its closes too, and a worker only if its open
+ * coordinator closes too. Start from "every non-live candidate closes" and
+ * strip the ones that break either rule until nothing changes, so one busy
+ * great-grandchild keeps its whole run open — the propagation
+ * idleOrchestrationCloseTargets uses, extended to the worker side because a
+ * completed worker can sit under a coordinator that is still coordinating.
+ *
+ * WHY one function for the list AND the pre-loop re-judge: the kill-boundary
+ * rule ("no worker left") cannot be used before the loop, because at that
+ * point no worker has closed yet — the first version did exactly that and
+ * silently dropped every coordinator from its own finished run.
+ */
+function orchestrationBlocks(
+  state: WorkspaceState,
+  candidates: readonly SessionId[],
+  live: ReadonlySet<SessionId>,
+): Map<SessionId, NonNullable<CompletedGoalRow['blocked']>> {
+  const reason = new Map<SessionId, NonNullable<CompletedGoalRow['blocked']>>()
+  for (const id of candidates) if (live.has(id)) reason.set(id, 'running')
+  const candidateSet = new Set(candidates)
+  const closable = (id: SessionId) => candidateSet.has(id) && !reason.has(id)
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const id of candidates) {
+      if (reason.has(id)) continue
+      if (openWorkers(state, id).some(worker => !closable(worker))) {
+        reason.set(id, 'workers-open'); changed = true
+        continue
+      }
+      const meta = state.sessions[id]
+      const coordinator = meta ? openCoordinator(state, meta, id) : null
+      if (coordinator && !closable(coordinator)) {
+        reason.set(id, 'coordinator-open'); changed = true
+      }
+    }
+  }
+  return reason
 }
 
 /** Placed agents whose goal is complete, most recently completed first: the
@@ -132,6 +210,8 @@ export function completedGoalRows(
     if (!meta || !isCompleted(record)) continue
     rows.push(rowFor(state, runtimes, sessionId, meta, identity, tabIndex, record))
   }
+  const reason = orchestrationBlocks(state, rows.map(row => row.sessionId), new Set(rows.filter(row => row.live).map(row => row.sessionId)))
+  for (const row of rows) row.blocked = reason.get(row.sessionId) ?? null
   // Stable sort; ISO timestamps compare correctly as strings.
   return rows.sort((a, b) => (a.completedAt < b.completedAt ? 1 : a.completedAt > b.completedAt ? -1 : 0))
 }
@@ -151,6 +231,7 @@ export function completedGoalRows(
  */
 export function currentCompletedGoalTarget(
   readGoals: () => Record<string, TldrRecord>,
+  granted: ReadonlySet<SessionId> = new Set(),
 ): CurrentBulkCloseTarget {
   return (state, runtimes, sessionId): CloseTargetSnapshot | null => {
     const meta = state.sessions[sessionId]
@@ -162,6 +243,19 @@ export function currentCompletedGoalTarget(
     if (!identity || !isCompleted(record)) return null
     const row = rowFor(state, runtimes, sessionId, meta, identity, tabIndex, record)
     if (row.live) return null
+    // Orchestration, judged against LIVE state (#1184 review). Workers close
+    // first (bulkClose orders deepest first), so a coordinator reaching its
+    // kill with a worker still present means that worker survived — it was
+    // unticked, refused or spawned meanwhile — and is still being coordinated.
+    if (openWorkers(state, sessionId).length > 0) return null
+    // A worker may go only if its coordinator is gone or is going in this same
+    // grant: unticking the coordinator means "keep that run", and its workers
+    // are part of it. A granted coordinator that started working since the
+    // click is coordinating again, so its worker stays too — it is judged
+    // before the coordinator (deepest first), and closing it now would take a
+    // worker out from under a live run whose own kill is about to be refused.
+    const coordinator = openCoordinator(state, meta, sessionId)
+    if (coordinator && (!granted.has(coordinator) || isSessionLiveForClose(runtimes, coordinator))) return null
     return closeTargetFor(row)
   }
 }
@@ -252,12 +346,16 @@ export async function closeCompletedGoalAgents(
   options: { removeLanes: boolean },
   deps: CompletedGoalCloseDeps,
 ): Promise<PartialCloseOutcome | null> {
-  const currentTarget = currentCompletedGoalTarget(deps.readGoals)
   const state = deps.readState()
   const runtimes = deps.readRuntimes()
-  const granted = selection
-    .map(sessionId => currentTarget(state, runtimes, sessionId))
-    .filter((target): target is CloseTargetSnapshot => target !== null)
+  // Pre-loop: the listing's rules applied to exactly the selection — still a
+  // completed, placed, idle row, and not tied to an orchestration run member
+  // that stays open. The kill boundary then re-checks each one live.
+  const rows = new Map(completedGoalRows(state, runtimes, deps.readGoals()).map(row => [row.sessionId, row]))
+  const candidates = selection.filter(sessionId => rows.has(sessionId))
+  const blocked = orchestrationBlocks(state, candidates, new Set(candidates.filter(id => rows.get(id)!.live)))
+  const granted = candidates.filter(id => !blocked.has(id)).map(id => closeTargetFor(rows.get(id)!))
+  const currentTarget = currentCompletedGoalTarget(deps.readGoals, new Set(granted.map(target => target.sessionId)))
   if (granted.length === 0) {
     deps.showToast('No completed agents left to close.')
     return null
@@ -272,8 +370,13 @@ export async function closeCompletedGoalAgents(
     killCaller: 'bulk.close-completed-agents',
   })
   let lanesRemoved = 0
+  let lanesKept = false
   if (options.removeLanes && outcome.closed.length > 0) {
-    for (const laneIndex of laneIndicesToRemove(stageBefore, deps.readState(), outcome.closed)) {
+    const after = deps.readState()
+    // Said out loud (#1184 review): the user asked for lanes to go, and a
+    // silent no-op would leave them wondering why the grid still has holes.
+    lanesKept = stageBefore.lanes.length !== after.stage.lanes.length
+    for (const laneIndex of laneIndicesToRemove(stageBefore, after, outcome.closed)) {
       const before = deps.readState().stage.lanes.length
       deps.removeTiledLane(laneIndex)
       // removeTiledLane refuses at the one-lane floor without saying so; the
@@ -283,7 +386,9 @@ export async function closeCompletedGoalAgents(
     }
   }
   const closedText = describePartialClose(outcome) ?? `Closed ${outcome.closed.length} ${agentsNoun(outcome.closed.length)}.`
-  const laneText = lanesRemoved > 0 ? ` Removed ${lanesRemoved} lane${lanesRemoved === 1 ? '' : 's'}.` : ''
+  const laneText = lanesKept
+    ? ' Lanes were left in place because the layout changed meanwhile.'
+    : lanesRemoved > 0 ? ` Removed ${lanesRemoved} lane${lanesRemoved === 1 ? '' : 's'}.` : ''
   deps.showToast(`${closedText}${laneText}`, 6000)
   return outcome
 }

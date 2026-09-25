@@ -20,11 +20,11 @@ const goal = (text: string, revision: number, note?: string): TldrRecord => ({
   ...(note ? { completedAt: new Date().toISOString(), completionNote: note } : {}),
 })
 
-function setup(records: Record<string, TldrRecord>) {
+function setup(records: Record<string, TldrRecord>, options: { read?: (identities: string[]) => Promise<Record<string, TldrRecord>> } = {}) {
   const listeners = new Set<(update: TldrUpdate) => void>()
   window.api = {
     ...originalApi,
-    readGoals: vi.fn(async (identities: string[]) => Object.fromEntries(identities.filter(id => records[id]).map(id => [id, records[id]!]))),
+    readGoals: vi.fn(options.read ?? (async (identities: string[]) => Object.fromEntries(identities.filter(id => records[id]).map(id => [id, records[id]!])))),
     onGoalChanged: vi.fn((listener: (update: TldrUpdate) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }),
   }
   const state = {
@@ -40,11 +40,12 @@ function setup(records: Record<string, TldrRecord>) {
   } as unknown as WorkspaceState
   const idle = { ...emptyRuntime(), processStatus: 'started' as const, inputReady: true }
   const runtimes = { a: idle, b: { ...idle, sessionStatus: 'running' as const, streamPhase: 'tool-use' as const }, c: idle }
-  const closeCompletedGoalAgents = vi.fn(async () => null)
+  const closeCompletedGoalAgents = vi.fn(async (_selection: string[], _options: { removeLanes: boolean; readGoals: () => Record<string, TldrRecord> }) => null)
   const onClose = vi.fn()
-  render(<CloseCompletedAgentsModal open onClose={onClose} workspace={{ state, runtimes, closeCompletedGoalAgents } as never} />)
+  const view = render(<CloseCompletedAgentsModal open onClose={onClose} workspace={{ state, runtimes, closeCompletedGoalAgents } as never} />)
+  const rerenderWith = (next: Record<string, unknown>) => view.rerender(<CloseCompletedAgentsModal open onClose={onClose} workspace={{ state, runtimes: { ...runtimes, ...next }, closeCompletedGoalAgents } as never} />)
   const emit = (identity: string, record: TldrRecord) => act(() => { for (const listener of listeners) listener({ identity, record }) })
-  return { closeCompletedGoalAgents, onClose, emit }
+  return { closeCompletedGoalAgents, onClose, emit, rerenderWith, idle }
 }
 
 describe('Close Completed Agents modal', () => {
@@ -62,7 +63,7 @@ describe('Close Completed Agents modal', () => {
     expect(a.checked).toBe(true)
     expect(b.checked).toBe(false)
     expect(b.disabled).toBe(true)
-    expect(screen.getByText('1 running agent stays open')).toBeTruthy()
+    expect(screen.getByText('1 agent stays open')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Also remove their lanes' }))
     fireEvent.click(screen.getByRole('button', { name: 'Close 1 Agent' }))
@@ -100,4 +101,51 @@ describe('Close Completed Agents modal', () => {
     expect(await screen.findByText(/No agent has completed its goal/)).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Close 0 Agents' }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  // #1184 review: the headline guarantee is that the close sees a goal set
+  // AFTER the click, which is why the modal hands over a reader, not a map.
+  it('hands the flow a reader that sees goal changes made after the click', async () => {
+    const { closeCompletedGoalAgents, emit } = setup({ 'id-a': goal('Ship A.', 2, 'PR #1 merged.') })
+    await screen.findByText('✓ PR #1 merged.')
+    fireEvent.click(screen.getByRole('button', { name: 'Close 1 Agent' }))
+    await waitFor(() => expect(closeCompletedGoalAgents).toHaveBeenCalledOnce())
+    const readGoals = closeCompletedGoalAgents.mock.calls[0]![1].readGoals
+    emit('id-a', goal('Start feature E.', 3))
+    expect(readGoals()['id-a']).toMatchObject({ text: 'Start feature E.', revision: 3 })
+    expect(readGoals()['id-a']).not.toHaveProperty('completedAt')
+  })
+
+  it('offers no close until the fresh read lands, and none at all after a failed one', async () => {
+    const pending = setup({}, { read: () => new Promise(() => {}) })
+    // A completion heard on the subscription while the read is in flight is
+    // shown, but the list is not trusted for a close yet.
+    pending.emit('id-a', goal('Ship A.', 2, 'PR #1 merged.'))
+    await screen.findByText('✓ PR #1 merged.')
+    expect((screen.getByRole('button', { name: 'Close 1 Agent' }) as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+
+    const failed = setup({}, { read: async () => { throw new Error('Goal storage is invalid.') } })
+    failed.emit('id-a', goal('Ship A.', 2, 'PR #1 merged.'))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Close 1 Agent' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Close 1 Agent' }))
+    expect(failed.closeCompletedGoalAgents).not.toHaveBeenCalled()
+  })
+
+  it('keeps a row the user saw running unticked after it stops, until they tick it', async () => {
+    const { rerenderWith, idle, closeCompletedGoalAgents } = setup({
+      'id-a': goal('Ship A.', 2, 'PR #1 merged.'),
+      'id-b': goal('Ship B.', 2, 'PR #2 merged.'),
+    })
+    await screen.findByText('✓ PR #2 merged.')
+    rerenderWith({ b: idle })
+    const b = screen.getByRole('checkbox', { name: 'Close Feature B' }) as HTMLInputElement
+    expect(b.disabled).toBe(false)
+    expect(b.checked).toBe(false)
+    fireEvent.click(b)
+    fireEvent.click(screen.getByRole('button', { name: 'Close 2 Agents' }))
+    await waitFor(() => expect(closeCompletedGoalAgents).toHaveBeenCalledOnce())
+    expect([...closeCompletedGoalAgents.mock.calls[0]![0]].sort()).toEqual(['a', 'b'])
+  })
 })
+
