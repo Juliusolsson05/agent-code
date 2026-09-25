@@ -319,40 +319,77 @@ export type FontFamilyMeta = {
   webFont: boolean
 }
 
+/**
+ * Monochrome symbol faces every app font stack falls back to (#1194).
+ *
+ * WHY: the feed's rows draw symbols that carry the Unicode Emoji property —
+ * the `⏺` tool bullet on every Claude row, `⏸`, `☑`/`☐`, `🖼`, `↗`. None of
+ * the curated coding faces has most of them (JetBrains Mono lacks
+ * `⏺ ⏸ ☑ 🖼`, checked against its cmap). On macOS the browser's last-resort
+ * fallback happens to be a monochrome system symbol font, so the desktop
+ * looked fine; iOS Safari has no such font and falls back to Apple Color
+ * Emoji, which is why the phone kept showing color emoji however many
+ * emoji were replaced in its own chrome. Naming faces that DO have the
+ * glyphs makes the fallback the same on every platform.
+ *
+ * Coverage (cmap-verified): Noto Sans Symbols 2 has
+ * `⏺ ⏸ ☑ ☐ 🖼 ✓ ✗ ◐ ◌ ▸ ▾ ▴ ❯ ● ✕ ⌘ ◷ ◍`; Noto Sans Symbols adds `↗`.
+ * Both are loaded by the Google Fonts @import in styles.css, which serves
+ * unicode-range subsets, so nothing downloads until such a symbol is drawn.
+ */
+export const SYMBOL_FALLBACK_FONTS = "'Noto Sans Symbols 2', 'Noto Sans Symbols'"
+
+/**
+ * One stack shape for every font option, so they cannot drift.
+ *
+ * ORDER is the point: the symbol faces come AFTER the system monospace
+ * faces and BEFORE the generic `monospace`. xterm.js renders the desktop
+ * terminal from this same string, and a glyph Menlo or Monaco already draws
+ * must keep coming from there; the Noto faces only catch characters that
+ * would otherwise fall through to the platform's last resort — on iOS, the
+ * color emoji font.
+ */
+function appFontStack(face: string): string {
+  return `'${face}', ui-monospace, Menlo, Monaco, ${SYMBOL_FALLBACK_FONTS}, monospace`
+}
+
+/** The default stack, for readers that need it before settings load. */
+export const DEFAULT_APP_FONT_STACK = appFontStack('JetBrains Mono')
+
 export const FONT_FAMILIES: FontFamilyMeta[] = [
   {
     id: 'jetbrains-mono',
     label: 'JetBrains Mono',
     description: 'Modern coding default',
-    family: "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace",
+    family: DEFAULT_APP_FONT_STACK,
     webFont: true,
   },
   {
     id: 'roboto-mono',
     label: 'Roboto Mono',
     description: 'Neutral and compact',
-    family: "'Roboto Mono', ui-monospace, Menlo, Monaco, monospace",
+    family: appFontStack('Roboto Mono'),
     webFont: true,
   },
   {
     id: 'space-mono',
     label: 'Space Mono',
     description: 'Wide geometric',
-    family: "'Space Mono', ui-monospace, Menlo, Monaco, monospace",
+    family: appFontStack('Space Mono'),
     webFont: true,
   },
   {
     id: 'ubuntu-mono',
     label: 'Ubuntu Mono',
     description: 'Rounded humanist',
-    family: "'Ubuntu Mono', ui-monospace, Menlo, Monaco, monospace",
+    family: appFontStack('Ubuntu Mono'),
     webFont: true,
   },
   {
     id: 'courier-prime',
     label: 'Courier Prime',
     description: 'Classic typewriter',
-    family: "'Courier Prime', ui-monospace, Menlo, Monaco, monospace",
+    family: appFontStack('Courier Prime'),
     webFont: true,
   },
 ]
