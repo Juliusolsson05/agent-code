@@ -395,10 +395,62 @@ describe('one invalid record in a real store (#1247)', () => {
 
   it('continues an identity above its set-aside revision, so readers do not discard it as stale', async () => {
     const document = structuredClone(realRecords.tldr) as { version: 1; records: Record<string, { text: string; revision: number }> }
+    // A real record whose revision is well above 1 (#1257 review C1: the
+    // at-limit record is revision 1, so "always continue at 2" also passed).
+    const [identity, record] = Object.entries(document.records).sort(([, a], [, b]) => b.revision - a.revision)[0]!
+    expect(record.revision).toBeGreaterThan(2)
+    record.text = 'x'.repeat(401)
+    const { store } = await storeWith('tldr.json', document)
+    expect((await store.update(identity, 'Reporting again.', () => true)).revision).toBe(record.revision + 1)
+  })
+
+  // #1257 review C4: a set-aside record with a nonsense revision must not
+  // seed a negative one on disk.
+  it('does not continue from a set-aside revision below 1', async () => {
+    const document = structuredClone(realRecords.tldr) as { version: 1; records: Record<string, { text: string; revision: number }> }
     const record = document.records[realRecords.atLimit]!
     record.text += '.'
+    record.revision = -5
     const { store } = await storeWith('tldr.json', document)
-    expect((await store.update(realRecords.atLimit, 'Reporting again.', () => true)).revision).toBe(record.revision + 1)
+    expect((await store.update(realRecords.atLimit, 'Reporting again.', () => true)).revision).toBe(1)
+  })
+
+  // #1257 review C2: re-posting an unchanged status after a salvage must
+  // still repair the damaged file, or the history view keeps failing.
+  it('repairs a damaged history when the agent re-posts an unchanged status', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    await store.update('agent-1', 'Working.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const history = JSON.parse(await readFile(path, 'utf8')) as { entries: Array<{ text: string; writtenAt: string; revision: number }> }
+    history.entries.unshift({ text: 'x'.repeat(401), writtenAt: history.entries[0]!.writtenAt, revision: 99 })
+    await writeFile(path, JSON.stringify(history))
+    await expect(store.history('agent-1')).rejects.toThrow()
+    await store.update('agent-1', 'Working.', () => true)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Working.', 'First.'])
+  })
+
+  // #1257 review C3: a damaged document that belongs to ANOTHER identity
+  // must not donate its rows to this one.
+  it('salvages nothing from a damaged history of a different identity', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const writtenAt = new Date().toISOString()
+    await writeFile(path, JSON.stringify({ version: 1, identity: 'agent-2', entries: [
+      { text: 'x'.repeat(401), writtenAt, revision: 3 },
+      { text: 'Another agent\'s status.', writtenAt, revision: 2 },
+    ] }))
+    await store.update('agent-1', 'Second.', () => true)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Second.'])
   })
 
   it('keeps the valid history entries and preserves the file when one entry is unreadable', async () => {

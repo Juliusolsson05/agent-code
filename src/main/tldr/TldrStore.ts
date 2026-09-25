@@ -212,6 +212,8 @@ export class TldrStore extends EventEmitter {
     // whether the old contents parsed. Repairing a corrupt file must not count
     // as a new one, or the eviction below would delete real histories.
     const existed = await stat(path).then(() => true, () => false)
+    // Whether `previous` came from a damaged file rather than a clean read.
+    let salvaged = false
     // An unreadable history (for example one entry a newer build wrote over
     // today's limit) used to read as EMPTY here, and the rename below then
     // replaced that identity's whole timeline with one entry (#1247 review
@@ -219,6 +221,7 @@ export class TldrStore extends EventEmitter {
     // validates is carried forward.
     const previous = existed
       ? await this.readHistory(identity).catch(async () => {
+        salvaged = true
         // Too large to load safely: move it aside whole instead of reading it
         // (#1257 round 2; the reader's own size cap must hold here too).
         if ((await stat(path)).size > MAX_HISTORY_FILE_BYTES) {
@@ -245,8 +248,15 @@ export class TldrStore extends EventEmitter {
     // row carry identical text: an agent completing with its goal's own words
     // as the note, or setting a goal worded exactly like the note it just
     // completed with. Comparing text alone would swallow that transition.
-    if (previous[0]?.text === entry.text && Boolean(previous[0]?.completed) === Boolean(entry.completed)) return
-    const entries = [entry, ...previous].slice(0, TLDR_HISTORY_LIMIT)
+    //
+    // After a salvage the file on disk is still the damaged one, so an
+    // unchanged re-post must REWRITE the salvaged rows rather than return:
+    // otherwise the history view kept failing until the agent happened to
+    // post different text (#1257 review C2), and re-posting an unchanged
+    // status is exactly what agents are told to do.
+    const unchanged = previous[0]?.text === entry.text && Boolean(previous[0]?.completed) === Boolean(entry.completed)
+    if (unchanged && !salvaged) return
+    const entries = (unchanged ? previous : [entry, ...previous]).slice(0, TLDR_HISTORY_LIMIT)
     await mkdir(this.historyDirectory, { recursive: true })
     const temporary = `${path}.${randomUUID()}.tmp`
     try {
