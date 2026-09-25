@@ -103,7 +103,7 @@ export function AgentCodeCustomSkillsRow() {
   }
 
   if (!snapshot) {
-    return <div className="text-[11px] italic text-muted">{error ?? 'Loading custom skills…'}</div>
+    return error ? <Alert>{error}</Alert> : <div role="status" className="text-[11px] text-muted">Loading custom skills…</div>
   }
   const active = snapshot.skills.filter(skill => skill.enabled).length
 

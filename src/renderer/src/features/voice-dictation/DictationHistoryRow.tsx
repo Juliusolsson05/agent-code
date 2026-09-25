@@ -90,7 +90,7 @@ export function DictationHistoryRow() {
   }
 
   if (!snapshot) {
-    return <div className="text-[11px] text-muted italic">Loading dictation history…</div>
+    return <div role="status" className="text-[11px] text-muted">Loading dictation history…</div>
   }
 
   const { stats, entries } = snapshot

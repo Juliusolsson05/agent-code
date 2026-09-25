@@ -577,7 +577,7 @@ feeds the rows below G-1.
 | G-11 | Missing Select | raw selects (Performance ×2, ProviderEnablement, Dictation input, MergeTabs, CloseOld, BulkSwitch ×2), no focus ring on several | one `Select` on input tokens | todo |
 | G-12 | Raw text/number inputs (~12) | ExtensionSettingRow ×2 (square), ExternalControlRow (no focus), SkillsGrid, CustomSkills ×2, CloseOld ×2, BulkSwitch, AgentActivity filter, Pocket URL | `Input` / `NumberInput` | todo |
 | G-13 | Error boxes (7 recipes) + errors shown as muted text | Analytics/Usage, CustomSkills/Conventions, AddSkill, ViewPrompts, Conversations, Keybindings (ink text), Explorer/Skills/UpdateChannel | partly done (`Alert` primitive; 7 plain error boxes migrated: Custom Skills, Conventions editor, Add Skill, View Prompts, Usage, Analytics, AI Workspace; the keybindings conflict banner onto the soft/border tokens. Kept: Custom Skills' composite boxes with embedded buttons, and Conversations' full-width strip. Errors shown as muted text (Usage provider, Performance, Git) are still open) |
-| G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | `EmptyState` + plain muted loading text | todo |
+| G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | done (`EmptyState` list/inline; Agent Activity, Conversations ×2, palette, Search in Files, Top consumers ×2, Skills sections, prompt-template sections; periods and curly quotes; 5 italic loading lines made plain `role=status`; 3 of them rendered errors as muted text and now use `Alert`) |
 | G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | done for the look (every uppercase label on 10px / tracking-wider / no weight, DropdownMenuLabel included; banner titles and segmented controls excluded on purpose); component adoption continues opportunistically |
 | G-16 | Explorer context menu | the only floating menu not on DropdownMenu; z-30 sits under z-40 overlays | `DropdownMenu` | done differently (layer fixed: z-[1150], the menu band. Not moved onto DropdownMenu: pointer/row-anchored opening would need a virtual anchor, and its keyboard behaviour is already complete from M4) |
 | G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | `OptionCard`, one `Checkbox` | todo |
@@ -866,6 +866,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-13/G-14 Errors, empty and loading states:** inline errors are one
+  red box with a soft fill (Custom Skills, Conventions, Add Skill, View
+  Prompts, Usage, Analytics, AI Workspace, and the settings rows that
+  showed errors as grey italic text). "Nothing here" messages are one
+  centred grey sentence with a period ("No matching commands.", "No
+  conversations match “x”."). Loading lines are plain, not italic.
 - **G-21 Small text:** nothing in the app is smaller than 10px now (Dispatch
   chips, pane label chip, git formatter, Skills, theme picker…). **Check the
   Dispatch rows** still fit their chips on one line at narrow widths.

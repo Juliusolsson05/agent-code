@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
 
 import type { UpdateChannel, UpdateChannelSnapshot } from '@shared/updates/updateChannel'
 
@@ -44,7 +45,7 @@ export function UpdateChannelRow() {
     })
   }
 
-  if (!snapshot) return <div className="text-[11px] italic text-muted">{error ?? 'Loading…'}</div>
+  if (!snapshot) return error ? <Alert>{error}</Alert> : <div role="status" className="text-[11px] text-muted">Loading…</div>
   return (
     <div className="flex flex-col gap-1.5">
       <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>

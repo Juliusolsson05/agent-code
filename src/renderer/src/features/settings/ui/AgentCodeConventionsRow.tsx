@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -123,7 +124,7 @@ export function AgentCodeConventionsRow() {
   }, [applyResult, busy, snapshot])
 
   if (!snapshot) {
-    return <div className="text-[11px] italic text-muted">{error ?? 'Loading conventions…'}</div>
+    return error ? <Alert>{error}</Alert> : <div role="status" className="text-[11px] text-muted">Loading conventions…</div>
   }
 
   const lines = snapshot.markdown ? snapshot.markdown.split('\n').length : 0

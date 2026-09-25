@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Button } from '@renderer/components/ui/button'
 import { Sparkline } from '@renderer/components/charts/Sparkline'
 import { providerLabel } from '@renderer/workspace/tile-tree/TileLeaf/labels'
@@ -67,8 +68,8 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
           ))}
         </div>
       </header>
-      {!usage ? <p className="px-3 py-6 text-center text-[11px] text-muted" role="status">Waiting for the first process sample…</p>
-        : !rows.length ? <p className="px-3 py-6 text-center text-[11px] text-muted" role="status">No agents are running.</p> : (
+      {!usage ? <EmptyState role="status">Waiting for the first process sample…</EmptyState>
+        : !rows.length ? <EmptyState role="status">No agents are running.</EmptyState> : (
           <div className="min-h-0 overflow-auto">
             <table className="w-full text-left text-[11px] tabular-nums">
               <thead className="sticky top-0 bg-surface text-[10px] text-muted">

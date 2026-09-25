@@ -1,4 +1,5 @@
 import { commandExecutionRequests, type CommandExecutionRequest } from '../commandExecutionRequests'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useCommandExecutionRequest } from './useCommandExecutionRequest'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
@@ -1831,11 +1832,11 @@ function OpenCommandPalette({
 
             {mode === 'commands' &&
               (paletteRows.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">
+                <EmptyState role="status">
                   {promptTemplatesInCommandSearch && queryText.length > 0
-                    ? 'No matching commands or prompt templates'
-                    : 'No matching commands'}
-                </div>
+                    ? 'No matching commands or prompt templates.'
+                    : 'No matching commands.'}
+                </EmptyState>
               ) : (
                 paletteRows.map((row, i) => {
                   const groupHeader = commandGroupHeaders.get(i - directAgentRowOffset)

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useShallow } from 'zustand/react/shallow'
 
 import { KbdLegend } from '@renderer/components/ui/kbd'
@@ -389,7 +390,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
             !state.searching &&
             query.length > 0 &&
             displayedMatches.length === 0 && (
-              <div className="px-3 py-2 text-[11px] text-muted">No matches.</div>
+              <EmptyState role="status">No matches.</EmptyState>
             )}
         </div>
         <div

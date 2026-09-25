@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
 import { useListNavigation } from '@renderer/lib/useListNavigation'
 
@@ -235,9 +236,9 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             onScroll={e => { const el = e.currentTarget; if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) loadMore() }}
           >
             {needsPane ? (
-              <div className="py-12 text-center text-[12px] text-muted">Focus a pane to list its repository, or switch the scope to everywhere.</div>
+              <EmptyState>Focus a pane to list its repository, or switch the scope to everywhere.</EmptyState>
             ) : rows.length === 0 && !loading && !error ? (
-              <div className="py-12 text-center text-[12px] text-muted">{query.trim() ? `No conversations match "${query.trim()}".` : 'No conversations recorded for this scope.'}</div>
+              <EmptyState role="status">{query.trim() ? `No conversations match “${query.trim()}”.` : 'No conversations recorded for this scope.'}</EmptyState>
             ) : rows.map((row, i) => (
               <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} itemProps={nav.getItemProps(i)} />
             ))}

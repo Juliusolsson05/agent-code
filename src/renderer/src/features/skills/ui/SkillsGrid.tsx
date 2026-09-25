@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -661,7 +662,8 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="px-3 py-2 text-[10px] text-muted">{children}</div>
+  // The shared inline empty state (UI pass, G-14).
+  return <EmptyState size="inline">{children}</EmptyState>
 }
 
 /**

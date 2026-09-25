@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import {
@@ -418,7 +419,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
             )
           })}
           {rows.length === 0 && query && (
-            <div className="py-8 text-center text-[12px] text-muted">No agent matches “{query}”.</div>
+            <EmptyState role="status">No agent matches “{query}”.</EmptyState>
           )}
         </div>
 

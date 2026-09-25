@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 
 import { Button } from '@renderer/components/ui/button'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
@@ -105,7 +106,7 @@ function Section({
       <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-muted">{title}</div>
       <div>
         {count === 0 ? (
-          <div className="px-3 pb-3 text-[11px] text-muted">{empty}</div>
+          <EmptyState size="inline" className="pt-0 pb-3">{empty}</EmptyState>
         ) : children}
       </div>
     </section>
