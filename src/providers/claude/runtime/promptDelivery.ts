@@ -452,33 +452,8 @@ const sleep = (ms: number): Promise<void> =>
 async function rollbackWrittenPrompt(
   io: PromptDeliveryIo,
 ): Promise<'cleared' | 'restored' | 'unrecoverable'> {
-  const readComposer = (): 'empty' | 'drafted' | 'unpainted' => {
-    // #1291: after a kill empties the composer, Claude repaints placeholder
-    // text into it (a prompt suggestion, a hint). The text-only read calls any
-    // unrecognised row 'drafted', so all 64 kills "failed" and the prompt was
-    // yanked back and stranded: 4 of 5 recorded rollbacks ended that way.
-    //
-    // The rule (#1309 review):
-    //  - the text-only read stays the base. It fails closed, and its 'empty'
-    //    (a bare prompt marker) is trustworthy;
-    //  - it is overruled to 'empty' only when the LIVE cell attributes show a
-    //    painted placeholder: dim cells and no typed (plain) cells. A leftover
-    //    character under the inverse cursor has no dim cells, so it stays
-    //    'drafted';
-    //  - text and attributes come from the live buffer at the same instant,
-    //    never the per-frame cache, which lags a 25 ms kill loop and can
-    //    stall behind pendingWrites.
-    // A false 'drafted' aborts and restores; a false 'empty' would report
-    // success over half a prompt, so every doubt resolves to 'drafted'.
-    const live = io.session.readComposer?.()
-    const screen = live?.screen ?? io.session.snapshotScreen?.() ?? ''
-    const textOnly = parseClaudeComposerState(screen, null)
-    if (textOnly !== 'drafted') return textOnly
-    const attributes = live?.attributes
-    if (attributes && attributes.plain === 0 && attributes.dim > 0
-      && parseClaudeComposerState(screen, attributes) === 'empty') return 'empty'
-    return 'drafted'
-  }
+  const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
+    classifyRollbackComposer(io.session.readComposer?.() ?? null, io.session.snapshotScreen?.() ?? '')
 
   // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
   //
@@ -554,3 +529,42 @@ function describeReadiness(
   if (outcome.kind === 'occupied') return 'occupied by a human draft'
   return `unavailable (${outcome.reason})`
 }
+
+/**
+ * The rollback's reading of Claude's composer (#1291, #1309 review).
+ *
+ * After a kill empties the composer, Claude repaints placeholder text into it
+ * (a prompt suggestion, a hint), and the text-only read calls any unrecognised
+ * row 'drafted'. The paste-debug corpus holds 4 `rollback-exhausted` (all 64
+ * presses, then yanked back), 1 `rollback-cleared` and 7 `rollback-unobserved`.
+ * The exhausted records carry no screen, so a repainted placeholder is the
+ * explanation that fits them (one prompt was a typical suggestion, "yes fix
+ * all 9"), not a recorded observation.
+ *
+ * Exported so a test can drive it with a real ClaudeCodeHeadless frame.
+ */
+export function classifyRollbackComposer(
+  live: { screen: string; attributes: { dim: number; inverse: number; plain: number } | null } | null,
+  fallbackScreen: string,
+): 'empty' | 'drafted' | 'unpainted' {
+  // The rule (#1309 review):
+  //  - the text-only read stays the base. It fails closed, and its 'empty'
+  //    (a bare prompt marker) is trustworthy;
+  //  - it is overruled to 'empty' only when the LIVE cell attributes show a
+  //    painted placeholder: dim cells and no typed (plain) cells. A leftover
+  //    character under the inverse cursor has no dim cells, so it stays
+  //    'drafted';
+  //  - text and attributes come from the live buffer at the same instant,
+  //    never the per-frame cache, which lags a 25 ms kill loop and can
+  //    stall behind pendingWrites.
+  // A false 'drafted' aborts and restores; a false 'empty' would report
+  // success over half a prompt, so every doubt resolves to 'drafted'.
+  const screen = live?.screen ?? fallbackScreen
+  const textOnly = parseClaudeComposerState(screen, null)
+  if (textOnly !== 'drafted') return textOnly
+  const attributes = live?.attributes
+  if (attributes && attributes.plain === 0 && attributes.dim > 0
+    && parseClaudeComposerState(screen, attributes) === 'empty') return 'empty'
+  return 'drafted'
+}
+

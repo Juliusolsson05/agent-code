@@ -72,3 +72,25 @@ it('trusts a bare prompt marker even when attributes are unavailable', async () 
   expect(records.join(',')).toContain('rollback-cleared')
   expect(kills).toBe(1)
 })
+
+// #1309 review B: the classifier fed by a REAL ClaudeCodeHeadless, so the
+// live screen + attribute pipeline (not a hand-written object) reaches it.
+it('classifies real painted frames: a dim suggestion is empty, typed text is not', async () => {
+  vi.useRealTimers()
+  const { ClaudeCodeHeadless } = await import('claude-code-headless')
+  const { classifyRollbackComposer } = await import('./promptDelivery.js')
+  const pty = {
+    pid: 1, process: 'claude', cols: 120, rows: 40, handleFlowControl: false,
+    write: vi.fn(), resize: vi.fn(), clear: vi.fn(), pause: vi.fn(), resume: vi.fn(), kill: vi.fn(),
+    onData: vi.fn(() => ({ dispose: vi.fn() })), onExit: vi.fn(() => ({ dispose: vi.fn() })),
+  }
+  const headless = new ClaudeCodeHeadless({ pty: pty as never, cwd: '/tmp' })
+  const terminal = (headless as unknown as { terminal: { writeForTest(data: string): Promise<void> } }).terminal
+  const paint = async (row: string) => {
+    await terminal.writeForTest('\x1b[2J\x1b[H' + ['─'.repeat(60), row, '─'.repeat(60)].join('\r\n'))
+    return classifyRollbackComposer({ screen: headless.getScreen(), attributes: headless.getComposerAttributes() }, '')
+  }
+  expect(await paint('❯ \x1b[2myes fix all 9\x1b[22m')).toBe('empty')
+  expect(await paint('❯ yes fix all 9')).toBe('drafted')
+  expect(await paint('❯')).toBe('empty')
+})
