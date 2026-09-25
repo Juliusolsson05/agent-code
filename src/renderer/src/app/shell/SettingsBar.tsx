@@ -41,6 +41,7 @@ export function SettingsBar() {
           aria-expanded={performancePanelOpen}
           className={`rounded-control
             px-2 py-1 border text-[10px] font-code transition-colors
+            outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
             ${
               performancePanelOpen
                 ? 'border-accent bg-accent text-accent-fg'
@@ -54,6 +55,12 @@ export function SettingsBar() {
           type="button"
           disabled={caffeinateStatus?.supported === false}
           onClick={() => void toggleCaffeinate()}
+          // An on/off toggle: the accent fill was its only state signal, and
+          // the visible "caff" names nothing a screen reader user would
+          // recognise, so both the state and a real name are spelled out
+          // (ledger N18).
+          aria-pressed={caffeinateStatus?.active === true}
+          aria-label="Keep the machine awake (caffeinate)"
           title={
             caffeinateStatus?.supported === false
               ? 'Caffeinate is only available on macOS.'
@@ -63,6 +70,7 @@ export function SettingsBar() {
           }
           className={`rounded-control
             px-2 py-1 border text-[10px] font-code transition-colors
+            outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
             ${
               caffeinateStatus?.active
                 ? 'border-accent bg-accent text-accent-fg'

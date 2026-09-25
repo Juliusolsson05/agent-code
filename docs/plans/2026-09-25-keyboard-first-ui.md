@@ -490,7 +490,7 @@ entry when it lands.
 | N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | todo |
 | N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | todo |
 | N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | done (in M8) |
-| N18 | SettingsBar | caff toggle no aria-pressed | aria-pressed; T4 | todo |
+| N18 | SettingsBar | caff toggle no aria-pressed | aria-pressed; T4 | done (+ accessible name; T4 ring on caff + performance) |
 | N19 | Chart markers (TimeSeriesChart L184) | pointer shortcut by design | leave; note in checklist | done (no change — see ruling) |
 
 Row-highlight variants to converge under T7 (from the sweep): `bg-row-selected-bg`
@@ -789,6 +789,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **N18 Settings bar:** `caff` and `performance` show the thin focus ring.
+  No visual change otherwise. (Whether "caff" should read as something
+  clearer belongs to the general UI pass, Task 8.)
 - **N12 Claude slash picker (type `/` in a Claude composer):** the
   highlighted row now uses the app's selected-row look (fill + accent rail
   on the left) instead of accent-coloured text. The popover uses the menu
@@ -1323,3 +1326,6 @@ Sharp corners and one light theme.
   while the picker is open. Fixture is hand-built in the parser's output shape
   (no slash-picker recording exists; the component consumes only the parsed
   state). Confirm-red: the linkage test fails on the pre-change composer.
+- 2026-09-25 N18: caff toggle `aria-pressed` + accessible name "Keep the
+  machine awake (caffeinate)". Confirm-red: the SettingsBar test fails on the
+  pre-change bar.
