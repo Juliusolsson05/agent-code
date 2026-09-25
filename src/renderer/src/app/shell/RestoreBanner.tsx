@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 
@@ -35,13 +35,34 @@ export function RestoreBanner() {
 
   const [collapsed, setCollapsed] = useState(false)
 
+  // WHY focus is carried across the swap (ledger G-35): collapsing and
+  // expanding UNMOUNT the control that was just pressed, so focus fell to
+  // <body> and a keyboard user lost their place. It moves to the
+  // counterpart instead, but only when focus was inside the banner. The
+  // 60 s auto-collapse must never pull the caret out of a composer the user
+  // is typing in.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const counterpartRef = useRef<HTMLButtonElement>(null)
+  const carryFocusRef = useRef(false)
+  const swap = (next: boolean) => {
+    carryFocusRef.current = rootRef.current?.contains(document.activeElement) ?? false
+    setCollapsed(next)
+  }
+  // Layout effect: focus lands before paint, so there is no frame where
+  // <body> owns it and a document-level router could claim the next key.
+  useLayoutEffect(() => {
+    if (!carryFocusRef.current) return
+    carryFocusRef.current = false
+    counterpartRef.current?.focus()
+  }, [collapsed])
+
   useEffect(() => {
     if (!message) return
     // Reset any prior collapse timer whenever the message content (or
     // presence) changes — a partial→persisted transition should re-nag
     // the user for the full 60 s window.
     setCollapsed(false)
-    const timer = window.setTimeout(() => setCollapsed(true), COLLAPSE_AFTER_MS)
+    const timer = window.setTimeout(() => swap(true), COLLAPSE_AFTER_MS)
     return () => window.clearTimeout(timer)
   }, [message])
 
@@ -49,14 +70,17 @@ export function RestoreBanner() {
 
   if (collapsed) {
     return (
-      <div className="flex justify-end px-2 py-1 flex-shrink-0">
+      <div ref={rootRef} className="flex justify-end px-2 py-1 flex-shrink-0">
         <button
+          ref={counterpartRef}
           type="button"
-          onClick={() => setCollapsed(false)}
+          onClick={() => swap(false)}
+          // The warning-soft token family (T-rules), like the CLI update
+          // banner beside it; `bg-warning/10` was a raw alpha of its own.
           className="rounded-control
-            inline-flex items-center gap-2 border border-warning bg-warning/10
+            inline-flex items-center gap-2 border border-warning bg-warning-soft
             px-2 py-0.5 text-[11px] font-code text-warning
-            hover:bg-warning/20
+            hover:bg-current/10
           "
           title="Show autosave-off details"
           aria-label="Show autosave-off details"
@@ -70,10 +94,11 @@ export function RestoreBanner() {
 
   return (
     <div
+      ref={rootRef}
       role="alert"
       className="
         flex items-start gap-3 px-3 py-2
-        border-b border-warning bg-warning/15 text-warning
+        border-b border-warning bg-warning-soft text-warning
         text-[11px] leading-snug font-code
         flex-shrink-0
       "
@@ -81,9 +106,13 @@ export function RestoreBanner() {
       <span className="font-semibold uppercase tracking-wide">Autosave off</span>
       <span className="flex-1 text-ink/90">{message}</span>
       <button
+        ref={counterpartRef}
         type="button"
-        onClick={() => setCollapsed(true)}
-        className="text-warning/80 hover:text-warning"
+        onClick={() => swap(true)}
+        // The CLI update banner's action grammar (a current-colour bordered
+        // control), so the two degraded-state banners stacked above the tab
+        // bar read as one family. Hide was bare tinted text with no border.
+        className="rounded-control border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
         title="Collapse into a corner chip (press the chip to expand it again)"
         aria-label="Collapse autosave-off banner"
       >

@@ -598,6 +598,7 @@ feeds the rows below G-1.
 | G-32 | Search / filter placeholders | most end in "…" (Search in files…, Filter skills…, Go to file…); Search settings, Filter projects ×2 and Agent Activity's filter did not | one form | done (all four end in "…"; Agent Activity keeps "Type to filter" because typing anywhere in its list really lands in the field) |
 | G-33 | Error fallback wording | "Could not …" ×58 vs "Failed to …" ×18 / "Unable to …" ×2, with and without a final period | "Could not …." | done (18 renderer fallbacks, the spawn fallback, and Path Picker's listing error). Kept: "Failed to start" (a row status, not a message) and main-process messages |
 | G-34 | Row switches | Skills and MCP servers: the same hand-rolled 12×20 pill with no knob (state by colour only; only MCP's had a focus ring); provider enablement: a lowercase on/off chip with `text-ink` on the accent fill | `Switch` primitive | done (all three on `Switch`: a knob that moves, `accent-fg`-family knob on the fill, `rounded-chip` so it follows the corner style, focus ring). The settings page's row toggle stays its own control: a full-width row that spells out Enabled/Disabled (N14) |
+| G-35 | Degraded-run banners (RestoreBanner, CLI update banner) | Hide ↔ corner chip unmounted the pressed control, so focus fell to <body> (the 60 s auto-collapse too); RestoreBanner used raw `bg-warning/15` / `/10` and a borderless Hide beside the CLI banner's bordered current-colour actions | focus carried to the counterpart; `-soft` tokens; one action grammar | done (focus moves chip ↔ Hide only when it was inside the banner, so auto-collapse never takes a composer's caret; `bg-warning-soft`; Hide uses the CLI banner's control). CLI banner dismiss left as is: its row unmounts to <body>, which type-to-focus already reclaims for the focused pane, and a single row is the normal case |
 
 ## Owner visual checklist
 
@@ -923,6 +924,9 @@ Sharp corners and one light theme.
   with a knob that slides right when on. Providers' "on"/"off" chip is
   gone. **Check** the knob at the Sharp and Round corner styles, and that the
   on state reads in a light theme.
+- **G-35 "Autosave off" banner** (only in a degraded run): Hide now has the
+  same bordered look as the CLI update banner's buttons, and the tint matches
+  it. Hard to trigger on purpose; source-verified.
 - **G-29…G-33 Copy and small controls:** the browser pocket's right-click
   and ⋯ menus are Title Case like the app menu ("Open in Default Browser",
   "Cookies and Storage"); "All Projects | Selected Projects", "Show All",
