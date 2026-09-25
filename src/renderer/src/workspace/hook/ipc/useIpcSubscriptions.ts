@@ -65,11 +65,9 @@ import {
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
-  gcHiddenOrphanGhosts,
-  gcSupersededGhosts,
   ghostsFromSemanticTurn,
   ghostsToPersist,
-  orphanStale,
+  sweepGhosts,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
 import {
@@ -517,26 +515,10 @@ export function useIpcSubscriptions(
           // Only runs when there are ghosts to consider; otherwise leaves
           // `working` untouched so the queue pass below still gets a chance.
           if (runtime.ghosts.size > 0) {
-            const orphanedGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
-            // Hidden orphans (orphaned AND at-or-before the committed JSONL
-            // tail) can never render again and would otherwise pin the
-            // live-entry trim bound for the rest of the session (#724).
-            // Same grace as superseded GC, for the same persistence reason.
-            // Both sweeps spare the live turn's ghosts: ghostsFromSemanticTurn
-            // re-mints any missing block of it on the next tick (#724, #730).
-            const currentTurnId = runtime.semantic.currentTurn?.turnId ?? null
-            const nextGhosts = gcHiddenOrphanGhosts(
-              gcSupersededGhosts(
-                orphanedGhosts,
-                now,
-                GHOST_SUPERSEDED_GC_MS,
-                currentTurnId,
-              ),
-              runtime.lastJsonlEntryAt,
-              currentTurnId,
-              now,
-              GHOST_SUPERSEDED_GC_MS,
-            )
+            const nextGhosts = sweepGhosts(runtime, now, {
+              orphanTtlMs: GHOST_ORPHAN_TTL_MS,
+              gcMs: GHOST_SUPERSEDED_GC_MS,
+            })
             if (nextGhosts !== runtime.ghosts) {
               for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
                 window.api.ghostAppend(sessionId, ghost)

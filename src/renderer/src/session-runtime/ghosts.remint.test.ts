@@ -8,6 +8,7 @@ import {
   gcSupersededGhosts,
   ghostsFromSemanticTurn,
   reconcileUpstream,
+  sweepGhosts,
 } from '@renderer/session-runtime/ghosts'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import type { Entry } from '@shared/types/transcript'
@@ -113,5 +114,39 @@ describe('a superseded ghost of the still-current turn (#730)', () => {
     const reconciled = supersededGhostOfLiveTurn()
     const now = reminted._atp.createdAt
     expect(gcSupersededGhosts(reconciled, now, GC_MS, null).has(minted.uuid)).toBe(false)
+  })
+
+  // #1228 review: the fix is one argument at the call site, and the sweep
+  // used to assemble its reducers inline where nothing tested them. These go
+  // through the composed tick the 1 s timer runs, with the turn id read from
+  // the runtime slice exactly as production passes it.
+  it('survives the real sweep tick while its turn is current, and goes once it is not', () => {
+    const reconciled = supersededGhostOfLiveTurn()
+    const now = reminted._atp.createdAt
+    vi.setSystemTime(now)
+    const timing = { orphanTtlMs: 30_000, gcMs: GC_MS }
+    const live = { ghosts: reconciled, lastJsonlEntryAt: superseding._atp.updatedAt, semantic: { currentTurn: liveTurn } }
+    const swept = sweepGhosts(live, now, timing)
+    expect(ghostsFromSemanticTurn(liveTurn, SESSION, swept).get(minted.uuid)?._atp.supersededBy)
+      .toBe(superseding._atp.supersededBy)
+
+    const idle = { ...live, ghosts: swept, semantic: { currentTurn: null } }
+    expect(sweepGhosts(idle, now, timing).has(minted.uuid)).toBe(false)
+  })
+
+  it('stays frozen when its live block keeps streaming after supersedure', () => {
+    // The supersede guard in ghostsFromSemanticTurn: a late delta for a block
+    // whose committed record already landed must not rewrite the ghost or
+    // bump its updatedAt (log noise, and a reset of its eviction clock).
+    const reconciled = supersededGhostOfLiveTurn()
+    const before = reconciled.get(minted.uuid)!
+    vi.setSystemTime(reminted._atp.createdAt)
+    const block = liveTurn.blocks[minted._atp.blockIndex]!
+    const streamedOn = {
+      ...liveTurn,
+      blocks: { [minted._atp.blockIndex]: { ...block, parsedInput: { command: 'echo a later delta' } } },
+    } as SemanticLiveTurn
+    const ticked = ghostsFromSemanticTurn(streamedOn, SESSION, reconciled)
+    expect(ticked.get(minted.uuid)).toBe(before)
   })
 })
