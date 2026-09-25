@@ -19,6 +19,7 @@ import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
   GHOST_ORPHAN_TTL_MS,
   ghostsToPersist,
+  isGhostHiddenBehindJsonlTail,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
 import {
@@ -453,12 +454,28 @@ export async function loadInitialHistoryForSession({
       // whose turns it committed, and only what that CHANGED is appended
       // back, diffed against the merged state rather than the empty runtime,
       // so a restore does not re-append the whole log it just read (#731).
+      // The committed tail this load establishes; the restored ghosts are
+      // judged against it below, and the runtime is stamped with it further
+      // down (see the lastJsonlEntryAt comment there).
+      const lastJsonlEntryAt = latestCommittedTimestamp(current.lastJsonlEntryAt, initialEntries)
       let loadedGhosts = current.ghosts
       if (persistedGhosts.size > 0) {
         const merged = new Map(current.ghosts)
         const committedResponses = committedCodexResponses(chunk.entries)
         for (const [uuid, ghost] of persistedGhosts) {
+          // In-memory wins: a live pane re-reading its own log (a re-kicked
+          // load, a hydrate) holds fresher state than the file.
           if (merged.has(uuid)) continue
+          // WHY a restored ghost the tail already passed is not merged at all
+          // (#1227 review, B F1/F2): render rule 4 hides it for good, and most
+          // can never be superseded — Codex response ids never match the
+          // rollout turn id (#1231) and OpenCode entries carry no id at all
+          // (1,864 of 1,864 OpenCode ghosts on disk are un-superseded). Merged,
+          // they were permanent cargo: re-read, re-merged and swept 5 s later
+          // on every restore of a pane whose log #1223 protects. Only a ghost
+          // newer than the tail — a turn the transcript never got to — can
+          // paint, so only those are worth holding. The log keeps the rest.
+          if (isGhostHiddenBehindJsonlTail(ghost, lastJsonlEntryAt)) continue
           // A Codex response this chunk shows as finished and committed. Its
           // ghosts cannot be superseded the ordinary way (their response-id
           // turnId never matches the rollout's turn id, #1231), and the
@@ -492,7 +509,6 @@ export async function loadInitialHistoryForSession({
       // production expression is hard to read.
       const resolvedTotalEntries = chunk.totalEntries ?? initialEntries.length
       loadedEntryCount = resolvedTotalEntries
-      const lastJsonlEntryAt = latestCommittedTimestamp(current.lastJsonlEntryAt, initialEntries)
 
       const placed = initialEntries.length > 0
         ? placeHistoryEntries(placement, current.entries)

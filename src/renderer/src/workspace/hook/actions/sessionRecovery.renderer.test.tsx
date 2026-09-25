@@ -492,7 +492,10 @@ describe('useSessionActions recovery retry', () => {
     // deleted that bootstrap — persisted ghosts are now read only by the
     // history load (initialHistory.ts), which a bare replacement with no
     // durable provider id never runs. Nothing async is left in flight here,
-    // so asserting "not read" also pins that the dead path stays dead.
+    // so asserting "not read" also pins that the dead path stays dead. The
+    // removed bootstrap was DEFERRED by a timer, so let one macrotask pass
+    // first, or this only catches a synchronous read (#1227 review C3).
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(ghostRead).not.toHaveBeenCalled()
   })
 })

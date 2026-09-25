@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 import { GHOST_ORPHAN_TTL_MS, orphanStale } from '@renderer/session-runtime/ghosts'
 import { selectMergedEntries } from '@renderer/session-runtime/mergedEntries'
@@ -20,22 +21,29 @@ import { loadInitialHistoryForSession } from './initialHistory'
 // has to be read.
 //
 // The data is a real pair from the owner's machine (see the fixture's
-// `source`): 7 never-superseded ghosts whose turns WERE committed. That makes
-// it a two-sided test. The log must be read (the ghosts arrive), and a ghost
-// whose committed record IS in the loaded chunk must be superseded by it.
+// `source`): 7 never-superseded ghosts whose turns WERE committed, and those
+// turns' 8 transcript records. What a restore must do with them:
+//  - read the log under the persisted id;
+//  - hold only a ghost the committed tail has NOT passed (anything older can
+//    never paint, and most can never be superseded, #1227 review B F1/F2);
+//  - supersede, from the loaded chunk, a held ghost whose turn is committed
+//    (this fixture's newest turn: its ghosts postdate its own JSONL stamps by
+//    ~227 ms, so only reconcile keeps them off screen);
+//  - write back only what changed, never the log it just read (#731 grew
+//    ghost logs to 2.1 GB by re-appending on every restore);
+//  - keep an in-memory ghost over the file's copy of it.
 //
-// Honest scope (#1227 review, finding 3): on the real restore of this pane
-// those 7 turns sit ABOVE the 120-record window, so reconcile never sees
-// them there; what keeps them off screen in production is render rule 4 with
-// each ghost re-dated to its own createdAt. The describe block further down
-// pins that, on the merged feed, with two more real sessions.
+// Honest scope (#1227 review): on the real restore of this pane these turns
+// sit ABOVE the 120-record window, so there the tail alone hides them. The
+// describe block further down pins what the merged feed paints, with more
+// real sessions.
 
 const fixture = JSON.parse(readFileSync(
   join(import.meta.dirname, '../../../../../../testing/fixtures/ghost-restore/943d15d6-committed-turns.json'),
   'utf8',
 )) as {
   providerSessionId: string
-  ghosts: Array<{ uuid: string; _atp: { turnId: string; supersededBy?: string } }>
+  ghosts: Array<{ uuid: string; _atp: { turnId: string; createdAt: number; supersededBy?: string } }>
   transcriptRecords: Array<{ message?: { id?: string } }>
 }
 
@@ -46,23 +54,26 @@ afterEach(() => {
   else Reflect.deleteProperty(window, 'api')
 })
 
-async function restore(records: typeof fixture.transcriptRecords) {
+async function restore(records: typeof fixture.transcriptRecords, inMemory: GhostEntry[] = []) {
   const state = {
     sessions: { [SESSION]: { cwd: '/repo', kind: 'claude', providerSessionId: fixture.providerSessionId } },
   } as unknown as WorkspaceState
   const refs = makeWorkspaceRefsForTest(state)
-  let runtimes: Record<SessionId, SessionRuntime> = { [SESSION]: emptyRuntime() }
+  let runtimes: Record<SessionId, SessionRuntime> = {
+    [SESSION]: { ...emptyRuntime(), ghosts: new Map(inMemory.map(ghost => [ghost.uuid, ghost])) },
+  }
   refs.latestRuntimesRef.current = runtimes
   const setRuntimes = (next: typeof runtimes | ((prev: typeof runtimes) => typeof runtimes)) => {
     runtimes = typeof next === 'function' ? next(runtimes) : next
     refs.latestRuntimesRef.current = runtimes
   }
   const ghostRead = vi.fn(async () => fixture.ghosts)
+  const ghostAppend = vi.fn()
   Object.defineProperty(window, 'api', {
     configurable: true,
     value: {
       ghostRead,
-      ghostAppend: vi.fn(),
+      ghostAppend,
       gitWorktrees: vi.fn(async () => ({ ok: false })),
       reportSessionLifecycle: vi.fn(),
     },
@@ -73,31 +84,56 @@ async function restore(records: typeof fixture.transcriptRecords) {
     setRuntimes: setRuntimes as never,
     feed: { loadHistory: vi.fn(async () => ({ entries: records, hasMore: false, totalEntries: records.length })) } as never,
   })
-  return { runtime: runtimes[SESSION]!, ghostRead }
+  return { runtime: runtimes[SESSION]!, ghostRead, ghostAppend }
 }
 
+const newestTurn = [...fixture.ghosts].sort((a, b) => a._atp.createdAt - b._atp.createdAt).at(-1)!._atp.turnId
+const paintedGhosts = (runtime: SessionRuntime) => selectMergedEntries(
+  { ...runtime, ghosts: orphanStale(runtime.ghosts, Date.now(), GHOST_ORPHAN_TTL_MS) },
+  null,
+).filter(entry => (entry as { _atp?: { origin?: string } })._atp?.origin === 'ghost').map(entry => entry.uuid)
+
 describe('a restored pane reads its own ghost log (#1225)', () => {
-  it('reads the log under the persisted id and supersedes every ghost whose turn is committed', async () => {
-    const { runtime, ghostRead } = await restore(fixture.transcriptRecords)
+  it('holds only what the tail has not passed, supersedes it from the chunk, and writes back only that', async () => {
+    const { runtime, ghostRead, ghostAppend } = await restore(fixture.transcriptRecords)
     expect(ghostRead).toHaveBeenCalledWith(SESSION)
-    for (const ghost of fixture.ghosts) {
-      const restored = runtime.ghosts.get(ghost.uuid)
-      expect(restored, `ghost ${ghost.uuid} of ${ghost._atp.turnId}`).toBeDefined()
-      expect(restored?._atp.supersededBy, `ghost of committed turn ${ghost._atp.turnId}`).toBeTruthy()
-    }
+    const held = fixture.ghosts.filter(ghost => runtime.ghosts.has(ghost.uuid))
+    // The newest turn's ghosts are the only ones newer than the tail.
+    expect(new Set(held.map(ghost => ghost._atp.turnId))).toEqual(new Set([newestTurn]))
+    for (const ghost of held) expect(runtime.ghosts.get(ghost.uuid)?._atp.supersededBy).toBeTruthy()
+    // Exactly the supersedes are persisted; nothing read is re-appended (#731).
+    const appended = ghostAppend.mock.calls.map(([, ghost]) => (ghost as GhostEntry).uuid)
+    expect(appended.sort()).toEqual(held.map(ghost => ghost.uuid).sort())
+    expect(paintedGhosts(runtime)).toEqual([])
   })
 
-  it('keeps a ghost whose turn never reached the transcript (the crash case)', async () => {
-    // Drop one turn's committed records, as if Agent Code died before Claude
-    // wrote them. That turn's ghosts are the only record of it and must stay.
-    const lostTurn = fixture.ghosts[0]!._atp.turnId
-    const { runtime } = await restore(fixture.transcriptRecords.filter(record => record.message?.id !== lostTurn))
-    const lost = fixture.ghosts.filter(ghost => ghost._atp.turnId === lostTurn)
-    expect(lost.length).toBeGreaterThan(0)
+  it('paints the ghosts of a turn the transcript never got to (the crash case), and re-appends none of them', async () => {
+    // Drop the NEWEST turn's committed records, as if Agent Code died before
+    // Claude wrote them. Its ghosts are the only record of it.
+    const records = fixture.transcriptRecords.filter(record => record.message?.id !== newestTurn)
+    const { runtime, ghostAppend } = await restore(records)
+    const lost = fixture.ghosts.filter(ghost => ghost._atp.turnId === newestTurn)
     for (const ghost of lost) {
-      expect(runtime.ghosts.get(ghost.uuid), `lost-turn ghost ${ghost.uuid}`).toBeDefined()
-      expect(runtime.ghosts.get(ghost.uuid)?._atp.supersededBy).toBeFalsy()
+      expect(runtime.ghosts.get(ghost.uuid)?._atp.supersededBy, `lost-turn ghost ${ghost.uuid}`).toBeUndefined()
     }
+    expect(paintedGhosts(runtime).sort()).toEqual(lost.map(ghost => ghost.uuid).sort())
+    // Only supersedes are written back (#731). Here that is the previous
+    // turn's ghost: it postdates its own JSONL stamp by ~190 ms, so it too is
+    // newer than this cut tail, and the chunk heals it. The lost turn's
+    // ghosts, read from the log and unchanged, are not re-appended.
+    const appended = ghostAppend.mock.calls.map(([, ghost]) => ghost as GhostEntry)
+    for (const ghost of appended) expect(ghost._atp.supersededBy, ghost.uuid).toBeTruthy()
+    expect(appended.some(ghost => ghost._atp.turnId === newestTurn)).toBe(false)
+  })
+
+  it('keeps the in-memory ghost over the log\'s copy of it', async () => {
+    // A live pane re-reading its own log (a re-kicked load, a hydrate) holds
+    // fresher state than the file; the file must not overwrite it.
+    const onDisk = fixture.ghosts.find(ghost => ghost._atp.turnId === newestTurn)!
+    const live = { ...onDisk, _atp: { ...onDisk._atp, orphanedAt: undefined, updatedAt: Date.now() } } as unknown as GhostEntry
+    const records = fixture.transcriptRecords.filter(record => record.message?.id !== newestTurn)
+    const { runtime } = await restore(records, [live])
+    expect(runtime.ghosts.get(onDisk.uuid)).toBe(live)
   })
 })
 
