@@ -122,7 +122,9 @@ export async function readProxyEventsForBundle(opts: {
     if (!latest) return empty
 
     const eventsPath = join(latest.runDir, 'proxy-events.jsonl')
-    const proxyEvents = await readEventsTail(eventsPath, latest.size)
+    const tail = await readEventsTail(eventsPath, latest.size)
+    const newestBody = await readLatestRequestBody(latest.runDir)
+    const proxyEvents = tail === null ? newestBody : newestBody ? `${tail.replace(/\n?$/, '\n')}${newestBody}` : tail
     const sessionMeta = await readSessionMeta(join(latest.runDir, 'session-meta.json'))
 
     return {
@@ -249,6 +251,33 @@ async function readEventsTail(path: string, size: number): Promise<string | null
       await handle.close()
     }
   } catch {
+    return null
+  }
+}
+
+
+/**
+ * The newest request body the Claude proxy addon kept after its events file
+ * passed its body budget (#1273, claude-code-headless#62).
+ *
+ * WHY it is appended to the events text rather than given its own bundle
+ * field: past the budget the log's own request events carry
+ * `body_omitted: "file-budget"`, so the 5 MiB tail above has no prompt text at
+ * all — the one thing a bug report most needs. The sidecar line
+ * (`kind: "request-body-latest"`, with the flow_id of its request) sits at
+ * the end of the same JSONL, where every existing reader already looks,
+ * without changing the bundle's shape. It is bounded by one request body
+ * (2 MiB raw), and because a Claude request re-sends the whole conversation,
+ * that single body holds every prompt so far.
+ */
+const LATEST_REQUEST_BODY_FILE = 'latest-request-body.json'
+
+async function readLatestRequestBody(runDir: string): Promise<string | null> {
+  try {
+    const text = await readFile(join(runDir, LATEST_REQUEST_BODY_FILE), 'utf-8')
+    return text.trim().length > 0 ? `${text.trim()}\n` : null
+  } catch {
+    // Absent is the normal case: the run never passed its budget.
     return null
   }
 }
