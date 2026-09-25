@@ -204,6 +204,39 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     expect(missed).toEqual([])
   })
 
+  // #1310 review: symbols the owner actually types are two cells wide too.
+  it.each([
+    ['check marks', '✅'.repeat(40)],
+    ['crosses', '❌'.repeat(30)],
+    ['rockets', '🚀'.repeat(60)],
+    ['fullwidth punctuation', '︐'.repeat(101)],
+    ['check marks before a path', `${'✅'.repeat(40)} /Users/example/project/src/providers/claude/runtime/promptDelivery.ts`],
+  ])('confirms wrapped %s at every width', (_name, prompt) => {
+    const tail = pasteTailNeedle(prompt)
+    const missed: number[] = []
+    for (let cols = 20; cols <= 140; cols += 1) {
+      if (pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, prompt)), tail, 0, false) !== 'inline') missed.push(cols)
+    }
+    expect(missed).toEqual([])
+  })
+
+  // #1310 review A/B: a SOFT wrap before a wide word must keep its space. A
+  // join without it confirmed a paste whose tail had not arrived (B's probe:
+  // an early Enter on a partial screen).
+  it('never confirms early across a soft wrap before a wide character', () => {
+    const payload = 'abcdefghijklmnop 请ghijklm\nabcdefghijklmnop请ghijklm'
+    const tail = pasteTailNeedle(payload)
+    for (let cols = 20; cols <= 140; cols += 1) {
+      const partial = activeClaudeComposerText(screenAt(cols, 'abcdefghijklmnop 请ghijklm'))
+      expect(pasteAbsorbedVia(partial, tail, 0, false)).toBeNull()
+    }
+  })
+
+  it('keeps the space of a soft wrap between a long word and a CJK word', () => {
+    const prompt = `${'a'.repeat(101)} 你好吗`
+    expect(activeClaudeComposerText(screenAt(20, prompt))).toContain(' 你好吗')
+  })
+
   it('still refuses a composer that holds only the start of the prompt', () => {
     // The tail is what proves the WHOLE paste landed. A composer still
     // receiving the paste shows its head, and must not confirm.
