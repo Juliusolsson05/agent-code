@@ -183,10 +183,10 @@ export class FileControlHistory implements ControlHistory {
     return { records: [], invalid: { file: RECOVERY, sha256: createHash('sha256').update(bytes).digest('hex'), blockedPairs: [], keyedCallsBlocked: true } }
   }
 
-  // Active guards, minus accepted digests. A quarantine file that is present
-  // is always re-analyzed: the preserved bytes are the truth, and a record
-  // can be stale or edited. A record only speaks for a quarantine file that
-  // has since been deleted, so deleting the evidence does not lift its block.
+  // Active guards, minus accepted digests: every validated record, plus a
+  // fresh analysis of every quarantine file present (which covers a deleted
+  // or unreadable recovery.json). Deleting or shortening the evidence
+  // therefore never lifts a recorded block.
   private async readGuards(): Promise<Guard[]> {
     const { records, invalid } = await this.readRecords()
     const guards: Guard[] = invalid ? [invalid] : []
@@ -198,7 +198,12 @@ export class FileControlHistory implements ControlHistory {
       const analysis = analyze(bytes.toString('utf8'))
       guards.push({ file: name, sha256, blockedPairs: analysis.blockedPairs, keyedCallsBlocked: analysis.keyedCallsBlocked })
     }
-    guards.push(...records.filter(record => !present.has(record.file)))
+    // Every record applies, present file or not: re-analysis may ADD blocks
+    // but never lift one. A quarantine truncated so its damaged line became
+    // a "torn tail" re-analyzes as harmless, and replacing the record with
+    // that analysis lifted a block nobody accepted (#1254 review A). The
+    // record's own digest is what accepts it.
+    guards.push(...records)
     let accepted = new Set<string>()
     try {
       const parsed = JSON.parse(await readFile(join(this.directory, ACCEPTED), 'utf8')) as { accepted?: unknown }
@@ -353,6 +358,9 @@ function analyze(text: string): Analysis {
   let damagedLines = 0
   let keyedCallsBlocked = false
   let gap = false
+  // Calls with a damaged row whose callId is still readable: their kept
+  // sibling rows name the key the damaged row may have lost (review A).
+  const damagedCallIds = new Set<string>()
   complete.split('\n').filter(Boolean).forEach((line, index) => {
     let raw: unknown
     try { raw = JSON.parse(line) } catch {
@@ -372,12 +380,44 @@ function analyze(text: string): Analysis {
     // Exact-pair evidence only when every field but `kind` is proven valid:
     // the downgrade shape. A corrupted key value can still look like a key,
     // so any other schema failure is unknown-key evidence (steering q13).
-    const onlyKind = parsed.error.issues.every(issue => issue.path.length === 1 && issue.path[0] === 'kind')
-    const record = raw as { caller?: unknown; requestKey?: unknown }
+    // The kind must be PRESENT and a string: a newer build writes a new kind
+    // value, never a missing one. A missing or mistyped kind is corruption,
+    // and a second corruption in the same row (a truncated key) would then be
+    // trusted as an exact pair while the real key dispatched again (#1254
+    // review B).
+    const record = raw as { kind?: unknown; caller?: unknown; requestKey?: unknown; callId?: unknown }
+    const onlyKind = typeof record.kind === 'string'
+      && parsed.error.issues.every(issue => issue.path.length === 1 && issue.path[0] === 'kind')
     if (!onlyKind) { keyedCallsBlocked = true; return }
+    if (typeof record.callId === 'string') damagedCallIds.add(record.callId)
     if (typeof record.caller === 'string' && typeof record.requestKey === 'string') {
       blockedPairs.push({ caller: record.caller, requestKey: record.requestKey })
     }
   })
-  return { events, torn, damaged: damagedLines > 0 || gap, damagedLines, blockedPairs, keyedCallsBlocked }
+  // WHY sibling rows decide too (#1254 review A): the executor stamps every
+  // row of a call with the same `requestKey` (or none); all 1,846 calls in
+  // the owner's real journal agree. A downgrade-shaped row whose key STRING
+  // was corrupted names the wrong pair, while its kept `dispatched`/`result`
+  // rows still name the real one, and the real key would then dispatch a
+  // second time because the lookup only reads `received` rows. So:
+  // - every key a damaged call's kept rows name is blocked too;
+  // - a call whose kept rows DISAGREE about the key is damage in its own
+  //   right, even when every row is schema-valid (a deleted or rewritten key
+  //   on a `received` row), and every key it names is blocked.
+  const keysByCall = new Map<string, Set<string | undefined>>()
+  for (const event of events) {
+    const keys = keysByCall.get(event.callId) ?? new Set<string | undefined>()
+    keys.add(event.requestKey)
+    keysByCall.set(event.callId, keys)
+  }
+  let inconsistent = false
+  for (const event of events) {
+    const disagrees = (keysByCall.get(event.callId)?.size ?? 0) > 1
+    if (disagrees) inconsistent = true
+    if ((disagrees || damagedCallIds.has(event.callId)) && event.requestKey !== undefined
+      && !blockedPairs.some(pair => pair.caller === event.caller && pair.requestKey === event.requestKey)) {
+      blockedPairs.push({ caller: event.caller, requestKey: event.requestKey })
+    }
+  }
+  return { events, torn, damaged: damagedLines > 0 || gap || inconsistent, damagedLines, blockedPairs, keyedCallsBlocked }
 }

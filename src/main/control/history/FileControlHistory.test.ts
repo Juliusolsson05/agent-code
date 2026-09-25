@@ -209,6 +209,125 @@ describe('damaged history recovery (#1240) keeps request keys idempotent', () =>
     expect(reports).toEqual([expect.objectContaining({ kind: 'damaged-rows', keyedCallsBlocked: false })])
   })
 
+  it('blocks exactly the damaged pair, not every key of the same caller', async () => {
+    // The real external caller sends many keyed intents (529 keyed rows in the
+    // owner's journal); one unreadable pair must not lock the rest out.
+    const { directory } = await seeded()
+    await appendFile(join(directory, 'events.jsonl'), `${JSON.stringify({ ...realRows.keyedReceived, sequence: 4, kind: 'received.v2' })}\n`)
+    let effects = 0
+    const run = executor(reopen(directory).history, async () => { effects++; return 'ran' })
+    expect(await run.invoke(realRetry, realCaller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(await run.invoke({ ...realRetry, requestKey: `${realRows.keyedReceived.requestKey}-next` }, realCaller)).toMatchObject({ ok: true, value: 'ran' })
+    expect(effects).toBe(1)
+  })
+
+  it('treats a row with its kind MISSING as corruption, not a downgrade (review B)', async () => {
+    // Missing kind plus a truncated key: trusting the truncated pair would let
+    // the REAL key dispatch a second time.
+    const { directory } = await seeded()
+    const { kind: _gone, ...kindless } = realRows.keyedReceived
+    await appendFile(join(directory, 'events.jsonl'),
+      `${JSON.stringify({ ...kindless, sequence: 4, requestKey: realRows.keyedReceived.requestKey.slice(0, -2) })}\n`)
+    let effects = 0
+    const { history, reports } = reopen(directory)
+    expect(await executor(history, async () => { effects++; return 'ran' }).invoke(realRetry, realCaller))
+      .toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(effects).toBe(0)
+    expect(reports[0]).toMatchObject({ keyedCallsBlocked: true })
+  })
+
+  it('salvages every valid row around a gap once, and later loads find a clean ledger', async () => {
+    const { directory, history } = await seeded()
+    await executor(history).invoke(request, caller)
+    const path = join(directory, 'events.jsonl')
+    const lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean)
+    await writeFile(path, `${[lines[0], ...lines.slice(2)].join('\n')}\n`)
+    const first = reopen(directory)
+    expect((await first.history.events()).map(event => event.sequence)).toEqual(lines.slice(1).map((_, index) => index + 1))
+    const second = reopen(directory)
+    await second.history.events()
+    // Renumbered to 1..n, so the next launch does not re-quarantine forever.
+    expect(second.reports).toEqual([])
+    expect((await readdir(directory)).filter(name => name.startsWith('events.quarantined-'))).toHaveLength(1)
+  })
+
+  it('preserves an unreadable marker as evidence when a later recovery rewrites it, and keeps its block', async () => {
+    const { directory, history } = await seeded()
+    await executor(history).invoke(request, caller)
+    await writeFile(join(directory, 'recovery.json'), '{"quarantines": "garbage"}')
+    const path = join(directory, 'events.jsonl')
+    await appendFile(path, JSON.stringify({ ...realRows.keyedReceived, sequence: 9 }).slice(0, 60))
+    let effects = 0
+    const run = executor(reopen(directory).history, async () => { effects++; return 'ran' })
+    // The torn tail alone would block nothing; the unreadable marker it
+    // replaced must keep blocking new keyed intents.
+    expect(await run.invoke({ ...request, requestKey: 'after-marker' }, caller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    const preserved = (await readdir(directory)).find(name => name.startsWith('recovery.invalid-'))!
+    expect(await readFile(join(directory, preserved), 'utf8')).toBe('{"quarantines": "garbage"}')
+    // Its record carries the block even once the preserved bytes are deleted.
+    await rm(join(directory, preserved))
+    expect(await executor(new FileControlHistory(directory), async () => { effects++; return 'ran' }).invoke({ ...request, requestKey: 'after-marker' }, caller))
+      .toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(effects).toBe(0)
+  })
+
+  it('does not cache a failed load: the next call re-reads the disk', async () => {
+    const { directory, history } = await seeded()
+    const path = join(directory, 'events.jsonl')
+    await chmod(path, 0o000)
+    await expect(history.events()).rejects.toThrow()
+    await chmod(path, 0o600)
+    expect(await history.events()).toHaveLength(realRows.prefix.length)
+  })
+
+  // Review A: the executor stamps every row of a call with its request key,
+  // and the lookup reads only `received` rows. A damaged `received` row can
+  // name the wrong key while the call's kept rows still name the real one.
+  async function withReceivedRewritten(rewrite: (row: Record<string, unknown>) => Record<string, unknown>) {
+    const { directory, history } = await seeded()
+    let effects = 0
+    await executor(history, async () => { effects++; return 'sent' }).invoke(request, caller)
+    const path = join(directory, 'events.jsonl')
+    const lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean)
+    const index = lines.findIndex(line => JSON.parse(line).kind === 'received' && JSON.parse(line).requestKey === request.requestKey)
+    lines[index] = JSON.stringify(rewrite(JSON.parse(lines[index]!)))
+    await writeFile(path, `${lines.join('\n')}\n`)
+    const run = executor(reopen(directory).history, async () => { effects++; return 'again' })
+    return { directory, run, effects: () => effects }
+  }
+
+  it('blocks the real key when a downgrade-shaped received row carries a corrupted key string', async () => {
+    const { run, effects } = await withReceivedRewritten(row => ({ ...row, kind: 'received.v2', requestKey: `${row.requestKey}-corrupted` }))
+    expect(await run.invoke(request, caller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(effects()).toBe(1)
+  })
+
+  it('blocks the real key when a schema-valid received row lost its key but its siblings kept it', async () => {
+    const { run, effects } = await withReceivedRewritten(({ requestKey: _lost, ...row }) => row)
+    expect(await run.invoke(request, caller)).toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(effects()).toBe(1)
+  })
+
+  it('never lifts a recorded block when the quarantined evidence is shortened (review A)', async () => {
+    const { directory, history } = await seeded()
+    let effects = 0
+    await executor(history, async () => { effects++; return 'sent' }).invoke(request, caller)
+    const path = join(directory, 'events.jsonl')
+    const lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean)
+    const index = lines.findIndex(line => JSON.parse(line).kind === 'received' && JSON.parse(line).requestKey === request.requestKey)
+    lines[index] = 'NOT-JSON-RECEIVED'
+    await writeFile(path, `${lines.join('\n')}\n`)
+    await reopen(directory).history.events()
+    // Cut the preserved copy inside the damaged line: re-analysis alone would
+    // now call it a harmless torn tail.
+    const quarantine = join(directory, (await readdir(directory)).find(name => name.startsWith('events.quarantined-'))!)
+    const bytes = await readFile(quarantine, 'utf8')
+    await writeFile(quarantine, bytes.slice(0, bytes.indexOf('NOT-JSON') + 5))
+    expect(await executor(new FileControlHistory(directory), async () => { effects++; return 'again' }).invoke({ ...request, requestKey: 'fresh-after-cut' }, caller))
+      .toMatchObject({ ok: false, error: { code: 'history_unavailable' } })
+    expect(effects).toBe(1)
+  })
+
   it('blocks new keyed calls after an unreadable line until the operator clears recovery', async () => {
     const { directory, history } = await seeded()
     await executor(history).invoke(request, caller)
