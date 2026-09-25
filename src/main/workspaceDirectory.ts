@@ -1,6 +1,8 @@
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 
+import { MISSING_WORKSPACE_FOLDER_PREFIX } from '@shared/types/session.js'
+
 /**
  * The session's workspace directory is gone from disk.
  *
@@ -14,7 +16,7 @@ import path from 'node:path'
  */
 export class MissingWorkspaceDirectoryError extends Error {
   constructor(readonly cwd: string) {
-    super(`Workspace folder is missing: ${cwd}`)
+    super(`${MISSING_WORKSPACE_FOLDER_PREFIX}${cwd}`)
     this.name = 'MissingWorkspaceDirectoryError'
   }
 }
