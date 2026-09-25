@@ -26,10 +26,20 @@ let openerInstalled = false
 type ModelContext = {
   workspaceRoot: string
   openDefinition: (absolutePath: string, line: number, column: number) => Promise<boolean>
+  /** Re-send this mount's own open after the server lost the document
+   *  (#1208). Main re-authorizes it; see ipc/lsp.ts `lsp:reopen-document`. */
+  reopen?: (content: string) => Promise<boolean>
+  /** Retry throttle for `reopen`: a server that dies on startup must not be
+   *  respawned on every keystroke. Backoff doubles from REOPEN_BACKOFF_MIN_MS
+   *  to REOPEN_BACKOFF_MAX_MS and resets on a successful reopen. */
+  reopenBlockedUntil: number
+  reopenBackoffMs: number
   refs: number
   syncedVersion: number | null
   pendingSync: { version: number; promise: Promise<boolean> } | null
 }
+const REOPEN_BACKOFF_MIN_MS = 5_000
+const REOPEN_BACKOFF_MAX_MS = 60_000
 const modelContexts = new Map<string, ModelContext>()
 
 /** Bind a Monaco model to the filesystem root that authorized its LSP doc.
@@ -37,18 +47,22 @@ const modelContexts = new Map<string, ModelContext>()
  * Workspaces deliberately edit files from other worktrees. */
 export function registerEditorLspContext(
   clientUri: string,
-  context: Pick<ModelContext, 'workspaceRoot' | 'openDefinition'>,
+  context: Pick<ModelContext, 'workspaceRoot' | 'openDefinition' | 'reopen'>,
 ): () => void {
   const existing = modelContexts.get(clientUri)
   if (existing && existing.workspaceRoot === context.workspaceRoot) {
     existing.refs += 1
     existing.openDefinition = context.openDefinition
+    // The newest mount's authorization is the current one.
+    if (context.reopen) existing.reopen = context.reopen
   } else {
     modelContexts.set(clientUri, {
       ...context,
       refs: 1,
       syncedVersion: null,
       pendingSync: null,
+      reopenBlockedUntil: 0,
+      reopenBackoffMs: REOPEN_BACKOFF_MIN_MS,
     })
   }
   return () => {
@@ -94,8 +108,13 @@ export async function syncEditorLspModel(model: Monaco.editor.ITextModel): Promi
         if (modelContexts.get(clientUri) !== context) return false
         context.syncedVersion = version
         return true
-      } catch {
-        return false
+      } catch (error) {
+        // #1208: the server lost the document (a crash, or retirement for
+        // ignoring cancelled requests). The editor stays open, so it asks for
+        // the document back with its own authorization, which re-sends the
+        // current text. Anything else is the fail-open no-op it always was.
+        if (!isDocumentLost(error) || !context.reopen) return false
+        return await reopenLostDocument(clientUri, context, content, version)
       }
     })
   context.pendingSync = { version, promise }
@@ -103,6 +122,32 @@ export async function syncEditorLspModel(model: Monaco.editor.ITextModel): Promi
     if (context.pendingSync?.promise === promise) context.pendingSync = null
   })
   return await promise
+}
+
+function isDocumentLost(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('LSP document is not open')
+}
+
+async function reopenLostDocument(
+  clientUri: string,
+  context: ModelContext,
+  content: string,
+  version: number,
+): Promise<boolean> {
+  const now = Date.now()
+  if (now < context.reopenBlockedUntil) return false
+  const reopened = await context.reopen!(content).catch(() => false)
+  if (modelContexts.get(clientUri) !== context) return false
+  if (!reopened) {
+    context.reopenBlockedUntil = now + context.reopenBackoffMs
+    context.reopenBackoffMs = Math.min(context.reopenBackoffMs * 2, REOPEN_BACKOFF_MAX_MS)
+    return false
+  }
+  context.reopenBackoffMs = REOPEN_BACKOFF_MIN_MS
+  context.reopenBlockedUntil = 0
+  // The reopen carried this exact text.
+  context.syncedVersion = version
+  return true
 }
 
 // LSP CompletionItemKind (1-based) → Monaco CompletionItemKind. The two

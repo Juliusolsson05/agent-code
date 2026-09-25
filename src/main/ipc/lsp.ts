@@ -266,6 +266,90 @@ export function registerLspIpc(
     },
   )
 
+  // #1208: an editor that stays open after its server was lost (a crash, or
+  // retirement for ignoring cancelled requests, #924) asks for its document
+  // back. WHY the renderer drives this, with its own current authorization,
+  // rather than main re-opening from what it cached at the first open: that
+  // design was reviewed and withdrawn. A cached capability outlived its owner,
+  // skipped the physical checks (a directory swapped for a symlink out of the
+  // root re-opened fine), and restored one reference of two. Here:
+  //   - only the renderer that owns the URI may ask;
+  //   - authorization is re-run NOW through authorizeContext, physical
+  //     target and regular-file checks included; nothing cached is reused;
+  //   - it runs in the URI's IPC queue and re-checks ownership after the
+  //     await, so an owner cleared meanwhile gets nothing opened (clear()
+  //     queued its own closes, which balance anything already in flight);
+  //   - it restores the manager to the owner's IPC reference count for the
+  //     URI, so two mounts get two references back;
+  //   - it is a no-op while the manager still has the document.
+  ipcMain.handle(
+    'lsp:reopen-document',
+    async (
+      evt,
+      params: {
+        clientUri: string
+        content: string
+        language: string
+        workspaceRoot: string
+        filePath?: string | null
+        authorization: LspDocumentAuthorization
+      },
+    ): Promise<boolean> => {
+      if (
+        typeof params.clientUri !== 'string' ||
+        params.clientUri.length === 0 ||
+        params.clientUri.length > 8_192 ||
+        typeof params.content !== 'string' ||
+        Buffer.byteLength(params.content, 'utf8') > MAX_LSP_CONTENT_BYTES
+      ) {
+        throw new Error('invalid or oversized LSP document')
+      }
+      if (!isOwned(evt.sender, params.clientUri)) return false
+      return await serializeDocument(params.clientUri, async () => {
+        const stillOwned = (): boolean =>
+          ownerByDocument.get(params.clientUri) === evt.sender.id && !evt.sender.isDestroyed()
+        if (!stillOwned()) return false
+        if (lspManager.hasDocument(params.clientUri)) return true
+        const context = await authorizeContext(evt.sender, params)
+        // Defensive: clear() already removed the owner's counts, so `refs`
+        // below would read 0 and nothing would open. Kept so the rule does
+        // not depend on that ordering.
+        if (!stillOwned()) return false
+        const refs = documentsByOwner.get(evt.sender.id)?.get(params.clientUri) ?? 0
+        // Transactional against the manager's OWN count, not the number of
+        // opens that fulfilled (steering q23): an open can count a shared-alias
+        // reference and then throw on its didChange. The manager had no
+        // document before this (the no-op guard above), so every reference it
+        // holds after a failure belongs to this attempt and is closed.
+        let opened = 0
+        let failure: unknown = null
+        try {
+          for (; opened < refs; opened++) {
+            const ok = await lspManager.openDocument({
+              clientUri: params.clientUri,
+              content: params.content,
+              language: params.language,
+              workspaceRoot: context.workspaceRoot,
+              filePath: context.filePath,
+            })
+            if (!ok) break
+          }
+        } catch (err) {
+          failure = err
+        }
+        if (failure !== null || opened < refs) {
+          for (let leaked = lspManager.documentRefs(params.clientUri); leaked > 0; leaked--) {
+            await lspManager.closeDocument(params.clientUri).catch(() => undefined)
+          }
+          if (failure !== null) throw failure
+          return false
+        }
+        lspBackedDocuments.add(params.clientUri)
+        return true
+      })
+    },
+  )
+
   ipcMain.handle('lsp:change-document', async (evt, clientUri: string, content: string) => {
     if (!isOwned(evt.sender, clientUri)) return
     if (Buffer.byteLength(content, 'utf8') > MAX_LSP_CONTENT_BYTES) {

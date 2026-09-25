@@ -783,3 +783,162 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       .resolves.toBeUndefined()
   })
 })
+
+// #1208: after the server is lost, an editor that stays open re-opens its
+// document through `lsp:reopen-document`. The withdrawn first fix re-opened
+// from main with authorization cached at first open; each test below pins one
+// of the defects review found in it, against the real IPC handlers.
+describe('#1208 — reopening a document after its server was lost', () => {
+  const docsOf = (manager: Manager) => (manager as unknown as { docs: Map<string, { refs: number }> }).docs
+  // The server dies as a crash does, and the next request gets a REPLACEMENT
+  // process (a fresh generation), which is what getOrCreateServer does.
+  const discard = (manager: Manager, server: FakeServer) => {
+    ;(manager as unknown as { discardServer: (s: unknown, kill?: boolean) => void }).discardServer(server, false)
+    const replacement: FakeServer = { ...server, generation: `${server.generation}-next`, closed: false, abandonedRequests: 0 }
+    const internal = manager as unknown as { servers: Map<string, FakeServer>; getOrCreateServer: () => Promise<FakeServer> }
+    internal.servers.set(replacement.key, replacement)
+    internal.getOrCreateServer = async () => replacement
+  }
+  const VIRTUAL = { language: 'typescript', workspaceRoot: '/repo', filePath: null, authorization: { kind: 'editor-root' } } as const
+
+  function setup(authorize: (sender: unknown, root: string) => Promise<string> = async () => '/repo') {
+    ipcHandlers.clear()
+    const { manager, server } = managerWithServer()
+    registerLspIpc(manager, { authorize } as never, {} as never)
+    const listeners = new Map<string, () => void>()
+    const sender = {
+      id: 1, isDestroyed: () => false,
+      once: (event: string, fn: () => void) => { listeners.set(event, fn) },
+      on: (event: string, fn: () => void) => { listeners.set(event, fn) },
+    }
+    return { manager, server, evt: { sender }, destroy: () => listeners.get('destroyed')?.() }
+  }
+
+  it('restores every reference the renderer holds, so closing one mount keeps LSP for the other', async () => {
+    const { manager, server, evt } = setup()
+    const open = ipcHandlers.get('lsp:open-document')!
+    await open(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    await open(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'two')).rejects.toThrow('not open')
+
+    expect(await ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'two' })).toBe(true)
+    expect(docsOf(manager).get('inmemory://a')?.refs).toBe(2)
+    await ipcHandlers.get('lsp:close-document')!(evt, 'inmemory://a')
+    await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'three')).resolves.toBeUndefined()
+    await ipcHandlers.get('lsp:close-document')!(evt, 'inmemory://a')
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  it('is a no-op while the document still exists, never an extra reference', async () => {
+    const { manager, evt } = setup()
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    expect(await ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })).toBe(true)
+    expect(docsOf(manager).get('inmemory://a')?.refs).toBe(1)
+  })
+
+  it('refuses a renderer that does not own the document', async () => {
+    const { manager, server, evt } = setup()
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    const stranger = { sender: { ...evt.sender, id: 2 } }
+    await expect(ipcHandlers.get('lsp:reopen-document')!(stranger, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'x' })).rejects.toThrow('not owned')
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  it('re-authorizes with the CURRENT authorization; a revoked root opens nothing', async () => {
+    let allowed = true
+    const { manager, server, evt } = setup(async () => {
+      if (!allowed) throw new Error('root is no longer authorized')
+      return '/repo'
+    })
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    allowed = false
+    await expect(ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'two' })).rejects.toThrow('no longer authorized')
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  it('refuses a file whose directory became a symlink out of the root since the first open', async () => {
+    const { mkdtemp, mkdir, writeFile, rm, rename, symlink, realpath } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'ac-lsp-reopen-')))
+    try {
+      const root = join(base, 'root')
+      const outside = join(base, 'outside')
+      await mkdir(join(root, 'src'), { recursive: true })
+      await mkdir(outside)
+      await writeFile(join(root, 'src', 'a.ts'), 'export {}')
+      await writeFile(join(outside, 'a.ts'), 'secret')
+      const { manager, server, evt } = setup(async () => root)
+      const params = { clientUri: 'file-editor://a', content: 'export {}', language: 'typescript', workspaceRoot: root, filePath: 'src/a.ts', authorization: { kind: 'editor-root' } }
+      await ipcHandlers.get('lsp:open-document')!(evt, params)
+      discard(manager, server)
+      await rename(join(root, 'src'), join(base, 'old-src'))
+      await symlink(outside, join(root, 'src'))
+      await expect(ipcHandlers.get('lsp:reopen-document')!(evt, params)).rejects.toThrow()
+      expect(docsOf(manager).has('file-editor://a')).toBe(false)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('opens nothing when the owner goes away while authorization is still running', async () => {
+    let release!: () => void
+    let entered!: () => void
+    const authorizing = new Promise<void>(resolve => { entered = resolve })
+    let paused = false
+    const { manager, server, evt, destroy } = setup(async () => {
+      if (paused) {
+        entered()
+        await new Promise<void>(resolve => { release = resolve })
+      }
+      return '/repo'
+    })
+    await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
+    discard(manager, server)
+    paused = true
+    const reopen = ipcHandlers.get('lsp:reopen-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'two' })
+    await authorizing
+    destroy()
+    release()
+    await reopen.catch(() => undefined)
+    // Let the closes that clear() queued drain too.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(docsOf(manager).has('inmemory://a')).toBe(false)
+  })
+
+  it('rolls back a reopen that throws after the manager already counted a shared-alias reference (steering q23)', async () => {
+    const { mkdtemp, mkdir, writeFile, rm, realpath } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'ac-lsp-reopen-alias-')))
+    try {
+      await mkdir(join(base, 'src'))
+      await writeFile(join(base, 'src', 'a.ts'), 'export {}')
+      const { manager, evt } = setup(async () => base)
+      const file = { language: 'typescript', workspaceRoot: base, filePath: 'src/a.ts', authorization: { kind: 'editor-root' } } as const
+      // Two aliases of ONE physical file share a server document.
+      await ipcHandlers.get('lsp:open-document')!(evt, { ...file, clientUri: 'file-editor://A', content: 'draft A' })
+      await ipcHandlers.get('lsp:open-document')!(evt, { ...file, clientUri: 'file-editor://B', content: 'draft A' })
+      const shared = () => [...(manager as unknown as { serverDocuments: Map<string, { refs: number }> }).serverDocuments.values()][0]
+      expect(shared()?.refs).toBe(2)
+      // B's manager document is lost while its IPC ownership remains.
+      await manager.closeDocument('file-editor://B')
+      expect(shared()?.refs).toBe(1)
+      // B comes back with a different draft, so the shared document must
+      // change, and that didChange is rejected (not a destroyed stream).
+      ;(manager as unknown as { sendNotificationIfOpen: () => Promise<void> }).sendNotificationIfOpen = async () => {
+        throw new Error('didChange rejected')
+      }
+      await expect(ipcHandlers.get('lsp:reopen-document')!(evt, { ...file, clientUri: 'file-editor://B', content: 'draft B' }))
+        .rejects.toThrow('didChange rejected')
+      // Nothing of the failed reopen may remain counted.
+      expect(docsOf(manager).has('file-editor://B')).toBe(false)
+      expect(shared()?.refs).toBe(1)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+})
