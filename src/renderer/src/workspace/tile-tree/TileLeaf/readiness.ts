@@ -58,6 +58,21 @@ export function resolveReadinessText(
   runtime: SessionRuntime,
   now: number | null = null,
 ): string | null {
+  // WHY a failed process outranks every transcript state (#1252 review): a
+  // pane keeps its transcript fields when its backend dies, so a reader that
+  // had already errored or disconnected would otherwise answer for the dead
+  // pane. After a failed restart the line then said "transcript unavailable:
+  // old reader stopped" while the reason the agent is down, the thing Retry
+  // exists to fix, was hidden.
+  if (runtime.processStatus === 'failed') {
+    // WHY the typed recovery code is appended: `processError` is a stable,
+    // payload-free message, but it does not say WHICH failure mode occurred.
+    // 'ownership-conflict' (another backend owns this id) and 'start-failed'
+    // (the provider would not launch) need completely different responses from
+    // the user, and both previously rendered as 'agent failed to start'.
+    const base = runtime.processError ?? 'agent failed to start'
+    return runtime.recoveryFailureCode ? `${base} (${runtime.recoveryFailureCode})` : base
+  }
   if (runtime.transcriptStatus === 'loading') {
     // #283's signature state. Elapsed matters more here than anywhere else: a
     // transcript load that never terminates is invisible without it, and used
@@ -74,15 +89,6 @@ export function resolveReadinessText(
   }
   if (runtime.transcriptStatus === 'disconnected') {
     return `transcript disconnected${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-  }
-  if (runtime.processStatus === 'failed') {
-    // WHY the typed recovery code is appended: `processError` is a stable,
-    // payload-free message, but it does not say WHICH failure mode occurred.
-    // 'ownership-conflict' (another backend owns this id) and 'start-failed'
-    // (the provider would not launch) need completely different responses from
-    // the user, and both previously rendered as 'agent failed to start'.
-    const base = runtime.processError ?? 'agent failed to start'
-    return runtime.recoveryFailureCode ? `${base} (${runtime.recoveryFailureCode})` : base
   }
   if (isSessionExited(runtime)) {
     return `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`

@@ -8,6 +8,8 @@ import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/sta
 import { useSessionActions } from './session'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
+import { resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
 
 // #1239: toggling Dangerous Agents By Default reloads every live agent. An
 // agent whose respawn failed used to be DELETED from the workspace (and its
@@ -50,14 +52,26 @@ it('keeps an agent whose respawn failed, marked failed with the spawn error, and
     tabs: recorded.projects,
     activeTabId: recorded.activeProjectId,
     sessions: recorded.sessions,
-    pinnedSessionIds: [],
+    // Pinned, so the failed agent must also stay in the Pinned list.
+    pinnedSessionIds: [claudeLane],
     stage: recorded.stage,
   } as unknown as WorkspaceState
   const refs = makeRefs(state), writer = stateWriter(state, refs)
-  // Both lane agents have a backend (reload restarts only those, #992); the
-  // Claude one has a half-typed draft that must survive.
+  // Both lane agents have a backend (reload restarts only those, #992). The
+  // Claude one is a real live pane: input-ready, with a half-typed draft that
+  // must survive, and a transcript reader that had already errored (the
+  // paths in initialHistory/useIpcSubscriptions write this), which must not
+  // hide the restart failure (#1252 review).
   refs.latestRuntimesRef.current = {
-    [claudeLane!]: { ...emptyRuntime(), processStatus: 'started', draftInput: 'half-typed' },
+    [claudeLane!]: {
+      ...emptyRuntime(),
+      processStatus: 'started',
+      inputReady: true,
+      inputReadinessReason: 'ready',
+      draftInput: 'half-typed',
+      transcriptStatus: 'error',
+      transcriptError: 'old reader stopped',
+    },
     [codexLane!]: { ...emptyRuntime(), processStatus: 'started' },
   }
   const setRuntimes = (update: Record<string, SessionRuntime> | ((prev: Record<string, SessionRuntime>) => Record<string, SessionRuntime>)) => {
@@ -81,11 +95,18 @@ it('keeps an agent whose respawn failed, marked failed with the spawn error, and
   expect(after.stage.lanes[0]!.selectedSessionId).toBe(claudeLane)
   expect(after.tabs.map(tab => tab.id)).toEqual(recorded.projects.map(project => project.id))
   // ...and says what happened, with Retry's state and its draft.
-  expect(refs.latestRuntimesRef.current[claudeLane!]).toMatchObject({
+  expect(after.pinnedSessionIds).toEqual([claudeLane])
+  const failed = refs.latestRuntimesRef.current[claudeLane!]!
+  expect(failed).toMatchObject({
     processStatus: 'failed',
-    processError: recordedFailure.reason,
+    processError: SESSION_START_FAILED_MESSAGE,
     recoveryFailureCode: 'start-failed',
     inputReady: false,
+    inputReadinessReason: null,
     draftInput: 'half-typed',
   })
+  // The raw IPC rejection never reaches the pane: provider exceptions can
+  // carry environment values and tokens (#1252 review A).
+  expect(JSON.stringify(failed)).not.toContain('posix_spawnp')
+  expect(resolveReadinessText(failed)).toBe(`${SESSION_START_FAILED_MESSAGE} (start-failed)`)
 })

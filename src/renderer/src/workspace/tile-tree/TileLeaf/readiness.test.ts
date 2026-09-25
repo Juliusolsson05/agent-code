@@ -105,6 +105,21 @@ describe('resolveReadinessText', () => {
     })).toBe('starting agent')
   })
 
+  it('reports a failed process even when the transcript reader had already stopped', () => {
+    // A restart fails on a pane whose transcript had errored: the failure,
+    // not the stale reader error, is why the pane is down.
+    for (const transcriptStatus of ['error', 'disconnected', 'loading'] as const) {
+      expect(resolveReadinessText({
+        ...emptyRuntime(),
+        processStatus: 'failed',
+        processError: 'Session failed to start. Check provider setup and retry.',
+        recoveryFailureCode: 'start-failed',
+        transcriptStatus,
+        transcriptError: 'old reader stopped',
+      })).toBe('Session failed to start. Check provider setup and retry. (start-failed)')
+    }
+  })
+
   it('appends the typed recovery code to a failed pane', () => {
     // 'ownership-conflict' (another backend owns this id) and 'start-failed'
     // (the provider would not launch) need completely different responses from

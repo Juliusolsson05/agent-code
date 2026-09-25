@@ -9,7 +9,7 @@ import {
   isSessionKind,
 } from '@shared/types/providerKind'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
-import type { SessionRecoverFailureCode } from '@shared/types/session'
+import { SESSION_START_FAILED_MESSAGE, type SessionRecoverFailureCode } from '@shared/types/session'
 import { useCallback, useRef } from 'react'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -1525,9 +1525,9 @@ export function useSessionActions(
 
       const oldRuntimes = refs.latestRuntimesRef.current
       const idMap = new Map<SessionId, SessionId>()
-      // Old id -> why its respawn failed. See the setState below for why
-      // these stay in the workspace instead of being removed (#1239).
-      const failedIds = new Map<SessionId, string>()
+      // Old ids whose respawn failed. See the setState below for why these
+      // stay in the workspace instead of being removed (#1239).
+      const failedIds = new Set<SessionId>()
       const freshSessions: Record<SessionId, SessionMeta> = {}
 
       for (const [oldId, meta] of agentEntries) {
@@ -1581,10 +1581,12 @@ export function useSessionActions(
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
             ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
           }
-        } catch (error) {
-          failedIds.set(oldId, error instanceof Error && error.message.length > 0
-            ? error.message
-            : `Could not restart this agent (${meta.kind ?? DEFAULT_PROVIDER})`)
+        } catch {
+          // WHY the rejection's text is dropped (#1252 review): it is the raw
+          // provider exception relayed through IPC, which can carry secrets,
+          // and the pane renders `processError` verbatim. Main's recovery
+          // path already returns this same fixed message for the same failure.
+          failedIds.add(oldId)
         }
       }
 
@@ -1596,12 +1598,12 @@ export function useSessionActions(
         // A failed respawn keeps its pane, in the same `failed` state a
         // failed wake uses: its backend was killed above, so the pane must
         // say so and offer Retry (which wakes it under the same id).
-        for (const [oldId, message] of failedIds) {
+        for (const oldId of failedIds) {
           const current = next[oldId] ?? emptyRuntime()
           next[oldId] = {
             ...current,
             processStatus: 'failed',
-            processError: message,
+            processError: SESSION_START_FAILED_MESSAGE,
             recoveryFailureCode: 'start-failed',
             inputReady: false,
             inputReadinessReason: null,
