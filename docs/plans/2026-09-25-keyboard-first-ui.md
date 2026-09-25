@@ -868,7 +868,22 @@ Sharp corners and one light theme.
 - [ ] 4. Menu/overlay rows M1–M10.
 - [ ] 5. Non-modal pickers/lists/strips/settings rows.
 - [ ] 6. Cross-cutting X1–X4.
-- [ ] 7. Plan-vs-built, full checks, review round (2 Codex + 1 Pi, own
+- [ ] 7. **Keyboard sweep 2** (owner, 2026-09-25: "We have a lot more to do
+      keyboard only probably"): a whole-app sweep for mouse-only interactions
+      the first inventory missed. Covers pointer handlers on non-interactive
+      elements, double-click, context-menu-only, drag-only, hover-only
+      reveals, title-only info, hover popovers, unscrollable regions, role
+      widgets missing keys, and focus not returned on close. Findings are
+      verified by reading, then added as `K2-*` ledger rows and worked like
+      the others.
+- [ ] 8. **General UI/UX consistency pass** (owner, 2026-09-25: "make the UI
+      good and consistent in general, UI and UX, this is supposed to be a
+      serious application", to be done "after all of current work"). This
+      covers every surface, not only the keyboard-touched ones: type scale,
+      spacing rhythm, radius tiers, button variants, headers, empty/loading/
+      error states, copy (sentence case, ellipsis, labels), alignment, and
+      density. Rows are added as `G-*` in the ledger after task 7.
+- [ ] 9. Plan-vs-built, full checks, review round (2 Codex + 1 Pi, own
       detached worktrees), at most one verification round. Leave the PR
       open, green, reviewed.
 
@@ -1294,3 +1309,7 @@ Sharp corners and one light theme.
   ↑/↓). Confirm-red: its Tab-stop test fails on the pre-change component. ResumePromptModal/CodexApprovalModal belong to N16. No new
   tests: class/primitive swaps; the existing Apps and settings suites cover
   the behaviour.
+- 2026-09-25 SCOPE: the owner widened the loop twice mid-run. Keyboard sweep 2
+  (Task 7) and the general UI/UX consistency pass (Task 8) come after the
+  current N/X rows and before the final review. Order confirmed by the owner:
+  "do that after all of current work".
