@@ -269,3 +269,97 @@ describe('bulk switch reporting', () => {
     expect(toastDurations[0]).toBeUndefined()
   })
 })
+
+// #1271: a batch holds the app (the modal locks input) for up to five minutes
+// per agent. A stop requested during the batch ends it after the agent in
+// flight, and the summary says what was not attempted.
+describe('switchAgentsToProvider stop', () => {
+  it('stops before the next agent and reports the rest as not attempted', async () => {
+    const { result, state, toasts } = harness(null)
+    const sessions = state.sessions as Record<string, unknown>
+    for (const id of ['a', 'b', 'c']) sessions[id] = { cwd: '/recorded', kind: 'claude', title: id }
+    let stop = false
+    switchAgentProvider.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      // The user presses Stop while the first agent is switching.
+      stop = true
+      return { status: 'switched', strategy: 'native', newSessionId: `${sessionId}-new` }
+    })
+    await result.current.switchAgentsToProvider(['a', 'b', 'c'] as never, 'codex', {
+      allowSourceTurns: false, compactOnArrival: false, sourceCompactionConfirmed: false,
+    }, { shouldStop: () => stop })
+    expect(switchAgentProvider).toHaveBeenCalledTimes(1)
+    expect(toasts.at(-1)).toMatch(/^Stopped: 2 agents not attempted\. Switched 1 agent/)
+  })
+})
+
+describe('switchAgentsToProvider stop, edges (#1312 review B)', () => {
+  function batchHarness(ids: string[]) {
+    const h = harness(null)
+    const sessions = h.state.sessions as Record<string, unknown>
+    for (const id of ids) sessions[id] = { cwd: '/recorded', kind: 'claude', title: id }
+    return h
+  }
+  const policy = { allowSourceTurns: false, compactOnArrival: false, sourceCompactionConfirmed: false }
+
+  it('stops before the third agent when stop is pressed during the second', async () => {
+    const { result, toasts } = batchHarness(['a', 'b', 'c'])
+    let calls = 0
+    let stop = false
+    switchAgentProvider.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      calls += 1
+      if (calls === 2) stop = true
+      return { status: 'switched', strategy: 'native', newSessionId: `${sessionId}-new` }
+    })
+    await result.current.switchAgentsToProvider(['a', 'b', 'c'] as never, 'codex', policy, { shouldStop: () => stop })
+    expect(switchAgentProvider).toHaveBeenCalledTimes(2)
+    expect(toasts.at(-1)).toMatch(/^Stopped: 1 agent not attempted\./)
+  })
+
+  it('attempts nothing when stop was already requested, and keeps the summary on screen longer', async () => {
+    const { result, toasts, toastDurations } = batchHarness(['a', 'b'])
+    await result.current.switchAgentsToProvider(['a', 'b'] as never, 'codex', policy, { shouldStop: () => true })
+    expect(switchAgentProvider).not.toHaveBeenCalled()
+    expect(toasts.at(-1)).toMatch(/^Stopped: 2 agents not attempted\./)
+    expect(toastDurations.at(-1)).toBe(10_000)
+  })
+})
+
+describe('returnLastProviderSwitchBatch stop (#1312 review A)', () => {
+  it('stops after the agent in flight and keeps the rest in the batch for a later Return', async () => {
+    const { result, state, toasts } = harness(batchOf('a', 'b', 'c'))
+    let stop = false
+    switchAgentProvider.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      stop = true
+      return { status: 'switched', strategy: 'native', newSessionId: `${sessionId}-home` }
+    })
+    await result.current.returnLastProviderSwitchBatch({ shouldStop: () => stop })
+    expect(switchAgentProvider).toHaveBeenCalledTimes(1)
+    expect(state.lastProviderSwitchBatch?.agents.map(agent => agent.sessionId)).toEqual(['b', 'c'])
+    expect(toasts.at(-1)).toMatch(/^Stopped: 2 agents not returned yet\./)
+  })
+
+  // #1312 round 2 B: the stop is checked before EVERY agent, not only the
+  // second, and a stop requested before the run returns nobody.
+  it('stops before the third agent when stop is pressed during the second', async () => {
+    const { result, state } = harness(batchOf('a', 'b', 'c'))
+    let calls = 0
+    let stop = false
+    switchAgentProvider.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      calls += 1
+      if (calls === 2) stop = true
+      return { status: 'switched', strategy: 'native', newSessionId: `${sessionId}-home` }
+    })
+    await result.current.returnLastProviderSwitchBatch({ shouldStop: () => stop })
+    expect(switchAgentProvider).toHaveBeenCalledTimes(2)
+    expect(state.lastProviderSwitchBatch?.agents.map(agent => agent.sessionId)).toEqual(['c'])
+  })
+
+  it('returns nobody when stop was already requested, and keeps the summary on screen longer', async () => {
+    const { result, state, toasts, toastDurations } = harness(batchOf('a', 'b'))
+    await result.current.returnLastProviderSwitchBatch({ shouldStop: () => true })
+    expect(switchAgentProvider).not.toHaveBeenCalled()
+    expect(state.lastProviderSwitchBatch?.agents.map(agent => agent.sessionId)).toEqual(['a', 'b'])
+    expect(toasts.at(-1)).toMatch(/^Stopped: 2 agents not returned yet\./)
+    expect(toastDurations.at(-1)).toBe(10_000)
+  })
+})

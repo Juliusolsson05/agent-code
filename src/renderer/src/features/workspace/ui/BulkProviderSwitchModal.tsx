@@ -166,6 +166,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // them — depending on them would re-run the reset the moment a loop ended.
   const busyRef = useRef(busy)
   busyRef.current = busy
+  // #1271: the batch keeps its single-flight lock, but the user can end it
+  // after the agent in flight. A ref for the loop (read between agents), state
+  // for the label.
+  const stopRequestedRef = useRef(false)
+  const [stopRequested, setStopRequested] = useState(false)
+  const requestStop = useCallback(() => {
+    stopRequestedRef.current = true
+    setStopRequested(true)
+  }, [])
   const switchingModelRef = useRef(switchingModel)
   switchingModelRef.current = switchingModel
   /**
@@ -511,6 +520,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     const sessionIds = compactOnSource && confirmedSessionIds
       ? confirmedSessionIds
       : matchingRows.map(row => row.sessionId)
+    stopRequestedRef.current = false
+    setStopRequested(false)
     setBusy(true)
     try {
       await workspace.switchAgentsToProvider(
@@ -527,6 +538,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           // must key on the second.
           sourceCompactionConfirmed: compactOnSource,
         },
+        { shouldStop: () => stopRequestedRef.current },
       )
       onClose()
     } finally {
@@ -536,9 +548,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
   const runModelSwitch = useCallback(async () => {
     if (matchingRows.length === 0 || lockedRef.current) return
+    stopRequestedRef.current = false
+    setStopRequested(false)
     setSwitchingModel(true)
     let delivered = 0
     let failed = 0
+    // #1271 (steering q32): this fan-out holds the same modal lock as a
+    // provider batch, so it gets the same way out. Checked between agents,
+    // never during a delivery.
+    let notAttempted = 0
     // The provider's own words for the FIRST failure. A count alone ("2
     // failed") is unactionable — prompt delivery fails for reasons the user can
     // usually fix (the pane is mid-turn, the process died, a dialog is up), and
@@ -550,7 +568,11 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       // independent prompt deliveries, but a burst of PTY writes across many
       // panes is exactly the shape that has produced delivery races before.
       // A handful of agents is not worth the risk of parallelism.
-      for (const row of matchingRows) {
+      for (const [index, row] of matchingRows.entries()) {
+        if (stopRequestedRef.current) {
+          notAttempted = matchingRows.length - index
+          break
+        }
         const result = await window.api.deliverPrompt(row.sessionId, CLAUDE_MODEL_SWITCH_PROMPT)
         if (result.ok) {
           delivered += 1
@@ -571,8 +593,18 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       // Clamped so the report can never claim more agents than the batch had:
       // the loop aborted, so everything not already counted is unattempted,
       // and at minimum the one that rejected must show up.
+      //
+      // #1312 round 2 (review A): once the user has pressed Stop, the loop
+      // would never have reached the agents after the one that rejected, so
+      // they are "not attempted", not failures. Only the rejected agent
+      // failed. Without a stop the old reading stands: the rejection cut the
+      // batch short, and every unreached agent is reported as failed.
+      failed += 1
       const remaining = matchingRows.length - delivered - failed
-      failed += remaining > 0 ? remaining : 1
+      if (remaining > 0) {
+        if (stopRequestedRef.current) notAttempted = remaining
+        else failed += remaining
+      }
       if (firstFailure === null) {
         firstFailure = error instanceof Error && error.message.length > 0
           ? error.message
@@ -583,7 +615,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       const failureNote = failed > 0
         ? ` (${failed} failed${firstFailure ? `: ${firstFailure}` : ''})`
         : ''
-      showToast(`Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}${failureNote}`)
+      const stopped = notAttempted > 0 ? `Stopped: ${pluralAgents(notAttempted)} not attempted. ` : ''
+      showToast(`${stopped}Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}${failureNote}`)
     }
   }, [busy, matchingRows, showToast, switchingModel])
 
@@ -591,12 +624,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     // Same reason as runSwitch: a Return must not start under an in-flight
     // /model fan-out.
     if (lockedRef.current) return
+    stopRequestedRef.current = false
+    setStopRequested(false)
     setBusy(true)
     try {
       // Intentionally NOT closing the modal: the banner clears itself when
       // workspace state updates, giving the user visible confirmation the batch
       // was returned without yanking the modal out from under them.
-      await workspace.returnLastProviderSwitchBatch()
+      await workspace.returnLastProviderSwitchBatch({ shouldStop: () => stopRequestedRef.current })
     } finally {
       setBusy(false)
     }
@@ -639,6 +674,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden"
         onEscapeKeyDown={event => {
           if (locked) event.preventDefault()
+          // During a provider batch or the /model fan-out, Escape asks to stop
+          // after the agent in flight (#1271), the one exit a locked batch can
+          // safely offer.
+          if (locked) requestStop()
         }}
         onPointerDownOutside={event => {
           // WHY an in-flight batch cannot be dismissed: the old overlay kept
@@ -983,11 +1022,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={requestClose}
-              disabled={locked}
+              // While a provider batch or the /model fan-out runs, Cancel is the
+              // way out (#1271): it
+              // stops the batch after the agent in flight instead of closing
+              // a modal whose loop would keep running unseen.
+              onClick={locked ? requestStop : requestClose}
+              disabled={locked && stopRequested}
               className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
-              Cancel
+              {locked ? (stopRequested ? 'Stopping after this agent…' : 'Stop after this agent') : 'Cancel'}
             </button>
             <button
               type="button"
