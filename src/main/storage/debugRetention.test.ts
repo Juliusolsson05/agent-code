@@ -152,6 +152,56 @@ describe('runPrunePasses', () => {
     expect(result).toEqual({ removed: 1, bytesFreed: 10, remainingBytes: 40 })
   })
 
+  describe('ghost logs are recovery state only while their session exists (#732)', () => {
+    // Measured on the owner's machine (2026-09-25): 1,952 ghost logs, 2.1 GB,
+    // and 1,935 of them (2,128 MB) belonged to sessions no longer in any
+    // window's workspace. Every one was protected from every pass, and
+    // startup compaction rewrites each file, so none ever aged either.
+    const log = (sessionId: string, bytes: number, ageMs: number) =>
+      artifact(`/state/ghost-logs/${sessionId}.ghost.jsonl`, 'ghost-logs', bytes, ageMs)
+
+    it('trims orphaned logs over the cap, oldest first, and never a live session\'s', async () => {
+      const oldOrphan = log('gone-1', 100, 5 * HOUR)
+      const newerOrphan = log('gone-2', 100, 3 * HOUR)
+      const owned = log('live-1', 100, 6 * HOUR)
+      const { calls, remove } = recordingRemover()
+
+      await runPrunePasses(
+        [owned, newerOrphan, oldOrphan],
+        policy({ caps: capsOf(1_000_000, { 'ghost-logs': 150 }), ghostLogOwners: new Set(['live-1']) }),
+        remove,
+      )
+
+      // 300 > 150: the two orphans go, oldest first. The live session's log is
+      // the OLDEST file and still stays: it is what its pane rebuilds from.
+      expect(calls).toEqual(['/state/ghost-logs/gone-1.ghost.jsonl', '/state/ghost-logs/gone-2.ghost.jsonl'])
+    })
+
+    it('lets an orphaned log age out, but not a live session\'s', async () => {
+      const orphan = log('gone-1', 10, 72 * HOUR)
+      const owned = log('live-1', 10, 72 * HOUR)
+      const { calls, remove } = recordingRemover()
+
+      await runPrunePasses([orphan, owned], policy({ ghostLogOwners: new Set(['live-1']) }), remove)
+
+      expect(calls).toEqual(['/state/ghost-logs/gone-1.ghost.jsonl'])
+    })
+
+    it('keeps a just-written orphan inside the active grace', async () => {
+      // A pane closed a minute ago can still be restored by undo.
+      const fresh = log('gone-1', 100, 60_000)
+      const { calls, remove } = recordingRemover()
+
+      await runPrunePasses(
+        [fresh],
+        policy({ caps: capsOf(1_000_000, { 'ghost-logs': 10 }), ghostLogOwners: new Set() }),
+        remove,
+      )
+
+      expect(calls).toEqual([])
+    })
+  })
+
   it('cap pass trims the oldest inactive, unprotected artifacts of an over-cap bucket only', async () => {
     const oldest = artifact('oldest', 'proxy', 60, 5 * HOUR)
     const older = artifact('older', 'proxy', 60, 3 * HOUR)

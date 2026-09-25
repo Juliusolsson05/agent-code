@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
@@ -54,6 +54,11 @@ export type DebugStoragePrunePolicy = {
   activeGraceMs: number
   budgetBytes: number
   caps: Record<DebugStorageBucket, number>
+  /** Session ids whose ghost log is still recovery state (#732): every
+   *  session in any window's workspace, plus every running one. Absent or
+   *  null means "not known yet" (the first prune runs before the workspace
+   *  store opens), and then every ghost log stays protected, as before. */
+  ghostLogOwners?: ReadonlySet<string> | null
 }
 
 export type DebugStoragePrunePassesResult = {
@@ -122,6 +127,26 @@ let liveRecordingDirsProvider: (() => Set<string>) | null = null
 
 export function setLiveRecordingDirsProvider(fn: (() => Set<string>) | null): void {
   liveRecordingDirsProvider = fn
+}
+
+// Provider for the sessions whose ghost logs are still recovery state (#732).
+// Same singleton shape as the recording provider above, for the same reason.
+// Read ONCE per prune (into the policy), not per artifact: the workspace
+// store derives it from the whole file, and a prune can see ~2,000 logs.
+let ghostLogOwnersProvider: (() => ReadonlySet<string>) | null = null
+
+export function setGhostLogOwnersProvider(fn: (() => ReadonlySet<string>) | null): void {
+  ghostLogOwnersProvider = fn
+}
+
+/** The owner set for one prune, or null when it cannot be known. A provider
+ *  that throws must not unprotect anything, so failure reads as "unknown". */
+function readGhostLogOwners(): ReadonlySet<string> | null {
+  try {
+    return ghostLogOwnersProvider ? ghostLogOwnersProvider() : null
+  } catch {
+    return null
+  }
 }
 
 function envNumber(name: string, fallback: number): number {
@@ -254,6 +279,7 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
       activeGraceMs: ACTIVE_GRACE_MS,
       budgetBytes: budget,
       caps: bucketCaps(budget),
+      ghostLogOwners: readGhostLogOwners(),
     },
     async artifact => (await removeArtifact(artifact)) > 0,
   )
@@ -310,12 +336,13 @@ export async function runPrunePasses(
   }
 
   for (const artifact of artifacts) {
-    // Ghost logs are recovery state. Age alone is not enough evidence that a
-    // log is disposable: a user can resume an older crashed session and still
-    // need those provisional rows during bootstrap. Keep ghost cleanup on the
-    // budget/cap passes below, where pressure is explicit and active recent
-    // files still get the activeGraceMs guard.
-    if (isProtectedFromDebugPrune(artifact)) continue
+    // A ghost log is recovery state while its session exists: a user can
+    // resume an older crashed session and still need its provisional rows
+    // during bootstrap, however old the file is. Once the session is gone from
+    // every workspace (and not running), nothing can rebuild from it, so it is
+    // ordinary debug output (#732). `isProtectedFromDebugPrune` draws that
+    // line; active recent files still get the activeGraceMs guard below.
+    if (isProtectedFromDebugPrune(artifact, policy.ghostLogOwners)) continue
     if (artifact.mtimeMs >= cutoff) continue
     await drop(artifact)
   }
@@ -334,7 +361,7 @@ export async function runPrunePasses(
       // silently breaking the "keep the 50 newest runs regardless" guarantee
       // that collectIncidentRunDirs() establishes. (Manual debug bundles get
       // the same protection via the `continue` at the top of this loop.)
-      if (isProtectedFromDebugPrune(artifact)) continue
+      if (isProtectedFromDebugPrune(artifact, policy.ghostLogOwners)) continue
       if (artifact.mtimeMs > activeCutoff) continue
       bucketBytes -= await drop(artifact)
     }
@@ -343,7 +370,7 @@ export async function runPrunePasses(
   let totalBytes = sumBytes([...live])
   for (const artifact of [...live].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
     if (totalBytes <= policy.budgetBytes) break
-    if (isProtectedFromDebugPrune(artifact)) continue
+    if (isProtectedFromDebugPrune(artifact, policy.ghostLogOwners)) continue
     if (artifact.mtimeMs > activeCutoff) continue
     totalBytes -= await drop(artifact)
   }
@@ -553,7 +580,7 @@ export function legacyDebugBundleBucketForPath(
     : 'debug-bundles-legacy'
 }
 
-function isProtectedFromDebugPrune(artifact: Artifact): boolean {
+function isProtectedFromDebugPrune(artifact: Artifact, ghostLogOwners?: ReadonlySet<string> | null): boolean {
   // A live session recording is protected regardless of its folder mtime — see
   // setLiveRecordingDirsProvider for WHY mtime is the wrong liveness oracle
   // here (an idle-but-open recording ages past ACTIVE_GRACE_MS while still being
@@ -563,8 +590,18 @@ function isProtectedFromDebugPrune(artifact: Artifact): boolean {
   if (artifact.bucket === 'session-recordings' && liveRecordingDirsProvider) {
     if (liveRecordingDirsProvider().has(resolve(artifact.path))) return true
   }
+  // WHY ghost logs are protected per SESSION, not as a bucket (#732): the
+  // whole bucket used to be protected from every pass, so the per-bucket cap
+  // above could never act, and startup compaction rewrites each file, so
+  // they never aged either. Measured 2026-09-25: 1,952 logs, 2.1 GB, of which
+  // 1,935 (2,128 MB) belonged to sessions no longer in any workspace. A log
+  // is kept while its session exists; with no owner set (not known yet) all
+  // stay protected.
+  if (artifact.bucket === 'ghost-logs') {
+    if (!ghostLogOwners) return true
+    return ghostLogOwners.has(basename(artifact.path).replace(/\.ghost\.jsonl$/u, ''))
+  }
   return artifact.protected === true ||
-    artifact.bucket === 'ghost-logs' ||
     artifact.bucket === 'debug-bundles-manual'
 }
 
