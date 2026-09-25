@@ -86,6 +86,7 @@ export const SURFACE_OWNER_FLAGS = {
   'open-keyboard-shortcuts': 'keyboardShortcutsOpen',
   'open-agent-activity': 'agentActivityOpen',
   'close-old-agents': 'closeOldAgentsOpen',
+  'close-completed-agents': 'closeCompletedAgentsOpen',
   'switch-agents-provider': 'bulkProviderSwitchOpen',
   'search-conversation-prompts': 'conversationsOpen',
   'resume-session': 'conversationsOpen',

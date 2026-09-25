@@ -15,7 +15,7 @@ export const BUILT_IN_MCP_SERVERS: readonly {
   description: string
 }[] = [
   { domain: 'tldr', title: 'TLDR', description: 'Concise status summaries; hold Cmd+L to read them.' },
-  { domain: 'goal', title: 'Goal', description: 'What each agent\'s work is for; hold Cmd+G to see it.' },
+  { domain: 'goal', title: 'Goal', description: 'What each agent\'s work is for; hold Cmd+G to see it. Agents mark it complete once you accept the work.' },
   { domain: 'goal_loop', title: 'Goal Loop', description: 'Harness-owned loops that re-prompt until the goal is done.' },
   { domain: 'orchestration', title: 'Orchestration', description: 'Create and coordinate child agents.' },
   { domain: 'agent_transcripts', title: 'Agent Transcripts', description: 'Bounded transcript file tools.' },

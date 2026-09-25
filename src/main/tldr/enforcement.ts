@@ -19,6 +19,12 @@ export const TLDR_NEVER_WRITTEN_REASON = 'Agent Code TLDR: this agent has no TLD
 export const TLDR_STATUS_NEVER_WRITTEN_REASON = 'Agent Code TLDR: this agent has no TLDR yet. Call tldr_update now with the current status in one or two sentences, then finish.'
 export const GOAL_SET_CONTEXT = 'Agent Code Goal: this agent has no goal yet. Once you understand what this request is trying to achieve, call goal_set with that goal in one plain sentence before starting the work.'
 export const GOAL_NEVER_SET_REASON = 'Agent Code Goal: this agent has no goal yet. Call goal_set now with what this work is trying to achieve, in one plain sentence.'
+// #1182 review: a completed agent that is handed a small follow-up in the same
+// direction ("also bump the version") would, following its own instructions,
+// NOT set a new goal — and would stay listed as completed, ticked in the
+// user's bulk close, with a fresh PR open. The completion is exactly what this
+// prompt may have invalidated, so ask. A pure "thanks" leaves it alone.
+export const GOAL_COMPLETED_CONTEXT = 'Agent Code Goal: your goal is marked complete, and the user uses completed goals to close finished agents. If this message asks for any further work, call goal_set with the goal of that work before starting, which clears the completion. If it only thanks you or asks a question, leave the goal as it is.'
 
 /** Which reporting capabilities one registration has. The hooks are shared, so
  * the host tells the policy what each session actually enabled. */
@@ -67,7 +73,7 @@ export class TldrEnforcement {
   constructor(
     private readonly store: Pick<TldrStore, 'lastWrittenAt'>,
     private readonly now: () => number = Date.now,
-    private readonly goalStore?: Pick<TldrStore, 'lastWrittenAt'>,
+    private readonly goalStore?: Pick<TldrStore, 'lastWrittenAt' | 'completedAt'>,
   ) {}
 
   async handle(
@@ -107,9 +113,12 @@ export class TldrEnforcement {
       // TLDR as well would get it overwritten by the next status update.
       // A missing TLDR is still caught at Stop, with a status-only request.
       if (features.goal && this.goalStore) {
-        return await this.goalStore.lastWrittenAt(identity) ? {} : {
-          hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT },
+        if (!(await this.goalStore.lastWrittenAt(identity))) {
+          return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_SET_CONTEXT } }
         }
+        return await this.goalStore.completedAt(identity) ? {
+          hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_COMPLETED_CONTEXT },
+        } : {}
       }
       if (!features.tldr) return {}
       return await this.store.lastWrittenAt(identity) ? {} : {
