@@ -49,6 +49,28 @@ function setup(records: Record<string, TldrRecord>, options: { read?: (identitie
 }
 
 describe('Close Completed Agents modal', () => {
+  it('cannot be hidden by Cancel or Escape while the close batch is in flight (steering note k3)', async () => {
+    // A destructive batch that is still killing agents must stay on screen
+    // until it settles; hiding it makes the result look cancelled.
+    const { closeCompletedGoalAgents, onClose } = setup({ 'id-a': goal('Ship A.', 2, 'PR #1 merged.') })
+    await screen.findByText('✓ PR #1 merged.')
+    let settle!: () => void
+    closeCompletedGoalAgents.mockImplementation(() => new Promise(resolve => { settle = () => resolve(null) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close 1 Agent' }))
+    await waitFor(() => expect(closeCompletedGoalAgents).toHaveBeenCalledOnce())
+
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect(cancel).toBeDisabled()
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull() // no ⎋ promise while blocked
+    fireEvent.click(cancel)
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    await act(async () => { settle() })
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
+  })
+
   it('uses the shared footer: Cancel ⎋, and no Enter chip on the destructive close (plan S14)', async () => {
     setup({ 'id-a': goal('Ship A.', 2, 'PR #1 merged.') })
     await screen.findByText('✓ PR #1 merged.')

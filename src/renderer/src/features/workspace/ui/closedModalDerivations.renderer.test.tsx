@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -168,6 +168,26 @@ describe('bulk dialogs: one exit, key chips, no key on the batch action', () => 
     expect(screen.queryByRole('button', { name: 'Esc' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
     expect(screen.getByRole('button', { name: confirm }).querySelector('[data-slot="kbd"]')).toBeNull()
+  })
+
+  it('Close Old Agents cannot be hidden by Cancel or Escape while its close batch runs (steering note k3)', async () => {
+    const onClose = vi.fn()
+    const workspace = replaceRuntime(workspaceFixture(), false)
+    // The batch hangs on its first kill until we say so — the in-flight window.
+    let settle!: () => void
+    ;(workspace.closeSession as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(resolve => { settle = () => resolve(true) }),
+    )
+    render(<CloseOldAgentsModal open workspace={workspace} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: /^Close 1 Agent/ }))
+    const cancel = await screen.findByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.click(cancel)
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await act(async () => { settle?.() })
   })
 
   it('Close Old Agents opens with focus in the threshold field', () => {

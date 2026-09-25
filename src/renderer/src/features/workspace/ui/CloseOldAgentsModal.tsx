@@ -470,6 +470,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       <DialogContent
         size="lg"
         className="flex max-h-[86vh] flex-col overflow-hidden"
+        // IN-FLIGHT EXIT INVARIANT (steering note k3): while the batch close
+        // runs, NO path may hide the dialog — not Cancel (disabled below), not
+        // Escape, not an outside click. The old footer disabled Cancel while
+        // closing; the first DialogActions migration passed only `busy`, which
+        // disables the CONFIRM, so Cancel hid a destructive batch that was
+        // still killing agents and made the result look cancelled. Same model
+        // as Bulk Provider Switch: cancelDisabled + escapeCancels + these two
+        // guards.
+        onEscapeKeyDown={event => { if (closing) event.preventDefault() }}
+        onInteractOutside={event => { if (closing) event.preventDefault() }}
         onOpenAutoFocus={event => {
           // Focus the threshold: it is what the user came to change. Radix
           // would otherwise focus the first tabbable node.
@@ -742,6 +752,8 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
           }
           onConfirm={() => void closeMatchingAgents()}
           onCancel={onClose}
+          cancelDisabled={closing}
+          escapeCancels={!closing}
         />
       </DialogContent>
     </Dialog>

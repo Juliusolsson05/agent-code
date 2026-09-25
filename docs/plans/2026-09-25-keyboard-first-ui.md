@@ -632,7 +632,10 @@ Sharp corners and one light theme.
   click); Close Old's exclusion note moved into the header description;
   Bulk's mid-turn/terminals note is its own line above the footer, and
   while a batch runs Cancel is disabled, the ⎋ chip disappears and the
-  footer says "Working — closing is paused…". All 860 wide (lg).
+  footer says "Working — closing is paused…". The SAME in-flight rule now
+  holds for Close Old and Close Completed (steering note k3): while their
+  close batch runs, Cancel is disabled, its ⎋ chip is gone, and Escape /
+  outside clicks do nothing until the batch settles. All 860 wide (lg).
 - **S16 Root Agent Code Management confirm:** focus opens on the
   acknowledgement checkbox (Space ticks); footer `Cancel ⎋` (ghost, was
   outline) + red `Enable for This Agent` with no ↩ chip, disabled until
@@ -711,6 +714,13 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k3 (valid, major): the S13/S14 migration passed
+  `busy={closing}` but not `cancelDisabled`, so Cancel (and Escape) could
+  hide an in-flight destructive batch — the old footers disabled Cancel.
+  Fixed with Bulk Switch's model: cancelDisabled + escapeCancels={!closing}
+  + onEscapeKeyDown/onInteractOutside guards. Tests start a deferred close
+  and try Cancel and Escape; mutation-checked: dropping either the Cancel
+  guard or the Escape guard fails the test in both dialogs.
 - 2026-09-25 S16: Root confirm on DialogActions (danger, confirmKey null,
   confirmDisabled until acknowledged). Confirm-red: the new "no grant from
   dialog Enter + chips" test fails on the pre-change file. Copy: "Enable for

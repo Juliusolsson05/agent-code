@@ -145,7 +145,20 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
-      <DialogContent size="lg" className="flex max-h-[86vh] flex-col overflow-hidden">
+      <DialogContent
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
+        // IN-FLIGHT EXIT INVARIANT (steering note k3): while the batch close
+        // runs, NO path may hide the dialog — not Cancel (disabled below), not
+        // Escape, not an outside click. The old footer disabled Cancel while
+        // closing; the first DialogActions migration passed only `busy`, which
+        // disables the CONFIRM, so Cancel hid a destructive batch that was
+        // still killing agents and made the result look cancelled. Same model
+        // as Bulk Provider Switch: cancelDisabled + escapeCancels + these two
+        // guards.
+        onEscapeKeyDown={event => { if (closing) event.preventDefault() }}
+        onInteractOutside={event => { if (closing) event.preventDefault() }}
+      >
         {/* KEYBOARD (plan S14): the rows stay NATIVE checkboxes — a checkbox
             group is already fully operable (Tab between, Space toggles, state
             announced natively), and every row is an independent destructive
@@ -186,6 +199,8 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
           confirmLabel={`Close ${selected.length} Agent${selected.length === 1 ? '' : 's'}`}
           onConfirm={() => void closeSelected()}
           onCancel={onClose}
+          cancelDisabled={closing}
+          escapeCancels={!closing}
           legend={
             <label className="flex items-center gap-2 text-[11px] text-ink-dim">
               <input
