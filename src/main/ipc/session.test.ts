@@ -25,12 +25,46 @@ vi.mock('@main/window/windowRegistry.js', () => ({
   windowIdFor: () => 'requesting-window',
 }))
 
+// The sub-agent watcher polls real directories; nothing here is about fleets.
+vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
+
 const { registerSessionIpc } = await import('./session.js')
 const { sessionApi } = await import('@preload/api/session.js')
+const { SessionFeedTap } = await import('@main/sessions/sessionFeedTap.js')
+const { EventEmitter } = await import('node:events')
+
+it('sends the prompt\'s committed row before answering its delivery (#1181)', async () => {
+  // Claude's acceptance IS main seeing the prompt's JSONL line, and the
+  // renderer drops its pending Sending row the moment the reply lands. The
+  // row sits in the tap's burst buffer until setImmediate while the reply
+  // resumes in a microtask, so without the barrier the reply overtakes it
+  // and the prompt blinks out of the feed. Driven through the REAL tap: the
+  // barrier moved there when the module-global coalescer was deleted (#1177).
+  const manager = new EventEmitter()
+  const tap = new SessionFeedTap(manager as never)
+  const order: string[] = []
+  tap.addSink(channel => {
+    if (channel === 'jsonl-entries') order.push('row')
+  })
+  Object.assign(manager, {
+    deliverPromptToAgent: vi.fn(async () => {
+      manager.emit('jsonl-entry', { sessionId: 's1', file: '/t.jsonl', entry: { uuid: 'prompt', type: 'user' } })
+      return { ok: true, acceptance: { kind: 'transport', acceptedAt: 1 } }
+    }),
+  })
+  try {
+    registerSessionIpc(manager as never, {} as never, tap)
+    await sessionApi.deliverPrompt('s1', 'hello')
+    order.push('reply')
+    expect(order).toEqual(['row', 'reply'])
+  } finally {
+    tap.dispose()
+  }
+})
 
 it('transports generated-task draft protection from preload through main without granting waiter replacement', async () => {
   const deliverPromptToAgent = vi.fn(async () => ({ ok: false, message: 'Native draft occupied' }))
-  registerSessionIpc({ deliverPromptToAgent } as never, {} as never)
+  registerSessionIpc({ deliverPromptToAgent } as never, {} as never, { flushCommitted: () => {} })
   // Real preload -> registered handler composition catches a dropped option
   // at either IPC end. The internal supersede option must not cross with it.
   await sessionApi.deliverPrompt('s1', 'Restart the server', undefined, undefined, { requireEmptyNativeComposer: true, supersedesPendingPrompt: true } as never)
@@ -48,7 +82,7 @@ describe('recovered renderer screen seed', () => {
     const screen = { plain: 'latest raw tick', markdown: 'latest raw tick', recent: 'latest raw tick', recentMarkdown: 'latest raw tick' }
     const recover = vi.fn(async (_options, admitted) => { if (ok) admitted(); return { ok } })
     const getScreenSnapshot = vi.fn(() => available ? screen : null)
-    registerSessionIpc({ recover, getScreenSnapshot } as never, {} as never)
+    registerSessionIpc({ recover, getScreenSnapshot } as never, {} as never, { flushCommitted: () => {} })
     const sender = { isDestroyed: () => destroyed, send: vi.fn() }
     await expect(harness.handlers.get('session:recover')!({ sender }, { sessionId: 's1' })).resolves.toEqual({ ok })
     expect(harness.routed).toHaveBeenCalledTimes(sends)
@@ -77,7 +111,7 @@ describe('session input transcript observations', () => {
     }
     const append = vi.fn()
     const pasteDebugJournals = { get: vi.fn(() => ({ append })) }
-    registerSessionIpc(manager as never, pasteDebugJournals as never)
+    registerSessionIpc(manager as never, pasteDebugJournals as never, { flushCommitted: () => {} })
     const input = harness.handlers.get('session:input')
     if (!input) throw new Error('session:input was not registered')
 

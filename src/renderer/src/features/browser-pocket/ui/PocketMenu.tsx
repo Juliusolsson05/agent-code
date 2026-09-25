@@ -3,7 +3,7 @@ import { DEVICE_PRESETS, type DevicePresetId } from '@shared/browserPocket/devic
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { setPocketColorScheme, setPocketProfile, setPocketViewport, setPocketZoom } from '../actions'
 import { requestPocket } from '../state/pocketBus'
 import { usePocketLive } from '../state/pocketLiveStore'

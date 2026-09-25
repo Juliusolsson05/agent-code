@@ -1,12 +1,13 @@
 import { act, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { ToastHostProvider, useGlobalToast } from './ToastHost'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
+import { ToastHostProvider } from './ToastHost'
 
-// A shared-row stand-in: the whole point of this host is that components
-// importing `@renderer/ui/GlobalToast` (aliased here) stop calling the
-// no-op default context. The probe uses the exact call shape
-// AskUserQuestionRow uses.
+// A shared-row stand-in: the whole point of this host is that rows calling
+// the SHARED hook (@renderer/ui/GlobalToastContext — the exact import
+// AskUserQuestionRow uses since #1177, with no alias in between) reach the
+// phone's presentation instead of the context's no-op default.
 function Probe() {
   const { showToast } = useGlobalToast()
   return (

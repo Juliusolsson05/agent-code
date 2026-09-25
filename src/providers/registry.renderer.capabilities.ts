@@ -52,6 +52,12 @@ import type {
   TranscriptEntryMapper,
 } from '@shared/types/providerConfig'
 import { CLAUDE_SEMANTIC_FOLD_POLICY } from '@providers/claude/renderer/semanticFoldPolicy'
+import type { LedgerProviderPolicy } from '@renderer/rendering/model/ownership'
+import { CLAUDE_LEDGER_POLICY } from '@providers/claude/renderer/ledgerPolicy'
+import { CODEX_LEDGER_POLICY } from '@providers/codex/renderer/ledgerPolicy'
+import { OPENCODE_LEDGER_POLICY } from '@providers/opencode/renderer/ledgerPolicy'
+import { GROK_LEDGER_POLICY } from '@providers/grok/renderer/ledgerPolicy'
+import { PI_LEDGER_POLICY } from '@providers/pi/renderer/ledgerPolicy'
 import { CODEX_SEMANTIC_FOLD_POLICY } from '@providers/codex/renderer/semanticFoldPolicy'
 import { OPENCODE_SEMANTIC_FOLD_POLICY } from '@providers/opencode/renderer/semanticFoldPolicy'
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
@@ -259,6 +265,15 @@ export type RendererProviderCapabilities = {
    * WHYs.
    */
   semanticFoldPolicy: SemanticFoldPolicy
+  /**
+   * The provider's rendering asymmetries for the ownership ledger (#1177):
+   * suppression bits, whether its ghost plane may render, whether its
+   * '<'-prefixed user rows are scaffolding. They were literals in the shared
+   * decide layer keyed by provider name, so adding a provider meant editing
+   * shared code. Required, so a new provider must decide each one. See
+   * LedgerProviderPolicy and providers/<kind>/renderer/ledgerPolicy.ts.
+   */
+  ledgerPolicy: LedgerProviderPolicy
 }
 
 /** See providers/<kind>/renderer/conditions/policy.ts for the concrete
@@ -347,6 +362,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   usesOptimisticUserEcho: false,
   conditionPolicy: CLAUDE_CONDITION_POLICY,
   semanticFoldPolicy: CLAUDE_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: CLAUDE_LEDGER_POLICY,
 }
 
 const codexCapabilities: RendererProviderCapabilities = {
@@ -374,6 +390,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   usesOptimisticUserEcho: true,
   conditionPolicy: CODEX_CONDITION_POLICY,
   semanticFoldPolicy: CODEX_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: CODEX_LEDGER_POLICY,
 }
 
 const opencodeCapabilities: RendererProviderCapabilities = {
@@ -397,6 +414,7 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   usesOptimisticUserEcho: true,
   conditionPolicy: OPENCODE_CONDITION_POLICY,
   semanticFoldPolicy: OPENCODE_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: OPENCODE_LEDGER_POLICY,
 }
 
 const grokCapabilities: RendererProviderCapabilities = {
@@ -424,6 +442,7 @@ const grokCapabilities: RendererProviderCapabilities = {
   usesOptimisticUserEcho: true,
   conditionPolicy: GROK_CONDITION_POLICY,
   semanticFoldPolicy: GROK_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: GROK_LEDGER_POLICY,
 }
 
 const piCapabilities: RendererProviderCapabilities = {
@@ -447,6 +466,7 @@ const piCapabilities: RendererProviderCapabilities = {
   usesOptimisticUserEcho: true,
   conditionPolicy: PI_CONDITION_POLICY,
   semanticFoldPolicy: PI_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: PI_LEDGER_POLICY,
 }
 
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {

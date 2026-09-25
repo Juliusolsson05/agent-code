@@ -4,6 +4,7 @@ import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
 import { diffShadowUnits, ledgerUnits, legacyUnits } from '@renderer/rendering/shadow/shadowDiff'
 import type { LegacyItemLike } from '@renderer/rendering/shadow/shadowDiff'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // Shadow diff: the normalization must collapse REPRESENTATION differences
@@ -38,6 +39,7 @@ describe('shadow diff — normalization', () => {
     // must collapse to one turn unit.
     const ledger = createSessionLedger()({
       provider: 'claude',
+      policy: getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
       committed: [
         cand({ id: 'entry:u1', sourcePlane: 'committed', timestampMs: T }),
         cand({ id: 'entry:a1', sourcePlane: 'committed', timestampMs: T + 100, sequence: 1 }),
@@ -79,6 +81,7 @@ describe('shadow diff — normalization', () => {
     ]
     const ledger = createSessionLedger()({
       provider: 'claude',
+      policy: getRendererProviderCapabilities('claude').ledgerPolicy.suppression,
       committed: [],
       live: [
         cand({

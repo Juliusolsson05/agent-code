@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildFrameDocument, childFrameCsp, NET_FETCH_ARGS_JS } from '@main/extensions/frameDocument.js'
+import { buildFrameDocument, childFrameCsp, NET_FETCH_ARGS_JS, SERVICE_INVOKE_ARGS_JS } from '@main/extensions/frameDocument.js'
+import { isExtensionJson } from '@shared/types/extensionJson.js'
 import { buildRuntimeDocument } from '@main/extensions/runtimeDocument.js'
 import type { ExtensionManifest } from '@shared/types/extensions.js'
 
@@ -214,6 +215,34 @@ describe('net.fetch arguments are built identically in views and runtimes', () =
     for (const html of [view, runtime]) {
       expect(html).toContain(NET_FETCH_ARGS_JS)
       expect(html).toMatch(/fetch: \(url, init\) => .*netFetchArgs\(url, init\)/)
+    }
+  })
+})
+
+// services.invoke(id, name) used to reach main as params: undefined, which the
+// JSON admission refused as "exceeds the JSON limits" (Agent Code Poker 0.3.0's
+// Host button). Pin the omission and that both bootstraps use the snippet.
+describe('service.invoke arguments omit an absent params', () => {
+  const serviceInvokeArgs = new Function(`${SERVICE_INVOKE_ARGS_JS}; return serviceInvokeArgs;`)() as (serviceId: string, name: string, params?: unknown) => Record<string, unknown>
+
+  it('leaves the params key out when the author passes none', () => {
+    const args = serviceInvokeArgs('poker.lan-host', 'status')
+    expect(args).toEqual({ serviceId: 'poker.lan-host', name: 'status' })
+    expect('params' in args).toBe(false)
+    expect(isExtensionJson({ method: 'service', extensionId: 'poker', revision: 'r', request: { method: 'service.invoke', ...args } })).toBe(true)
+  })
+
+  it('keeps real JSON params, null included', () => {
+    expect(serviceInvokeArgs('s', 'n', { seat: 2 })).toEqual({ serviceId: 's', name: 'n', params: { seat: 2 } })
+    expect(serviceInvokeArgs('s', 'n', null)).toEqual({ serviceId: 's', name: 'n', params: null })
+  })
+
+  it('is the construction both bootstraps actually use', () => {
+    const view = buildFrameDocument(base)
+    const runtime = buildRuntimeDocument({ id: 'example', apiVersion: 2, entry: 'runtime.js' } as ExtensionManifest, 'test-nonce')
+    for (const html of [view, runtime]) {
+      expect(html).toContain(SERVICE_INVOKE_ARGS_JS)
+      expect(html).toMatch(/invoke: \(serviceId, name, params\) => .*serviceInvokeArgs\(serviceId, name, params\)/)
     }
   })
 })

@@ -226,7 +226,7 @@ export const sessionApi = {
 
   // The singular `session:jsonl-entry` bridge method was removed: main
   // emits JSONL ONLY through the coalescer as `session:jsonl-entries`
-  // (see main/sessions/jsonlCoalescer.ts). A live single entry arrives as
+  // (see the JSONL burst coalescing in main/sessions/sessionFeedTap.ts). A live single entry arrives as
   // a 1-element bulk burst with ~1ms setImmediate latency, so the renderer
   // can treat every JSONL delivery identically. The old singular channel
   // was the pre-coalescer slow path that caused the bootstrap-replay

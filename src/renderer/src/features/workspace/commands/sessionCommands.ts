@@ -16,6 +16,7 @@ import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCo
 import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
 import { hasGoalReportingAgents } from '@renderer/workspace/completedGoalAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
@@ -1148,7 +1149,9 @@ export const sessionCommands: CommandDef[] = [
       // and every reason behind that shape live in clearAgentComposer.ts —
       // shared with the composer's Escape recovery path (#737) so the two
       // cannot drift.
-      await clearAgentComposer(sessionId)
+      // Commands run outside React, so this is the desktop's one feed (the
+      // same instance app/main.tsx provides), not a context read.
+      await clearAgentComposer(sessionId, ipcSessionFeed)
       // States what was DONE, not what was achieved. From the renderer we
       // cannot confirm the composer is empty; the pane's own readiness line is
       // the honest signal, and it updates on the next gate evaluation.

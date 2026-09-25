@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, vi } from 'vitest'
 import { DevicePairing } from './auth/DevicePairing.js'
 import { DeviceRegistry } from './auth/deviceRegistry.js'
 import { SessionFeedSource } from './SessionFeedSource.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import { LanTransport } from './transport/LanTransport.js'
 import { RemoteServer } from './RemoteServer.js'
 import type { RemoteSessionControl, RemoteWorkspaceReadModel, RemoteNoteStore } from './RemoteServer.js'
@@ -49,6 +50,10 @@ let manager: FakeManager
 let registry: DeviceRegistry
 let pairing: DevicePairing
 let feedSource: SessionFeedSource
+// One tap per manager, surviving restartServer(): the production tap belongs
+// to main and outlives every remote enable/disable, so a restart must attach
+// a new sink to the SAME tap rather than build a fresh one.
+let feedTap: SessionFeedTap
 let server: RemoteServer
 let baseUrl: string
 
@@ -99,6 +104,7 @@ function framesOfType(frames: unknown[], type: string): Array<Record<string, unk
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'remote-server-'))
   manager = makeManager()
+  feedTap = new SessionFeedTap(manager as never)
   registry = new DeviceRegistry(join(dir, 'devices.json'))
   await registry.load()
   pairing = new DevicePairing({ secret: randomBytes(32), registry })
@@ -114,6 +120,7 @@ afterEach(async () => {
     ...clients.splice(0).map(client => () => client.terminate()),
     () => server?.stop(),
     () => feedSource?.dispose(),
+    () => feedTap?.dispose(),
     // registry.touch() persists asynchronously and may still finish a rename.
     () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 }),
   ]
@@ -130,7 +137,7 @@ async function openAuthed(): Promise<{ ws: WebSocket; frames: unknown[]; token: 
   return { ws, frames, token }
 }
 
-export { dir, manager, registry, pairing, feedSource, server, baseUrl, pairDevice, connect, waitFor, framesOfType, openAuthed, restartServer }
+export { dir, manager, registry, pairing, feedSource, feedTap, server, baseUrl, pairDevice, connect, waitFor, framesOfType, openAuthed, restartServer }
 
 async function restartServer(options?: {
   /** v2 identity read model; absent keeps v1 summaries (and every
@@ -143,7 +150,7 @@ async function restartServer(options?: {
 }): Promise<void> {
   await server?.stop()
   feedSource?.dispose()
-  feedSource = new SessionFeedSource(manager as never)
+  feedSource = new SessionFeedSource(manager as never, feedTap)
   server = new RemoteServer({
     manager,
     feedSource,

@@ -5,7 +5,7 @@ Refs #1172.
 ## Goal
 
 An on-by-default setting. When an agent finishes and you haven't looked at it yet, its pane
-header is drawn with diagonal stripes in the accent (activity) colour. The stripes clear
+header is drawn with stripes in the accent (activity) colour (vertical and full strength since #1191). The stripes clear
 once you've actually seen the pane.
 
 ## Decisions (agreed with the user, 2026-09-24)

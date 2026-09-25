@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import type { ForwardedKey } from '@shared/browserPocket/types'

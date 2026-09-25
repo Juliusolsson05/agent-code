@@ -66,7 +66,7 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import * as perf from '@renderer/performance/client'
-import { useAppStore } from '@renderer/app-state/hooks'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 import {
   RenderDebugBoundary,
   RenderingDebugProvider,
@@ -133,8 +133,10 @@ type Props = {
    *  position persistence across Feed unmount/remount (tab switches).
    *  See `scrollPositions` below. */
   sessionId: string
-  /** Which provider's row renderers to use. Default 'claude'. */
-  provider?: AgentProvider
+  /** Which provider's row renderers to use. Required since #1177: the old
+   *  `'claude'` default meant a caller that forgot it painted any provider
+   *  with Claude's rows, silently. AgentFeed, the one mount, always knows. */
+  provider: AgentProvider
   entries: Entry[]
   /**
    * The ownership-ledger pipeline's pre-decided, pre-ordered item list — the
@@ -239,6 +241,10 @@ type Props = {
   }) => void
 }
 
+/** Exported for AgentFeed (#1177), which maps a runtime onto these props
+ *  once for every surface that paints an agent feed. */
+export type FeedProps = Props
+
 // VisibleDecision + DebugVisibleRow moved to ../types.ts.
 // debugKeyForEntry + debugLabelForEntry moved to ../lib/helpers.ts.
 
@@ -312,7 +318,7 @@ export const Feed = memo(FeedImpl)
 function FeedImpl({
   usageLimitActions,
   sessionId,
-  provider = 'claude',
+  provider,
   entries,
   renderItemsOverride = null,
   committedOperationDecisionOverride,
@@ -341,7 +347,10 @@ function FeedImpl({
   askUserQuestionState,
   onDebugLog,
 }: Props) {
-  const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
+  // From the host, not the app store (#1177): the store is desktop state the
+  // phone could only fake with an untyped stub, and this switch is the ONE
+  // thing the whole Feed subtree read from it.
+  const { renderingDebugMode } = useRendererHost()
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and

@@ -9,17 +9,20 @@ import { defineConfig } from 'vite'
 // desktop pipeline cannot grow accidental dependencies on it (the isolation
 // wall, enforced at build level).
 //
-// THE ALIAS TABLE BELOW IS THE PHONE'S COMPATIBILITY CONTRACT with the
-// desktop renderer (see docs/superpowers/specs/2026-07-06-remote-semantic-
-// rendering-design.md). The phone mounts the REAL desktop feed components —
-// zero rendering drift — and every module that would drag Electron/desktop
-// coupling into the bundle is substituted here, at build level, with a stub
-// under src/stubs/ that documents its divergence. Adding an entry to this
-// table is a conscious decision; anything NOT listed renders with literally
-// the same code the desktop runs.
+// The phone mounts the REAL desktop feed modules — every row, CodeBlock,
+// link and toast is the same source the desktop renders. Until #1177 it got
+// there by SUBSTITUTING six desktop-coupled modules with stubs through the
+// alias table below; the stubs had to mirror each module's exports by hand,
+// one (the app store) was invisible to the type checker, and every desktop
+// change to those modules silently risked the phone. They are gone: what a
+// row may do on a given device now arrives typed through the RendererHost
+// context (host/phoneRendererHost.ts here, DesktopRendererHost on the
+// desktop) and the shared toast context. If the phone bundle ever needs a
+// substitution again, the fix is a host capability, not an alias.
 //
-// ORDER MATTERS: vite's array-form aliases match top-down, so the exact
-// stub substitutions MUST precede the general @renderer prefix mapping.
+// What remains below is path mapping only: the source aliases every build
+// shares, plus two exact package entries that must precede the general
+// prefixes (vite's array-form aliases match top-down).
 
 const src = resolve(__dirname, '..')
 
@@ -36,45 +39,6 @@ export default defineConfig({
   ],
   resolve: {
     alias: [
-      // --- stub substitutions (desktop-coupled modules) ---
-      {
-        // monaco + LSP-over-window.api; stub is static-hljs with the same
-        // props type and markup contract.
-        find: '@renderer/lib/code/CodeBlock',
-        replacement: resolve(__dirname, 'src', 'stubs', 'CodeBlock'),
-      },
-      {
-        // zustand app store; the feed subtree's single read gets a frozen
-        // default-settings snapshot.
-        find: '@renderer/app-state/hooks',
-        replacement: resolve(__dirname, 'src', 'stubs', 'appStateHooks'),
-      },
-      {
-        // perf spans over IPC; no-ops.
-        find: '@renderer/performance/client',
-        replacement: resolve(__dirname, 'src', 'stubs', 'perfClient'),
-      },
-      {
-        // external-open IPC + Global Editor routing; plain new-tab anchor.
-        find: '@renderer/features/rendered-content/SafeMarkdownLink',
-        replacement: resolve(__dirname, 'src', 'stubs', 'SafeMarkdownLink'),
-      },
-      {
-        // click-to-open-in-editor inline code; plain <code>.
-        find: '@renderer/features/rendered-content/SafeInlineCode',
-        replacement: resolve(__dirname, 'src', 'stubs', 'SafeInlineCode'),
-      },
-      {
-        // Toast context. The desktop provider reads the zustand app store
-        // and window.api extension notifications; neither exists in a phone
-        // browser. Substituting the phone host (same showToast API, bottom-
-        // anchored presentation) means shared rows like AskUserQuestionRow
-        // surface delivery failures on the phone instead of calling the
-        // desktop module's no-op default context in silence.
-        find: '@renderer/ui/GlobalToast',
-        replacement: resolve(__dirname, 'src', 'ui', 'ToastHost'),
-      },
-      // --- real desktop source (everything else) ---
       // The shared workflow row reduces clean events. This exact alias keeps
       // the phone on the pure reducer entry instead of importing Node/Electron
       // runtime surfaces from the package root.
