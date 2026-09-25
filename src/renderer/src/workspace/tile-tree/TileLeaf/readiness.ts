@@ -120,6 +120,9 @@ export function resolveReadinessText(
  * silently diverge.
  */
 export function readinessStatusSince(runtime: SessionRuntime): number | null {
+  // Mirrors the failed-first order above: a failed line carries no elapsed
+  // suffix, so it needs no clock and no 1 Hz re-render (#1252 review).
+  if (runtime.processStatus === 'failed') return null
   if (runtime.transcriptStatus === 'loading') return runtime.transcriptStatusChangedAt
   return runtime.inputReadinessChangedAt
 }
