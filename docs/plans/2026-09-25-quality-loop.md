@@ -546,7 +546,7 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
     - Both C reviewers are on their one verification round.
   - **codex-headless#54:** round 2 found the cwd forging both hints. Fixed by anchoring the hints to Codex's hint rows, never the status row; the final disposition is posted.
   - **New #1316** (#1315, the Pi bootstrap waits for its bridge). B's six mutants all now fail tests, and round 2 is out.
-  - **Decision:** a pointer-only bump PR (#1317) relies on the package PR's three reviewers; its diff is one submodule line.
+  - ~~Decision: a pointer-only bump PR relies on the package PR's reviewers~~ **Withdrawn (steering q38):** owner decision 2 (§ line 180) sends the bump PR through the pipeline too. #1317 gets three pointer-specific reviewers and its own disposition before merge.
 
 - 2026-09-25 (14:20) — **#1300 merged** (`1d25b0ed`, closes #1261). #1171 closed by hand (same failure). #1308 is remerged onto `1d25b0ed`, with a fresh gate running; it merges next.
   - **Steering q37 (quorum):** #1257, #1263, #1284, #1286, #1287, #1297 and #1298 had only reviewers A and B. None merges without a third. Independent C reviewers (Pi/Grok alternating) are now reviewing each final head. #1297's C must cover stale selection, paging and overlap with #1221, and #1284's C the unreviewed package commit 052a476. #1297's posted two-reviewer disposition got a public correction.
