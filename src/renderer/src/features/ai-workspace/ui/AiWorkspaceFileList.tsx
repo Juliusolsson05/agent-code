@@ -111,12 +111,18 @@ export function AiWorkspaceFileList({
             return (
               <div
                 key={entry.entryId}
-                className={`group flex items-stretch ${
+                // The app's one selected-row look, as the Explorer draws its
+                // active file (plan T7, G-8): fill plus a 2px accent rail,
+                // with a transparent rail slot on every other row so text
+                // never shifts. It was an accent-soft fill with no rail, so
+                // the current file looked different in the two panels side by
+                // side (Claude review of #1221, reviewer C F5).
+                className={`group flex items-stretch border-l-2 ${
                   activeEntryId === entry.entryId
-                    ? 'bg-accent-soft text-ink'
+                    ? 'border-l-accent bg-row-selected-bg text-ink'
                     : stale
-                      ? 'text-muted opacity-70'
-                      : 'text-ink-dim hover:bg-row-hover-bg hover:text-ink'
+                      ? 'border-l-transparent text-muted opacity-70'
+                      : 'border-l-transparent text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                 }`}
               >
                 <button
