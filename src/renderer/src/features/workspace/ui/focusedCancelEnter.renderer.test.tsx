@@ -243,7 +243,7 @@ describe('a click must not hand the row the keyboard (#867 review)', () => {
 })
 
 describe('Pin Sessions: the dialog keeps the keys it advertises (#867 review)', () => {
-  it('opens with focus on the dialog, not on Cancel', () => {
+  it('opens with focus on the list, not on Cancel', () => {
     // Radix's FocusScope focuses the first TABBABLE node on mount. Once the
     // rows left the tab order that node was CANCEL, so the very first Enter —
     // the one the dialog's own description calls "commit" — cancelled and
@@ -251,7 +251,10 @@ describe('Pin Sessions: the dialog keeps the keys it advertises (#867 review)', 
     // `onOpenAutoFocus`; this one did not.
     const { onConfirm, onCancel } = pinHarness()
 
-    expect(document.activeElement).toBe(screen.getByRole('dialog'))
+    // The LISTBOX, specifically (was: the dialog surface). It carries
+    // aria-activedescendant, which only announces from the focused element
+    // (steering note k2); keys still reach the dialog's handler by bubbling.
+    expect(document.activeElement).toBe(screen.getByRole('listbox'))
     // And the advertised key works from that starting point, with no rescue
     // gesture in between.
     expect(fireEvent.keyDown(document.activeElement!, { key: 'Enter' })).toBe(false)
@@ -308,7 +311,7 @@ describe('Reorder Tabs: the ↑/↓ buttons leave the dialog usable (#867 review
     expect(onConfirm).toHaveBeenCalledWith(['a', 'b'])
   })
 
-  it('hands focus back to the dialog after a move that disables the button', () => {
+  it('hands focus back to the list after a move that disables the button', () => {
     // A move can disable the button that performed it (the row is now at an
     // end). A disabled control keeps focus while dropping out of the event
     // path, so real keys reached neither the button nor the dialog's ancestor
@@ -326,6 +329,8 @@ describe('Reorder Tabs: the ↑/↓ buttons leave the dialog usable (#867 review
     fireEvent.click(up)
 
     expect(up).toBeDisabled()
-    expect(document.activeElement).toBe(screen.getByRole('dialog'))
+    // The listbox (focus owner of the cursor's aria-activedescendant), inside
+    // the dialog whose handler receives every key by bubbling.
+    expect(document.activeElement).toBe(screen.getByRole('listbox'))
   })
 })

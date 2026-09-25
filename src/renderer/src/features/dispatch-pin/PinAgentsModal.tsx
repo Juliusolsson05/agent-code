@@ -60,7 +60,7 @@ export function PinAgentsModal({
   onCancel,
   onConfirm,
 }: Props) {
-  const { selectedIds, focusedIndex, toggle, onKeyDown, getRowProps } =
+  const { selectedIds, focusedIndex, onKeyDown, getRowProps } =
     usePinAgentsKeybinds({
       rows,
       initialSelectedIds,
@@ -69,7 +69,7 @@ export function PinAgentsModal({
     })
 
   const selectedSet = new Set(selectedIds)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   return (
     <Dialog
@@ -79,18 +79,20 @@ export function PinAgentsModal({
       }}
     >
       <DialogContent
-        ref={dialogRef}
-        tabIndex={-1}
         onKeyDown={onKeyDown}
         onOpenAutoFocus={event => {
           // WHY this dialog needs what its two siblings already had (#867
           // review): Radix's FocusScope focuses the first TABBABLE node on
           // mount. Taking the rows out of the tab order made that node
           // CANCEL — so on a fresh open, the Enter this dialog advertises as
-          // "commit" was handed to Cancel and threw the pins away. Nothing in
-          // here ever moves DOM focus, so no arrow key could rescue it.
+          // "commit" was handed to Cancel and threw the pins away.
+          //
+          // Focus goes to the LISTBOX, not the dialog surface: it carries
+          // aria-activedescendant, which only announces from the focused
+          // element (focus-owner invariant, lib/useListNavigation header).
+          // Keys still reach onKeyDown above by bubbling.
           event.preventDefault()
-          dialogRef.current?.focus()
+          listRef.current?.focus()
         }}
         // Standard anatomy (plan T3): header / padded body / DialogActions.
         // It used to pad the WHOLE content (p-5) with a bespoke title and a
@@ -111,11 +113,14 @@ export function PinAgentsModal({
             on — without it the highlight is a CSS class and nothing else
             (#867 review). */}
         <div
+          ref={listRef}
           role="listbox"
+          // One Tab stop (plan K4) so Shift+Tab from the footer returns here.
+          tabIndex={0}
           aria-label="Agents to pin"
           aria-multiselectable
           aria-activedescendant={rows[focusedIndex] ? `pin-agents-row-${rows[focusedIndex]!.sessionId}` : undefined}
-          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas py-1"
+          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas py-1 outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           {rows.length === 0 ? (
             <div className="px-3 py-4 text-[12px] text-muted">
@@ -125,17 +130,14 @@ export function PinAgentsModal({
             rows.map((row, index) => {
               const isSelected = selectedSet.has(row.sessionId)
               const isFocused = index === focusedIndex
-              // Hover (mousemove), click-without-focus-theft and keyboard
-              // scroll-into-view come from useListNavigation. The click
-              // TOGGLES rather than activating (Enter commits the whole
-              // draft; a click only edits it), so onClick is overridden by the
-              // later prop below.
-              const rowNav = getRowProps(index)
+              // Hover (mousemove), click (highlight + toggle, via the hook's
+              // onItemClick), no focus theft on mousedown, and keyboard
+              // scroll-into-view all come from useListNavigation.
               return (
                 <button
                   key={row.sessionId}
                   type="button"
-                  {...rowNav}
+                  {...getRowProps(index)}
                   id={`pin-agents-row-${row.sessionId}`}
                   role="option"
                   aria-selected={isSelected}
@@ -145,7 +147,6 @@ export function PinAgentsModal({
                   // FOCUSED one — so the user would act on a row other than the
                   // one the dialog is showing as chosen, whatever Enter does.
                   tabIndex={-1}
-                  onClick={() => toggle(row.sessionId)}
                   className={`
                     w-full flex items-center gap-3 px-3 py-1.5 border-l-2 text-left text-ink
                     ${isFocused ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent hover:bg-row-hover-bg'}

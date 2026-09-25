@@ -53,4 +53,27 @@ describe('Pin Sessions keyboard', () => {
     // Enter commits, so the confirm says so.
     expect(screen.getByRole('button', { name: /Pin 0 Agents/ }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
   })
+
+  it('keeps DOM focus on the listbox that announces the highlight (steering note k2)', () => {
+    // aria-activedescendant only works on the focused element. The first
+    // migration focused the dialog surface and hung the attribute on an
+    // unfocused child — right-looking markup that announces nothing.
+    const { highlighted } = harness()
+    const listbox = screen.getByRole('listbox')
+    expect(document.activeElement).toBe(listbox)
+    fireEvent.keyDown(listbox, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(listbox)
+    expect(highlighted()).toBe('pin-agents-row-s1')
+  })
+
+  it('moves the highlight to a tapped row, so the toggle and the highlight never diverge', () => {
+    // A tap/click with no mousemove first (touch, or a pointer that has not
+    // moved): the row toggles AND becomes the highlighted row. Overriding the
+    // row's onClick used to drop the highlight move.
+    const { dialog, highlighted, onConfirm } = harness()
+    fireEvent.click(screen.getByRole('option', { name: /Agent 7/ }))
+    expect(highlighted()).toBe('pin-agents-row-s7')
+    fireEvent.keyDown(dialog, { key: 'Enter' })
+    expect(onConfirm).toHaveBeenCalledWith(['s7'])
+  })
 })

@@ -100,6 +100,11 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
       const row = rows[index]
       if (row) toggle(row.sessionId)
     },
+    // A click edits the draft (toggle), it does not commit it.
+    onItemClick: index => {
+      const row = rows[index]
+      if (row) toggle(row.sessionId)
+    },
   })
 
   const onKeyDown = useCallback(

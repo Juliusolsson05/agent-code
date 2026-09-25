@@ -37,7 +37,9 @@ export function ReorderTabsModal({
   const [movingTabId, setMovingTabId] = useState<TabId | null>(null)
   const [snapshotTabIds, setSnapshotTabIds] = useState<TabId[]>(() => tabs.map(tab => tab.id))
   const [error, setError] = useState<string | null>(null)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  // The LISTBOX is the focus owner (aria-activedescendant must sit on the
+  // focused element — lib/useListNavigation's focus-owner invariant).
+  const listRef = useRef<HTMLDivElement>(null)
   const wasOpenRef = useRef(false)
 
   // The modal keeps its own snapshot while open because tab order is a
@@ -113,8 +115,8 @@ export function ReorderTabsModal({
       // end), and a disabled control keeps focus while dropping out of the
       // event path — real keys then reach neither the button nor this dialog's
       // ancestor handler, so arrows and Enter went dead mid-reorder. Hand focus
-      // back to the dialog, which is where every key in this dialog belongs.
-      dialogRef.current?.focus()
+      // back to the list, which is where every key in this dialog belongs.
+      listRef.current?.focus()
     },
     [],
   )
@@ -219,12 +221,10 @@ export function ReorderTabsModal({
       }}
     >
       <DialogContent
-        ref={dialogRef}
-        tabIndex={-1}
         onKeyDown={onKeyDown}
         onOpenAutoFocus={event => {
           event.preventDefault()
-          dialogRef.current?.focus()
+          listRef.current?.focus()
         }}
         onEscapeKeyDown={event => {
           // WHY the first Escape can be consumed: while a row is "picked",
@@ -250,10 +250,13 @@ export function ReorderTabsModal({
         {/* Roving focus: the rows left the tab order, so the cursor has to be
             announced rather than focused (#867 review). */}
         <div
+          ref={listRef}
           role="listbox"
+          // One Tab stop (plan K4): Shift+Tab from the footer returns here.
+          tabIndex={0}
           aria-label="Tab order"
           aria-activedescendant={cursorTabId ? `reorder-tabs-row-${cursorTabId}` : undefined}
-          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas"
+          className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           {draftTabs.map((tab, index) => {
             // (row highlight: T7 — row-selected + 2px accent bar for the

@@ -22,6 +22,19 @@ import { focusedControlOwnsEnter, focusedControlOwnsSpace } from '@renderer/comp
 // onMouseDown). Roving tabindex remains right for TAB STRIPS (EditorTabs),
 // which is a different widget and does not use this hook.
 //
+// THE FOCUS-OWNER INVARIANT (steering note k2 — read before wiring a list):
+// `aria-activedescendant={activeId}` must sit on the element that HOLDS DOM
+// FOCUS, or assistive tech announces nothing as the arrows move (WAI-ARIA
+// 1.2 §aria-activedescendant). Two correct shapes, nothing else:
+//   - Filterable list: focus stays on the text input; the INPUT carries
+//     `role="combobox"`, `aria-activedescendant`, `aria-controls=<listbox id>`.
+//   - Plain list: the LISTBOX itself is focused — `tabIndex={0}` (one Tab
+//     stop, plan K4, so Shift+Tab from the footer can come back) and focused
+//     in the dialog's onOpenAutoFocus — and carries `aria-activedescendant`.
+// Focusing DialogContent and hanging the attribute on an unfocused listbox
+// child (the first S2 migration did this) LOOKS right and announces nothing.
+// Key handlers may stay on DialogContent: key events bubble from the owner.
+//
 // WHY the handler returns a boolean instead of calling preventDefault
 // blindly: callers compose it with their own keys (Backspace-to-go-back,
 // a two-phase Enter) and need to know whether this hook consumed the event.
@@ -56,6 +69,15 @@ export type UseListNavigationOptions = {
   onActivate?: (index: number) => void
   /** Space on the highlight, for multi-select lists. */
   onToggle?: (index: number) => void
+  /**
+   * What a pointer click on a row does, after the highlight moves to it.
+   * Defaults to `onActivate`. A multi-select list (Pin Sessions) passes its
+   * toggle here, because a click EDITS the draft while Enter COMMITS it —
+   * and it must not override the item's onClick itself, or it loses the
+   * highlight move and a tap without a prior mousemove toggles one row while
+   * the highlight stays on another (steering note k2).
+   */
+  onItemClick?: (index: number) => void
   /** DOM id prefix for rows, used for aria-activedescendant. */
   idPrefix?: string
 }
@@ -99,6 +121,7 @@ export function useListNavigation({
   isDisabled,
   onActivate,
   onToggle,
+  onItemClick,
   idPrefix,
 }: UseListNavigationOptions): UseListNavigationResult {
   const [index, setIndexState] = useState(initialIndex)
@@ -241,10 +264,10 @@ export function useListNavigation({
       onClick: () => {
         if (disabled(i)) return
         setIndexState(i)
-        onActivate?.(i)
+        ;(onItemClick ?? onActivate)?.(i)
       },
     }),
-    [disabled, idPrefix, index, onActivate],
+    [disabled, idPrefix, index, onActivate, onItemClick],
   )
 
   return {

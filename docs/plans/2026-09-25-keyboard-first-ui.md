@@ -242,6 +242,11 @@ pending — they stay UNCONFIRMED in the PR body):
   List rows are not tab stops (`tabIndex={-1}` + `onMouseDown`
   preventDefault, per `focusedControlOwnsEnter`'s doc); the highlight is an
   index with `aria-activedescendant` on the focused input/list.
+  **Focus-owner invariant (steering note k2):** `aria-activedescendant` goes
+  ONLY on the element holding DOM focus — the filter input (as a combobox
+  with `aria-controls`) for filterable lists, or the listbox itself
+  (`tabIndex={0}`, focused in onOpenAutoFocus) for plain lists. Never on an
+  unfocused listbox inside a focused DialogContent.
 - **K5 Lists.** ↑/↓ move, Home/End jump, PgUp/PgDn move one visible page,
   ⌃N/⌃P alias ↑/↓, j/k only where the surface has no text input. Clamp at
   ends (D4). Highlighted row always scrolled into view (`block: 'nearest'`).
@@ -646,6 +651,15 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k2 (valid, both points): S2/S3 focused the
+  dialog surface while aria-activedescendant sat on the unfocused listbox,
+  and S2's onClick override dropped the highlight move. Fixed: listbox is
+  the focus owner (tabIndex 0, focused on open, focus ring), invariant
+  recorded in useListNavigation's header + K4; new `onItemClick` hook option
+  replaces overriding onClick. Confirm-red: the two new Pin tests (focus on
+  listbox across arrows; tap moves highlight + toggles) fail on the pre-fix
+  files. Two focusedCancelEnter tests that pinned "focus = dialog" now pin
+  the stricter "focus = listbox".
 - 2026-09-25 S3: Reorder Tabs keeps its two-phase handler (a list hook
   would not model pick/move), gains Home/End in both phases, phase-aware
   legend and Done chip, standard anatomy. Confirm-red: all 3 new tests fail
