@@ -365,8 +365,8 @@ entry when it lands.
 
 | # | Item | Status |
 |---|---|---|
-| F1 | `Kbd` primitive + test | todo |
-| F2 | `DialogActions` chips + `legend` + `confirmChord` + tests | todo |
+| F1 | `Kbd` primitive + test | done |
+| F2 | `DialogActions` chips + `legend` + `confirmKey` + `escapeCancels` + tests | done |
 | F3 | `useListNavigation` + test | todo |
 | F4 | `DialogContent size` presets + close button convergence | todo |
 | F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | todo |
@@ -490,7 +490,12 @@ What to eyeball per surface once built (the app is never launched here). One
 line per landed row: open it, check the listed things, in Round, Soft and
 Sharp corners and one light theme.
 
-- (filled as rows land)
+- **F1/F2 chips (any DialogActions dialog — Pin Agents, Dictation Guide
+  today):** `Cancel ⎋` and `<Confirm> ↩` chips sit inside the buttons, the
+  footer does not grow taller than before (chip h-4 inside an h-7 button),
+  the chip on the filled confirm reads as part of the button (translucent
+  frame on accent, not a dark sticker), and in Sharp corners the chip is
+  square, in Round it is a capsule.
 
 ## Tasks
 
@@ -507,6 +512,21 @@ Sharp corners and one light theme.
       detached worktrees), at most one verification round. Leave the PR
       open, green, reviewed.
 
+## Rulings
+
+- Ruling: Enter's glyph is `↩` (what `displayKeybinding` already emits), not
+  `↵` as the first draft of H2 wrote — one display projection beats a
+  prettier glyph — cost if wrong: one table entry in `@shared/keybindings`.
+- Ruling: `confirmChord` became `confirmKey: 'Enter' | 'Cmd+Enter' | null`,
+  and `confirmOnEnter={false}` now means "the surface wires the key" (chip
+  still shown) rather than "no key commits" — the only consumer (Pin Agents)
+  commits on Enter through its own hook, so the chip is true there — cost if
+  wrong: a future dialog that wants no key commit must pass
+  `confirmKey={null}`, documented on the prop.
+- Ruling: ⌘↩ commits from anywhere in the dialog, including a focused
+  textarea or button — the modifier is an explicit commit — cost if wrong:
+  ⌘↩ on a focused Cancel commits; judged correct (the user asked to commit).
+
 ## Execution notes
 
 - Sweep counts: 44 Radix dialogs (45 mounts), 15 hand-rolled overlays/menus,
@@ -516,3 +536,8 @@ Sharp corners and one light theme.
 - 2026-09-25: read BRIEF, command-style, command-keybindings, useKeybinds
   header, styles.css tokens, ui primitives; three read-only sweeps
   (keybindings/tokens, dialogs, pickers/lists). Plan drafted.
+- 2026-09-25 F1+F2: `components/ui/kbd.tsx` (Kbd, KbdGroup, KbdLegend),
+  DialogActions chips/legend/confirmKey/escapeCancels. Confirm-red observed:
+  3 of 5 new DialogActions tests fail on the pre-change file (chip labels,
+  confirmKey null, ⌘↩ commit); the other 2 are guards (no Escape chip when
+  blocked, plain Enter in a textarea is a newline).

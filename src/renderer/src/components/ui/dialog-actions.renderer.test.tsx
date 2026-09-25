@@ -44,6 +44,84 @@ describe('DialogActions Enter ownership', () => {
   })
 })
 
+// Key chips (keyboard-first plan H2). The rule these pin: a chip is shown
+// exactly when that key performs that button's action — never a chip that
+// lies. Before the chips, every dialog footer was silent about its keys.
+function chipsOn(name: string | RegExp): string[] {
+  const button = screen.getByRole('button', { name })
+  return [...button.querySelectorAll('[data-slot="kbd"]')].map(chip => chip.textContent ?? '')
+}
+
+describe('DialogActions key chips', () => {
+  it('labels Cancel with Escape and confirm with Enter', () => {
+    harness()
+    expect(chipsOn('Cancel')).toEqual(['⎋'])
+    expect(chipsOn('Close 3 Agents')).toEqual(['↩'])
+  })
+
+  it('keeps the chip text out of the accessible name', () => {
+    // A screen reader should hear "Cancel", not "Cancel escape".
+    harness()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+  })
+
+  it('drops the Escape chip while the surface refuses Escape', () => {
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Switching</DialogTitle>
+          <DialogActions confirmLabel="Switch" onConfirm={() => {}} onCancel={() => {}} escapeCancels={false} />
+        </DialogContent>
+      </Dialog>,
+    )
+    expect(chipsOn('Cancel')).toEqual([])
+  })
+
+  it('shows no chip and commits on no key when confirmKey is null', () => {
+    const onConfirm = vi.fn()
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Deliberate</DialogTitle>
+          <DialogActions confirmLabel="Apply" onConfirm={onConfirm} confirmKey={null} />
+        </DialogContent>
+      </Dialog>,
+    )
+    expect(chipsOn('Apply')).toEqual([])
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+})
+
+describe('DialogActions Cmd+Enter commit', () => {
+  function textareaHarness() {
+    const onConfirm = vi.fn()
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Note</DialogTitle>
+          <textarea aria-label="note" />
+          <DialogActions confirmLabel="Save" onConfirm={onConfirm} onCancel={() => {}} confirmKey="Cmd+Enter" />
+        </DialogContent>
+      </Dialog>,
+    )
+    return { onConfirm, textarea: screen.getByRole('textbox', { name: 'note' }) }
+  }
+
+  it('commits on Cmd+Enter from inside the textarea and labels the button ⌘↩', () => {
+    const { onConfirm, textarea } = textareaHarness()
+    expect(chipsOn('Save')).toEqual(['⌘↩'])
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    expect(onConfirm).toHaveBeenCalledOnce()
+  })
+
+  it('leaves plain Enter in the textarea as a newline', () => {
+    const { onConfirm, textarea } = textareaHarness()
+    expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(true)
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+})
+
 describe('focusedControlOwnsEnter', () => {
   it('claims Enter for buttons, links and textareas only', () => {
     expect(focusedControlOwnsEnter(document.createElement('button'))).toBe(true)
