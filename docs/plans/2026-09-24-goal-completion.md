@@ -2,7 +2,7 @@
 
 Fixes #1182.
 Branch `feat/goal-completion` · Worktree `.worktrees/goal-completion` · Base `origin/main` @ 73f77de6 (2026-09-24).
-Status: implementation in progress; merge needs explicit approval.
+Status: implemented, PR #1184 open, one review round resolved; merge needs explicit approval.
 
 ## Outcome
 
@@ -19,8 +19,11 @@ their lanes removed, in one confirmation.
   renderer reads through `goal:read` / `goal:history` / `goal:changed`.
 - `TldrStore.load()` rebuilds each record from `text/updatedAt/revision`, so
   extra fields in an older build are dropped, not rejected (downgrade-safe).
-- `readGoals` returns `TldrRecord`, so optional fields on that type reach every
-  reader (overlay, history, remote frames) with no new IPC.
+- `readGoals` returns `TldrRecord`, so optional fields on that type reach the
+  desktop readers (overlay, history, close menu) with no new IPC. NOT the
+  phone: the remote server and client rebuild note frames field by field
+  (`RemoteServer.ts` live forward + bootstrap, `WebSocketSessionFeed.ts`,
+  `wire.ts`), so completion never reaches it (corrected after review).
 - Bulk close: `workspace/bulkClose.ts` `closeGrantedSessions` (grant = rows
   shown; `currentTarget` re-judges each kill synchronously; deepest owner
   first). Used by Close Old Agents (modal) and Close Idle Orchestration
@@ -98,7 +101,37 @@ Scoped vitest while iterating; `npx tsc -b` and the full suite once at the end
 check of the modal and peek is for the user.
 
 ## Out of scope
-- Phone (remote) peek showing completion: the record already carries the
-  fields; UI follow-up.
+- Phone (remote) peek showing completion: needs the protocol frame, both
+  server paths and the client wire, not just UI (see Evidence).
+- Agent Activity's goal column does not mark completion.
+- Downgrading to a pre-#1182 build drops completions from goal.json on the
+  old build's next goal write; an old history modal shows completion rows as
+  goals. Harmless (nothing closes on its own), accepted.
 - Pane/index badge for completed agents.
 - `agent_management` MCP exposing goal/completion to managing agents.
+
+## Rulings
+- Ruling: no renderer "messaged since completion" signal — `turnStartedAt`
+  and `submittedAt` reset at idle, so an idle agent carries no trace of a
+  later turn; the prompt hook handles it instead — cost if wrong: on
+  OpenCode/Grok/Pi (no hooks) a completed agent given a same-direction
+  follow-up without a new goal stays listed; the user sees its goal and note
+  before closing.
+- Ruling: the modal mounts per opening rather than resetting its state on
+  open — structural freshness beats a reset list every new state must join —
+  cost if wrong: no exit animation on close.
+
+## Review (2026-09-25, one round: two Claude reviewers)
+| Finding | Verdict | Disposition |
+|---|---|---|
+| Completed agent given follow-up work stays completed and ticked (A1, major) | valid | prompt hook asks a completed agent to `goal_set` before more work (`GOAL_COMPLETED_CONTEXT`) |
+| Modal reuses last opening's goals until/unless the read lands (B1, major) | valid | mount per opening; Close gated on a fresh read; failed read shown |
+| Coordinator closes under open workers / worker under live coordinator (B2) | valid | owner rule to a fixed point in list + pre-loop; kill-time refuses a worker whose coordinator left the grant or is working |
+| Lanes silently kept after a mid-close reshape (B3) | valid | toast says so |
+| Blocked row ticks itself when it clears (B4) | valid | rows seen blocked default unticked |
+| Remote frames drop completion; plan claimed otherwise (A2) | valid | plan corrected; phone stays out of scope |
+| Agent Activity shows no completion (A3) | valid | listed out of scope |
+| Downgrade drops completions (A4) | valid | documented, accepted |
+| Dedupe comment describes the wrong case (A5) | valid | comment fixed; note==goal test added |
+| Surviving mutations (note normalization, change event, set-time, history marker, disabled peek, reader-after-click, ready gate, orchestration rules) | valid | tests added; each re-run killed |
+
