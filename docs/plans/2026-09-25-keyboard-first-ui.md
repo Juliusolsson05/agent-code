@@ -485,7 +485,7 @@ entry when it lands.
 | N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | done (in S43) |
 | N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
 | N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | done (textarea carries aria-controls/activedescendant/autocomplete while open; T7 row + popover tokens) |
-| N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
+| N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | done (scroller is a labelled Tab stop; native arrows/PgUp/PgDn/Home; End = jump-latest via `feed` context; key scroll = engagement) |
 | N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | done (in S45) |
 | N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | done (Kbd chips, named Buttons, conflict focus flow + focus return; dictation copy) |
 | N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | done (verified: keys already reach the agent; added shared `ConditionOptionList` listbox + legend, Tab-reachable) |
@@ -526,7 +526,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-1 | Goal-loop overlay (`features/goal-loop/GoalLoopPane.tsx:34,152`; gate `useKeybinds.ts:524-560`) | `role="dialog"`, but the capture gate eats every key except ⎋ and the toggle chord, so Tab, Enter and Space never reach Pause/Resume/Raise cap/Stop; focus is never moved in | let focus-navigation keys through inside the overlay; focus the first action on open; return focus on close | todo |
 | K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | todo |
 | K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | todo |
-| K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | todo (N13) |
+| K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
 | K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
 | K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | todo |
 | K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | todo |
@@ -828,6 +828,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **N13 Conversation scroller:** Tab (or Shift+Tab from the composer, after
+  the feed's own controls) reaches the conversation, which then shows an
+  inset focus ring. ↑/↓/PgUp/PgDn/Home scroll it and End jumps to the
+  latest message. **Check**: clicking in the feed shows NO ring and typing
+  still lands in the composer (type-to-focus); text selection for Reply to
+  Selection still works.
 - **N15 Settings › Command keybindings:** bindings are key chips with a
   small ×; Add / Reset / Replace / Cancel are standard small buttons (same
   height and radius everywhere); the search box is the standard input.
@@ -1395,3 +1401,14 @@ Sharp corners and one light theme.
   ⌥D (Split Vertical, replaceable) and ⌘W (reserved by native menu + editor).
   Confirm-red: all 3 fail on the pre-change row; removing the focus return
   fails the Escape test.
+- 2026-09-25 N13: Feed scroller `tabIndex 0`, `role=region` "Conversation",
+  T4 inset ring, onKeyDown engagement for keys on the scroller itself. Safe
+  for the mouse because useTypeToFocus redirects printable keys from any
+  non-editable target. NOT done, left as a proposal (product calls,
+  UNCONFIRMED): PgUp/PgDn from inside the composer scrolling the feed (steals
+  the textarea's caret paging), and a keyboard "quote message/block" for
+  Reply to Selection (needs a block-selection model). Confirm-red: both Feed
+  keyboard tests fail on the pre-change scroller; widening the engagement
+  guard fails the control test.
+- 2026-09-25 merge: origin/main (8 commits: goal-loop background hold, Claude
+  image-literal delivery) merged clean; no submodule drift; tsc green.
