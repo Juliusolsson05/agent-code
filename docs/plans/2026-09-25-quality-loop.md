@@ -347,6 +347,10 @@ The surface list below is B18's starting inventory.
 3. No unresolved valid blocking finding; disposition table present.
 4. Each regression test mutation-checked.
 5. Closing keywords match what shipped; partly fixed issues get a comment and stay open.
+   Check GitHub's own link, not just the text: `gh pr view N --json
+   closingIssuesReferences` must list only fully fixed issues. A PR opened with
+   "Fixes #N" keeps that link after the body and commit say "Refs" (#1222
+   closed #290 that way; reopened).
 6. Not in a `needs-owner` category (decision 5).
 
 Then `gh pr merge --merge` (never squash or rebase), close by hand any issues the
@@ -525,6 +529,11 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — **#1222 MERGED** (#290 marker slice). GitHub closed #290
+  through a closing link left from the PR's original "Fixes" wording, so it
+  was reopened with the remaining items. The merge gate now checks
+  closingIssuesReferences. #1223 round 2 all MERGE-READY (waiting on CI).
+  #1226 (#1119 image literal) opened.
 - 2026-09-25 — **#1219 MERGED** (#1118 closed): the composer text is reconstructed
   from recorded geometry. #1160 MERGED. #1222 (#290 marker slice): 2 Codex + 1
   Pi, two rounds, all MERGE-READY; waiting on CI. #1223 (#732 orphan ghost
