@@ -218,4 +218,57 @@ describe('feed debug persistence cadence and durability', () => {
       entries: [refs.latestRuntimesRef.current.a!.feedDebugLog[2]],
     })
   })
+
+  it('tells generations apart even when the reload lands in the same millisecond', async () => {
+    // #1111 review: the epoch used to be the first entry's timestamp, so a
+    // reset inside one millisecond (fake timers never advance here) gave the
+    // new generation the old epoch, and the stale write's settle moved the
+    // new cursor from 2 to 3.
+    const oldWrite = deferred()
+    append.mockReturnValueOnce(oldWrite.promise)
+    // Both generations are built before any time passes, so their first
+    // entries share one millisecond, exactly the collision.
+    const oldRuntime = add(add(add(emptyRuntime(), 'old 1'), 'old 2'), 'old 3')
+    const newRuntime = add(add(emptyRuntime(), 'new 1'), 'new 2')
+    expect(newRuntime.feedDebugLog[0]!.ts).toBe(oldRuntime.feedDebugLog[0]!.ts)
+    const refs = makeRefs({ a: oldRuntime })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1000)
+
+    delete refs.persistedFeedDebugIdRef.current.a
+    delete refs.inFlightFeedDebugIdRef.current.a
+    refs.latestRuntimesRef.current = { a: newRuntime }
+    await advance(1000)
+    expect(refs.persistedFeedDebugIdRef.current.a).toBe(2)
+
+    await act(async () => { oldWrite.resolve(); await oldWrite.promise })
+    expect(refs.persistedFeedDebugIdRef.current.a).toBe(2)
+  })
+
+  it('keeps the new generation\'s reservation when a pre-reload write fails', async () => {
+    // The catch half of the same guard. An old batch ending at id 2 that
+    // REJECTS after the reload must not clear a new in-flight reservation
+    // that also ends at id 2: the next tick would then send an overlapping
+    // write while the first is unresolved.
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const oldWrite = deferred()
+    const newWrite = deferred()
+    append.mockReturnValueOnce(oldWrite.promise).mockReturnValueOnce(newWrite.promise)
+    const oldRuntime = add(add(emptyRuntime(), 'old 1'), 'old 2')
+    const newRuntime = add(add(emptyRuntime(), 'new 1'), 'new 2')
+    const refs = makeRefs({ a: oldRuntime })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1000)
+
+    delete refs.persistedFeedDebugIdRef.current.a
+    delete refs.inFlightFeedDebugIdRef.current.a
+    refs.latestRuntimesRef.current = { a: newRuntime }
+    await advance(1000)
+    expect(refs.inFlightFeedDebugIdRef.current.a).toBe(2)
+
+    await act(async () => { oldWrite.reject(new Error('disk')); await oldWrite.promise.catch(() => {}) })
+    expect(refs.inFlightFeedDebugIdRef.current.a).toBe(2)
+    await advance(3000)
+    expect(append).toHaveBeenCalledTimes(2)
+  })
 })

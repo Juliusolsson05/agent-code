@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -123,5 +123,35 @@ describe('#770 — a soft reload restarts entry ids below the persisted cursor',
 
     const lines = (await readFile(logPath('session-770c'), 'utf8')).trim().split('\n')
     expect(lines).toHaveLength(2)
+  })
+})
+
+describe('#770 — a reload does not re-open a capped log', () => {
+  it('keeps dropping after the generation changes', async () => {
+    // The epoch reset clears the de-dup CURSOR only. The cap state describes
+    // the file on disk, which a reload does not shrink, so resetting it too
+    // would let a flooding session write past 128 MiB again after every
+    // reload. A sparse file at exactly the cap stands in for a real flood.
+    forgetFeedDebugSession('session-cap')
+    await mkdir(join(stateDir, 'feed-debug'), { recursive: true })
+    await writeFile(logPath('session-cap'), '')
+    await truncate(logPath('session-cap'), 128 * 1024 * 1024)
+
+    await queueFeedDebugAppend('session-cap', [entry(1), entry(2)], 1_000)
+    await queueFeedDebugAppend('session-cap', [entry(1), entry(2)], 2_000)
+
+    const handle = await open(logPath('session-cap'), 'r')
+    try {
+      const size = (await handle.stat()).size
+      const tail = Buffer.alloc(size - 128 * 1024 * 1024)
+      await handle.read(tail, 0, tail.length, 128 * 1024 * 1024)
+      const rows = tail.toString('utf8').trim().split('\n').filter(Boolean)
+      // Only cap markers past the cap: no ordinary entry from either
+      // generation.
+      expect(rows.length).toBeGreaterThan(0)
+      for (const row of rows) expect(row).toContain('__feedDebugCapped')
+    } finally {
+      await handle.close()
+    }
   })
 })
