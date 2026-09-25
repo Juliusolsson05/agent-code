@@ -1,3 +1,4 @@
+import { Switch } from '@renderer/components/ui/switch'
 import { useState } from 'react'
 import { Select } from '@renderer/components/ui/select'
 
@@ -58,21 +59,14 @@ function EntryRow({ entry }: { entry: ProviderEnablementEntry }) {
           ) : null}
         </div>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={entry.enabled}
+      {/* The shared row switch (G-34; the primitive has the WHY). This was
+          a lowercase on/off chip with text-ink on the accent fill. */}
+      <Switch
+        checked={entry.enabled}
         aria-label={`Enable ${capabilities.shortLabel}`}
         disabled={pending}
-        onClick={() => void toggle()}
-        className={
-          entry.enabled
-            ? 'rounded-chip border border-border bg-accent px-2 py-1 text-[10px] text-ink'
-            : 'rounded-chip border border-border bg-surface-hi px-2 py-1 text-[10px] text-muted'
-        }
-      >
-        {entry.enabled ? 'on' : 'off'}
-      </button>
+        onCheckedChange={() => void toggle()}
+      />
     </div>
   )
 }

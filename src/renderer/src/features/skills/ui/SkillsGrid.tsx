@@ -1,3 +1,4 @@
+import { Switch } from '@renderer/components/ui/switch'
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
 import { EmptyState } from '@renderer/components/ui/empty-state'
@@ -468,14 +469,11 @@ function SkillRow({
     <div role="group" aria-label={`Skill ${name}`} className={`border-t border-border/50 px-3 py-1.5 ${enabled ? '' : 'opacity-70'}`}>
       <div className="grid items-center gap-2" style={{ gridTemplateColumns: gridColumns }}>
         <div className="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
+          <Switch
+            checked={enabled}
             aria-label={`${name} on or off`}
             disabled={disabled}
-            onClick={onToggle}
-            className={`h-3 w-5 shrink-0 rounded-full border disabled:opacity-50 ${enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border bg-transparent'}`}
+            onCheckedChange={() => onToggle()}
           />
           <div className="min-w-0">
             <span className="text-ink">{name}</span>

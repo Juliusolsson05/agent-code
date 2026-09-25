@@ -1,3 +1,4 @@
+import { Switch } from '@renderer/components/ui/switch'
 import { useState } from 'react'
 
 import { providerSupportsBuiltInMcpDomain, type BuiltInMcpDefaults } from '@mcp/shared/types'
@@ -172,13 +173,10 @@ function UserServerRow({
     <div className={`border-t border-border/50 px-3 py-1.5 ${server.enabled ? '' : 'opacity-60'}`}>
       <div className="grid items-center gap-2" style={{ gridTemplateColumns: columns }}>
         <div className="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={server.enabled}
+          <Switch
+            checked={server.enabled}
             aria-label={`${server.name} on or off everywhere`}
-            onClick={onToggleEnabled}
-            className={`h-3 w-5 shrink-0 rounded-full border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${server.enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border bg-transparent'}`}
+            onCheckedChange={() => onToggleEnabled()}
           />
           <div className="min-w-0">
             <span className="text-ink">{server.name}</span>

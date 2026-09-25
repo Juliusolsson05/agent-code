@@ -597,6 +597,7 @@ feeds the rows below G-1.
 | G-31 | Casing in labels defined as data | G-23 scanned JSX text, so `label:` props slipped: the browser pocket's native menus (all sentence case, while the app menu and session menu are Title Case), Skills row menu, CLI banner actions, Notify Only / All Limits choices, and the segmented options All Projects / Selected Projects, Show All, All Time (their siblings, e.g. This Folder / Repository, were already Title Case) | the casing ruling | done (18 pocket menu labels, 3 Skills items, 2 banner actions, 2 choices, 4 segmented options, Workflows' Show All, the pocket's Fit Pane). Kept: persisted data labels ("System default" is stored as the device label), feed tool labels (G-29 voice), key/value field labels in Agent Status |
 | G-32 | Search / filter placeholders | most end in "…" (Search in files…, Filter skills…, Go to file…); Search settings, Filter projects ×2 and Agent Activity's filter did not | one form | done (all four end in "…"; Agent Activity keeps "Type to filter" because typing anywhere in its list really lands in the field) |
 | G-33 | Error fallback wording | "Could not …" ×58 vs "Failed to …" ×18 / "Unable to …" ×2, with and without a final period | "Could not …." | done (18 renderer fallbacks, the spawn fallback, and Path Picker's listing error). Kept: "Failed to start" (a row status, not a message) and main-process messages |
+| G-34 | Row switches | Skills and MCP servers: the same hand-rolled 12×20 pill with no knob (state by colour only; only MCP's had a focus ring); provider enablement: a lowercase on/off chip with `text-ink` on the accent fill | `Switch` primitive | done (all three on `Switch`: a knob that moves, `accent-fg`-family knob on the fill, `rounded-chip` so it follows the corner style, focus ring). The settings page's row toggle stays its own control: a full-width row that spells out Enabled/Disabled (N14) |
 
 ## Owner visual checklist
 
@@ -918,6 +919,17 @@ Sharp corners and one light theme.
   Performance and Caffeinate are one height with one border, hover and focus
   ring. "caff" now reads "Caffeinate". **Check** the row still fits beside
   the detailed usage level on a narrow window.
+- **G-34 Switches (Settings › Skills, MCP servers, Providers):** one switch
+  with a knob that slides right when on. Providers' "on"/"off" chip is
+  gone. **Check** the knob at the Sharp and Round corner styles, and that the
+  on state reads in a light theme.
+- **G-29…G-33 Copy and small controls:** the browser pocket's right-click
+  and ⋯ menus are Title Case like the app menu ("Open in Default Browser",
+  "Cookies and Storage"); "All Projects | Selected Projects", "Show All",
+  "All Time"; search boxes all end in "…"; error fallbacks read "Could not
+  …."; the editor toolbar's Files / Full / Close match Save; multi-edit's
+  previous / next are easier to tap on the phone. Feed pager links stay
+  lowercase on purpose.
 - **G-6 Composer:** its accent border now means "the caret is in here"
   (real focus), not "this pane is selected", so it goes plain when you Tab
   or click into the feed. The pane's own outline still marks the active
