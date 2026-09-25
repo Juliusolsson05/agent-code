@@ -263,7 +263,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
         <div role="alert" className="flex flex-col gap-2 border-b border-danger px-3 py-2 text-[10px] text-danger">
           <span>{installed.recovery.message}</span>
           <div className="flex flex-wrap gap-2">
-            <Button size="xs" variant="outline" onClick={() => void window.api.revealAgentCodeInstalledSkillsRecoveryFile()}>Reveal state file</Button>
+            <Button size="xs" variant="outline" onClick={() => void window.api.revealAgentCodeInstalledSkillsRecoveryFile()}>Reveal State File</Button>
             <Button size="xs" variant="outline" onClick={async () => {
               if (!(await requestConfirm({
                 title: 'Reset all Agent Code-managed skill state?',
@@ -272,7 +272,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
                 tone: 'danger',
               }))) return
               void run(async () => applyInstalledSkillsResult(await window.api.resetAgentCodeInstalledSkillsRecovery()))
-            }}>Reset managed skill state</Button>
+            }}>Reset Managed Skill State</Button>
           </div>
         </div>
       ) : null}
@@ -371,7 +371,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
                   <Button size="xs" variant="outline" className="self-start" onClick={() => removeInstalled(
                     skill,
                     blocked.map(target => ({ targetId: target.id, expectedConflictFingerprint: target.conflictFingerprint! })),
-                  )}>Leave external copies and forget skill</Button>
+                  )}>Leave External Copies and Forget Skill</Button>
                 ) : null}
               </div>
             ) : null}
@@ -409,7 +409,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
           ))}
           {hiddenCount > 0 ? (
             <div className="px-3 pb-2">
-              <Button size="xs" variant="ghost" onClick={() => setShowHidden(value => !value)}>{showHidden ? 'Hide hidden skills' : `Show ${hiddenCount} hidden`}</Button>
+              <Button size="xs" variant="ghost" onClick={() => setShowHidden(value => !value)}>{showHidden ? 'Hide Hidden Skills' : `Show ${hiddenCount} Hidden`}</Button>
             </div>
           ) : null}
           {external?.notices.map(notice => <div key={notice} className="px-3 py-1 text-[10px] text-warning">{notice}</div>)}

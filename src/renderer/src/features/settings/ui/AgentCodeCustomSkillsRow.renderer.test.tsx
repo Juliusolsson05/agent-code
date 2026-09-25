@@ -151,7 +151,7 @@ describe('AgentCodeCustomSkillsRow', () => {
     expect(await screen.findByText(/Choose how to continue/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save Draft' })).toBeDisabled()
     expect(update).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: 'Keep my draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep My Draft' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
     await waitFor(() => expect(update).toHaveBeenLastCalledWith(expect.objectContaining({
       expectedRevision: 2,

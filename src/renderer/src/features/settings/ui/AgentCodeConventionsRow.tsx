@@ -198,7 +198,7 @@ export function AgentCodeConventionsRow() {
           <span>{snapshot.recovery.message}</span>
           <div className="flex gap-2">
             <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
-              Reveal state file
+              Reveal State File
             </Button>
             <Button
               type="button"
@@ -213,7 +213,7 @@ export function AgentCodeConventionsRow() {
                 void window.api.resetAgentCodeConventionsRecovery().then(applyResult)
               }}
             >
-              Reset state
+              Reset State
             </Button>
           </div>
         </div>

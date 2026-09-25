@@ -194,7 +194,7 @@ export function SetupGate() {
         aria-describedby={undefined}
         onOpenAutoFocus={event => {
           // The panel itself, not the first row: the first focusable control
-          // is a provider's "Enter path manually…", and landing there reads
+          // is a provider's "Enter Path Manually…", and landing there reads
           // as if that is what Setup is for.
           event.preventDefault()
           panelRef.current?.focus()
@@ -359,7 +359,7 @@ function SetupRow({
               disabled={busy !== null}
               onClick={() => setOverrideOpen(open => !open)}
             >
-              Enter path manually…
+              Enter Path Manually…
             </Button>
           ) : null}
           {!isBundled && !tool.found && target && tool.installable ? (

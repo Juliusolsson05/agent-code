@@ -179,6 +179,6 @@ function PocketSetup({ sessionId, workspace }: { sessionId: SessionId; workspace
     setConnecting(true)
     void reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'browser', true, { reloaded: 'Browser tools connected', failed: 'Could not connect browser tools' }).finally(() => setConnecting(false))
   }}>
-    {connecting ? 'Connecting…' : 'Connect browser tools · reload agent'}
+    {connecting ? 'Connecting…' : 'Connect Browser Tools · Reload Agent'}
   </button>
 }

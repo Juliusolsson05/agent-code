@@ -32,17 +32,17 @@ describe('the routing-gap notice', () => {
   it('offers a repair while one is still possible', () => {
     paneWith('unavailable')
     // The ticket still exists in main, and the failure may be transient.
-    expect(screen.getByRole('button', { name: 'Refresh view' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Refresh View' })).toBeTruthy()
   })
 
   it('keeps the warning but drops the button once the refresh has happened', () => {
     paneWith('refreshed')
     expect(screen.getByText(/some earlier live output may be missing/i)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Refresh view' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Refresh View' })).toBeNull()
   })
 
   it('disables the button while a repair is running', () => {
     paneWith('refreshing')
-    expect(screen.getByRole('button', { name: 'Refresh view' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Refresh View' })).toBeDisabled()
   })
 })

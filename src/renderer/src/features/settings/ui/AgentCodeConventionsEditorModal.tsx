@@ -278,7 +278,7 @@ export function AgentCodeConventionsEditorModal({
                 setPreview(null)
               }}
             >
-              Insert starter
+              Insert Starter
             </Button>
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
               Preview Generated Skill
@@ -318,7 +318,7 @@ export function AgentCodeConventionsEditorModal({
                             void save(next)
                           }}
                         >
-                          Replace reviewed file
+                          Replace Reviewed File
                         </Button>
                       ) : null}
                       {target.conflictFingerprint ? (
@@ -360,7 +360,7 @@ export function AgentCodeConventionsEditorModal({
                 setConflictSnapshot(null)
                 setError(null)
                 setRevisionConflict(false)
-              }}>Reload latest</Button>
+              }}>Reload Latest</Button>
               <Button type="button" variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy Draft</Button>
             </div>
           ) : null}

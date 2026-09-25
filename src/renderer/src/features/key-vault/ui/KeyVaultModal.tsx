@@ -306,7 +306,7 @@ export function KeyVaultModal() {
       <DialogContent size="lg" className="flex max-h-[86vh] flex-col overflow-hidden">
         {/* `flex` has to accompany `flex-row` here. DialogHeader's base class
             list is a plain block, so flex-row/items-center/justify-between
-            were all inert and "Lock now" stacked underneath the description
+            were all inert and "Lock Now" stacked underneath the description
             instead of sitting opposite the title. */}
         <DialogHeader className="flex flex-row items-center justify-between gap-4">
           <div className="min-w-0">
@@ -331,7 +331,7 @@ export function KeyVaultModal() {
                 void window.api.keyVaultLock().catch(err => setError(err instanceof Error ? err.message : 'Could not lock vault'))
               }}
             >
-              Lock now
+              Lock Now
             </Button>
           )}
         </DialogHeader>

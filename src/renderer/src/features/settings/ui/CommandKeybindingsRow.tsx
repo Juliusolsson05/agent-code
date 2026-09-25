@@ -628,7 +628,7 @@ export function CommandKeybindingsRow() {
           size="sm"
           onClick={() => setSettings({ commandKeybindingOverrides: {} })}
         >
-          Reset all bindings
+          Reset All Bindings
         </Button>
         <Button
           variant="outline"
@@ -636,7 +636,7 @@ export function CommandKeybindingsRow() {
           onClick={() => setSettings({ commandVisibilityOverrides: {} })}
           title="Return every command to its shipped palette visibility. Shortcuts are untouched."
         >
-          Reset palette visibility
+          Reset Palette Visibility
         </Button>
       </div>
     </div>

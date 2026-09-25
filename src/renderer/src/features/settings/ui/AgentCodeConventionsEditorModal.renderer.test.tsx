@@ -149,7 +149,7 @@ describe('AgentCodeConventionsEditorModal', () => {
 
     expect(await screen.findByText(/newer saved version/)).toBeTruthy()
     expect(editor).toHaveValue('# Unsaved draft')
-    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Latest' }))
     expect(editor).toHaveValue('# Saved elsewhere')
   })
 })

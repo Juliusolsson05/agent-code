@@ -257,14 +257,14 @@ export function AppsSettingsRow() {
           variant="outline"
           className="shrink-0"
         >
-          Load folder…
+          Load Folder…
         </Button>
       </div>
 
       {error || loadError ? (
         <div role="alert" className="border border-border bg-row-bg px-3 py-2 text-[12px] text-ink">
           {error || loadError}
-          {loadError ? <button type="button" className="ml-3 rounded-chip underline outline-none focus-visible:ring-1 focus-visible:ring-focus-ring" onClick={() => void refresh()}>Retry loading extensions</button> : null}
+          {loadError ? <button type="button" className="ml-3 rounded-chip underline outline-none focus-visible:ring-1 focus-visible:ring-focus-ring" onClick={() => void refresh()}>Retry Loading Extensions</button> : null}
         </div>
       ) : null}
       {notice ? <div className="text-[12px] text-muted">{notice}</div> : null}

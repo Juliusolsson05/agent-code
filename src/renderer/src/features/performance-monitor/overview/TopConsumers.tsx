@@ -136,7 +136,7 @@ export function TopConsumers({ usage, identities, onOpenAgent }: {
             </table>
             {rows.length > COLLAPSED_ROWS ? (
               <div className="border-t border-border px-3 py-1.5">
-                <Button size="xs" variant="ghost" onClick={() => setExpanded(value => !value)}>{expanded ? 'Show top 10' : `Show all ${rows.length}`}</Button>
+                <Button size="xs" variant="ghost" onClick={() => setExpanded(value => !value)}>{expanded ? 'Show Top 10' : `Show All ${rows.length}`}</Button>
               </div>
             ) : null}
           </div>

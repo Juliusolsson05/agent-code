@@ -397,7 +397,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
                       onClick={() => selectSection(sectionRows)}
                       className="text-[11px] text-ink-dim hover:text-ink"
                     >
-                      {sectionRows.every(row => selected.has(row.sessionId)) ? 'Unselect all' : 'Select all'}
+                      {sectionRows.every(row => selected.has(row.sessionId)) ? 'Unselect All' : 'Select All'}
                     </button>
                   )}
                 </div>

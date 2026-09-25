@@ -54,7 +54,7 @@ export function EditorStatusBanner({
       )}
       {conflict && onOverwrite && (
         <Button type="button" variant="destructive-outline" size="xs" onClick={onOverwrite}>
-          {externalChange === 'deleted' ? 'Recreate file' : 'Overwrite'}
+          {externalChange === 'deleted' ? 'Recreate File' : 'Overwrite'}
         </Button>
       )}
     </div>

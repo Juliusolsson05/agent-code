@@ -227,7 +227,7 @@ export function PaneHeader({
             <button type="button" disabled={routingGap.phase === 'refreshing'}
               className="flex-shrink-0 underline disabled:opacity-50"
               onClick={event => { event.stopPropagation(); requestSessionRoutingRefresh(sessionId) }}>
-              Refresh view
+              Refresh View
             </button>
           )}
         </div>

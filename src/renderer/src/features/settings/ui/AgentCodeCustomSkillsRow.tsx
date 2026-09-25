@@ -415,7 +415,7 @@ function AgentCodeCustomSkillsModal({
               ) : null}
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
-                  Preview generated skill
+                  Preview Generated Skill
                 </Button>
                 <Button type="button" variant="outline" size="sm" disabled={busy} onClick={async () => {
                   if (dirty && !(await requestConfirm({
@@ -427,7 +427,7 @@ function AgentCodeCustomSkillsModal({
                   setBaseDraft(null)
                   setConflictTargets([])
                   setError(null)
-                }}>Back to skills</Button>
+                }}>Back to Skills</Button>
               </div>
               {revisionConflict ? (
                 <div role="status" className="rounded-slab flex flex-wrap items-center gap-2 border border-warning p-2 text-[10px] text-warning">
@@ -437,19 +437,19 @@ function AgentCodeCustomSkillsModal({
                       <Button type="button" variant="outline" size="xs" onClick={() => {
                         const latest = current.skills.find(skill => skill.id === draft.skillId)
                         if (latest) edit(draftFromSkill(latest), current.revision)
-                      }}>Reload saved skill</Button>
+                      }}>Reload Saved Skill</Button>
                       <Button type="button" variant="outline" size="xs" onClick={() => {
                         setBaseRevision(current.revision)
                         setRevisionConflict(false)
                         setError(null)
-                      }}>Keep my draft</Button>
+                      }}>Keep My Draft</Button>
                     </>
                   ) : (
                     <Button type="button" variant="outline" size="xs" onClick={() => {
                       setBaseRevision(current.revision)
                       setRevisionConflict(false)
                       setError(null)
-                    }}>Retry with latest revision</Button>
+                    }}>Retry with Latest Revision</Button>
                   )}
                 </div>
               ) : null}
@@ -496,7 +496,7 @@ function AgentCodeCustomSkillsModal({
                           <div className="rounded-slab flex items-center justify-between gap-2 border border-danger p-2 text-[10px] text-danger">
                             <span>Modified or historical files were preserved.</span>
                             <Button type="button" aria-label={`Leave files and forget ${skill.name}`} variant="destructive-outline" size="xs" onClick={() => void remove(skill, abandon)}>
-                              Leave files and forget skill
+                              Leave Files and Forget Skill
                             </Button>
                           </div>
                         ) : null}
@@ -517,7 +517,7 @@ function AgentCodeCustomSkillsModal({
             <div className="rounded-slab flex flex-col gap-2 border border-danger p-2 text-[10px] text-danger">
               <span>{current.recovery.message}</span>
               <div className="flex gap-2">
-                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal state file</Button>
+                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal State File</Button>
                 <Button type="button" variant="destructive-outline" size="xs" onClick={async () => {
                   if (!(await requestConfirm({
                     title: 'Reset all unreadable Agent Code-managed skill state?',
@@ -526,7 +526,7 @@ function AgentCodeCustomSkillsModal({
                     tone: 'danger',
                   }))) return
                   void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult)
-                }}>Reset state</Button>
+                }}>Reset State</Button>
               </div>
             </div>
           ) : null}

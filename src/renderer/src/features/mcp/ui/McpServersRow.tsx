@@ -94,7 +94,7 @@ export function McpServersRow({ settings, onChange }: Props) {
       </div>
 
       <SectionHeading
-        action={<Button size="xs" variant="outline" onClick={() => openDialog({ mode: 'add' })}>Add server…</Button>}
+        action={<Button size="xs" variant="outline" onClick={() => openDialog({ mode: 'add' })}>Add Server…</Button>}
       >
         Your servers
       </SectionHeading>
