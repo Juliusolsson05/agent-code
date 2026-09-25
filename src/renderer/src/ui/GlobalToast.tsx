@@ -136,24 +136,35 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
   return (
     <GlobalToastContext.Provider value={{ showToast }}>
       {children}
-      {toast && (
-        <div
-          onClick={dismiss}
-          title="Dismiss"
-          className="
-            fixed top-3 right-3 z-[1200]
-            toast-enter
-            cursor-pointer
-            bg-accent/80 border border-accent/40 rounded-float
-            shadow-lg shadow-black/20
-            px-4 py-2
-            max-w-[420px]
-            text-[12px] font-code text-white font-semibold
-          "
-        >
-          {toast}
-        </div>
-      )}
+      {/* Always-mounted live region (plan N17): screen readers announce a
+          region's CHANGES, so a region mounted together with its text was
+          silent. The toast inside is a real button — keyboard-reachable
+          (it never takes focus itself, so it cannot steal the user's place)
+          and dismissable with Enter/Space, where it was a click-only div.
+          text-accent-fg, not text-white: the accent's own foreground token,
+          which is what keeps it readable on light themes and custom accents. */}
+      <div role="status" aria-live="polite" className="fixed top-3 right-3 z-[1200]">
+        {toast && (
+          <button
+            type="button"
+            onClick={dismiss}
+            title="Dismiss"
+            aria-label={`${toast} — dismiss`}
+            className="
+              toast-enter
+              cursor-pointer text-left
+              bg-accent/80 border border-accent/40 rounded-float
+              shadow-lg shadow-black/20
+              px-4 py-2
+              max-w-[420px]
+              text-[12px] font-code text-accent-fg font-semibold
+              outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
+            "
+          >
+            {toast}
+          </button>
+        )}
+      </div>
     </GlobalToastContext.Provider>
   )
 }

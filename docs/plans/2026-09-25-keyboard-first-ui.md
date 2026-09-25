@@ -465,7 +465,7 @@ entry when it lands.
 | M5 | PathInput dropdown | good | visuals (T7) | done (+ combobox ARIA) |
 | M6 | NewAgentPlacementOverlay | capture ↑↓ Enter Esc; focus never moved; footer px-3 | legend with Kbd; T3 footer | done |
 | M7 | TldrOverlay / GoalLoopPane | hold/latch; no focus | hint chips for release/dismiss | todo |
-| M8 | GlobalToast / CaffeinateToast | click-only dismiss; caffeinate z-50 under scrim | keyboard dismiss path; layering note (functional part → issue) | todo |
+| M8 | GlobalToast / CaffeinateToast | click-only dismiss; caffeinate z-50 under scrim | keyboard dismiss path; layering note (functional part → issue) | done (global + pane toasts; caffeinate layering → issue) |
 | M9 | RenderingDebugInspector | prose "Press Esc" | Kbd | todo |
 | M10 | Chart tooltips, PocketStrip hover | mouse-only | focusable data points only where a keyboard user loses information | todo |
 
@@ -489,7 +489,7 @@ entry when it lands.
 | N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | done (in S45) |
 | N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | todo |
 | N16 | Provider option modals (Claude ResumePromptModal L121, Codex CodexApprovalModal L166) | `div onClick` rows | buttons/`option` rows with arrows, or confirm keys reach the agent — verify first | todo |
-| N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | todo |
+| N17 | GlobalToast / PaneToast | no `role=status`/`aria-live`; click-only dismiss | role=status; dismiss via Escape when focused / timeout unchanged | done (in M8) |
 | N18 | SettingsBar | caff toggle no aria-pressed | aria-pressed; T4 | todo |
 | N19 | Chart markers (TimeSeriesChart L184) | pointer shortcut by design | leave; note in checklist | todo |
 
@@ -778,6 +778,10 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **M8/N17 Toasts:** the top-right toast text now uses the accent's own
+  foreground colour (was hard white — check it on a light theme and a light
+  accent); it can be Tabbed to and dismissed with Enter/Space; pane toasts
+  are announced by screen readers (live region).
 - **M6 New Agent (⌘N) type chooser:** the corner "Choose agent type…" note
   is gone; the card's footer reads `↑ ↓ move  ↩ create` · `Cancel ⎋`
   (ghost, was outline; px-4 py-3); the highlighted type is the row-selected
@@ -874,6 +878,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 M8/N17: Global + pane toasts are always-mounted live regions;
+  the global toast is a dismiss button; text-white → text-accent-fg.
+  Confirm-red: both toast tests fail on the pre-change files. Caffeinate
+  toast layering (z-50 under the dialog scrim) is functional → issue.
 - 2026-09-25 M6: placement overlay — clamp (D4), Home/End/⌃N⌃P, listbox
   focus owner with option ids, legend + Cancel ⎋ in its footer, T7 rows.
   Confirm-red: the new test fails on the pre-change file.
