@@ -79,6 +79,8 @@ describe('ConversationsPicker', () => {
     // other caller of replaceSession continues the same agent and omits it.
     await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', { resumeSessionId: '01a08ddd-6327-7482-bd79-d1ade559677c', kind: 'codex', newConversation: true }))
     expect(onClose).toHaveBeenCalled()
+    // A successful swap says nothing (#1262 review A).
+    expect(ws.showPaneToast).not.toHaveBeenCalled()
   })
 
   // #1241: the picker closes, then swaps the pane. A failed swap used to be an
@@ -93,7 +95,10 @@ describe('ConversationsPicker', () => {
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', recordedSpawnFailure))
+    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', "Couldn't resume Project context bootstrapping: Session failed to start. Check provider setup and retry."))
+    // Never the raw IPC rejection: it can carry environment values or tokens.
+    expect(JSON.stringify(ws.showPaneToast.mock.calls)).not.toContain('posix_spawnp')
+    expect(JSON.stringify(ws.showPaneToast.mock.calls)).not.toContain('Error invoking remote method')
   })
 
   it('tells the pane when an in-place resume could not happen at all (#1241)', async () => {
@@ -102,7 +107,17 @@ describe('ConversationsPicker', () => {
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
-    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', expect.stringContaining("Couldn't resume")))
+    await waitFor(() => expect(ws.showPaneToast).toHaveBeenCalledWith('s', "Couldn't resume Project context bootstrapping in this pane."))
+  })
+
+  it('does not leave an unhandled rejection when a new-tab resume fails (#1262 review A)', async () => {
+    install()
+    const ws = workspace({ activeTab: null, newTab: vi.fn(async () => { throw new Error('newTab already toasted this') }) })
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    await screen.findByText('break down this project')
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.newTab).toHaveBeenCalled())
   })
 
   it('stays open and says why when no pane is selected to resume into (#1241)', async () => {
@@ -117,6 +132,9 @@ describe('ConversationsPicker', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     expect(await screen.findByText(/no agent pane is selected/)).toBeInTheDocument()
     expect(onClose).not.toHaveBeenCalled()
+    // Moving the highlight clears the error that named the previous row.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(screen.queryByText(/no agent pane is selected/)).not.toBeInTheDocument())
     expect(ws.replaceSession).not.toHaveBeenCalled()
   })
 
