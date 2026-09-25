@@ -28,6 +28,7 @@ import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
+import { optimisticPromptUuid } from '@renderer/session-runtime/optimisticPrompt'
 import { ComposerActions } from '@renderer/workspace/tile-tree/TileLeaf/ComposerActions'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import { useAcknowledgeAfterDwell } from '@renderer/workspace/tile-tree/TileLeaf/useAcknowledgeAfterDwell'
@@ -250,6 +251,10 @@ export function TileLeaf({
   const completionUnseen = runtime.unreadKind !== null
   useAcknowledgeAfterDwell({ sessionId, focused, unread: completionUnseen, acknowledge: acknowledgeSession })
   const setDraftImages = workspace.setDraftImages
+  // The prompt has left the composer for the feed and is on its way (#1181).
+  // Every path that could edit the draft from the keyboard or clipboard keys
+  // off this one value, so the lock cannot disagree with itself.
+  const composerLocked = runtime.promptDelivery.kind === 'sending'
   // Agent kinds route through the registry; undefined kind is the
   // pre-kind-persistence back-compat case (#394 phase 2c-4 — the old
   // `=== 'codex' ? codex : claude` ternary silently coerced any
@@ -308,7 +313,10 @@ export function TileLeaf({
   // drifted elsewhere. Hook in ./TileLeaf/useTypeToFocus.ts owns
   // the full filter/injection logic.
   useTypeToFocus({
-    focused: interactive,
+    // Off while the composer is locked (#1181): this hook writes draftInput
+    // directly, so a keystroke typed with focus outside the textarea would
+    // otherwise edit a composer the user cannot edit from inside it.
+    focused: interactive && !composerLocked,
     sessionId,
     inputRef,
     setDraftInput,
@@ -640,7 +648,8 @@ export function TileLeaf({
   // ./TileLeaf/usePasteToFocus.ts. Declared here (not next to
   // useTypeToFocus) because it depends on `handlePaste`.
   usePasteToFocus({
-    focused: interactive,
+    // Off while locked, for the same reason as useTypeToFocus above.
+    focused: interactive && !composerLocked,
     sessionId,
     inputRef,
     setDraftInput,
@@ -905,6 +914,11 @@ export function TileLeaf({
             semanticTurn={runtime.semantic.currentTurn}
             tailMode={effectiveTailMode}
             pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
+            pendingEntryUuid={
+              runtime.promptDelivery.kind === 'sending'
+                ? optimisticPromptUuid(runtime.promptDelivery.submissionId)
+                : null
+            }
             codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
             onScrollInfo={onScrollInfo}
             onUserEngagement={acknowledgeSession}
@@ -1059,6 +1073,7 @@ export function TileLeaf({
         }
         providerSwitchMessage={runtime.providerSwitch?.message ?? null}
         providerSwitchPhase={runtime.providerSwitch?.phase ?? null}
+        locked={composerLocked}
       />
 
       {/* Mouse Mode only. Rendered as a sibling BELOW the composer rather than

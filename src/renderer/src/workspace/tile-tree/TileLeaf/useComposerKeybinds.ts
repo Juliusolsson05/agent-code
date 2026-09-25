@@ -20,7 +20,7 @@ import { clearAgentComposer, isClearingAgentComposer } from '@renderer/workspace
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
-import { draftAfterAcceptance, imagesAfterAcceptance } from './promptDeliveryDraft'
+import { draftAfterFailure, imagesAfterFailure } from './promptDeliveryDraft'
 import { deliverWithWake } from './deliverWithWake'
 import { reportLifecycle } from '@renderer/lifecycle/report'
 
@@ -161,7 +161,6 @@ export function useComposerKeybinds({
       return
     }
     const draftImages = runtime.draftImages
-    const submittedImageIds = new Set(draftImages.map(image => image.id))
     if (draftImages.length === 0 && isLocalUsageCommand()) {
       await openLocalUsageCommand(false)
       return
@@ -189,8 +188,17 @@ export function useComposerKeybinds({
     if (submitInFlightRef.current) return
     submitInFlightRef.current = true
     const submittedInput = input
+    // Minted here, before anything observable, because two things key on it
+    // from this point: the paste-debug journal below (see the WHY there) and
+    // the `sending` state, which names the feed row still in flight (#1181).
+    const pasteId = crypto.randomUUID()
     workspace.updateRuntime(sessionId, {
-      promptDelivery: { kind: 'sending', prompt: submittedInput, startedAt: Date.now() },
+      promptDelivery: {
+        kind: 'sending',
+        prompt: submittedInput,
+        startedAt: Date.now(),
+        submissionId: pasteId,
+      },
     })
     // WHY submit does not stop at the renderer readiness flag:
     //
@@ -208,7 +216,6 @@ export function useComposerKeybinds({
     // separate journal files for what the user perceived as one press.
     // See docs/superpowers/plans/2026-05-11-paste-submit-...md for
     // the hypothesis space.
-    const pasteId = crypto.randomUUID()
     window.api.recordPasteDebugEvent(pasteId, {
       layer: 'RENDER',
       event: 'keydown:enter',
@@ -237,6 +244,18 @@ export function useComposerKeybinds({
       ? sessionKind
       : DEFAULT_PROVIDER
     const caps = getRendererProviderCapabilities(submitProvider)
+    // THE PROMPT LEAVES THE COMPOSER AT ENTER (#1181). It reappears in the feed
+    // below as a pending row, and the composer stays locked (read-only) while
+    // `promptDelivery` is `sending`. Before this, the draft stayed editable
+    // until acceptance, which for Claude is the JSONL acknowledgement and can
+    // take seconds. The submit looked ignored, and the editable text invited a
+    // second Enter or edits to a prompt that was already on its way. Failure
+    // puts it back (draftAfterFailure in the catch below). Images follow the
+    // text, but only for providers that attach them: for the rest the strip is
+    // never rendered and the submit sends none, so there is nothing to move.
+    const submittedImages = caps.supportsImageAttachments ? draftImages : []
+    setInputText('')
+    if (submittedImages.length > 0) workspace.setDraftImages(sessionId, [])
     // Emitted BEFORE the optimistic streaming state is set, so a recorded
     // ladder shows the exact ordering that produces the stuck-`Sending` bug:
     // submit.begin → (optimistic streamPhase 'submitting') → submit.result
@@ -278,6 +297,13 @@ export function useComposerKeybinds({
         pasteId,
         runtime.sessionRunId,
       )
+    } else {
+      // Claude has no optimistic echo, so without this the prompt would exist
+      // nowhere between Enter and the JSONL acknowledgement: gone from the
+      // locked composer and not yet in the transcript. The row is removed
+      // again when the send settles; see addPendingPromptEntry for why it
+      // must not outlive the send.
+      workspace.addPendingPromptEntry(sessionId, input, pasteId)
     }
 
     // Start at the common submit boundary so raw-PTY Codex and main-owned
@@ -295,7 +321,7 @@ export function useComposerKeybinds({
       const acceptance = await caps.composerSubmit({
         sessionId,
         input,
-        draftImages: caps.supportsImageAttachments ? draftImages : [],
+        draftImages: submittedImages,
         // WHY successful sends are counted rather than trusting the thrown
         // error: Codex never goes through `deliverPrompt` at all — its submit
         // is a sequence of raw `send` calls (bracketed paste chunks, then
@@ -328,16 +354,13 @@ export function useComposerKeybinds({
         pasteId,
         getScreen: () => workspace.latestScreenRef.current[sessionId],
       })
-      // The textarea remains editable during durable JSONL acknowledgement.
-      // Never erase a next draft the user typed while the prior prompt was
-      // pending; clear only the exact submitted snapshot.
-      const acceptedDraft = draftAfterAcceptance(
-        workspace.getRuntime(sessionId).draftInput,
-        submittedInput,
-      )
-      if (acceptedDraft !== workspace.getRuntime(sessionId).draftInput) {
-        setInputText(acceptedDraft)
-      }
+      // Accepted: the pending row has done its job. For Claude the committed
+      // row (a started turn) or Claude's queue strip (a queued prompt) now
+      // represents the prompt, so the pending-only row goes. Echo providers
+      // keep their optimistic row until the transcript catches up. Leaving
+      // `sending` is what undims it and unlocks the composer. The draft was
+      // already cleared at Enter, so there is nothing to clear here.
+      if (!caps.usesOptimisticUserEcho) workspace.removePendingPromptEntry(sessionId, pasteId)
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
       // Acceptance, not the write, decides whether first-output is measurable:
       // a queued prompt's clock would otherwise stop on the running turn's
@@ -356,15 +379,6 @@ export function useComposerKeybinds({
       // revert.
       if (acceptance?.kind === 'queue') {
         workspace.settleQueuedSubmit(sessionId, optimisticStamp)
-      }
-      if (caps.supportsImageAttachments && draftImages.length > 0) {
-        workspace.setDraftImages(
-          sessionId,
-          imagesAfterAcceptance(
-            workspace.getRuntime(sessionId).draftImages,
-            submittedImageIds,
-          ),
-        )
       }
       // OUTCOME marks the end of the submit flow from the renderer's
       // POV. A real reader of the dump can compare this against
@@ -432,6 +446,18 @@ export function useComposerKeybinds({
           pasteId,
           runtime.sessionRunId,
           nothingWasWritten ? 'before-write-failure' : 'write-status-uncertain',
+        )
+      }
+      if (!caps.usesOptimisticUserEcho) workspace.removePendingPromptEntry(sessionId, pasteId)
+      // Put the prompt back where the user can fix or resend it. The composer
+      // was cleared at Enter (#1181), so without this every failure would lose
+      // the prompt. The `uncertain` banner set below still blocks a plain
+      // resend when something may have reached the provider.
+      setInputText(draftAfterFailure(workspace.getRuntime(sessionId).draftInput, submittedInput))
+      if (submittedImages.length > 0) {
+        workspace.setDraftImages(
+          sessionId,
+          imagesAfterFailure(workspace.getRuntime(sessionId).draftImages, submittedImages),
         )
       }
       if (nothingWasWritten) {
@@ -508,6 +534,25 @@ export function useComposerKeybinds({
     // preventDefault already, skip processing here to avoid
     // routing pane-management keys into the PTY as text.
     if (e.defaultPrevented) return
+
+    // ---- Locked while a prompt is sending (#1181) ----
+    //
+    // The textarea is read-only then, which stops the browser from editing,
+    // but this handler edits and forwards on its own: on an empty draft `/`
+    // enters slash mode and writes to the PTY, Up/Down write arrow keys to the
+    // agent, Tab prefills the prompt suggestion, and Enter submits. Each of
+    // those would reach around the lock, so every key returns
+    // here except the two that are not edits: Escape and Ctrl+C interrupt the
+    // agent, and "I just sent the wrong thing" is exactly the moment someone
+    // reaches for them. Enter is swallowed explicitly so a read-only textarea
+    // never gets a chance to act on it.
+    if (runtime.promptDelivery.kind === 'sending') {
+      const interrupts = e.key === 'Escape' || (e.ctrlKey && e.key.toLowerCase() === 'c')
+      if (!interrupts) {
+        if (e.key === 'Enter') e.preventDefault()
+        return
+      }
+    }
 
     if (
       e.altKey &&

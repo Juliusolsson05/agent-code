@@ -272,6 +272,8 @@ export function useWorkspace(
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
   } =
     useStreamingActions(setRuntimes, isCodexSession)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
@@ -1064,6 +1066,8 @@ export function useWorkspace(
     appendFeedDebug,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
     setDraftInput,
     setDraftImages,
     clearDraft,

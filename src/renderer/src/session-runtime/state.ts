@@ -95,7 +95,14 @@ export type ClaudeDraftImage = {
 
 export type PromptDeliveryUiState =
   | { kind: 'idle' }
-  | { kind: 'sending'; prompt: string; startedAt: number }
+  /**
+   * `submissionId` is the submit's paste-debug id. It names the ONE feed row
+   * that is still sending: the optimistic entry minted for this submit carries
+   * it in its uuid (see optimisticPromptUuid), so Feed can dim exactly that row
+   * without guessing from text or tail position (#1181). The composer is locked
+   * for as long as this state holds.
+   */
+  | { kind: 'sending'; prompt: string; startedAt: number; submissionId: string }
   | { kind: 'failed-safe'; message: string }
   /**
    * `enterWritten` is the fact that decides what the banner may claim. The
