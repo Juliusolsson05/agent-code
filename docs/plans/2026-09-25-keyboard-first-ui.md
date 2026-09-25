@@ -451,7 +451,7 @@ entry when it lands.
 | S41 | WorkflowHistoryDialog | showCloseButton; p-3 | Close ⎋; T3 | done |
 | S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | done (no change: F4 corner close covers it) |
 | S43 | CommandPalette | input ↑↓ Enter; sub-modes; px-3 py-2 header; raw sub-form buttons; plain-text chords | Kbd chords on rows; legend; T8 sub-form | todo |
-| S44 | PathPickerModal | Tab/↑↓/⇧↵/two-phase Esc; p-6; lowercase prose + "cancel" | T3 anatomy; legend with Kbd; DialogActions | todo |
+| S44 | PathPickerModal | Tab/↑↓/⇧↵/two-phase Esc; p-6; lowercase prose + "cancel" | T3 anatomy; legend with Kbd; DialogActions | done |
 | S45 | SettingsPage | full-page takeover; sections | D5; T3; focus into section | todo |
 
 ### Hand-rolled overlays, menus, popovers
@@ -481,7 +481,7 @@ entry when it lands.
 | N6 | Reader strip | no aria-pressed | aria-current | todo |
 | N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | todo |
 | N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
-| N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | todo |
+| N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | done (Tab stop + shared list keys) |
 | N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | todo |
 | N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
 | N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | todo |
@@ -765,6 +765,14 @@ Sharp corners and one light theme.
   the guide still breathes.
 - **S42 Extension app window:** corner `× ⎋` (from F4); nothing else changes
   — keys inside the extension belong to the extension.
+- **S44 New Tab (⌘T) path picker:** standard header "New Tab — Working
+  Directory", padded body, footer (was one p-6 card); provider toggles show
+  a focus ring and announce the chosen one; the path field uses input
+  colours; the lowercase prose line became chips `⇥ complete  ↑ ↓ browse
+  ↩ open` (+ `⇧↩ new tab` when the folder is already open); footer `Cancel
+  ⎋` · `New Session ↩` / `Create & Open ↩`, or `New Tab Anyway ⇧↩` · `Go to
+  Tab ↩` / `Stay Here ↩`; the Resume list is now a Tab stop — ↑↓ highlight
+  a past session, Enter resumes it; 640 wide.
 
 ## Tasks
 
@@ -839,6 +847,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S44/N9: path picker anatomy + DialogActions (confirmOnEnter
+  false: PathInput owns Enter/⇧Enter; chips honest to what they do), chip
+  legend, provider toggle aria-pressed, busy guards on every close path;
+  Resume list → Tab-stop listbox on useListNavigation (keyed; unavailable
+  rows skipped). Title-cased labels (tests updated). Confirm-red: both new
+  tests fail on the pre-change file.
 - 2026-09-25 S40/S42: Dictation guide → md preset + T3 body (class swaps,
   owner checklist, no unit test — a test would restate classes); App Host
   needs nothing beyond F4's corner close.

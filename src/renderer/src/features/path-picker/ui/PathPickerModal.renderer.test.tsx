@@ -132,7 +132,7 @@ describe('PathPickerModal reuse of an open tab (#913)', () => {
 
     // The hint follows the debounced resolution of the typed path.
     await screen.findByText('Already open as E · repo.')
-    expect(screen.queryByRole('button', { name: 'new session' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New Session' })).not.toBeInTheDocument()
 
     // Enter on the input goes to the tab: this is the default that stops ⌘T
     // from minting duplicate tabs.
@@ -140,10 +140,10 @@ describe('PathPickerModal reuse of an open tab (#913)', () => {
     await waitFor(() => expect(onActivateTab).toHaveBeenCalledWith('tab-e'))
     expect(onAccept).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'go to tab' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Go to Tab' }))
     expect(onActivateTab).toHaveBeenCalledTimes(2)
 
-    fireEvent.click(screen.getByRole('button', { name: 'new tab anyway' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Tab Anyway' }))
     await waitFor(() => expect(onAccept).toHaveBeenCalledWith('/repo', 'claude'))
   })
 
@@ -169,7 +169,7 @@ describe('PathPickerModal reuse of an open tab (#913)', () => {
     // ⌘T pre-fills the active tab's folder, so Enter on the default must
     // stay in G rather than jump to B just because B comes first.
     await screen.findByText('Already open in this tab (G · repo), and as B · repo.')
-    expect(screen.getByRole('button', { name: 'stay here' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stay Here' })).toBeInTheDocument()
     fireEvent.keyDown(pathInput(), { key: 'Enter' })
     await waitFor(() => expect(onActivateTab).toHaveBeenCalledWith('tab-g'))
     expect(onActivateTab).not.toHaveBeenCalledWith('tab-b')
@@ -195,7 +195,7 @@ describe('PathPickerModal reuse of an open tab (#913)', () => {
       />,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: 'new session' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'New Session' }))
     await waitFor(() => expect(onAccept).toHaveBeenCalledWith('/repo', 'claude'))
     expect(onActivateTab).not.toHaveBeenCalled()
     expect(screen.queryByText(/Already open/)).not.toBeInTheDocument()
@@ -219,7 +219,7 @@ describe('PathPickerModal reuse of an open tab (#913)', () => {
 
     // Clicked before the 150 ms debounce has resolved the path: the button
     // still reads "new session", so it must create, not switch tabs.
-    fireEvent.click(screen.getByRole('button', { name: 'new session' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
     await waitFor(() => expect(onAccept).toHaveBeenCalledWith('/repo', 'claude'))
     expect(onActivateTab).not.toHaveBeenCalled()
   })
@@ -245,5 +245,33 @@ describe('PathPickerModal on a machine without the default provider (#995)', () 
     // Still selectable: a probe can be wrong, and the spawn re-resolves.
     fireEvent.click(claude)
     await waitFor(() => expect(list).toHaveBeenCalledWith(expect.objectContaining({ providers: ['claude'] })))
+  })
+})
+
+// Plan S44/N9: the Resume list is reachable and operable from the keyboard,
+// and the footer names the keys the path field already owns.
+describe('PathPickerModal keyboard', () => {
+  it('lets the keyboard reach the Resume list, move in it, and resume with Enter', async () => {
+    installApi(vi.fn(async () => response([row('one', 'First saved row', 'claude'), row('two', 'Second saved row', 'claude')])))
+    const onResume = vi.fn()
+    render(<PathPickerModal open defaultValue="/repo" onCancel={vi.fn()} onAccept={vi.fn()} onResume={onResume} />)
+    await screen.findByText('First saved row')
+    const list = screen.getByRole('listbox', { name: 'Previous sessions' })
+    expect(list).toHaveAttribute('tabindex', '0')
+    list.focus()
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    expect(list).toHaveAttribute('aria-activedescendant', 'path-picker-resume-1')
+    fireEvent.keyDown(list, { key: 'Enter' })
+    await waitFor(() => expect(onResume).toHaveBeenCalledWith('/repo', 'two', 'claude'))
+  })
+
+  it('labels New Session ↩ and Cancel ⎋ and shows the path keys as chips', async () => {
+    installApi(vi.fn(async () => response([])))
+    render(<PathPickerModal open defaultValue="/repo" onCancel={vi.fn()} onAccept={vi.fn()} onResume={vi.fn()} />)
+    const session = await screen.findByRole('button', { name: 'New Session' })
+    expect(session.querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getByText('complete')).toBeInTheDocument()
+    expect(screen.queryByText(/tab completes/)).toBeNull()
   })
 })
