@@ -381,7 +381,7 @@ export function EditorWorkbench({
                   // failure, but it has the same safety contract: leave the
                   // buffer and dialog open, make retry possible, and never
                   // strand the controls in a permanent "Saving…" state.
-                  setCloseError(err instanceof Error ? err.message : 'Failed to save the file.')
+                  setCloseError(err instanceof Error ? err.message : 'Could not save the file.')
                 } finally {
                   setSavingClose(false)
                 }

@@ -104,7 +104,7 @@ describe('PathPickerModal resume target coherence', () => {
       />,
     )
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load saved sessions')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load saved sessions')
     fireEvent.click(screen.getByRole('button', { name: /^codex$/i }))
     await screen.findByText('Recovered Codex row')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()

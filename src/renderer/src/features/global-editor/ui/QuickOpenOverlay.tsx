@@ -85,7 +85,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
       .catch(err => {
         if (stale) return
         setLoading(false)
-        setLoadError(err instanceof Error ? err.message : 'Failed to index project files.')
+        setLoadError(err instanceof Error ? err.message : 'Could not index project files.')
       })
     return () => {
       stale = true

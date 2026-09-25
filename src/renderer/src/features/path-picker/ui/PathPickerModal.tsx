@@ -220,7 +220,7 @@ export function PathPickerModal({
         // instead of misreporting it as a successful zero-result scan.
         setSessions([])
         setListingTarget(null)
-        setListingError('Unable to load saved sessions. You can still start a new session.')
+        setListingError('Could not load saved sessions. You can still start a new session.')
       } finally {
         if (v === reqVersion.current) setSessionsLoading(false)
       }

@@ -984,8 +984,8 @@ export function usePaneActions(
           err instanceof Error && err.message.length > 0
             ? err.message
             : kind === 'terminal'
-              ? 'Failed to create dispatch terminal'
-              : 'Failed to create dispatch agent',
+              ? 'Could not create dispatch terminal.'
+              : 'Could not create dispatch agent.',
         )
         return
       }
@@ -1155,7 +1155,7 @@ export function usePaneActions(
         showToast(
           err instanceof Error && err.message.length > 0
             ? err.message
-            : 'Failed to create dispatch agent',
+            : 'Could not create dispatch agent.',
         )
         return null
       }
@@ -1261,7 +1261,7 @@ export function usePaneActions(
         showToast(
           err instanceof Error && err.message.length > 0
             ? err.message
-            : 'Failed to create linked agent',
+            : 'Could not create linked agent.',
         )
         return
       }

@@ -102,7 +102,7 @@ export function SetupGate() {
     try {
       const result = await window.api.setupInstall(target)
       useSetupStore.getState().setCheck(result.check)
-      if (!result.ok) setActionError(result.output || `Failed to install ${target}`)
+      if (!result.ok) setActionError(result.output || `Could not install ${target}.`)
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {

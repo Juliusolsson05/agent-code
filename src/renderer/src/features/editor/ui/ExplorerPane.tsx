@@ -150,7 +150,7 @@ export function ExplorerPane({
     async (path: string): Promise<boolean> => {
       const result = await onOpenFile(path).catch(err => ({
         ok: false as const,
-        error: err instanceof Error ? err.message : 'Failed to open file.',
+        error: err instanceof Error ? err.message : 'Could not open file.',
       }))
       if (!result.ok) {
         setMutationError(result.error)
@@ -217,7 +217,7 @@ export function ExplorerPane({
         })
       } catch (err) {
         if (generation !== loadGenerationRef.current) return
-        const message = err instanceof Error ? err.message : 'Failed to read directory.'
+        const message = err instanceof Error ? err.message : 'Could not read directory.'
         if (path === '') setError(message)
         setNodes(prev => {
           const current = prev[path]
@@ -451,7 +451,7 @@ export function ExplorerPane({
           : window.api.editorCreateDirectory({ root, path })
       ).catch(err => ({
         ok: false as const,
-        error: err instanceof Error ? err.message : 'Failed to create item.',
+        error: err instanceof Error ? err.message : 'Could not create item.',
       }))
       if (!result.ok) {
         setMutationError(result.error)
@@ -498,7 +498,7 @@ export function ExplorerPane({
         })
         .catch(err => ({
           ok: false as const,
-          error: err instanceof Error ? err.message : 'Failed to rename item.',
+          error: err instanceof Error ? err.message : 'Could not rename item.',
         }))
       if (!result.ok) {
         setMutationError(result.error)
@@ -515,7 +515,7 @@ export function ExplorerPane({
       await loadDirectory(parent)
       focusTreePath(result.path)
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : 'Failed to validate rename.')
+      setMutationError(err instanceof Error ? err.message : 'Could not validate rename.')
     } finally {
       setMutationPending(false)
     }
@@ -534,7 +534,7 @@ export function ExplorerPane({
         }
         const result = await window.api.editorDelete({ root, path: entry.path }).catch(err => ({
           ok: false as const,
-          error: err instanceof Error ? err.message : 'Failed to delete item.',
+          error: err instanceof Error ? err.message : 'Could not delete item.',
         }))
         if (!result.ok) {
           setMutationError(result.error)
@@ -546,7 +546,7 @@ export function ExplorerPane({
         onFileDeleted?.(entry.path)
         focusTreePath(dirname(entry.path))
       } catch (err) {
-        setMutationError(err instanceof Error ? err.message : 'Failed to confirm deletion.')
+        setMutationError(err instanceof Error ? err.message : 'Could not confirm deletion.')
       } finally {
         setMutationPending(false)
       }
