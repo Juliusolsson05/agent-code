@@ -236,7 +236,7 @@ export function ReorderTabsModal({
         }}
         size="sm"
         // Standard anatomy (plan T3) instead of the whole-content p-5 card.
-        className="flex max-h-[80vh] flex-col"
+        className="flex max-h-[86vh] flex-col"
       >
         <DialogHeader>
           <DialogTitle>Reorder Tabs</DialogTitle>

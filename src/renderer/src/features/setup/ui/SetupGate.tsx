@@ -190,7 +190,7 @@ export function SetupGate() {
         ref={panelRef}
         tabIndex={-1}
         size="lg"
-        className="max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto]"
+        className="max-h-[86vh] grid-rows-[auto_minmax(0,1fr)_auto]"
         aria-describedby={undefined}
         onOpenAutoFocus={event => {
           // The panel itself, not the first row: the first focusable control

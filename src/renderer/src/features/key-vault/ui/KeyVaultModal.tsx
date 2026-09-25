@@ -303,7 +303,7 @@ export function KeyVaultModal() {
 
   return (
     <Dialog open onOpenChange={nextOpen => { if (!nextOpen) requestClose() }}>
-      <DialogContent size="lg" className="flex max-h-[85vh] flex-col overflow-hidden">
+      <DialogContent size="lg" className="flex max-h-[86vh] flex-col overflow-hidden">
         {/* `flex` has to accompany `flex-row` here. DialogHeader's base class
             list is a plain block, so flex-row/items-center/justify-between
             were all inert and "Lock now" stacked underneath the description

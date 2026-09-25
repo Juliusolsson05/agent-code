@@ -64,7 +64,7 @@ export function DictationGuideModal() {
           illustrated steps rather than a confirm prompt, so the body scrolls
           inside the dialog instead of letting the surface grow past the
           viewport. */}
-      <DialogContent size="md" className="max-h-[88vh] grid-rows-[auto_1fr_auto]">
+      <DialogContent size="md" className="max-h-[86vh] grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <DialogTitle>Configure Voice Dictation</DialogTitle>
           <DialogDescription>

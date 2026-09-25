@@ -74,6 +74,10 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 // Full-viewport takeovers (Settings, Performance) still pass an explicit
 // width with a WHY at the call site — they are sized to the window, not to
 // content. The `92vw` cap keeps every preset inside a narrow window.
+// HEIGHT (UI pass, G-20): a dialog that scrolls inside caps itself at
+// `max-h-[86vh]`, one value. The sweep found eight caps between 80 and 92vh,
+// each picked by eye, so dialogs of the same kind ended at different heights.
+// Not a DialogContent default: a dialog with no scrolling body would clip.
 const dialogSizes = {
   sm: 'w-[min(440px,92vw)]',
   default: 'w-[min(520px,92vw)]',
@@ -151,6 +155,11 @@ const DialogContent = React.forwardRef<
       className={cn(
         'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
         dialogSizes[size],
+        // The corner `× ⎋` (below) sits over the header's right end, so the
+        // header must leave room for it. Owned HERE (UI pass, G-20): five
+        // dialogs reserved it by hand with pr-12 / pr-16 / pr-20, and two
+        // reserved nothing, so their titles could run under the button.
+        showCloseButton && '[&_[data-slot=dialog-header]]:pr-16',
         className,
       )}
     >

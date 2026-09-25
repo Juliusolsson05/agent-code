@@ -1571,7 +1571,7 @@ function OpenCommandPalette({
                   mode === 'save-prompt-template' ||
                   mode === 'edit-prompt-template' ||
                   mode === 'fill-prompt-template'
-                ? 'w-[min(1080px,95vw)] max-h-[82vh]'
+                ? 'w-[min(1080px,95vw)] max-h-[86vh]'
                 : 'w-[min(900px,92vw)] max-h-[60vh]'
           }
         `}

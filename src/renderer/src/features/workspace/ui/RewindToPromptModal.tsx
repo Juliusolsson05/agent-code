@@ -171,7 +171,7 @@ export function RewindToPromptModal({
     >
       <DialogContent
         size="lg"
-        className="flex max-h-[82vh] flex-col overflow-hidden"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
           // The LISTBOX is the focus owner (it carries aria-activedescendant —
           // focus-owner invariant, useListNavigation). While prompts are still

@@ -325,7 +325,7 @@ export function PathPickerModal({
           lowercase prose legend, the one dialog in the app that did. */}
       <DialogContent
         size="md"
-        className="modal-pop flex max-h-[80vh] flex-col"
+        className="modal-pop flex max-h-[86vh] flex-col"
         // While a spawn is in flight nothing hides the dialog (the k3 rule).
         onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
         onInteractOutside={event => { if (busy) event.preventDefault() }}

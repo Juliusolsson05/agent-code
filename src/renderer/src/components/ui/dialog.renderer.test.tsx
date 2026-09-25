@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from './dialog'
@@ -81,5 +82,18 @@ describe('Dialog', () => {
     )
     const close = screen.getByRole('button', { name: 'Close' })
     expect(close.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+  })
+
+  it('reserves header room for the corner close itself (G-20)', () => {
+    // Dialogs padded their headers by hand (pr-12/16/20) or not at all, so a
+    // long title could run under the × ⎋ button.
+    render(
+      <Dialog open>
+        <DialogContent showCloseButton>
+          <DialogHeader><DialogTitle>Usage</DialogTitle></DialogHeader>
+        </DialogContent>
+      </Dialog>,
+    )
+    expect(screen.getByRole('dialog').className).toContain('[&_[data-slot=dialog-header]]:pr-16')
   })
 })

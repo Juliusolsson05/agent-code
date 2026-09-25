@@ -97,7 +97,7 @@ export function PinAgentsModal({
         // Standard anatomy (plan T3): header / padded body / DialogActions.
         // It used to pad the WHOLE content (p-5) with a bespoke title and a
         // legend row in the body, so it matched no sibling dialog.
-        className="flex max-h-[80vh] flex-col"
+        className="flex max-h-[86vh] flex-col"
       >
         <DialogHeader>
           <DialogTitle>Pin Sessions</DialogTitle>

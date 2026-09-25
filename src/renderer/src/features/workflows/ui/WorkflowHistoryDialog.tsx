@@ -160,7 +160,7 @@ export function WorkflowHistoryDialog({
       <DialogContent
         showCloseButton
         size="md"
-        className="flex max-h-[82vh] flex-col overflow-hidden"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
           // The history rows are read-only, so without an explicit focus target Radix can only
           // focus Close. Focusing the labeled scroll region lets PageUp/PageDown and arrow keys
@@ -169,7 +169,7 @@ export function WorkflowHistoryDialog({
           historyRegionRef.current?.focus()
         }}
       >
-        <DialogHeader className="pr-12">
+        <DialogHeader>
           <DialogTitle>Workflow History</DialogTitle>
           <DialogDescription>
             All workflow runs started by this session, newest first.

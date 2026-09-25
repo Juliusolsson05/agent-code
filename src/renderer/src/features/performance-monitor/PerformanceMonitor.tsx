@@ -40,7 +40,7 @@ export function PerformanceMonitor({ onClose, request = null, onRequestHandled }
         setView(VIEWS[next]!)
       }}
     >
-      <DialogHeader className="pr-16">
+      <DialogHeader>
         <DialogTitle>Performance Monitor</DialogTitle>
         <DialogDescription>Live health and local performance evidence for Agent Code and your agents.</DialogDescription>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-muted">

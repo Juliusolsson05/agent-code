@@ -140,9 +140,9 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
       <DialogContent
         size="sm"
         showCloseButton
-        className="flex max-h-[80vh] flex-col overflow-y-auto text-[12px]"
+        className="flex max-h-[86vh] flex-col overflow-y-auto text-[12px]"
       >
-        <DialogHeader className="select-none pr-16">
+        <DialogHeader className="select-none">
           <div className="text-[10px] uppercase tracking-wider text-muted">Remote Control</div>
           <DialogTitle>Control Your Agents from a Phone</DialogTitle>
           <DialogDescription className="sr-only">

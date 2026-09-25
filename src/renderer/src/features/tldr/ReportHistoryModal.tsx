@@ -224,7 +224,7 @@ export function ReportHistoryModal({ open, kind, sessionId, workspace, onClose }
           history is, instead of a fixed 60vh box floating between them. */}
       <DialogContent
         size="md"
-        className="flex max-h-[80vh] flex-col overflow-hidden"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
           // A read-only viewer (plan S33, same as View Prompts): focus the
           // history so ↑↓/PgUp/PgDn scroll it at once. Radix's default was the

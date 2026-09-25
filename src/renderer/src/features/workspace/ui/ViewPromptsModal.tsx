@@ -102,7 +102,7 @@ export function ViewPromptsModal({
     >
       <DialogContent
         size="lg"
-        className="flex max-h-[82vh] flex-col overflow-hidden"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
           // WHY focus the scroll region instead of the first footer button:
           // this surface is primarily a reading/scrolling tool. Radix still

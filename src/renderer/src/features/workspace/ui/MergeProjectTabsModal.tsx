@@ -50,7 +50,7 @@ type Props = {
 export function MergeProjectTabsModal({ open, tabs, initialTargetId, onCancel, onConfirm }: Props) {
   return (
     <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onCancel() }}>
-      <DialogContent size="md" className="flex max-h-[80vh] flex-col">
+      <DialogContent size="md" className="flex max-h-[86vh] flex-col">
         <DialogHeader>
           <DialogTitle>Merge Project Tabs</DialogTitle>
           <DialogDescription>

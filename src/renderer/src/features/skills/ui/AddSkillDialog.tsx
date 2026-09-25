@@ -124,7 +124,7 @@ export function AddSkillDialog() {
     <Dialog open={target !== null} onOpenChange={open => { if (!open && !busy) close() }}>
       <DialogContent
         size="lg"
-        className="flex max-h-[92vh] flex-col overflow-hidden font-code"
+        className="flex max-h-[86vh] flex-col overflow-hidden font-code"
         // In flight (find or install), nothing may hide the dialog (the k3
         // rule): onOpenChange already refused while busy; Escape and outside
         // clicks now do too, and Cancel disables with its ⎋ chip.

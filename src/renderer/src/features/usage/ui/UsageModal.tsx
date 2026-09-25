@@ -211,13 +211,13 @@ export function UsageModal({ open, onClose }: Props) {
     >
       <DialogContent
         size="lg"
-        className="flex max-h-[88vh] flex-col"
+        className="flex max-h-[86vh] flex-col"
         // No footer, so the standard corner `× ⎋` is the exit (plan H5) — it
         // replaces the lowercase "close" button that sat in the header.
         showCloseButton
         onKeyDown={onDialogKeyDown}
       >
-        <DialogHeader className="flex flex-row items-center justify-between gap-4 pr-20">
+        <DialogHeader className="flex flex-row items-center justify-between gap-4">
           <div>
             <DialogTitle>Usage</DialogTitle>
             <DialogDescription className="mt-0.5">

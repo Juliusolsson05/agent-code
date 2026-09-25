@@ -345,7 +345,7 @@ function AgentCodeCustomSkillsModal({
 
   return (
     <Dialog open={open} onOpenChange={next => void requestClose(next)}>
-      <DialogContent className="flex max-h-[90vh] w-[min(880px,95vw)] flex-col overflow-hidden font-code">
+      <DialogContent className="flex max-h-[86vh] w-[min(880px,95vw)] flex-col overflow-hidden font-code">
         <DialogHeader>
           <DialogTitle>{draft ? (draft.skillId ? `Edit ${draft.name}` : 'New custom skill') : 'Custom Skills'}</DialogTitle>
           <DialogDescription>

@@ -155,7 +155,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       <DialogContent
         ref={modalRef}
         size="xl"
-        className="top-[8vh] max-h-[84vh] translate-y-0 flex flex-col overflow-hidden"
+        className="top-[8vh] max-h-[86vh] translate-y-0 flex flex-col overflow-hidden"
         onKeyDown={onKeyDown}
         onOpenAutoFocus={event => {
           // Search Conversations… opens in the search box, Resume Session… on

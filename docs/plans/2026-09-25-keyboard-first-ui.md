@@ -583,7 +583,7 @@ feeds the rows below G-1.
 | G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | `OptionCard`, one `Checkbox` | todo |
 | G-18 | Close glyph/size | × at 12/14/16px; the word "close"; ✕ (fixed in G-2) | one icon-close button | done where it matters (panel headers share one close via PanelHeader; dialogs have one corner close; ✕ gone in G-2). Kept, as contextual: in-tab closes (TabBar, EditorTabs) and the image-thumbnail remove badge |
 | G-19 | Performance Monitor | Title Case buttons, raw selects, `text-warning-fg` misuse, table cell padding, stat sizes 20/18/15px (shared with Analytics, Dictation) | primitives + one stat size | done (Title Case already matches the ruling; selects in G-11; `text-warning-fg` misuse → `text-warning`; Operations table cells padded like Processes; empty table uses EmptyState). Stat-tile sizes deferred to G-17 |
-| G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | 2 presets; padding from the primitive when `showCloseButton` | todo |
+| G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | done (24 dialog caps → `max-h-[86vh]`; inner list heights (30–60vh) are per-list and kept; `showCloseButton` now reserves `pr-16` on the header in DialogContent, and five hand-set values were removed; QueueStrip and the extension host had no padding and now get it) |
 | G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | done (21 files: 9 → 10, 10.5 → 10, 11.5 → 11, 12.5 → 12; SVG chart ticks exempt) |
 | G-22 | Raw colours/shadows | `text-white` on flags, `bg-black/20` scrim, toast `shadow-black/20`, dictation inline rgba, chart `shadow-lg` ×2, LanePortChip `shadow-sm`, `bg-canvas/34`; `bg-danger/N` vs `-soft` families | tokens | partly done (toast + chart tooltips on the theme shadow). Kept on purpose: placement overlay's light `bg-black/20` dim (the scrim token would hide the panes the user is placing into), LanePortChip's shadow (it floats), `bg-canvas/34` unfocused-lane dim, `text-white` on colour-flag badges (user colours need a contrast-picked fg; follow-up), dictation's tuned inline shadow (documented). The `bg-danger/N` vs `-soft` families move with G-13 |
 | G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | titles/buttons/settings done (a scan found ~35 sentence-case strings in the Title Case majority); lowercase side-panel controls go with G-26 |
@@ -866,6 +866,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-20 Dialog heights:** long dialogs stop at the same height (86% of
+  the window) instead of anywhere between 80 and 92%. Titles never run
+  under the corner × ⎋ (Queued Prompt and extension windows could).
 - **G-10 Segmented choices:** one connected-pill look ("All projects |
   Selected projects", "LAN | Tunnel", "This Folder | Repository |
   Everywhere", "Split | Browser | Agent", Grid Dispatch "Show all | Cap").

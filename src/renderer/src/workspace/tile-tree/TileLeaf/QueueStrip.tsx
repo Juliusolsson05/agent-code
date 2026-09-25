@@ -106,7 +106,7 @@ function QueuedPromptDialog({
     >
       <DialogContent
         size="lg"
-        className="flex max-h-[82vh] flex-col overflow-hidden"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         showCloseButton
         onOpenAutoFocus={event => {
           // A read-only viewer (plan S18, same as View Prompts): focus the

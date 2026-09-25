@@ -230,7 +230,7 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
     >
       <DialogContent
         size="xl"
-        className="flex max-h-[90vh] flex-col"
+        className="flex max-h-[86vh] flex-col"
         // No footer: the corner `× ⎋` is the exit (plan H5), replacing the
         // header's lowercase "close" button.
         showCloseButton
@@ -243,7 +243,7 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
           setRange(RANGES[next]!.id)
         }}
       >
-        <DialogHeader className="pr-12">
+        <DialogHeader>
           <div>
             <DialogTitle>Agent Analytics</DialogTitle>
             <DialogDescription className="mt-0.5">
