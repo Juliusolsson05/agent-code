@@ -4,6 +4,7 @@ import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
 import { useListNavigation } from '@renderer/lib/useListNavigation'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 
 import type { Conversation, ConversationScope } from '@shared/conversations/types'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
@@ -68,7 +69,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // pane underneath the command center.
   const commandSessionId = commandTargetSessionId(workspace)
   const cwd = commandSessionId ? workspace.state.sessions[commandSessionId]?.cwd ?? null : null
-  const { response, loading, error, needsPane, loadMore } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
+  const { response, loading, error, needsPane, loadMore, stale } = useConversationList({ open, cwd, scope, providers, includeChildren, query })
   const rows = response?.rows ?? []
 
   useEffect(() => {
@@ -148,12 +149,22 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // the scope and provider chips are ordinary tabbable buttons, and without
   // the rule Tab to "everywhere" + Enter RESUMED the highlighted conversation,
   // replacing what was running in the focused pane.
+  //
+  // The reset key is CONTENT (steering q27, #1297): the enablement effect
+  // rebuilds `providers` on every store update, and an identity key threw the
+  // highlight back to row 0 whenever enablement refreshed, so Enter resumed a
+  // conversation the user had not chosen. `stale` is in it too (#1297 review
+  // C1) so the reset fires again when the fresh page LANDS. Today the key
+  // guard and the stale hover strip below stop every path that could move
+  // the highlight meanwhile, so this is the backstop for a path added later,
+  // not the only guard (a mutation removing it passes the tests). loadMore
+  // only appends to a fresh list, so it never flips `stale`.
   const headId = response?.rows[0]?.nativeId ?? null
   const rowKeys = useMemo(() => rows.map(row => `${row.provider}:${row.nativeId}`), [rows])
   const nav = useListNavigation({
     count: rows.length,
     keys: rowKeys,
-    resetKey: `${open}|${headId}|${query}|${scope}|${providers.join(',')}|${includeChildren}`,
+    resetKey: `${open}|${headId}|${query}|${scope}|${providers.join(',')}|${includeChildren}|${stale}`,
     onActivate: index => {
       const row = rows[index]
       if (row) void resume(row)
@@ -167,13 +178,24 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   // (resetKey + follow), so only this one survives the merge.
   useEffect(() => { setResumeError(null) }, [selected])
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // While the rows on screen answer an OLDER query, scope or filter, the
+    // keyboard must not act on them (#1297 review A): Enter resumed a row the
+    // new scope excludes, and a move put the highlight on a row the arriving
+    // page then replaced. Checked BEFORE nav.onKeyDown, which moves the index
+    // before it returns, and for every key the hook handles (#1297 review C2:
+    // PageUp/PageDown, Home/End and ⌃N/⌃P came with the shared list keys).
+    // A mouse click on a visible row is still a deliberate choice.
+    if (stale && isListKey(e)) {
+      e.preventDefault()
+      return
+    }
     if (!nav.onKeyDown(e)) return
     // Page in more rows as the keyboard highlight nears the end (the scroll
     // handler below covers the mouse wheel).
     if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'End' || (e.ctrlKey && e.key === 'n')) {
       if (nav.index >= rows.length - 6) loadMore()
     }
-  }, [nav, rows.length, loadMore])
+  }, [nav, rows.length, loadMore, stale])
 
   const previewTarget: PreviewTarget | null = useMemo(() => {
     const row = rows[selected]
@@ -245,7 +267,10 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             </button>
           )}
           <span className="font-code opacity-80">
-            {loading
+            {/* Stale rows are on screen and the keyboard ignores them until the
+                new page lands (#1297 round 2): say so at once, including the
+                debounce before the request starts. */}
+            {loading || stale
               ? 'loading…'
               : response
                 ? query.trim()
@@ -276,7 +301,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             ) : rows.length === 0 && !loading && !error ? (
               <EmptyState role="status">{query.trim() ? `No conversations match “${query.trim()}”.` : 'No conversations recorded for this scope.'}</EmptyState>
             ) : rows.map((row, i) => (
-              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} itemProps={nav.getItemProps(i)} />
+              <ConversationRow key={`${row.provider}:${row.nativeId}`} row={row} index={i} selected={i === selected} itemProps={stale ? { ...nav.getItemProps(i), onMouseMove: () => undefined } : nav.getItemProps(i)} />
             ))}
           </div>
           {/* Keyboard-resizable (plan N11): it was mouse-only. A focusable
@@ -306,4 +331,18 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
       </DialogContent>
     </Dialog>
   )
+}
+
+/** The keys useListNavigation acts on (moves and Enter), for the stale guard.
+ *  Home/End only outside a text field, where they belong to the caret; a
+ *  focused control keeps its own Enter (#867). */
+function isListKey(e: React.KeyboardEvent): boolean {
+  const ctrlOnly = e.ctrlKey && !e.metaKey && !e.altKey
+  if (ctrlOnly && (e.key === 'n' || e.key === 'p')) return true
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'PageUp' || e.key === 'PageDown') return true
+  if (e.key === 'Home' || e.key === 'End') {
+    const target = e.target as HTMLElement | null
+    return !(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable))
+  }
+  return e.key === 'Enter' && !focusedControlOwnsEnter(e.target)
 }

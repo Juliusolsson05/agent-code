@@ -20,6 +20,15 @@ const MAX_HISTORY_FILE_BYTES = 512 * 1024
  * preserve a conversation; it is deliberately independent of PTY routing IDs. */
 export class TldrStore extends EventEmitter {
   private records: Record<string, TldrRecord> | null = null
+  /** The last revision of each record set aside at load (#1247 review A):
+   *  every reader keeps the HIGHER revision when a read and a change event
+   *  race, so an identity that reports again after its record was set aside
+   *  must continue above it, not restart at 1 and be discarded as stale. */
+  private readonly setAsideRevisions = new Map<string, number>()
+  /** The loaded file's bytes while set-aside records are not yet preserved.
+   *  The next write drops them from the file, so it must not run until a
+   *  copy exists; it retries the copy and is refused if it still fails. */
+  private unpreserved: { source: string; setAside: number } | null = null
   private tail: Promise<unknown> = Promise.resolve()
   private historyFileCount: number | null = null
 
@@ -75,14 +84,31 @@ export class TldrStore extends EventEmitter {
       throw new Error('TLDR storage is invalid; the original file has been preserved.')
     }
     const records = Object.create(null) as Record<string, TldrRecord>
+    // WHY an invalid RECORD is set aside instead of refusing the store (#1247):
+    // the refusal was never cached as a result, so every read and write
+    // re-failed. Every agent's tldr_update and goal_set then failed, the peeks
+    // and Agent Activity went empty, and the enforcement hooks threw, all for
+    // one record, typically one a newer build with a larger text limit wrote
+    // before a downgrade (the owner's real file already has a record at
+    // exactly today's 400-char limit). The file's rule is still "refuse and
+    // preserve rather than guess": the record is not repaired, its identity
+    // simply has no current record, and the original bytes are preserved
+    // beside the file before any write can drop it. A malformed CONTAINER
+    // above still refuses, since writing through it would destroy every record.
+    let setAside = 0
     for (const [identity, raw] of Object.entries(document.records)) {
       const record = raw as TldrRecord
       if (!validTldrIdentity(identity) || !record || typeof record.text !== 'string'
-        || normalizeTldrText(record.text) !== record.text
+        || !storedTextValid(record.text)
         || !Number.isSafeInteger(record.revision) || record.revision < 1
         || typeof record.updatedAt !== 'string' || !Number.isFinite(Date.parse(record.updatedAt))
         || !validCompletion(record)) {
-        throw new Error('TLDR storage is invalid; the original file has been preserved.')
+        setAside++
+        const revision = (raw as { revision?: unknown } | null)?.revision
+        if (validTldrIdentity(identity) && Number.isSafeInteger(revision) && (revision as number) >= 1) {
+          this.setAsideRevisions.set(identity, revision as number)
+        }
+        continue
       }
       // Rebuilt field by field, as before: whatever else a hand edit or a newer
       // build left in the file does not survive into memory. The completion
@@ -95,8 +121,29 @@ export class TldrStore extends EventEmitter {
           : {}),
       }
     }
+    if (setAside > 0) {
+      // A failed copy must not fail the READ (#1257 review B): a read drops
+      // nothing, and failing it would bring back #1247's symptom (every peek
+      // empty) on exactly the full or read-only disks this has to survive.
+      // The copy is owed before the first write instead; see commit().
+      this.unpreserved = { source, setAside }
+      await this.preserveOwedCopy().catch(error => {
+        console.warn(`[${this.label.toLowerCase()}] could not preserve ${setAside} invalid record(s) yet; writes wait for it:`, error)
+      })
+    }
     this.records = records
     return records
+  }
+
+  /** Byte-for-byte copy of a file whose records were set aside. Named by the
+   *  content digest so relaunching over the same bytes, before any write
+   *  replaces them, does not pile up identical copies. */
+  private async preserveOwedCopy(): Promise<void> {
+    if (!this.unpreserved) return
+    const { source, setAside } = this.unpreserved
+    const copy = await preserveBytes(`${this.file}.invalid`, source)
+    this.unpreserved = null
+    console.warn(`[${this.label.toLowerCase()}] set aside ${setAside} invalid record(s); original preserved at ${copy}`)
   }
 
   read(identities: string[]): Promise<Record<string, TldrRecord>> {
@@ -165,15 +212,51 @@ export class TldrStore extends EventEmitter {
     // whether the old contents parsed. Repairing a corrupt file must not count
     // as a new one, or the eviction below would delete real histories.
     const existed = await stat(path).then(() => true, () => false)
-    const previous = existed ? await this.readHistory(identity).catch(() => []) : []
+    // Whether `previous` came from a damaged file rather than a clean read.
+    let salvaged = false
+    // An unreadable history (for example one entry a newer build wrote over
+    // today's limit) used to read as EMPTY here, and the rename below then
+    // replaced that identity's whole timeline with one entry (#1247 review
+    // A). Its bytes are preserved first, and every entry that still
+    // validates is carried forward.
+    const previous = existed
+      ? await this.readHistory(identity).catch(async () => {
+        salvaged = true
+        // Too large to load safely: move it aside whole instead of reading it
+        // (#1257 round 2; the reader's own size cap must hold here too).
+        if ((await stat(path)).size > MAX_HISTORY_FILE_BYTES) {
+          const aside = `${path}.invalid-oversize-${randomUUID()}`
+          await rename(path, aside)
+          console.warn(`[${this.label.toLowerCase()}] history for one identity was over its size limit; moved aside to ${aside}`)
+          return []
+        }
+        // If even the raw read fails, do NOT carry on as if it were empty:
+        // the rename below would replace a file nobody could copy (#1257
+        // round 2). The throw leaves it untouched; the caller already treats a
+        // history failure as non-fatal to the report itself.
+        const raw = await readFile(path, 'utf8')
+        // No `.json` extension: history eviction counts and deletes every
+        // `*.json` in this directory, and preserved evidence is neither.
+        const copy = await preserveBytes(`${path}.invalid`, raw, '')
+        console.warn(`[${this.label.toLowerCase()}] history for one identity was unreadable; original preserved at ${copy}`)
+        return salvageHistory(raw, identity)
+      })
+      : []
     // An agent re-posting an unchanged status is not a new moment in the task;
     // keeping it would bury real transitions under identical rows. The KIND
     // matters too (#1182), for the one case where a completion row and a goal
     // row carry identical text: an agent completing with its goal's own words
     // as the note, or setting a goal worded exactly like the note it just
     // completed with. Comparing text alone would swallow that transition.
-    if (previous[0]?.text === entry.text && Boolean(previous[0]?.completed) === Boolean(entry.completed)) return
-    const entries = [entry, ...previous].slice(0, TLDR_HISTORY_LIMIT)
+    //
+    // After a salvage the file on disk is still the damaged one, so an
+    // unchanged re-post must REWRITE the salvaged rows rather than return:
+    // otherwise the history view kept failing until the agent happened to
+    // post different text (#1257 review C2), and re-posting an unchanged
+    // status is exactly what agents are told to do.
+    const unchanged = previous[0]?.text === entry.text && Boolean(previous[0]?.completed) === Boolean(entry.completed)
+    if (unchanged && !salvaged) return
+    const entries = (unchanged ? previous : [entry, ...previous]).slice(0, TLDR_HISTORY_LIMIT)
     await mkdir(this.historyDirectory, { recursive: true })
     const temporary = `${path}.${randomUUID()}.tmp`
     try {
@@ -216,7 +299,8 @@ export class TldrStore extends EventEmitter {
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
       // (#1182). The agent sets a new goal exactly when it is given new work.
-      const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: (records[identity]?.revision ?? 0) + 1 }
+      const previousRevision = records[identity]?.revision ?? this.setAsideRevisions.get(identity) ?? 0
+      const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: previousRevision + 1 }
       await this.commit(identity, records, record, authorized)
       // The current record is already durable and acknowledged. History is the
       // secondary view of it, so a history failure (a full disk, a corrupt file)
@@ -276,6 +360,10 @@ export class TldrStore extends EventEmitter {
     record: TldrRecord,
     authorized: () => boolean,
   ): Promise<void> {
+    // Writing now would drop set-aside records whose bytes are not yet
+    // preserved anywhere; the copy is retried, and the write refused if it
+    // still cannot be made.
+    await this.preserveOwedCopy()
     // Preserve the null prototype after every write, not just initial load.
     // Otherwise a valid opaque key such as "constructor" can read inherited
     // object properties and persist an invalid revision instead of entry 1.
@@ -301,12 +389,59 @@ export class TldrStore extends EventEmitter {
 function validCompletion(record: TldrRecord): boolean {
   if (record.completedAt === undefined && record.completionNote === undefined) return true
   return typeof record.completedAt === 'string' && Number.isFinite(Date.parse(record.completedAt))
-    && typeof record.completionNote === 'string' && normalizeTldrText(record.completionNote) === record.completionNote
+    && typeof record.completionNote === 'string' && storedTextValid(record.completionNote)
+}
+
+/** Write `bytes` to `<prefix>-<digest>.json` exactly once, atomically.
+ *
+ *  WHY temp + rename and a byte comparison (#1247 review A): a crash in a
+ *  direct write left an empty or partial copy under the final name, and
+ *  "the name already exists" was then taken as proof the evidence was safe,
+ *  while the next write dropped the original record. An existing copy counts
+ *  only if its bytes are identical; anything else gets a fresh name. */
+async function preserveBytes(prefix: string, bytes: string, extension = '.json'): Promise<string> {
+  const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
+  let copy = `${prefix}-${digest}${extension}`
+  const existing = await readFile(copy, 'utf8').catch(() => null)
+  if (existing === bytes) return copy
+  if (existing !== null) copy = `${prefix}-${digest}-${randomUUID()}${extension}`
+  const temporary = `${copy}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' })
+    await rename(temporary, copy)
+  } finally {
+    await unlink(temporary).catch(() => {})
+  }
+  return copy
+}
+
+/** The entries of an unreadable history document that still validate, in
+ *  order, when the document is at least the right identity's list. */
+function salvageHistory(raw: string, identity: string): TldrHistoryEntry[] {
+  try {
+    const document = JSON.parse(raw) as { version?: unknown; identity?: unknown; entries?: unknown }
+    if (document.version !== 1 || document.identity !== identity || !Array.isArray(document.entries)) return []
+    return document.entries.filter(validHistoryEntry).slice(0, TLDR_HISTORY_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+/** Whether stored text is exactly what this build would have written.
+ *  normalizeTldrText THROWS for text it rejects (over the limit, empty), which
+ *  is right for a new update and wrong for validating a stored record: the
+ *  throw escaped the per-record check and failed the whole store (#1247). */
+function storedTextValid(text: string): boolean {
+  try {
+    return normalizeTldrText(text) === text
+  } catch {
+    return false
+  }
 }
 
 function validHistoryEntry(value: unknown): value is TldrHistoryEntry {
   const entry = value as TldrHistoryEntry
-  return Boolean(entry) && typeof entry.text === 'string' && normalizeTldrText(entry.text) === entry.text
+  return Boolean(entry) && typeof entry.text === 'string' && storedTextValid(entry.text)
     && typeof entry.writtenAt === 'string' && Number.isFinite(Date.parse(entry.writtenAt))
     && Number.isSafeInteger(entry.revision) && entry.revision >= 1
     && (entry.completed === undefined || entry.completed === true)

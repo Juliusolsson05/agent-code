@@ -55,6 +55,8 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
     let resizeObserver: ResizeObserver | null = null
     let rafId: number | null = null
     let disposed = false
+    // Whether main holds a raw PTY reference for THIS view. See the attach.
+    let attached = false
     // Tracked outside the try so cleanup detaches the listener whether
     // or not mount made it past Terminal construction.
     let onThemeChangedListener: ((e: Event) => void) | null = null
@@ -141,7 +143,23 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
         term?.write(data)
       })
 
+      // #1311 round 2 (review A): release only a reference main actually
+      // took. Main counts references per page and session, shared with a
+      // retained pane terminal of the same agent (Settings/Reader hide that
+      // pane without unmounting it). A detach after a REFUSED attach (null:
+      // no backend, e.g. after a provider exit) used to release the pane's
+      // reference instead, and the pane froze on the next same-id wake.
       void window.api.attachAgentPty(sessionId).then(buffer => {
+        if (buffer !== null) {
+          // Main took the reference when its handler ran, which can be
+          // before this view unmounted; cleanup then found nothing attached,
+          // so a late attach releases itself (AgentTerminalLeaf does the same).
+          if (disposed) {
+            void window.api.detachAgentPty(sessionId)
+            return
+          }
+          attached = true
+        }
         if (disposed || termRef.current !== term) return
         const liveTerm = term
         if (!liveTerm) return
@@ -178,7 +196,7 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
-      void window.api.detachAgentPty(sessionId)
+      if (attached) void window.api.detachAgentPty(sessionId)
       term?.dispose()
       termRef.current = null
     }

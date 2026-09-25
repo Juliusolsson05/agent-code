@@ -1,5 +1,6 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -261,8 +262,14 @@ describe('Goal MCP', () => {
 
     const broken = JSON.stringify({ version: 1, records: { 'agent-1': { ...legacy.records['agent-1'], completedAt: '2026-09-02T00:00:00.000Z' } } })
     await writeFile(file, broken)
-    await expect(new TldrStore(file).read(['agent-1'])).rejects.toThrow('storage is invalid')
+    // Not guessed into a goal-without-completion: the record is set aside
+    // (#1247), its bytes preserved, and the file itself is not rewritten by a
+    // read.
+    expect(await new TldrStore(file).read(['agent-1'])).toEqual({})
     expect(await readFile(file, 'utf8')).toBe(broken)
+    const preserved = (await readdir(directory)).filter(name => name.startsWith('goal.json.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await readFile(join(directory, preserved[0]!), 'utf8')).toBe(broken)
   })
 
   // Review of #1182: behaviours only a direct store test can pin.
@@ -310,3 +317,249 @@ describe('Goal MCP', () => {
   })
 })
 
+
+// #1247: one invalid record used to make the whole store refuse, so every
+// agent's tldr_update and goal_set failed, the peeks and Agent Activity went
+// empty and the enforcement hooks threw. Real records from the owner's files
+// (testing/fixtures/tldr-store, texts redacted to same-length markers).
+const realRecords = JSON.parse(await readFile(join(import.meta.dirname,
+  '../../../testing/fixtures/tldr-store/real-records-2026-09-25.json'), 'utf8')) as {
+  tldr: { version: 1; records: Record<string, { text: string }> }
+  goal: { version: 1; records: Record<string, { text: string; completedAt?: string; completionNote?: string }> }
+  atLimit: string
+}
+
+describe('one invalid record in a real store (#1247)', () => {
+  async function storeWith(name: string, document: unknown, options?: ConstructorParameters<typeof TldrStore>[2]) {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-invalid-'))
+    directories.push(directory)
+    const file = join(directory, name)
+    const source = JSON.stringify(document)
+    await writeFile(file, source)
+    return { directory, file, source, store: new TldrStore(file, undefined, options) }
+  }
+
+  it('sets aside an over-limit TLDR (a newer build, then a downgrade) and keeps every other agent working', async () => {
+    const document = structuredClone(realRecords.tldr)
+    // One character past today's limit, on the real record that sits AT it.
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file, source, store } = await storeWith('tldr.json', document)
+    const others = Object.keys(document.records).filter(id => id !== realRecords.atLimit)
+
+    expect(Object.keys(await store.read(Object.keys(document.records))).sort()).toEqual([...others].sort())
+    const written = await store.update(others[0]!, 'Still reporting.', () => true)
+    expect(written.text).toBe('Still reporting.')
+    // The set-aside record's bytes survive the rewrite that drops it.
+    const preserved = (await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await readFile(join(directory, preserved[0]!), 'utf8')).toBe(source)
+    expect(JSON.parse(await readFile(file, 'utf8')).records).not.toHaveProperty(realRecords.atLimit)
+    // The damaged identity can simply report again.
+    expect((await store.update(realRecords.atLimit, 'Back.', () => true)).text).toBe('Back.')
+  })
+
+  it('keeps the other goals and lets the damaged identity set a new goal when one completion is half-written', async () => {
+    const document = structuredClone(realRecords.goal)
+    const [completed, other] = Object.keys(document.records)
+    delete document.records[completed!]!.completionNote
+    const { store } = await storeWith('goal.json', document, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    expect(Object.keys(await store.read([completed!, other!]))).toEqual([other])
+    expect((await store.update(completed!, 'A fresh goal.', () => true)).text).toBe('A fresh goal.')
+  })
+
+  it('does not write a second copy of the same damaged bytes on every launch', async () => {
+    const document = structuredClone(realRecords.tldr)
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file } = await storeWith('tldr.json', document)
+    await new TldrStore(file).read([realRecords.atLimit])
+    await new TldrStore(file).read([realRecords.atLimit])
+    expect((await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))).toHaveLength(1)
+  })
+
+  it('does not trust a partial copy left by a crash, and keeps the copy private', async () => {
+    const document = structuredClone(realRecords.tldr)
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file, source } = await storeWith('tldr.json', document)
+    // A crash mid-write left an empty file under the final digest name.
+    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
+    await writeFile(join(directory, `tldr.json.invalid-${digest}.json`), '')
+    const store = new TldrStore(file)
+    const other = Object.keys(document.records).find(id => id !== realRecords.atLimit)!
+    await store.update(other, 'Still here.', () => true)
+    const copies = (await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))
+    const contents = await Promise.all(copies.map(name => readFile(join(directory, name), 'utf8')))
+    expect(contents).toContain(source)
+    const full = copies[contents.indexOf(source)]!
+    expect((await stat(join(directory, full))).mode & 0o777).toBe(0o600)
+  })
+
+  it('continues an identity above its set-aside revision, so readers do not discard it as stale', async () => {
+    const document = structuredClone(realRecords.tldr) as { version: 1; records: Record<string, { text: string; revision: number }> }
+    // A real record whose revision is well above 1 (#1257 review C1: the
+    // at-limit record is revision 1, so "always continue at 2" also passed).
+    const [identity, record] = Object.entries(document.records).sort(([, a], [, b]) => b.revision - a.revision)[0]!
+    expect(record.revision).toBeGreaterThan(2)
+    record.text = 'x'.repeat(401)
+    const { store } = await storeWith('tldr.json', document)
+    expect((await store.update(identity, 'Reporting again.', () => true)).revision).toBe(record.revision + 1)
+  })
+
+  // #1257 review C4: a set-aside record with a nonsense revision must not
+  // seed a negative one on disk.
+  it('does not continue from a set-aside revision below 1', async () => {
+    const document = structuredClone(realRecords.tldr) as { version: 1; records: Record<string, { text: string; revision: number }> }
+    const record = document.records[realRecords.atLimit]!
+    record.text += '.'
+    record.revision = -5
+    const { store } = await storeWith('tldr.json', document)
+    expect((await store.update(realRecords.atLimit, 'Reporting again.', () => true)).revision).toBe(1)
+  })
+
+  // #1257 review C2: re-posting an unchanged status after a salvage must
+  // still repair the damaged file, or the history view keeps failing.
+  it('repairs a damaged history when the agent re-posts an unchanged status', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    await store.update('agent-1', 'Working.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const history = JSON.parse(await readFile(path, 'utf8')) as { entries: Array<{ text: string; writtenAt: string; revision: number }> }
+    history.entries.unshift({ text: 'x'.repeat(401), writtenAt: history.entries[0]!.writtenAt, revision: 99 })
+    await writeFile(path, JSON.stringify(history))
+    await expect(store.history('agent-1')).rejects.toThrow()
+    await store.update('agent-1', 'Working.', () => true)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Working.', 'First.'])
+  })
+
+  // #1257 review C3: a damaged document that belongs to ANOTHER identity
+  // must not donate its rows to this one.
+  it('salvages nothing from a damaged history of a different identity', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const writtenAt = new Date().toISOString()
+    await writeFile(path, JSON.stringify({ version: 1, identity: 'agent-2', entries: [
+      { text: 'x'.repeat(401), writtenAt, revision: 3 },
+      { text: 'Another agent\'s status.', writtenAt, revision: 2 },
+    ] }))
+    await store.update('agent-1', 'Second.', () => true)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Second.'])
+  })
+
+  it('keeps the valid history entries and preserves the file when one entry is unreadable', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const file = join(directory, 'tldr.json')
+    const store = new TldrStore(file)
+    await store.update('agent-1', 'First.', () => true)
+    await store.update('agent-1', 'Second.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const history = JSON.parse(await readFile(path, 'utf8')) as { entries: Array<{ text: string }> }
+    // A newer build's over-limit entry, on top of the older valid one.
+    history.entries[0]!.text = 'x'.repeat(401)
+    const raw = JSON.stringify(history)
+    await writeFile(path, raw)
+
+    await store.update('agent-1', 'Third.', () => true)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Third.', 'First.'])
+    const preserved = (await readdir(historyDirectory)).filter(entry => entry.includes('.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await readFile(join(historyDirectory, preserved[0]!), 'utf8')).toBe(raw)
+    // Evidence is not history: it must not count toward (or be evicted as) a history file.
+    expect(preserved[0]!.endsWith('.json')).toBe(false)
+  })
+
+  it('keeps reads working when the copy cannot be written, and refuses writes until it can (review B)', async () => {
+    const document = structuredClone(realRecords.tldr)
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file, source } = await storeWith('tldr.json', document)
+    const others = Object.keys(document.records).filter(id => id !== realRecords.atLimit)
+    await chmod(directory, 0o555)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = new TldrStore(file)
+      expect(Object.keys(await store.read(others)).sort()).toEqual([...others].sort())
+      await expect(store.update(others[0]!, 'Blocked.', () => true)).rejects.toThrow()
+      expect(await readFile(file, 'utf8')).toBe(source)
+      await chmod(directory, 0o755)
+      await store.update(others[0]!, 'Now it can.', () => true)
+      const copies = (await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))
+      expect(await readFile(join(directory, copies[0]!), 'utf8')).toBe(source)
+    } finally {
+      warn.mockRestore()
+      await chmod(directory, 0o755)
+    }
+  })
+
+  it('sets aside a completion whose note is over the limit (a newer build, then a downgrade)', async () => {
+    const document = structuredClone(realRecords.goal) as { version: 1; records: Record<string, { completionNote?: string }> }
+    const [completed, other] = Object.keys(document.records)
+    document.records[completed!]!.completionNote = 'x'.repeat(401)
+    const { store } = await storeWith('goal.json', document, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    expect(Object.keys(await store.read([completed!, other!]))).toEqual([other])
+  })
+
+  it('never answers a read for an inherited property name', async () => {
+    const { store } = await storeWith('tldr.json', structuredClone(realRecords.tldr))
+    await store.update(realRecords.atLimit, 'Written.', () => true)
+    expect(await store.read(['toString', 'constructor'])).toEqual({})
+  })
+
+  it('leaves an unreadable history file untouched rather than replacing it (round 2)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    await store.update('agent-1', 'Second.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const before = await readFile(path, 'utf8')
+    await chmod(path, 0o000)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // The report itself still succeeds; only its history row is skipped.
+      expect((await store.update('agent-1', 'Third.', () => true)).text).toBe('Third.')
+    } finally {
+      warn.mockRestore()
+      await chmod(path, 0o600)
+    }
+    expect(await readFile(path, 'utf8')).toBe(before)
+  })
+
+  it('moves an oversized history aside without loading it (round 2)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const store = new TldrStore(join(directory, 'tldr.json'))
+    await store.update('agent-1', 'First.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const oversized = 'x'.repeat(600 * 1024)
+    await writeFile(join(historyDirectory, name!), oversized)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await store.update('agent-1', 'Second.', () => true)
+    } finally {
+      warn.mockRestore()
+    }
+    const aside = (await readdir(historyDirectory)).filter(entry => entry.includes('.invalid-oversize-'))
+    expect(aside).toHaveLength(1)
+    expect(await readFile(join(historyDirectory, aside[0]!), 'utf8')).toBe(oversized)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Second.'])
+  })
+
+  it('still refuses a malformed document container, which a write would destroy whole', async () => {
+    const { file, source } = await storeWith('tldr.json', { version: 2, records: realRecords.tldr.records })
+    await expect(new TldrStore(file).read([realRecords.atLimit])).rejects.toThrow('storage is invalid')
+    expect(await readFile(file, 'utf8')).toBe(source)
+  })
+})

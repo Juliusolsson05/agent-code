@@ -1,5 +1,7 @@
 import { act } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { expect, it, vi } from 'vitest'
 import { mountPaneActions } from './testing/paneActionsHarness'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { WorkspaceState } from '@renderer/workspace/types'
@@ -151,4 +153,60 @@ it.each([true, false])('creation selectCreated=%s fills or preserves the focused
   expect(next.sessions['new-agent']?.projectId).toBe('project')
   expect(harness.sessionActions.killSession).not.toHaveBeenCalled()
   harness.mounted.unmount()
+})
+
+// #1270 / steering q22: a create whose spawn rejects used to toast the
+// rejection verbatim. The fixture is the real IPC rejection recorded in the
+// incident journal; the class of text it stands for can carry environment
+// values or scoped MCP tokens.
+it('never toasts the raw spawn rejection when a create fails', async () => {
+  const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+  const harness = mountPaneActions(state(), { spawn: vi.fn().mockRejectedValue(new Error(recorded)) })
+  await act(async () => {
+    expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' })).toBeNull()
+  })
+  expect(harness.showToast).toHaveBeenCalledWith('Could not create agent: Session failed to start. Check provider setup and retry.')
+  expect(JSON.stringify(vi.mocked(harness.showToast).mock.calls)).not.toContain('posix_spawnp')
+  harness.mounted.unmount()
+})
+
+// #1286 review B2: the other two spawn catches in pane.ts.
+it('never toasts the raw spawn rejection from splitFocused or createLinkedAgent', async () => {
+  const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+  const harness = mountPaneActions(state(), { spawn: vi.fn().mockRejectedValue(new Error(recorded)) })
+  await act(async () => { await harness.actions.splitFocused('codex') })
+  await act(async () => { await harness.actions.createLinkedAgent({ kind: 'codex' }, 'anchor' as never) })
+  const calls = vi.mocked(harness.showToast).mock.calls.map(call => call[0])
+  expect(calls).toEqual([
+    'Could not create agent: Session failed to start. Check provider setup and retry.',
+    'Could not create linked agent: Session failed to start. Check provider setup and retry.',
+  ])
+  harness.mounted.unmount()
+})
+
+// #1286 review C1: `spawn` already turned the rejection into a safe message
+// (sessionSpawnErrorMessage). The curated ones carry the fix, so a create
+// must show them; only the generic flattening hides the raw text.
+it('shows the curated spawn failures a create can act on', async () => {
+  const curated = [
+    'Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment.',
+    'Workspace folder is missing: /repo/.worktrees/gone',
+    'codex CLI not found. Open Setup (File › Setup…) to install it or enter its path.',
+  ]
+  for (const message of curated) {
+    const spawn = vi.fn().mockRejectedValue(new Error(message))
+    const harness = mountPaneActions(state(), { spawn })
+    await act(async () => {
+      expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' })).toBeNull()
+    })
+    // The folder named is the one this create asked for, never the error's
+    // own text (#1286 review C round 2).
+    const expected = message.startsWith('Workspace folder is missing: ')
+      ? `Workspace folder is missing: ${spawn.mock.calls[0]![0] as string}`
+      : message
+    expect(harness.showToast).toHaveBeenCalledWith(`Could not create agent: ${expected}`)
+    harness.mounted.unmount()
+  }
 })

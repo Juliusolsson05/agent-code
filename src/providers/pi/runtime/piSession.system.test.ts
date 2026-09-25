@@ -169,6 +169,89 @@ describe('PiSession over the recordings', () => {
     expect(result).toMatchObject({ ok: false, code: 'not-ready', retrySafe: true, promptWritten: false })
   })
 
+  // #1315: orchestration delivers a child's bootstrap prompt right after
+  // spawn, before the bridge extension has connected. It used to fail at
+  // once with "the Pi bridge is not connected" (5 of 5 Pi children on
+  // 2026-09-25); a retry seconds later always worked.
+  async function unconnected(options: { bridgeConnectDeadlineMs?: number } = {}) {
+    const fixture = loadLiveFixture('plain')
+    const sandbox: ReplaySandbox = createReplaySandbox(fixture)
+    cleanups.push(() => sandbox.cleanup())
+    const pty = new AdapterPty()
+    const session = new PiSession({ cwd: sandbox.launch.cwd }, {
+      spawnPty: (() => pty) as never,
+      prepareLaunch: (async () => sandbox.launch) as never,
+      bridgeScriptPath: '/staged/bridge.ts',
+      newSessionId: () => fixture.sessionIdLaunched!,
+      headlessOptions: { heartbeatMs: 0, fastPollMs: 20, slowPollMs: 200, discoverPollMs: 20, bridgeConnectDeadlineMs: options.bridgeConnectDeadlineMs ?? 5_000 },
+    })
+    cleanups.push(() => session.stop())
+    await session.start()
+    const headless = (session as unknown as { headless: { submitPrompt: (text: string) => Promise<unknown>; emit: (name: string, payload: unknown) => boolean } }).headless
+    const submit = vi.spyOn(headless, 'submitPrompt')
+    const settle = (text = 'hi') => session.deliverPromptText(text).then(() => null, (error: Error) => error)
+    return { fixture, sandbox, pty, session, headless, submit, settle }
+  }
+
+  it('a prompt sent before the bridge connects waits for it, then submits that prompt', async () => {
+    const { fixture, sandbox, submit, settle } = await unconnected()
+    const delivery = settle('the bootstrap brief')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(submit).not.toHaveBeenCalled()
+    // The bridge connects only now. The replay rig answers every request
+    // with a refusal, so the prompt it saw is asserted on the submit itself.
+    await playReplay(fixture, sandbox)
+    const error = await delivery
+    expect(submit).toHaveBeenCalledWith('the bootstrap brief')
+    expect(error?.message ?? '').not.toContain('not connected')
+    expect(error).toMatchObject({ code: 'pi-terminal-rejected' })
+  })
+
+  // #1316 review B: only the FIRST connect is waited for. After a later
+  // disconnect a prompt fails at once, so a real fault is reported.
+  it('fails fast after the bridge has connected once and then dropped', async () => {
+    const { fixture, sandbox, headless, settle } = await unconnected()
+    await playReplay(fixture, sandbox) // connects, then the rig closes the socket
+    const live = headless as unknown as { isLiveConnected(): boolean }
+    await waitUntil(() => !live.isLiveConnected(), 2_000, 'bridge disconnected')
+    const startedAt = Date.now()
+    const error = await settle()
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(error).toMatchObject({ code: 'pi-terminal-not-ready' })
+  })
+
+  // #1316 review B: a pending delivery learns at once that pi is gone.
+  it.each([
+    ['pi exits', async (ctx: Awaited<ReturnType<typeof unconnected>>) => { ctx.pty.exit(0, 15) }],
+    ['the pane stops', async (ctx: Awaited<ReturnType<typeof unconnected>>) => { await ctx.session.stop() }],
+    ['the bridge cannot listen', async (ctx: Awaited<ReturnType<typeof unconnected>>) => { ctx.headless.emit('live-state', { connected: false, reason: 'bridge-listen-failed' }) }],
+  ])('settles a waiting delivery when %s', async (_name, end) => {
+    const ctx = await unconnected()
+    const delivery = ctx.settle()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const startedAt = Date.now()
+    await end(ctx)
+    const error = await delivery
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(error).toMatchObject({ code: 'pi-terminal-not-ready' })
+    expect(ctx.submit.mock.calls.length).toBeLessThanOrEqual(1)
+  })
+
+  // #1316 review B: the cap is a backstop for a package that never settles.
+  it('gives up at the cap when nothing ever settles the bridge startup', async () => {
+    const ctx = await unconnected({ bridgeConnectDeadlineMs: 10 * 60_000 })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const delivery = ctx.settle()
+      await vi.advanceTimersByTimeAsync(34_000)
+      expect(ctx.submit).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(2_000)
+      vi.useRealTimers()
+      expect(await delivery).toMatchObject({ code: 'pi-terminal-not-ready' })
+      expect(ctx.submit).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
   it('a prompt pi refused before it was sent (e.g. mid-compaction) is safe to retry; an unknown outcome is not', async () => {
     const refusing = { deliverPromptText: async () => { throw Object.assign(new Error('pi is compacting this session'), { code: 'pi-terminal-rejected' }) } }
     expect(await deliverPiPrompt({ session: refusing, sessionId: 'pane', prompt: 'hi' } as never))

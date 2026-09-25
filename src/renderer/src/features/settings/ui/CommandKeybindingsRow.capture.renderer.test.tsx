@@ -8,23 +8,14 @@ import { CommandKeybindingsRow } from './CommandKeybindingsRow'
 // Escape or a finished chord. Clicking elsewhere (the Settings search box) or
 // leaving the window did not release it, so the next bare letter typed was
 // swallowed AND saved as that command's shortcut.
-// Accessible names from #1221 (the keyboard-first pass): the Add button names
-// its command and the recording state is spelled out, since the visible
-// "Press keys… ⎋" chip is decorative. One helper for each, so the absence
-// checks below cannot drift back to a name that no longer exists and pass
-// vacuously.
-const ADD = /^Add a shortcut to /
-const RECORDING = /^Recording a shortcut for /
-const recorder = () => screen.queryByRole('button', { name: RECORDING })
-
 const original = useAppStore.getState()
 afterEach(() => { useAppStore.setState(original, true) })
 
 function startRecording() {
   render(<CommandKeybindingsRow />)
-  const add = screen.getAllByRole('button', { name: ADD })[0]!
+  const add = screen.getAllByRole('button', { name: /^Add a shortcut to / })[0]!
   fireEvent.click(add)
-  expect(recorder()).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^Recording a shortcut for / })).toBeInTheDocument()
 }
 
 it('stops recording when the user clicks somewhere else', () => {
@@ -32,7 +23,7 @@ it('stops recording when the user clicks somewhere else', () => {
   const elsewhere = document.createElement('input')
   document.body.appendChild(elsewhere)
   fireEvent.mouseDown(elsewhere)
-  expect(recorder()).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
   // The next key is ordinary typing again: not swallowed, not saved.
   const before = JSON.stringify(useAppStore.getState().settings.commandKeybindingOverrides ?? {})
   const typed = fireEvent.keyDown(elsewhere, { key: 't', code: 'KeyT' })
@@ -44,7 +35,7 @@ it('stops recording when the user clicks somewhere else', () => {
 it('stops recording when the window loses focus', () => {
   startRecording()
   fireEvent.blur(window)
-  expect(recorder()).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 // #1308 review: the edges of the release rule.
@@ -61,28 +52,28 @@ function listGeometry(): HTMLElement {
 it('keeps recording while the user drags the list scrollbar', () => {
   startRecording()
   fireEvent.mouseDown(listGeometry(), { clientX: 395, clientY: 100 })
-  expect(recorder()).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^Recording a shortcut for / })).toBeInTheDocument()
 })
 
 it('ends recording on a click in the gap between category blocks', () => {
   startRecording()
   fireEvent.mouseDown(listGeometry(), { clientX: 120, clientY: 20 })
-  expect(recorder()).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 it('ends recording on a click on another row', () => {
   startRecording()
   const row = document.querySelector('[data-shortcut-list] [data-shortcut-recorder]')!.parentElement!.parentElement!
   fireEvent.mouseDown(row)
-  expect(recorder()).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 it('lets the recorder button toggle recording off itself', () => {
   startRecording()
-  const button = recorder()!
-  fireEvent.mouseDown(button)
-  fireEvent.click(button)
-  expect(recorder()).toBeNull()
+  const recorder = screen.getByRole('button', { name: /^Recording a shortcut for / })
+  fireEvent.mouseDown(recorder)
+  fireEvent.click(recorder)
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 it('ends recording even when the clicked control stops propagation', () => {
@@ -91,7 +82,7 @@ it('ends recording even when the clicked control stops propagation', () => {
   stubborn.addEventListener('mousedown', event => event.stopPropagation())
   document.body.appendChild(stubborn)
   fireEvent.mouseDown(stubborn)
-  expect(recorder()).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
   stubborn.remove()
 })
 
