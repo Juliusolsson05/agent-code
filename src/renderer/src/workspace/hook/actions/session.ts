@@ -497,7 +497,7 @@ export function useSessionActions(
             pendingReplacementSuccessorsRef.current.add(sessionId)
           }
         } catch (err) {
-          throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
+          throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true, cwd))
         }
         const previousMeta = refs.stateRef.current.sessions[sessionId]
         const requestedProviderSessionId = opts?.resumeSessionId ?? startedProviderSessionId
