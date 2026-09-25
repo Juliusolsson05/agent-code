@@ -142,20 +142,19 @@ export function setGhostLogOwnersProvider(fn: (() => ReadonlySet<string> | null)
 /**
  * Who owns ghost logs right now, or null when that cannot be known.
  *
- * WHY a read-only store yields null, not its (empty) session set (#1223
- * steering review): `WorkspaceFileStore` deliberately loads an EMPTY file and
- * goes read-only when workspace.json is unreadable, corrupt or from a newer
- * version, precisely so nothing overwrites the user's real data. Its
- * `sessionIds()` is then empty although the file on disk may own every
- * session. Reading that as "no owners" would declare every ghost log an
- * orphan and delete the recovery state of the very workspace the store is
- * protecting. Unknown means protect all.
+ * WHY "unknown" unless the store read a complete workspace.json (#1223
+ * reviews): the owner set is the only thing standing between a ghost log and
+ * deletion, so an EMPTY set must mean "no sessions", never "could not tell".
+ * The store reports unknown for a read-only file (unreadable, corrupt, newer)
+ * and also for a missing, empty or partially decoded one: a user who moves
+ * workspace.json aside and relaunches would otherwise lose every ghost log of
+ * the workspace they put back. Unknown means protect all.
  */
 export function ghostLogOwnersFrom(
-  store: { isReadOnly(): boolean; sessionIds(): ReadonlySet<string> },
+  store: { sessionOwnershipKnown(): boolean; sessionIds(): ReadonlySet<string> },
   runningSessionIds: readonly string[],
 ): ReadonlySet<string> | null {
-  if (store.isReadOnly()) return null
+  if (!store.sessionOwnershipKnown()) return null
   return new Set([...store.sessionIds(), ...runningSessionIds])
 }
 
@@ -356,12 +355,14 @@ export async function runPrunePasses(
   }
 
   for (const artifact of artifacts) {
-    // A ghost log is recovery state while its session exists: a user can
-    // resume an older crashed session and still need its provisional rows
-    // during bootstrap, however old the file is. Once the session is gone from
-    // every workspace (and not running), nothing can rebuild from it, so it is
-    // ordinary debug output (#732). `isProtectedFromDebugPrune` draws that
-    // line; active recent files still get the activeGraceMs guard below.
+    // A ghost log is kept while its session exists. The designed use is the
+    // crash-resume bootstrap (docs/design/ghost-system.md, "Crash + restart"):
+    // a restored pane rebuilding its provisional rows under its persisted id,
+    // however old the file. NOTE: that reader is not wired today. Only a fresh
+    // spawn reads a log, under an id minted a moment earlier (#1223 review A;
+    // #1225). Keeping owned logs costs little and is right the day it is. Once
+    // the session is gone from every workspace and not running, nothing can
+    // use the log, so it is ordinary debug output (#732).
     if (isProtectedFromDebugPrune(artifact, policy.ghostLogOwners)) continue
     if (artifact.mtimeMs >= cutoff) continue
     await drop(artifact)
@@ -611,9 +612,8 @@ function isProtectedFromDebugPrune(artifact: Artifact, ghostLogOwners?: Readonly
     if (liveRecordingDirsProvider().has(resolve(artifact.path))) return true
   }
   // WHY ghost logs are protected per SESSION, not as a bucket (#732): the
-  // whole bucket used to be protected from every pass, so the per-bucket cap
-  // above could never act, and startup compaction rewrites each file, so
-  // they never aged either. Measured 2026-09-25: 1,952 logs, 2.1 GB, of which
+  // whole bucket used to be protected from every pass, so neither the TTL nor
+  // the per-bucket cap above could ever act on it. Measured 2026-09-25: 1,952 logs, 2.1 GB, of which
   // 1,935 (2,128 MB) belonged to sessions no longer in any workspace. A log
   // is kept while its session exists; with no owner set (not known yet) all
   // stay protected.

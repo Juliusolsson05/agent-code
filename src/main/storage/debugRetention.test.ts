@@ -173,7 +173,7 @@ describe('runPrunePasses', () => {
       )
 
       // 300 > 150: the two orphans go, oldest first. The live session's log is
-      // the OLDEST file and still stays: it is what its pane rebuilds from.
+      // the OLDEST file and still stays, because its session still exists.
       expect(calls).toEqual(['/state/ghost-logs/gone-1.ghost.jsonl', '/state/ghost-logs/gone-2.ghost.jsonl'])
     })
 
@@ -191,7 +191,7 @@ describe('runPrunePasses', () => {
       // A read-only store loaded an EMPTY file on purpose (unreadable,
       // corrupt or newer workspace.json). Its empty session set is not
       // evidence that the logs are orphans; the real file may own them all.
-      const readOnlyStore = { isReadOnly: () => true, sessionIds: () => new Set<string>() }
+      const readOnlyStore = { sessionOwnershipKnown: () => false, sessionIds: () => new Set<string>() }
       const owners = ghostLogOwnersFrom(readOnlyStore, [])
       expect(owners).toBeNull()
 
@@ -206,12 +206,14 @@ describe('runPrunePasses', () => {
     })
 
     it('uses a healthy store\'s sessions plus running ones', () => {
-      const store = { isReadOnly: () => false, sessionIds: () => new Set(['saved']) }
+      const store = { sessionOwnershipKnown: () => true, sessionIds: () => new Set(['saved']) }
       expect(ghostLogOwnersFrom(store, ['running'])).toEqual(new Set(['saved', 'running']))
     })
 
     it('keeps a just-written orphan inside the active grace', async () => {
-      // A pane closed a minute ago can still be restored by undo.
+      // The same active grace every bucket gets: nothing written in the last
+      // ten minutes is pruned. (Undo Close respawns under a fresh id and does
+      // not read the old log; this is the general rule, not an undo contract.)
       const fresh = log('gone-1', 100, 60_000)
       const { calls, remove } = recordingRemover()
 
