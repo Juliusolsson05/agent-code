@@ -567,6 +567,30 @@ feeds the rows below G-1.
 | G-1 | Provider prompts: Claude trust + permission, Codex trust, Grok and OpenCode question/permission/plan | hand-laid cards: 18px "!" glyph, 14px title, pl-6 body, lowercase "cancel" / "trust this folder" / "deny" / "approve", full-size buttons; Grok's shell a clone of OpenCode's | DialogHeader + px-4 body + DialogActions (Claude/Codex) or the shared `ConditionPromptShell` (Grok/OpenCode); sentence-case labels; sm buttons; `DialogActions.initialFocus` | done |
 | G-2 | Composer prompt-suggestion chip | led with "↵" (Enter never applied it: click sends, Tab on an empty draft fills); the app's only ✕ glyph; no focus rings | "⇥ fill" hint only while Tab really fills (empty draft, not slash mode, not OpenCode); body named "Send suggestion: …"; × like every close; T4 rings | done |
 | G-3 | Prose key hints (audit of literal ↵ / "Press Enter" / ⌘ in UI text) | Command palette AI Workspace: "Press Enter or click again to confirm…" and "Press Enter to create…" (the buttons already carry the chips) | chip inline (`Confirm metadata deletion: ↩ or click again`); a what-happens sentence instead of the duplicate key prose. Remaining hits are code comments or terminal-behaviour prose (template pane), kept | done |
+| G-4 | Undefined tokens (rendering bugs) | `bg-bg` (CommandKeybindingsRow sticky header is see-through), `bg-panel/40` ×2 (DictationGuideModal), `decoration-ink-faint` (claude web-fetch), `text-red-400` (CodeEditView) | defined tokens (`bg-surface`, `bg-canvas`, `decoration-muted`, `text-danger`) | todo |
+| G-5 | Composer action strip | Send is a raw ~20px button beside Stop `Button sm` (h-7); terminal says "Submit"; Stop overrides hover by className | `Button sm` for Send, one verb (Send), Stop on a real variant | todo |
+| G-6 | Composer textarea | `bg-canvas border-border`; focus is a JS-toggled `border-accent`, not the ring | input tokens + T4 ring (keep the focused-pane accent as a PANE signal only if it is one) | todo |
+| G-7 | Row hover | 34 `hover:bg-surface-hi` (16 files) vs 35 `hover:bg-row-hover-bg` | rows `hover:bg-row-hover-bg`, controls `hover:bg-control-hover-bg` | todo |
+| G-8 | Selected rows | ~13 selected rows lack the accent rail (palette ×4, Conversations, AgentActivity, KeyVault, PathInput, Usage ×2); Explorer active = `bg-accent-soft`; WorkflowViewSelector ●; Incidents card | T7 recipe everywhere | todo |
+| G-9 | Hand-rolled bordered buttons (~80) | CustomSkillsRow ×8, browser pocket ×8, CLI banner ×3, palette row actions, ThemePicker, AgentActivity Close, AI workspace, EditorTabs Save/Save All, viewBridge Retry, feed/condition buttons | `Button` variants | todo |
+| G-10 | Missing SegmentedControl | 7 toggle-group recipes (Spotlight ×2, Reader, Remote split, Conversations scope/providers, CloseOld/BulkSwitch scope, Performance tabs, PathPicker tabs) | one primitive | todo |
+| G-11 | Missing Select | raw selects (Performance ×2, ProviderEnablement, Dictation input, MergeTabs, CloseOld, BulkSwitch ×2), no focus ring on several | one `Select` on input tokens | todo |
+| G-12 | Raw text/number inputs (~12) | ExtensionSettingRow ×2 (square), ExternalControlRow (no focus), SkillsGrid, CustomSkills ×2, CloseOld ×2, BulkSwitch, AgentActivity filter, Pocket URL | `Input` / `NumberInput` | todo |
+| G-13 | Error boxes (7 recipes) + errors shown as muted text | Analytics/Usage, CustomSkills/Conventions, AddSkill, ViewPrompts, Conversations, Keybindings (ink text), Explorer/Skills/UpdateChannel | one `Alert` (`bg-danger-soft border-danger-border text-danger`) + inline variant | todo |
+| G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | `EmptyState` + plain muted loading text | todo |
+| G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | todo |
+| G-16 | Explorer context menu | the only floating menu not on DropdownMenu; z-30 sits under z-40 overlays | `DropdownMenu` | todo |
+| G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | `OptionCard`, one `Checkbox` | todo |
+| G-18 | Close glyph/size | × at 12/14/16px; the word "close"; ✕ (fixed in G-2) | one icon-close button | todo |
+| G-19 | Performance Monitor | Title Case buttons, raw selects, `text-warning-fg` misuse, table cell padding, stat sizes 20/18/15px (shared with Analytics, Dictation) | primitives + one stat size | todo |
+| G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | 2 presets; padding from the primitive when `showCloseButton` | todo |
+| G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | todo |
+| G-22 | Raw colours/shadows | `text-white` on flags, `bg-black/20` scrim, toast `shadow-black/20`, dictation inline rgba, chart `shadow-lg` ×2, LanePortChip `shadow-sm`, `bg-canvas/34`; `bg-danger/N` vs `-soft` families | tokens | todo |
+| G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | blocked on ask-2 |
+| G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | todo |
+| G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | todo |
+| G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | todo |
+| G-27 | Dictation feedback layer | the dictation chip (z-40) is hidden under any dialog scrim (z-1100) | toast band, if dictation can target dialog fields (behaviour check) | todo |
 
 ## Owner visual checklist
 
@@ -1631,3 +1655,9 @@ Sharp corners and one light theme.
 - 2026-09-25 G-2: PromptSuggestionChip `tabFills` mirrors the Tab branch in
   useComposerKeybinds (empty draft, not slash mode, not OpenCode).
   Confirm-red: the hint test fails on the pre-change chip.
+- 2026-09-25 UI consistency sweep (Explore agent, read-only, HEAD 7f887507)
+  produced G-4 to G-27. Headline: mechanical rules are mostly clean (1 bare
+  `rounded`, 0 ASCII `...`); what is left is STRUCTURAL: ~80 hand-styled
+  buttons, and no shared Select / Checkbox / SegmentedControl / OptionCard /
+  Alert / EmptyState / SectionLabel / PanelHeader. Rows are worked in impact
+  order: G-4 (real bugs) first, then the composer, then the sweeps.
