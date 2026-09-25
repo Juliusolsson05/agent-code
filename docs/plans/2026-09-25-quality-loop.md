@@ -536,6 +536,25 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (05:45) — **Merged #1236** (`b21ed712`, closes #762) and **#1254**
+  (`9c1de6e3`, closes the P1 #1240). Two review rounds are done on
+  #1256–#1260, and every round-2 finding is fixed; each merges on green
+  CI (only a main merge or CI remains).
+  - **Steering q18–q21 caught real data-loss paths:**
+    - goal-loop: a failed copy started empty and later persisted `{}`;
+      q19 found a delayed valid-loop loss;
+    - workspace: a null tab or project replacing a real one kept 6 of 27
+      and 3 of 13 agents, so it now gets a typed lock;
+    - a FIFO mutant harness hung twice (use bounded runs; never pipeline
+      a blocking mutant).
+  - **Shared evidence rule across the store family:** a digest-named atomic
+    copy, taken before any write can drop a row. A failed copy never fails
+    reads; writes wait for it. The helper is duplicated in #1257/#1258/#1260
+    until merged; consolidate onto `src/main/storage/preserveInvalidBytes.ts`
+    afterwards.
+  - Opened #1262 (#1241 picker resume failure). Filed #1261 (intermittent
+    extension Electron test). Remaining P2s: #1242, #1243, #1244.
+
 - 2026-09-25 (04:45) — **Merged #1252** (`d86ef9b9`, closes #1239) and **#1238**
   (`dd5a44f7`, Refs #369) plus codex-headless #52 (`ae0e935`). Open:
   - **#1236:** q15 fixed (the preload announces its document on every load,
