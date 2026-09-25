@@ -1,4 +1,5 @@
 import { useContext, useEffect, useRef, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import type { KeyboardEvent } from 'react'
 
@@ -497,21 +498,18 @@ export function AskUserQuestionRow({
           )
         })}
         {!useImmediateSingle ? (
-          <button
+          <Button
+            // The shared Button (UI pass, G-9): the feed's submit was a
+            // hand-styled 13px bordered button, the only one of its kind.
             type="button"
+            variant="default"
+            size="sm"
+            className="self-start"
             disabled={!structuredReady || answering}
             onClick={submitStructuredAnswers}
-            className={`
-              self-start rounded-control border border-border px-3 py-1.5 text-[13px] transition-colors
-              ${
-                !structuredReady || answering
-                  ? 'cursor-default opacity-60'
-                  : 'cursor-pointer hover:border-accent hover:bg-surface-hi'
-              }
-            `}
           >
             {answering ? 'Answering…' : 'Submit'}
-          </button>
+          </Button>
         ) : answering ? (
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}

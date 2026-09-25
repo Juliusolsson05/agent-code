@@ -673,14 +673,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 {batch.agents.length === 1 ? '' : 's'} · {providerLabel(batch.sourceKind)} →{' '}
                 {providerLabel(batch.targetKind)} · {relativeTime(batch.switchedAt)}
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={() => void runReturn()}
                 disabled={locked}
-                className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent outline-none hover:bg-accent/20 focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-50"
+                variant="outline" size="sm" className="flex-shrink-0"
               >
                 {busy ? 'Working…' : `Return ${batch.agents.length}`}
-              </button>
+              </Button>
             </div>
           )}
 
@@ -806,16 +806,16 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   Only one {sourceLabel} model family is exhausted — a model switch
                   keeps every agent where it is.
                 </div>
-                <button
+                <Button
                   type="button"
                   onClick={() => void runModelSwitch()}
                   disabled={locked || matchingRows.length === 0 || !direction}
-                  className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent outline-none hover:bg-accent/20 focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-50"
+                  variant="outline" size="sm" className="flex-shrink-0"
                 >
                   {switchingModel
                     ? 'Sending…'
                     : `Switch ${pluralAgents(matchingRows.length)} to another ${sourceLabel} model`}
-                </button>
+                </Button>
               </div>
             )}
           </div>

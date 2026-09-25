@@ -1,4 +1,5 @@
 // OpenCode condition VIEW modules (#406 step 6).
+import { Button } from '@renderer/components/ui/button'
 //
 // Unlike the Claude/Codex views — thin adapters over existing modal
 // components whose buttons emit raw PTY keystrokes via
@@ -422,14 +423,9 @@ export const opencodeQuestionView = defineView<
               />
             ))}
             {!single && (
-              <button
-                type="button"
-                disabled={!complete}
-                onClick={submit}
-                className="rounded-control border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg disabled:opacity-40"
-              >
+              <Button type="button" variant="default" size="sm" disabled={!complete} onClick={submit}>
                 {complete ? 'Answer' : 'Choose an option for each question'}
-              </button>
+              </Button>
             )}
           </>
         )}
