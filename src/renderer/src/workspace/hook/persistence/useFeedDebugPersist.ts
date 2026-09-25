@@ -20,6 +20,10 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 export type FeedDebugAppendBatch = {
   entries: SessionRuntime['feedDebugLog']
   maxPendingId: number
+  /** Which generation of ids this batch belongs to (#770). Main keys its
+   *  de-dup cursor on it, so a soft reload's restart at id 1 is written
+   *  instead of being filtered as already-seen. */
+  epochMs: number | null
 }
 
 export const FEED_DEBUG_FLUSH_INTERVAL_MS = 1000
@@ -39,7 +43,28 @@ export function selectFeedDebugAppendBatch(
   return {
     entries: pending,
     maxPendingId: pending[pending.length - 1]?.id ?? lastPersistedId,
+    epochMs: runtime.feedDebugEpochMs,
   }
+}
+
+/**
+ * Whether the session is still in the id generation a batch was cut from.
+ *
+ * WHY the settle handlers ask (#770 follow-up): a soft reload restarts ids at
+ * 1 and deletes both cursors, but an append from the OLD generation can still
+ * be in flight. When it settles afterwards, `maxPendingId` is an id from the
+ * old numbering — writing it into the persisted cursor makes every new entry
+ * at or below it look already written, which is #770's silent loss reopened
+ * by timing. The epoch is the generation's identity (minted with the first
+ * entry, re-minted after a reload), so a stale settle is recognised by it and
+ * dropped. Dropping is safe: main keyed that write on the old epoch, and the
+ * new generation's entries are sent on their own.
+ *
+ * A null current epoch means the reload has happened but the new generation
+ * has no entries yet — still not the batch's generation.
+ */
+function isSameGeneration(refs: WorkspaceRefs, sessionId: SessionId, epochMs: number | null): boolean {
+  return (refs.latestRuntimesRef.current[sessionId]?.feedDebugEpochMs ?? null) === epochMs
 }
 
 export function useFeedDebugPersist(refs: WorkspaceRefs): void {
@@ -50,7 +75,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       const lastInFlightId = refs.inFlightFeedDebugIdRef.current[sessionId] ?? 0
       const batch = selectFeedDebugAppendBatch(runtime, lastPersistedId, lastInFlightId)
       if (!batch) return
-      const { entries: pending, maxPendingId } = batch
+      const { entries: pending, maxPendingId, epochMs } = batch
       refs.inFlightFeedDebugIdRef.current[sessionId] = maxPendingId
       // Advance the durable cursor ONLY after the IPC append actually
       // resolves. A previous version advanced optimistically before
@@ -75,6 +100,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       void window.api
         .appendFeedDebugLog({
           sessionId,
+          ...(epochMs === null ? {} : { epochMs }),
           entries: pending.map(entry => ({
             id: entry.id,
             ts: entry.ts,
@@ -86,13 +112,17 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
           })),
         })
         .then(() => {
+          if (!isSameGeneration(refs, sessionId, epochMs)) return
           refs.persistedFeedDebugIdRef.current[sessionId] = maxPendingId
           if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
             delete refs.inFlightFeedDebugIdRef.current[sessionId]
           }
         })
         .catch(err => {
-          if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
+          if (
+            isSameGeneration(refs, sessionId, epochMs)
+            && refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId
+          ) {
             delete refs.inFlightFeedDebugIdRef.current[sessionId]
           }
           // eslint-disable-next-line no-console
