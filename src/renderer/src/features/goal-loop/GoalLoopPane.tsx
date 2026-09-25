@@ -171,7 +171,7 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
     <span className="flex shrink-0 gap-2">
       {loop.phase === 'active' && <Button type="button" variant="ghost" size="xs" onClick={control('pause')}>Pause</Button>}
       {loop.phase === 'paused' && <Button type="button" variant="ghost" size="xs" onClick={control('resume')}>Resume</Button>}
-      {canRaise && <Button type="button" variant="ghost" size="xs" onClick={control('raise-cap')}>Raise cap</Button>}
+      {canRaise && <Button type="button" variant="ghost" size="xs" onClick={control('raise-cap')}>Raise Cap</Button>}
       {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="xs" onClick={control('stop')}>Stop</Button>}
       {/* An ended loop has nothing left to control, but its strip still sits
           over the pane's top line — and ended loops are persisted, so without
@@ -191,7 +191,7 @@ export function GoalLoopPane({ sessionId }: { sessionId: string }) {
         <div className="flex gap-3 text-sm">
           {loop.phase === 'active' && <Button type="button" variant="outline" size="sm" onClick={control('pause')}>Pause</Button>}
           {loop.phase === 'paused' && <Button type="button" variant="outline" size="sm" onClick={control('resume')}>Resume</Button>}
-          {canRaise && <Button type="button" variant="outline" size="sm" onClick={control('raise-cap')}>Raise cap to {raisedCap}</Button>}
+          {canRaise && <Button type="button" variant="outline" size="sm" onClick={control('raise-cap')}>Raise Cap to {raisedCap}</Button>}
           {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="sm" onClick={control('stop')}>Stop</Button>}
           {loop.phase === 'ended' && <Button type="button" variant="outline" size="sm" onClick={control('dismiss')}>Dismiss</Button>}
           {/* The latch is one app-wide flag and this overlay is opaque over

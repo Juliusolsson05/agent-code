@@ -112,10 +112,10 @@ describe('AgentCodeConventionsEditorModal', () => {
         onSnapshot={vi.fn()}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Preview generated skill' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Generated Skill' }))
     expect(await screen.findByText(/name: agent-code-conventions/)).toBeTruthy()
     expect(preview).toHaveBeenCalledWith('# Rules')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to editor' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Editor' }))
     expect(screen.getByText(/Keep conventions concise/)).toBeTruthy()
   })
 

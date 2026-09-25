@@ -245,7 +245,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
         >
           Check updates{updatesAvailable > 0 ? ` (${updatesAvailable})` : ''}
         </Button>
-        <Button size="xs" onClick={() => openAddSkill()}>+ Add skill…</Button>
+        <Button size="xs" onClick={() => openAddSkill()}>+ Add Skill…</Button>
       </div>
 
       <div className="grid items-center gap-2 border-b border-border px-3 py-2 text-[10px] uppercase tracking-wider text-muted" style={{ gridTemplateColumns: gridColumns }}>
@@ -551,7 +551,7 @@ function UpdateLine({
         <div className="border border-panel-border p-2">
           <UpdateReviewPanel review={update} />
           <div className="mt-2 flex justify-end">
-            <Button size="xs" disabled={disabled} onClick={() => onApply(update)}>Apply reviewed update</Button>
+            <Button size="xs" disabled={disabled} onClick={() => onApply(update)}>Apply Reviewed Update</Button>
           </div>
         </div>
       ) : null}

@@ -51,11 +51,11 @@ export function ExternalControlRow() {
     </label>
     <div className="flex flex-wrap gap-2">
       <Button variant="outline" disabled={busy || !status} onClick={() => void configure(!status?.enabled)}>{status?.enabled ? 'Disable' : 'Enable'}</Button>
-      {(status?.enabled || status?.error) && <Button variant="outline" disabled={busy} onClick={() => void configure(status?.enabled ?? false)}>Apply port / retry</Button>}
+      {(status?.enabled || status?.error) && <Button variant="outline" disabled={busy} onClick={() => void configure(status?.enabled ?? false)}>Apply Port / Retry</Button>}
       {status?.running && <>
-        <Button variant="outline" disabled={busy} onClick={() => void copy('codex')}>Copy Codex config</Button>
-        <Button variant="outline" disabled={busy} onClick={() => void copy('json')}>Copy JSON config</Button>
-        <Button variant="outline" disabled={busy} onClick={() => void configure(true, true)}>Rotate connection key</Button>
+        <Button variant="outline" disabled={busy} onClick={() => void copy('codex')}>Copy Codex Config</Button>
+        <Button variant="outline" disabled={busy} onClick={() => void copy('json')}>Copy JSON Config</Button>
+        <Button variant="outline" disabled={busy} onClick={() => void configure(true, true)}>Rotate Connection Key</Button>
       </>}
     </div>
     {status?.url && <code className="break-all text-muted">{status.url}</code>}

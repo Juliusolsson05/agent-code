@@ -59,13 +59,13 @@ describe('GoalLoopPane', () => {
     // and the button did nothing.
     api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 190, continuationsDelivered: 190 }) })
     const first = render(<GoalLoopPane sessionId="s1" />)
-    ;(await screen.findByText('Raise cap')).click()
+    ;(await screen.findByText('Raise Cap')).click()
     expect(api.controlGoalLoop).toHaveBeenCalledWith({ sessionId: 's1', action: 'raise-cap', value: 200 })
     first.unmount()
     api.readGoalLoops.mockResolvedValueOnce({ s1: loop({ phase: 'paused', pauseReason: 'cap', maxContinuations: 200, continuationsDelivered: 200 }) })
     render(<GoalLoopPane sessionId="s1" />)
     await screen.findByText('Resume')
-    expect(screen.queryByText('Raise cap')).toBeNull()
+    expect(screen.queryByText('Raise Cap')).toBeNull()
   })
   it('closes the latched overlay from inside it', async () => {
     toggleGoalLoop()

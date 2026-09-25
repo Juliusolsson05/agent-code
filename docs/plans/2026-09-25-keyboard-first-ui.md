@@ -586,7 +586,7 @@ feeds the rows below G-1.
 | G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | 2 presets; padding from the primitive when `showCloseButton` | todo |
 | G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | todo |
 | G-22 | Raw colours/shadows | `text-white` on flags, `bg-black/20` scrim, toast `shadow-black/20`, dictation inline rgba, chart `shadow-lg` ×2, LanePortChip `shadow-sm`, `bg-canvas/34`; `bg-danger/N` vs `-soft` families | tokens | todo |
-| G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | todo (ruling below: Title Case) |
+| G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | titles/buttons/settings done (a scan found ~35 sentence-case strings in the Title Case majority); lowercase side-panel controls go with G-26 |
 | G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | todo |
 | G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | todo |
 | G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | todo |
@@ -866,6 +866,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-23 Casing (Title Case for titles, buttons, menus, settings):** e.g.
+  "Trust This Folder?" / "Trust Folder" (Codex now says folder too), "Add MCP
+  Server", "Workflow History", "Raise Cap", "Back to Editor", settings "Agent
+  Names" / "Update Channel" / "MCP Servers" / "External Operator MCP".
+  Descriptions and tooltips stay sentence case. Guides now name the real
+  paths: "Settings → Dictation", "Settings → MCP → External Operator MCP".
 - **G-5 Mouse Mode buttons under the composer / raw terminal:** Send is now
   the standard filled button, the same height as Stop, with ↩; Stop shows
   ⎋. The raw agent terminal's "Submit" is now "Send ↩", like the composer.
@@ -1677,3 +1683,10 @@ Sharp corners and one light theme.
 - 2026-09-25 G-5: AgentTerminalActions "Submit" → "Send" (one verb for one
   action). Its scaffold-parity test asserted the old hand-styled classes; it
   now pins the shared Button + ↩ chip, the same parity intent.
+- 2026-09-25 G-23 (first batch): Title Case per the ask-2 ruling. A scan of
+  DialogTitle / confirmLabel / cancelLabel / Button text for lowercase
+  non-minor words found ~35. The aria-label "Workflow history entries" stays
+  sentence case (non-visible label, per the ruling). Two wrong settings paths
+  fixed (controlGuide + settings controlReference said Settings → Agents; the
+  dictation IPC error and guide said Settings → Voice Dictation). Test
+  queries updated to the new visible labels.

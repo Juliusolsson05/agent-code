@@ -80,7 +80,7 @@ export function McpServerDialog() {
         {target?.mode === 'edit' && editing ? <EditServer key={editing.id} server={editing} onDone={close} onCancel={() => void requestClose()} onDirty={reportDirty} onSaving={reportSaving} /> : null}
         {target?.mode === 'edit' && !editing ? (
           <DialogHeader>
-            <DialogTitle>Server not found</DialogTitle>
+            <DialogTitle>Server Not Found</DialogTitle>
             <DialogDescription>It may have been deleted in another window.</DialogDescription>
           </DialogHeader>
         ) : null}
@@ -245,7 +245,7 @@ function AddServer({ onDone, onCancel, onDirty, onSaving }: { onDone: () => void
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Add MCP server</DialogTitle>
+        <DialogTitle>Add MCP Server</DialogTitle>
         <DialogDescription>
           Paste the config from the server&apos;s README. mcpServers blocks, VS Code servers/inputs and single entries all work.
         </DialogDescription>
@@ -447,7 +447,7 @@ function EditServer({ server, onDone, onCancel, onDirty, onSaving }: { server: U
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Edit MCP server</DialogTitle>
+        <DialogTitle>Edit MCP Server</DialogTitle>
         <DialogDescription>Changes apply to new agents, and to existing agents when they reload.</DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-3 px-4 py-3 text-[11px]">

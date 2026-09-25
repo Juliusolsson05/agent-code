@@ -71,7 +71,7 @@ describe('pane-scoped condition dialogs (#713)', () => {
     composerB.focus()
     flushFrames()
 
-    const dialog = screen.getByRole('dialog', { name: 'Trust this folder?' })
+    const dialog = screen.getByRole('dialog', { name: 'Trust This Folder?' })
     expect(dialog.closest('[data-pane-id]')?.getAttribute('data-pane-id')).toBe('pane-a')
     // No APP owner: every global router stays live for the other panes.
     expect(hasAppInteractionOwner()).toBe(false)
@@ -95,7 +95,7 @@ describe('pane-scoped condition dialogs (#713)', () => {
     flushFrames()
     rerender(<TwoPanes trustActive onDecline={onDecline} />)
     flushFrames()
-    const trust = screen.getByRole('button', { name: 'Trust folder' })
+    const trust = screen.getByRole('button', { name: 'Trust Folder' })
     expect(document.activeElement).toBe(trust)
 
     fireEvent.keyDown(trust, { key: 'Escape' })
@@ -111,7 +111,7 @@ describe('pane-scoped condition dialogs (#713)', () => {
     render(<TwoPanes trustActive={false} onDecline={vi.fn(async () => {})} />)
     expect(paneHasInteractionOwner(screen.getByLabelText('composer A'))).toBe(true)
     expect(paneHasInteractionOwner(screen.getByLabelText('composer B'))).toBe(false)
-    expect(isInPaneInteractionOwner(screen.getByRole('button', { name: 'Trust folder' }))).toBe(true)
+    expect(isInPaneInteractionOwner(screen.getByRole('button', { name: 'Trust Folder' }))).toBe(true)
     expect(isInPaneInteractionOwner(screen.getByLabelText('composer B'))).toBe(false)
   })
 
@@ -185,6 +185,6 @@ describe('app-mode dialogs are unchanged', () => {
     expect(dialog.closest('[data-pane-id]')).toBeNull()
     expect(hasAppInteractionOwner()).toBe(true)
     await act(async () => { frames.splice(0).forEach(frame => frame(performance.now())) })
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Trust folder' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Trust Folder' }))
   })
 })

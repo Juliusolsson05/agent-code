@@ -123,7 +123,7 @@ export function DictationGuideModal() {
             body={
               <>
                 In Agent Code, open{' '}
-                <span className="font-semibold text-ink">Settings → Voice Dictation</span>,
+                <span className="font-semibold text-ink">Settings → Dictation</span>,
                 paste the key into the <span className="font-semibold text-ink">Deepgram API Key</span>{' '}
                 row, and press <span className="font-semibold text-ink">Save</span>. Your key
                 is encrypted with your system keyring — Agent Code never writes

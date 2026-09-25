@@ -44,7 +44,7 @@ export function TrustDialogModal({ state, onAccept, onDecline }: Props) {
         onPointerDownOutside={event => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Trust this folder?</DialogTitle>
+          <DialogTitle>Trust This Folder?</DialogTitle>
           <DialogDescription>Claude Code will be able to read, edit, and run files in it.</DialogDescription>
         </DialogHeader>
         <div className="px-4 py-3 text-[12px] leading-[1.6] text-ink-dim">
@@ -59,7 +59,7 @@ export function TrustDialogModal({ state, onAccept, onDecline }: Props) {
         </div>
         <DialogActions
           onCancel={decline}
-          confirmLabel="Trust folder"
+          confirmLabel="Trust Folder"
           onConfirm={accept}
           initialFocus="confirm"
         />

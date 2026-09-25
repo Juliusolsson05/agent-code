@@ -170,7 +170,7 @@ export function WorkflowHistoryDialog({
         }}
       >
         <DialogHeader className="pr-12">
-          <DialogTitle>Workflow history</DialogTitle>
+          <DialogTitle>Workflow History</DialogTitle>
           <DialogDescription>
             All workflow runs started by this session, newest first.
           </DialogDescription>

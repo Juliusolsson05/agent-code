@@ -26,7 +26,7 @@ export function ConfirmDeleteDialog({ path, dirtyPaths, onCancel, onConfirm }: P
           commit key — Tab to Delete, or click. */}
       <DialogContent size="sm" onOpenAutoFocus={focusDialogActionOnOpen('cancel')}>
         <DialogHeader>
-          <DialogTitle>Delete from disk?</DialogTitle>
+          <DialogTitle>Delete from Disk?</DialogTitle>
           <DialogDescription>
             {/* `report.txt<U+200B>` and `report.txt` are different files and
                 render identically; this dialog authorises deleting one of

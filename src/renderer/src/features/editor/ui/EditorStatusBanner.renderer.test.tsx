@@ -22,7 +22,7 @@ describe('EditorStatusBanner', () => {
     expect(text.className).not.toContain('truncate')
     expect(text.hasAttribute('title')).toBe(false)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reload from disk' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reload from Disk' }))
     fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }))
     expect(onReload).toHaveBeenCalledTimes(1)
     expect(onOverwrite).toHaveBeenCalledTimes(1)

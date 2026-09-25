@@ -50,8 +50,8 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
         onPointerDownOutside={event => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Trust this directory?</DialogTitle>
-          <DialogDescription>Codex is about to work in it.</DialogDescription>
+          <DialogTitle>Trust This Folder?</DialogTitle>
+          <DialogDescription>Codex is about to work in this folder.</DialogDescription>
         </DialogHeader>
         <div className="px-4 py-3 text-[12px] leading-[1.6] text-ink-dim">
           {state.workspace && (
@@ -60,12 +60,12 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
             </pre>
           )}
           <p className="text-[11px] text-muted">
-            Continue only if you trust the contents of this directory.
+            Continue only if you trust the contents of this folder.
           </p>
         </div>
         <DialogActions
           onCancel={decline}
-          confirmLabel="Trust directory"
+          confirmLabel="Trust Folder"
           onConfirm={accept}
           initialFocus="confirm"
         />

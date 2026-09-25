@@ -143,7 +143,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
       >
         <DialogHeader className="select-none pr-16">
           <div className="text-[10px] uppercase tracking-[0.16em] text-muted">Remote Control</div>
-          <DialogTitle>Control your agents from a phone</DialogTitle>
+          <DialogTitle>Control Your Agents from a Phone</DialogTitle>
           <DialogDescription className="sr-only">
             Configure the remote server, pair phones, and manage connected devices.
           </DialogDescription>

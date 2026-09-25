@@ -1604,7 +1604,7 @@ function OpenCommandPalette({
           setSelectedIndex(0)
         }}
       >
-        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogTitle className="sr-only">Command Palette</DialogTitle>
         <DialogDescription className="sr-only">
           {mode === 'commands' && promptTemplatesInCommandSearch
             ? 'Search application commands, prompt templates, and related session workflows.'

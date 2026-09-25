@@ -153,10 +153,10 @@ export function AgentCodeConventionsRow() {
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => setEditorOpen(true)}>
-          Edit conventions…
+          Edit Conventions…
         </Button>
         <Button variant="outline" size="sm" disabled={busy} onClick={() => void refresh()}>
-          Refresh status
+          Refresh Status
         </Button>
       </div>
 

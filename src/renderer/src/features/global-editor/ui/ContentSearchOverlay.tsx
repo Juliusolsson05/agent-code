@@ -287,7 +287,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
       }}
     >
       <DialogContent size="md" className="top-[10vh] flex -translate-y-0 flex-col overflow-hidden p-0 font-code">
-        <DialogTitle className="sr-only">Search in project files</DialogTitle>
+        <DialogTitle className="sr-only">Search in Project Files</DialogTitle>
         <DialogDescription className="sr-only">
           Enter text to search, then use the arrow keys and Enter to open a result.
         </DialogDescription>

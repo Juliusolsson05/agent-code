@@ -15,7 +15,7 @@ type Props = {
 // the dirty tab uncloseable with no visible path out (#513 bug 1).
 //
 // The conflict variant carries its two recovery actions inline —
-// "Reload from disk" (discard my edits, take the disk version) and
+// "Reload from Disk" (discard my edits, take the disk version) and
 // "Overwrite" (my buffer wins, skip the mtime check once) — because a
 // conflict is not resolvable by retrying; parking the actions anywhere
 // less proximate (a toast, the command palette) leaves the user stuck
@@ -49,7 +49,7 @@ export function EditorStatusBanner({
       </span>
       {conflict && externalChange !== 'deleted' && onReload && (
         <Button type="button" variant="outline" size="xs" onClick={onReload}>
-          Reload from disk
+          Reload from Disk
         </Button>
       )}
       {conflict && onOverwrite && (

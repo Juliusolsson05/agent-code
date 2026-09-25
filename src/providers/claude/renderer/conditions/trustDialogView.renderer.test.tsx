@@ -37,7 +37,7 @@ function mountTrustView() {
 describe('claudeTrustView action dispatch', () => {
   it('accept dispatches the headless-resolved custom action, never Enter', () => {
     const dispatched = mountTrustView()
-    fireEvent.click(screen.getByRole('button', { name: 'Trust folder' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trust Folder' }))
 
     expect(dispatched).toEqual([
       {

@@ -228,7 +228,7 @@ export function AgentCodeConventionsEditorModal({
             <div className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-between text-[11px] text-muted">
                 <span>Generated SKILL.md preview</span>
-                <Button type="button" variant="outline" size="sm" onClick={() => setPreview(null)}>Back to editor</Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setPreview(null)}>Back to Editor</Button>
               </div>
               {/* Same as the custom-skill preview: this is what Save & Enable
                   writes into every provider's skills directory (#1049
@@ -280,7 +280,7 @@ export function AgentCodeConventionsEditorModal({
               Insert starter
             </button>
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
-              Preview generated skill
+              Preview Generated Skill
             </Button>
           </div>
 
@@ -360,7 +360,7 @@ export function AgentCodeConventionsEditorModal({
                 setError(null)
                 setRevisionConflict(false)
               }}>Reload latest</Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy draft</Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy Draft</Button>
             </div>
           ) : null}
         </div>

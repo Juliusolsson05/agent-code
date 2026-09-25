@@ -5,7 +5,7 @@ import type { FeatureReference } from '@control-sdk'
 export const controlReference = [
   {
     id: 'mcp',
-    title: 'MCP servers',
+    title: 'MCP Servers',
     purpose:
       'Choose which MCP servers agents get: Agent Code\'s built-in servers and user-added servers (stdio, HTTP or SSE), per provider and per agent.',
     ui: 'Settings → MCP (one grid, a column per enabled provider), Add MCP Server… (paste a README config), and Agent MCP Servers… (the focused agent, applied with one reload). Agents with the MCP Servers built-in capability can manage the same list through mcp_servers_* tools; every such change raises a notice.',

@@ -115,7 +115,7 @@ export function AgentCodeCustomSkillsRow() {
             : `${snapshot.skills.length} skill${snapshot.skills.length === 1 ? '' : 's'} · ${active} active`}
         </div>
         <Button variant="outline" size="sm" disabled={busy} onClick={() => setOpen(true)}>
-          Manage custom skills…
+          Manage Custom Skills…
         </Button>
       </div>
       {error ? <div role="alert" className="text-[11px] text-danger">{error}</div> : null}
@@ -385,7 +385,7 @@ function AgentCodeCustomSkillsModal({
                 <div className="flex min-h-0 flex-col gap-2">
                   <div className="flex items-center justify-between text-[11px] text-muted">
                     <span>Generated SKILL.md preview</span>
-                    <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setPreview(null)}>Back to editor</Button>
+                    <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setPreview(null)}>Back to Editor</Button>
                   </div>
                   {/* The generated file, read immediately before Save &
                       Enable deploys it to every provider's skills directory.
@@ -459,7 +459,7 @@ function AgentCodeCustomSkillsModal({
             <>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-muted">{current.skills.length} Agent Code-authored skill{current.skills.length === 1 ? '' : 's'}</span>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => edit(emptyDraft())}>New skill…</Button>
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => edit(emptyDraft())}>New Skill…</Button>
               </div>
               {current.skills.length === 0 ? (
                 <div className="rounded-slab border border-panel-border p-4 text-[11px] text-muted">Create an instruction-only personal skill. Installed and project-local skills are intentionally not imported here.</div>

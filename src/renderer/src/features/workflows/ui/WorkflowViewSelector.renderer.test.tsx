@@ -170,7 +170,7 @@ describe('WorkflowViewSelector', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
-    expect(await screen.findByRole('dialog', { name: 'Workflow history' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'Workflow History' })).toBeInTheDocument()
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(5))
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
 
