@@ -58,6 +58,9 @@ function Stat({ label, value, detail }: { label: string; value: string; detail?:
   return (
     <div className="rounded-slab border border-border bg-surface px-3 py-2">
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+      {/* The one stat size (UI pass, G-17): 18px semibold tabular, shared
+          with Performance's health tiles and Dictation's history stats,
+          which were 20px and 15px for the same "big number" idea. */}
       <div className="mt-1 text-[18px] font-semibold tabular-nums text-ink">{value}</div>
       {detail ? <div className="mt-0.5 text-[10px] text-muted">{detail}</div> : null}
     </div>

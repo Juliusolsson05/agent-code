@@ -21,7 +21,7 @@ function Tile({ label, value, detail, tone = 'neutral', children }: { label: str
           healthy tiles stay quiet. */}
       <span className={`absolute inset-y-0 left-0 w-[3px] ${TONE_BAR[tone]}`} aria-hidden="true" />
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      <div className={`mt-0.5 text-[20px] font-semibold leading-tight tabular-nums ${TONE_TEXT[tone]}`}>{value}</div>
+      <div className={`mt-0.5 text-[18px] font-semibold leading-tight tabular-nums ${TONE_TEXT[tone]}`}>{value}</div>
       <div className="mt-0.5 truncate text-[10px] text-muted">{detail}</div>
       {children}
     </div>

@@ -104,7 +104,7 @@ export function DictationHistoryRow() {
         <div className="rounded-control border border-control-border bg-control-bg px-2 py-1.5">
           <div className="text-[10px] uppercase tracking-wider text-muted">Words/min</div>
           <div
-            className="font-code text-[15px] text-ink"
+            className="font-code text-[18px] font-semibold tabular-nums text-ink"
             // The denominator is hold time, not true speaking time — it
             // includes recorder start-up and any silence before release, so
             // the figure reads slightly low. Say so rather than fudge it.
@@ -258,7 +258,7 @@ function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-control border border-control-border bg-control-bg px-2 py-1.5">
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      <div className="font-code text-[15px] text-ink">{value}</div>
+      <div className="font-code text-[18px] font-semibold tabular-nums text-ink">{value}</div>
     </div>
   )
 }
