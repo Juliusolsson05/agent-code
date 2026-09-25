@@ -10,7 +10,7 @@ import {
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Button } from '@renderer/components/ui/button'
 import { KbdLegend } from '@renderer/components/ui/kbd'
-import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
+import { rovingFocusKeyDown } from '@renderer/lib/radioGroupKeys'
 import { useAppStore } from '@renderer/app-state/hooks'
 import {
   DISPATCH_COLOR_FLAGS,
@@ -24,11 +24,21 @@ import type { SessionId } from '@renderer/workspace/types'
 // header (see PaneHeaderColorFlag). Kept intentionally tiny — this is a one-tap
 // triage affordance, not a color editor.
 //
-// KEYBOARD (plan S9): the swatches are a WAI-ARIA radio group with ROVING
-// tabindex — one Tab stop for the whole group, arrows move between swatches,
-// Home/End jump, Enter/Space pick (the swatch is a real button, so activation
-// is native). Before, every swatch was its own Tab stop and no arrow key did
-// anything, so reaching the eighth colour took eight Tabs.
+// KEYBOARD (plan S9, steering k9): the swatches are a LISTBOX of options with
+// ROVING tabindex. One Tab stop for the whole group; arrows move FOCUS only;
+// Home/End jump; Enter/Space/click pick (the swatch is a real button, so
+// activation is native). `aria-selected` marks the flag that is set now.
+//
+// WHY a listbox and not a radio group (it was one until k9): picking COMMITS.
+// It sets the flag and closes the dialog. Radios check on arrow (APG), so a
+// radio group here would either set a flag and slam the dialog shut on the
+// first arrow, or keep radio semantics while not honouring them, which is
+// what k9 flagged. A listbox whose selection does NOT follow focus is the
+// pattern for "move, then choose". Its Tab stop follows focus (`focusIndex`),
+// so Tab away and back returns to the swatch you were on.
+//
+// Before S9 every swatch was its own Tab stop and no arrow key did anything,
+// so reaching the eighth colour took eight Tabs.
 //
 // WHY roving focus here and aria-activedescendant in the list dialogs: this
 // group has no text input and each swatch is a real, independently
@@ -89,12 +99,13 @@ export function ColorFlagPickerModal({
             footer inset while justify-center balances the unused width. */}
         <div
           data-color-flag-swatches="true"
-          role="radiogroup"
+          role="listbox"
           aria-label="Color flag"
+          aria-orientation="horizontal"
           className="flex flex-wrap justify-center gap-3 px-4 py-3"
-          // The swatches' onFocus keeps `focusIndex` (the roving Tab stop) in
-          // step with wherever the shared helper moves focus.
-          onKeyDown={radioGroupKeyDown}
+          // Focus-only movement (commit is Enter/Space/click). The swatches'
+          // onFocus keeps `focusIndex`, the roving Tab stop, in step.
+          onKeyDown={event => { rovingFocusKeyDown(event, '[role="option"]') }}
         >
           {DISPATCH_COLOR_FLAGS.map((flag, index) => {
             const active = flag.id === currentFlagId
@@ -103,8 +114,8 @@ export function ColorFlagPickerModal({
                 key={flag.id}
                 ref={element => { swatchRefs.current[index] = element }}
                 type="button"
-                role="radio"
-                aria-checked={active}
+                role="option"
+                aria-selected={active}
                 title={flag.label}
                 aria-label={flag.label}
                 tabIndex={index === focusIndex ? 0 : -1}

@@ -6,6 +6,7 @@ import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchS
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
+import { useSpotlightPocketMode } from '@renderer/features/browser-pocket/state/spotlightPocketMode'
 
 // Spotlight's header strip from the keyboard (plan K5/K7, ledger N5).
 //
@@ -80,7 +81,7 @@ describe('SpotlightView header', () => {
     expect(pills[sessionIds.indexOf(focused)]).toBe(current[0])
   })
 
-  it('walks the layout radios with arrows without choosing one', () => {
+  it('walks the layout radios with arrows, checking each one (APG, steering k9)', () => {
     const { getByRole, updateBrowserPocket } = renderSpotlight()
     const group = getByRole('radiogroup', { name: 'Spotlight layout' })
     const radios = within(group).getAllByRole('radio')
@@ -92,8 +93,10 @@ describe('SpotlightView header', () => {
     radios[0]!.focus()
     fireEvent.keyDown(radios[0]!, { key: 'ArrowRight' })
     expect(document.activeElement).toBe(radios[1])
-    // Moving never chose: the pocket was not rewritten.
-    expect(updateBrowserPocket).not.toHaveBeenCalled()
+    // The arrow CHOSE "browser": the same click path the mouse takes. Browser
+    // is a momentary view, so it does not rewrite the pocket, while Agent does.
+    expect(useSpotlightPocketMode.getState().browserOnly).toBe(true)
+    expect(updateBrowserPocket).toHaveBeenCalledTimes(1)
 
     fireEvent.keyDown(radios[1]!, { key: 'End' })
     expect(document.activeElement).toBe(radios[2])

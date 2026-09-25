@@ -194,24 +194,32 @@ describe('Dispatch color-flag layout', () => {
 
     const swatches = document.querySelector<HTMLElement>('[data-color-flag-swatches="true"]')
     expect(swatches).toHaveClass('flex-wrap', 'justify-center', 'px-4')
-    // Radio semantics now (plan S9): one choice among peers, not toggles.
-    expect(screen.getByRole('radio', { name: 'Green' })).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByRole('radio', { name: 'Purple' })).toHaveAttribute('aria-checked', 'false')
+    // Listbox semantics (plan S9, steering k9): one choice among peers, and
+    // picking COMMITS, so selection must not follow the arrows.
+    expect(screen.getByRole('option', { name: 'Green' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('option', { name: 'Purple' })).toHaveAttribute('aria-selected', 'false')
   })
 
-  it('is one Tab stop that opens on the current flag, and arrows walk the swatches', () => {
+  it('is one Tab stop that opens on the current flag, and arrows walk the swatches without picking', () => {
     // Before: every swatch was its own Tab stop and no arrow key moved.
     setColorFlags({ [FLAGGED_SESSION_ID]: 'green' })
-    render(<ColorFlagPickerModal open sessionId={FLAGGED_SESSION_ID} onClose={vi.fn()} />)
-    const radios = screen.getAllByRole('radio')
-    const green = screen.getByRole('radio', { name: 'Green' })
+    const onClose = vi.fn()
+    render(<ColorFlagPickerModal open sessionId={FLAGGED_SESSION_ID} onClose={onClose} />)
+    const options = screen.getAllByRole('option')
+    const green = screen.getByRole('option', { name: 'Green' })
     expect(document.activeElement).toBe(green)
-    expect(radios.filter(radio => radio.getAttribute('tabindex') === '0')).toEqual([green])
+    expect(options.filter(option => option.getAttribute('tabindex') === '0')).toEqual([green])
     fireEvent.keyDown(green, { key: 'ArrowRight' })
-    const next = radios[radios.indexOf(green) + 1] ?? radios[0]!
+    const next = options[options.indexOf(green) + 1] ?? options[0]!
     expect(document.activeElement).toBe(next)
+    // The Tab stop FOLLOWS focus (k9): Tab away and back lands here, not on
+    // the flag that was set when the dialog opened.
+    expect(options.filter(option => option.getAttribute('tabindex') === '0')).toEqual([next])
+    // Moving never picked: the flag is unchanged and the dialog is open.
+    expect(green).toHaveAttribute('aria-selected', 'true')
+    expect(onClose).not.toHaveBeenCalled()
     fireEvent.keyDown(next, { key: 'End' })
-    expect(document.activeElement).toBe(radios[radios.length - 1])
+    expect(document.activeElement).toBe(options[options.length - 1])
   })
 
   it('closes from one Close ⎋, with Clear Flag beside it', () => {

@@ -45,7 +45,7 @@ describe('Grid Dispatch shape editor', () => {
     expect(screen.getByRole('radio', { name: /Show all/ })).toHaveAttribute('aria-checked', 'true')
   })
 
-  it('makes the nested-agents pair one Tab stop that arrows walk (ledger N5 sweep)', () => {
+  it('makes the nested-agents pair one Tab stop whose arrows choose (ledger N5, steering k9)', () => {
     const { setDispatchGridShape } = harness(false)
     const showAll = screen.getByRole('radio', { name: /Show all/ })
     const cap = screen.getByRole('radio', { name: /Cap/ })
@@ -54,8 +54,9 @@ describe('Grid Dispatch shape editor', () => {
     showAll.focus()
     fireEvent.keyDown(showAll, { key: 'ArrowRight' })
     expect(document.activeElement).toBe(cap)
-    // Moving is not choosing, and the arrow never reached the dialog.
-    expect(showAll).toHaveAttribute('aria-checked', 'true')
+    // The arrow CHOSE Cap in the draft (APG radios), and it never reached the
+    // dialog: nothing was applied.
+    expect(cap).toHaveAttribute('aria-checked', 'true')
     expect(setDispatchGridShape).not.toHaveBeenCalled()
   })
 })

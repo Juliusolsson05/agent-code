@@ -11,8 +11,8 @@ import { SettingsSidebar } from './SettingsSidebar'
 
 // Settings keyboard contract (plan S45/N14): categories are a one-Tab-stop
 // tablist whose arrows select; ⌘[ / ⌘] step categories from anywhere;
-// toggles are switches; select rows are radio groups whose arrows MOVE focus
-// without choosing (the settings apply live). The sidebar and list are
+// toggles are switches; select rows are APG radio groups whose arrows move
+// AND choose (steering k9 reversed the first "move only" ruling). The sidebar and list are
 // rendered directly: the full page mounts every heavy row (skills, themes,
 // devices), which is not what these contracts are about.
 
@@ -63,7 +63,7 @@ describe('Settings keyboard', () => {
     expect(screen.getByRole('button', { name: 'Close' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
   })
 
-  it('renders toggles as switches and a select as a radio group whose arrows move without choosing', () => {
+  it('renders toggles as switches and a select as a radio group whose arrows choose', () => {
     const onToggle = vi.fn()
     const onSelect = vi.fn()
     const definitions = [
@@ -78,8 +78,15 @@ describe('Settings keyboard', () => {
     b!.focus()
     fireEvent.keyDown(b!, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(c)
-    expect(onSelect).not.toHaveBeenCalled()
-    fireEvent.click(c!)
+    // The arrow checked C through the same click path the mouse uses.
+    expect(onSelect).toHaveBeenCalledTimes(1)
     expect(onSelect).toHaveBeenCalledWith(expect.anything(), 'c')
+    // Wrapping onto the already-checked option re-fires nothing: getValue
+    // still says 'b', so B is checked, and arrowing from A back to B is a
+    // no-op for a live setting.
+    a!.focus()
+    fireEvent.keyDown(a!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(b)
+    expect(onSelect).toHaveBeenCalledTimes(1)
   })
 })

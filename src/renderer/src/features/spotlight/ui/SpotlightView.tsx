@@ -122,9 +122,9 @@ function SpotlightPocketModes({ sessionId, workspace }: { sessionId: SessionId; 
       className="ml-auto flex flex-shrink-0 items-center rounded-control border border-border text-[10px]"
       role="radiogroup"
       aria-label="Spotlight layout"
-      // Arrows move between the three, Space/Enter choose (the shared radio
-      // rule, lib/radioGroupKeys). Before this the group announced itself as
-      // a radiogroup but was three separate Tab stops with no arrow keys.
+      // Arrows move AND choose (the APG radio rule, lib/radioGroupKeys).
+      // Before this the group announced itself as a radiogroup but was three
+      // separate Tab stops with no arrow keys.
       onKeyDown={radioGroupKeyDown}
     >
       {(['split', 'browser', 'agent'] as const).map(option => (

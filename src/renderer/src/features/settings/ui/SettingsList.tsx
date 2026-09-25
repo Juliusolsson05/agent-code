@@ -192,13 +192,12 @@ function SettingRow({
           ) : null}
 
           {control.type === 'select' ? (
-            // A RADIO GROUP (plan N14): one Tab stop (the chosen option), ←→↑↓
-            // and Home/End move focus between options, Space/Enter choose.
-            // Ruling: arrows MOVE, they do not CHOOSE (APG radios choose on
-            // arrow). These settings apply live — Theme, Update channel,
-            // Agent view mode — so choosing on every arrow would flash
-            // through every theme or flip a channel just to reach the last
-            // option. Cost if wrong: one extra key (Space) per change.
+            // A RADIO GROUP (plan N14, steering k9): one Tab stop (the chosen
+            // option); ←→↑↓ and Home/End move AND choose, the APG radio
+            // pattern (lib/radioGroupKeys has the full reasoning, including
+            // why the first "arrows only move" ruling was reversed). These
+            // settings apply live, so arrowing through Theme previews each
+            // theme, exactly as native radios do; every one is reversible.
             <div
               className="grid gap-1.5"
               role="radiogroup"

@@ -828,6 +828,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **k9 radio groups (Settings choices such as Theme / Update channel /
+  Agent view mode, Spotlight layout, Grid Dispatch "Nested agents"):**
+  arrows now SELECT as they move (Theme previews each theme as you arrow).
+  Tab leaves the group and comes back to the chosen option. **Color flag**
+  is different on purpose: arrows only move the focus ring, and Enter/click
+  sets the flag and closes.
 - **X1 / #713 Provider trust / permission / question prompts:** they now
   appear INSIDE the agent's pane, with a scrim over that pane only. The
   tab bar, other panes, the palette and every shortcut keep working.
@@ -976,6 +982,22 @@ Sharp corners and one light theme.
 
 ## Rulings
 
+- Ruling (steering k9, supersedes the S45 "move, don't choose" ruling): ONE
+  radio contract. Every `radiogroup` follows the APG radio pattern: arrows move
+  AND check, the checked radio is the single Tab stop (so Tab away and back
+  returns to where the user moved), Home/End jump and check, and modified
+  arrows pass through. Implemented once in `lib/radioGroupKeys.ts`
+  (`radioGroupKeyDown` checks through the radio's own click handler and
+  skips a radio that is already checked). Groups whose items COMMIT on
+  choose (Color flag: sets and closes) are NOT radio groups: a listbox of
+  options, focus-only arrows (`rovingFocusKeyDown`), a Tab stop that follows
+  focus, and Enter/Space/click commit. Why: "radio, 2 of 6" followed by an
+  arrow that selects nothing broke the announced semantics, and every live
+  setting behind a radio is reversible (arrowing Theme previews, as native
+  radios do). Cost if wrong: a keyboard user arrowing through Update channel
+  flips it on the way (a 2-option group, so one press), and Theme flashes
+  while arrowing.
+
 - Ruling: Enter's glyph is `↩` (what `displayKeybinding` already emits), not
   `↵` as the first draft of H2 wrote — one display projection beats a
   prettier glyph — cost if wrong: one table entry in `@shared/keybindings`.
@@ -1078,9 +1100,8 @@ Sharp corners and one light theme.
   PathInput test fails on the pre-change file.
 - 2026-09-25 S45/N14: Settings — sidebar tablist (roving, arrows select),
   page-level ⌘[/⌘] via sectionCycle, toggles → role=switch, selects →
-  radiogroup with roving focus. Ruling: settings radios MOVE on arrow and
-  CHOOSE on Space/Enter (not APG's choose-on-arrow) because they apply live
-  (theme, update channel) — cost: one extra key. Tests render the sidebar
+  radiogroup with roving focus. ~~Ruling: settings radios MOVE on arrow and
+  CHOOSE on Space/Enter~~ SUPERSEDED by the k9 radio ruling (see Rulings). Tests render the sidebar
   and a synthetic SettingsList directly (the full page mounts heavy rows
   unrelated to these contracts); ⌘] tested on the page with the list
   filtered empty. Confirm-red: all 3 fail on the pre-change files.
@@ -1452,3 +1473,9 @@ Sharp corners and one light theme.
   useKeybinds unmodified-key yield (reasoned; the router needs a full
   workspace harness). Dictation hotkey targeting a covered composer is not
   gated (low risk; recorded).
+- 2026-09-25 k9: radio contract unified (Rulings). Tests updated to the new
+  contract on the mounted groups (Settings synthetic list, Spotlight, Grid
+  Dispatch, Color flag). Mutations observed: dropping the arrow's `click()`
+  fails 3 group tests; always clicking (no already-checked skip) fails the
+  Settings re-fire assertion; Color flag at HEAD (radiogroup) fails both
+  listbox tests.

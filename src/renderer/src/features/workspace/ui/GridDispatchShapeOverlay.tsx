@@ -300,9 +300,9 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                   role="radiogroup"
                   aria-label={`Row ${index + 1} nested agents`}
                   className="flex items-center gap-3 pl-12 text-[10px]"
-                  // Shared radio keys: arrows move, Space/Enter choose. The
-                  // Enter a native button eats never reaches the dialog's
-                  // Apply (K3: a focused control keeps its own Enter).
+                  // Shared radio keys: arrows move AND choose (APG, a draft
+                  // edit until Apply). A focused radio keeps its own Enter,
+                  // so Enter here never reaches the dialog's Apply (K3).
                   onKeyDown={radioGroupKeyDown}
                 >
                   <span className="uppercase text-muted">Nested agents</span>
