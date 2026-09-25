@@ -183,29 +183,20 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
         <DialogHeader>
           <div className="flex items-baseline justify-between gap-3">
             <DialogTitle>Grid Dispatch</DialogTitle>
-            {/* A two-state mode switch: aria-pressed says which is on (it was
-                colour only), and each half takes the focus ring (plan T4).
-                `text-fg` here and below was an undefined token — hover did
-                nothing. */}
-            <div className="flex items-center gap-1 text-[10px] uppercase text-muted">
-              <button
-                type="button"
-                aria-pressed={!advanced}
-                onClick={() => setAdvanced(false)}
-                className={`rounded-control px-1 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${advanced ? 'hover:text-ink' : 'text-accent'}`}
-              >
-                Simple
-              </button>
-              <span aria-hidden>│</span>
-              <button
-                type="button"
-                aria-pressed={advanced}
-                onClick={() => setAdvanced(true)}
-                className={`rounded-control px-1 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${advanced ? 'text-accent' : 'hover:text-ink'}`}
-              >
-                Advanced
-              </button>
-            </div>
+            {/* A two-state mode switch on the shared SegmentedControl (ledger
+                G-37). It was the last hand-drawn pair left after G-10: two
+                text buttons around a "│", with the accent text as the only
+                "on" look. `pressed` semantics, not `radio`: switching resizes
+                the dialog (sm ↔ md), so it waits for Enter/Space/click
+                instead of firing on every arrow. aria-pressed still says
+                which is on, so the state is never colour only. */}
+            <SegmentedControl
+              size="sm"
+              label="Dispatch mode"
+              value={advanced ? 'advanced' : 'simple'}
+              onChange={next => setAdvanced(next === 'advanced')}
+              options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }] as const}
+            />
           </div>
           <DialogDescription>
             {advanced
