@@ -1,14 +1,16 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { normalizeGridShape } from '@renderer/workspace/dispatch/gridShape'
@@ -67,30 +69,76 @@ export function DispatchRowProjectModal({
     [commit, selected],
   )
 
+  // KEYBOARD (plan S10): a multi-select listbox on the shared list keys.
+  // Before, every project was its own Tab stop (a role=checkbox button) and
+  // no arrow key moved. Space and Enter both toggle the highlighted project
+  // (there is nothing to "commit" — toggles apply live, which is why the
+  // footer's only exit is Close). Keyed by tab id so the highlight stays on
+  // its project if a tab closes while the dialog is open.
+  const listRef = useRef<HTMLDivElement>(null)
+  const tabs = workspace.state.tabs
+  const keys = useMemo(() => tabs.map(tab => tab.id), [tabs])
+  const toggleAt = (index: number) => {
+    const tab = tabs[index]
+    if (tab) toggle(tab.id)
+  }
+  const nav = useListNavigation({
+    count: tabs.length,
+    keys,
+    resetKey: rowIndex,
+    onActivate: toggleAt,
+    onToggle: toggleAt,
+    idPrefix: 'row-project',
+  })
+
   return (
     <Dialog open={rowIndex !== null} onOpenChange={next => { if (!next) onClose() }}>
-      <DialogContent className="w-[380px] max-w-[calc(100vw-64px)]">
+      <DialogContent
+        size="sm"
+        onKeyDown={nav.onKeyDown}
+        onOpenAutoFocus={event => {
+          // The listbox is the focus owner (focus-owner invariant).
+          event.preventDefault()
+          listRef.current?.focus()
+        }}
+      >
         <DialogHeader>
-          <DialogTitle>Row projects</DialogTitle>
-          <DialogDescription className="text-[10px]">
+          <DialogTitle>Row Projects</DialogTitle>
+          <DialogDescription>
             Restrict this row&rsquo;s index and lane selectors. Agents already in
             its lanes are left alone.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col px-2 py-2">
-          {workspace.state.tabs.map((tab, index) => {
+        <div className="px-4 py-3">
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-multiselectable
+          aria-label="Row projects"
+          aria-activedescendant={nav.activeId}
+          tabIndex={0}
+          className="rounded-slab flex flex-col overflow-hidden border border-border bg-canvas py-1 outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
+        >
+          {tabs.map((tab, index) => {
             const checked = selected.includes(tab.id)
+            const highlighted = index === nav.index
             return (
               <button
                 key={tab.id}
                 type="button"
-                role="checkbox"
-                aria-checked={checked}
-                onClick={() => toggle(tab.id)}
-                className={`flex items-center gap-2 rounded px-3 py-1.5 text-left text-xs hover:bg-surface-raised focus:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-                  checked ? 'text-accent' : 'text-fg'
-                }`}
+                {...nav.getItemProps(index)}
+                role="option"
+                aria-selected={checked}
+                // Not a tab stop: the listbox is (plan K4).
+                tabIndex={-1}
+                // Tokens (plan T1/T7): these used bare `rounded` (renders 0),
+                // `text-fg` and `bg-surface-raised`, neither of which exists
+                // in the theme — so the hover and resting text colours were
+                // silently unset.
+                className={`flex items-center gap-2 border-l-2 px-3 py-1.5 text-left text-[12px] ${
+                  highlighted ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent hover:bg-row-hover-bg'
+                } ${checked ? 'text-accent' : 'text-ink'}`}
               >
                 <span className="w-3 flex-shrink-0 text-center">{checked ? '✓' : ''}</span>
                 {/* The same A/B/C vocabulary the dispatch labels and pinned
@@ -104,19 +152,20 @@ export function DispatchRowProjectModal({
           })}
         </div>
 
-        <DialogFooter className="items-center justify-between">
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={selected.length === 0}
-            onClick={() => commit([])}
-          >
-            Any project
-          </Button>
-          <Button type="button" onClick={onClose}>
-            Done
-          </Button>
-        </DialogFooter>
+        </div>
+
+        {/* Done only ever closed (toggles apply live), so it is the
+            close-only `Close ⎋` (plan H5), with Any Project beside it. */}
+        <DialogActions
+          onCancel={onClose}
+          cancelLabel="Close"
+          legend={<KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Space'], label: 'toggle' }]} />}
+          extraActions={
+            <Button type="button" variant="ghost" size="sm" disabled={selected.length === 0} onClick={() => commit([])}>
+              Any Project
+            </Button>
+          }
+        />
       </DialogContent>
     </Dialog>
   )

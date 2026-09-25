@@ -415,7 +415,7 @@ entry when it lands.
 | S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | done |
 | S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | done |
 | S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | done |
-| S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | todo |
+| S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | done |
 | S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | todo |
 | S12 | AgentTitlePrompt | form submit | DialogActions chips; T3 | todo |
 | S13 | CloseOldAgentsModal | no Enter; "Esc" header button; raw buttons | DialogActions (danger); remove Esc button; T3/T8; `focus:border-accent` → T4 | todo |
@@ -606,6 +606,12 @@ Sharp corners and one light theme.
   they differ); ←/→ walk and wrap, Home/End jump, Enter picks and closes;
   footer `← → move  ↩ pick` · `Clear Flag` · `Close ⎋` (was outline "Clear
   flag" + filled "Done"); 440 wide.
+- **S10 Row Projects (Dispatch row header → projects):** projects sit in a
+  bordered well in a padded body (was edge-to-edge px-2); hover now actually
+  shows (the old `bg-surface-raised`/`text-fg` tokens did not exist);
+  checked = accent text + ✓; highlight = row-selected + 2px bar; description
+  at 11px (was 10px); footer `↑ ↓ move  ␣ toggle` · `Any Project` ·
+  `Close ⎋` (was ghost "Any project" + filled "Done"); title "Row Projects".
 
 ## Tasks
 
@@ -680,6 +686,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S10: Row Projects → multiselect listbox on useListNavigation
+  (keyed by tab id; Space/Enter toggle live), undefined tokens replaced,
+  close-only footer + Any Project. Confirm-red: both new tests fail on the
+  pre-change file.
 - 2026-09-25 S9: Color Flag swatches → radiogroup with roving tabindex
   (arrows linear + wrap, Home/End); current vs focus visually distinct;
   close-only footer + Clear Flag. Ruling: roving focus (not
