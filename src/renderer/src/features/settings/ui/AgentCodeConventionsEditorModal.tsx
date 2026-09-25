@@ -5,10 +5,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
   AGENT_CODE_CONVENTIONS_STARTER,
@@ -223,7 +224,7 @@ export function AgentCodeConventionsEditorModal({
             <div className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-between text-[11px] text-muted">
                 <span>Generated SKILL.md preview</span>
-                <button type="button" className="rounded-control border border-control-border px-2 py-1" onClick={() => setPreview(null)}>Back to editor</button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setPreview(null)}>Back to editor</Button>
               </div>
               {/* Same as the custom-skill preview: this is what Save & Enable
                   writes into every provider's skills directory (#1049
@@ -274,9 +275,9 @@ export function AgentCodeConventionsEditorModal({
             >
               Insert starter
             </button>
-            <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void showPreview()}>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
               Preview generated skill
-            </button>
+            </Button>
           </div>
 
           {shownSnapshot.targets.length > 0 ? (
@@ -293,7 +294,7 @@ export function AgentCodeConventionsEditorModal({
                   <span className="min-w-0 flex-1 truncate text-muted">{withVisibleControls(target.displayPath || target.id)} · {target.state}</span>
                   {(target.state === 'conflict' || target.state === 'retired') ? (
                     <>
-                      <button type="button" className="rounded-control border border-control-border px-1.5 py-0.5" onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}>Reveal</button>
+                      <Button type="button" variant="outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}>Reveal</Button>
                       {target.canOverwrite && target.conflictFingerprint ? (
                         <button
                           type="button"
@@ -342,7 +343,7 @@ export function AgentCodeConventionsEditorModal({
 
           {revisionConflict ? (
             <div className="flex gap-2">
-              <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => {
+              <Button type="button" variant="outline" size="sm" onClick={() => {
                 // The conflict response is already the authoritative latest
                 // snapshot. Do not depend on React finishing the parent prop
                 // round-trip before this button is clicked.
@@ -354,23 +355,37 @@ export function AgentCodeConventionsEditorModal({
                 setConflictSnapshot(null)
                 setError(null)
                 setRevisionConflict(false)
-              }}>Reload latest</button>
-              <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy draft</button>
+              }}>Reload latest</Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy draft</Button>
             </div>
           ) : null}
         </div>
 
-        <DialogFooter className="justify-between">
-          <button type="button" disabled={busy || (!base.markdown && conflicts.length === 0)} onClick={() => void clear()} className="rounded-control border border-danger px-2 py-1 text-[11px] text-danger disabled:opacity-40">
-            {base.enabled ? 'Disable and clear' : abandonApprovals.length > 0 ? 'Leave selected and clear' : 'Clear saved rules'}
-          </button>
-          <div className="flex gap-2">
-            <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => void requestClose(false)}>Cancel</button>
-            <button type="button" disabled={busy} className="rounded-control border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
-              {enabled && !base.enabled ? 'Save & Enable' : 'Save changes'}
-            </button>
-          </div>
-        </DialogFooter>
+        {/* Shared footer (plan S28): ⌘↩ saves (the rules textarea owns plain
+            Enter), Cancel ⎋ goes through requestClose so a dirty draft asks
+            first (B7's D3 condition, since F7). The destructive Clear rides at
+            the far left as a red-outline extra. Guards carried over from the
+            hand-built footer (k3): Save and Clear wait while busy; Cancel was
+            never disabled here and still is not. */}
+        <DialogActions
+          confirmLabel={enabled && !base.enabled ? 'Save & Enable' : 'Save Changes'}
+          confirmKey="Cmd+Enter"
+          confirmDisabled={busy}
+          onConfirm={() => void save()}
+          onCancel={() => void requestClose(false)}
+          extraActions={
+            <Button
+              type="button"
+              variant="destructive-outline"
+              size="sm"
+              className="mr-auto"
+              disabled={busy || (!base.markdown && conflicts.length === 0)}
+              onClick={() => void clear()}
+            >
+              {base.enabled ? 'Disable and Clear' : abandonApprovals.length > 0 ? 'Leave Selected and Clear' : 'Clear Saved Rules'}
+            </Button>
+          }
+        />
       </DialogContent>
     </Dialog>
   )

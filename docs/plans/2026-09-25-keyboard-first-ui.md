@@ -433,8 +433,8 @@ entry when it lands.
 | S25 | ConfirmDeleteDialog (editor) | autoFocus Cancel | DialogActions danger | done |
 | S26 | KeyboardShortcutsModal | search focus; no arrows; font-mono chips | Kbd chips; ↑↓ over results; Close ⎋ | done |
 | S27 | ThemeEditorModal (SettingsPage) | name autoFocus; secondary buttons | DialogActions; T3 | done |
-| S28 | AgentCodeConventionsEditorModal | window.confirm; raw buttons | ConfirmDialog; T8; ⌘↵ save chip | todo |
-| S29 | AgentCodeCustomSkillsModal | as S28 | as S28 | todo |
+| S28 | AgentCodeConventionsEditorModal | window.confirm; raw buttons | ConfirmDialog; T8; ⌘↵ save chip | done |
+| S29 | AgentCodeCustomSkillsModal | as S28 | as S28 | done |
 | S30 | AgentMcpServersModal | no Enter; `max-w-xl` no-op | size preset; Close ⎋ | todo |
 | S31 | McpServerDialog | textarea autoFocus; `max-w-2xl` no-op (renders 520) | size md; ⌘↵ confirm chip | todo |
 | S32 | AddSkillDialog | Enter = find; square inputs/cards | T1 tokens; legend (↵ find); DialogActions | todo |
@@ -697,6 +697,14 @@ Sharp corners and one light theme.
   footer `Cancel ⎋` · `Save a Copy` (edit only) · `Save & Apply ⌘↩`, save
   errors in red at the left; editing then pressing Escape asks "Discard
   theme changes?"; body py-3.
+- **S28/S29 Conventions editor / Custom Skills (Settings → Agents):** the
+  small grey buttons (Insert Starter, Preview, Back to editor, Reload
+  latest, Copy draft, row actions) are now the standard outline buttons with
+  a focus ring; footer: red-outline Clear at the far left, `Cancel ⎋` /
+  `Close ⎋`, filled `Save Changes ⌘↩` / `Save & Enable ⌘↩` / `Save Draft ⌘↩`
+  (was a custom "control-active" filled button); while saving the custom
+  skills Close disables and loses ⎋. Warning/danger-bordered status buttons
+  are unchanged.
 
 ## Tasks
 
@@ -771,6 +779,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S28/S29: Conventions + Custom Skills editors — hand-rolled
+  outline buttons → Button outline (scripted: rawbtn transform, 10 sites;
+  danger/warning-bordered ones left), footers on DialogActions with
+  Cmd+Enter and every old guard carried (k3). Title-case labels (test
+  lookups updated). Confirm-red: the ⌘↩ test and the in-flight Close test
+  fail on the pre-change files.
 - 2026-09-25 S27: Theme editor on DialogHeader/DialogActions (Cmd+Enter),
   header Close removed, dirty-draft discard confirm (B7's D3 condition),
   exported for its test. Confirm-red: both tests fail on the pre-change

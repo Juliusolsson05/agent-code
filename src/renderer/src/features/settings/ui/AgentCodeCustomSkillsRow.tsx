@@ -6,10 +6,10 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Textarea } from '@renderer/components/ui/textarea'
 import {
   AGENT_CODE_MANAGED_SKILLS_CHANGED_EVENT,
@@ -385,7 +385,7 @@ function AgentCodeCustomSkillsModal({
                 <div className="flex min-h-0 flex-col gap-2">
                   <div className="flex items-center justify-between text-[11px] text-muted">
                     <span>Generated SKILL.md preview</span>
-                    <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 disabled:opacity-50" onClick={() => setPreview(null)}>Back to editor</button>
+                    <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setPreview(null)}>Back to editor</Button>
                   </div>
                   {/* The generated file, read immediately before Save &
                       Enable deploys it to every provider's skills directory.
@@ -412,10 +412,10 @@ function AgentCodeCustomSkillsModal({
                 </ul>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void showPreview()}>
+                <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
                   Preview generated skill
-                </button>
-                <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={async () => {
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={busy} onClick={async () => {
                   if (dirty && !(await requestConfirm({
                     title: 'Discard unsaved custom skill changes?',
                     confirmLabel: 'Discard Changes',
@@ -425,7 +425,7 @@ function AgentCodeCustomSkillsModal({
                   setBaseDraft(null)
                   setConflictTargets([])
                   setError(null)
-                }}>Back to skills</button>
+                }}>Back to skills</Button>
               </div>
               {revisionConflict ? (
                 <div role="status" className="rounded-slab flex flex-wrap items-center gap-2 border border-warning p-2 text-[10px] text-warning">
@@ -531,14 +531,20 @@ function AgentCodeCustomSkillsModal({
           {error ? <div role="alert" className="rounded-slab border border-danger px-2 py-1 text-[11px] text-danger">{error}</div> : null}
         </div>
 
-        <DialogFooter>
-          <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void requestClose(false)}>Close</button>
-          {draft ? (
-            <button type="button" disabled={busy || revisionConflict} className="rounded-control border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
-              {draft.enabled ? 'Save & Enable' : 'Save draft'}
-            </button>
-          ) : null}
-        </DialogFooter>
+        {/* Shared footer (plan S29). In the editor view ⌘↩ saves (the body
+            textarea owns plain Enter); in the list view it is close-only.
+            Guards carried over (k3): Close and Save wait while busy, Save
+            also on a revision conflict — and Escape waits with Close. */}
+        <DialogActions
+          confirmLabel={draft ? (draft.enabled ? 'Save & Enable' : 'Save Draft') : undefined}
+          confirmKey="Cmd+Enter"
+          confirmDisabled={busy || revisionConflict}
+          onConfirm={draft ? () => void save() : undefined}
+          onCancel={() => void requestClose(false)}
+          cancelLabel="Close"
+          cancelDisabled={busy}
+          escapeCancels={!busy}
+        />
       </DialogContent>
     </Dialog>
   )

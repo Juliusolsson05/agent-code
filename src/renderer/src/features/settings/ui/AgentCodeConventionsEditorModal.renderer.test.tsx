@@ -63,6 +63,19 @@ describe('AgentCodeConventionsEditorModal', () => {
     expect(await screen.findByText(/Agent Code will reconcile before starting new agents/)).toBeTruthy()
   })
 
+  it('saves on ⌘↩ from the rules editor and says so on the button (plan S28)', async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, snapshot: { ...snapshot(), revision: 5, markdown: '# Rules' } })
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveAgentCodeConventions: save } })
+    render(<AgentCodeConventionsEditorModal open snapshot={snapshot()} onOpenChange={vi.fn()} onSnapshot={vi.fn()} />)
+    const rules = screen.getByLabelText('Convention rules')
+    fireEvent.change(rules, { target: { value: '# Rules' } })
+    expect(screen.getByRole('button', { name: 'Save Changes' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⌘↩')
+    expect(fireEvent.keyDown(rules, { key: 'Enter' })).toBe(true) // newline
+    expect(save).not.toHaveBeenCalled()
+    fireEvent.keyDown(rules, { key: 'Enter', metaKey: true })
+    await waitFor(() => expect(save).toHaveBeenCalledOnce())
+  })
+
   it('uses main for the exact generated preview', async () => {
     const preview = vi.fn().mockResolvedValue({
       ok: true,
@@ -116,7 +129,7 @@ describe('AgentCodeConventionsEditorModal', () => {
     )
     const editor = screen.getByLabelText('Convention rules')
     fireEvent.change(editor, { target: { value: '# Unsaved draft' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
 
     expect(await screen.findByText(/newer saved version/)).toBeTruthy()
     expect(editor).toHaveValue('# Unsaved draft')

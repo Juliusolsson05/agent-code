@@ -73,7 +73,7 @@ describe('AgentCodeCustomSkillsRow', () => {
     fireEvent.change(screen.getByLabelText('Skill name'), { target: { value: 'review-code' } })
     fireEvent.change(screen.getByLabelText('Skill description'), { target: { value: 'Review code when asked' } })
     fireEvent.change(screen.getByLabelText('Skill instructions'), { target: { value: '# Review\n\nExplain why findings matter.' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
 
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       expectedRevision: 0,
@@ -101,10 +101,15 @@ describe('AgentCodeCustomSkillsRow', () => {
     fireEvent.change(screen.getByLabelText('Skill instructions'), {
       target: { value: '# Submitted draft' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
 
     expect(screen.getByLabelText('Skill instructions')).toBeDisabled()
     expect(screen.getByLabelText('Skill description')).toBeDisabled()
+    // The in-flight save also holds the exit (plan S29, the k3 rule): Close is
+    // disabled and advertises no ⎋ while the save runs.
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close).toBeDisabled()
+    expect(close.querySelector('[data-slot="kbd"]')).toBeNull()
     await act(async () => pending.resolve({
       ok: true,
       snapshot: {
@@ -141,13 +146,13 @@ describe('AgentCodeCustomSkillsRow', () => {
     fireEvent.change(screen.getByLabelText('Skill instructions'), {
       target: { value: '# My stale draft' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
 
     expect(await screen.findByText(/Choose how to continue/)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save Draft' })).toBeDisabled()
     expect(update).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Keep my draft' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
     await waitFor(() => expect(update).toHaveBeenLastCalledWith(expect.objectContaining({
       expectedRevision: 2,
       markdown: '# My stale draft',
@@ -171,7 +176,7 @@ describe('AgentCodeCustomSkillsRow', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'New skill…' }))
     fireEvent.change(screen.getByLabelText('Skill name'), { target: { value: 'review-code' } })
     fireEvent.change(screen.getByLabelText('Skill instructions'), { target: { value: '# Review' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Draft' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       expectedRevision: 1,
     })))
