@@ -173,7 +173,14 @@ export function activeClaudeComposerText(screen: string): string {
     // the last column free (calibrated on the recorded 64-column frames, body
     // 61 + the two-column prefix = 63). Comparing against the divider width
     // itself never fired on a real screen (#1219 review, Pi F3).
-    const hardCut = width !== null && previous.length >= width - 1 && content.length > 0 && !/^\s/u.test(content)
+    // Judged in CELLS, and by whether the continuation's first character
+    // would still have fit (#1292): a wide (CJK) character is one UTF-16 unit
+    // but two cells, and with an odd free width it cannot use the last cell,
+    // so a full CJK row can be one cell short. For single-width text this is
+    // exactly the old `length >= width - 1`.
+    const firstChar = content.length > 0 ? String.fromCodePoint(content.codePointAt(0)!) : ''
+    const hardCut = width !== null && content.length > 0 && !/^\s/u.test(content)
+      && displayWidth(previous) + displayWidth(firstChar) > width - 1
     text = hardCut ? text.trimEnd() + content : `${text} ${content}`
   }
   return text
@@ -363,3 +370,40 @@ export function pollPasteAbsorbed(
     tick()
   })
 }
+
+/**
+ * Terminal cells a string occupies (#1292): 2 for East Asian wide/fullwidth
+ * characters and emoji, 0 for combining marks, 1 otherwise. The ranges are the
+ * ones terminals (xterm's unicode handler, Ink's string-width) treat as wide
+ * for the scripts people actually type; exhaustive Unicode tables are not
+ * needed to decide whether a composer line was full. Kept local: string-width
+ * is only a transitive dependency here, and pulling it in for one comparison
+ * would couple this shared module to its release cadence.
+ */
+function displayWidth(text: string): number {
+  let cells = 0
+  for (const char of text) {
+    const code = char.codePointAt(0)!
+    if (/\p{Mn}|\p{Me}/u.test(char) || code === 0x200d || (code >= 0xfe00 && code <= 0xfe0f)) continue
+    cells += isWide(code) ? 2 : 1
+  }
+  return cells
+}
+
+function isWide(code: number): boolean {
+  return (code >= 0x1100 && code <= 0x115f) // Hangul Jamo initials
+    || (code >= 0x2e80 && code <= 0x303e) // CJK radicals, Kangxi, CJK symbols and punctuation
+    || (code >= 0x3041 && code <= 0x33ff) // Hiragana, Katakana, Bopomofo, CJK compatibility
+    || (code >= 0x3400 && code <= 0x4dbf) // CJK Extension A
+    || (code >= 0x4e00 && code <= 0x9fff) // CJK Unified Ideographs
+    || (code >= 0xa000 && code <= 0xa4cf) // Yi
+    || (code >= 0xac00 && code <= 0xd7a3) // Hangul syllables
+    || (code >= 0xf900 && code <= 0xfaff) // CJK compatibility ideographs
+    || (code >= 0xfe30 && code <= 0xfe4f) // CJK compatibility forms
+    || (code >= 0xff00 && code <= 0xff60) // Fullwidth forms
+    || (code >= 0xffe0 && code <= 0xffe6)
+    || (code >= 0x1f300 && code <= 0x1f64f) // Emoji: symbols, pictographs, emoticons
+    || (code >= 0x1f900 && code <= 0x1f9ff)
+    || (code >= 0x20000 && code <= 0x3fffd) // CJK Extensions B and beyond
+}
+

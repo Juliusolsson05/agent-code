@@ -173,6 +173,37 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     expect(missed).toEqual([])
   })
 
+  // #1292 (C1 hunt): the hard-cut rule compared the previous line's STRING
+  // length with the width, but a wide (CJK) character is one UTF-16 unit and
+  // two cells; a real xterm row of 9 CJK characters after `❯ ` is 20 cells
+  // and 11 characters long (probed with @xterm/headless). So every CJK wrap
+  // was read as soft, joined with a space, and the tail never matched: a 5 s
+  // timeout and a rollback for most multi-row CJK prompts. And with an odd
+  // free width a wide character cannot fill the last cell, so a CJK row can
+  // stop one cell short of full; the cut is judged by whether the next
+  // character would have fit.
+  const cjkPrompt = '请检查这个问题并修复所有相关的测试然后运行完整的测试套件确认没有回归再提交拉取请求并通知审查人员继续推进后续工作'
+  it('confirms a wrapped CJK prompt at every pane width from 20 to 140 columns', () => {
+    const tail = pasteTailNeedle(cjkPrompt)
+    const missed: number[] = []
+    for (let cols = 20; cols <= 140; cols += 1) {
+      const baseline = activeClaudeComposerText(screenAt(cols, ''))
+      const after = activeClaudeComposerText(screenAt(cols, cjkPrompt))
+      if (pasteAbsorbedVia(after, tail, placeholderCount(baseline), false) !== 'inline') missed.push(cols)
+    }
+    expect(missed).toEqual([])
+  })
+
+  it('confirms a wrapped mixed Latin and CJK prompt ending in a path', () => {
+    const mixed = `${cjkPrompt} /Users/example/project/src/providers/claude/runtime/promptDelivery.ts`
+    const tail = pasteTailNeedle(mixed)
+    const missed: number[] = []
+    for (let cols = 20; cols <= 140; cols += 1) {
+      if (pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, mixed)), tail, 0, false) !== 'inline') missed.push(cols)
+    }
+    expect(missed).toEqual([])
+  })
+
   it('still refuses a composer that holds only the start of the prompt', () => {
     // The tail is what proves the WHOLE paste landed. A composer still
     // receiving the paste shows its head, and must not confirm.
