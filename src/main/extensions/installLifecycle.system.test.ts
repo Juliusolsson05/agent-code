@@ -18,6 +18,7 @@ vi.mock('@main/storage/paths.js', () => ({
   EXTENSIONS_DIR: join(stateRoot, 'extensions'),
   EXTENSIONS_LOCKFILE: ledgerPath,
   EXTENSION_STATE_DIR: join(stateRoot, 'extension-state'),
+  EXTENSION_SECRETS_DIR: join(stateRoot, 'extension-secrets'),
 }))
 vi.mock('fs/promises', async importOriginal => {
   const fs = await importOriginal<typeof import('fs/promises')>()
@@ -157,6 +158,21 @@ describe('atomic extension publication', () => {
     expect(await extensionStorageGet('timer', 'saved')).toBe(true)
     await installExtensionFromPath(await source(), async () => true)
     expect(await extensionStorageGet('timer', 'saved')).toBe(true)
+  })
+
+  it('a first install of an id never inherits secrets left behind by an interrupted removal', async () => {
+    // Models the crash window (or any orphan): a secrets directory exists for
+    // an id with no runnable row. The newcomer may be a different source.
+    const secrets = join(stateRoot, 'extension-secrets', 'timer')
+    await mkdir(secrets, { recursive: true })
+    await writeFile(join(secrets, 'deadbeef.bin'), 'someone else\'s ciphertext', 'utf8')
+    await installExtensionFromPath(await source(), async () => true)
+    await expect(readdir(secrets)).rejects.toMatchObject({ code: 'ENOENT' })
+    // An UPDATE (same source, previous row exists) keeps the secrets it stored.
+    await mkdir(secrets, { recursive: true })
+    await writeFile(join(secrets, 'cafe.bin'), 'own ciphertext', 'utf8')
+    await installExtensionFromPath(await source(), async () => true)
+    expect(await readdir(secrets)).toEqual(['cafe.bin'])
   })
 
   it('refuses a bundle from a different source that claims an installed id', async () => {

@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { GhostLedgerCandidate } from '@renderer/rendering/model/ledger'
 
@@ -64,15 +65,14 @@ export function collectGhostCandidates(
   provider: AgentProviderKind,
   sessionId: string,
 ): GhostLedgerCandidate[] {
-  // Opencode gate (plan §ghosts): opencode's mapper mints ghosts with no
-  // supersede key — reconcileUpstream can never match them, so every one
-  // eventually orphans and, being real turn content, passes the shape
-  // backstop too. Rendering them would double every opencode turn. Until
-  // opencode grows a supersede identity, its ghost plane is bookkeeping
-  // only (crash-recovery journal), never a render source. Gating HERE
-  // (collector, with the provider in hand) and not in the predicate keeps
-  // the five rules provider-neutral.
-  if (provider === 'opencode') return []
+  // Provider gate (plan §ghosts): a provider whose ghosts can never be
+  // superseded (OpenCode's mapper mints them with no supersede key) would
+  // double every turn if its ghost plane rendered. Whether that holds is the
+  // provider's declaration (ledgerPolicy.rendersGhostFallback, #1177 — it
+  // was an `opencode` literal here). Gating HERE (collector, with the
+  // provider in hand) and not in the predicate keeps the five rules
+  // provider-neutral.
+  if (!getRendererProviderCapabilities(provider).ledgerPolicy.rendersGhostFallback) return []
 
   const out: GhostLedgerCandidate[] = []
   for (const [uuid, ghost] of ghosts) {

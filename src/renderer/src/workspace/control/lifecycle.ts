@@ -6,7 +6,8 @@ import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/hook'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import { providerSwitchChoices } from '@renderer/workspace/providerChoices'
-import { isAgentProviderKind } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
+import { AGENT_PROVIDER_KINDS, effectiveProviderRuntime, isAgentProviderKind, providerOffersTerminalRuntime } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { startControlTask } from './startTask'
@@ -14,7 +15,7 @@ import { startControlTask } from './startTask'
 const target = z.object({ sessionId: z.string().min(1).describe('Exact Agent Code sessionId from agents.search; not the native transcript ID.') }).strict()
 const revision = z.string().describe('Revision from agents.lifecycleRead. Refresh it after any lifecycle or draft change.')
 const accepted = z.object({ callId: z.string(), accepted: z.literal(true) })
-const address = z.object({ provider: z.enum(['claude', 'codex', 'opencode', 'grok']), line: z.number().int().min(0),
+const address = z.object({ provider: z.enum(AGENT_PROVIDER_KINDS), line: z.number().int().min(0),
   sessionId: z.string().nullable(), uuid: z.string().nullable().optional() }).strict()
 
 // Lifecycle adapters consume observable domain results, not toasts or before/
@@ -39,7 +40,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       rewindUndo: runtime?.pendingRewindUndo?.createdAt ?? null, providerSwitch: runtime?.providerSwitch ?? null }
     return { sessionId, provider, providerRuntime: meta.providerRuntime ?? null, nativeSessionId, cwd: meta.cwd, processActive,
       hasRewindUndo: Boolean(runtime?.pendingRewindUndo), revision: paginate([evidence], { limit: 1 }, `lifecycle:${sessionId}`).revision,
-      switchChoices: providerSwitchChoices(provider).map(choice => ({ provider: choice.kind, runtime: choice.providerRuntime ?? null, label: choice.label })) }
+      switchChoices: providerSwitchChoices(provider).filter(choice => enabledAgentProviderKindsSnapshot().has(choice.kind)).map(choice => ({ provider: choice.kind, runtime: choice.providerRuntime ?? null, label: choice.label })) }
   }
   const guard = (input: { sessionId: string; revision: string }) => {
     if (getWorkspace().restoreStatus === 'pending' || hasAppInteractionOwner()) throw new ControlError('unavailable', 'Wait for restoration or finish the input-owning surface')
@@ -55,12 +56,12 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({ id: 'agents.resume', title: 'Resume a native session in a project', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'project', field: 'tabId' },
       description: 'Open a known native conversation as a new agent in an explicit project. Supply provider/nativeSessionId/cwd from nativeHistory.list; known OpenCode IDs are supported. This resumes the same native conversation, not a copy; the ordinary backend ownership policy applies if already open. Returns a task callId; operations.read reports the exact newSessionId. It fills the captured focused lane only when that lane is empty (selectCreated:false never places it); otherwise it waits in the project index. Use agents.show afterward to put it in a lane.',
-      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(['claude', 'codex', 'opencode', 'grok']), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }).strict(), output: accepted,
+      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(AGENT_PROVIDER_KINDS), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }).strict(), output: accepted,
       handler: (input, context) => {
         const check = () => {
           if (getWorkspace().restoreStatus === 'pending' || hasAppInteractionOwner()) throw new ControlError('unavailable', 'Wait for restoration or finish the input-owning surface')
           if (!resolveTabSessions(useAppStore.getState().workspaceState, input.tabId).includes(input.anchorSessionId)) throw new ControlError('unavailable', 'Anchor is not in the target project')
-          if (input.runtime && input.provider !== 'opencode') throw new ControlError('invalid_input', 'Only OpenCode supports the terminal runtime')
+          if (input.runtime && !providerOffersTerminalRuntime(input.provider)) throw new ControlError('invalid_input', 'Only OpenCode and terminal-only providers (Pi) support the terminal runtime')
         }
         check()
         return startControlTask(context, async () => {
@@ -107,7 +108,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({ id: 'agents.switchProvider', title: 'Switch an exact agent provider', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
       description: 'Move an observed agent to one of agents.lifecycleRead switchChoices through the normal translation, capacity/compaction and replacement transaction. May open a confirmation or take minutes. Returns a task callId; use operations.read for the new Agent Code session ID or failure. Draft and supported internal MCP-domain continuity follow the ordinary UI operation. Never assume the source ID remains valid.',
-      input: target.extend({ revision, provider: z.enum(['claude', 'codex', 'opencode', 'grok']), runtime: z.enum(['terminal']).optional().describe('Supply only when the chosen switchChoices entry declares this runtime; omit for structured rendering.') }), output: accepted,
+      input: target.extend({ revision, provider: z.enum(AGENT_PROVIDER_KINDS), runtime: z.enum(['terminal']).optional().describe('Supply only when the chosen switchChoices entry declares this runtime; omit for structured rendering.') }), output: accepted,
       handler: (input, context) => {
         const current = guard(input)
         if (!current.switchChoices.some(choice => choice.provider === input.provider && choice.runtime === (input.runtime ?? null))) throw new ControlError('invalid_input', 'Choose a supported provider/runtime from agents.lifecycleRead')
@@ -127,7 +128,12 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       description: 'Create a new native transcript ending before an exact prompt address from nativeHistory.prompts, and replace this idle agent in place. The original transcript remains intact. The selected historical prompt becomes the new unsent draft, replacing the current draft; undoRewind can restore the prior conversation/draft until the next submission. First read agents.lifecycleRead. Use operations.read for the final newSessionId; acceptance alone is not completion.',
       input: target.extend({ revision, address: address.describe('Exact address from nativeHistory.prompts for this native session; never infer line numbers from rendered feed rows.') }), output: accepted,
       handler: (input, context) => {
-        const check = () => { const value = guard(input); if (!value.nativeSessionId || value.processActive) throw new ControlError('unavailable', 'Rewind requires an idle resumable agent');
+        const check = () => { const value = guard(input); if (!value.nativeSessionId || value.processActive) throw new ControlError('unavailable', 'Rewind requires an idle resumable agent')
+          // The same gate as the Rewind command. A native TUI pane (Pi,
+          // OpenCode Terminal) renders no Agent Code composer, so the rewound
+          // prompt would land in a draft nothing shows: the agent would
+          // silently lose its turn (#896).
+          if (effectiveProviderRuntime(value.provider, value.providerRuntime ?? undefined) === 'terminal') throw new ControlError('unavailable', 'Rewind is not available for a native terminal agent: its TUI has no composer for the rewound prompt');
           // Imported transcripts can retain original source session IDs in
           // their addresses. The native transcript engine owns exact address
           // membership; comparing source identity to the container ID here

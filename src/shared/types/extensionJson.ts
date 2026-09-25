@@ -5,7 +5,12 @@ export type ExtensionJson = null | boolean | number | string | ExtensionJson[] |
 // second unbounded allocation or a main-process stack overflow. Repeated object
 // references count repeatedly, just as JSON serialization would; cycles fail the
 // depth bound without needing a recursive cycle detector.
-export function isExtensionJson(value: unknown): value is ExtensionJson {
+export const EXTENSION_JSON_MAX_CHARACTERS = 128 * 1024
+
+/** `maxCharacters` exists for ONE caller: the runtime channel's net.fetch
+ *  result, whose body is already capped by the broker (see runtimeService).
+ *  Every other boundary uses the default; do not raise it for convenience. */
+export function isExtensionJson(value: unknown, maxCharacters = EXTENSION_JSON_MAX_CHARACTERS): value is ExtensionJson {
   const pending = [{ value, depth: 0 }]
   let nodes = 0
   let characters = 0
@@ -26,12 +31,12 @@ export function isExtensionJson(value: unknown): value is ExtensionJson {
         for (const key in current) {
           if (!Object.prototype.hasOwnProperty.call(current, key)) continue
           characters += key.length
-          if (characters > 128 * 1024 || nodes + pending.length >= 4096) return false
+          if (characters > maxCharacters || nodes + pending.length >= 4096) return false
           pending.push({ value: (current as Record<string, unknown>)[key], depth: item.depth + 1 })
         }
       }
     }
-    if (characters > 128 * 1024) return false
+    if (characters > maxCharacters) return false
   }
   return true
 }

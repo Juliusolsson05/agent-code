@@ -1,4 +1,3 @@
-import type { AgentProviderKind } from '@shared/types/providerKind'
 import type {
   OwnershipDecision,
   RenderCandidate,
@@ -36,63 +35,81 @@ export type CommittedOwnership = {
   toolUseIds: ReadonlySet<string>
   toolResultIds: ReadonlySet<string>
   itemIds: ReadonlySet<string>
-  /** Normalized committed USER text — optimistic reconciliation only. */
-  userTextKeys: ReadonlySet<string>
+  /**
+   * Normalized committed USER text → the NEWEST producer timestamp among the
+   * committed user rows carrying it. Optimistic reconciliation only.
+   *
+   * WHY a timestamp and not a set (#1181): with a set, ANY earlier committed
+   * row with the same text owned a new optimistic prompt. Send `continue` a
+   * second time in a session and its optimistic row was rejected the instant
+   * it was minted, so the prompt vanished from the feed until the transcript
+   * caught up. With the composer now cleared at Enter, that gap reads as a
+   * lost prompt. A committed row can only be the twin of a prompt submitted
+   * at or before it, so ownership now also requires the committed row to be
+   * no older than the submit (see OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS).
+   * `Infinity` records a committed row with no timestamp: it keeps the old
+   * presence-only rule, because a missing time proves nothing either way.
+   */
+  userTextKeys: ReadonlyMap<string, number>
 }
 
 /**
  * Per-provider suppression policy (plan D10: asymmetry is policy, not
- * forks). `wholeTurnByMessageId` is ONLY safe when the provider's durable
- * row provably carries the semantic turn id (Claude: message.id == turnId).
- * Codex commits one response item at a time and SHARES broad turn ids
- * across items, so whole-turn suppression hides still-live output — the
- * exact #165/#191 regression class. OpenCode follows Codex (unit-level):
- * its concurrency lands via committed assembly, and note the drift report:
- * opencode committed rows DO carry message ids, which is why this is an
- * explicit policy bit and not an id-presence heuristic — presence of an id
- * does not make whole-turn suppression semantically safe.
+ * forks). The VALUES live with each provider since #1177
+ * (providers/<kind>/renderer/ledgerPolicy.ts, reached through the renderer
+ * capability registry, resolved into LedgerInput.policy by the adapter). They
+ * used to be a Record<AgentProviderKind, …> literal right here, so adding a
+ * provider meant editing the shared decide layer and the model knew every
+ * provider by name. The model now knows only what a policy bit MEANS.
  */
 export type SuppressionPolicy = {
+  /**
+   * Suppress a whole live semantic turn once a committed row carries its
+   * message id. ONLY safe when the provider's durable row provably carries
+   * the semantic turn id; presence of an id alone does not make it safe.
+   */
   wholeTurnByMessageId: boolean
   /**
    * Collapsed-running null-paint (legacy semanticRenderUnitPaintsDom
    * behavior; corpus new-bug 2026-06-29 1b2b5e96): hide a HISTORY tool
    * block whose run never resolved — no result paired into the block AND
-   * no committed tool_use/tool_result trace. CLAUDE ONLY: its tool
-   * results always pair into the block (semantic reducer) or land as
-   * committed rows, so absence of both means the run truly died. Codex is
-   * excluded because its MCP lifecycle delivers function_call_output in a
-   * LATER semantic turn — block-local evidence is legitimately absent and
-   * committed reconstruction may lag; the corpus proved the rule
-   * over-fires there (15 fixtures went missing-in-next). Opencode's
-   * committed channel is assembled server truth; no dangling-chip bundle
-   * exists for it — revisit if one appears.
+   * no committed tool_use/tool_result trace — once committed truth has
+   * moved past its turn. Only safe for a provider whose tool results always
+   * pair into the block or land as committed rows, so absence of both means
+   * the run truly died.
    */
   hideUnresolvedHistoryTools: boolean
+  /**
+   * The tools whose RUNNING history blocks may null-paint under the rule
+   * above: the provider's collapsed-activity churn set. Everything else — a
+   * running Task, Edit, AskUserQuestion, MCP tool — paints even while
+   * unresolved, because it is live signal, not churn.
+   */
+  collapsibleChurnToolNames: ReadonlySet<string>
 }
 
-export const SUPPRESSION_POLICY: Record<AgentProviderKind, SuppressionPolicy> = {
-  claude: { wholeTurnByMessageId: true, hideUnresolvedHistoryTools: true },
-  codex: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
-  opencode: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
-  // Grok durable rows are per-item with no whole-turn message id (the mapper
-  // derives uuids from generation+offset), and its MCP tool errors pair like
-  // Codex's — block-local evidence is legitimately absent, so the aggressive
-  // hide rule must not fire.
-  grok: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
+/**
+ * Everything the ledger pipeline needs to know about a provider's
+ * rendering asymmetries, declared by the provider (#1177). Two bits are
+ * read by collectors, which already hold the registry; the suppression
+ * policy reaches the pure model through LedgerInput.
+ */
+export type LedgerProviderPolicy = {
+  suppression: SuppressionPolicy
+  /**
+   * Whether the ghost plane may render as a fallback. False for a provider
+   * whose mapper mints ghosts with no supersede key: every one would orphan
+   * and, being real turn content, double the turn it belongs to.
+   */
+  rendersGhostFallback: boolean
+  /**
+   * Whether a committed NON-meta user row whose text starts with '<' is
+   * provider scaffolding (local-command markup) rather than something the
+   * user typed. Only a provider that writes such rows may say yes: for
+   * everyone else a user message starting with '<' (pasted HTML) is real.
+   */
+  angleBracketUserRowsAreScaffolding: boolean
 }
-
-/** The legacy collapsed_activity churn set (helpers.ts
- *  classifySemanticToolActivity): the only tools whose RUNNING history
- *  blocks null-paint. Source of truth is that classifier until Stage 3
- *  absorbs it; keep in sync. */
-const COLLAPSIBLE_CHURN_TOOLS: ReadonlySet<string> = new Set([
-  'Read',
-  'FileRead',
-  'Glob',
-  'Grep',
-  'Bash',
-])
 
 export function buildCommittedOwnership(
   committed: readonly RenderCandidate[],
@@ -103,7 +120,7 @@ export function buildCommittedOwnership(
   const toolUseIds = new Set<string>()
   const toolResultIds = new Set<string>()
   const itemIds = new Set<string>()
-  const userTextKeys = new Set<string>()
+  const userTextKeys = new Map<string, number>()
   for (const c of committed) {
     // Block-grain evidence mined at collection time (see RenderCandidate
     // .ownedToolUseIds WHY). This is the corpus-proven path for claude:
@@ -112,7 +129,9 @@ export function buildCommittedOwnership(
     for (const id of c.ownedToolUseIds ?? []) toolUseIds.add(id)
     for (const id of c.ownedToolResultIds ?? []) toolResultIds.add(id)
     if (c.contentKind === 'user-text' && c.normalizedTextKey) {
-      userTextKeys.add(c.normalizedTextKey)
+      const at = c.timestampMs ?? Number.POSITIVE_INFINITY
+      const newest = userTextKeys.get(c.normalizedTextKey)
+      if (newest === undefined || at > newest) userTextKeys.set(c.normalizedTextKey, at)
     }
     if (c.contentKind === 'assistant-text') {
       if (c.messageId) wholeTurnOwnerIds.add(c.messageId)
@@ -131,6 +150,18 @@ export function buildCommittedOwnership(
   }
   return { wholeTurnOwnerIds, exactText, normalizedText, toolUseIds, toolResultIds, itemIds, userTextKeys }
 }
+
+/**
+ * How far BEFORE an optimistic submit a committed twin may be stamped and still
+ * own it. The two times come from different writers (the renderer stamps the
+ * optimistic row at Enter; the provider stamps its transcript row when it
+ * records the prompt), and the provider always writes after it receives the
+ * prompt, so on one machine the twin is never really earlier. The tolerance
+ * only absorbs clock granularity and small skew between the two writers. It is
+ * far below the time a person takes to type and send the same prompt twice,
+ * which is the case this rule exists to tell apart.
+ */
+export const OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS = 2_000
 
 /**
  * Decide one live candidate against committed ownership. Returns a full
@@ -152,11 +183,15 @@ export function decideLiveCandidate(
   // optimistic row SURVIVING when no owner is provable — surviving too long
   // is visible and diagnosable; vanishing early is the silent #339 class.
   if (candidate.owner === 'optimistic-submit') {
+    const newestTwinMs = candidate.normalizedTextKey
+      ? ownership.userTextKeys.get(candidate.normalizedTextKey)
+      : undefined
     if (
-      candidate.normalizedTextKey &&
-      ownership.userTextKeys.has(candidate.normalizedTextKey)
+      newestTwinMs !== undefined &&
+      (candidate.timestampMs === null ||
+        newestTwinMs >= candidate.timestampMs - OPTIMISTIC_TWIN_CLOCK_TOLERANCE_MS)
     ) {
-      evidence.push('committed user row with matching normalized text')
+      evidence.push('committed user row with matching normalized text, not older than the submit')
       return {
         candidateId: candidate.id,
         selected: false,
@@ -249,7 +284,7 @@ export function decideLiveCandidate(
       // corpus caught it within one run: 6 claude fixtures went
       // missing-in-next on legitimate running chips.
       candidate.toolName !== undefined &&
-      COLLAPSIBLE_CHURN_TOOLS.has(candidate.toolName)
+      policy.collapsibleChurnToolNames.has(candidate.toolName)
     ) {
       const key = candidate.toolUseId ?? candidate.callId
       const committedTrace =

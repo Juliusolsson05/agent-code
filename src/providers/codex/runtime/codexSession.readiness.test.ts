@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CodexSession } from './codexSession.js'
+import { deliverCodexPrompt } from './promptDelivery.js'
 
 afterEach(() => vi.useRealTimers())
 
@@ -29,6 +30,34 @@ function installHeadless(
 }
 
 describe('CodexSession prompt readiness lifecycle', () => {
+  it.each([
+    ['text', '› unfinished human instructions\n\n  gpt-5.6-sol high · /tmp/x'],
+    ['multiline', '› \n  another draft line\n\n  gpt-5.6-sol high · /tmp/x'],
+    ['ambiguous placeholder', '› Ask Codex to do anything\n\n  gpt-5.6-sol high · /tmp/x'],
+    ['native image', '[Image #1]\n› \n\n  gpt-5.6-sol high · /tmp/x'],
+    ['Vim mode', '› \n\n  gpt-5.6-sol high · /tmp/x    Vim: Normal'],
+    ['completion', '› /re\n\n  gpt-5.6-sol high · /tmp/x\n  Press enter to insert or esc to close'],
+  ])('refuses generated delivery with %s instead of submitting native input', async (_kind, screen) => {
+    const session = new CodexSession()
+    installHeadless(session, {}, screen)
+    const write = vi.fn(() => true)
+    const before = session.snapshotScreen()
+    // Exercise the real readiness method AND delivery policy. A stub returning
+    // occupied would conceal the original bug: occupied › passes readiness.
+    const result = await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Restart the server', write, requireEmptyNativeComposer: true })
+    expect(result).toMatchObject({ ok: false, stage: 'before-write', disposition: 'retry-after-resolve', promptWritten: false, enterWritten: false })
+    expect(write).not.toHaveBeenCalled()
+    expect(session.snapshotScreen()).toBe(before)
+  })
+
+  it('delivers a generated request only after a visibly empty native composer', async () => {
+    const session = new CodexSession()
+    installHeadless(session, {}, '› historical user text\n\nAssistant response\n\n' + READY_SCREEN)
+    const write = vi.fn(() => true)
+    await expect(deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Restart the server', write, requireEmptyNativeComposer: true })).resolves.toMatchObject({ ok: true })
+    expect(write).toHaveBeenCalledExactlyOnceWith('\x1b[200~Restart the server\x1b[201~\r')
+  })
+
   it('stops a partially started headless before killing its PTY', async () => {
     const session = new CodexSession()
     const order: string[] = []

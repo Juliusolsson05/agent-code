@@ -10,7 +10,7 @@ import type { Entry } from '@shared/types/transcript'
 import { CloseOldAgentsModal } from './CloseOldAgentsModal'
 
 const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }))
-vi.mock('@renderer/ui/GlobalToast', () => ({ useGlobalToast: () => ({ showToast }) }))
+vi.mock('@renderer/ui/GlobalToastContext', () => ({ useGlobalToast: () => ({ showToast }) }))
 
 const now = Date.parse('2026-09-11T12:00:00Z')
 const old = now - 8 * 60 * 60 * 1000
@@ -65,6 +65,11 @@ describe('Close Old Agents destructive scope (#886)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close 1 Agent' }))
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
     expect(killOwnedSession.mock.calls.map(([owner]) => owner.sessionId)).toEqual(['root'])
+    // The purge must journal as Close Old Agents, not 'unknown': a forty-agent
+    // cleanup is otherwise indistinguishable from a kill storm (#1135). The
+    // tag is optional on closeSession, so only this end-to-end check catches
+    // the bulk loop dropping it.
+    expect(killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ caller: 'bulk.close-old-agents' }))
     expect(harness.getState().sessions.worker).toBeDefined()
     expect(harness.getState().tabs).toHaveLength(1)
     expect(showToast).toHaveBeenLastCalledWith('Closed 1 session.', 6000)

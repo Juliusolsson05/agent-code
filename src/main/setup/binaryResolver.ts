@@ -89,6 +89,11 @@ const WELL_KNOWN_BIN_DIRS = [
   // The Grok CLI's own layout, for the same reason. Its npm install lands in a
   // prefix already scanned below, but a native install puts the binary here.
   join(homedir(), '.grok', 'bin'),
+  // Pi's installer (https://pi.dev/install.sh) writes `pi` into ~/.local/bin
+  // (above) for an npm install, or into ~/.pi/agent/bin for its managed
+  // install — and, like OpenCode's, relies on a .zshrc PATH line the login
+  // probe never sources.
+  join(homedir(), '.pi', 'agent', 'bin'),
   join(homedir(), '.volta', 'bin'),
   join(homedir(), '.asdf', 'shims'),
   join(homedir(), '.bun', 'bin'),

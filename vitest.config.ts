@@ -44,6 +44,8 @@ export const alias = [
   { find: 'opencode-headless', replacement: resolve(root, 'packages/opencode-headless/src/index.ts') },
   { find: /^opencode-terminal-headless\/(.+)$/, replacement: `${resolve(root, 'packages/opencode-terminal-headless/src')}/$1` },
   { find: 'opencode-terminal-headless', replacement: resolve(root, 'packages/opencode-terminal-headless/src/index.ts') },
+  { find: /^pi-terminal-headless\/(.+)$/, replacement: `${resolve(root, 'packages/pi-terminal-headless/src')}/$1` },
+  { find: 'pi-terminal-headless', replacement: resolve(root, 'packages/pi-terminal-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(root, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(root, 'packages/agent-transcript-parser/src/index.ts') },
   { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(root, 'packages/agent-voice-dictation/src')}/$1/index.ts` },

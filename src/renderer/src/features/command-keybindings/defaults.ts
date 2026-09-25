@@ -335,6 +335,10 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // Monaco's claim so the checker stops offering the chord as free.
     { commandId: 'goal-loop-preview', bindings: ['Cmd+Shift+G'], context: 'global' },
     { commandId: 'toggle-spotlight', bindings: ['Alt+S'], context: 'global' },
+    // ⌘⇧B is the "browser pane" chord across agent tools (Codex, Claude Code
+    // Desktop, Superset, Emdash, Conductor), and it was free here. The checker
+    // only knows THIS app's bindings; ⌘⇧B is not a macOS-reserved chord.
+    { commandId: 'toggle-browser-pocket', bindings: ['Cmd+Shift+B'], context: 'global' },
     // ⌥F, leaving ⌥⇧F open for Auto-follow ALL Visible Agents — the same
     // soft/heavy pairing, and the command that OWNS the effective state when
     // both are on (see the `detail` on toggle-tail's state).

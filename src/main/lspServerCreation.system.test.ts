@@ -129,7 +129,12 @@ describe('initialized reaches the server that initialized (#1078 review, 4)', ()
     const second = await internal.createServer('/repo', key, spec)
     internal.servers.set(key, second as unknown)
 
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // Wait for the two notifications, not for a fixed 20 ms: `initialized`
+    // follows each fake server's `initialize` reply asynchronously, and on a
+    // loaded CI runner under coverage 20 ms was not enough for either
+    // (agent-code#1174's quality gate saw `[]`). The assertion is about WHICH
+    // server each notification reached, never about how fast it came.
+    await vi.waitFor(() => expect(notified).toHaveLength(2))
     expect(notified).toEqual([first!.generation, second!.generation])
   })
 })

@@ -5,6 +5,7 @@ import type {
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseRefusalReason, CloseSessionOptions } from '@renderer/workspace/hook/actions/pane'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { KillCaller } from '@shared/lifecycle/events'
 
 // ---------------------------------------------------------------------------
 // Executing a bulk close the user has already approved.
@@ -92,6 +93,13 @@ export async function closeGrantedSessions(params: {
   sessions: WorkspaceState['sessions']
   closeSession: BulkCloseSession
   currentTarget: CurrentBulkCloseTarget
+  /**
+   * Which bulk surface this is, journaled on every kill (#1135). Required
+   * because the loop is shared: without it Close Old Agents and Close Idle
+   * Orchestration Agents are the same N kills in the journal, and a purge of
+   * forty agents reads exactly like a kill storm.
+   */
+  killCaller: KillCaller
 }): Promise<PartialCloseOutcome> {
   const outcome: PartialCloseOutcome = { closed: [], failed: [], kept: [], skipped: [] }
   // Array.prototype.sort is stable, so sessions at the same depth keep the
@@ -121,6 +129,7 @@ export async function closeGrantedSessions(params: {
         // user's own close history from the 10-entry stack, so ⌘⇧T would
         // resurrect something they had just cleared on purpose.
         captureUndo: false,
+        killCaller: params.killCaller,
         // The grant stays honest at the kill boundary: the target must still
         // qualify, and a session approved while idle must not be killed once
         // it has started working.

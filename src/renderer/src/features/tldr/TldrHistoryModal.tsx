@@ -120,7 +120,9 @@ export function TldrHistoryModal({ open, sessionId, workspace, onClose }: Props)
                   <li key={`${entry.kind}:${entry.revision}`} className="flex flex-col gap-1 border-b border-border pb-3 last:border-b-0">
                     <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{entry.text}</p>
                     <span className="text-[11px] text-muted">
-                      {entry.kind === 'goal' ? 'Goal · ' : ''}
+                      {/* A completion row's text is the completion note
+                          (#1182), so it must never read as a new goal. */}
+                      {entry.kind === 'goal' ? (entry.completed ? 'Goal completed · ' : 'Goal · ') : ''}
                       {current ? 'Current · ' : ''}
                       <time dateTime={time.iso} title={time.exact}>{time.text}</time>
                     </span>

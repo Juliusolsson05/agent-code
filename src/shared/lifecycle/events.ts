@@ -527,6 +527,9 @@ export const WAKE_CALLERS = [
   'orchestration.read-agent',
   'orchestration.send-prompt',
   'control.send-prompt',
+  // Human clicked the local browser failure's restart request. Separate from
+  // generic delivery so wake diagnostics identify the initiating UI action.
+  'browser-pocket.restart-request',
   // Programmatic text delivery (#830: prompt templates / API key vault
   // inserting into a PTY surface). Same family as the MCP-driven callers
   // above — not a direct human gesture, but always downstream of one
@@ -535,6 +538,157 @@ export const WAKE_CALLERS = [
 ] as const
 
 export type WakeCaller = (typeof WAKE_CALLERS)[number]
+
+/**
+ * Identifies who asked main to kill a session, recorded on `kill.request`.
+ *
+ * WHY this exists (#1135): `kill.request` recorded `cause` (what main found:
+ * live entry / recovery claim / nothing) but not who asked. The 2026-08-30..
+ * 09-22 journal triage flagged a "recovery storm" that pulled in ~30 ordinary
+ * shutdowns, because 185 `cause: live-entry` kills from quit, Close Old Agents
+ * and real recovery replacement were byte-identical. The caller is the only
+ * field that separates "the app is quitting" from "the user purged agents"
+ * from "something is killing agents in a loop".
+ *
+ * WHY a closed union, for the same reason as WAKE_CALLERS: free strings drift,
+ * and a drifted tag splits one shape into two.
+ *
+ * WHY it differs from wake in one respect: `wake.request` is emitted by the
+ * renderer, so its caller never crosses IPC. `kill.request` is emitted by MAIN
+ * (the only place that sees every kill, including shutdown and internal
+ * recovery teardown), so a renderer tag rides the `session:kill-owned` IPC and
+ * main re-validates it with `isKillCaller` — a renderer value outside this
+ * list is journaled as `'unknown'` rather than trusted.
+ *
+ * WHY `'unknown'` is a member rather than omitting the field: a kill without a
+ * tag must show up as a visible gap to fix, not as an event that silently
+ * lacks a key (which a query for `caller` would never find).
+ */
+export const KILL_CALLERS = [
+  'unknown',
+  // ── main-owned ─────────────────────────────────────────────────────────
+  // SessionManager.killAll during app quit, AND any main-internal kill below
+  // (reclaim, late materialization, deadline) that runs after quit began —
+  // those only happen because killAll cancelled their transaction. Most
+  // `live-entry` kills in any run that ends in `app.shutdown.clean` should
+  // carry this.
+  'app.shutdown',
+  // A Codex replacement being RECLAIMED: a renderer reloaded (or gave up)
+  // before making the successor's id durable, so rehydrate retires the hidden
+  // successor and restores the predecessor. This is the recovery-side signal;
+  // a storm here is a recovery storm.
+  'replacement.reclaim',
+  // The same-rollout Codex handoff stopping its predecessor when the spawn did
+  // NOT say who asked. NOT a recovery signal: the handoff is the routine path
+  // for a user-initiated swap (reload / resume / rewind / MCP reload of N
+  // Codex agents). The renderer names that swap via `predecessorKillCaller`,
+  // so those journal as `replace.predecessor`; this tag only remains for a
+  // spawn from an older or foreign caller that omitted it.
+  'replacement.handoff',
+  // Recovery's own cleanup of a provider that materialized after its claim
+  // was cancelled.
+  'recovery.late-materialization',
+  // The renderer's recovery deadline fired and cancelled the claim.
+  'recovery.deadline',
+  // ── renderer, human gestures ───────────────────────────────────────────
+  // The focused-session close: keyboard command and Dispatch row buttons.
+  'close.focused',
+  // The "close lane" layout command.
+  'close.lane',
+  'close.tab',
+  'close.agent-activity',
+  // The Sessions list right-click menu (#1180): the clicked row's agent, not
+  // the focused one — distinct from close.focused in the journal for exactly
+  // that reason.
+  'close.context-menu',
+  'close.extension-surface',
+  // ── renderer, bulk and automation ──────────────────────────────────────
+  'bulk.close-old-agents',
+  'bulk.close-idle-orchestration',
+  // Close Completed Agents… (#1182): agents whose own goal_complete said the
+  // user's task is done. Its own tag so a journal reader can tell "the agents
+  // said they were finished" from "they had been inactive for N hours".
+  'bulk.close-completed-agents',
+  // Agent Activity's multi-select close (#1170). Its own tag, not
+  // `close.agent-activity`: that one is a single row the user aimed at, this
+  // is N kills from one approval, and a journal reader triaging "why did nine
+  // agents die at once" must be able to tell the two apart.
+  'bulk.agent-activity',
+  'orchestration.close-agent',
+  'orchestration.close-run',
+  // The Agent Management MCP close tool: a model asking to close an agent it
+  // does not own, always behind a forced confirmation.
+  'agent-management.close-agent',
+  // The operator `agents.close` capability (control plane / root management).
+  'control.agents-close',
+  // ── renderer, internal teardown ────────────────────────────────────────
+  // A spawn whose owning project vanished before it could be filed.
+  'spawn.unplaced',
+  // Undo Close restored a session and then had to retire it.
+  'undo-close.rollback',
+  // A wake that SPAWNED a backend which then died or failed before becoming
+  // input-ready (observed exit, failed start, or failed recovery). Never a
+  // timeout: since #772 a wake that merely times out on a live backend keeps
+  // it, so reading this as "slow boot" would send triage the wrong way.
+  'wake.spawn-failed',
+  // replaceSession (reload / provider switch / resume / rewind / built-in MCP
+  // reload): retiring the predecessor — by the renderer for most swaps, or by
+  // main during a same-rollout Codex handoff, which carries this tag across
+  // the spawn — or a successor whose source pane disappeared mid-swap.
+  'replace.predecessor',
+  'replace.orphaned-successor',
+  // Dangerous-mode toggle reloading every running agent.
+  'reload.agent-sessions',
+] as const
+
+export type KillCaller = (typeof KILL_CALLERS)[number]
+
+const KILL_CALLER_SET: ReadonlySet<string> = new Set(KILL_CALLERS)
+
+export function isKillCaller(value: unknown): value is KillCaller {
+  return typeof value === 'string' && KILL_CALLER_SET.has(value)
+}
+
+/**
+ * Why a recovery's start failed: the `cause` on `recover.failed` (#1133).
+ *
+ * WHY a closed enum and not the exception message: `code: 'start-failed'`
+ * alone left two workspace-wide outages (Sept 18 and Sept 19, 2026) readable
+ * only by lining up `seq` numbers against a neighbouring
+ * `conventions.pre_spawn_reconcile.error`. The raw message cannot go here for
+ * the same reason it stays out of the recover IPC result: provider launch
+ * errors can embed environment values, proxy URLs and scoped MCP tokens, and
+ * this stream is always on and kept on disk. A classification carries the
+ * answer to "which layer refused?" and nothing else.
+ *
+ * WHY there is no `conventions-gate` value, though #1133 proposed one: after
+ * that fix the managed-skill reconcile can no longer fail a start. It
+ * degrades the session and warns instead. A value no code path can emit would
+ * read as a live failure mode to whoever triages the next journal. The
+ * reconcile's own failure is still journaled as
+ * `conventions.pre_spawn_reconcile.error`.
+ *
+ * Add a value only when a new failure can be classified from TYPED evidence (an
+ * error class or a tag set at a known boundary). Classifying by message
+ * substring would silently fall back to `unknown` the day the wording changes.
+ */
+export const SESSION_START_FAILURE_CAUSES = [
+  // The pane's cwd no longer exists. Not retryable; see
+  // MissingWorkspaceDirectoryError.
+  'missing-workspace',
+  // The provider CLI could not be resolved to an absolute path, even after the
+  // late re-resolve. The user has to act in Setup.
+  'cli-not-found',
+  // The provider runtime was constructed and its start() threw: PTY spawn,
+  // headless bootstrap, proxy launch, or the provider exiting during startup.
+  'provider-launch',
+  // Anything not classified above, for example a missing built-in MCP host or a
+  // registry race. Kept as an explicit value so "unclassified" reads
+  // differently from "this build predates causes" (the key is absent).
+  'unknown',
+] as const
+
+export type SessionStartFailureCause = (typeof SESSION_START_FAILURE_CAUSES)[number]
 
 /**
  * The allowlisted top-level payload keys.

@@ -1,0 +1,146 @@
+{
+ "provenance": {
+  "recordedBy": "scripts/browser-pocket/record-fixtures.mts",
+  "what": "GET / on listeners owned by the app subtree",
+  "recordedAt": "2026-09-23T02:15:22.961Z",
+  "platform": "darwin-arm64",
+  "tag": "agents-and-tmux-terminal"
+ },
+ "probes": [
+  {
+   "port": 4173,
+   "status": 200,
+   "contentType": "text/html"
+  },
+  {
+   "port": 5292,
+   "status": 404,
+   "contentType": null
+  },
+  {
+   "port": 55800,
+   "status": 404,
+   "contentType": "application/json"
+  },
+  {
+   "port": 56230,
+   "status": 404,
+   "contentType": "text/plain; charset=utf-8"
+  },
+  {
+   "port": 61585,
+   "status": 404,
+   "contentType": "text/plain; charset=utf-8"
+  },
+  {
+   "port": 61426,
+   "status": 404,
+   "contentType": "text/plain; charset=utf-8"
+  },
+  {
+   "port": 62329,
+   "status": 200,
+   "contentType": "text/html; charset=utf-8"
+  },
+  {
+   "port": 55809,
+   "status": 401,
+   "contentType": null
+  },
+  {
+   "port": 60571,
+   "status": 401,
+   "contentType": null
+  },
+  {
+   "port": 56181,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 58674,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 4096,
+   "status": 200,
+   "contentType": "text/html"
+  },
+  {
+   "port": 58740,
+   "status": 200,
+   "contentType": "text/html"
+  },
+  {
+   "port": 58755,
+   "status": 200,
+   "contentType": "text/html"
+  },
+  {
+   "port": 56370,
+   "status": 401,
+   "contentType": null
+  },
+  {
+   "port": 59370,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 57438,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 20241,
+   "status": 404,
+   "contentType": "text/plain; charset=utf-8"
+  },
+  {
+   "port": 9393,
+   "status": 200,
+   "contentType": "text/html; charset=UTF-8"
+  },
+  {
+   "port": 50533,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 62678,
+   "status": 404,
+   "contentType": "text/plain"
+  },
+  {
+   "port": 62679,
+   "status": 200,
+   "contentType": "text/html; charset=utf-8"
+  },
+  {
+   "port": 50836,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 53442,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 51459,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 53837,
+   "status": 502,
+   "contentType": "text/html"
+  },
+  {
+   "port": 52500,
+   "status": 502,
+   "contentType": "text/html"
+  }
+ ]
+}

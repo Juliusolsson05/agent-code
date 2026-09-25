@@ -1,0 +1,11 @@
+{
+ "provenance": {
+  "recordedBy": "scripts/browser-pocket/record-fixtures.mts",
+  "what": "CDP recording of errors",
+  "recordedAt": "2026-09-23T02:15:47.524Z",
+  "platform": "darwin-arm64",
+  "chrome": "Chrome/153.0.8010.53",
+  "url": "/errors"
+ },
+ "geometry": []
+}

@@ -6,13 +6,14 @@ import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
 import { observeWorkspace, workspaceObservationSchema } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
-import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, AGENT_PROVIDER_RUNTIMES, providerOffersTerminalRuntime } from '@shared/types/providerKind'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 
 const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
-const provider = z.enum(['claude', 'codex', 'opencode', 'grok']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
+// Derived: a hand-written list silently dropped every new provider.
+const provider = z.enum(AGENT_PROVIDER_KINDS).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
 
 export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const observe = () => observeWorkspace(getWorkspace)
@@ -29,7 +30,12 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   // a parked session is an ordinary row in its project's index.)
   const requireSession = (sessionId: string) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
-    if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window')
+    // WHY the refusal explains id churn (#1145): the recorded case was a root
+    // management agent anchoring on ITS OWN pre-reload id — enabling this
+    // capability reloads the agent under a new launch-local id, and the model
+    // reused the old one from its own earlier tool output. The bare sentence
+    // read as "your own agent does not exist", which it had no way to act on.
+    if (!current) throw new ControlError('unavailable', 'Agent does not exist in this window. Session IDs change when an agent reloads (including your own); re-read current IDs with agents.search or app.observe instead of reusing one from earlier output')
     return current
   }
   const requireReady = () => {
@@ -62,7 +68,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
           // Admission crosses IPC. Recheck the exact captured target and surface
           // before opening the ordinary confirmation gate; never follow focus.
           requireUi(); requireSession(sessionId)
-          const closed = await getWorkspace().closeSession(sessionId)
+          const closed = await getWorkspace().closeSession(sessionId, { killCaller: 'control.agents-close' })
           return { sessionId, closed }
         })
       },
@@ -215,7 +221,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: sessionReference.extend({ readiness: z.object({ inputReady: z.boolean().nullable(), sessionRunId: z.string().nullable() }) }),
       handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title, selectCreated }) => {
         requireUi(); requireSession(anchorSessionId)
-        if (providerRuntime && kind !== 'opencode') throw new ControlError('invalid_input', 'Only OpenCode supports the terminal runtime')
+        if (providerRuntime && !providerOffersTerminalRuntime(kind)) throw new ControlError('invalid_input', 'Only OpenCode and terminal-only providers (Pi) support the terminal runtime')
         if (!resolveTabSessions(useAppStore.getState().workspaceState, tabId).includes(anchorSessionId)) {
           throw new ControlError('unavailable', 'Anchor does not belong to that project')
         }

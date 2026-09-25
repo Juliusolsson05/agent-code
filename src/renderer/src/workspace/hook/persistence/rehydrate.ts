@@ -38,6 +38,7 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
+import { userMcpOverridesFrom } from '@shared/userMcp/types'
 import * as perf from '@renderer/performance/client'
 import { reportLifecycle } from '@renderer/lifecycle/report'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
@@ -676,6 +677,9 @@ export async function rehydrateWorkspace(
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains,
+            // User MCP choices ride the same path as the built-in domains
+            // (#1143); main uses them only if it has to start the backend.
+            ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             // Only bootstrap can prove the predecessor ID still came from the
             // durable workspace. Ordinary retry/wake calls must not be able to
             // abort a same-pane replacement transaction.
@@ -738,6 +742,9 @@ export async function rehydrateWorkspace(
             ...(recovery.snapshot.tldrIdentity ? { tldrIdentity: recovery.snapshot.tldrIdentity } : {}),
             ...(recoveredBuiltInMcpDomains !== undefined
               ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
+              : {}),
+            ...(recovery.snapshot.userMcpServerIds !== undefined
+              ? { userMcpServerIds: recovery.snapshot.userMcpServerIds }
               : {}),
             ...(recovery.tmuxName ? { tmuxName: recovery.tmuxName } : {}),
           }

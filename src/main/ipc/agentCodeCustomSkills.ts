@@ -8,8 +8,10 @@ import type {
   CreateAgentCodeCustomSkillRequest,
   DeleteAgentCodeCustomSkillRequest,
   SetAgentCodeCustomSkillEnabledRequest,
+  SetAgentCodeCustomSkillProvidersRequest,
   UpdateAgentCodeCustomSkillRequest,
 } from '@shared/types/agentCodeCustomSkills.js'
+import { isAgentProviderKind } from '@shared/types/providerKind.js'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -64,6 +66,18 @@ function parseEnabled(value: unknown): SetAgentCodeCustomSkillEnabledRequest {
   return value as SetAgentCodeCustomSkillEnabledRequest
 }
 
+function parseProviders(value: unknown): SetAgentCodeCustomSkillProvidersRequest {
+  if (!isRecord(value)
+    || !isRevision(value.expectedRevision)
+    || !isId(value.skillId)
+    || !(value.providers === null || (Array.isArray(value.providers)
+      && value.providers.length > 0
+      && value.providers.every(isAgentProviderKind)))) {
+    throw new Error('Invalid custom skill providers request')
+  }
+  return value as SetAgentCodeCustomSkillProvidersRequest
+}
+
 function parseDelete(value: unknown): DeleteAgentCodeCustomSkillRequest {
   if (!isRecord(value)
     || !isRevision(value.expectedRevision)
@@ -86,6 +100,8 @@ export function registerAgentCodeCustomSkillsIpc(service: AgentCodeConventionsSe
     service.createCustomSkill(parseCreate(value)))
   ipcMain.handle('agent-code-custom-skills:update', (_event, value: unknown) =>
     service.updateCustomSkill(parseUpdate(value)))
+  ipcMain.handle('agent-code-custom-skills:set-providers', (_event, value: unknown) =>
+    service.setCustomSkillProviders(parseProviders(value)))
   ipcMain.handle('agent-code-custom-skills:set-enabled', (_event, value: unknown) =>
     service.setCustomSkillEnabled(parseEnabled(value)))
   ipcMain.handle('agent-code-custom-skills:delete', (_event, value: unknown) =>

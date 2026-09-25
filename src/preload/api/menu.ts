@@ -1,4 +1,7 @@
+import { ipcRenderer } from 'electron'
+
 import { subscribe } from '@preload/api/ipc.js'
+import type { PopupMenuRequest } from '@shared/types/popupMenu.js'
 import type { Unsub } from '@preload/api/types.js'
 
 // Native menu → renderer command dispatch (issue #148).
@@ -15,4 +18,11 @@ import type { Unsub } from '@preload/api/types.js'
 export const menuApi = {
   onMenuCommand: (cb: (commandId: string) => void): Unsub =>
     subscribe('menu:command', cb),
+  /**
+   * Show a native popup menu and resolve with the chosen item's id, or null
+   * when dismissed (#1180). Main returns only ids the renderer supplied; it
+   * never runs anything — the caller maps the id back to its own action.
+   */
+  showPopupMenu: (request: PopupMenuRequest): Promise<string | null> =>
+    ipcRenderer.invoke('menu:popup', request),
 }

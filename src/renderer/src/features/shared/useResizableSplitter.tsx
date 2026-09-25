@@ -104,7 +104,12 @@ export function useResizableSplitter({ axis = 'x', enabled = true, onDrag }: Opt
     window.addEventListener('mousemove', onMove, true)
     window.addEventListener('mouseup', onUp, true)
     window.addEventListener('blur', onUp)
+    // Browser pocket pages (<webview>) swallow mouse events, so a drag that
+    // crosses one would stall; BrowserPocketHost makes guests inert while
+    // this class is set (#1142 review B #7).
+    document.documentElement.classList.add('pocket-dragging')
     return () => {
+      document.documentElement.classList.remove('pocket-dragging')
       window.removeEventListener('mousemove', onMove, true)
       window.removeEventListener('mouseup', onUp, true)
       window.removeEventListener('blur', onUp)

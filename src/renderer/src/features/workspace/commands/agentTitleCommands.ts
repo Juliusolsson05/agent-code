@@ -1,12 +1,14 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // WHY every session kind qualifies (#865): the title is session metadata, not a
 // transcript feature. Plain shells were refused here (#660) until the product
 // decided a terminal running a dev server deserves a glance label as much as an
 // agent does. The reducer and the operator capability accept terminals too.
 function titleTarget(ctx: CommandContext): string | null {
-  const sessionId = commandTargetSessionId(ctx.workspace)
+  // commandTarget: the right-clicked row when the Sessions menu runs this
+  // (#1180), the focused agent otherwise.
+  const sessionId = commandTarget(ctx)
   if (!sessionId) return null
   return ctx.workspace.state.sessions[sessionId] ? sessionId : null
 }
@@ -37,5 +39,6 @@ export const agentTitleCommands: CommandDef[] = [
       const sessionId = titleTarget(ctx)
       if (sessionId) ctx.ui.openAgentTitlePrompt(sessionId)
     },
+    contextMenu: { group: 'identity', order: 10 },
   },
 ]

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { SessionManager } from '@main/sessionManager.js'
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
@@ -31,10 +32,13 @@ import { wrapWithSttTag } from 'agent-voice-dictation/composer'
 //   - Everything durable (secret, registry) lazy-loads on first enable()
 //     and persists across disable/enable cycles — pairing survives toggling
 //     the server off overnight.
-//   - Everything live (feed tap, server, transport) is created on enable()
+//   - Everything live (feed sink, server, transport) is created on enable()
 //     and torn down on disable() — a disabled remote subsystem holds NO
-//     manager subscriptions and NO sockets, so its steady-state cost when
-//     off is zero. That property is why this is safe to ship default-off.
+//     sink on the shared session feed tap and NO sockets, so its
+//     steady-state cost when off is zero. That property is why this is safe
+//     to ship default-off. (The tap itself belongs to main and feeds the
+//     desktop whether or not remote is on; since #1177 remote no longer
+//     subscribes to SessionManager directly.)
 
 export type RemoteTransportMode = 'lan' | 'tunnel'
 
@@ -96,6 +100,17 @@ export type RemoteStatus = {
 
 export type RemoteControllerDeps = {
   manager: SessionManager
+  /**
+   * The ONE session feed tap main/index.ts builds for the manager, shared
+   * with the desktop forwarder (#1177). A GETTER because this controller is
+   * constructed before index.ts wires the forwarder, and the tap must be
+   * created at the forwarder's spot to keep its manager listeners in their
+   * old registration order; remote is only ever enabled by a later user
+   * action, so the getter always resolves by then. Required, not defaulted:
+   * a controller that quietly built its own tap would bring back the second
+   * sub-agent watcher and the drifting second copy of the ordering.
+   */
+  getFeedTap: () => SessionFeedTap
   journal?: AppRunJournal | null
   /** Override the durable-state root (secret, devices.json). Tests point
    *  this at a tmpdir; production uses REMOTE_STATE_DIR. */
@@ -188,10 +203,11 @@ export class RemoteController extends EventEmitter {
     try {
       // Transport FIRST: it is the most likely failure (tunnel binary
       // missing) and allocates nothing that needs teardown, whereas
-      // SessionFeedSource subscribes to SessionManager the moment it is
-      // constructed. Building the tap before a throwing transport leaked a
-      // full set of manager listeners per failed enable attempt (review
-      // finding) — construction order IS the resource-safety argument here.
+      // SessionFeedSource attaches a sink to the shared feed tap the moment
+      // it is constructed. Building it before a throwing transport leaked a
+      // full set of listeners per failed enable attempt (review finding;
+      // then manager listeners, now a tap sink) — construction order IS the
+      // resource-safety argument here.
       const transport = this.deps.createTransport?.() ?? (await this.buildTransport(mode))
       const secret = await loadOrCreateRemoteSecret(this.stateDir)
       if (!this.registry) {
@@ -199,7 +215,7 @@ export class RemoteController extends EventEmitter {
         await this.registry.load()
       }
       this.pairing = new DevicePairing({ secret, registry: this.registry })
-      this.feedSource = new SessionFeedSource(this.deps.manager)
+      this.feedSource = new SessionFeedSource(this.deps.manager, this.deps.getFeedTap())
       this.server = new RemoteServer({
         manager: this.deps.manager,
         feedSource: this.feedSource,

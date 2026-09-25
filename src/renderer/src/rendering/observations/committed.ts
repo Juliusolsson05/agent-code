@@ -16,6 +16,7 @@ import {
   providerTaskNotificationFromEntry,
 } from '@providers/registry.renderer.capabilities'
 import type { Entry, ToolUseBlock } from '@shared/types/transcript'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent'
 import type { ProviderDurableEntryKind } from '@shared/types/providerConfig'
 
 // ---------------------------------------------------------------------------
@@ -121,21 +122,21 @@ function textOf(e: RawCommittedEntry): string | null {
 }
 
 /**
- * The #338 synthetic-Claude-user predicate, centralized. Claude writes
- * local-command scaffolding as NON-meta user rows — `<command-name>`,
- * `<local-command-stdout>`, `<environment_context>` — which rendered as if
- * the user typed them ("we are so often spitting out commands into the user
- * prompts"). The stronger predicate already existed in latestUserPrompts.ts
- * and the prompt folder but feed visibility never adopted it; this collector
- * is now the single home. Claude-only: other providers don't emit
- * angle-bracket scaffolding as user rows, and a codex/opencode user message
- * legitimately starting with '<' (pasted HTML) must not be hidden.
+ * The #338 synthetic-user predicate, centralized. A provider that writes
+ * local-command scaffolding as NON-meta user rows (Claude: `<command-name>`,
+ * `<local-command-stdout>`, `<environment_context>`) rendered it as if the
+ * user typed it. The stronger predicate already existed in
+ * latestUserPrompts.ts and the prompt folder but feed visibility never
+ * adopted it; this collector is now the single home. WHICH providers write
+ * such rows is the provider's own declaration (ledgerPolicy, #1177) — it
+ * was a `provider !== 'claude'` literal here — because for everyone else a
+ * user message starting with '<' (pasted HTML) is real and must not hide.
  */
-function isSyntheticClaudeUserRow(
+function isScaffoldingUserRow(
   e: RawCommittedEntry,
   provider: AgentProviderKind,
 ): boolean {
-  if (provider !== 'claude') return false
+  if (!getRendererProviderCapabilities(provider).ledgerPolicy.angleBracketUserRowsAreScaffolding) return false
   if (e.type !== 'user' || e.message?.role !== 'user') return false
   if (e.permissionMode !== undefined) return false
   const text = textOf(e)
@@ -351,7 +352,7 @@ export function collectCommittedCandidates(
       })
       return
     }
-    if (isSyntheticClaudeUserRow(e, provider)) {
+    if (isScaffoldingUserRow(e, provider)) {
       decisions.push({
         candidateId: id,
         selected: false,
@@ -393,7 +394,18 @@ export function collectCommittedCandidates(
       // assistant-text candidates exclusively) but for optimistic-prompt
       // reconciliation: the committed user row owns its optimistic stand-in
       // by normalized text (marker+text, never tail position).
-      normalizedTextKey: text ? normalizeTextKey(text) : undefined,
+      //
+      // A PASTED Claude prompt is committed inside Claude's <pasted_content>
+      // envelope, while the pending row carries what the user typed. Keyed on
+      // the raw text, the two never matched, so both painted until the send
+      // settled (PR #1183 review, Codex 3). The user key is the envelope's
+      // inner text. unwrapClaudePastedContent is the same strict whole-string
+      // unwrap main uses to recognise the accepted prompt, and it returns null
+      // for anything that is not exactly one envelope, so no other row's key
+      // changes.
+      normalizedTextKey: text
+        ? normalizeTextKey(e.type === 'user' ? (unwrapClaudePastedContent(text) ?? text) : text)
+        : undefined,
       ownedToolUseIds: mined.toolUse.length > 0 ? mined.toolUse : undefined,
       ownedToolResultIds: mined.toolResult.length > 0 ? mined.toolResult : undefined,
     })

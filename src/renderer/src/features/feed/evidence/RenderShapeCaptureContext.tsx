@@ -5,6 +5,7 @@ import {
   armRenderShapeCapture,
   disarmRenderShapeCapture,
 } from '@renderer/features/feed/evidence/observer'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 
 // Capture gate / session binding — Phase 2.
 //
@@ -70,23 +71,30 @@ export function RenderShapeCaptureProvider({
     () => ({ sessionId, provider }),
     [sessionId, provider],
   )
+  // The recorder bridge is a HOST capability (#1177). A host without one (the
+  // phone) never arms capture — before, it got there by every `window.api`
+  // call below failing inside a try/catch. The try/catches that remain guard
+  // a desktop bridge that is present but failing, never an absent one.
+  const { sessionRecording } = useRendererHost()
   useEffect(() => {
+    if (!sessionRecording) return undefined
     let cancelled = false
+    const arm = (generation: string): void => {
+      armRenderShapeCapture(sessionId, generation, sessionRecording.appendSightings)
+    }
     const check = (): void => {
       try {
-        void window.api
-          .isSessionRecording(sessionId)
+        void sessionRecording
+          .isRecording(sessionId)
           .then(state => {
             if (cancelled) return
-            if (state.recording && state.generation) {
-              armRenderShapeCapture(sessionId, state.generation)
-            }
+            if (state.recording && state.generation) arm(state.generation)
           })
           .catch(() => {
             /* recording capability off — observer stays disarmed */
           })
       } catch {
-        /* preload absent (bare component tests) — observer stays disarmed */
+        /* preload absent (bare harness) — observer stays disarmed */
       }
     }
     check()
@@ -99,16 +107,14 @@ export function RenderShapeCaptureProvider({
     let unsubscribe: (() => void) | undefined
     let unsubscribeStopping: (() => void) | undefined
     try {
-      unsubscribe = window.api.onSessionRecordingStarted?.(payload => {
-        if (!cancelled && payload.sessionId === sessionId) {
-          armRenderShapeCapture(sessionId, payload.generation)
-        }
+      unsubscribe = sessionRecording.onStarted(payload => {
+        if (!cancelled && payload.sessionId === sessionId) arm(payload.generation)
       })
     } catch {
       /* preload absent — capture remains disarmed */
     }
     try {
-      unsubscribeStopping = window.api.onSessionRecordingStopping?.(payload => {
+      unsubscribeStopping = sessionRecording.onStopping(payload => {
         if (cancelled || payload.sessionId !== sessionId) return
         // Main owns the recorder lifetime; renderer owns the coalesced queue.
         // Echoing main's opaque generation closes that ownership loop without
@@ -131,7 +137,7 @@ export function RenderShapeCaptureProvider({
             // owners—the recorder grace period existed, but renderer ended it
             // before its other evidence producer had a chance to run.
             await new Promise<void>(resolve => window.setTimeout(resolve, 0))
-            await window.api.finishSessionRecordingStop(sessionId, generation)
+            await sessionRecording.finishStop(sessionId, generation)
           }
         })()
           .catch(() => {
@@ -146,7 +152,7 @@ export function RenderShapeCaptureProvider({
       unsubscribe?.()
       unsubscribeStopping?.()
     }
-  }, [sessionId])
+  }, [sessionId, sessionRecording])
   return (
     <RenderShapeCaptureContext.Provider value={binding}>
       {children}

@@ -27,7 +27,7 @@ import { withVisibleControls } from '@shared/text/visibleControls'
 //
 // Parallel to `ViewPromptsModal` (same row component, every prompt, newest
 // first) but rows are clickable — each invokes
-// `workspace.rewindFocusedToPrompt(anchor)` and the modal closes.
+// `workspace.rewindSessionToPrompt(sessionId, anchor)` and the modal closes.
 // Keyboard navigation mirrors the other command palette family
 // (Up/Down to move, Enter to confirm, Esc to close).
 //
@@ -139,9 +139,14 @@ export function RewindToPromptModal({
   // the highlight state has not caught up with it in this render.
   const confirm = async (index = selectedIndex) => {
     const target = prompts[index] ?? null
-    if (!target) return
+    if (!target || !sessionId) return
     onClose()
-    await workspace.rewindFocusedToPrompt(target.address)
+    // The session this modal was opened FOR, not whichever agent is focused
+    // now (#1180). rewindFocusedToPrompt re-resolved focus at confirm time: if
+    // focus moved while the modal was open — or the modal was opened from the
+    // Sessions right-click menu for an agent that was never focused — it
+    // rewound a different agent than the one whose prompts were listed.
+    await workspace.rewindSessionToPrompt(sessionId, target.address)
   }
 
   return (

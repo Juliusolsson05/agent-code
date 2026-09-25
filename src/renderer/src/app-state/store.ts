@@ -6,7 +6,7 @@ import { createUiShellSlice } from '@renderer/app-state/uiShell/slice'
 import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
 import type { AppStore } from '@renderer/app-state/types'
 import type { Settings } from '@renderer/app-state/settings/types'
-import { coerceSettings } from '@renderer/app-state/settings/persistence'
+import { coerceSettings, migrateLegacyDefaultAppearance } from '@renderer/app-state/settings/persistence'
 import { createSettingsStorage } from '@renderer/app-state/settings/storage'
 import {
   APP_STORE_STORAGE_KEY,
@@ -72,9 +72,11 @@ export const useAppStore = create<AppStore>()(
         // bootstrap can create or recover an agent.
         //
         // v11 reinterprets the old default appearance: a blob on Dark + Lime
-        // becomes Nord + Frost, and the Lime/Sage accent ids are retired
-        // (#973). coerceSettings does the work on every hydration; the bump is
-        // the record that a persisted VALUE changed meaning, per the rule above.
+        // becomes Nord + Frost (#973). The bump is the record that a persisted
+        // VALUE changed meaning, per the rule above — and since #1173 it is
+        // also load-bearing: Lime is selectable again, so `migrate` below uses
+        // "stored version < 11" to tell an untouched old default apart from
+        // a user who picked Dark + Lime after the change.
         version: 11,
         storage: createSettingsStorage(),
         partialize: state => ({ settings: state.settings }),
@@ -106,10 +108,15 @@ export const useAppStore = create<AppStore>()(
           const legacyPromptTemplates = version < 6 && data?.settings?.savedPromptTemplates === undefined
             ? readLegacyPromptTemplatesFromStandaloneStorage()
             : undefined
+          // WHY here and not in coerceSettings: only `migrate` knows the
+          // stored version. Zustand hands our return value to `merge`, which
+          // coerces again — harmless, because by then a migrated blob is
+          // already Nord + Frost and a kept Dark + Lime is a valid pair.
+          const settings = migrateLegacyDefaultAppearance(data?.settings, version)
           return {
             settings: coerceSettings({
-              ...data?.settings,
-              savedPromptTemplates: data?.settings?.savedPromptTemplates ?? legacyPromptTemplates,
+              ...settings,
+              savedPromptTemplates: settings?.savedPromptTemplates ?? legacyPromptTemplates,
             }),
           }
         },

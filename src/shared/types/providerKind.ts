@@ -32,7 +32,7 @@
  * will fail to compile until every kind has a config. That compile
  * error is the intended checklist.
  */
-export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode', 'grok'] as const
+export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode', 'grok', 'pi'] as const
 
 /** A provider that runs an actual agent (has transcripts, conditions, …). */
 export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number]
@@ -76,6 +76,58 @@ export const SESSION_KINDS = [...AGENT_PROVIDER_KINDS, 'terminal', 'extension-vi
  */
 export const AGENT_PROVIDER_RUNTIMES = ['terminal'] as const
 export type AgentProviderRuntime = (typeof AGENT_PROVIDER_RUNTIMES)[number]
+
+/**
+ * Providers that ONLY have the terminal runtime: their pane is always the
+ * native TUI, never Agent Code's rendered feed.
+ *
+ * WHY a provider property, resolved at READ time (effectiveProviderRuntime),
+ * instead of stamping `providerRuntime: 'terminal'` on every Pi pane when it
+ * is created: every gate that pins the TUI surface (agentDisplayMode, command
+ * policies, Rewind, remote status…) reads `providerRuntime === 'terminal'`,
+ * and many spawn paths pass only a kind — the conversation catalog's resume,
+ * split chords, a provider switch (which drops the runtime when the kind
+ * changes), MCP `create_agent` without a runtime, the control API. Any one of
+ * them missing the stamp would silently mount a feed for a provider that has
+ * none. Resolving at read time cannot miss a spawn path because it does not
+ * depend on them (spec docs/decomposition/pi-terminal.md §5.1).
+ *
+ * Pi (pi.dev) is terminal-only by product decision: its TUI is the interface,
+ * and Agent Code observes it through pi-terminal-headless.
+ */
+export const TERMINAL_ONLY_PROVIDER_KINDS = ['pi'] as const satisfies readonly AgentProviderKind[]
+
+// Accepts `unknown` because it is asked at wire boundaries (remote summaries,
+// persisted metadata) as often as of a typed kind.
+export function isTerminalOnlyProviderKind(value: unknown): boolean {
+  return typeof value === 'string' && (TERMINAL_ONLY_PROVIDER_KINDS as readonly string[]).includes(value)
+}
+
+/**
+ * The runtime a pane actually runs, whatever was stored: a terminal-only
+ * provider is always 'terminal'; anything else keeps its stored value (absent
+ * = the provider's structured runtime, as before). Every "is this the TUI
+ * surface" decision must go through here, never read `providerRuntime` raw.
+ */
+export function effectiveProviderRuntime(
+  kind: SessionKind | undefined,
+  runtime: AgentProviderRuntime | null | undefined,
+): AgentProviderRuntime | undefined {
+  if (isTerminalOnlyProviderKind(kind)) return 'terminal'
+  return runtime ?? undefined
+}
+
+/**
+ * May a caller REQUEST the terminal runtime for this provider (the control API,
+ * MCP create_agent)? OpenCode, whose native TUI is a second, separately
+ * selectable runtime, and every terminal-only provider, whose only runtime it
+ * is. Grok's main registry also names a terminal factory, but that is the same
+ * single runtime and the renderer never offered it as a choice; keeping it out
+ * preserves that behaviour.
+ */
+export function providerOffersTerminalRuntime(kind: SessionKind | undefined): boolean {
+  return kind === 'opencode' || isTerminalOnlyProviderKind(kind)
+}
 
 /**
  * Narrow an untrusted string (IPC arg, persisted metadata, MCP input)

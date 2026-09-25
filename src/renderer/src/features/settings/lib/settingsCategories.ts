@@ -1,7 +1,10 @@
 export type SettingCategoryId =
   | 'appearance'
   | 'workspace'
+  | 'providers'
   | 'agents'
+  | 'mcp'
+  | 'skills'
   | 'commands'
   | 'dictation'
   | 'performance'
@@ -27,9 +30,30 @@ export const SETTING_CATEGORIES: SettingCategory[] = [
     description: 'How the shell behaves during normal use.',
   },
   {
+    id: 'providers',
+    label: 'Providers',
+    description: 'Which coding agents appear in Agent Code, and what usage they report.',
+  },
+  {
     id: 'agents',
     label: 'Agents',
     description: 'Shared behavior and instructions for agent runtimes.',
+  },
+  // Its own category (#1143) because MCP is now one grid of built-in and user
+  // servers per provider plus the external operator server — three rows that
+  // used to be spread through Agents as eight separate toggles.
+  {
+    id: 'mcp',
+    label: 'MCP',
+    description: 'Tools your agents can use: Agent Code\'s own MCP servers and yours.',
+  },
+  // Its own category (#1161) for the same reason as MCP: one grid of every
+  // skill per provider, plus Conventions and the Custom Skills editor that
+  // used to sit among the Agents rows.
+  {
+    id: 'skills',
+    label: 'Skills',
+    description: 'Instructions your agents can load: installed, written here, and found on this machine.',
   },
   {
     id: 'commands',

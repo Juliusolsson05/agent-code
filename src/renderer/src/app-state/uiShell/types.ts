@@ -1,5 +1,6 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { TabId, SessionId } from '@renderer/workspace/types'
+import type { BuiltInMcpOverrides } from '@mcp/shared/types'
 import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ExtensionFailure } from '@renderer/apps/types'
 
@@ -14,10 +15,50 @@ import type { ExtensionFailure } from '@renderer/apps/types'
  */
 export type PendingCommandInvocation = {
   id: string
-  source: 'native-menu' | 'keybinding'
+  source: 'native-menu' | 'keybinding' | 'context-menu'
+  /**
+   * The agent the command acts on, when the caller named one (#1180: the
+   * Sessions list right-click menu). Absent means "the focused agent", which is
+   * what every native-menu and keybinding invocation still means. Carried into
+   * `CommandContext.target`; see `commandTarget` for why a vanished target
+   * refuses instead of falling back to focus.
+   */
+  target?: SessionId
   /** Close the palette again once the command has run. True when the palette
    *  was not already open, so a menu click or chord does not leave it visible. */
   closeAfterRun: boolean
+}
+
+/**
+ * A Sessions row asking for its right-click menu (#1180).
+ *
+ * WHY this goes through the store and not straight to `menu:popup` from the
+ * row: the menu is built from command `when` predicates, which need a live
+ * CommandContext — and the palette host is the only place one exists (the
+ * same reason `pendingCommandInvocation` exists). The row records the request;
+ * the host builds the template, shows it, and routes the pick.
+ */
+export type SessionMenuRequest = {
+  sessionId: SessionId
+  /**
+   * The row's own left-click action, and the lane it would use.
+   *
+   * WHY a callback rather than a lane index for the host to act on: what a
+   * click does depends on which grid row's index was clicked (it selects into
+   * that row's focused lane, or moves focus to the row's first lane —
+   * TiledDispatchLayout's `selectIntoRow`). Re-deriving that in the host would
+   * be a second definition of "what clicking this row does", and the two
+   * would drift. Absent for a disabled row, whose click does nothing.
+   *
+   * A function in store state is fine here: only `settings` is persisted, and
+   * the request is cleared the moment the host picks it up.
+   */
+  showInLane?: { label: string; run: () => void }
+  /** The row's goal loop has not ended, so "Stop Goal Loop" applies. */
+  goalLoopLive: boolean
+  /** Window coordinates for a keyboard-opened menu; absent = at the cursor. */
+  x?: number
+  y?: number
 }
 
 export type UiShellState = {
@@ -57,6 +98,14 @@ export type UiShellState = {
    * invocations share ONE dispatch path rather than growing a second one.
    */
   pendingCommandInvocation: PendingCommandInvocation | null
+  /** A Sessions row menu waiting for the palette host (#1180). */
+  sessionMenuRequest: SessionMenuRequest | null
+  /**
+   * The row whose menu is on screen, so it can stay highlighted: right-click
+   * deliberately does not select the row (D5), and without a mark the user
+   * cannot tell which of twenty similar rows the menu is about.
+   */
+  sessionMenuOpenFor: SessionId | null
   pathPickerOpen: boolean
   pathPickerDefault: string
   /** When true, the Reorder Tabs modal is open.
@@ -82,6 +131,27 @@ export type UiShellState = {
    * pin session that the user later cancels with Escape. */
   pinAgentsOpen: boolean
   settingsPageOpen: boolean
+  /** Category the Settings page should show when opened (#1143: "MCP Servers"
+   * deep-links to Settings → MCP). A plain string, not SettingCategoryId, so
+   * this slice does not import the settings feature; SettingsPage validates
+   * it and falls back to "all". */
+  settingsPageCategory: string | null
+  /** Bumped on every openSettingsPage call, so a repeated deep link to the
+   * same category still wins over a sidebar click made in between. */
+  settingsPageRequest: number
+  /** Add/Edit MCP server dialog (#1143). One owner so the Settings grid and
+   * the "Add MCP Server…" command open the same dialog. */
+  mcpServerDialog: { mode: 'add' } | { mode: 'edit'; serverId: string } | null
+  /** Add skills dialog (#1161), optionally prefilled (for example with an
+   * `npx skills add …` line for an external skill). One owner so the grid,
+   * the "Add Skill…" command and "Manage with Agent Code" share it. */
+  addSkillDialog: { initialInput: string } | null
+  /** Bumped by "Check Skill Updates"; the Skills grid runs check-all when it
+   * changes. A counter, like settingsPageRequest, so repeats still fire. */
+  skillUpdateCheckRequest: number
+  /** Target of the per-agent "Agent MCP Servers…" modal, captured when the
+   * command runs so focus moving while it is open cannot retarget it. */
+  agentMcpServersSessionId: SessionId | null
   /**
    * The session captured when Set Title is invoked.
    *
@@ -98,6 +168,14 @@ export type UiShellState = {
    * by the time the user finishes reading the warning.
    */
   rootManagementPromptSessionId: SessionId | null
+  /** Other per-agent MCP choices staged in "Agent MCP Servers…" alongside a
+   * Root Management grant (#1143). The confirmation dialog applies them in the
+   * SAME reload, so granting root there does not silently discard the rest of
+   * the user's staged changes. Null for the plain root command. */
+  rootManagementPromptOverrides: BuiltInMcpOverrides | null
+  /** The staged choices also remove Goal Loop's tools: stop the running loop,
+   * but only once the confirmed reload actually runs (#1045 rule). */
+  rootManagementPromptStopGoalLoop: boolean
   debugBundleNotePrompt: {
     bundlePath: string
     sessionId: SessionId
@@ -295,6 +373,14 @@ export type UiShellState = {
    * live key capture between the user and a one-line answer. */
   keyboardShortcutsOpen: boolean
   closeOldAgentsOpen: boolean
+  /** When true, Close Completed Agents… is open (#1182).
+   *
+   * WHY its own surface rather than a filter inside Close Old Agents: the two
+   * select on unrelated evidence. Old Agents asks "how long has nothing
+   * happened", which catches an agent waiting on review; this asks "did the
+   * agent say the user's task is done", which is true minutes after a merge.
+   * One modal answering both would make every row's reason ambiguous. */
+  closeCompletedAgentsOpen: boolean
   /** When true, the Switch Agents (bulk provider switch) modal is open.
    *
    * WHY a separate flag rather than folding it into Close Old Agents: the two

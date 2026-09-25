@@ -1,0 +1,87 @@
+{
+ "provenance": {
+  "recordedBy": "scripts/browser-pocket/record-fixtures.mts",
+  "what": "CDP recording of iframe",
+  "recordedAt": "2026-09-23T02:15:39.328Z",
+  "platform": "darwin-arm64",
+  "chrome": "Chrome/153.0.8010.53",
+  "url": "/iframe"
+ },
+ "geometry": [
+  {
+   "backendNodeId": 9,
+   "quads": {
+    "quads": [
+     [
+      8,
+      456.8125,
+      57.34375,
+      456.8125,
+      57.34375,
+      477.8125,
+      8,
+      477.8125
+     ]
+    ]
+   },
+   "box": {
+    "model": {
+     "content": [
+      16,
+      459.8125,
+      49.34375,
+      459.8125,
+      49.34375,
+      474.8125,
+      16,
+      474.8125
+     ],
+     "padding": [
+      10,
+      458.8125,
+      55.34375,
+      458.8125,
+      55.34375,
+      475.8125,
+      10,
+      475.8125
+     ],
+     "border": [
+      8,
+      456.8125,
+      57.34375,
+      456.8125,
+      57.34375,
+      477.8125,
+      8,
+      477.8125
+     ],
+     "margin": [
+      8,
+      456.8125,
+      57.34375,
+      456.8125,
+      57.34375,
+      477.8125,
+      8,
+      477.8125
+     ],
+     "width": 49,
+     "height": 21
+    }
+   },
+   "node": {
+    "node": {
+     "nodeId": 0,
+     "backendNodeId": 9,
+     "nodeType": 1,
+     "nodeName": "BUTTON",
+     "localName": "button",
+     "nodeValue": "",
+     "childNodeCount": 1,
+     "attributes": []
+    }
+   }
+  }
+ ]
+}

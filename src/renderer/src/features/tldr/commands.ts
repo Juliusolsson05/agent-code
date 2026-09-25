@@ -1,7 +1,7 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { toggle } from '@renderer/features/command-palette/commandState'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { isPreviewVisible, toggleTldr, useTldrView } from './viewState'
 
 export const tldrCommands: CommandDef[] = [{
@@ -22,15 +22,16 @@ export const tldrCommands: CommandDef[] = [{
   keywords: ['tldr', 'goal', 'history', 'summary', 'status', 'timeline', 'progress'],
   // Offered for every agent pane, not only TLDR-enabled ones: history outlives
   // turning reporting off, and the modal explains when there is none.
-  when: ({ workspace }) => {
-    const sessionId = commandTargetSessionId(workspace)
+  when: ({ workspace, target }) => {
+    const sessionId = commandTarget({ workspace, target })
     const meta = sessionId ? workspace.state.sessions[sessionId] : null
     return Boolean(meta && isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER))
   },
-  run: ({ workspace, ui }) => {
-    const sessionId = commandTargetSessionId(workspace)
+  run: ({ workspace, ui, target }) => {
+    const sessionId = commandTarget({ workspace, target })
     if (!sessionId) return
     ui.closePalette()
     ui.openTldrHistory(sessionId)
   },
+  contextMenu: { group: 'agent', order: 70, title: 'TLDR History…' },
 }]

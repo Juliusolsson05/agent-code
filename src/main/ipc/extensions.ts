@@ -16,6 +16,7 @@ import type {
   ExtensionCapability,
   ExtensionInstallResult,
   ExtensionListEntry,
+  ExtensionManifest,
   QuarantinedExtensionEntry,
 } from '@shared/types/extensions.js'
 import { withVisibleControls } from '@shared/text/visibleControls.js'
@@ -51,6 +52,39 @@ const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
     'Create or replace text files it names inside projects belonging to active sessions.',
   'notifications.show':
     'Show short app-wide status notifications while it runs in the background.',
+  // The one disclosure that is about TRUST rather than data: a service is a
+  // bundled program the host launches as a real child process with this user's
+  // privileges. It can read and write what this account can, open network
+  // connections, and run for as long as Agent Code is open. The grant gates the
+  // host's lifecycle/proxy conveniences — it is not a sandbox. If that sounds
+  // alarming, it is meant to: this is the VS Code extension-host decision,
+  // made once, per extension, here.
+  'service.run':
+    'Run bundled native programs as child processes with this user’s privileges — only when you use the extension’s start control. Native code is not sandboxed.',
+  'service.transport':
+    'Exchange requests with its own running service on this machine (the host proxies them; the extension cannot reach anything else on the network).',
+  'net.listen':
+    'Make one of its running services reachable from this machine’s local network. The host owns that listener and closes it when the service stops. Use a trusted network only.',
+  'net.connect':
+    'Open web requests to addresses you or the extension enter on this local network (private addresses only in this release; the request goes through the host, not the sandbox).',
+  // The origins themselves are appended by disclosureFor — the capability
+  // alone says nothing useful; WHICH servers is the whole decision.
+  'net.origins':
+    'Send HTTPS requests over the internet to only these servers (through the host, not the sandbox):',
+}
+
+/** Capabilities that reach a network. Used to keep the dialog's closing
+ *  sentence true: it said "It has no network access." unconditionally, even
+ *  for extensions that had just been granted net.connect or native services. */
+const NETWORK_CAPABILITIES: readonly ExtensionCapability[] = ['service.run', 'net.listen', 'net.connect', 'net.origins']
+
+function disclosureFor(cap: ExtensionCapability, manifest: ExtensionManifest): string {
+  if (cap !== 'net.origins') return `  • ${CAPABILITY_DISCLOSURE[cap]}`
+  // Every origin on its own line. The list was validated at parse time (exact
+  // https origins, DNS names); withVisibleControls is applied to the whole
+  // detail by the caller so a lookalike or bidi-spoofed name is visible.
+  const origins = (manifest.networkOrigins ?? []).map(origin => `      – ${origin}`).join('\n')
+  return `  • ${CAPABILITY_DISCLOSURE[cap]}\n${origins}`
 }
 
 function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {
@@ -81,8 +115,9 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
         : await dialog.showMessageBox(plain)
       return plainResult.response === 1
     }
-    const detail = permissions.map(cap => `  • ${CAPABILITY_DISCLOSURE[cap]}`).join('\n')
+    const detail = permissions.map(cap => disclosureFor(cap, manifest)).join('\n')
     const canWrite = permissions.includes('fs.write')
+    const usesNetwork = permissions.some(cap => NETWORK_CAPABILITIES.includes(cap))
 
     const options = {
       // Read-only requests stay a question. A real project mutation uses warning
@@ -104,7 +139,7 @@ function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPromp
       detail:
         `"${withVisibleControls(manifest.name)}" wants these capabilities:\n\n${withVisibleControls(detail)}\n\n` +
         `${canWrite ? 'It can change project files.' : 'It cannot change project files.'} ` +
-        `It has no network access. ` +
+        (usesNetwork ? '' : `It has no network access. `) +
         // The same value, twice, and the second one was raw: a source string
         // with a bidi override could therefore spoof the sentence that carries
         // the whole trust decision (#1049 re-review).
@@ -309,6 +344,9 @@ export function registerExtensionsIpc(): void {
   )
 
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
+    // removeExtension deletes the id's secrets before the ledger commit, and
+    // finalizeInstall clears stale ones on any first install (#1151 review):
+    // one owner for the credential lifecycle, shared by both removal paths.
     await removeExtension(id)
   })
 

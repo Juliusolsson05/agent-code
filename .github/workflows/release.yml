@@ -11,14 +11,11 @@ on:
         options:
           - "false"
           - "true"
-      channel:
-        description: "prerelease (a beta; never latest) or stable (becomes releases/latest). Must match package.json: stable needs a version without -beta etc."
-        required: true
-        default: "prerelease"
-        type: choice
-        options:
-          - "prerelease"
-          - "stable"
+      # No `channel` input (2026-09-24, RELEASE.md "Channels"): every manual
+      # release is STABLE and becomes releases/latest. Previews of the next
+      # version are published automatically by preview.yml, which replaced
+      # hand-cut `-beta.N` prereleases. scripts/release/identity.mjs refuses a
+      # prerelease version in package.json before anything builds.
       # WHY these are optional and default to empty (Stage 8 of
       # docs/decomposition/release-readiness.md): they used to default to
       # v0.0.2-beta.1, the release that already exists, so every later
@@ -76,25 +73,24 @@ jobs:
             exit 1
           fi
 
-      # The rules (tag = v<version>; the stable channel needs a stable
-      # version and the prerelease channel a prerelease one) live in a script
-      # with system tests: testing/system/release/identity.test.ts.
+      # The rules (tag = v<version>; the version must be stable) live in a
+      # script with system tests: testing/system/release/identity.test.ts.
       - name: Validate release identity
         id: identity
         if: ${{ github.event.inputs.publish_release == 'true' }}
         env:
-          CHANNEL: ${{ github.event.inputs.channel }}
           RELEASE_TAG: ${{ github.event.inputs.release_tag }}
           RELEASE_NAME: ${{ github.event.inputs.release_name }}
         run: node scripts/release/identity.mjs
 
   # DRIFT WARNING: build-app and package-macos below are mirrored verbatim in
-  # .github/workflows/reusable-app-build-macos.yml, which the nightly
-  # (nightly.yml, #1011) builds through. Until this file adopts that reusable
-  # workflow (a follow-up once nightlies run green), a fix to either copy
-  # MUST be mirrored in the other. The #965 executable-bit fix is the kind of
-  # hotfix that would otherwise land here only and silently leave nightlies
-  # shipping a broken build.
+  # .github/workflows/reusable-app-build-macos.yml, which the preview
+  # (preview.yml, formerly nightly.yml, #1011) builds through. Until this
+  # file adopts that reusable workflow, a fix to either copy MUST be mirrored
+  # in the other. The #965 executable-bit fix is the kind of hotfix that would
+  # otherwise land here only and silently leave previews shipping a broken
+  # build. (The reusable copy's "Stamp the build version" steps are the one
+  # intended difference: a stable release ships package.json as committed.)
   build-app:
     needs: validate-release
     runs-on: macos-latest
@@ -321,9 +317,13 @@ jobs:
         run: npm run package:mac
 
       - name: Verify packaged app contents and architectures
+        # verify-update-feed (#1129): every file latest-mac.yml names must exist
+        # here under exactly that name, or installed apps get 404 when they
+        # update. Checked before upload, while the feed and files sit together.
         run: |
           npm run verify:package:mac
           npm run smoke:package:mac
+          node scripts/release/verify-update-feed.mjs
 
       - name: Verify signed apps and notarization tickets
         if: ${{ env.HAS_SIGNING_IDENTITY == 'true' }}
@@ -367,7 +367,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest-mac.yml
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -383,13 +383,15 @@ jobs:
           # dispatched from another ref.
           target_commitish: ${{ github.sha }}
           name: ${{ needs.validate-release.outputs.name }}
-          # Hardcoded `true` until Stage 8, so no stable release could be
-          # made and releases/latest 404'd. make_latest is explicit either
-          # way: a beta must never become the fallback latest.
+          # Always false/true now that manual releases are stable-only; read
+          # from identity.mjs so the tested decision and the published flags
+          # cannot drift.
           prerelease: ${{ needs.validate-release.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.validate-release.outputs.make_latest }}
+          # latest-mac.yml by name, not release/*.yml: the wildcard also
+          # published electron-builder's builder-debug.yml on every release.
           files: |
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest-mac.yml

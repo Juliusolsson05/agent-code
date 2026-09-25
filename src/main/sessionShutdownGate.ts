@@ -14,6 +14,17 @@ interface SessionShutdownGateOptions {
   onQuitAllowed: () => void
   platform?: NodeJS.Platform
   onShutdownError?: (error: unknown) => void
+  /** Self-update exit: when drain completes with a pending update, install()
+   *  REPLACES the final app.quit(). electron-updater's quitAndInstall does not
+   *  exit the process — it re-enters before-quit/will-quit, arming Squirrel's
+   *  relaunch. Calling it AFTER a plain app.quit() loses the race and the
+   *  process exits before ShipIt takes the update: a silent no-op update. On
+   *  this second will-quit pass shutdownComplete is already true, so the gate
+   *  runs onQuitAllowed (lock release, clean journal) and does not prevent. */
+  update?: {
+    pending(): boolean
+    install(): void
+  }
 }
 
 export interface SessionShutdownGate {
@@ -87,7 +98,8 @@ export function installSessionShutdownGate(
     shutdownPromise = drain
       .then(() => {
         shutdownComplete = true
-        options.app.quit()
+        if (options.update?.pending()) options.update.install()
+        else options.app.quit()
       })
       .catch(error => {
         // WHY failure stays fail-closed but retryable: allowing Electron to exit

@@ -141,28 +141,58 @@ export async function revokeGrant(extensionId: string): Promise<void> {
  * matching two values read from the ledger would authorize hand-modified code.
  */
 export async function installedExtensionCapabilities(extensionId: string, expectedRevision?: string): Promise<ExtensionCapability[]> {
+  return (await installedExtensionGrant(extensionId, expectedRevision)).capabilities
+}
+
+/** What the user approved for the committed installation, bound to verified bytes. */
+export type InstalledExtensionGrant = {
+  capabilities: ExtensionCapability[]
+  /** The manifest's declared `networkOrigins` (net.origins, #1150). Empty
+   *  unless the bundle hash verified AND net.origins is in the approved set:
+   *  the list is part of what was consented to, so it follows exactly the same
+   *  binding as the capabilities. Legacy grant-file rows predate the field. */
+  networkOrigins: string[]
+}
+
+/**
+ * The capability set AND the declared network origins, resolved from one
+ * committed ledger snapshot under one lock and one bundle hash. Returning both
+ * together is the point: a second lookup for the origins could read a
+ * different generation than the one whose capabilities it gates.
+ */
+export async function installedExtensionGrant(extensionId: string, expectedRevision?: string): Promise<InstalledExtensionGrant> {
+  const none: InstalledExtensionGrant = { capabilities: [], networkOrigins: [] }
   return withLedgerLock(async () => {
     const row = (await readLedger()).find(entry => entry.manifest.id === extensionId)
-    if (!row) return []
+    if (!row) return none
     // A slow frame start may cross an update. Never give that old frame the new
     // generation's approval just because it still has the same extension ID.
-    if (expectedRevision !== undefined && extensionRevision(row) !== expectedRevision) return []
+    if (expectedRevision !== undefined && extensionRevision(row) !== expectedRevision) return none
     try {
       const actual = await computeBundleHash(extensionBundleDirectory(row))
       if (row.installation) {
-        return actual === row.installation.bundleSha256 ? [...(row.manifest.permissions ?? [])] : []
+        if (actual !== row.installation.bundleSha256) return none
+        const capabilities = [...(row.manifest.permissions ?? [])]
+        return {
+          capabilities,
+          networkOrigins: capabilities.includes('net.origins') ? [...(row.manifest.networkOrigins ?? [])] : [],
+        }
       }
-      const granted = await grantedCapabilities(extensionId, actual)
-      if (granted.size > 0) return [...granted]
-      // Pre-generation builds bound the grant to the ledger's tarball provenance
-      // sha256, never to a whole-bundle hash, so a real legacy grant can never
-      // match `actual`. Honour that original binding: it carries over exactly the
-      // trust the old build granted, instead of silently denying every capability
-      // after upgrade with nothing in Settings explaining why. The next update
-      // publishes an `installation` record bound to verified bytes.
-      return [...await grantedCapabilities(extensionId, row.sha256)]
+      return { capabilities: await legacyCapabilities(extensionId, actual, row.sha256), networkOrigins: [] }
     } catch {
-      return []
+      return none
     }
   })
+}
+
+async function legacyCapabilities(extensionId: string, actual: string, provenanceSha256: string): Promise<ExtensionCapability[]> {
+  const granted = await grantedCapabilities(extensionId, actual)
+  if (granted.size > 0) return [...granted]
+  // Pre-generation builds bound the grant to the ledger's tarball provenance
+  // sha256, never to a whole-bundle hash, so a real legacy grant can never
+  // match `actual`. Honour that original binding: it carries over exactly the
+  // trust the old build granted, instead of silently denying every capability
+  // after upgrade with nothing in Settings explaining why. The next update
+  // publishes an `installation` record bound to verified bytes.
+  return [...await grantedCapabilities(extensionId, provenanceSha256)]
 }

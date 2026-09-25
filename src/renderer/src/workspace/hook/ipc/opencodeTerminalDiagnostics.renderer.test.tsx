@@ -63,9 +63,23 @@ const REFUSALS: Refusal[] = [
     historyCode: 'unsupported_schema',
   },
   {
+    // #1114 changed the CODE this case reports, and nothing else about it.
+    // With a resolver wired (production, and this harness), an unresolved path
+    // is retried, so the first diagnostic is `db_path_retrying`; the permanent
+    // `db_path_unavailable` is emitted only once the ladder is spent, and the
+    // package's own suite pins that.
+    //
+    // What must NOT change is this test's whole point: the pane still fails
+    // CLOSED for the entire retry window. `transcriptStatus` is 'error' for
+    // every durable diagnostic, transient or not, so Agent Status still says
+    // error and `managedTranscriptUnavailableReason` still tells a parent
+    // `transcript_unavailable` — which is the property that stops a parent
+    // reading an empty conversation as a complete one (R5-F1/R7-F3/R8-F4).
+    // Only the LIFETIME banner is withheld, because that one can never be
+    // retracted and this state ends.
     name: 'no database path, because `opencode db path` failed',
     database: () => ({ error: 'opencode db path exited with code 1' }),
-    channelCode: 'db_path_unavailable',
+    channelCode: 'db_path_retrying',
     historyCode: 'open_failed',
   },
 ]
@@ -194,6 +208,34 @@ describe('an OpenCode Terminal pane whose server never came up (#881)', () => {
     })
 
     expect(pane.runtime().transcriptError).toContain('sink_failed')
+    expect(pane.runtime().transcriptChannelError).toBeFalsy()
+  })
+
+  // #1114. A db-path lookup that is still being retried, and one that already
+  // recovered, are both states a pane LEAVES. Nothing in this file ever clears
+  // a lifetime banner except the `provider_server_unreachable` gate above, so
+  // putting either of these in it marks a pane broken for the life of the app
+  // — in this banner, in Agent Status, and in the `transcript_unavailable`
+  // every orchestration parent reads through `managedTranscriptUnavailableReason`.
+  // That cancels the entire benefit of recovering the channel, which is why
+  // the package emits a distinct code for each instead of reusing
+  // `db_path_unavailable` (whose #864 AC8 meaning — permanent — the REFUSALS
+  // case below still pins).
+  it.each([
+    ['db_path_retrying', 'Retrying in the background; this pane has no committed transcript until it succeeds.'],
+    ['db_path_recovered_late', "anything committed while the database path was unavailable is missing from this pane's transcript"],
+  ])('leaves %s out of the lifetime banner', async (code, detail) => {
+    const recording = loadLiveFixture('plain.json')
+    const pane = await panes.startRecordedPane(recording)
+
+    act(() => {
+      pane.feed.emitJsonlError({
+        sessionId: SESSION_ID,
+        message: `OpenCode durable channel (${code}): ${detail}`,
+      })
+    })
+
+    expect(pane.runtime().transcriptError).toContain(code)
     expect(pane.runtime().transcriptChannelError).toBeFalsy()
   })
 

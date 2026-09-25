@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
+import { useAcknowledgeAfterDwell } from '@renderer/workspace/tile-tree/TileLeaf/useAcknowledgeAfterDwell'
+import { isEngagementKeydown } from '@renderer/workspace/tile-tree/engagementKeydown'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -95,6 +97,12 @@ export function AgentTerminalLeaf({
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
+  // #1172: the same hook as TileLeaf, so switching a pane between Feed and raw
+  // Terminal view never changes when its completion stripes clear.
+  const completionUnseen = runtime.unreadKind !== null
+  // Stable so the dwell timer isn't re-armed on every terminal re-render.
+  const acknowledgeThisSession = useCallback(() => acknowledgeSession(sessionId), [acknowledgeSession, sessionId])
+  useAcknowledgeAfterDwell({ sessionId, focused, unread: completionUnseen, acknowledge: acknowledgeThisSession })
   const tailAllMode = useAppStore(state => state.tailAllMode)
   const tailWorkingMode = useAppStore(state => state.tailWorkingMode)
   // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
@@ -604,7 +612,9 @@ export function AgentTerminalLeaf({
       // bubbling keyboard events. Capture observes actual engagement without
       // feeding every spinner/DSR response through React state. Paste and IME
       // commits need their own events because neither requires a normal key.
-      onKeyDownCapture={() => acknowledgeSession(sessionId)}
+      // Filtered: keys the workspace router consumed (pane navigation) and bare
+      // modifiers aren't engagement. See engagementKeydown.ts.
+      onKeyDownCapture={event => { if (isEngagementKeydown(event)) acknowledgeSession(sessionId) }}
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
@@ -629,6 +639,7 @@ export function AgentTerminalLeaf({
         projectDir={projectDir}
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}
+        completionUnseen={completionUnseen}
         // `text-ink` lifts the surface name above the muted cwd on the plain
         // strip. On the lit strip it inherits `accent-fg`, since ink is not
         // guaranteed to contrast with a user-chosen accent.
@@ -699,7 +710,9 @@ export function AgentTerminalLeaf({
           costs exactly the one case it exists for. This field is the lifetime
           marker: a channel that stopped for good, or a TUI that moved to
           another session. Both stay true until something real changes. */}
-      {runtime.transcriptChannelError ? (
+      {/* liveChannelWarning is the same lifetime class for a live channel
+          that never connected while the transcript works (Pi's bridge). */}
+      {(runtime.transcriptChannelError ?? runtime.liveChannelWarning) ? (
         <div
           data-terminal-transcript-error="true"
           role="status"
@@ -708,7 +721,7 @@ export function AgentTerminalLeaf({
             bg-warning-soft px-2 py-1 text-[10px] leading-snug text-warning
           "
         >
-          {runtime.transcriptChannelError}
+          {runtime.transcriptChannelError ?? runtime.liveChannelWarning}
         </div>
       ) : null}
 

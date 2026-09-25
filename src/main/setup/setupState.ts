@@ -3,6 +3,12 @@ import { join } from 'path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 import type { CliUpdateBehavior, CliUpdateKind } from '@shared/types/cliUpdate.js'
+import {
+  coerceOpencodeUsageSource,
+  coerceUserProviderOverrides,
+  type OpencodeUsageSource,
+  type UserProviderOverrides,
+} from '@shared/types/providerEnablement.js'
 import type { SetupToolId } from '@shared/types/setup.js'
 
 const SETUP_STATE_FILE = join(STATE_DIR, 'setup.json')
@@ -67,6 +73,14 @@ export type PersistedSetupState = {
   // for the behavior union.
   cliUpdateBehavior: CliUpdateBehavior
   cliUpdateCache: Partial<Record<CliUpdateKind, CliUpdateCacheEntry>>
+  // User's explicit provider on/off word (#1102). Only overrides persist —
+  // detection is recomputed, so these entries stay meaningful across
+  // installs/uninstalls. Same additive-field, no-version-bump rationale as
+  // manualToolPaths above; coerced defensively at load.
+  providerEnablementOverrides: UserProviderOverrides
+  // Which OpenCode-configured provider the usage surface should report
+  // (#1102/#1104). 'zai' has no reader until #1104 lands.
+  opencodeUsageSource: OpencodeUsageSource
   updatedAt: number
 }
 
@@ -78,6 +92,8 @@ const DEFAULT_SETUP_STATE: PersistedSetupState = {
   acknowledgedNoProviders: false,
   cliUpdateBehavior: 'automatic',
   cliUpdateCache: {},
+  providerEnablementOverrides: {},
+  opencodeUsageSource: 'none',
   updatedAt: 0,
 }
 
@@ -106,6 +122,10 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
           ? parsed.cliUpdateBehavior
           : 'automatic',
       cliUpdateCache: parsed.cliUpdateCache ?? {},
+      providerEnablementOverrides: coerceUserProviderOverrides(
+        parsed.providerEnablementOverrides,
+      ),
+      opencodeUsageSource: coerceOpencodeUsageSource(parsed.opencodeUsageSource),
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
     }
   } catch {
@@ -207,6 +227,24 @@ export async function setCliUpdateBehavior(
 ): Promise<PersistedSetupState> {
   const state = await loadSetupState()
   return await saveSetupState({ ...state, cliUpdateBehavior: behavior })
+}
+
+/** Replace the provider-enablement override map (#1102). Whole-map write:
+ *  the caller (main's providerEnablement module) computed the next map from
+ *  the state it just loaded, so partial merges here would only re-race it. */
+export async function setProviderEnablementOverrides(
+  overrides: UserProviderOverrides,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({ ...state, providerEnablementOverrides: overrides })
+}
+
+/** Persist the selected OpenCode usage source (#1102/#1104). */
+export async function setOpencodeUsageSource(
+  opencodeUsageSource: OpencodeUsageSource,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({ ...state, opencodeUsageSource })
 }
 
 /** Persist a successful latest-version probe. Called after every non-error

@@ -1,10 +1,10 @@
 import { TldrPane } from '@renderer/features/tldr/TldrOverlay'
 import { GoalLoopPane } from '@renderer/features/goal-loop/GoalLoopPane'
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { memo, useCallback } from 'react'
 import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 
-import { getRendererProvider } from '@providers/registry.renderer'
+import { TileLeaf } from '@renderer/workspace/tile-tree/TileLeaf'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
@@ -14,6 +14,7 @@ import { ExtensionViewLeaf } from '@renderer/workspace/tile-tree/ExtensionViewLe
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
+import { PocketedLeaf, type PocketPlacement } from '@renderer/features/browser-pocket/ui/PocketedLeaf'
 
 // The workspace leaf renderer.
 //
@@ -40,8 +41,13 @@ export function renderWorkspaceLeaf(
   showWorktreeBadges: boolean,
   onFocusRequest?: () => void,
   surfacePaneLabel?: string,
+  // Where this leaf is drawn, for the browser pocket (#1142). Lanes and
+  // Spotlight both pass one; since both draw through THIS function, the pocket
+  // follows an agent into Spotlight with no Spotlight-specific data. Absent
+  // (other callers) ⇒ no pocket UI.
+  pocketPlacement?: PocketPlacement,
 ) {
-  return <WorkspaceLeaf
+  const leaf = <WorkspaceLeaf
     sessionId={sessionId}
     focusedSessionId={focusedSessionId}
     workspace={workspace}
@@ -52,6 +58,11 @@ export function renderWorkspaceLeaf(
     onFocusRequest={onFocusRequest}
     surfacePaneLabel={surfacePaneLabel}
   />
+  // EVERY lane and Spotlight leaf is wrapped, pocket or not: attaching a
+  // pocket must not change the element type above the agent, or React
+  // remounts the agent view (terminal attach, feed) — review B #4.
+  if (!pocketPlacement) return leaf
+  return <PocketedLeaf sessionId={sessionId} workspace={workspace} placement={pocketPlacement}>{leaf}</PocketedLeaf>
 }
 
 // The subscription belongs below the recursive layout and above provider/view
@@ -115,8 +126,8 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     )
   }
 
-  // Extension-view pane. Short-circuited BEFORE getRendererProvider(kind), which
-  // throws on any non-agent kind. Every lane and Spotlight funnel through here,
+  // Extension-view pane. Short-circuited BEFORE the agent-kind check below,
+  // which throws on any non-agent kind. Every lane and Spotlight funnel through here,
   // so this one branch lights the view up everywhere. Uses `sessionId` (the
   // lane's own session) not `renderedSessionId`: the extension view is keyed to
   // its own id, not whatever agent the lane resolves to.
@@ -131,7 +142,12 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     )
   }
 
-  const provider = getRendererProvider(kind)
+  // Validate the untrusted kind (persisted SessionMeta.kind, IPC) before
+  // mounting an agent surface. This check is all that remained of the renderer
+  // provider registry's pane lookup (#1177): every provider mapped to the SAME
+  // TileLeaf, so the per-provider slot was indirection with no choice in it,
+  // and it made the provider registry import the workspace pane.
+  if (!isAgentProviderKind(kind)) throw new Error(`Unknown provider: ${kind}`)
   if (getEffectiveAgentSurfaceForSession({
     kind,
     providerRuntime: meta?.providerRuntime,
@@ -165,11 +181,10 @@ const WorkspaceLeaf = memo(function WorkspaceLeaf({
     )
   }
 
-  const LeafComponent = provider.TileLeaf
   return (
     <TldrPane runtime={runtime} provider={kind} identity={meta?.tldrIdentity ?? renderedSessionId} enabled={Boolean(meta?.builtInMcpDomains?.includes('tldr'))} goalEnabled={Boolean(meta?.builtInMcpDomains?.includes('goal'))}>
       <GoalLoopPane sessionId={renderedSessionId} />
-      <LeafComponent
+      <TileLeaf
         sessionId={renderedSessionId}
         runtime={runtime}
         paneLabel={paneLabel}

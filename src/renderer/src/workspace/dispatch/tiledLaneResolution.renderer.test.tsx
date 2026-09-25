@@ -26,6 +26,7 @@ import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recor
 // lane on the next render. A unit test cannot see that; only mounting can.
 
 const appState = vi.hoisted(() => ({
+  settings: { browserPocketEnabled: false },
   workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),
@@ -48,12 +49,10 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
 vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
   DispatchMiniList: () => null,
 }))
-vi.mock('@providers/registry.renderer', () => ({
-  getRendererProvider: () => ({
-    TileLeaf: ({ sessionId }: { sessionId: string }) => (
-      <div data-testid="lane-agent" data-session-id={sessionId} />
-    ),
-  }),
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
+  TileLeaf: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="lane-agent" data-session-id={sessionId} />
+  ),
 }))
 
 // A REAL persisted Agent Code workspace: 4 tabs, 24 sessions, 12 detached, 3

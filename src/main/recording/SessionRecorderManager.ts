@@ -33,6 +33,7 @@ const RECORDED_CHANNELS: ReadonlySet<string> = new Set([
   'session:jsonl-entries',
   'session:jsonl-error',
   'session:history-boundary',
+  'session:provider-session-changed',
   'session:transcript-diagnostic',
   'session:process-state',
   'session:conditions',

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { makePhoneConditionDispatch } from './conditionDispatch'
+import { phoneConditionHandlers } from './conditionDispatch'
 import type { PhoneConditionFeed } from './conditionDispatch'
+import { makeOutletDispatch } from '@shared/conditions-core/dispatch'
 import type { ConditionAction } from '@shared/conditions-core/contract'
 
 // The phone half of #1070. Until this file existed the ONLY way to reach this
@@ -26,7 +27,7 @@ const key: ConditionAction = { kind: 'pty', id: 'yes', label: 'Yes', data: '1' }
 
 function harness(feed: Partial<PhoneConditionFeed>) {
   const errors: (string | null)[] = []
-  const dispatch = makePhoneConditionDispatch(
+  const handlers = phoneConditionHandlers(
     {
       replyWithPtyAction: vi.fn(async () => ({ ok: true })),
       resolveCondition: vi.fn(async () => ({ ok: true })),
@@ -35,6 +36,9 @@ function harness(feed: Partial<PhoneConditionFeed>) {
     'session-1',
     message => errors.push(message),
   )
+  // Driven through the SAME dispatcher the shared ProviderConditionOutlet
+  // builds (#1177), so these cases exercise what a phone tap really runs.
+  const dispatch = makeOutletDispatch(handlers.onPtyAction, handlers.onResolveCustom, handlers.onConditionRefused)
   // `errors` keeps every call, not just the last, so the "cleared first" step
   // is observable: a dispatch that never cleared would leave the array without
   // its leading null and still end on the right message.

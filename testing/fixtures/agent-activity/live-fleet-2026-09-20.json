@@ -1,0 +1,309 @@
+{
+ "provenance": "Captured 2026-09-20 from a live Agent Code window through its own control MCP (`ac_agents_list` for identity and placement, `orchestration_list_agents` for the runtime attention fields of this window's orchestration children). Session and tab ids are truncated to 8 characters; nothing else is edited. Titles are verbatim, because they are the finding \u2014 the same reason owner-fleet-2026-09-19.json keeps its rambling ones.",
+ "whyThisFleetIsTheRightEvidence": "48 sessions in one window, 35 of them orchestration children created by one parent during a single working session. It carries every attention state the redesign has to separate: a child still thinking, 30+ finished children nobody has closed, parked pool sessions whose label falls back to a prompt fragment or a cwd, terminals and an extension view that are not agents at all, and ONE STRANDED CHILD (ba61a050) that never received its bootstrap prompt \u2014 `promptSubmitted: false`, `messageCount: 0`, `lifecycleState: waiting` \u2014 which is #854 sitting in a real fleet.",
+ "totals": {
+  "sessionsInWindow": 48,
+  "orchestrationChildren": 35,
+  "childrenCompletedAndUnclosed": 33,
+  "childrenRunning": 1,
+  "childrenStrandedWithoutTheirPrompt": 1,
+  "sessionsOnALane": 3,
+  "sessionsWithAnExplicitTitle": 35,
+  "sessionsWithASpokenAgentName": 0,
+  "nonAgentSessions": 3
+ },
+ "pool": [
+  {
+   "sessionId": "575880c6",
+   "displayLabel": "B2",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "claude",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "e6e19a29",
+   "displayLabel": "A1",
+   "title": "",
+   "displayedTitle": "bringdown",
+   "provider": "opencode",
+   "providerRuntime": "terminal",
+   "project": "bringdown",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "3bf27c7f",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "9bb36de4",
+   "displayLabel": "C47",
+   "title": "",
+   "displayedTitle": "startup",
+   "provider": "claude",
+   "providerRuntime": null,
+   "project": "startup",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "d3a84a9d",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "1220cbcb",
+   "displayLabel": "C48",
+   "title": "",
+   "displayedTitle": "startup",
+   "provider": "opencode",
+   "providerRuntime": "terminal",
+   "project": "startup",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "d3a84a9d",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "a15c8aa6",
+   "displayLabel": "B3",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "terminal",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "6579b6f4",
+   "displayLabel": "B4",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "opencode",
+   "providerRuntime": "terminal",
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "4d757102",
+   "displayLabel": "B5",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "codex",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "5906040e",
+   "displayLabel": "B6",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "claude",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    },
+    {
+     "kind": "dispatch",
+     "where": "lane 0",
+     "visible": true
+    }
+   ]
+  },
+  {
+   "sessionId": "edc2bc2f",
+   "displayLabel": "B42",
+   "title": "",
+   "displayedTitle": ".",
+   "provider": "codex",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    },
+    {
+     "kind": "dispatch",
+     "where": "lane 1",
+     "visible": true
+    }
+   ]
+  },
+  {
+   "sessionId": "2bd51d81",
+   "displayLabel": "B43",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "claude",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "a88b59a3",
+   "displayLabel": "B44",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "extension-view",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "dbd157af",
+   "displayLabel": "B45",
+   "title": "",
+   "displayedTitle": "agent-code",
+   "provider": "terminal",
+   "providerRuntime": null,
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    }
+   ]
+  },
+  {
+   "sessionId": "659f22b9",
+   "displayLabel": "B46",
+   "title": "",
+   "displayedTitle": "no lest only show me in ASCII instead",
+   "provider": "opencode",
+   "providerRuntime": "terminal",
+   "project": "agent-code",
+   "placements": [
+    {
+     "kind": "project",
+     "where": "e0224b91",
+     "visible": false
+    },
+    {
+     "kind": "dispatch",
+     "where": "lane 2",
+     "visible": true
+    }
+   ]
+  }
+ ],
+ "orchestrationChildren": [
+  {
+   "sessionId": "b05e03c1",
+   "displayLabel": "B7",
+   "title": "Review #1064 dictation lane",
+   "provider": "claude",
+   "project": "agent-code/.worktrees/dictation-focused-lane",
+   "orchestrationRole": "reviewer",
+   "lifecycleState": "completed",
+   "statusSummary": "completed",
+   "messageCount": 48,
+   "promptSubmitted": true
+  },
+  {
+   "sessionId": "ba61a050",
+   "displayLabel": "B23",
+   "title": "Review oth#5 exit drain",
+   "provider": "claude",
+   "project": "agent-code/.worktrees/exit-drain-retry/packages/opencode-terminal-headless",
+   "orchestrationRole": "reviewer",
+   "lifecycleState": "waiting",
+   "statusSummary": "waiting",
+   "messageCount": 0,
+   "promptSubmitted": false,
+   "createdAt": 1789914946567
+  },
+  {
+   "sessionId": "26ba9650",
+   "displayLabel": "B39",
+   "title": "Review #1099 condition refusal",
+   "provider": "claude",
+   "project": "agent-code/.worktrees/condition-refusal-visible",
+   "orchestrationRole": "reviewer",
+   "lifecycleState": "completed",
+   "statusSummary": "completed",
+   "messageCount": 548,
+   "promptSubmitted": true,
+   "lastActivityAt": 1789934576730,
+   "completedAt": 1789934576730
+  },
+  {
+   "sessionId": "13b397d2",
+   "displayLabel": "B41",
+   "title": "Review #1101 bridge read dedup",
+   "provider": "claude",
+   "project": "agent-code/.worktrees/bridge-read-dedup",
+   "orchestrationRole": "reviewer",
+   "lifecycleState": "running",
+   "statusSummary": "thinking",
+   "messageCount": 25,
+   "promptSubmitted": true,
+   "lastActivityAt": 1789934608036,
+   "createdAt": 1789934533533
+  },
+  {
+   "sessionId": "1304065d",
+   "displayLabel": "B40",
+   "title": "Review #1100 rewind attachments",
+   "provider": "claude",
+   "project": "agent-code/.worktrees/rewind-attachment-loss",
+   "orchestrationRole": "reviewer",
+   "lifecycleState": "completed",
+   "statusSummary": "completed",
+   "messageCount": 270,
+   "promptSubmitted": true,
+   "lastActivityAt": 1789934523233,
+   "completedAt": 1789934523233
+  }
+ ]
+}

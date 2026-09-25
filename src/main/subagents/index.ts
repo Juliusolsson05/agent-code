@@ -21,7 +21,7 @@ type Emit = (
   subAgents: Record<string, SubAgentState>,
 ) => void
 
-function subagentsDirFromTranscript(file: string): string | null {
+export function subagentsDirFromTranscript(file: string): string | null {
   if (!file.endsWith('.jsonl')) return null
   const providerSessionId = basename(file, '.jsonl')
   // Claude's layout names each transcript after its session id
@@ -31,6 +31,10 @@ function subagentsDirFromTranscript(file: string): string | null {
   // that never exists — and registration would turn a useless 600 ms poller on
   // for every Grok pane. A fixed row name is not a session id; refuse it.
   if (providerSessionId === 'chat_history') return null
+  // Pi names each session file `<ISO timestamp>_<session id>.jsonl` and has no
+  // subagents at all (research/census-2026-09-22.md in pi-terminal-headless).
+  // The same fabricated-directory trap as Grok's: refuse the timestamped name.
+  if (/^\d{4}-\d{2}-\d{2}T[\d-]+Z_/.test(providerSessionId)) return null
   return join(dirname(file), providerSessionId, 'subagents')
 }
 

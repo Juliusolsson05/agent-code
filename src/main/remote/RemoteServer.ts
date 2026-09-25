@@ -15,7 +15,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
-import { isAgentProviderKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind, isTerminalOnlyProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 import type { RemoteSessionIdentity } from './workspaceProjection.js'
@@ -97,6 +97,10 @@ export type RemoteSessionControl = {
   // structural fakes in tests stay valid; absent = no runtime field on the
   // summary, which reads as the structured runtime on the phone.
   getSpawnProviderRuntime?(sessionId: string): AgentProviderRuntime | null
+  // The live process's native session id: history's key for a FILE-backed
+  // provider that pages its own history (Pi). OPTIONAL for the same test-fake
+  // reason as above; absent means only a parseable locator can page history.
+  getNativeConversationId?(sessionId: string): string | null
 }
 
 /**
@@ -321,6 +325,11 @@ export class RemoteServer extends EventEmitter {
           input: backend.input,
         })
       }
+      // The sub-agent watcher is shared with the desktop since #1177 and only
+      // emits on change, so a fleet that is already running when remote is
+      // enabled would never reach this cache from live events alone.
+      const subAgents = this.deps.feedSource.getSubAgentsSnapshot(session.sessionId)
+      if (subAgents) this.lastSubAgents.set(session.sessionId, subAgents)
     }
 
     try {
@@ -822,7 +831,14 @@ export class RemoteServer extends EventEmitter {
         // provider also owns decoding its minted locator: resume history can
         // be requested before any live entry has announced the native id.
         const provider = getMainProvider(kind)
+        // A minted locator carries its own identity (OpenCode). A provider
+        // whose transcript IS a file but that still pages history itself
+        // (Pi: only the active branch of its tree is the conversation) has
+        // no locator grammar, and its identity is the live session's native
+        // id. Pi must not register parseTranscriptLocator for plain paths,
+        // because that would also stop inventory from stat'ing its files.
         const providerSessionId = provider.parseTranscriptLocator?.(file)
+          ?? (provider.loadHistoryChunk ? this.deps.manager.getNativeConversationId?.(msg.sessionId) ?? null : null)
         if (provider.loadHistoryChunk && !providerSessionId) {
           return { ok: false, error: 'provider transcript locator has no session identity' }
         }
@@ -956,11 +972,12 @@ export class RemoteServer extends EventEmitter {
               pinned: identity.pinned,
             }
           : {}),
-        // Runtime only means something for the provider that HAS two
-        // runtimes; stamping 'terminal'-vs-null onto claude/codex rows
-        // would conflate OpenCode's discriminator with the plain-shell
-        // session kind and confuse future readers of the wire.
-        ...(summary.kind === 'opencode' ? { providerRuntime: runtime } : {}),
+        // Runtime only means something for a provider whose pane can be its
+        // native TUI: OpenCode (two runtimes) and the terminal-only ones (Pi,
+        // always 'terminal' — main normalizes it at spawn). Stamping
+        // 'terminal'-vs-null onto claude/codex rows would conflate the
+        // discriminator with the plain-shell session kind.
+        ...(summary.kind === 'opencode' || isTerminalOnlyProviderKind(summary.kind) ? { providerRuntime: runtime } : {}),
         ...(subAgentCount !== null ? { subAgentCount } : {}),
       }
     })

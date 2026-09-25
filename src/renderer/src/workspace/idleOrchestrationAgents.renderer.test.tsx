@@ -101,6 +101,11 @@ describe('Close Idle Orchestration Agents', () => {
     // `worker` first: the coordinator is only judged once the worker it owns
     // is gone, otherwise the kill-boundary rule would keep it open.
     expect(killed()).toEqual(['worker', 'coord', 'done'])
+    // Every kill of the purge carries this surface's tag through the shared
+    // bulk loop (#1135); it is optional on closeSession, so only an
+    // end-to-end assertion catches the loop dropping it.
+    expect(killOwnedSession.mock.calls.map(([owner]) => (owner as { caller?: string }).caller))
+      .toEqual(['bulk.close-idle-orchestration', 'bulk.close-idle-orchestration', 'bulk.close-idle-orchestration'])
     expect(Object.keys(harness.getState().sessions).sort()).toEqual(['busy', 'lead', 'manual'])
     // A purge must not evict the user's own close history from the stack.
     expect(refs.undoStackRef.current.length).toBe(0)

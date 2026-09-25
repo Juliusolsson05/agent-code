@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ReportingFeatures } from './enforcement'
 import {
-  GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON,
+  GOAL_COMPLETED_CONTEXT, GOAL_NEVER_SET_REASON, GOAL_SET_CONTEXT, TLDR_GOAL_CONTEXT, TLDR_NEVER_WRITTEN_REASON, TLDR_STALE_REASON,
   TLDR_STATUS_NEVER_WRITTEN_REASON, TldrEnforcement,
 } from './enforcement'
 
@@ -9,16 +9,19 @@ function setup(features: ReportingFeatures = { tldr: true, goal: false }) {
   let clock = 1_000_000
   const written = new Map<string, string>()
   const goals = new Map<string, string>()
+  const completions = new Map<string, string>()
   const enforcement = new TldrEnforcement(
     { lastWrittenAt: async (identity: string) => written.get(identity) },
     () => clock,
-    { lastWrittenAt: async (identity: string) => goals.get(identity) },
+    { lastWrittenAt: async (identity: string) => goals.get(identity), completedAt: async (identity: string) => completions.get(identity) },
   )
   return {
     enforcement,
     tick: (ms = 1_000) => { clock += ms },
     report: (identity: string) => { written.set(identity, new Date(clock).toISOString()) },
-    setGoal: (identity: string) => { goals.set(identity, new Date(clock).toISOString()) },
+    // Mirrors the store: a new goal is a fresh record, so it drops the completion.
+    setGoal: (identity: string) => { goals.set(identity, new Date(clock).toISOString()); completions.delete(identity) },
+    completeGoal: (identity: string) => { completions.set(identity, new Date(clock).toISOString()) },
     hook: (event: 'user-prompt-submit' | 'post-tool-use' | 'stop', input: unknown = {}, token = 'process-a', identity = 'agent-a') =>
       enforcement.handle(token, identity, event, input, features),
   }
@@ -218,5 +221,25 @@ describe('Goal turn enforcement', () => {
     await t.hook('post-tool-use')
     // No TLDR exists and none is asked for.
     expect(await t.hook('stop')).toEqual({})
+  })
+
+  // #1182 review: a completed agent handed a same-direction follow-up would,
+  // by its own instructions, keep its goal — and stay ticked in the user's
+  // bulk close with new work open. The prompt is where to ask.
+  it('asks a completed agent to set a new goal if the next prompt brings more work, and stops once it does', async () => {
+    const t = setup({ tldr: true, goal: true })
+    t.setGoal('agent-a')
+    t.completeGoal('agent-a')
+    t.tick()
+    expect(await t.hook('user-prompt-submit', { turn_id: 't1' })).toEqual({
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: GOAL_COMPLETED_CONTEXT },
+    })
+    // A completed goal is still a goal: Stop never asks for one.
+    await t.hook('post-tool-use', { turn_id: 't1' })
+    t.report('agent-a')
+    expect(await t.hook('stop', { turn_id: 't1' })).toEqual({})
+    t.setGoal('agent-a')
+    t.tick()
+    expect(await t.hook('user-prompt-submit', { turn_id: 't2' })).toEqual({})
   })
 })

@@ -1,3 +1,4 @@
+import type { SessionHistoryRequest } from '@shared/sessionFeed/types'
 import { describe, expect, it, vi } from 'vitest'
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 import type { HistoryChunkResult } from '../wire'
@@ -20,9 +21,9 @@ function fixture(kind = 'claude') {
   const listeners = new Map<string, Set<(value: unknown) => void>>()
   let now = EPOCH
   const list = ['a', 'b', 'c'].map(sessionId => ({ sessionId, kind, alive: true, cwd: '/synthetic', lastActivityAt: 0 }))
-  const getHistory = vi.fn<(...args: unknown[]) => Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }>>()
-    .mockResolvedValue({ ok: true, chunk: page([]) })
-  const methods = { getHistory, getSessionList: () => list }
+  const loadHistory = vi.fn<(request: SessionHistoryRequest) => Promise<HistoryChunkResult>>()
+    .mockResolvedValue(page([]))
+  const methods = { loadHistory, getSessionList: () => list }
   const feed = new Proxy(methods, {
     get(target, key: string) {
       if (key in target) return target[key as keyof typeof target]
@@ -37,7 +38,7 @@ function fixture(kind = 'claude') {
   const store = new TranscriptStore(feed, () => now)
   const emit = (name: string, value: unknown) => { for (const cb of listeners.get(name) ?? []) cb(value) }
   return {
-    store, list, getHistory, emit,
+    store, list, loadHistory, emit,
     advance: (ms: number) => { now += ms },
     live: (entries: Array<Record<string, unknown>>, sessionId = 'a') => emit('onSessionJsonlEntries', { sessionId, entries: entries.map(entry => ({ entry, file: FILE })) }),
     semantic: (event: unknown, sessionId = 'a') => emit('onSessionSemanticEvent', { sessionId, event }),
@@ -70,7 +71,7 @@ describe('view-owned remote transcript retention', () => {
         expect(bookkeeping(f.store, sessionId).liveMapper).toBeNull()
       }
       await f.store.loadInitialHistory('a')
-      expect(f.getHistory).not.toHaveBeenCalled()
+      expect(f.loadHistory).not.toHaveBeenCalled()
     } finally { f.store.dispose() }
   })
 
@@ -91,15 +92,15 @@ describe('view-owned remote transcript retention', () => {
       expect(bookkeeping(f.store).trimmed.size).toBe(0)
       expect(bookkeeping(f.store).liveMapper).toBeNull()
 
-      let resolve!: (result: { ok: true; chunk: HistoryChunkResult }) => void
-      f.getHistory.mockReturnValueOnce(new Promise(r => { resolve = r }))
+      let resolve!: (result: HistoryChunkResult) => void
+      f.loadHistory.mockReturnValueOnce(new Promise(r => { resolve = r }))
       const pendingView = f.store.subscribe('a', () => {})
       const pending = f.store.loadInitialHistory('a')
       pendingView()
-      resolve({ ok: true, chunk: page(range(0, 20)) })
+      resolve(page(range(0, 20)))
       await pending
       expect(f.store.getSnapshot('a').entries).toHaveLength(0)
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: { ...page(range(200, 210), true), file: '/synthetic/rolled-while-unviewed.jsonl' } })
+      f.loadHistory.mockResolvedValueOnce({ ...page(range(200, 210), true), file: '/synthetic/rolled-while-unviewed.jsonl' })
       const reselected = await f.view()
       expect(f.store.getSnapshot('a').entries.map(e => e.uuid)).toEqual(range(200, 210).map(e => e.uuid))
       f.semantic({ type: 'block_started', turnId: 'old', blockId: 'suffix', blockType: 'text' })
@@ -132,9 +133,9 @@ describe('view-owned remote transcript retention', () => {
       f.live(range(0, 600))
       expect(f.store.getSnapshot('a').entries).toHaveLength(1500)
       expect(f.store.getSnapshot('a').totalEntries).toBe(2100)
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page(range(400, 600), true) })
+      f.loadHistory.mockResolvedValueOnce(page(range(400, 600), true))
       await f.store.loadOlderHistory('a')
-      expect(f.getHistory).toHaveBeenLastCalledWith('a', { beforeMarker: 'u-600', limit: 200 })
+      expect(f.loadHistory).toHaveBeenLastCalledWith({ sessionId: 'a', beforeMarker: 'u-600', limit: 200 })
       t = f.store.getSnapshot('a')
       expect(t.entries.map(e => e.uuid)).toEqual(range(400, 2100).map(e => e.uuid))
       expect(t.toolUseIndex.has('tool-400')).toBe(true)
@@ -178,7 +179,7 @@ describe('view-owned remote transcript retention', () => {
       expect(t.entries[0]?.uuid).toBe('u-100')
       expect(t.toolUseIndex.has('tool-100')).toBe(true)
       expect(t.toolResultIndex.get('tool-100')?.content).toBe('latest')
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page([...range(0, 100), result(99, 'historical')]) })
+      f.loadHistory.mockResolvedValueOnce(page([...range(0, 100), result(99, 'historical')]))
       await f.store.loadOlderHistory('a')
       expect(f.store.getSnapshot('a').toolResultIndex.get('tool-100')?.content).toBe('latest')
     } finally { f.store.dispose() }
@@ -205,29 +206,29 @@ describe('view-owned remote transcript retention', () => {
   it('carries exact history offsets through a trim and older pagination', async () => {
     const f = fixture()
     try {
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page(range(0, 2000), true, Array.from({ length: 2000 }, (_, i) => 100 + i * 80)) })
+      f.loadHistory.mockResolvedValueOnce(page(range(0, 2000), true, Array.from({ length: 2000 }, (_, i) => 100 + i * 80)))
       await f.view()
       f.live(range(2000, 2100))
       expect(f.store.getSnapshot('a').entries[0]?.uuid).toBe('u-600')
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page(range(400, 600), true, Array.from({ length: 200 }, (_, i) => 100 + (i + 400) * 80)) })
+      f.loadHistory.mockResolvedValueOnce(page(range(400, 600), true, Array.from({ length: 200 }, (_, i) => 100 + (i + 400) * 80)))
       await f.store.loadOlderHistory('a')
-      expect(f.getHistory).toHaveBeenLastCalledWith('a', { beforeMarker: 'u-600', beforeOffset: 48100, limit: 200 })
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page(range(200, 400)) })
+      expect(f.loadHistory).toHaveBeenLastCalledWith({ sessionId: 'a', beforeMarker: 'u-600', beforeOffset: 48100, limit: 200 })
+      f.loadHistory.mockResolvedValueOnce(page(range(200, 400)))
       await f.store.loadOlderHistory('a')
-      expect(f.getHistory).toHaveBeenLastCalledWith('a', { beforeMarker: 'u-400', beforeOffset: 32100, limit: 200 })
+      expect(f.loadHistory).toHaveBeenLastCalledWith({ sessionId: 'a', beforeMarker: 'u-400', beforeOffset: 32100, limit: 200 })
       expect(f.store.getSnapshot('a').entries.map(e => e.uuid)).toEqual(range(200, 2100).map(e => e.uuid))
     } finally { f.store.dispose() }
   })
   it('advances an all-duplicate history page by its exact offset rather than repeating an ambiguous marker', async () => {
     const f = fixture()
     try {
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page([raw(9)], true, [900]) })
+      f.loadHistory.mockResolvedValueOnce(page([raw(9)], true, [900]))
       await f.view()
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page([raw(9)], true, [500]) })
+      f.loadHistory.mockResolvedValueOnce(page([raw(9)], true, [500]))
       await f.store.loadOlderHistory('a')
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page(range(0, 9), false) })
+      f.loadHistory.mockResolvedValueOnce(page(range(0, 9), false))
       await f.store.loadOlderHistory('a')
-      expect(f.getHistory).toHaveBeenLastCalledWith('a', { beforeMarker: 'u-9', beforeOffset: 500, limit: 200 })
+      expect(f.loadHistory).toHaveBeenLastCalledWith({ sessionId: 'a', beforeMarker: 'u-9', beforeOffset: 500, limit: 200 })
       expect(f.store.getSnapshot('a').entries.map(e => e.uuid)).toEqual(range(0, 10).map(e => e.uuid))
       expect(f.store.getSnapshot('a').hasOlderHistory).toBe(false)
     } finally { f.store.dispose() }
@@ -249,9 +250,9 @@ describe('view-owned remote transcript retention', () => {
       expect(t.toolUseIndex.size).toBe(750)
       expect(t.toolResultIndex.size).toBe(750)
       expect(t.toolResultIndex.has('call-0')).toBe(false)
-      f.getHistory.mockResolvedValueOnce({ ok: true, chunk: page([message(300)], true, [12345]) })
+      f.loadHistory.mockResolvedValueOnce(page([message(300)], true, [12345]))
       await f.store.loadOlderHistory('a')
-      expect(f.getHistory).toHaveBeenLastCalledWith('a', { beforeMarker: 'm-301', limit: 200 })
+      expect(f.loadHistory).toHaveBeenLastCalledWith({ sessionId: 'a', beforeMarker: 'm-301', limit: 200 })
       expect(f.store.getSnapshot('a').entries.slice(0, 4).map(e => e.uuid)).toEqual(['m-300', 'm-300:result:call-300', 'm-301', 'm-301:result:call-301'])
     } finally { f.store.dispose() }
   })

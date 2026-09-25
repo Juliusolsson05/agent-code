@@ -2,14 +2,17 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SessionFeedSource } from './SessionFeedSource.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionManager } from '@main/sessionManager.js'
 
-// SessionFeedSource is the remote subsystem's ONLY tap into SessionManager's
-// event stream — a second subscriber alongside the renderer forwarder, never
-// a replacement for it. These tests drive a bare EventEmitter standing in
-// for the manager, which is honest: the source consumes nothing but `on()`,
-// `getSessionKind()`, and `getSpawnKind()` (the latter used by the emit gate
-// for the pre-registration window, before getSessionKind is populated).
+// SessionFeedSource is the remote SINK over the shared SessionFeedTap (#1177):
+// ordering and coalescing are the tap's (pinned in sessionFeedTap.test.ts);
+// what this suite owns is the remote-only policy layered on top — the session
+// list, the terminal gate, and `removed` forwarding. These tests drive a bare
+// EventEmitter standing in for the manager, which is honest: tap and source
+// consume nothing but `on()`/`off()`, `list()`, `getSessionKind()`,
+// `getSpawnKind()` (the gate's pre-registration fallback), `getSpawnCwd()` and
+// `getLastActivityAt()`.
 
 function makeManager(live: string[] = []): SessionManager & EventEmitter {
   const emitter = new EventEmitter() as SessionManager & EventEmitter
@@ -26,6 +29,21 @@ function makeManager(live: string[] = []): SessionManager & EventEmitter {
   return emitter
 }
 
+function makeSource(manager: SessionManager & EventEmitter): SessionFeedSource & { feedTap: SessionFeedTap } {
+  // A real tap, not a stub: the source is only meaningful over the tap's
+  // actual delivery, and the tap is cheap to build over an EventEmitter.
+  const tap = new SessionFeedTap(manager)
+  const source = new SessionFeedSource(manager, tap)
+  const dispose = source.dispose.bind(source)
+  return Object.assign(source, {
+    feedTap: tap,
+    dispose: () => {
+      dispose()
+      tap.dispose()
+    },
+  })
+}
+
 async function drainImmediates(): Promise<void> {
   // The source's jsonl coalescer flushes on setImmediate — one macrotask hop
   // lands after it.
@@ -35,35 +53,46 @@ async function drainImmediates(): Promise<void> {
 describe('SessionFeedSource', () => {
   it('forwards feed-covered manager events as channel/payload pairs', () => {
     const manager = makeManager()
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     const seen: Array<{ channel: string; payload: unknown }> = []
     source.onEvent((channel, payload) => seen.push({ channel, payload }))
 
     manager.emit('screen', { sessionId: 's1', plain: 'hi', markdown: '', recent: 'hi', recentMarkdown: '', picker: { visible: false, items: [] } })
     manager.emit('process-state', { sessionId: 's1', active: true, status: 'Working' })
     manager.emit('conditions', { sessionId: 's1', snapshot: { provider: 'claude', conditions: {} } })
-
-    expect(seen.map(e => e.channel)).toEqual(['screen', 'process-state', 'conditions'])
+    manager.emit('transcript-diagnostic', { sessionId: 's1', diagnostic: { kind: 'late' } })
+    // Screen and process-state are latest-per-session snapshots the tap holds
+    // for its 100 ms window (the phone used to get every repaint uncoalesced);
+    // conditions and the diagnostic cross directly.
+    expect(seen.map(e => e.channel)).toEqual(['conditions', 'transcript-diagnostic'])
+    source.feedTap.flush()
+    expect(seen.map(e => e.channel)).toEqual(['conditions', 'transcript-diagnostic', 'screen', 'process-state'])
     source.dispose()
   })
 
-  it('does NOT forward raw PTY channels (terminal-data, agent-pty-data, pty-data)', () => {
+  it('does NOT forward raw PTY channels, even though the tap emits them to a sink that asked', () => {
     const manager = makeManager()
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     const seen: string[] = []
     source.onEvent(channel => seen.push(channel))
+    // Without a sink that opted in, "the remote saw nothing" could just mean
+    // the tap never emitted — the desktop-shaped sink proves the bytes flowed.
+    const desktop: string[] = []
+    source.feedTap.addSink(channel => desktop.push(channel), { rawPty: true })
 
     manager.emit('terminal-data', { sessionId: 's1', data: 'raw bytes' })
     manager.emit('agent-pty-data', { sessionId: 's1', data: 'raw bytes' })
+    manager.emit('terminal-foreground', { sessionId: 's1', foreground: null })
     manager.emit('pty-data', { sessionId: 's1', data: 'raw bytes' })
 
+    expect(desktop).toEqual(['terminal-data', 'agent-pty-data', 'terminal-foreground'])
     expect(seen).toEqual([])
     source.dispose()
   })
 
   it('coalesces jsonl entries into one burst per tick', async () => {
     const manager = makeManager()
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     const bursts: unknown[] = []
     source.onEvent((channel, payload) => {
       if (channel === 'jsonl-entries') bursts.push(payload)
@@ -81,7 +110,7 @@ describe('SessionFeedSource', () => {
 
   it('tracks the live session list from started/exit', () => {
     const manager = makeManager()
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
 
     manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
     manager.emit('started', { sessionId: 's2', kind: 'codex' })
@@ -100,7 +129,7 @@ describe('SessionFeedSource', () => {
 
   it('seeds already-live sessions at construction (pre-enable agents are visible)', () => {
     const manager = makeManager(['pre-1', 'pre-2'])
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     expect(source.listSessions().map(s => s.sessionId).sort()).toEqual(['pre-1', 'pre-2'])
     source.dispose()
   })
@@ -108,7 +137,7 @@ describe('SessionFeedSource', () => {
   it('never tracks terminal sessions (seeded or started)', () => {
     const manager = makeManager(['term-1'])
     ;(manager.getSessionKind as ReturnType<typeof vi.fn>).mockReturnValue('terminal')
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     expect(source.listSessions()).toEqual([])
 
     manager.emit('started', { sessionId: 'term-2', kind: 'terminal' })
@@ -118,7 +147,7 @@ describe('SessionFeedSource', () => {
 
   it("emits 'removed' for tracked sessions (removed-without-exit paths)", () => {
     const manager = makeManager()
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     const seen: Array<{ channel: string; payload: unknown }> = []
     source.onEvent((channel, payload) => seen.push({ channel, payload }))
 
@@ -138,7 +167,7 @@ describe('SessionFeedSource', () => {
     const manager = makeManager()
     ;(manager.getSessionKind as unknown as ReturnType<typeof vi.fn>)
       .mockImplementation((sessionId: string) => (sessionId === 'shell' ? 'terminal' : 'claude'))
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     const seen: Array<[string, unknown]> = []
     source.onEvent((channel, payload) => seen.push([channel, (payload as { sessionId?: unknown }).sessionId]))
 
@@ -165,7 +194,7 @@ describe('SessionFeedSource', () => {
     ;(manager.getSpawnKind as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (sessionId: string) => (sessionId === 'shell' ? 'terminal' : null),
     )
-    const source = new SessionFeedSource(manager)
+    const source = makeSource(manager)
     const seen: Array<[string, unknown]> = []
     source.onEvent((channel, payload) =>
       seen.push([channel, (payload as { sessionId?: unknown }).sessionId]),
@@ -178,14 +207,21 @@ describe('SessionFeedSource', () => {
     source.dispose()
   })
 
-  it('dispose unsubscribes everything (no forwarding after)', () => {
+  it('dispose detaches only this sink; the shared tap keeps feeding the desktop', () => {
+    // The tap is main's, shared with the desktop forwarder. Disabling remote
+    // must not unsubscribe it or stop its watchers — only remove this sink.
     const manager = makeManager()
-    const source = new SessionFeedSource(manager)
+    const tap = new SessionFeedTap(manager)
+    const source = new SessionFeedSource(manager, tap)
     const seen: string[] = []
+    const desktop: string[] = []
     source.onEvent(channel => seen.push(channel))
+    tap.addSink(channel => desktop.push(channel))
     source.dispose()
-    manager.emit('screen', { sessionId: 's1', plain: '', markdown: '', recent: '', recentMarkdown: '', picker: { visible: false, items: [] } })
+    manager.emit('conditions', { sessionId: 's1', snapshot: { provider: 'claude', conditions: {} } })
     expect(seen).toEqual([])
-    expect(manager.listenerCount('screen')).toBe(0)
+    expect(desktop).toEqual(['conditions'])
+    tap.dispose()
+    expect(manager.listenerCount('conditions')).toBe(0)
   })
 })

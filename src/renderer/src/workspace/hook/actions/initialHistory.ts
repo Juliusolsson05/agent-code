@@ -4,11 +4,17 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import {
   isUuidTrimmed,
-  stampHistoryMarker,
+  releaseTrimmedUuid,
 } from '@renderer/session-runtime/liveEntryWindow'
+import {
+  admitMappedEntries,
+  isPaginationAnchor,
+  latestCommittedTimestamp,
+  reindexToolsAfterMerge,
+  type CommittedSeenLedger,
+} from '@renderer/session-runtime/ingest/committedRecords'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
   ghostsToPersist,
@@ -24,6 +30,9 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import { hasDurableProviderSession } from '@renderer/workspace/providerSessionIdentity'
 import { reportLifecycle } from '@renderer/lifecycle/report'
+import { placeHistoryEntries, type HistoryPlacement } from '@renderer/session-runtime/ingest/historyPlacement'
+import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 
 const INITIAL_HISTORY_CONCURRENCY = 2
 let activeInitialHistoryLoads = 0
@@ -68,206 +77,6 @@ function releaseInitialHistorySlot(): void {
   activeInitialHistoryLoads = Math.max(0, activeInitialHistoryLoads - 1)
 }
 
-// A history chunk in its own (durable) order: entries the pane does not have
-// yet, and uuids of entries it already holds, which act as anchors.
-type HistoryPlacement = { fresh: Entry } | { anchor: string }
-
-/**
- * Merge a history chunk's new entries into the pane's existing entries,
- * keeping the chunk's order.
- *
- * WHY not `[...fresh, ...existing]`: that assumes every new history entry is
- * older than everything the pane already shows, i.e. the live stream is
- * always AHEAD of the durable read. It can be behind:
- * - OpenCode Terminal holds a queued prompt until its answer commits.
- * - A durable reader that stopped (an event version it refuses) leaves the
- *   pane frozen while OpenCode's tables keep growing; the next history load
- *   (an MCP read re-hydrating a pane in `error`) then brings newer turns.
- * - Any provider's history read can land while a live burst is mid-flight.
- * Prepending put those newer entries above older ones, and since their uuids
- * were then "seen", the live copies were dropped and the misorder was
- * permanent. Anchoring each new entry just before the next entry the pane
- * already holds places it where the durable order says it belongs.
- *
- * When all the chunk's new entries precede the first shared one, the result is
- * exactly the old prepend. Existing entries never move relative to each other.
- *
- * A chunk that shares NO entry with the pane has no anchor to go by, and the
- * stopped-reader case above produces exactly that once the database has grown
- * by more than one chunk (`limit`, 120) since the pane's last live entry: the
- * newest-N chunk no longer reaches back to anything the pane holds. Prepending
- * it put the newest turns ABOVE the pane's older ones, permanently (their
- * uuids are then seen), and everything that reads the tail (Agent
- * Management's activity state, Dispatch titles, Copy Last Response) read an
- * old turn as the latest. So with no anchor, timestamps decide: a chunk whose
- * first entry is strictly newer than the pane's last goes AFTER the window.
- * Anything else (older, equal, or undated on either side) keeps the prepend,
- * which is right for every provider whose live stream is ahead of its
- * durable read (Claude and Codex resume). Appending leaves an unloaded gap
- * between the two when the chunk did not reach back far enough; that is
- * missing rows in order, not rows out of order, and the caller keeps the
- * pagination cursor on the window's oldest entry rather than the chunk's.
- */
-/**
- * Exported for tests only — nothing but the loader below may call it.
- *
- * WHY the direct export rather than driving it through the loader, which the
- * cursor half of #910 does successfully: this rule's inputs are a chunk/window
- * PAIR, and the interesting ones (a trimmed anchor, an anchor the window holds
- * out of durable order) take a specific paging history to stage through a
- * seeded database. The loader seam is better where it can reach — and finding
- * 2 of the #1081 review is the cost of this one: a hand-authored placement let
- * a case be pinned whose own timestamps contradicted the asserted order,
- * because nothing forced the question "can a chunk actually look like this?".
- * Author placements in DURABLE ORDER, or the test is about nothing.
- *
- * `keptWindowHead` reports whether the merged result still begins with the
- * window's first entry. That, not "did this load add anything", is what the
- * pagination cursor needs — see its use below.
- */
-export function placeHistoryEntries(
-  placement: HistoryPlacement[],
-  existing: Entry[],
-): { entries: Entry[]; appendedAfterWindow: boolean; keptWindowHead: boolean } {
-  const position = new Map<string, number>()
-  existing.forEach((entry, index) => {
-    const uuid = (entry as { uuid?: string }).uuid
-    if (uuid && !position.has(uuid)) position.set(uuid, index)
-  })
-  const anchored = placement.some(item => 'anchor' in item && position.has(item.anchor))
-  if (!anchored && existing.length > 0) {
-    const fresh = placement.flatMap(item => ('fresh' in item ? [item.fresh] : []))
-    if (isStrictlyNewer(fresh, existing)) {
-      return { entries: [...existing, ...fresh], appendedAfterWindow: true, keptWindowHead: true }
-    }
-  }
-  const merged: Entry[] = []
-  let next = 0
-  for (const [at, item] of placement.entries()) {
-    if ('fresh' in item) {
-      // ── FLUSH THE RETAINED PREFIX FIRST (#910 item 2) ──
-      // A fresh entry belongs before the next anchor it shares with the
-      // window. This used to push the fresh row straight out, so a pane
-      // holding [a,c] receiving [b,c] produced [b,a,c]: `b` emitted, then `a`
-      // and `c` flushed behind it. Nothing errors, uuid dedup makes the order
-      // permanent, and the user simply reads the conversation wrong.
-      //
-      // WHY the flush is bounded by TIME and not only by the anchor (#1081
-      // review, finding 2): "before the anchor" does not mean "after
-      // everything the window holds ahead of it". The window can hold a row
-      // the chunk skips, and that row can fall on either side of the fresh
-      // one:
-      //
-      //   window [a,c]   chunk [b, *c]        a < b  → flush a, then b   ✓
-      //   window [b,d,e] chunk [*b, c, *e, g] d > c  → b, c, d, e, g     ✓
-      //
-      // Flushing unconditionally gets the first right and the second wrong
-      // (b,d,c,e,g); flushing nothing gets the second right and the first
-      // wrong. The timestamps are already on these entries and are exactly
-      // what tells the two families apart, so the loop stops at the first
-      // retained row that is strictly NEWER than the fresh one. When either
-      // side is undated the comparison is false and the row is flushed, which
-      // is the pre-timestamp behaviour and the better default: a fuzz over
-      // ~48k random chunk/window pairs found flushing beat not flushing by
-      // 12,275 to 1,397 on chronological inversions.
-      //
-      // The anchor bound stays on top of it. With no following anchor the
-      // chunk shares nothing further with the window and the prepend is
-      // deliberate — see the unanchored case above, where a chunk that does
-      // not reach back far enough must not be interleaved on a guess.
-      const anchorIndex = nextAnchorIndex(placement, at + 1, position, next)
-      if (anchorIndex !== null) {
-        while (next < anchorIndex && !isAfter(existing[next], item.fresh)) merged.push(existing[next++]!)
-      }
-      merged.push(item.fresh)
-      continue
-    }
-    const index = position.get(item.anchor)
-    // Seen but not in the window (trimmed), or already emitted: no anchor.
-    if (index === undefined || index < next) continue
-    while (next <= index) merged.push(existing[next++]!)
-  }
-  while (next < existing.length) merged.push(existing[next++]!)
-  return {
-    entries: merged,
-    appendedAfterWindow: false,
-    // Observed, not inferred: whatever the rule above did, either the window's
-    // first entry is still first or it is not.
-    keptWindowHead: existing.length > 0 && merged[0] === existing[0],
-  }
-}
-
-/**
- * Where in the window the next usable anchor sits, scanning forward from `from`.
- *
- * "Usable" means present in the window and not already emitted — the same two
- * conditions the anchor branch applies — so a fresh entry is never flushed
- * against an anchor the loop is going to skip.
- *
- * WHY the already-emitted half is load-bearing, though an earlier version of
- * this comment claimed it was mere symmetry (#1081 review, finding 3): a stale
- * index would indeed make the caller's flush loop a no-op — but skipping it
- * lets the scan CONTINUE to a later anchor that does flush. Same input,
- * different output:
- *
- *   window [b,a,x,c]  chunk [*a, f, *b, *c]
- *   with the guard: b,a,x,f,c        without it: b,a,f,x,c
- *
- * That window is out of durable order, which is the state this whole rule
- * exists to stop creating — but a pane can already be in it, because uuid
- * dedup made the old misorder permanent. Pinned by a test rather than left to
- * the claim.
- */
-function nextAnchorIndex(
-  placement: HistoryPlacement[],
-  from: number,
-  position: Map<string, number>,
-  next: number,
-): number | null {
-  for (let at = from; at < placement.length; at += 1) {
-    const item = placement[at]!
-    if ('fresh' in item) continue
-    const index = position.get(item.anchor)
-    if (index === undefined || index < next) continue
-    return index
-  }
-  return null
-}
-
-/**
- * Is `candidate` strictly newer than `reference`? False whenever either side
- * has no usable timestamp — an unknown order is not evidence of one, and the
- * callers all want the timestamp-free behaviour as their default.
- */
-function isAfter(candidate: Entry | undefined, reference: Entry | undefined): boolean {
-  const left = entryTime(candidate)
-  const right = entryTime(reference)
-  return left !== null && right !== null && left > right
-}
-
-function entryTime(entry: Entry | undefined): number | null {
-  const ts = (entry as { timestamp?: unknown } | undefined)?.timestamp
-  if (typeof ts !== 'string') return null
-  const ms = Date.parse(ts)
-  return Number.isFinite(ms) ? ms : null
-}
-
-// The chunk's oldest dated entry against the window's newest dated entry.
-// Both sides are in their own chronological order (the chunk in durable
-// order, the window as displayed), so comparing the two ends is enough.
-function isStrictlyNewer(chunk: readonly Entry[], window: readonly Entry[]): boolean {
-  let chunkFirst: number | null = null
-  for (const entry of chunk) {
-    chunkFirst = entryTime(entry)
-    if (chunkFirst !== null) break
-  }
-  let windowLast: number | null = null
-  for (let index = window.length - 1; index >= 0 && windowLast === null; index -= 1) {
-    windowLast = entryTime(window[index])
-  }
-  return chunkFirst !== null && windowLast !== null && chunkFirst > windowLast
-}
-
 function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
   for (const entry of runtime.entries) {
     const uuid = (entry as { uuid?: string }).uuid
@@ -281,7 +90,7 @@ export async function loadInitialHistoryForSession({
   setRuntimes,
   limit = 120,
   meta: metaOverride,
-  readHistory,
+  feed = ipcSessionFeed,
   preserveStatusUntilLoaded = false,
 }: {
   sessionId: SessionId
@@ -289,9 +98,23 @@ export async function loadInitialHistoryForSession({
   setRuntimes: WorkspaceSetRuntimes
   limit?: number
   meta?: SessionMeta
-  // A scoped recovery can supply an owner/source-validated read while retaining
-  // the existing mapper, UUID ledger, tool pairing and optimistic reconciliation.
-  readHistory?: typeof window.api.loadInitialHistory
+  // Where the chunk is read from: the SessionFeed contract (#1177), not a raw
+  // `window.api` call, so the history read goes through the same seam as
+  // every other session read and a shared ingest core can later drive it
+  // over either transport.
+  //
+  // WHY a default rather than a required argument: this loader runs from a
+  // dozen places outside React (session actions, rehydrate, adoption,
+  // hydrateTranscript, routing recovery) that hold `refs` but no feed, and
+  // the desktop has exactly one feed — the `ipcSessionFeed` module constant
+  // main.tsx hands to SessionFeedProvider. Defaulting to that same instance
+  // is reading through the feed; threading it through every caller would add
+  // a parameter that can only ever hold one value.
+  //
+  // A scoped recovery overrides it with an owner/source-validated read while
+  // retaining the existing mapper, UUID ledger, tool pairing and optimistic
+  // reconciliation (this used to be the `readHistory` injection point).
+  feed?: Pick<SessionFeed, 'loadHistory'>
   // Routing repair owns its own warning. A denied/stale repair read is not
   // evidence that the provider's committed transcript channel has failed.
   preserveStatusUntilLoaded?: boolean
@@ -369,6 +192,59 @@ export async function loadInitialHistoryForSession({
   // synchronous contract is asserted by the test below rather than assumed.
   let loadOutcome = 'no-terminal-write'
   let loadedEntryCount = 0
+  // ── A LOAD BELONGS TO THE CONVERSATION IT READ (Astra review, finding 1) ──
+  // A pane that follows its runtime into another provider session (Pi /new,
+  // /resume, /fork) rebinds its identity and then resets its history window.
+  // A load of the OLD session that resolves after either would merge the old
+  // conversation's rows into the new one's window (and View Prompts and the
+  // orchestration reads would serve them). So refuse to apply a result,
+  // success or failure, once the pane is no longer that conversation.
+  //
+  // WHY compare against the id this load READ, and only once the pane has a
+  // different one: a pane routinely gains its id while a load is in flight —
+  // an OpenCode runtime pre-creates its session at start, and a scoped
+  // recovery passes a meta override naming the transcript before the store
+  // holds it. A first version compared the store's id at start with the id at
+  // the end, and threw those legitimate loads away (no id → the same id is a
+  // BINDING, not a switch).
+  //
+  // WHY not the history window's generation as well: it was tried, and it
+  // threw away OpenCode Terminal's startup load, whose runtime resets the
+  // window while that load is in flight. That reset re-delivers rows but not
+  // the loader's pagination facts (totalEntries, hasOlderHistory), so the pane
+  // lost them. The identity alone is enough: every Pi session move rebinds
+  // the id BEFORE its reset, so a load of the old session is caught here, and
+  // a load that started after the rebind read the new session — its rows are
+  // the right ones, and the dedup set absorbs the overlap with the replay.
+  const readProviderSessionId = meta.providerSessionId
+  const superseded = (): boolean => {
+    const current = refs.stateRef.current.sessions[sessionId]?.providerSessionId
+    return current !== undefined && current !== readProviderSessionId
+  }
+  // A superseded load is done, not failed: the reset (and the new session's
+  // own rows) own the window now. Settle the status it set to 'loading' so
+  // neither the pane nor the stuck-load reconciler waits on it forever (#283).
+  const settleSuperseded = (): false => {
+    setRuntimes(prev => {
+      const current = prev[sessionId]
+      if (!current) {
+        loadOutcome = 'dropped-superseded'
+        return prev
+      }
+      loadOutcome = 'superseded'
+      if (preserveStatusUntilLoaded) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          transcriptStatus: current.transcriptChannelError ? 'error' : 'ready',
+          transcriptStatusChangedAt: Date.now(),
+          transcriptError: current.transcriptChannelError ?? null,
+        },
+      }
+    })
+    return false
+  }
   if (!preserveStatusUntilLoaded) setRuntimes(prev => {
     const current = prev[sessionId]
     if (!current) return prev
@@ -385,19 +261,18 @@ export async function loadInitialHistoryForSession({
 
   try {
     const releaseHistorySlot = await acquireInitialHistorySlot()
-    // WHY an async wrapper instead of `.finally()` on the IPC promise: if the
-    // bridge call throws before returning a promise (a missing or broken
-    // `window.api` method), `.finally` is never attached and the slot is
+    // WHY an async wrapper instead of `.finally()` on the read's promise: if
+    // the feed call throws before returning a promise (a missing or broken
+    // `window.api` method behind it, or an override), `.finally` is never attached and the slot is
     // never released. With two module-level slots, two such throws stall
     // every later history load in the window, and nothing reports it. The
     // slot still frees as soon as the history read settles, not after
     // `gitWorktrees`.
     const historyRead = (async () => {
       try {
-        return await (readHistory ?? window.api.loadInitialHistory)({
-          kind,
-          cwd: meta.cwd,
-          providerSessionId: meta.providerSessionId,
+        return await feed.loadHistory({
+          sessionId,
+          transcript: { kind, cwd: meta.cwd, providerSessionId: meta.providerSessionId },
           limit,
         })
       } finally {
@@ -409,6 +284,10 @@ export async function loadInitialHistoryForSession({
       window.api.gitWorktrees(meta.cwd),
     ])
     const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+    if (superseded()) {
+      span.end({ fetched: chunk.entries.length, hasMore: chunk.hasMore, superseded: true })
+      return settleSuperseded()
+    }
 
     setRuntimes(prev => {
       const current = prev[sessionId]
@@ -419,6 +298,11 @@ export async function loadInitialHistoryForSession({
       loadOutcome = 'ready'
       const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
       seedSeenFromRuntime(current, seen)
+      const seenLedger: CommittedSeenLedger = {
+        seen,
+        isTrimmed: uuid => isUuidTrimmed(sessionId, uuid),
+        releaseTrimmed: uuid => releaseTrimmedUuid(sessionId, uuid),
+      }
 
       const initialEntries: Entry[] = []
       const placement: HistoryPlacement[] = []
@@ -436,11 +320,6 @@ export async function loadInitialHistoryForSession({
       const mapper = getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
       const toolUseIndex = current.toolUseIndex
       const toolResultIndex = current.toolResultIndex
-      // Bump `toolIndexVersion` once if this bootstrap load actually populated
-      // either tool-index map, so Feed's tool-index context picks up the
-      // resumed pairings instead of staying on the empty-map identity from
-      // emptyRuntime() (feed audit Finding 1).
-      let toolIndexChanged = false
 
       for (const [rawIndex, raw] of chunk.entries.entries()) {
         workActivity = ingestWorktreeRawEvent({
@@ -455,33 +334,20 @@ export async function loadInitialHistoryForSession({
         // Marker policy (site-owned): the FIRST kept line of the
         // bootstrap chunk is the pagination anchor for older-history
         // loads.
-        if (mapped.length > 0 && marker && !initialOldestMarker) {
+        if (!initialOldestMarker && isPaginationAnchor(mapped, marker)) {
           initialOldestMarker = marker
           initialOldestOffset = chunk.offsets?.[rawIndex] ?? null
         }
-        for (const entry of mapped) {
-          const uuid = (entry as { uuid?: string }).uuid
-          // Like the live-burst path, this TAIL loader treats trimmed
-          // uuids as already-seen (#375 part B): the bootstrap chunk is
-          // the newest slice of the transcript, so a trimmed uuid showing
-          // up here means the window trimmed past it — re-appending it
-          // out of order would corrupt the feed. Only loadOlderHistory
-          // may readmit trimmed uuids.
-          if (uuid && (seen.has(uuid) || isUuidTrimmed(sessionId, uuid))) {
-            placement.push({ anchor: uuid })
-            continue
-          }
-          if (uuid) seen.add(uuid)
-          // Pagination-marker rider — see liveEntryWindow.ts. Stamped at
-          // every ingest site so a future trim can re-anchor
-          // historyOldestMarker at whatever entry ends up oldest-retained.
-          stampHistoryMarker(entry, marker)
-          initialEntries.push(entry)
-          placement.push({ fresh: entry })
-          if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
-            toolIndexChanged = true
-          }
-        }
+        // The `tail` rule (session-runtime/ingest/committedRecords.ts): like
+        // the live-burst path, this TAIL loader treats trimmed uuids as
+        // already-seen (#375 part B) — the bootstrap chunk is the newest
+        // slice of the transcript, so a trimmed uuid showing up here means the
+        // window trimmed past it, and re-appending it out of order would
+        // corrupt the feed. Only loadOlderHistory may readmit trimmed uuids.
+        // Already-held uuids become placement anchors; each admitted entry is
+        // stamped with its line's marker so a future trim can re-anchor
+        // historyOldestMarker at whatever entry ends up oldest-retained.
+        initialEntries.push(...admitMappedEntries(mapped, marker, 'tail', seenLedger, { placement }).admitted)
       }
 
       let nextGhosts = current.ghosts
@@ -507,20 +373,19 @@ export async function loadInitialHistoryForSession({
       // production expression is hard to read.
       const resolvedTotalEntries = chunk.totalEntries ?? initialEntries.length
       loadedEntryCount = resolvedTotalEntries
-      let lastJsonlEntryAt = current.lastJsonlEntryAt
-      for (const entry of initialEntries) {
-        const ts = (entry as { timestamp?: unknown }).timestamp
-        if (typeof ts !== 'string') continue
-        const ms = Date.parse(ts)
-        if (!Number.isFinite(ms)) continue
-        if (lastJsonlEntryAt === null || ms > lastJsonlEntryAt) {
-          lastJsonlEntryAt = ms
-        }
-      }
+      const lastJsonlEntryAt = latestCommittedTimestamp(current.lastJsonlEntryAt, initialEntries)
 
       const placed = initialEntries.length > 0
         ? placeHistoryEntries(placement, current.entries)
         : { entries: current.entries, appendedAfterWindow: false, keptWindowHead: current.entries.length > 0 }
+      // Fold the chunk's tool blocks AFTER placement, in window order, so a
+      // chunk row can never overwrite a newer live pairing that shares its id
+      // (reindexToolsAfterMerge, #1177). A chunk with no tool block leaves
+      // the maps and the version alone; one that has any bumps
+      // `toolIndexVersion` so Feed's tool-index context picks up the resumed
+      // pairings instead of staying on the empty-map identity from
+      // emptyRuntime() (feed audit Finding 1).
+      const toolIndexChanged = reindexToolsAfterMerge(initialEntries, placed.entries, { toolUseIndex, toolResultIndex })
       // ── THE CURSOR NAMES THE OLDEST ENTRY THE PANE HOLDS (#910 item 3) ──
       // So the only question is whether this load changed which entry that is,
       // and `placeHistoryEntries` answers it by observation: `keptWindowHead`
@@ -615,6 +480,9 @@ export async function loadInitialHistoryForSession({
     span.fail(err)
     const message = err instanceof Error ? err.message : String(err)
     console.warn('[history] load initial failed', err)
+    // A failure to read the conversation the pane has since LEFT says nothing
+    // about the one it shows now; marking that one 'error' would be a lie.
+    if (superseded()) return settleSuperseded()
     if (!preserveStatusUntilLoaded) setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {
