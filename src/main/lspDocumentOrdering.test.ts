@@ -435,10 +435,48 @@ describe('#924 — a newer intent must not wait out an obsolete request', () => 
         if (server.closed) break
       }
 
+      // Nothing is retired yet: an abandoned request only counts once it has
+      // stayed unanswered for the whole request budget (15 s), and the loop
+      // above spans about ten seconds.
+      expect(server.closed).toBe(false)
+      await vi.advanceTimersByTimeAsync(15_000)
+
       expect(server.closed).toBe(true)
       // Retiring a server drops its documents, exactly as a crash does, so the
-      // next open spawns a fresh process rather than talking to a dead one.
+      // next edit re-opens on a fresh process rather than talking to a dead one.
       expect(internal.docs.has('inmemory://a')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('#924 fix pass — a busy server is not a wedged one', () => {
+  it('never retires a slow server that answers every abandoned request', async () => {
+    // A server still indexing can be several seconds behind, and every
+    // keystroke abandons the request in flight. The first cut counted an
+    // abandonment 250 ms after the cancel, so a server answering each request
+    // after 12 s had ~40 "abandoned" at once and was retired after a few
+    // seconds of typing, silently turning LSP off for the open editors. It
+    // answered every one of them.
+    vi.useFakeTimers()
+    try {
+      const { manager, server } = managerWithServer({
+        sendRequest: async () => await new Promise(resolve => setTimeout(() => resolve(null), 12_000)),
+      })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'text' })
+
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const request = manager.getHover('inmemory://a', { line: 0, character: 0 })
+        await vi.advanceTimersByTimeAsync(1)
+        void manager.changeDocument('inmemory://a', `text ${attempt}`)
+        await vi.advanceTimersByTimeAsync(300)
+        await expect(request).resolves.toBeNull()
+      }
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(server.closed).toBe(false)
+      expect(server.abandonedRequests).toBe(0)
     } finally {
       vi.useRealTimers()
     }
@@ -515,12 +553,19 @@ describe('#922 — text accepted during authorization must not vanish', () => {
     expect(text).toBe('second')
   })
 
-  it('rejects a change for a document that WAS open and is now gone', async () => {
+  it('re-opens a backed document whose server went away, once per cooldown', async () => {
     // The other half of #922. Routing the change through the queue fixes the
     // ordering; the boolean is what stops the silent acknowledgement when the
     // document the renderer is editing has disappeared underneath it.
+    //
+    // #1108 fix pass: rejecting was not enough on its own. The renderer's
+    // sync gate swallows the rejection, so after a crash or a retirement the
+    // editor sat without LSP until it was remounted. The change now re-opens
+    // the document on a fresh server with the text just typed; a second loss
+    // inside the cooldown still rejects, so a server that dies on startup is
+    // not re-spawned on every keystroke.
     ipcHandlers.clear()
-    const { manager, server } = managerWithServer()
+    const { manager, server, notifications } = managerWithServer()
     registerLspIpc(manager, { authorize: async () => '/repo' } as never, {} as never)
 
     const sender = { id: 1, once: () => {}, on: () => {}, isDestroyed: () => false }
@@ -534,11 +579,30 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       authorization: { kind: 'editor-root' },
     })
 
+    const internal = manager as unknown as {
+      discardServer: (s: unknown, kill?: boolean) => void
+      getOrCreateServer: () => Promise<unknown>
+      servers: Map<string, unknown>
+    }
+    // The replacement a fresh spawn would produce.
+    const replacement = { ...server, generation: 'gen-2', closed: false, abandonedRequests: 0 }
+    internal.getOrCreateServer = async () => {
+      internal.servers.set('server', replacement)
+      return replacement
+    }
+
     // The server dies, exactly as a crash does: its documents go with it.
-    ;(manager as unknown as { discardServer: (s: unknown, kill?: boolean) => void })
-      .discardServer(server, false)
+    internal.discardServer(server, false)
+    notifications.length = 0
 
     await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'second'))
+      .resolves.toBeUndefined()
+    const reopened = notifications.find(n => n.method === 'textDocument/didOpen')
+    expect((reopened?.params as { textDocument?: { text: string } })?.textDocument?.text).toBe('second')
+
+    // Lost again inside the cooldown: no second spawn, and the loss is loud.
+    internal.discardServer(replacement, false)
+    await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'third'))
       .rejects.toThrow('LSP document is not open')
   })
 

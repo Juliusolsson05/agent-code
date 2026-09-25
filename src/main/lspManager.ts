@@ -153,7 +153,10 @@ const LSP_ABANDONED_REQUEST_GRACE_MS = 250
  * cancellation AND never answers leaks one pending RPC per abandonment, and
  * the LSP connection holds a response handler for each. The cap turns an
  * unbounded leak into a bounded one followed by a deliberate restart: the next
- * open re-spawns, which is what already happens when a server crashes.
+ * edit of a backed document re-opens it on a fresh process (ipc/lsp.ts). A
+ * request only counts once it has stayed unanswered for the full request
+ * budget after being abandoned — see `noteAbandonedRequest` for why a shorter
+ * window retired healthy servers that were merely busy.
  */
 const LSP_MAX_ABANDONED_REQUESTS = 32
 
@@ -440,12 +443,20 @@ export class LspManager extends EventEmitter {
    * didChange waited out the full 15 s, which is this issue's symptom verbatim
    * in the exact split-view scenario #923 is about.
    *
-   * Any intent on the shared document abandons the in-flight request, and
-   * nothing is lost by that: an open, a change or a close of ANY alias either
-   * rewrites the shared text or removes a document, and `changeSharedDocument`
-   * advances `version` on every alias — so the answer we are still waiting for
-   * would be rejected by the ticket check anyway. The 15 s bought nobody
-   * anything.
+   * Any intent on the shared document abandons the in-flight request. That
+   * is almost always free: a change of ANY alias rewrites the shared text and
+   * `changeSharedDocument` advances `version` on every alias, so the answer we
+   * are still waiting for would be rejected by the ticket check anyway.
+   *
+   * It is NOT free in two cases, and the cost is accepted: opening another
+   * surface with identical text, or closing a sibling surface, wakes the
+   * request although the shared text did not change (`changeSharedDocument`
+   * returns early on identical text without bumping `version`). The answer
+   * was still valid and is dropped: one hover, completion or semantic-token
+   * round, which the editor re-requests on its next trigger. Distinguishing
+   * "intent that changes the text" from "intent that does not" would need the
+   * wake to know the post-intent text, which is exactly what it does not wait
+   * for. One lost answer beats a keystroke waiting out 15 s.
    */
   private readonly documentIntentWaiters = new Map<string, Set<() => void>>()
   private completionResolveSequence = 0
@@ -736,39 +747,53 @@ export class LspManager extends EventEmitter {
   }
 
   /**
-   * What a request was actually asked about, captured AFTER synchronization.
-   *
-   * WHY it cannot be captured before (#923): a request from an inactive client
-   * alias has to push that alias's draft onto the shared server document
-   * first, and `changeSharedDocument` advances `version` on EVERY alias of that
-   * URI — including the requesting one. `getCompletions` captured the version
-   * before `sendDocRequest` ran, so its final "did the text change under me?"
-   * check compared the pre-sync number against the post-sync one and threw away
-   * the result of its own synchronization. Deterministic, not a race: it
-   * happened on every completion from the inactive half of a split view.
-   */
-  /**
    * Track one request we walked away from, and retire a server that collects
-   * too many (#924).
+   * too many that it NEVER answers (#924).
    *
-   * The count drops when the server finally answers, so a slow-but-honest
-   * server never trips it. `discardServer` is the same path a crash takes:
-   * documents are dropped, diagnostics cleared, and the next open spawns a
-   * fresh process.
+   * WHY a request only counts once it has stayed unanswered for the full
+   * request budget, not at the end of the 250 ms grace period (#1108 fix
+   * pass): every keystroke abandons the request in flight, and a server that
+   * is still indexing can easily be a few seconds behind. Counting at 250 ms
+   * retired exactly those healthy-but-busy servers after a few seconds of
+   * typing — and retiring one silently turned LSP off for the editors already
+   * open. A request still unanswered `LSP_DOCUMENT_REQUEST_TIMEOUT_MS` after we
+   * abandoned it is one we would have given up on even had nothing
+   * superseded it, so that is the point at which it is evidence of a wedged
+   * server rather than a slow one. The count still drops the moment the
+   * server answers, so what trips the cap is 32 requests SIMULTANEOUSLY stuck
+   * past that budget.
+   *
+   * `discardServer` is the same path a crash takes: documents are dropped and
+   * diagnostics cleared. `lsp:change-document` then re-opens a backed
+   * document on its next edit (ipc/lsp.ts), so an open editor recovers instead
+   * of losing LSP until it remounts.
    */
   private noteAbandonedRequest(server: ServerRecord, settles: Promise<unknown>): void {
-    server.abandonedRequests += 1
+    let counted = false
+    let answered = false
+    const stuck = setTimeout(() => {
+      if (answered) return
+      counted = true
+      server.abandonedRequests += 1
+      // Deliberate, not incidental: a server this far behind is not going to
+      // catch up, and every further request queues behind work it is not
+      // doing.
+      if (server.abandonedRequests > LSP_MAX_ABANDONED_REQUESTS && !server.closed) {
+        this.discardServer(server)
+      }
+    }, LSP_DOCUMENT_REQUEST_TIMEOUT_MS)
+    // A pending stuck-check must not keep the main process (or a test worker)
+    // alive on its own; it only matters while the app is running anyway.
+    stuck.unref?.()
     // `settles` is the rejection-safe wrapper, so a server that answers a
-    // cancelled request with an error still decrements — it answered, which is
-    // what this counter measures.
-    void settles.then(
-      () => { server.abandonedRequests -= 1 },
-      () => { server.abandonedRequests -= 1 },
-    )
-    if (server.abandonedRequests <= LSP_MAX_ABANDONED_REQUESTS) return
-    // Deliberate, not incidental: a server this far behind is not going to
-    // catch up, and every further request queues behind work it is not doing.
-    this.discardServer(server)
+    // cancelled request with an error still counts as answering — it did,
+    // which is what this counter measures.
+    const onAnswer = (): void => {
+      answered = true
+      clearTimeout(stuck)
+      if (counted) server.abandonedRequests -= 1
+    }
+    void settles.then(onAnswer, onAnswer)
   }
 
   private async sendDocRequest<T>(
@@ -814,11 +839,8 @@ export class LspManager extends EventEmitter {
             await this.changeSharedDocument(ctx.server, shared, ctx.doc, ctx.doc.content)
           }
           // The ticket is minted HERE — after the restore, before the request
-          // leaves. Client revision and server version are kept apart because
-          // they answer different questions: the caller validates its result
-          // against the client revision it asked about, while the server
-          // version is what the server was told and is the number to compare a
-          // late `publishDiagnostics` against.
+          // leaves, so it records the revision the request was really asked
+          // about.
           // WHY only the client revision (#1108 review, 6): an earlier cut
           // also carried the server version, described as "the number to
           // compare a late publishDiagnostics against". `handlePublishDiagnostics`
