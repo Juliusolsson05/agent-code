@@ -184,7 +184,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async create(params: AiWorkspaceCreateParams): Promise<AiWorkspaceRecord> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const name = params.name.trim()
     if (!name) throw new Error('AI Workspace name is required')
 
@@ -266,7 +266,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async attachFile(params: AiWorkspaceAttachFileParams): Promise<AiWorkspaceFileEntry> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const workspace = this.requiredWorkspace(params.workspaceId)
     // WHY AI Workspace accepts absolute paths instead of forcing project-root
     // containment:
@@ -322,7 +322,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   async detachFile(
     params: AiWorkspaceDetachFileParams,
   ): Promise<{ removed: boolean; remaining: number }> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const workspace = this.requiredWorkspace(params.workspaceId)
     const normalized = params.path
       ? await realpath(normalizePath(params.path)).catch(() => normalizePath(params.path!))
@@ -346,7 +346,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async clear(workspaceId: string): Promise<{ removed: number }> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const workspace = this.requiredWorkspace(workspaceId)
     const removed = workspace.entries.length
     workspace.entries = []
@@ -357,7 +357,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async delete(workspaceId: string): Promise<{ deleted: boolean }> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const deleted = this.workspaces.delete(workspaceId)
     if (deleted) {
       await this.save()
@@ -438,6 +438,15 @@ export class AiWorkspaceRegistry extends EventEmitter {
     }
   }
 
+  /** For every user mutation: the owed evidence copy (see load()) is made
+   *  BEFORE memory changes (#1260 round 2). Checking only inside save() let
+   *  create() insert a workspace, fail its save, and then report it as
+   *  created on a retry, although it was never written. */
+  private async ensureWritable(): Promise<void> {
+    await this.ensureLoaded()
+    await this.preserveOwedCopy()
+  }
+
   private async ensureLoaded(): Promise<void> {
     // A failed load is not cached (#1246): a transient read error used to
     // fail every AI Workspace operation for the rest of the process.
@@ -487,10 +496,21 @@ export class AiWorkspaceRegistry extends EventEmitter {
           setAside++
           continue
         }
-        if (!usableStatus(entry.status)) entry.status = { ...UNKNOWN_STATUS }
-        entries.push(withUsableEntryFields(entry, raw.createdAt))
+        // A REPAIR counts like a set-aside row (#1260 round 2): the next save
+        // writes the repaired values, so the original bytes must be copied
+        // first or a recoverable value (say, a description stored as an
+        // object) is lost without evidence.
+        if (!usableStatus(entry.status)) {
+          entry.status = { ...UNKNOWN_STATUS }
+          setAside++
+        }
+        const usable = withUsableEntryFields(entry, raw.createdAt)
+        if (JSON.stringify(usable) !== JSON.stringify(entry)) setAside++
+        entries.push(usable)
       }
-      workspaces.push(withUsableWorkspaceFields({ ...raw, entries }))
+      const workspace = withUsableWorkspaceFields({ ...raw, entries })
+      if (JSON.stringify({ ...workspace, entries: [] }) !== JSON.stringify({ ...raw, entries: [] })) setAside++
+      workspaces.push(workspace)
     }
     if (setAside > 0) {
       // A failed copy must not fail the load (#1257 review B, same rule): the

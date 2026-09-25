@@ -203,12 +203,51 @@ describe('malformed rows in a real registry (#1246)', () => {
     state.workspaces[0]!.description = { not: 'text' }
     state.workspaces[0]!.entries[0].projectRoot = 42
     state.workspaces[0]!.entries[0].title = 9
-    const { registry } = await registryFor(state)
+    const { root, registry } = await registryFor(state)
     const listed = (await registry.list()).find(workspace => workspace.workspaceId === state.workspaces[0]!.workspaceId)!
     expect(listed).not.toHaveProperty('description')
     const opened = (await registry.get(state.workspaces[0]!.workspaceId))!
     expect(opened.entries[0]).not.toHaveProperty('projectRoot')
     expect(opened.entries[0]!.title).toBe('file-0.md')
+    // A valid description elsewhere is untouched (round 2: a repair that
+    // dropped every description survived).
+    const other = (await registry.list()).find(workspace => workspace.workspaceId === state.workspaces[1]!.workspaceId)!
+    expect(other.description).toBe(state.workspaces[1]!.description)
+    // The repaired values are preserved before the save that drops them.
+    await registry.create({ name: 'After repair' })
+    const { readdir, readFile: read } = await import('fs/promises')
+    const copies = (await readdir(root)).filter(name => name.startsWith('ai-workspaces.json.invalid-'))
+    expect(copies).toHaveLength(1)
+    expect(JSON.parse(await read(join(root, copies[0]!), 'utf8')).workspaces[0].description).toEqual({ not: 'text' })
+  })
+
+  it.each([
+    ['an entry field', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[0]!.entries[0].title = 9 }],
+    ['a workspace field', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[0]!.description = { not: 'text' } }],
+  ])('preserves the original before a save drops a repaired %s', async (_label, damage) => {
+    const state = await realState()
+    damage(state)
+    const { root, source, registry } = await registryFor(state)
+    await registry.create({ name: 'After repair' })
+    const { readdir, readFile: read } = await import('fs/promises')
+    const copies = (await readdir(root)).filter(name => name.startsWith('ai-workspaces.json.invalid-'))
+    expect(await Promise.all(copies.map(name => read(join(root, name), 'utf8')))).toEqual([source])
+  })
+
+  it('does not keep a workspace in memory whose create was refused (round 2)', async () => {
+    const state = await realState()
+    state.workspaces[1]!.updatedAt = 1789000000
+    const { root, source, registry } = await registryFor(state)
+    const { createHash } = await import('node:crypto')
+    const { mkdir } = await import('fs/promises')
+    const occupied = join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`)
+    await mkdir(occupied)
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow()
+    expect((await registry.list()).map(workspace => workspace.name)).not.toContain('Blocked')
+    await rm(occupied, { recursive: true })
+    await registry.create({ name: 'Blocked' })
+    const reopened = new AiWorkspaceRegistry(join(root, 'ai-workspaces.json'))
+    expect((await reopened.list()).map(workspace => workspace.name)).toContain('Blocked')
   })
 
   it.each([
