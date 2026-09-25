@@ -1,7 +1,7 @@
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 import type {
   SessionId,
@@ -134,11 +134,16 @@ export function useUndoCloseAction(
   setState: WorkspaceSetState,
   refs: WorkspaceRefs,
   sessionActions: SessionActions,
+  showToast: (message: string) => void = () => undefined,
 ): {
   undoClose: () => Promise<void>
   undoCloseCount: number
 } {
   const [, bumpUndoCloseVersion] = useState(0)
+  // The last respawn failure's reason, read when an entry turns out to be a
+  // retryable failure (#1242). A ref, not state: it is written and read in
+  // the same async undo, and never rendered.
+  const lastRespawnErrorRef = useRef<string | null>(null)
 
   // Respawn one closed session, or mint an id for a process-less one.
   //
@@ -180,7 +185,10 @@ export function useUndoCloseAction(
           builtInMcpOverrides: sessionMcpOverrides(meta),
         })
         return { sessionId, spawned: true }
-      } catch {
+      } catch (error) {
+        // Kept, not discarded (#1242): it is the only explanation the user
+        // gets for an Undo Close that did nothing.
+        lastRespawnErrorRef.current = error instanceof Error && error.message.length > 0 ? error.message : null
         return null
       }
     },
@@ -395,12 +403,14 @@ export function useUndoCloseAction(
           const rest = [...remaining, member]
           const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
           refs.undoStackRef.current.push(leftover)
+          // Part of the group came back; say what did not (#1242).
+          showToast(restoreFailureMessage(leftover, lastRespawnErrorRef.current))
           return 'restored'
         }
       }
       return restoredAny ? 'restored' : 'stale'
     },
-    [refs.undoStackRef, restoreSingleEntry],
+    [refs.undoStackRef, restoreSingleEntry, showToast],
   )
 
   const undoClose = useCallback(async () => {
@@ -416,6 +426,8 @@ export function useUndoCloseAction(
     // failures are different: those keep the entry by pushing it back so a
     // provider hiccup does not permanently consume the user's recovery slot.
     let staleEntryConsumed = false
+    // A reason belongs to THIS undo; an older failure's must not be shown.
+    lastRespawnErrorRef.current = null
     while (true) {
       const entry = refs.undoStackRef.current.pop()
       if (!entry) {
@@ -430,6 +442,10 @@ export function useUndoCloseAction(
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
+        // WHY a toast (#1242): keeping the entry is right (the provider, not
+        // the entry, is broken), but without saying so, every Cmd+Shift+T
+        // after a CLI broke looked like a dead key.
+        showToast(restoreFailureMessage(entry, lastRespawnErrorRef.current))
         if (staleEntryConsumed) {
           bumpUndoCloseVersion(version => version + 1)
         }
@@ -437,11 +453,22 @@ export function useUndoCloseAction(
       }
       staleEntryConsumed = true
     }
-  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreGroupEntry, restoreSingleEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreGroupEntry, restoreSingleEntry, showToast])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.
   const undoCloseCount = refs.undoStackRef.current.length
 
   return { undoClose, undoCloseCount }
+}
+
+/** What a failed Undo Close tells the user: which close could not come back,
+ *  and the provider's own reason when the spawn gave one. */
+function restoreFailureMessage(entry: ClosedEntry, reason: string | null): string {
+  const what = entry.type === 'session'
+    ? `"${entry.sessionMeta.title ?? entry.sessionMeta.cwd.split('/').pop() ?? 'agent'}"`
+    : entry.type === 'tab'
+      ? `project "${entry.tab.title}"`
+      : `${entry.entries.length} closed item${entry.entries.length === 1 ? '' : 's'}`
+  return `Could not restore ${what}: ${reason ?? 'the agent did not start'}`
 }
