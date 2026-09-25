@@ -567,7 +567,7 @@ feeds the rows below G-1.
 | G-1 | Provider prompts: Claude trust + permission, Codex trust, Grok and OpenCode question/permission/plan | hand-laid cards: 18px "!" glyph, 14px title, pl-6 body, lowercase "cancel" / "trust this folder" / "deny" / "approve", full-size buttons; Grok's shell a clone of OpenCode's | DialogHeader + px-4 body + DialogActions (Claude/Codex) or the shared `ConditionPromptShell` (Grok/OpenCode); sentence-case labels; sm buttons; `DialogActions.initialFocus` | done |
 | G-2 | Composer prompt-suggestion chip | led with "↵" (Enter never applied it: click sends, Tab on an empty draft fills); the app's only ✕ glyph; no focus rings | "⇥ fill" hint only while Tab really fills (empty draft, not slash mode, not OpenCode); body named "Send suggestion: …"; × like every close; T4 rings | done |
 | G-3 | Prose key hints (audit of literal ↵ / "Press Enter" / ⌘ in UI text) | Command palette AI Workspace: "Press Enter or click again to confirm…" and "Press Enter to create…" (the buttons already carry the chips) | chip inline (`Confirm metadata deletion: ↩ or click again`); a what-happens sentence instead of the duplicate key prose. Remaining hits are code comments or terminal-behaviour prose (template pane), kept | done |
-| G-4 | Undefined tokens (rendering bugs) | `bg-bg` (CommandKeybindingsRow sticky header is see-through), `bg-panel/40` ×2 (DictationGuideModal), `decoration-ink-faint` (claude web-fetch), `text-red-400` (CodeEditView) | defined tokens (`bg-surface`, `bg-canvas`, `decoration-muted`, `text-danger`) | todo |
+| G-4 | Undefined tokens (rendering bugs) | `bg-bg` (CommandKeybindingsRow sticky header is see-through), `bg-panel/40` ×2 (DictationGuideModal), `decoration-ink-faint` (claude web-fetch), `text-red-400` (CodeEditView) | defined tokens (`bg-surface`, `bg-canvas`, `decoration-muted`, `text-danger`) | done (a whole-renderer scan of color utilities against the `--color-*` tokens found exactly these four; the rest were comments/identifiers) |
 | G-5 | Composer action strip | Send is a raw ~20px button beside Stop `Button sm` (h-7); terminal says "Submit"; Stop overrides hover by className | `Button sm` for Send, one verb (Send), Stop on a real variant | todo |
 | G-6 | Composer textarea | `bg-canvas border-border`; focus is a JS-toggled `border-accent`, not the ring | input tokens + T4 ring (keep the focused-pane accent as a PANE signal only if it is one) | todo |
 | G-7 | Row hover | 34 `hover:bg-surface-hi` (16 files) vs 35 `hover:bg-row-hover-bg` | rows `hover:bg-row-hover-bg`, controls `hover:bg-control-hover-bg` | todo |
@@ -586,7 +586,7 @@ feeds the rows below G-1.
 | G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | 2 presets; padding from the primitive when `showCloseButton` | todo |
 | G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | todo |
 | G-22 | Raw colours/shadows | `text-white` on flags, `bg-black/20` scrim, toast `shadow-black/20`, dictation inline rgba, chart `shadow-lg` ×2, LanePortChip `shadow-sm`, `bg-canvas/34`; `bg-danger/N` vs `-soft` families | tokens | todo |
-| G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | blocked on ask-2 |
+| G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | todo (ruling below: Title Case) |
 | G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | todo |
 | G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | todo |
 | G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | todo |
@@ -1069,6 +1069,16 @@ Sharp corners and one light theme.
       open, green, reviewed.
 
 ## Rulings
+
+- Ruling (ask-2, B6 agreed 2026-09-25, UNCONFIRMED for the owner): **Title
+  Case** (macOS HIG, the current majority) for dialog titles, buttons, menu
+  items, command names and settings titles. **Sentence case** for descriptions,
+  tooltips, body text and empty states. Lowercase controls become Title Case.
+  This supersedes G-1's sentence-case prompt labels ("Trust Folder"). UI copy
+  says **folder**, never directory. Lists say **Agents**, except that a list
+  that really includes terminals says so ("Agents & Terminals"), per B6. The
+  dictation chip moves to the toast band; dictation is not refused while a
+  dialog is open.
 
 - Ruling (steering k9, supersedes the S45 "move, don't choose" ruling): ONE
   radio contract. Every `radiogroup` follows the APG radio pattern: arrows move

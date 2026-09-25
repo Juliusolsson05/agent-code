@@ -9,7 +9,7 @@ export function ClaudeWebFetchRow({ model }: { model: ClaudeWebFetchModel }) {
         <span className="text-accent font-semibold flex-shrink-0">Fetch</span>
         <SafeMarkdownLink
           href={model.url}
-          className="font-code text-[12px] text-ink-dim hover:text-ink underline decoration-ink-faint truncate min-w-0"
+          className="font-code text-[12px] text-ink-dim hover:text-ink underline decoration-muted truncate min-w-0"
           title={model.urlLabel}
         >
           {model.urlLabel}

@@ -496,8 +496,11 @@ export function CommandKeybindingsRow() {
             scrollbar while the rows below it are — so on any platform with
             non-overlay scrollbars the "Palette" caption drifts ~15px right of
             the column it names, and 98 rows guarantee a scrollbar. Sticky keeps
-            it visible while scrolling, which a long list needs anyway. */}
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border/40 bg-bg px-2 pb-1 text-[10px] uppercase tracking-wide text-ink-dim">
+            it visible while scrolling, which a long list needs anyway.
+            `bg-canvas`, the page colour the rows sit on: it was `bg-bg`, an
+            UNDEFINED token, so the "sticky" header was transparent and rows
+            scrolled visibly through it (UI pass, G-4). */}
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border/40 bg-canvas px-2 pb-1 text-[10px] uppercase tracking-wide text-ink-dim">
           <span className="min-w-0 flex-1">Command</span>
           <span className="shrink-0">Shortcut</span>
           <span
