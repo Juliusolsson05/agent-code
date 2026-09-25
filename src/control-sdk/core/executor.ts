@@ -193,10 +193,16 @@ export function createControlExecutor(ports: {
             active.set(callId, completion)
           } else await write('duplicate', { request }, { reusedCallId: previous.callId })
         })
-      } catch {
+      } catch (error) {
         // No effect is allowed without a durable intent. Do not fall back to
         // console logging: that would make mutation retries impossible to audit.
-        return { ...controlFailure('history_unavailable', 'History could not record intent; operation was not dispatched'),
+        // A history that refuses on purpose (a recovered journal blocking
+        // keyed intents, #1240) says why and how to clear it; any other
+        // failure keeps the generic message, since raw storage errors can
+        // carry local paths.
+        const message = error instanceof ControlError && error.code === 'history_unavailable'
+          ? error.message : 'History could not record intent; operation was not dispatched'
+        return { ...controlFailure('history_unavailable', message),
           operation: { callId, instanceId: ports.instanceId, status: 'blocked' } }
       }
 

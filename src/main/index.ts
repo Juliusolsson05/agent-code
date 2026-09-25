@@ -1190,7 +1190,17 @@ async function startApp(): Promise<void> {
   const controlManager = manager
   const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), ({ invokeTask }) => [
     ...workflowControlCapabilities(activeWorkflowService, invokeTask), ...usageControlCapabilities(), ...applicationIdentityCapabilities(), ...sessionHistoryControlCapabilities(), ...nativeHistoryControlCapabilities(() => conversationService), ...conditionBackendCapabilities(controlManager), ...terminalBackendCapabilities(controlManager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
-  ])
+  ], {
+    // #1240: a damaged journal is recovered instead of blocking every call.
+    // The incident is how anyone finds the preserved bytes and, when keyed
+    // calls stay blocked, the digest that accepts their unknown outcomes.
+    onHistoryRecovered: recovery => appRunJournal?.recordIncident({
+      kind: 'control.history_recovered',
+      severity: recovery.keyedCallsBlocked || recovery.blockedPairs > 0 ? 'error' : 'warn',
+      reason: recovery.kind,
+      context: recovery,
+    }),
+  })
   externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
   disposeExternalControl = () => externalSettings.dispose()
   disposeControlHost = () => controlHost.dispose({
