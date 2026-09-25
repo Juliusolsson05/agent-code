@@ -91,7 +91,7 @@ describe('gcHiddenOrphanGhosts', () => {
     ])
 
     expect(gcHiddenOrphanGhosts(prev, tail, null, NOW, GC_MS)).toBe(prev)
-    expect(gcSupersededGhosts(prev, NOW, GC_MS).size).toBe(0)
+    expect(gcSupersededGhosts(prev, NOW, GC_MS, null).size).toBe(0)
   })
 
   it('is reference-stable on no-op and copies only when it evicts', () => {
