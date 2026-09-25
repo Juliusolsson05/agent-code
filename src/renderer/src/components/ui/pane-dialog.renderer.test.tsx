@@ -104,6 +104,58 @@ describe('stacked pane prompts (round-2 review A-P1)', () => {
   })
 })
 
+// One controller per pane (Claude review of #1221: reviewer B F1/F2, A F2).
+function PaneWith({ prompts, lateChild = false, toast = null }: { prompts: string[]; lateChild?: boolean; toast?: string | null }) {
+  const [pane, setPane] = useState<HTMLDivElement | null>(null)
+  return (
+    <div ref={setPane} data-pane-id="pane-a" className="relative">
+      <textarea aria-label="composer A" />
+      {lateChild ? <button type="button">Send</button> : null}
+      <PaneDialogHostProvider container={pane} active restoreFocus={() => {}}>
+        {prompts.map(workspace => (
+          <TrustDialogModal key={workspace} state={{ workspace }} onAccept={async () => {}} onDecline={async () => {}} />
+        ))}
+      </PaneDialogHostProvider>
+      <PaneToast message={toast} />
+    </div>
+  )
+}
+
+describe('pane prompt inerting, one controller per pane', () => {
+  it('leaves the newest of two prompts that mount in the SAME commit answerable', () => {
+    // A TileLeaf remount mounts every visible prompt at once. Each prompt
+    // used to inert the other, and neither could be answered.
+    render(<PaneWith prompts={['/Users/me/first', '/Users/me/second']} />)
+    const dialogs = screen.getAllByRole('dialog')
+    expect(dialogs.map(d => d.closest('[inert]') !== null)).toEqual([true, false])
+  })
+
+  it('makes a pane control that mounts AFTER the prompt inert too', () => {
+    const { rerender } = render(<PaneWith prompts={['/Users/me/first']} />)
+    rerender(<PaneWith prompts={['/Users/me/first']} lateChild />)
+    // MutationObserver callbacks are microtasks.
+    return Promise.resolve().then(() => {
+      expect(screen.getByRole('button', { name: 'Send' }).closest('[inert]')).not.toBeNull()
+    })
+  })
+
+  it('keeps the pane toast live (announced and hoverable) above an open prompt', () => {
+    const { rerender } = render(<PaneWith prompts={['/Users/me/first']} />)
+    rerender(<PaneWith prompts={['/Users/me/first']} toast="That option was already replaced" />)
+    const status = screen.getByRole('status')
+    expect(status.closest('[inert]')).toBeNull()
+    expect(status).toHaveTextContent('That option was already replaced')
+  })
+
+  it('removes only the inert it set, once the last prompt closes', () => {
+    const { rerender } = render(<PaneWith prompts={['/Users/me/first']} />)
+    const composer = screen.getByLabelText('composer A')
+    expect(composer.closest('[inert]')).not.toBeNull()
+    rerender(<PaneWith prompts={[]} />)
+    expect(composer.closest('[inert]')).toBeNull()
+  })
+})
+
 describe('pane-scoped condition dialogs (#713)', () => {
   it('stays inside its own pane and blocks nothing outside it', () => {
     const onDecline = vi.fn(async () => {})
