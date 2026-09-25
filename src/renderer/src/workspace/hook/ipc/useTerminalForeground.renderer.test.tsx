@@ -13,8 +13,11 @@ afterEach(() => {
   Object.defineProperty(window, 'api', { configurable: true, value: originalApi })
 })
 
+const recordUsage = vi.fn()
+const readRuntime = (sessionId: string) => useAppStore.getState().workspaceRuntimes[sessionId]
+
 function Harness({ status }: { status: WorkspaceRestoreStatus }) {
-  useTerminalForeground(status, useAppStore(state => state.setWorkspaceRuntimes))
+  useTerminalForeground(status, useAppStore(state => state.setWorkspaceRuntimes), readRuntime, recordUsage)
   return null
 }
 
@@ -41,4 +44,31 @@ it('applies live events, and adopts the snapshot only once the workspace has res
 
   act(() => live({ sessionId: 'shell', busy: false, command: 'zsh', cwd: '/w' }))
   expect(useAppStore.getState().workspaceRuntimes.shell).toMatchObject({ sessionStatus: 'idle', unreadKind: 'output' })
+})
+
+it('treats the post-restart snapshot as a first sighting, and only a real change as use (#1178)', async () => {
+  recordUsage.mockClear()
+  let live!: (event: TerminalForegroundEvent) => void
+  Object.defineProperty(window, 'api', {
+    configurable: true,
+    value: {
+      onTerminalForeground: (cb: typeof live) => { live = cb; return () => {} },
+      // What main hands a freshly restarted renderer: every shell's CURRENT
+      // state, into runtimes that have none yet.
+      getTerminalForegrounds: vi.fn(async () => ({ shell: { busy: false, command: 'zsh', cwd: '/w' } })),
+    },
+  })
+
+  render(<Harness status="complete-restore" />)
+  await act(async () => { await Promise.resolve() })
+  // The restart is not a use: it may only give a record-less shell its floor.
+  expect(recordUsage.mock.calls).toEqual([['shell', 'floor']])
+
+  // The same state again changes nothing, so it is not a use either.
+  act(() => live({ sessionId: 'shell', busy: false, command: 'zsh', cwd: '/w' }))
+  expect(recordUsage).toHaveBeenCalledTimes(1)
+
+  // A command starting is.
+  act(() => live({ sessionId: 'shell', busy: true, command: 'npm', cwd: '/w' }))
+  expect(recordUsage.mock.calls.at(-1)).toEqual(['shell', 'use'])
 })

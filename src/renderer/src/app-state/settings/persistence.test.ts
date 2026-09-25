@@ -114,6 +114,19 @@ describe('coerceSettings agentNamesEnabled', () => {
   })
 })
 
+describe('coerceSettings showAgentCompletionIndicator (#1172)', () => {
+  it('is on for a blob written before the key existed', () => {
+    // WHY the empty blob is the case that matters: every existing install
+    // has no such key. An `=== true` coercion would read that as off and
+    // silently undo the on-by-default decision for everyone but fresh installs.
+    expect(coerceSettings({}).showAgentCompletionIndicator).toBe(true)
+  })
+
+  it('keeps an explicit opt-out', () => {
+    expect(coerceSettings({ showAgentCompletionIndicator: false }).showAgentCompletionIndicator).toBe(false)
+  })
+})
+
 describe('coerceSettings default appearance (#973)', () => {
   it('opens a fresh install in Nord with the Frost accent', () => {
     const settings = coerceSettings({})

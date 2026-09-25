@@ -397,6 +397,10 @@ export type Settings = {
    *  the modal validates before saving. */
   customAppearanceJson: string
   showStatusMode: boolean
+  /** Stripe an agent pane's header while it holds an unseen completion
+   *  (#1172). Gates the stripes only: when a completion counts as seen
+   *  (engagement, or dwelling on the pane) is the same with it off. */
+  showAgentCompletionIndicator: boolean
   showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
   /** Mode the app boots into on first launch / fresh install (no
@@ -712,6 +716,7 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'frost',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   showStatusMode: true,
+  showAgentCompletionIndicator: true,
   showWorktreeBadges: true,
   // On by default for the public build — the owner's explicit call (#973):
   // Agent Code is a workspace for people who run many agents at once, and the

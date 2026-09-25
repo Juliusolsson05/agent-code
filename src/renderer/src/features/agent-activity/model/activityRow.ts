@@ -14,6 +14,7 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 import { terminalProviderFailure } from '@renderer/workspace/orchestrationMcp'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { cwdBasename, sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
+import { terminalLastUsedUpperBound } from '@renderer/workspace/terminalLastUsed'
 import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 // ---------------------------------------------------------------------------
@@ -317,11 +318,11 @@ export function buildActivityRows(
       pinned: pinned.has(indexRow.sessionId),
       onLane: onLane.has(indexRow.sessionId),
       focused: focusedId === indexRow.sessionId,
-      // A shell has no transcript or turn clock; its last foreground change
-      // (a command started, finished, or the shell cd'd) is the only activity
-      // it has — the rule Close Old Agents and the old modal both use.
+      // A shell has no transcript or turn clock. Its durable last-used record
+      // (#1178) is the same one Close Old Agents ages it by, so the two
+      // surfaces cannot disagree about how long a terminal has sat unused.
       lastActiveAt: terminal
-        ? runtime?.terminalForeground?.changedAt ?? null
+        ? terminalLastUsedUpperBound(meta)
         : sessionActivity(runtime).timestamp,
     })
   }
