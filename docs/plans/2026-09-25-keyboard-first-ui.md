@@ -568,7 +568,7 @@ feeds the rows below G-1.
 | G-2 | Composer prompt-suggestion chip | led with "↵" (Enter never applied it: click sends, Tab on an empty draft fills); the app's only ✕ glyph; no focus rings | "⇥ fill" hint only while Tab really fills (empty draft, not slash mode, not OpenCode); body named "Send suggestion: …"; × like every close; T4 rings | done |
 | G-3 | Prose key hints (audit of literal ↵ / "Press Enter" / ⌘ in UI text) | Command palette AI Workspace: "Press Enter or click again to confirm…" and "Press Enter to create…" (the buttons already carry the chips) | chip inline (`Confirm metadata deletion: ↩ or click again`); a what-happens sentence instead of the duplicate key prose. Remaining hits are code comments or terminal-behaviour prose (template pane), kept | done |
 | G-4 | Undefined tokens (rendering bugs) | `bg-bg` (CommandKeybindingsRow sticky header is see-through), `bg-panel/40` ×2 (DictationGuideModal), `decoration-ink-faint` (claude web-fetch), `text-red-400` (CodeEditView) | defined tokens (`bg-surface`, `bg-canvas`, `decoration-muted`, `text-danger`) | done (a whole-renderer scan of color utilities against the `--color-*` tokens found exactly these four; the rest were comments/identifiers) |
-| G-5 | Composer action strip | Send is a raw ~20px button beside Stop `Button sm` (h-7); terminal says "Submit"; Stop overrides hover by className | `Button sm` for Send, one verb (Send), Stop on a real variant | todo |
+| G-5 | Composer action strip | Send is a raw ~20px button beside Stop `Button sm` (h-7); terminal says "Submit"; Stop overrides hover by className | `Button sm` for Send, one verb (Send), Stop on a real variant | done (Send + terminal Send on `Button sm` with ↩; Stop gets ⎋; Stop's hover-only danger kept, a documented choice) |
 | G-6 | Composer textarea | `bg-canvas border-border`; focus is a JS-toggled `border-accent`, not the ring | input tokens + T4 ring (keep the focused-pane accent as a PANE signal only if it is one) | todo |
 | G-7 | Row hover | 34 `hover:bg-surface-hi` (16 files) vs 35 `hover:bg-row-hover-bg` | rows `hover:bg-row-hover-bg`, controls `hover:bg-control-hover-bg` | todo |
 | G-8 | Selected rows | ~13 selected rows lack the accent rail (palette ×4, Conversations, AgentActivity, KeyVault, PathInput, Usage ×2); Explorer active = `bg-accent-soft`; WorkflowViewSelector ●; Incidents card | T7 recipe everywhere | todo |
@@ -866,6 +866,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-5 Mouse Mode buttons under the composer / raw terminal:** Send is now
+  the standard filled button, the same height as Stop, with ↩; Stop shows
+  ⎋. The raw agent terminal's "Submit" is now "Send ↩", like the composer.
 - **G-2 Prompt suggestion chip (above the composer after a turn):** no more
   "↵" in front; while the composer is empty it shows "⇥ fill" beside it
   (Tab fills the composer, a click sends). The dismiss is × like every
@@ -1671,3 +1674,6 @@ Sharp corners and one light theme.
   buttons, and no shared Select / Checkbox / SegmentedControl / OptionCard /
   Alert / EmptyState / SectionLabel / PanelHeader. Rows are worked in impact
   order: G-4 (real bugs) first, then the composer, then the sweeps.
+- 2026-09-25 G-5: AgentTerminalActions "Submit" → "Send" (one verb for one
+  action). Its scaffold-parity test asserted the old hand-styled classes; it
+  now pins the shared Button + ↩ chip, the same parity intent.

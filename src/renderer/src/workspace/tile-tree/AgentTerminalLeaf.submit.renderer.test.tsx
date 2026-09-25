@@ -189,7 +189,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
 
   it('hides Submit entirely when Mouse Mode is off', () => {
     render(leaf())
-    expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
   })
 
   it('sends the Enter byte to the agent PTY after attach when Mouse Mode is on', async () => {
@@ -201,7 +201,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
       await attach.promise
     })
 
-    const button = screen.getByRole('button', { name: 'Submit' })
+    const button = screen.getByRole('button', { name: 'Send' })
     expect(button).not.toBeDisabled()
     fireEvent.click(button)
     await act(async () => { await Promise.resolve() })
@@ -213,7 +213,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
     settings.mouseModeEnabled = true
     render(leaf())
     act(() => flushAnimationFrames())
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(sendInput).not.toHaveBeenCalled()
 
     await act(async () => {
