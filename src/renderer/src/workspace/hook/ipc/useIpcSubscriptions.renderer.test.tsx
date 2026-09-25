@@ -1699,11 +1699,11 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
         )
         return <div />
       }
-      render(<Harness />)
+      const mounted = render(<Harness />)
       const playRecordedTurn = () => act(() => {
         for (const event of recordedDisconnectedClaude.turnEvents) fake.emitSemantic({ sessionId, event: event as never })
       })
-      return { fake, runtime: () => runtimes[sessionId]!, playRecordedTurn }
+      return { fake, runtime: () => runtimes[sessionId]!, playRecordedTurn, unmount: mounted.unmount }
     }
 
     const provisional = {
@@ -1731,6 +1731,31 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
           entries: [{ entry: { type: 'user', uuid: 'u1', message: { role: 'user', content: 'hi' } } as never, file: '/p/x.jsonl' }],
         })
       })
+      act(() => { vi.advanceTimersByTime(15_000) })
+      expect(pane.runtime().transcriptStatus).toBe('ready')
+    })
+
+    it('keeps the first turn\'s deadline when more turns complete inside the grace', () => {
+      // One pending check per session (#1222 review): a busy pane completing
+      // a turn every few seconds must not push the verdict back forever, and
+      // must not stack a timer per turn.
+      const pane = mount(provisional)
+      const setTimeoutSpy = vi.spyOn(window, 'setTimeout')
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(10_000) })
+      pane.playRecordedTurn()
+      act(() => { vi.advanceTimersByTime(5_000) })
+      expect(pane.runtime().transcriptStatus).toBe('disconnected')
+      // Only the commit checks use the 15 s grace; the hook's other timers do not.
+      expect(setTimeoutSpy.mock.calls.filter(call => call[1] === 15_000)).toHaveLength(1)
+    })
+
+    it('cancels a pending check when the subscriptions unmount', () => {
+      // A torn-down window must not keep a timer that later writes into
+      // state it no longer owns (#1222 review).
+      const pane = mount(provisional)
+      pane.playRecordedTurn()
+      pane.unmount()
       act(() => { vi.advanceTimersByTime(15_000) })
       expect(pane.runtime().transcriptStatus).toBe('ready')
     })
