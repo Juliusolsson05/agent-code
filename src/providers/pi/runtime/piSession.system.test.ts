@@ -173,6 +173,12 @@ describe('PiSession over the recordings', () => {
     const refusing = { deliverPromptText: async () => { throw Object.assign(new Error('pi is compacting this session'), { code: 'pi-terminal-rejected' }) } }
     expect(await deliverPiPrompt({ session: refusing, sessionId: 'pane', prompt: 'hi' } as never))
       .toMatchObject({ ok: false, stage: 'before-write', retrySafe: true, disposition: 'retry-same-session', promptWritten: false })
+    // One of pi's own TUI commands: nothing reached pi (retrySafe), but no
+    // retry can ever run it, so an orchestration parent must not be told to
+    // retry (review of pi-terminal-headless#2).
+    const tuiCommand = { deliverPromptText: async () => { throw Object.assign(new Error('/new is a pi TUI command; type it in the pi pane'), { code: 'pi-terminal-tui-command' }) } }
+    expect(await deliverPiPrompt({ session: tuiCommand, sessionId: 'pane', prompt: '/new' } as never))
+      .toMatchObject({ ok: false, stage: 'before-write', code: 'missing-capability', retrySafe: true, disposition: 'do-not-retry', promptWritten: false, message: expect.stringContaining('type it in the pi pane') })
     const unknown = { deliverPromptText: async () => { throw new Error('pi prompt delivery outcome is unknown') } }
     expect(await deliverPiPrompt({ session: unknown, sessionId: 'pane', prompt: 'hi' } as never))
       .toMatchObject({ ok: false, retrySafe: false, disposition: 'do-not-retry', promptWritten: true })

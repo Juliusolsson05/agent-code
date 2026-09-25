@@ -25,6 +25,16 @@ class PiTerminalRejectedError extends Error {
 }
 
 /**
+ * The prompt is one of pi's own TUI commands (`/new`, `/tree`, `/model x`):
+ * the bridge cannot run those, and sent as a prompt pi would hand them to the
+ * model as text. Nothing reached pi, and no retry can ever succeed, so it
+ * needs its own code: the generic refusal above means "retry later".
+ */
+class PiTerminalTuiCommandError extends Error {
+  readonly code = 'pi-terminal-tui-command'
+}
+
+/**
  * Injection seams: tests replace the PTY spawn (no real pi) and the launch
  * step (point the package at a replay sandbox). The headless is always the
  * real package, so adapter tests exercise the reader Agent Code ships.
@@ -263,6 +273,7 @@ export class PiSession extends EventEmitter implements AgentSession {
     if (result.ok) return
     if (result.reason === 'no-live-channel') throw new PiTerminalNotReadyError(result.message ?? 'the Pi bridge is not connected')
     if (result.reason === 'rejected') throw new PiTerminalRejectedError(result.message ?? 'pi refused the prompt')
+    if (result.reason === 'tui-command') throw new PiTerminalTuiCommandError(result.message)
     // unknown: it may still run; the generic error means "possibly written, do not retry".
     throw new Error(result.message ?? 'pi prompt delivery outcome is unknown')
   }
