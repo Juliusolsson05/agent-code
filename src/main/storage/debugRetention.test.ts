@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { collectSessionRecordingDirs, runPrunePasses } from './debugRetention.js'
+import { collectSessionRecordingDirs, ghostLogOwnersFrom, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -185,6 +185,29 @@ describe('runPrunePasses', () => {
       await runPrunePasses([orphan, owned], policy({ ghostLogOwners: new Set(['live-1']) }), remove)
 
       expect(calls).toEqual(['/state/ghost-logs/gone-1.ghost.jsonl'])
+    })
+
+    it('protects every log when the workspace could not be read', async () => {
+      // A read-only store loaded an EMPTY file on purpose (unreadable,
+      // corrupt or newer workspace.json). Its empty session set is not
+      // evidence that the logs are orphans; the real file may own them all.
+      const readOnlyStore = { isReadOnly: () => true, sessionIds: () => new Set<string>() }
+      const owners = ghostLogOwnersFrom(readOnlyStore, [])
+      expect(owners).toBeNull()
+
+      const old = log('owned-by-unreadable-file', 100, 72 * HOUR)
+      const { calls, remove } = recordingRemover()
+      await runPrunePasses(
+        [old],
+        policy({ caps: capsOf(1_000_000, { 'ghost-logs': 10 }), ghostLogOwners: owners }),
+        remove,
+      )
+      expect(calls).toEqual([])
+    })
+
+    it('uses a healthy store\'s sessions plus running ones', () => {
+      const store = { isReadOnly: () => false, sessionIds: () => new Set(['saved']) }
+      expect(ghostLogOwnersFrom(store, ['running'])).toEqual(new Set(['saved', 'running']))
     })
 
     it('keeps a just-written orphan inside the active grace', async () => {

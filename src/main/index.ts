@@ -82,6 +82,7 @@ import {
   setDebugRetentionJournal,
   setLiveRecordingDirsProvider,
   setGhostLogOwnersProvider,
+  ghostLogOwnersFrom,
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import {
@@ -1394,7 +1395,7 @@ async function startApp(): Promise<void> {
   // somewhere: in any window's committed workspace, or running in the
   // manager (a brand-new pane can run before its first save). Before this
   // line runs, retention treats every ghost log as protected (#732).
-  setGhostLogOwnersProvider(() => new Set([...workspaceFileStore.sessionIds(), ...(manager?.list() ?? [])]))
+  setGhostLogOwnersProvider(() => ghostLogOwnersFrom(workspaceFileStore, manager?.list() ?? []))
   assertStartupOpen()
   // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
   // projection of every window's sessions keyed by native id, so the picker

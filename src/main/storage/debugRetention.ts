@@ -133,10 +133,30 @@ export function setLiveRecordingDirsProvider(fn: (() => Set<string>) | null): vo
 // Same singleton shape as the recording provider above, for the same reason.
 // Read ONCE per prune (into the policy), not per artifact: the workspace
 // store derives it from the whole file, and a prune can see ~2,000 logs.
-let ghostLogOwnersProvider: (() => ReadonlySet<string>) | null = null
+let ghostLogOwnersProvider: (() => ReadonlySet<string> | null) | null = null
 
-export function setGhostLogOwnersProvider(fn: (() => ReadonlySet<string>) | null): void {
+export function setGhostLogOwnersProvider(fn: (() => ReadonlySet<string> | null) | null): void {
   ghostLogOwnersProvider = fn
+}
+
+/**
+ * Who owns ghost logs right now, or null when that cannot be known.
+ *
+ * WHY a read-only store yields null, not its (empty) session set (#1223
+ * steering review): `WorkspaceFileStore` deliberately loads an EMPTY file and
+ * goes read-only when workspace.json is unreadable, corrupt or from a newer
+ * version, precisely so nothing overwrites the user's real data. Its
+ * `sessionIds()` is then empty although the file on disk may own every
+ * session. Reading that as "no owners" would declare every ghost log an
+ * orphan and delete the recovery state of the very workspace the store is
+ * protecting. Unknown means protect all.
+ */
+export function ghostLogOwnersFrom(
+  store: { isReadOnly(): boolean; sessionIds(): ReadonlySet<string> },
+  runningSessionIds: readonly string[],
+): ReadonlySet<string> | null {
+  if (store.isReadOnly()) return null
+  return new Set([...store.sessionIds(), ...runningSessionIds])
 }
 
 /** The owner set for one prune, or null when it cannot be known. A provider
