@@ -23,8 +23,11 @@ it('ages an idle terminal from its durable last-used record', () => {
     shell: { ...emptyRuntime(), terminalForeground: { busy: false, command: 'zsh', cwd: '/work/api', changedAt: 1_000 } },
   } as Workspace['runtimes']
 
-  expect(buildAgentRows(state, runtimes, 61_000)).toEqual([
-    expect.objectContaining({ sessionId: 'shell', kind: 'terminal', lastActiveAt: 1_000, ageMs: 60_000, isLive: false }),
+  // The age is read from the record's upper bound (record + one throttle
+  // resolution): a use dropped by the throttle can be up to a minute later
+  // than the record, and a destructive filter must not call that shell old.
+  expect(buildAgentRows(state, runtimes, 121_000)).toEqual([
+    expect.objectContaining({ sessionId: 'shell', kind: 'terminal', lastActiveAt: 61_000, ageMs: 60_000, isLive: false }),
   ])
 })
 
@@ -44,21 +47,24 @@ it('still finds a terminal that sat unused for days right after a restart (#1178
   } as Workspace['runtimes']
 
   expect(buildAgentRows(state, runtimes, now)).toEqual([
-    expect.objectContaining({ sessionId: 'shell', lastActiveAt: threeDaysAgo, ageMs: now - threeDaysAgo }),
+    expect.objectContaining({ sessionId: 'shell', lastActiveAt: threeDaysAgo + 60_000, ageMs: now - threeDaysAgo - 60_000, isLive: false }),
   ])
 })
 
-it('ages a parked terminal whose runtime was never rebuilt', () => {
+it('ages a parked terminal whose runtime was never rebuilt, but never calls it idle', () => {
   // A pooled shell that has not been woken since the restart has no runtime.
-  // Its record is metadata, so it still has an age instead of "unknown".
+  // Its record is metadata, so it still has an age instead of "unknown" — but
+  // nobody is watching its foreground, so it may be running a dev server
+  // (review of #1179). Unknown liveness counts as running: excluded unless the
+  // user ticks Include running.
   const state: Workspace['state'] = {
     tabs: [{ id: 'tab', title: 'project' }],
     activeTabId: 'tab', stage: oneLaneStage(),
     sessions: { shell: { cwd: '/work/api', kind: 'terminal', projectId: 'tab', joinedAt: 0, lastUsedAt: 1_000 } },
     pinnedSessionIds: [],
   }
-  expect(buildAgentRows(state, {} as Workspace['runtimes'], 61_000)).toEqual([
-    expect.objectContaining({ sessionId: 'shell', lastActiveAt: 1_000, ageMs: 60_000 }),
+  expect(buildAgentRows(state, {} as Workspace['runtimes'], 121_000)).toEqual([
+    expect.objectContaining({ sessionId: 'shell', lastActiveAt: 61_000, ageMs: 60_000, isLive: true, livenessUnknown: true }),
   ])
 })
 

@@ -82,8 +82,19 @@ export function withTerminalLastUsedFloor(
   }
 }
 
-/** The terminal's last use, for "how long has this been idle" readers. */
+/**
+ * The LATEST the terminal can have been used, for "how long has it been idle"
+ * readers: the record plus one resolution.
+ *
+ * WHY not the record itself (review of #1179): the throttle drops uses that
+ * land within a minute of the last write, so a shell used at 0 s and again at
+ * 59 s holds 0 — and at 60 s a one-minute Close Old threshold would call a
+ * shell used one second ago old. Every dropped use is, by construction, less
+ * than one resolution after the record, so record + resolution is a true
+ * upper bound. Reading the upper bound errs the safe way for a destructive
+ * filter: an idle shell shows as idle one minute less than it is.
+ */
 export function terminalLastUsedAt(meta: Pick<SessionMeta, 'lastUsedAt'> | undefined): number | null {
   const at = meta?.lastUsedAt
-  return typeof at === 'number' && Number.isFinite(at) ? at : null
+  return typeof at === 'number' && Number.isFinite(at) ? at + TERMINAL_LAST_USED_RESOLUTION_MS : null
 }

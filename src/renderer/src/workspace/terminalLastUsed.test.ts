@@ -62,5 +62,13 @@ it('reads a missing or malformed record as unknown', () => {
   expect(terminalLastUsedAt(undefined)).toBeNull()
   expect(terminalLastUsedAt({})).toBeNull()
   expect(terminalLastUsedAt({ lastUsedAt: Number.NaN })).toBeNull()
-  expect(terminalLastUsedAt({ lastUsedAt: 42 })).toBe(42)
+})
+
+it('reads the latest the shell can have been used, never the throttled record itself', () => {
+  // A use at 59 s after a record at 0 is dropped by the throttle. Reading 0
+  // would let a one-minute threshold call that shell old at 60 s (review of
+  // #1179); every dropped use is under one resolution after the record.
+  const record = withTerminalLastUsed(withTerminalLastUsed(state(), 'shell', 0 + 1), 'shell', 59_000)
+  expect(record.sessions.shell!.lastUsedAt).toBe(1)
+  expect(terminalLastUsedAt(record.sessions.shell)).toBeGreaterThan(59_000)
 })

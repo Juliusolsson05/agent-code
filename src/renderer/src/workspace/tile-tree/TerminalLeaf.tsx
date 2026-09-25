@@ -213,6 +213,7 @@ export function TerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
+    let offUserInput: (() => void) | null = null
     let offTerminalData: (() => void) | null = null
     // Nullable like the disposables above: xterm init can throw before the
     // follow wiring ever runs, and cleanup must survive that path.
@@ -377,9 +378,27 @@ export function TerminalLeaf({
           if (pendingInput.length > 256) pendingInput.splice(0, pendingInput.length - 256)
           return
         }
-        markTerminalUsedRef.current?.(sessionId)
         forwarder.onData(data)
       })
+
+      // Use is stamped from the user's own DOM events, not from xterm's onData
+      // (review of #1179). onData also carries the terminal's AUTOMATIC replies
+      // — cursor-position and device-attribute answers a program asks for — so
+      // a forgotten shell running something chatty would have looked in use
+      // forever. And the buffered branch above returns before any stamp, so
+      // typing while the shell woke never counted. A keydown, an IME
+      // composition and a DOM paste are human by definition, and they fire
+      // whether or not the backend is attached yet. Capture phase, because
+      // xterm's textarea handlers may stop propagation.
+      const markUsed = () => markTerminalUsedRef.current?.(sessionId)
+      container.addEventListener('keydown', markUsed, true)
+      container.addEventListener('compositionend', markUsed, true)
+      container.addEventListener('paste', markUsed, true)
+      offUserInput = () => {
+        container.removeEventListener('keydown', markUsed, true)
+        container.removeEventListener('compositionend', markUsed, true)
+        container.removeEventListener('paste', markUsed, true)
+      }
 
       // Incoming: raw bytes from the shell PTY.
       //
@@ -540,6 +559,7 @@ export function TerminalLeaf({
 
     return () => {
       disposed = true
+      offUserInput?.()
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()

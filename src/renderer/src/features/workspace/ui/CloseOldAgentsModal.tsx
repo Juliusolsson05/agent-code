@@ -51,8 +51,28 @@ type AgentRow = {
   cwd: string
   cwdBase: string
   isLive: boolean
+  /** A terminal nobody is observing yet: counted as live, but the row must
+   *  not claim it IS running (review of #1179). */
+  livenessUnknown: boolean
   lastActiveAt: number | null
   ageMs: number | null
+}
+
+/**
+ * A terminal nobody is observing yet counts as possibly running (review of
+ * #1179).
+ *
+ * WHY: after a restart a parked tmux shell is not re-attached or
+ * foreground-polled until something wakes it, so its runtime has no
+ * foreground observation and `isSessionLiveForClose` reads it as idle — while
+ * the shell may be running a dev server. Before #1178 such a shell had no age
+ * at all and was never listed. Its durable record now gives it an age, so the
+ * missing liveness has to be stated explicitly: unknown is treated as running,
+ * which means "excluded unless Include running is ticked". The user can still
+ * close it deliberately; the default never kills what it cannot see.
+ */
+function terminalLivenessUnknown(kind: SessionKind, runtime: Workspace['runtimes'][string] | undefined): boolean {
+  return kind === 'terminal' && (runtime?.terminalForeground ?? null) === null && runtime?.exited == null
 }
 
 /** One preview row for a session filed under `tab` (null without metadata). */
@@ -91,7 +111,8 @@ function agentRowFor(
     // Shared with every other close path (expansion, the confirmation
     // dialog, Kill Buried). Three private copies of "is this busy" is how a
     // preview and a confirmation come to disagree about the same session.
-    isLive: isSessionLiveForClose(runtimes, sessionId),
+    isLive: isSessionLiveForClose(runtimes, sessionId) || terminalLivenessUnknown(kind, runtime),
+    livenessUnknown: !isSessionLiveForClose(runtimes, sessionId) && terminalLivenessUnknown(kind, runtime),
     lastActiveAt,
     ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
   }
@@ -665,7 +686,11 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                       </div>
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
-                      {row.isLive ? (
+                      {row.livenessUnknown ? (
+                        <div className="text-[11px] text-warning" title="Not observed since the app started, so it may still be running a command. Wake it to check, or tick Include running to close it anyway.">
+                          not observed yet
+                        </div>
+                      ) : row.isLive ? (
                         <div className="text-[11px] text-danger">running</div>
                       ) : null}
                       {row.lastActiveAt != null && row.ageMs != null ? (
@@ -690,7 +715,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
 
         <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
-            Running agents and terminals with a command in progress are excluded unless explicitly included.
+            Running agents, terminals with a command in progress, and terminals not observed since the app started are excluded unless explicitly included.
           </div>
           <div className="flex items-center gap-2">
             <button
