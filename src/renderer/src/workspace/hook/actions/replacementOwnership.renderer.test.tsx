@@ -38,3 +38,23 @@ it.each(['spawn', 'retirement'] as const)('retires an uncommittable successor wh
   expect(useAppStore.getState().workspaceState.sessions).toEqual({})
   expect(useAppStore.getState().workspaceRuntimes.successor).toBeUndefined()
 })
+
+// #1279: the goal loop is keyed by session id in main, which cannot see the
+// swap. A committed replacement must hand it over; an uncommitted one (above)
+// must not.
+it('hands the pane\'s goal loop to the successor when the replacement commits', async () => {
+  useAppStore.setState({ workspaceState: { ...original.workspaceState, activeTabId: 'project',
+    tabs: [{ id: 'project', title: 'Project' }],
+    sessions: { source: { kind: 'claude', cwd: '/recorded/project', providerSessionId: 'native-source', projectId: 'project', joinedAt: 0 } },
+  }, workspaceRuntimes: { source: emptyRuntime() } })
+  const state = useAppStore.getState().workspaceState
+  const refs = makeRefs(state)
+  refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
+  const carryGoalLoop = vi.fn(async () => null)
+  window.api = { ...originalApi, spawnSession: vi.fn(async () => ({ sessionId: 'successor' })), killOwnedSession: vi.fn(async () => true), carryGoalLoop }
+  const mounted = renderHook(() => useSessionActions(state, useAppStore.getState().setWorkspaceState, useAppStore.getState().setWorkspaceRuntimes, refs))
+  await act(async () => {
+    expect(await mounted.result.current.replaceSession('/recorded/project', { targetSessionId: 'source', kind: 'claude', resumeSessionId: 'native-source' })).toBe('successor')
+  })
+  expect(carryGoalLoop).toHaveBeenCalledWith('source', 'successor')
+})

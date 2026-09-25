@@ -1088,3 +1088,46 @@ describe('GoalLoopService and background work the agent is waiting on (#1138)', 
     })
   })
 })
+
+// #1279: every replacement path (reload, provider switch, resume, rewind, MCP
+// toggle, Reload Agents) gives the pane a new id. The loop stayed filed under
+// the dead one, so the pane, Resume/Stop and goal_loop_complete all missed it.
+describe('GoalLoopService.carry (#1279)', () => {
+  it('moves the loop to the successor, paused, and the old id\'s late removal changes nothing', async () => {
+    const { svc, manager, storePath } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    const moved = await svc.carry('s1', 's2')
+    expect(moved).toMatchObject({ sessionId: 's2', goal: 'G.', phase: 'paused', pauseReason: 'interrupted' })
+    expect(svc.snapshot()['s1']).toBeUndefined()
+    manager.emit('removed', { sessionId: 's1' })
+    expect(svc.snapshot()['s2']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
+    // The successor's own completion now finds it.
+    await expect(svc.complete('s2', 'done', 'Shipped.')).resolves.toMatchObject({ phase: 'ended' })
+    // Persisted under the new id, so a restart does not bring the dead id back.
+    await vi.waitFor(async () => {
+      const persisted = JSON.parse(await readFile(storePath, 'utf8')) as Record<string, unknown>
+      expect(JSON.stringify(persisted)).toContain('"s2"')
+      expect(JSON.stringify(persisted)).not.toContain('"s1"')
+    })
+  })
+
+  it('never overwrites a loop the successor already runs, and ignores an unknown source', async () => {
+    const { svc } = await service()
+    await svc.startLoop('s1', { goal: 'Old.', loopPrompt: 'P.' })
+    await svc.startLoop('s2', { goal: 'New.', loopPrompt: 'P.' })
+    expect(await svc.carry('s1', 's2')).toBeNull()
+    expect(svc.snapshot()['s2']?.goal).toBe('New.')
+    expect(svc.snapshot()['s1']?.goal).toBe('Old.')
+    expect(await svc.carry('ghost', 's3')).toBeNull()
+  })
+
+  it('does not deliver a continuation into the successor before the user resumes', async () => {
+    const deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))
+    const { svc, manager } = await service(deliver)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await svc.carry('s1', 's2')
+    manager.emit('semantic-event', { sessionId: 's2', event: { type: 'turn_completed' } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(deliver).not.toHaveBeenCalled()
+  })
+})

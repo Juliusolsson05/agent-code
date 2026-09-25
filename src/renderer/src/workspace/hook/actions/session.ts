@@ -1433,6 +1433,7 @@ export function useSessionActions(
           await killSession(newId, 'replace.orphaned-successor', { cwd, kind: nextKind, providerRuntime })
           return
         }
+        carryGoalLoops(idMap)
         setRuntimes(prev => {
           // Replacement can await spawn and backend retirement while the user
           // keeps editing. Transfer the latest draft in the same state update
@@ -1662,6 +1663,7 @@ export function useSessionActions(
           stage: remapTiledLanes(prev.stage, idMap),
         }
       })
+      carryGoalLoops(idMap)
       for (const [newId, meta] of Object.entries(freshSessions)) {
         if (!hasDurableProviderSession(meta)) continue
         void loadInitialHistoryForSession({
@@ -1766,4 +1768,20 @@ export function useSessionActions(
   )
 
   return { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView }
+}
+
+/** Tell main that each replaced pane's goal loop now belongs to its
+ *  successor (#1279). Main keys loops by session id and cannot see the
+ *  swap; this is the same old -> new map the commit just applied to pins,
+ *  lanes and relationships. Fire-and-forget: a failed carry leaves the loop
+ *  where it was (the pre-#1279 behaviour), never blocks the swap, and main
+ *  refuses to overwrite a loop the successor already has. */
+function carryGoalLoops(idMap: ReadonlyMap<string, string>): void {
+  const carry = window.api?.carryGoalLoop
+  if (!carry) return
+  for (const [oldId, newId] of idMap) {
+    void carry(oldId, newId).catch(error => {
+      console.warn('[goal-loop] carry to the replacement session failed:', error)
+    })
+  }
 }
