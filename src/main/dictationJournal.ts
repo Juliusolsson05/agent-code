@@ -308,7 +308,8 @@ export class DictationDebugJournalRegistry {
       const path = dictationDebugLogPath(debugSessionId)
       // An evicted writer's last write may still be in flight, so the file
       // can be smaller than what that writer accounted for; take the larger.
-      const evicted = this.evictedBytes.get(debugSessionId) ?? 0
+      const inFlight = this.evictedBytes.get(debugSessionId)
+      const evicted = inFlight ? Math.max(0, ...inFlight.values()) : 0
       j = new DictationDebugJournal(path, { initialBytes: Math.max(existingSize(path), evicted), appendFile: this.options.appendFile })
       this.journals.set(debugSessionId, j)
       // Insertion order is age: evict the oldest press (flushing it first),
@@ -342,7 +343,7 @@ export class DictationDebugJournalRegistry {
   private readonly disposing = new Set<Promise<void>>()
   /** Accounted bytes of evicted writers whose final flush has not landed;
    *  see get(). Entries leave when that flush settles, so this stays small. */
-  private readonly evictedBytes = new Map<string, number>()
+  private readonly evictedBytes = new Map<string, Map<DictationDebugJournal, number>>()
 
   constructor(private readonly options: { appendFile?: typeof appendFile } = {}) {}
 
@@ -353,14 +354,24 @@ export class DictationDebugJournalRegistry {
   dispose(debugSessionId: string): void {
     const j = this.journals.get(debugSessionId)
     if (!j) return
-    this.evictedBytes.set(debugSessionId, j.accountedBytes)
+    // EVERY evicted writer of this press whose flush is in flight counts
+    // (steering q30): writes can land in any order, so the one that finishes
+    // first may be the small one while a 16 MiB batch is still pending.
+    const inFlight = this.evictedBytes.get(debugSessionId) ?? new Map<DictationDebugJournal, number>()
+    inFlight.set(j, j.accountedBytes)
+    this.evictedBytes.set(debugSessionId, inFlight)
     const flushing = j.flush().catch(err => {
       console.warn('[dictationJournal] dispose flush error:', err)
     })
     this.disposing.add(flushing)
     void flushing.finally(() => {
       this.disposing.delete(flushing)
-      this.evictedBytes.delete(debugSessionId)
+      // Only THIS writer's entry; another evicted writer of the same press may
+      // still be writing, and dropping its count let a later writer start
+      // below the budget (steering q30).
+      const remaining = this.evictedBytes.get(debugSessionId)
+      remaining?.delete(j)
+      if (remaining?.size === 0) this.evictedBytes.delete(debugSessionId)
     })
     this.journals.delete(debugSessionId)
   }

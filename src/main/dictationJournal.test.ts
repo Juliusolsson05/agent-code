@@ -201,3 +201,41 @@ it('waits for a write already in flight when shutting down, and keeps the budget
   expect(text).not.toContain('"event":"main:received"')
 })
 
+// Steering q30: evict A with a blocked write, reopen as B and evict B too,
+// then let A's write land first (or B's). A's finalizer must not delete B's
+// budget, or a third writer C starts below 16 MiB and logs raw chunks again.
+it.each(['A lands first', 'B lands first'] as const)('keeps the budget across two overlapping evictions (%s)', async order => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-dictation-user-'))
+  dirs.push(userData.dir)
+  const { appendFile: realAppend, mkdir } = await import('node:fs/promises')
+  await mkdir(join(userData.dir, 'dictation-debug'), { recursive: true })
+  const held: Array<() => void> = []
+  const appendFile = (async (...args: Parameters<typeof realAppend>) => {
+    await new Promise<void>(resolve => { held.push(resolve) })
+    await realAppend(...args)
+  }) as typeof realAppend
+  const registry = new DictationDebugJournalRegistry({ appendFile })
+  const evictPress0 = () => { for (let i = 1; i <= 64; i++) registry.get(`filler-${held.length}-${i}`) }
+  // A: past the budget, write held.
+  registry.get('press-0').append({ layer: 'IPC', event: 'big', data: { pad: 'x'.repeat(16 * 1024 * 1024) } })
+  await new Promise(resolve => setTimeout(resolve, 150))
+  evictPress0()
+  // B: reopened while A's write is held; its own write is held too.
+  registry.get('press-0').append({ layer: 'IPC', event: 'b-event', data: {} })
+  await new Promise(resolve => setTimeout(resolve, 150))
+  evictPress0()
+  const [releaseA, releaseB] = [held[0]!, held[1]!]
+  if (order === 'A lands first') releaseA(); else releaseB()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  // C: reopened with one write still in flight. It must still be over budget.
+  registry.get('press-0').append(chunk(1))
+  if (order === 'A lands first') releaseB(); else releaseA()
+  const drain = registry.flushAll()
+  for (let i = 0; i < 20 && held.length > 2; i++) { held.splice(2).forEach(release => release()); await new Promise(resolve => setTimeout(resolve, 10)) }
+  const pending = setInterval(() => held.splice(0).forEach(release => release()), 5)
+  await drain
+  clearInterval(pending)
+  const text = await readFile(dictationDebugLogPath('press-0'), 'utf8')
+  expect(text).not.toContain('"event":"main:received"')
+})
+
