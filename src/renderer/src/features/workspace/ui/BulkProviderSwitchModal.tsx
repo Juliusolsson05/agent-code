@@ -877,7 +877,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                       key={project.tabId}
                       className={`
                         flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0
-                        ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}
+                        ${disabled ? 'text-ink-dim' : 'cursor-pointer hover:bg-row-hover-bg'}
                       `}
                     >
                       <input

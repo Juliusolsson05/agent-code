@@ -245,7 +245,7 @@ export function QueueStrip({
       >
         <button
           type="button"
-          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-surface-hi hover:text-ink outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-row-hover-bg hover:text-ink outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
           aria-controls={listId}
           aria-expanded={!collapsed}
           onClick={() => setCollapsed(current => !current)}

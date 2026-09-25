@@ -203,7 +203,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
             flex items-center justify-center
             w-8 flex-shrink-0
             border-r border-border
-            text-muted hover:text-ink hover:bg-surface-hi
+            text-muted hover:text-ink hover:bg-control-hover-bg
             text-[14px] leading-none
             transition-colors duration-120
             outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring

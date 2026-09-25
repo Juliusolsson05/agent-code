@@ -96,7 +96,7 @@ export function WorkflowAgentDetails({
             {firstVisibleActivity > 0 ? (
               <button
                 type="button"
-                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
+                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-control-hover-bg hover:text-ink"
                 onClick={() => {
                   // WHY the right edge freezes on first history expansion: otherwise every live
                   // append shifts the tail window and silently evicts the oldest row the user just
@@ -111,7 +111,7 @@ export function WorkflowAgentDetails({
             {newerActivityCount > 0 ? (
               <button
                 type="button"
-                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
+                className="mb-1 w-full rounded-control py-1 text-center text-[10px] text-muted hover:bg-control-hover-bg hover:text-ink"
                 onClick={() => {
                   setActivityWindowEnd(null)
                   setVisibleActivityCount(ACTIVITY_WINDOW)

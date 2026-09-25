@@ -639,7 +639,7 @@ export function ExplorerPane({
               queuedLoadsRef.current.clear()
               for (const path of expandedRef.current) void loadDirectory(path)
             }}
-            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-surface-hi hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             ↻
           </button>
@@ -650,7 +650,7 @@ export function ExplorerPane({
               showHidden ? 'Hide hidden and ignored files' : 'Show hidden and ignored files'
             }
             onClick={() => setShowHidden(prev => !prev)}
-            className={`flex h-5 w-5 items-center justify-center rounded-control outline-none hover:bg-surface-hi focus-visible:ring-1 focus-visible:ring-focus-ring ${
+            className={`flex h-5 w-5 items-center justify-center rounded-control outline-none hover:bg-control-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring ${
               showHidden ? 'text-ink' : 'text-muted hover:text-ink'
             }`}
           >
@@ -674,7 +674,7 @@ export function ExplorerPane({
               }
               setMenu(clampedMenu(event.clientX, event.clientY, null))
             }}
-            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-surface-hi hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             +
           </button>
@@ -1071,8 +1071,8 @@ function TreeEntries({
                   isActive
                     ? 'bg-accent-soft text-ink'
                     : isActiveParent
-                      ? 'text-ink hover:bg-surface-hi'
-                      : 'text-ink-dim hover:bg-surface-hi hover:text-ink'
+                      ? 'text-ink hover:bg-row-hover-bg'
+                      : 'text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                 }`}
                 style={rowStyle}
                 title={entry.path}

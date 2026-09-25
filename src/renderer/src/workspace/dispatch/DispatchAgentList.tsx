@@ -966,41 +966,41 @@ export function dispatchActivityClasses(
   // spells out whether the underlying session is running, working, or exited.
   if (active) {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-accent text-accent-fg',
       title: '',
     }
   }
   if (activity === 'working') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-success text-success-fg',
       title: '',
     }
   }
   if (activity === 'running') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-info text-info-fg',
       title: '',
     }
   }
   if (activity === 'starting') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
+      row: 'bg-surface hover:bg-row-hover-bg text-ink',
       index: 'bg-warning text-warning-fg',
       title: '',
     }
   }
   if (activity === 'exited') {
     return {
-      row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
+      row: 'bg-surface hover:bg-row-hover-bg text-muted opacity-75',
       index: 'bg-danger text-danger-fg',
       title: '',
     }
   }
   return {
-    row: 'bg-surface hover:bg-surface-hi text-ink-dim',
+    row: 'bg-surface hover:bg-row-hover-bg text-ink-dim',
     index: 'bg-surface-hi text-muted',
     title: '',
   }

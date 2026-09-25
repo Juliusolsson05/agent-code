@@ -89,7 +89,7 @@ export function WorkflowViewSelector({
             className={`flex h-8 w-full min-w-0 items-center gap-2 border-b border-border px-3 pr-20 text-left font-code text-[11px] transition-colors ${tabFocus} ${
               selectedRunId === null
                 ? 'bg-surface-hi text-ink'
-                : 'text-muted hover:bg-surface-hi/60 hover:text-ink'
+                : 'text-muted hover:bg-row-hover-bg hover:text-ink'
             }`}
           >
             <span aria-hidden="true" className="w-3 text-center text-accent">
@@ -123,10 +123,10 @@ export function WorkflowViewSelector({
                   : activity === 'inactive'
                     ? selected
                       ? 'bg-surface-hi text-ink'
-                      : 'bg-surface-hi/35 text-muted hover:bg-surface-hi/60 hover:text-ink'
+                      : 'bg-surface-hi/35 text-muted hover:bg-row-hover-bg hover:text-ink'
                     : selected
                       ? 'bg-surface-hi text-ink'
-                      : 'text-muted hover:bg-surface-hi/60 hover:text-ink'
+                      : 'text-muted hover:bg-row-hover-bg hover:text-ink'
               }`}
             >
               <span aria-hidden="true" className="w-3 shrink-0 text-center text-accent">
@@ -157,7 +157,7 @@ export function WorkflowViewSelector({
         type="button"
         aria-haspopup="dialog"
         onClick={() => setHistoryOpen(true)}
-        className="absolute right-0 top-0 flex h-8 items-center px-3 font-code text-[10px] text-muted underline-offset-2 hover:bg-surface-hi/60 hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        className="absolute right-0 top-0 flex h-8 items-center px-3 font-code text-[10px] text-muted underline-offset-2 hover:bg-control-hover-bg hover:text-ink hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
       >
         Show all
       </button>
