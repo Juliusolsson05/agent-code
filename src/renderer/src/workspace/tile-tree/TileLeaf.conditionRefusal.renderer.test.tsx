@@ -5,6 +5,7 @@ import { useAppStore } from '@renderer/app-state/store'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { ConditionRefusal, ConditionRefusalReporter } from '@shared/conditions-core/dispatch'
+import type { ConditionPtyAction } from '@shared/conditions-core/contract'
 import type { Workspace } from '@renderer/workspace/hook'
 import { GlobalToastProvider } from '@renderer/ui/GlobalToast'
 import { AgentTerminalOwnerVisibilityProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
@@ -28,15 +29,21 @@ import { TileLeaf } from './TileLeaf'
 // src/providers/shared/renderer/conditions/dispatchRefusal.renderer.test.tsx.
 
 let reporter: ConditionRefusalReporter | undefined
-/** The pty arm TileLeaf passes as `onSend` — `sendConditionKey`. */
+/** The pty arm TileLeaf passes as `onPtyAction`, which reaches
+ *  `sendConditionKey`. Probed through the real prop (#1177 renamed it from
+ *  `onSend`), and adapted back to a keystroke so the tests read as one. A probe
+ *  that no longer matches the prop leaves `sendKey` undefined, and `mount`'s
+ *  assertion fails loudly rather than letting every keystroke test pass
+ *  vacuously. */
 let sendKey: ((data: string) => Promise<void>) | undefined
 vi.mock('@providers/shared/renderer/conditions/ProviderConditionOutlet', () => ({
   ProviderConditionOutlet: (props: {
     onConditionRefused?: ConditionRefusalReporter
-    onSend?: (data: string) => Promise<void>
+    onPtyAction?: (action: ConditionPtyAction) => Promise<void>
   }) => {
     reporter = props.onConditionRefused
-    sendKey = props.onSend
+    const onPtyAction = props.onPtyAction
+    sendKey = onPtyAction ? data => onPtyAction({ kind: 'pty', id: 'probe', label: 'probe', data }) : undefined
     return <div data-testid="outlet" />
   },
 }))
