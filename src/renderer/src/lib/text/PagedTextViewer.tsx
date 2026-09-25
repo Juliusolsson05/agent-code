@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from 'react'
 
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
-import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
+import { FeedPagerButtons } from '@renderer/features/feed/ui/rows/primitives'
 
 export const PagedTextViewer = memo(function PagedTextViewer({
   source,
@@ -37,24 +37,12 @@ export const PagedTextViewer = memo(function PagedTextViewer({
             characters {(page.start + 1).toLocaleString()}–{page.end.toLocaleString()} of{' '}
             {source.length.toLocaleString()}
           </span>
-          {page.hasPrevious ? (
-            <button
-              type="button"
-              className={feedDisclosureClass}
-              onClick={() => setPageStarts(current => current.length > 1 ? current.slice(0, -1) : current)}
-            >
-              previous
-            </button>
-          ) : null}
-          {page.hasNext ? (
-            <button
-              type="button"
-              className={feedDisclosureClass}
-              onClick={() => setPageStarts(current => [...current, page.end])}
-            >
-              next
-            </button>
-          ) : null}
+          <FeedPagerButtons
+            hasPrevious={page.hasPrevious}
+            hasNext={page.hasNext}
+            onPrevious={() => setPageStarts(current => current.length > 1 ? current.slice(0, -1) : current)}
+            onNext={() => setPageStarts(current => [...current, page.end])}
+          />
         </div>
       ) : null}
     </div>

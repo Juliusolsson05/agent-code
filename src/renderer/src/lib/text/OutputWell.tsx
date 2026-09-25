@@ -5,6 +5,7 @@ import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
 import { AnsiText } from '@renderer/lib/text/AnsiText'
+import { useSwapFocus } from '@renderer/lib/useSwapFocus'
 
 // PORTED from PR #524's kit (Phase 6 salvage, renderer rewrite PR #555).
 // The single collapsible output region for command/tool output — the
@@ -41,6 +42,11 @@ export const OutputWell = memo(function OutputWell({
   previewLines?: number
 }) {
   const [expanded, setExpanded] = useState(false)
+  // "(show all)" and "collapse" replace each other, so the pressed one
+  // unmounts; focus is carried to the other (ledger G-36, useSwapFocus).
+  // Expanding does not scroll: "collapse" lands at the END of the output
+  // the reader just opened.
+  const { counterpartRef, beforeSwap } = useSwapFocus(expanded)
 
   // Memoized: slicing + line-counting the dropped remainder of an
   // over-cap payload is O(dropped bytes) — running it on EVERY render
@@ -94,7 +100,8 @@ export const OutputWell = memo(function OutputWell({
         <>
           <button
             type="button"
-            onClick={() => setExpanded(true)}
+            ref={counterpartRef}
+            onClick={event => { beforeSwap(event.currentTarget, { preventScroll: true }); setExpanded(true) }}
             className={`my-0.5 block ${feedDisclosureClass}`}
           >
             … +{hiddenCount} {hiddenCount === 1 ? 'line' : 'lines'} (show all)
@@ -112,7 +119,8 @@ export const OutputWell = memo(function OutputWell({
       {needsTruncation && expanded && (
         <button
           type="button"
-          onClick={() => setExpanded(false)}
+          ref={counterpartRef}
+          onClick={event => { beforeSwap(event.currentTarget); setExpanded(false) }}
           className={`mt-1 ${feedDisclosureClass}`}
         >
           collapse

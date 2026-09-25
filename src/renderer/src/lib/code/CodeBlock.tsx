@@ -15,7 +15,8 @@ import {
 } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
-import { feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
+import { FeedPagerButtons, feedDisclosureClass } from '@renderer/features/feed/ui/rows/primitives'
+import { useSwapFocus } from '@renderer/lib/useSwapFocus'
 import {
   clearPendingSelection,
   setPendingSelection,
@@ -79,6 +80,11 @@ export const CodeBlock = memo(function CodeBlock({
   )
   const oversized = useMemo(() => exceedsInlineTextBudget(code), [code])
   const [largeContentOpen, setLargeContentOpen] = useState(false)
+  // "view paged content" and the pager replace each other. Opening hands
+  // focus to "next", the pager's forward step; collapsing hands it back to
+  // the opener (ledger G-36, useSwapFocus). The two targets are never mounted
+  // together, so they share the one counterpart ref.
+  const pagerFocus = useSwapFocus(largeContentOpen)
   const [fullCopyState, setFullCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [pageStarts, setPageStarts] = useState([0])
   const requestedPageStart = pageStarts[pageStarts.length - 1] ?? 0
@@ -448,38 +454,27 @@ export const CodeBlock = memo(function CodeBlock({
       </span>
       {!largeContentOpen ? (
         <button
+          ref={pagerFocus.counterpartRef}
           type="button"
           className={feedDisclosureClass}
-          onClick={() => setLargeContentOpen(true)}
+          onClick={event => { pagerFocus.beforeSwap(event.currentTarget); setLargeContentOpen(true) }}
         >
           view paged content
         </button>
       ) : (
         <>
-          {visiblePage.hasPrevious ? (
-            <button
-              type="button"
-              className={feedDisclosureClass}
-              onClick={() =>
-                setPageStarts(current => (current.length > 1 ? current.slice(0, -1) : current))
-              }
-            >
-              previous
-            </button>
-          ) : null}
-          {visiblePage.hasNext ? (
-            <button
-              type="button"
-              className={feedDisclosureClass}
-              onClick={() => setPageStarts(current => [...current, visiblePage.end])}
-            >
-              next
-            </button>
-          ) : null}
+          <FeedPagerButtons
+            hasPrevious={visiblePage.hasPrevious}
+            hasNext={visiblePage.hasNext}
+            onPrevious={() => setPageStarts(current => (current.length > 1 ? current.slice(0, -1) : current))}
+            onNext={() => setPageStarts(current => [...current, visiblePage.end])}
+            nextRef={pagerFocus.counterpartRef}
+          />
           <button
             type="button"
             className={feedDisclosureClass}
-            onClick={() => {
+            onClick={event => {
+              pagerFocus.beforeSwap(event.currentTarget)
               setLargeContentOpen(false)
               setPageStarts([0])
             }}

@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+
+import { useSwapFocus } from '@renderer/lib/useSwapFocus'
 
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 
@@ -35,26 +37,17 @@ export function RestoreBanner() {
 
   const [collapsed, setCollapsed] = useState(false)
 
-  // WHY focus is carried across the swap (ledger G-35): collapsing and
-  // expanding UNMOUNT the control that was just pressed, so focus fell to
-  // <body> and a keyboard user lost their place. It moves to the
-  // counterpart instead, but only when focus was inside the banner. The
-  // 60 s auto-collapse must never pull the caret out of a composer the user
-  // is typing in.
+  // Collapsing and expanding UNMOUNT the control that was just pressed, so
+  // focus is carried to the counterpart (ledger G-35; useSwapFocus has the
+  // WHY). The scope is the whole banner, so the 60 s auto-collapse carries
+  // focus only for someone tabbed onto it, and never takes a composer's
+  // caret.
   const rootRef = useRef<HTMLDivElement>(null)
-  const counterpartRef = useRef<HTMLButtonElement>(null)
-  const carryFocusRef = useRef(false)
+  const { counterpartRef, beforeSwap } = useSwapFocus(collapsed)
   const swap = (next: boolean) => {
-    carryFocusRef.current = rootRef.current?.contains(document.activeElement) ?? false
+    beforeSwap(rootRef.current)
     setCollapsed(next)
   }
-  // Layout effect: focus lands before paint, so there is no frame where
-  // <body> owns it and a document-level router could claim the next key.
-  useLayoutEffect(() => {
-    if (!carryFocusRef.current) return
-    carryFocusRef.current = false
-    counterpartRef.current?.focus()
-  }, [collapsed])
 
   useEffect(() => {
     if (!message) return
