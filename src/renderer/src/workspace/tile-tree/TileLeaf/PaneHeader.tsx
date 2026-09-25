@@ -174,7 +174,7 @@ export function PaneHeader({
           {badge}
           {/* truncate-START: every pane shares the leading path segments, so
               clipping the end hid the one part that identifies this agent. */}
-          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+          <span className="truncate-start" title={projectDir ?? 'No project folder'}>
             {/* The inner dir="ltr" is required, not decorative: the outer
                 element's rtl direction picks WHICH edge clips, and without
                 this the path's own characters are reordered with it. */}

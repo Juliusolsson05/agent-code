@@ -943,8 +943,8 @@ export function usePaneActions(
       if (!cwd) {
         showToast(
           kind === 'terminal'
-            ? 'Could not create dispatch terminal: no project directory found'
-            : 'Could not create dispatch agent: no project directory found',
+            ? 'Could not create dispatch terminal: no project folder found.'
+            : 'Could not create dispatch agent: no project folder found.',
         )
         return
       }
@@ -1144,7 +1144,7 @@ export function usePaneActions(
         // resolved project will do — all are valid directories for it.
         projectCwd(snapshot, tab.id)
       if (!cwd) {
-        showToast('Could not create dispatch agent: no project directory found')
+        showToast('Could not create dispatch agent: no project folder found.')
         return null
       }
 
