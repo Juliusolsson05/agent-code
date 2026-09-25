@@ -536,6 +536,13 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (10:50) — **Merged #1258** (`c13de395`, closes #1248) and **#1264** (`a56d696a`, closes #1242).
+  - **Process slip (steering q31):** #1264 merged 5 s after #1258 on a tested head that did not contain #1258. Its disposition is corrected, and main's push CI for `a56d696a` is the check of the combination.
+  - **Rule from now on:** after a merge, remerge main into the next PR and wait for a fresh gate before merging it. Never two merges off one check. Saved to memory.
+  - **Steering q30:** #1301 now tracks every in-flight evicted writer per press, tested A→B→C in both landing orders.
+  - **New PR #1309** fixes #1291 (C1, journal evidence): the rollback reads the attribute-aware composer. 3 reviewers.
+  - Every open PR is re-merged with the new main, and #1286 now uses the shared `MISSING_WORKSPACE_FOLDER_PREFIX`.
+
 - 2026-09-25 (10:05) — **Merged claude-code-headless#62** (`2ce428cf`). #1284 now points at that merge commit.
   - **Round 2 is complete and its findings fixed** for #1284, #1286, #1287, #1297, #1298, #1300 and #1301. All of them, plus #1257, #1258, #1263, #1264 and #1266, now only wait on CI: 13 PRs are queued on congested runners.
   - **New PR #1308** fixes #1272 (the shortcut recorder releases on outside click or blur). It has 3 reviewers.
