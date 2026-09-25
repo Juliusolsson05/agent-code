@@ -537,6 +537,17 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (13:45) — **claude-code-headless #63 merged** (`64fd0eaf`, disposition posted first). #1309 is bumped to it and remerged onto `54287d90`. Its last failure was the #1261 palette flake, which #1300 fixes.
+  - **Main CI red on `54287d90`:** `GoalLoopService` 'unrelated traffic cannot renew the screen grace' saw 2 deliveries where 1 was expected. It is not reproducible locally (15 isolated runs, 6 shuffled whole-file runs). Filed **#1314** (C9, suspected fake-timer and real-I/O interleave); timeouts must not be widened.
+  - **Steering q36:** the codex-headless#53 fixture held provider instruction text under base64. It is now sanitized byte-for-byte, the commit was amended out of the branch history (head `0800cba`), and the redaction is noted in the PR. Reviewers A and B were re-prompted for their final round. Memory: read the WHOLE fixture before committing.
+  - **Dispositions:** drafts exist for #1257, #1263, #1284, #1286, #1287, #1297 and #1298. Each is posted when its PR reaches the head of the queue. Still owed before merge:
+    - #1297's round-2 test doesn't exercise its fix (the ArrowDown guard);
+    - #1287 has a wrong comment;
+    - #1284's package commit 052a476 was never reviewed;
+    - most bodies are stale.
+  - **#919 is needs-evidence:** each window's `beforeunload` reads live state at its own close, and there is no stored cross-window vote.
+  - **#800 + new #1313:** a raw PTY recording of Codex 0.157 shows a dim placeholder, a plain draft and a two-row footer. The 0.149.1 classifier returns `unknown` for both frames, and the app's empty check refuses every browser-pocket restart (#1313). **codex-headless#54** (live, attribute-aware `getComposerState`, mutation-checked) is under review by Codex ×2 and Grok. The app PR follows after it merges.
+
 - 2026-09-25 (13:15) — **#1301 merged (`54287d90`, closes #1276).** It went green first, so the queue order became #1301 before #1300. That was intentional; one merge per cycle holds either way.
   - **Steering q35 (process):** #1301 merged without its public disposition, and its body described pre-review behaviour. Both were fixed after the merge; the disposition includes the confirmed `tMs` caveat. **The public disposition and an accurate body are now a pre-merge gate** (§7.4), alongside reviews, CI and current-main ancestry.
   - **#1300:** remerged onto `54287d90`. Round-2 A's plan/body drift is fixed (focus race, not frame selection; product gap is #1307). The pre-merge disposition is posted, and a fresh gate is running on `6ae2738f`. It merges next on green.
