@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { Input } from '@renderer/components/ui/input'
 import { Select } from '@renderer/components/ui/select'
 import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -508,7 +509,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 Inactive for more than
               </label>
               <div className="mt-1 flex items-center gap-2">
-                <input
+                <Input
                   ref={inputRef}
                   type="number"
                   min="1"
@@ -518,7 +519,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                   aria-label="Inactive for more than"
                   // T4: `focus:border-accent` (any focus, accent colour) →
                   // the input focus tokens on :focus-visible, like <Input>.
-                  className="rounded-control w-24 px-2 py-1.5 bg-input-bg border border-input-border text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+                  className="w-24"
                 />
                 <Select
                   value={thresholdUnit}
@@ -600,13 +601,13 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 )}
               </div>
               {scopeMode === 'selected' && projects.length > 8 && (
-                <input
+                <Input
                   type="text"
                   value={projectFilter}
                   onChange={e => setProjectFilter(e.target.value)}
                   placeholder="Filter projects"
                   aria-label="Filter projects"
-                  className="rounded-control mt-2 w-full px-2 py-1 bg-input-bg border border-input-border text-[11px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+                  className="mt-2"
                 />
               )}
             </div>

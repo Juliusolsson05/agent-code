@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Input } from '@renderer/components/ui/input'
 import { externalConnectionStatusSchema, type ExternalConnectionStatus } from '@control-sdk'
 import { Button } from '@renderer/components/ui/button'
 
@@ -46,8 +47,8 @@ export function ExternalControlRow() {
   return <div className="flex flex-col gap-2 text-[12px]">
     <div className="text-muted">{status ? status.running ? 'Running · global Codex connection installed' : status.enabled ? 'Enabled · connection needs attention' : 'Disabled' : 'Loading connection…'}</div>
     <label className="flex items-center justify-between gap-2">Local port
-      <input aria-label="External control port" type="number" min={1024} max={65535} value={port} disabled={busy}
-        onChange={event => setPort(event.target.value)} className="w-24 rounded-control border border-border bg-canvas px-2 py-1" />
+      <Input aria-label="External control port" type="number" min={1024} max={65535} value={port} disabled={busy}
+        onChange={event => setPort(event.target.value)} className="w-24" />
     </label>
     <div className="flex flex-wrap gap-2">
       <Button variant="outline" disabled={busy || !status} onClick={() => void configure(!status?.enabled)}>{status?.enabled ? 'Disable' : 'Enable'}</Button>

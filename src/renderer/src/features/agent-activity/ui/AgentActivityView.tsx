@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Input } from '@renderer/components/ui/input'
 import { EmptyState } from '@renderer/components/ui/empty-state'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
@@ -345,7 +346,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
               {counts.exited > 0 ? ` · ${counts.exited} exited` : ''}
             </DialogDescription>
           </div>
-          <input
+          <Input
             ref={filterRef}
             value={query}
             onChange={event => setQuery(event.target.value)}
@@ -357,7 +358,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
             aria-expanded
             aria-controls="agent-activity-listbox"
             aria-activedescendant={highlightedRow ? activityRowId(highlightedRow.sessionId) : undefined}
-            className="mt-3 w-full rounded-control border border-input-border bg-input-bg px-3 py-1.5 text-[12px] text-ink outline-none placeholder:text-input-placeholder focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+            className="mt-3"
           />
         </header>
 

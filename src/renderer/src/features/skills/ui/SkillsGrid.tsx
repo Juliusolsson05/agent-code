@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Input } from '@renderer/components/ui/input'
 import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -231,9 +232,9 @@ export function SkillsGrid({ settings, onChange }: Props) {
   return (
     <div className="rounded-slab border border-border bg-surface text-[11px]">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <input
+        <Input
           aria-label="Filter skills"
-          className="min-w-[160px] flex-1 border border-input-border bg-input-bg px-2 py-1 text-ink"
+          className="min-w-[160px] flex-1"
           placeholder="Filter skills…"
           value={filter}
           onChange={event => setFilter(event.target.value)}

@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Input } from '@renderer/components/ui/input'
 import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -357,9 +358,9 @@ function AgentCodeCustomSkillsModal({
             <>
               <label className="flex flex-col gap-1 text-[11px]">
                 <span>Name {draft.skillId ? '(immutable)' : ''}</span>
-                <input
+                <Input
                   aria-label="Skill name"
-                  className="rounded-control border border-input-border bg-input-bg px-2 py-1.5 text-ink"
+                  
                   value={draft.name}
                   disabled={busy}
                   readOnly={draft.skillId !== null}
@@ -369,9 +370,9 @@ function AgentCodeCustomSkillsModal({
               </label>
               <label className="flex flex-col gap-1 text-[11px]">
                 <span>Description</span>
-                <input
+                <Input
                   aria-label="Skill description"
-                  className="rounded-control border border-input-border bg-input-bg px-2 py-1.5 text-ink"
+                  
                   value={draft.description}
                   disabled={busy}
                   placeholder="Review a pull request when the user asks for code review."

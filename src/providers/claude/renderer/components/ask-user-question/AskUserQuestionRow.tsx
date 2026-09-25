@@ -1,4 +1,5 @@
 import { useContext, useEffect, useRef, useState } from 'react'
+import { Input } from '@renderer/components/ui/input'
 import type { KeyboardEvent } from 'react'
 
 import {
@@ -482,13 +483,13 @@ export function AskUserQuestionRow({
                       or custom answer
                     </div>
                   )}
-                  <input
+                  <Input
                     value={textByQuestion[qi] ?? ''}
                     disabled={controlsDisabled}
                     onFocus={() => activateCustomText(qi)}
                     onChange={event => updateCustomText(qi, event.target.value)}
                     placeholder="Type something"
-                    className="rounded-control border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
+                    
                   />
                 </div>
               </div>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Input } from '@renderer/components/ui/input'
 
 import { normalisePocketUrl } from '@shared/browserPocket/url'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -48,11 +49,11 @@ export function PocketChrome({ sessionId, workspace, compact = false, inLane = f
       <button type="button" className={BTN} aria-label={live.loading ? 'Stop loading' : 'Reload'} title={live.loading ? 'Stop loading' : 'Reload (Shift-click: without cache)'} onClick={e => requestPocket(pocket.pocketId, live.loading ? { type: 'stop' } : { type: 'reload', hard: e.shiftKey })}>
         <ControlIcon>{live.loading ? <rect x="6" y="6" width="12" height="12" rx="1" /> : <><path d="M20 7v5h-5" /><path d="M19.6 12a8 8 0 1 0-2.2 5.7M20 12l-2-5" /></>}</ControlIcon>
       </button>
-      <input
+      <Input
         ref={input}
         aria-label="Address"
         spellCheck={false}
-        className="mx-1 h-7 min-w-0 flex-1 rounded-control border border-border bg-canvas px-2 font-code text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+        className="mx-1 h-7 min-w-0 flex-1 px-2"
         value={draft ?? pocket.url ?? ''}
         placeholder={ports[0] ? `localhost:${ports[0].port}` : 'localhost:5173 or a URL'}
         onFocus={e => e.currentTarget.select()}

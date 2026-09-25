@@ -187,7 +187,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             // outline-none with the caret as the focus signal: the search
             // box is the header's only text field and the palette's idiom
             // (plan T4 exception for a borderless primary search field).
-            className="flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-muted"
+            className="flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-muted"
           />
           {/* The lowercase "esc" text became the shared chip (plan H1). */}
           <Kbd binding="Escape" />

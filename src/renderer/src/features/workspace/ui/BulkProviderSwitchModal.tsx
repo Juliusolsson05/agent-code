@@ -1,4 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { Input } from '@renderer/components/ui/input'
 import { Select } from '@renderer/components/ui/select'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -854,13 +855,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 )}
               </div>
               {scopeMode === 'selected' && projects.length > 8 && (
-                <input
+                <Input
                   type="text"
                   value={projectFilter}
                   onChange={e => changeProjectFilter(e.target.value)}
                   placeholder="Filter projects"
                   aria-label="Filter projects"
-                  className="rounded-control mt-2 w-full px-2 py-1 bg-input-bg border border-input-border text-[11px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+                  className="mt-2"
                 />
               )}
             </div>
