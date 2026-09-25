@@ -116,7 +116,7 @@ const DropdownMenuLabel = React.forwardRef<
   <DropdownMenuPrimitive.Label
     ref={ref}
     data-slot="dropdown-menu-label"
-    className={cn('px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.18em] text-muted', className)}
+    className={cn('px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider text-muted', className)}
     {...props}
   />
 ))

@@ -578,7 +578,7 @@ feeds the rows below G-1.
 | G-12 | Raw text/number inputs (~12) | ExtensionSettingRow ×2 (square), ExternalControlRow (no focus), SkillsGrid, CustomSkills ×2, CloseOld ×2, BulkSwitch, AgentActivity filter, Pocket URL | `Input` / `NumberInput` | todo |
 | G-13 | Error boxes (7 recipes) + errors shown as muted text | Analytics/Usage, CustomSkills/Conventions, AddSkill, ViewPrompts, Conversations, Keybindings (ink text), Explorer/Skills/UpdateChannel | one `Alert` (`bg-danger-soft border-danger-border text-danger`) + inline variant | todo |
 | G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | `EmptyState` + plain muted loading text | todo |
-| G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | in progress (`SectionLabel` exists and is used by PanelHeader + GitBar; sweep of the other sites pending) |
+| G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | done for the look (every uppercase label on 10px / tracking-wider / no weight, DropdownMenuLabel included; banner titles and segmented controls excluded on purpose); component adoption continues opportunistically |
 | G-16 | Explorer context menu | the only floating menu not on DropdownMenu; z-30 sits under z-40 overlays | `DropdownMenu` | todo |
 | G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | `OptionCard`, one `Checkbox` | todo |
 | G-18 | Close glyph/size | × at 12/14/16px; the word "close"; ✕ (fixed in G-2) | one icon-close button | todo |
@@ -1695,3 +1695,9 @@ Sharp corners and one light theme.
   fixed (controlGuide + settings controlReference said Settings → Agents; the
   dictation IPC error and guide said Settings → Voice Dictation). Test
   queries updated to the new visible labels.
+- 2026-09-25 G-15: 18 files normalized to the canonical label class (the
+  `tracking-wide` / `tracking-[0.12–0.18em]` / 9–11px / medium-semibold
+  variants). Banner titles ("Autosave off", CLI update) and the segmented
+  controls (AppearanceMenu radios, PathPicker provider tabs) were NOT section
+  labels. Two lines the first pass touched were reverted; they belong to
+  G-10 (SegmentedControl).

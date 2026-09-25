@@ -35,7 +35,7 @@ function DetailSlab({
 }): React.JSX.Element {
   return (
     <section>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">
         {label}
       </div>
       <div
@@ -88,7 +88,7 @@ export function WorkflowAgentDetails({
       {prompt ? <DetailSlab label="Prompt" value={prompt} /> : null}
 
       <section>
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+        <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">
           Activity · {totalActivities} {totalActivities === 1 ? 'event' : 'events'}
         </div>
         {totalActivities > 0 ? (

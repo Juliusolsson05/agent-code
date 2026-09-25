@@ -31,7 +31,7 @@ export function SettingsSidebar({ selectedCategory, onSelectCategory, counts }: 
   return (
     <aside className="hidden w-[220px] shrink-0 border-r border-border bg-surface md:block">
       <div className="border-b border-border px-4 py-3">
-        <div className="text-[11px] uppercase tracking-[0.18em] text-muted">Categories</div>
+        <div className="text-[10px] uppercase tracking-wider text-muted">Categories</div>
       </div>
 
       <div className="flex flex-col gap-1 p-2" role="tablist" aria-orientation="vertical" aria-label="Setting categories" onKeyDown={onKeyDown}>

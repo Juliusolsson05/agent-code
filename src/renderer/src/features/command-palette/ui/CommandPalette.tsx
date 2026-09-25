@@ -1877,7 +1877,7 @@ function OpenCommandPalette({
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2 text-[13px]">
                               <span className="truncate">{template.title}</span>
-                              <span className="flex-shrink-0 rounded-chip border border-border bg-surface px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted">
+                              <span className="flex-shrink-0 rounded-chip border border-border bg-surface px-1 py-0.5 text-[10px] uppercase tracking-wider text-muted">
                                 Prompt template
                               </span>
                             </div>
@@ -1915,7 +1915,7 @@ function OpenCommandPalette({
                           role="presentation"
                           className="
                             px-3 pt-3 pb-1
-                            text-[9px] font-code uppercase tracking-[0.14em] text-muted
+                            text-[10px] font-code uppercase tracking-wider text-muted
                             first:pt-1
                           "
                         >

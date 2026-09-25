@@ -478,7 +478,7 @@ export function AskUserQuestionRow({
                     typed-text → option → Submit transition reviewable. */}
                 <div className="mt-1 flex flex-col gap-1">
                   {!q.multiSelect && (
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
+                    <div className="text-[10px] uppercase tracking-wider text-muted">
                       or custom answer
                     </div>
                   )}

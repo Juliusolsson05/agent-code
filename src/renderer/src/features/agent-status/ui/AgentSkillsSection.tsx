@@ -56,7 +56,7 @@ function SkillInventory({ kind, cwd }: { kind: SessionKind; cwd: string }) {
   return (
     <section className="rounded-slab border border-border bg-canvas" aria-label="Installed Skills">
       <div className="flex items-center justify-between border-b border-border px-2 py-1">
-        <div className="text-[10px] uppercase tracking-[0.14em] text-muted">
+        <div className="text-[10px] uppercase tracking-wider text-muted">
           Installed Skills{agent && state.status === 'ready' ? ` · ${state.snapshot.skills.length}` : ''}
         </div>
         {agent ? (

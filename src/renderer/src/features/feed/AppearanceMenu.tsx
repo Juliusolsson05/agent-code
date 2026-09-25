@@ -75,7 +75,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
                 key={mode.id}
                 value={mode.id}
                 onSelect={keepOpen}
-                className="justify-center border border-border px-3 py-1.5 text-[11px] uppercase tracking-wider data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]:font-semibold data-[state=checked]:text-accent-fg data-[highlighted]:border-border-hi"
+                className="justify-center border border-border px-3 py-1.5 text-[11px] uppercase tracking-wider data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]: data-[state=checked]:text-accent-fg data-[highlighted]:border-border-hi"
               >
                 {mode.label}
               </DropdownMenuRadioItem>
@@ -131,7 +131,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div className="px-3 pt-3 pb-3 border-b border-border last:border-b-0">
       {/* 10px, not 9px (plan T5: legends/labels 10px). */}
-      <div className="text-[10px] uppercase tracking-[0.18em] text-muted font-medium mb-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted mb-2">
         {title}
       </div>
       {children}

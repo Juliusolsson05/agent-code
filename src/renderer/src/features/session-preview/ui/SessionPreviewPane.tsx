@@ -189,7 +189,7 @@ function PaneHeader({
     turnCount ?? (state.status === 'ready' ? countUserTurns(state.model.entries) : null)
   return (
     <div className="flex-shrink-0 flex items-center gap-2 border-b border-border px-4 py-2">
-      <span className="text-[10px] uppercase tracking-[0.15em] text-muted font-medium">
+      <span className="text-[10px] uppercase tracking-wider text-muted">
         preview
       </span>
       {kind && (

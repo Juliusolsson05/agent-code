@@ -69,7 +69,7 @@ export function PromptList({ prompts, emptyMessage, nav, listRef, label }: {
             data-prompt-index={index}
             className={`border-b border-l-2 border-border px-3 py-2 last:border-b-0 ${selected ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent'} ${nav ? 'cursor-pointer hover:bg-row-hover-bg' : ''}`}
           >
-            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.12em] text-muted">
+            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-wider text-muted">
               <span>#{prompts.length - index}</span>
               <span title={time.absolute ?? undefined}>{time.relative}</span>
             </div>

@@ -537,7 +537,7 @@ function ResumeSection({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col border-t border-border pt-3">
-      <div className="text-[10px] uppercase tracking-[0.15em] text-muted font-medium mb-2 flex-shrink-0">
+      <div className="text-[10px] uppercase tracking-wider text-muted mb-2 flex-shrink-0">
         Resume
         {loading && (
           <span className="ml-2 text-ink-dim normal-case tracking-normal">

@@ -142,7 +142,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
         className="flex max-h-[80vh] flex-col overflow-y-auto text-[12px]"
       >
         <DialogHeader className="select-none pr-16">
-          <div className="text-[10px] uppercase tracking-[0.16em] text-muted">Remote Control</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted">Remote Control</div>
           <DialogTitle>Control Your Agents from a Phone</DialogTitle>
           <DialogDescription className="sr-only">
             Configure the remote server, pair phones, and manage connected devices.
@@ -286,7 +286,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                           re-review). */}
                       {withVisibleControls(device.name)}
                       {connected.has(device.deviceId) && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wide text-success">
+                        <span className="ml-2 text-[10px] uppercase tracking-wider text-success">
                           connected
                         </span>
                       )}

@@ -94,7 +94,7 @@ function Section({ title, fields }: { title: string; fields: AgentStatusField[] 
     <section className="rounded-slab border border-border bg-canvas">
       <div className="
         border-b border-border px-2 py-1
-        text-[10px] uppercase tracking-[0.14em] text-muted
+        text-[10px] uppercase tracking-wider text-muted
       ">
         {title}
       </div>

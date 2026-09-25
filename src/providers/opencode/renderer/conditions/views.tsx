@@ -237,7 +237,7 @@ function QuestionBlock({
   return (
     <div className="mb-3">
       {total > 1 && (
-        <div className="text-[10px] uppercase tracking-wide text-muted mb-1">
+        <div className="text-[10px] uppercase tracking-wider text-muted mb-1">
           Question {index + 1} of {total}
         </div>
       )}

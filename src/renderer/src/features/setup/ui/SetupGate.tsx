@@ -274,7 +274,7 @@ export function SetupGate() {
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="border-b border-border bg-canvas/40 px-5 py-1.5 text-[10px] uppercase tracking-wide text-muted">
+    <div className="border-b border-border bg-canvas/40 px-5 py-1.5 text-[10px] uppercase tracking-wider text-muted">
       {children}
     </div>
   )

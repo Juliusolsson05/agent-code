@@ -764,9 +764,9 @@ function GitWorkflowCard({
       <GitCardHeader
         sub={workflowTitle(intent)}
         badges={allStepsProven
-          ? <span className="text-[10.5px] uppercase tracking-wide text-muted">complete</span>
+          ? <span className="text-[10px] uppercase tracking-wider text-muted">complete</span>
           : status === 'unknown'
-            ? <span className="text-[10.5px] uppercase tracking-wide text-muted">exit code unavailable</span>
+            ? <span className="text-[10px] uppercase tracking-wider text-muted">exit code unavailable</span>
             : null}
       />
       {summaries.length > 0 ? (
