@@ -479,7 +479,7 @@ entry when it lands.
 | N4 | TiledDispatch SplitHandles ×3 (L214/347/567) | mouse only, not focusable | `onKeyboardDelta` + `label` like GlobalEditorShell L1213 | done (2% step, shared clamp with drag) |
 | N5 | Spotlight strip + pocket radiogroup | no aria-pressed; radiogroup without arrows | aria-current/pressed; ←→ in radiogroup | done (pills `aria-current`; layout radios roving + shared `radioGroupKeyDown`; also swept into Grid Dispatch nested agents, Settings, Color flag) |
 | N6 | Reader strip | no aria-pressed | aria-current | done (+ Older/Newer said ↑/↓ but only ⌥↑/⌥↓ acted → one binding drives chip + listener) |
-| N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | todo |
+| N7 | WorkflowViewSelector | tablist without roving/arrows | roving tabindex ←→ | done (vertical → ↑↓/Home/End, automatic activation, wrap; Show all moved out of the tablist) |
 | N8 | QueueStrip | good focus styles (2px outline-accent) | T4 converge only | todo |
 | N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | done (Tab stop + shared list keys) |
 | N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | done (in S43) |
@@ -778,6 +778,11 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **N7 Session views (below the composer, once a workflow exists):** Tab
+  lands on the selected view only; ↑/↓ switch views as they move (focus ring
+  inset on the row); Tab again reaches "Show all". Check that "Show all" still
+  sits at the right end of the Main row at the same height (it is now drawn
+  over the row from outside the list, with the row pinned to h-8).
 - **N6 Reader header:** the buttons now read "Older ⌥↑" / "Newer ⌥↓" (they
   said "↑ Older" / "↓ Newer", but plain arrows never did that); agent pills
   and both buttons show a focus ring.
@@ -1243,3 +1248,12 @@ Sharp corners and one light theme.
   `eventMatchesKeybinding` in the listener and `<Kbd binding>` on the buttons.
   Confirm-red: both new ReaderView tests fail on the pre-change view; the
   existing ⌥-arrow and modal-yield tests stay green as the listener regression.
+- 2026-09-25 N7: WorkflowViewSelector tablist uses the SettingsSidebar shape
+  (↑↓ select, since the list is vertical; the ledger's ←→ was wrong for a
+  vertical list). Ruling: no shared tablist helper. The six tablists differ in
+  activation (KeyVault guard), Delete-to-close (TabBar/EditorTabs) and
+  orientation, so one helper would need a flag per difference. Cost if wrong:
+  about 15 duplicated lines per site. "Show all" moved out of the tablist
+  (invalid ARIA child) and is absolutely positioned over the Main row.
+  Confirm-red: both keyboard tests fail on the pre-change selector; the
+  unlisted-selection fallback is pinned by its own test (mutation observed).

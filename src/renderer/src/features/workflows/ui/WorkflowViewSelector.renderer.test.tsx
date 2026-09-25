@@ -75,6 +75,44 @@ describe('WorkflowViewSelector', () => {
     expect(screen.getByTestId('session-viewport')).toHaveTextContent('Conversation feed')
   })
 
+  it('is one Tab stop that ↑/↓ walk, selecting as they go (ledger N7)', () => {
+    render(<SelectionHarness />)
+    const tabs = screen.getAllByRole('tab')
+    // Only the selected view is tabbable, so Tab reaches the composer side
+    // in one press instead of one per workflow.
+    expect(tabs.map(tab => tab.tabIndex)).toEqual([0, -1, -1])
+
+    tabs[0]!.focus()
+    fireEvent.keyDown(tabs[0]!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(tabs[1])
+    expect(screen.getByTestId('session-viewport')).toHaveTextContent('Workflow viewport: run-deep-hunt')
+    expect(screen.getAllByRole('tab').map(tab => tab.tabIndex)).toEqual([-1, 0, -1])
+
+    fireEvent.keyDown(tabs[1]!, { key: 'End' })
+    expect(document.activeElement).toBe(tabs[2])
+    // Wraps from the last view back to Main.
+    fireEvent.keyDown(tabs[2]!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(tabs[0])
+    expect(screen.getByTestId('session-viewport')).toHaveTextContent('Conversation feed')
+  })
+
+  it('keeps a Tab stop when the selected run is not listed', () => {
+    // A selected run that dropped out of `references` (or has not arrived
+    // yet) must not leave every row at tabIndex -1: the group would vanish
+    // from the Tab order. Main is the fallback stop.
+    render(<WorkflowViewSelector references={references} selectedRunId="run-gone" onSelect={vi.fn()} />)
+    expect(screen.getAllByRole('tab').map(tab => tab.tabIndex)).toEqual([0, -1, -1])
+  })
+
+  it('keeps Show all out of the tablist but after it in Tab order', () => {
+    render(<SelectionHarness />)
+    const showAll = screen.getByRole('button', { name: 'Show all' })
+    // tablist owns only tabs; the dialog opener used to sit between them.
+    expect(screen.getByRole('tablist').contains(showAll)).toBe(false)
+    const tabbables = [...document.querySelectorAll<HTMLElement>('button')].filter(el => el.tabIndex >= 0)
+    expect(tabbables.at(-1)).toBe(showAll)
+  })
+
   it('does not reserve empty chrome before a workflow is detected', () => {
     const onSelect = vi.fn()
     const { container } = render(
