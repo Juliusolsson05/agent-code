@@ -244,7 +244,7 @@ function NativeServerRow({ server, onCopyIn }: { server: NativeMcpServer; onCopy
         title={server.copyable ? 'Manage a copy here and share it with the other provider' : undefined}
         onClick={onCopyIn}
       >
-        Copy in
+        Copy In
       </Button>
     </div>
   )
