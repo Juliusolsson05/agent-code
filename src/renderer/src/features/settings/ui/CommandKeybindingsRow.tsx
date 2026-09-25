@@ -406,8 +406,10 @@ export function CommandKeybindingsRow() {
   //
   // Grabbing the LIST's scrollbar is not leaving (#1308 review B): the list is
   // 134 rows in a 420 px scroller, and a mousedown on its scrollbar targets the
-  // scroller element itself, which is not inside any recorder button. Only
-  // that exact target is exempt; a click on another row still ends recording.
+  // scroller element itself, which is not inside any recorder button. The
+  // scroller is also the target for its own flex gaps (8 px strips between
+  // category blocks, #1308 round 2), so only a press PAST its client box, on
+  // the scrollbar, is exempt; a gap or a row still ends recording.
   // Capture phase, so a control that stops propagation cannot keep it armed.
   useEffect(() => {
     if (!capturingFor) return
@@ -415,7 +417,7 @@ export function CommandKeybindingsRow() {
     const onMouseDown = (event: MouseEvent) => {
       const target = event.target as Element | null
       if (target?.closest?.('[data-shortcut-recorder]')) return
-      if (target?.matches?.('[data-shortcut-list]')) return
+      if (target instanceof HTMLElement && target.matches('[data-shortcut-list]') && onScrollbar(target, event)) return
       release()
     }
     window.addEventListener('mousedown', onMouseDown, true)
@@ -678,3 +680,14 @@ function commandLabel(commandId: string): string {
   if (!command) return commandId
   return typeof command.title === 'function' ? commandId : command.title
 }
+
+/** Did this mousedown land on the element's own scrollbar? The scrollbar sits
+ *  outside the client box (clientWidth/clientHeight exclude it), so a press
+ *  past either edge of the client area is on it. */
+function onScrollbar(element: HTMLElement, event: MouseEvent): boolean {
+  const rect = element.getBoundingClientRect()
+  const x = event.clientX - rect.left - element.clientLeft
+  const y = event.clientY - rect.top - element.clientTop
+  return x >= element.clientWidth || y >= element.clientHeight
+}
+

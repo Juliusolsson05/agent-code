@@ -39,10 +39,33 @@ it('stops recording when the window loses focus', () => {
 })
 
 // #1308 review: the edges of the release rule.
+// The scroller is the target for both its scrollbar and its own flex gaps;
+// only the scrollbar, past the client box, keeps recording (#1308 round 2).
+function listGeometry(): HTMLElement {
+  const list = document.querySelector<HTMLElement>('[data-shortcut-list]')!
+  list.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 420, width: 400, height: 420, x: 0, y: 0, toJSON: () => ({}) })
+  Object.defineProperty(list, 'clientWidth', { configurable: true, value: 388 })
+  Object.defineProperty(list, 'clientHeight', { configurable: true, value: 420 })
+  return list
+}
+
 it('keeps recording while the user drags the list scrollbar', () => {
   startRecording()
-  fireEvent.mouseDown(document.querySelector('[data-shortcut-list]')!)
+  fireEvent.mouseDown(listGeometry(), { clientX: 395, clientY: 100 })
   expect(screen.getByRole('button', { name: 'Press keys… (Esc)' })).toBeInTheDocument()
+})
+
+it('ends recording on a click in the gap between category blocks', () => {
+  startRecording()
+  fireEvent.mouseDown(listGeometry(), { clientX: 120, clientY: 20 })
+  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+})
+
+it('ends recording on a click on another row', () => {
+  startRecording()
+  const row = document.querySelector('[data-shortcut-list] [data-shortcut-recorder]')!.parentElement!.parentElement!
+  fireEvent.mouseDown(row)
+  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
 })
 
 it('lets the recorder button toggle recording off itself', () => {
