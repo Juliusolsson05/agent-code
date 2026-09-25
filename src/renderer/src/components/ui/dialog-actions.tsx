@@ -44,9 +44,13 @@ import { Kbd } from '@renderer/components/ui/kbd'
 
 export type DialogActionsProps = {
   /** Label for the primary action. Imperative verb, e.g. "Bury", "Close 3
-   *  Agents". Not "OK" — a mouse user reads the button, not the title. */
-  confirmLabel: string
-  onConfirm: () => void
+   *  Agents". Not "OK" — a mouse user reads the button, not the title.
+   *  Omit both confirmLabel and onConfirm for a CLOSE-ONLY dialog (a
+   *  read-only viewer): the footer then renders just the cancel button,
+   *  labelled via cancelLabel="Close" — one ghost `Close ⎋` (plan H5), which
+   *  replaced the outline/secondary/"close"/"✕" variants those viewers used. */
+  confirmLabel?: string
+  onConfirm?: () => void
   /** Omit to render a confirm-only footer (an acknowledgement dialog). */
   onCancel?: () => void
   cancelLabel?: string
@@ -205,7 +209,7 @@ export function DialogActions({
   const footerRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
-    if (!confirmOnEnter || confirmKey === null) return
+    if (!onConfirm || !confirmOnEnter || confirmKey === null) return
     // Scope the listener to THIS footer's own dialog rather than the document.
     // Two mounted dialogs (or a dialog over a full-page surface) would
     // otherwise both fire on a single Enter, and the one the user is not
@@ -269,20 +273,22 @@ export function DialogActions({
           {escapeCancels ? <Kbd binding="Escape" /> : null}
         </Button>
       ) : null}
-      <Button
-        variant={tone === 'danger' ? 'destructive' : 'default'}
-        size="sm"
-        data-dialog-action="confirm"
-        disabled={blocked}
-        onClick={onConfirm}
-      >
-        {busy ? '…' : confirmLabel}
-        {confirmKey !== null && !busy ? (
-          // onAccent: both confirm variants (default, destructive) are
-          // FILLED, so the chip takes the button's foreground.
-          <Kbd binding={confirmKey} tone="onAccent" />
-        ) : null}
-      </Button>
+      {onConfirm ? (
+        <Button
+          variant={tone === 'danger' ? 'destructive' : 'default'}
+          size="sm"
+          data-dialog-action="confirm"
+          disabled={blocked}
+          onClick={onConfirm}
+        >
+          {busy ? '…' : confirmLabel}
+          {confirmKey !== null && !busy ? (
+            // onAccent: both confirm variants (default, destructive) are
+            // FILLED, so the chip takes the button's foreground.
+            <Kbd binding={confirmKey} tone="onAccent" />
+          ) : null}
+        </Button>
+      ) : null}
     </DialogFooter>
   )
 }

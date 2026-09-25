@@ -412,8 +412,8 @@ entry when it lands.
 | S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | done |
 | S5 | ProviderSwitchPickerModal | ↑↓ ⌃N/P Enter; prose hint; outline Cancel | useListNavigation; legend; ghost Cancel | done |
 | S6 | NewAgentInDialog | ↑↓ ⌃N/P Enter ⌫ back; prose hint | useListNavigation; legend (⌫ back) | done |
-| S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | todo |
-| S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | todo |
+| S7 | RewindToPromptModal | ↑↓ ⌃N/P Enter on scroller; no hints; outline-none | useListNavigation; legend; T4 | done |
+| S8 | ViewPromptsModal | scroll only; outline-none scroller | Close ⎋; T4 focus on scroller | done |
 | S9 | ColorFlagPickerModal | Tab only, no arrows on a grid | ←→↑↓ grid nav, Enter picks, legend; DialogActions | todo |
 | S10 | DispatchRowProjectModal | Tab only; px-2 py-2; `rounded`, `text-fg`, `bg-surface-raised` | useListNavigation; T1/T3 tokens | todo |
 | S11 | GridDispatchShapeOverlay | Enter in inputs; `rounded`, `rounded-[2px]`, `text-fg` | DialogActions chips; T1 tokens | todo |
@@ -591,6 +591,15 @@ Sharp corners and one light theme.
   py-2, 12px medium, row-selected + 2px bar; a disabled project stays
   visible at half opacity and the highlight skips it; the list keeps its
   focus ring across the step change.
+- **S7/S8 Rewind to Prompt / View Prompts (shared PromptList):** prompts are
+  now FLAT divided rows inside one bordered well (were separate rounded
+  cards with gaps — **owner call: confirm you prefer flat rows here**; the
+  full prompt text still wraps); highlight = row-selected + 2px accent bar;
+  Rewind: the "rewinds this pane…" sentence moved from the footer into the
+  header description, footer `↑ ↓ move` · `Cancel ⎋` · `Rewind Here ↩`, the
+  list takes focus once prompts load; View Prompts: one ghost `Close ⎋`
+  (was outline), the scroller shows an inset ring when tabbed to; both 860
+  wide (lg preset; were 760).
 
 ## Tasks
 
@@ -665,6 +674,13 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S7/S8: PromptList has read-only (list/listitem) and
+  interactive (listbox/option + aria-activedescendant, focus owner) modes;
+  flat rows. Rewind on useListNavigation with an effect that moves focus to
+  the listbox after the async load (only if focus is still on the
+  scroller). DialogActions confirm is now optional (close-only viewers).
+  Confirm-red: Rewind focus/End test and View Prompts Tab-stop/Close test
+  fail on the pre-change files. Copy: "Rewind here" → "Rewind Here".
 - 2026-09-25 S6: New Agent In on two useListNavigation instances; the hook
   gained `keys` (highlight follows the ITEM in live lists — the dialog's
   documented tab-id invariant) and DialogActions gained `extraActions` for
