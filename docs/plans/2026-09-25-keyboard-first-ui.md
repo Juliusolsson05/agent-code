@@ -542,8 +542,8 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-17 | Keybindings palette checkbox suppressed reason (`CommandKeybindingsRow.tsx` PaletteToggle) | reason title-only for sighted keyboard users | visible "Hidden while X is off" | todo |
 | K2-18 | SkillsGrid "shared" chip + ●/— cells (`skills/ui/SkillsGrid.tsx:498,586`) | meaning title-only | column legend | todo |
 | K2-19 | Dictation history WPM caveat (`DictationHistoryRow.tsx:106`) | title-only | footnote | todo |
-| K2-20 | Close Old "not observed yet" (`CloseOldAgentsModal.tsx:712`) | guidance title-only | visible second line | todo |
-| K2-21 | Bulk switch exhausted source (`BulkProviderSwitchModal.tsx:777`) | disabled reason title-only | inline reason | todo |
+| K2-20 | Close Old "not observed yet" (`CloseOldAgentsModal.tsx:712`) | guidance title-only | visible second line | done |
+| K2-21 | Bulk switch exhausted source (`BulkProviderSwitchModal.tsx:777`) | disabled reason title-only | inline reason | no change needed (verified: "— X is exhausted" is already visible beside the checkbox; the sweep read only the title) |
 | K2-22 | Perf Overview incident markers (`ResourceCharts.tsx:84` → `TimeSeriesChart.tsx:184`) | marker label only in SVG title | include in keyboard readout | todo |
 | K2-23 | WorktreesBar category (`worktrees/ui/WorktreesBar.tsx:338,345`) | meaning title-only | visible/expandable | todo |
 | K2-24 | TopConsumers caveats (`performance-monitor/overview/TopConsumers.tsx:95,105`) | title-only | visible marker ("≥") | todo |
@@ -828,6 +828,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-20 Close Old Agents:** a terminal marked "not observed yet" now
+  says underneath "may still be running · wake it, or include running
+  agents" (was a hover tooltip).
 - **K2-11/16 Settings › MCP servers:** in the server dialog, a locked
   provider checkbox now has a visible line under it ("Codex not available:
   Codex does not support SSE servers"). In the list, the same reason sits
@@ -1534,3 +1537,6 @@ Sharp corners and one light theme.
 - 2026-09-25 K2-11 / K2-16: MCP reasons are visible text, and the `title`s
   are removed. Confirm-red: the dialog test fails with McpServerDialog at
   HEAD, and the row test fails with McpServersRow at HEAD.
+- 2026-09-25 K2-20: visible guidance under "not observed yet" (wording
+  matches the real checkbox label). K2-21 verified as a false positive.
+  Confirm-red: the new test fails with the pre-change modal.

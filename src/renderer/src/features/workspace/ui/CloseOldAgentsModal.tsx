@@ -709,9 +709,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
                       {row.livenessUnknown ? (
-                        <div className="text-[11px] text-warning" title="Not observed since the app started, so it may still be running a command. Wake it to check, or tick Include running to close it anyway.">
-                          not observed yet
-                        </div>
+                        // The guidance is VISIBLE (K2-20). It was only a hover
+                        // title on a non-focusable div, and it is the one
+                        // thing that tells the user how to proceed with this
+                        // row.
+                        <>
+                          <div className="text-[11px] text-warning">not observed yet</div>
+                          <div className="text-[10px] leading-snug text-muted">
+                            may still be running · wake it, or include running agents
+                          </div>
+                        </>
                       ) : row.isLive ? (
                         <div className="text-[11px] text-danger">running</div>
                       ) : null}

@@ -190,6 +190,23 @@ describe('bulk dialogs: one exit, key chips, no key on the batch action', () => 
     await act(async () => { settle?.() })
   })
 
+  it('Close Old Agents says how to proceed with a terminal it has not observed (K2-20)', () => {
+    // A terminal whose foreground was never reported since launch is treated
+    // as possibly running. The "what now" guidance was only a hover title on
+    // a non-focusable cell.
+    const base = workspaceFixture()
+    const workspace = {
+      ...base,
+      state: { ...base.state, sessions: { agent: { ...base.state.sessions.agent!, kind: 'terminal' as const, lastUsedAt: Date.now() - 8 * 60 * 60 * 1000 } } },
+      runtimes: { agent: { ...emptyRuntime(), turnStartedAt: Date.now() - 8 * 60 * 60 * 1000 } },
+    } as unknown as Workspace
+    render(<CloseOldAgentsModal open workspace={workspace} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include agents that are currently running' }))
+    expect(screen.getByText('not observed yet')).toBeVisible()
+    expect(screen.getByText(/wake it, or include running agents/)).toBeVisible()
+    expect(screen.getByText('not observed yet').hasAttribute('title')).toBe(false)
+  })
+
   it('Close Old Agents opens with focus in the threshold field', () => {
     render(<CloseOldAgentsModal open workspace={replaceRuntime(workspaceFixture(), false)} onClose={vi.fn()} />)
     expect(document.activeElement).toBe(screen.getByRole('spinbutton', { name: 'Inactive for more than' }))
