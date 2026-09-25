@@ -31,8 +31,16 @@ export function RestoreBanner() {
         ? 'Could not load your saved workspace — running in a fresh-tab fallback. Autosave is disabled to avoid overwriting the on-disk file. Restart after resolving the issue.'
         : workspace.restoreStatus === 'bootstrap-error'
           ? 'Workspace bootstrap failed. Autosave is disabled. Check the dev console and restart Agent Code after fixing the underlying issue.'
-          : null
+          : workspace.saveFailure
+            // #1244: saves keep failing (a full disk, a permission change).
+            // The retries continue, and the banner clears on the first success.
+            ? `Workspace changes are not being saved: ${workspace.saveFailure}. Agent Code keeps retrying; free disk space or fix permissions, and changes save on the next success.`
+            : null
 
+  // Saves failing is a different condition from autosave being OFF (they are
+  // still attempted), so the collapsed chip must not claim the latter.
+  const savesFailing = Boolean(message) && !['partial-restore', 'persisted-fallback', 'bootstrap-error'].includes(workspace.restoreStatus as string)
+  const chipLabel = savesFailing ? 'Not saving' : 'Autosave off'
   const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
@@ -58,10 +66,10 @@ export function RestoreBanner() {
             px-2 py-0.5 text-[11px] font-code text-warning
             hover:bg-warning/20
           "
-          title="Show autosave-off details"
-          aria-label="Show autosave-off details"
+          title={`Show ${chipLabel.toLowerCase()} details`}
+          aria-label={`Show ${chipLabel.toLowerCase()} details`}
         >
-          <span className="font-semibold uppercase tracking-wide">Autosave off</span>
+          <span className="font-semibold uppercase tracking-wide">{chipLabel}</span>
           <span aria-hidden="true">▾</span>
         </button>
       </div>

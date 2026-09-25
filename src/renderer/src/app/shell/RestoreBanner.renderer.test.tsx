@@ -1,0 +1,29 @@
+import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+
+// The banner reads two fields of the layout context; mocking the hook keeps
+// the test on the banner's own decision rather than the whole workspace.
+let context: { restoreStatus: string; saveFailure: string | null } = { restoreStatus: 'complete-restore', saveFailure: null }
+vi.mock('@renderer/workspace/WorkspaceContext', () => ({ useWorkspaceLayoutContext: () => context }))
+
+import { RestoreBanner } from './RestoreBanner'
+
+describe('RestoreBanner', () => {
+  it('says workspace changes are not being saved, with the storage error (#1244)', () => {
+    context = { restoreStatus: 'complete-restore', saveFailure: "EACCES: permission denied, open '/state/workspace.json'" }
+    render(<RestoreBanner />)
+    expect(screen.getByRole('alert').textContent).toContain("Workspace changes are not being saved: EACCES: permission denied, open '/state/workspace.json'")
+  })
+
+  it('shows nothing while saves work', () => {
+    context = { restoreStatus: 'complete-restore', saveFailure: null }
+    const { container } = render(<RestoreBanner />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('keeps a restore problem first: its autosave-off state is the more severe one', () => {
+    context = { restoreStatus: 'partial-restore', saveFailure: 'ENOSPC' }
+    render(<RestoreBanner />)
+    expect(screen.getByRole('alert').textContent).toContain('partially restored')
+  })
+})

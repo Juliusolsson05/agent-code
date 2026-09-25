@@ -6,7 +6,10 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
-import { useAutoSave } from './useAutoSave'
+import { SAVE_FAILURE_BANNER_AFTER, useAutoSave } from './useAutoSave'
+import { mkdtemp, chmod, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 vi.mock('@renderer/performance/client', () => ({
@@ -251,5 +254,53 @@ describe('workspace autosave durability retry', () => {
       await vi.advanceTimersByTimeAsync(5_000)
     })
     expect(saveWorkspace).toHaveBeenCalledTimes(3)
+  })
+
+  // #1244: persistent save failures used to reach only console.warn while the
+  // backoff retried forever; the user kept working on changes lost at quit.
+  it('reports a save error after repeated failures and clears it on the next success', async () => {
+    // A genuine filesystem error, wrapped the way Electron IPC delivers it.
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-save-'))
+    await chmod(directory, 0o555)
+    const realError = await writeFile(join(directory, 'workspace.json'), '{}').then(() => null, (error: Error) => error)
+    await chmod(directory, 0o755)
+    await rm(directory, { recursive: true, force: true })
+    expect(realError).not.toBeNull()
+    const ipcError = new Error(`Error invoking remote method 'workspace:save': ${String(realError)}`)
+
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const state: WorkspaceState = {
+      tabs: [{ id: 'tab-a', title: 'recorded' }], activeTabId: 'tab-a', stage: oneLaneStage('s'),
+      sessions: { s: { cwd: '/recorded', kind: 'claude', projectId: 'tab-a', joinedAt: 0 } }, pinnedSessionIds: [],
+    }
+    const refs = {
+      latestStateRef: ref(state), latestRuntimesRef: ref({ s: emptyRuntime() }),
+      saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+    } as unknown as WorkspaceRefs
+    let failing = true
+    const saveWorkspace = vi.fn(async () => { if (failing) throw ipcError })
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveWorkspace } })
+    const health = vi.fn()
+    const { unmount } = renderHook(() => useAutoSave(state, 0, refs, true, health))
+
+    // Step by ATTEMPT, not by time: the backoff fits several into a second.
+    const until = async (attempts: number) => {
+      while (saveWorkspace.mock.calls.length < attempts) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+      }
+      await act(async () => { await Promise.resolve() })
+    }
+    await until(SAVE_FAILURE_BANNER_AFTER - 1)
+    expect(health).not.toHaveBeenCalledWith(expect.any(String))
+    await until(SAVE_FAILURE_BANNER_AFTER)
+    // The storage error itself, without the IPC channel wrapper.
+    expect(health).toHaveBeenLastCalledWith(String(realError!).replace(/^Error: /, ''))
+    expect(String(health.mock.lastCall![0])).toMatch(/EACCES/)
+
+    failing = false
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+    expect(health).toHaveBeenLastCalledWith(null)
+    unmount()
   })
 })

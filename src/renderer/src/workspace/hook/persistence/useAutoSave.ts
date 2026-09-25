@@ -36,12 +36,28 @@ const AUTOSAVE_RETRY_MAX_DELAY_MS = 30_000
 // initial empty Zustand state during that window can overwrite a real
 // workspace.json with `tabs: []` or a partially restored layout.
 
+/** Consecutive failed saves before the user is told (the first retries are
+ *  usually enough for a transient error). */
+export const SAVE_FAILURE_BANNER_AFTER = 3
+
+/** What the banner says about a failed save: the storage error itself,
+ *  without Electron's IPC wrapper ("Error invoking remote method ..."),
+ *  which names an internal channel rather than the problem. */
+export function saveFailureText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error)
+  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+}
+
 export function useAutoSave(
   state: WorkspaceState,
   draftVersion: number,
   refs: WorkspaceRefs,
   bootstrapComplete: boolean,
+  // Told the save failure to show (null when saves work again). #1244.
+  onSaveHealth: (failure: string | null) => void = () => undefined,
 ): void {
+  const onSaveHealthRef = useRef(onSaveHealth)
+  onSaveHealthRef.current = onSaveHealth
   const retryEnabledRef = useRef(false)
   const retryAttemptRef = useRef(0)
   const flushSaveRef = useRef<() => void>(() => undefined)
@@ -155,6 +171,7 @@ export function useAutoSave(
     void window.api.saveWorkspace(json)
       .then(() => {
         retryAttemptRef.current = 0
+        onSaveHealthRef.current(null)
         // Drain any adopted-window confirmations now that the merged rows are
         // DURABLE. Main deletes the closed window's slice on this call, so it
         // has to follow a committed save rather than the in-memory merge — see
@@ -182,6 +199,15 @@ export function useAutoSave(
         saveSpan.fail(err, { bytes: json.length })
         // eslint-disable-next-line no-console
         console.warn('[workspace] save failed:', err)
+        // WHY a banner after a few failures and not only this warn (#1244):
+        // a full disk or a permission change makes every save fail, the
+        // backoff below retries forever, and the user keeps working on
+        // changes that are lost at quit. One failure is often transient (the
+        // retry fixes it silently); SAVE_FAILURE_BANNER_AFTER in a row is a
+        // condition the user must know about.
+        if (retryAttemptRef.current + 1 >= SAVE_FAILURE_BANNER_AFTER) {
+          onSaveHealthRef.current(saveFailureText(err))
+        }
         if (
           retryEnabledRef.current &&
           refs.saveTimerRef.current === null
