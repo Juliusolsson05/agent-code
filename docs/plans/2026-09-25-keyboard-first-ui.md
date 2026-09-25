@@ -484,7 +484,7 @@ entry when it lands.
 | N9 | PathPicker Resume list | reuses ConversationRow with `selected={false}` — **unreachable by keyboard** | include in ↑↓ order after suggestions (or Tab into it) with useListNavigation | done (Tab stop + shared list keys) |
 | N10 | CommandPalette rows | `div onClick`, no role; no combobox/activedescendant | `listbox`/`option` + activedescendant on input; Kbd for shortcut column (S43) | done (in S43) |
 | N11 | ConversationsPicker splitter + PromptList | splitter mouse-only; `li role=listitem aria-selected` invalid; PromptList `rounded-slab` cards (violates "no cards") | keyboard splitter; valid roles; T7 rows | done (splitter in S20, PromptList roles/rows in S7) |
-| N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | todo |
+| N12 | Composer SlashCommandPicker | keys forwarded to agent; no activedescendant | activedescendant link only (keys stay the agent's) | done (textarea carries aria-controls/activedescendant/autocomplete while open; T7 row + popover tokens) |
 | N13 | Feed scroller | not focusable; only End | focusable scroller when not in a text field? — keep reserved picker ↑↓↵; PgUp/PgDn/Home in `feed` context | todo |
 | N14 | Settings sidebar/search/toggles/selects | no aria-current; toggles lack `role=switch`; selects lack radio semantics; sidebar hidden < md | `role=switch`/`aria-checked`; radiogroup + arrows; aria-current; D5 ⌘[ ⌘] | done (in S45) |
 | N15 | Settings hotkey editors | capture works | Kbd chips (T6 font-mono → font-code) | todo |
@@ -789,6 +789,11 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **N12 Claude slash picker (type `/` in a Claude composer):** the
+  highlighted row now uses the app's selected-row look (fill + accent rail
+  on the left) instead of accent-coloured text. The popover uses the menu
+  surface and a theme shadow (it had a hard black shadow, heavy on light
+  themes). Keys are unchanged: CC still owns ↑↓↩.
 - **N8 focus ring convergence:** the queued-messages header and rows, the
   workflow agent/activity rows and Settings › Dictation's input device select
   now show the thin theme focus ring (they drew a 2px accent outline, a
@@ -1313,3 +1318,8 @@ Sharp corners and one light theme.
   (Task 7) and the general UI/UX consistency pass (Task 8) come after the
   current N/X rows and before the final review. Order confirmed by the owner:
   "do that after all of current work".
+- 2026-09-25 N12: `slashActiveDescendant` / `slashOptionId` in
+  SlashCommandPicker; ComposerInput (the focus owner, k2) carries the ARIA only
+  while the picker is open. Fixture is hand-built in the parser's output shape
+  (no slash-picker recording exists; the component consumes only the parsed
+  state). Confirm-red: the linkage test fails on the pre-change composer.

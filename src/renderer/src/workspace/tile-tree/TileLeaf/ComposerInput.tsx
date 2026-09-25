@@ -1,8 +1,9 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { useId } from 'react'
 import type { MutableRefObject } from 'react'
 
-import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
+import { SlashCommandPicker, slashActiveDescendant } from '@providers/claude/renderer/SlashCommandPicker'
 import type {
   ClaudeDraftImage,
   PromptDeliveryUiState,
@@ -109,6 +110,8 @@ export function ComposerInput({
 }) {
   const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
   const showDictationActivity = dictation.enabled && dictation.busy
+  const slashListId = useId()
+  const slashOpen = Boolean(pickerState?.visible && pickerState.items.length > 0)
 
   return (
     <div
@@ -119,7 +122,7 @@ export function ComposerInput({
       {/* SlashCommandPicker is absolutely positioned relative to this
           composer container so it floats above the input without
           shifting layout. */}
-      <SlashCommandPicker state={pickerState ?? { visible: false, items: [] }} />
+      <SlashCommandPicker id={slashListId} state={pickerState ?? { visible: false, items: [] }} />
 
       {/* Prompt-suggestion chip (issue #174). Sits at the very top of the
           composer container, above the draft-images strip and the textarea,
@@ -256,6 +259,13 @@ export function ComposerInput({
           disabled={providerSwitchMessage !== null}
           readOnly={locked}
           aria-busy={locked || undefined}
+          // Links the focused textarea to CC's slash picker (see
+          // slashActiveDescendant for why the TEXTAREA carries these). Only
+          // while the picker is open: a dangling aria-controls to an unmounted
+          // list is announced as broken.
+          aria-autocomplete={slashOpen ? 'list' : undefined}
+          aria-controls={slashOpen ? slashListId : undefined}
+          aria-activedescendant={slashOpen ? slashActiveDescendant(pickerState, slashListId) : undefined}
           onChange={e => {
             onUserEngagement()
             // In slash mode we manage the value ourselves via
