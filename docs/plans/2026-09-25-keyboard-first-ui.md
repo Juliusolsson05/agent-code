@@ -443,7 +443,7 @@ entry when it lands.
 | S33 | ReportHistoryModal | no keys; outline Close | Close ⎋ ghost; scroller focus T4 | done |
 | S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | done |
 | S35 | AgentAnalyticsModal | "close" button; p-4 | as S34 | done |
-| S36 | KeyVaultModal | Enter in inputs; window.confirm; prose footer | ConfirmDialog; Close ⎋ | todo |
+| S36 | KeyVaultModal | Enter in inputs; window.confirm; prose footer | ConfirmDialog; Close ⎋ | done |
 | S37 | RemotePanel | ✕ raw button gets focus | Close ⎋; T3 | todo |
 | S38 | PerformanceMonitor | showCloseButton; p-4 sections | D5 sections; Close ⎋ | todo |
 | S39 | SetupGate | px-5 py-4; raw buttons; blocked Esc | T3/T8; legend when Esc blocked | todo |
@@ -738,6 +738,13 @@ Sharp corners and one light theme.
   / ⌘] step the time range (Today / 7 days / 30 days …) from anywhere;
   project rows show a hover and an inset focus ring; body py-3; 1240 wide
   (xl, was 1040) — check the chart still reads well at the wider size.
+- **S36 API Key Vault:** provider list is one Tab stop (↑↓ move + select,
+  control radius, row-highlight colours — were pills on the canvas colour);
+  every field is the standard input (were pills); the row actions (Reveal,
+  Copy, Insert, Edit, Delete, Rename) are small ghost/outline buttons with
+  focus rings (were bare text); the key form's `Save ↩` saves on Enter; with
+  a key half-typed, Escape asks "Discard this key?"; the long note sits
+  above a footer that is now just `Close ⎋`; 860 wide.
 
 ## Tasks
 
@@ -812,6 +819,11 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S36: Key Vault — provider tablist (roving), Input primitive
+  (5 pill inputs), Button for 7 text-link actions (scripted), key-form Enter
+  save + discard confirm (B7's D3 condition), close-only footer with the
+  note moved into the body. Confirm-red: 3 new tests fail on the pre-change
+  file.
 - 2026-09-25 S35: Analytics — corner close, ⌘[/⌘] over ranges via
   sectionCycle, T3/T5 cleanup, xl preset. Confirm-red: the new test fails
   on the pre-change file.

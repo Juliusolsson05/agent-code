@@ -2,11 +2,13 @@ import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Input } from '@renderer/components/ui/input'
+import { Kbd } from '@renderer/components/ui/kbd'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
@@ -140,6 +142,45 @@ export function KeyVaultModal() {
     void runVaultAction(() => window.api.keyVaultCreateProvider(name))
   }
 
+  // A key being typed is REAL input (B7's condition on plan D3) — often a
+  // secret the user just copied from a provider console. Escape, an outside
+  // click and Close route through requestClose, which asks before throwing an
+  // edited key form away; an untouched or absent form closes at once.
+  const keyFormDirty = keyForm !== null && (keyForm.value !== '' || keyForm.name !== '' || keyForm.note !== '')
+  const requestClose = async () => {
+    if (keyFormDirty && !(await requestConfirm({
+      title: 'Discard this key?',
+      description: 'The name and value you typed will be lost.',
+      confirmLabel: 'Discard Key',
+      tone: 'danger',
+    }))) return
+    closeKeyVault()
+  }
+
+  // The provider list is a vertical TABLIST (plan S36, same as Usage's rail):
+  // one Tab stop, ↑↓ move focus and selection together, Home/End jump, wrap.
+  const providerRefs = useRef(new Map<string, HTMLButtonElement>())
+  const selectProviderIndex = (index: number) => {
+    if (providers.length === 0) return
+    const provider = providers[((index % providers.length) + providers.length) % providers.length]!
+    setSelectedProviderId(provider.id)
+    setKeyForm(null)
+    setProviderRename(null)
+    providerRefs.current.get(provider.id)?.focus()
+  }
+  const onProviderKeyDown = (event: React.KeyboardEvent) => {
+    const current = Math.max(0, providers.findIndex(provider => provider.id === selectedProviderId))
+    const next =
+      event.key === 'ArrowDown' ? current + 1
+        : event.key === 'ArrowUp' ? current - 1
+          : event.key === 'Home' ? 0
+            : event.key === 'End' ? providers.length - 1
+              : null
+    if (next === null) return
+    event.preventDefault()
+    selectProviderIndex(next)
+  }
+
   const saveKeyForm = () => {
     const form = keyForm
     if (!form || !selectedProviderId) return
@@ -226,16 +267,16 @@ export function KeyVaultModal() {
   const selectedProvider = providers.find(p => p.id === selectedProviderId) ?? null
 
   return (
-    <Dialog open onOpenChange={nextOpen => { if (!nextOpen) closeKeyVault() }}>
-      <DialogContent className="flex max-h-[85vh] w-[min(760px,calc(100vw-2rem))] flex-col overflow-hidden">
+    <Dialog open onOpenChange={nextOpen => { if (!nextOpen) void requestClose() }}>
+      <DialogContent size="lg" className="flex max-h-[85vh] flex-col overflow-hidden">
         {/* `flex` has to accompany `flex-row` here. DialogHeader's base class
             list is a plain block, so flex-row/items-center/justify-between
             were all inert and "Lock now" stacked underneath the description
             instead of sitting opposite the title. */}
         <DialogHeader className="flex flex-row items-center justify-between gap-4">
           <div className="min-w-0">
-            <DialogTitle className="font-semibold">API Key Vault</DialogTitle>
-            <DialogDescription className="mt-0.5 text-[10px]">
+            <DialogTitle>API Key Vault</DialogTitle>
+            <DialogDescription className="mt-0.5">
               {status
                 ? status.unlocked
                   ? 'unlocked for this app launch'
@@ -300,13 +341,25 @@ export function KeyVaultModal() {
                   constrained. Shrinking only in the row direction keeps the
                   fixed 12rem sidebar the wide layout wants. */}
               <div className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-1 sm:w-48 sm:shrink-0">
+                <div role="tablist" aria-orientation="vertical" aria-label="Providers" className="flex flex-col gap-1" onKeyDown={onProviderKeyDown}>
                 {providers.map(provider => (
                   <button
                     key={provider.id}
-                    className={`truncate rounded-chip px-2 py-1 text-left text-xs ${
+                    ref={element => {
+                      if (element) providerRefs.current.set(provider.id, element)
+                      else providerRefs.current.delete(provider.id)
+                    }}
+                    type="button"
+                    role="tab"
+                    aria-selected={provider.id === selectedProviderId}
+                    tabIndex={provider.id === selectedProviderId || (selectedProviderId === null && provider === providers[0]) ? 0 : -1}
+                    // rounded-control + the row tokens (plan T1/T7): these were
+                    // pill-shaped at Round corners and used the canvas colour
+                    // as their selection.
+                    className={`truncate rounded-control px-2 py-1 text-left text-[12px] outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                       provider.id === selectedProviderId
-                        ? 'bg-canvas text-ink'
-                        : 'text-muted hover:text-ink'
+                        ? 'bg-row-selected-bg text-ink'
+                        : 'text-muted hover:bg-row-hover-bg hover:text-ink'
                     }`}
                     onClick={() => { setSelectedProviderId(provider.id); setKeyForm(null); setProviderRename(null) }}
                     title={provider.name}
@@ -317,8 +370,9 @@ export function KeyVaultModal() {
                     {withVisibleControls(provider.name)}
                   </button>
                 ))}
-                <input
-                  className="mt-2 rounded-chip border border-border bg-canvas px-2 py-1 text-xs"
+                </div>
+                <Input
+                  className="mt-2 h-7 text-[12px]"
                   placeholder="New provider…"
                   value={newProviderName}
                   onChange={e => setNewProviderName(e.target.value)}
@@ -333,18 +387,16 @@ export function KeyVaultModal() {
                 {selectedProvider && (
                   <>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-semibold text-ink">{selectedProvider.name}</span>
+                      <span className="truncate text-[13px] font-medium text-ink">{selectedProvider.name}</span>
                       <div className="flex shrink-0 items-center gap-2">
-                        <button
-                          className="text-[11px] text-muted hover:text-ink"
+                        <Button type="button" variant="ghost" size="xs"
                           onClick={() =>
                             setProviderRename({ id: selectedProvider.id, name: selectedProvider.name })
                           }
                         >
                           Rename
-                        </button>
-                        <button
-                          className="text-[11px] text-muted hover:text-ink"
+                        </Button>
+                        <Button type="button" variant="ghost" size="xs"
                           onClick={() => {
                             // Names are user-typed and the validator permits
                             // invisible characters, so `production` and
@@ -365,7 +417,7 @@ export function KeyVaultModal() {
                           }}
                         >
                           Delete
-                        </button>
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
@@ -378,8 +430,8 @@ export function KeyVaultModal() {
 
                     {providerRename && providerRename.id === selectedProvider.id && (
                       <div className="flex items-center gap-2">
-                        <input
-                          className="flex-1 rounded-chip border border-border bg-canvas px-2 py-1 text-xs"
+                        <Input
+                          className="h-7 flex-1 text-[12px]"
                           value={providerRename.name}
                           placeholder="Provider name"
                           onChange={e => setProviderRename({ ...providerRename, name: e.target.value })}
@@ -428,34 +480,29 @@ export function KeyVaultModal() {
                             </span>
                           )}
                           <span className="flex-1" />
-                          <button
-                            className="shrink-0 text-[11px] text-muted hover:text-ink"
+                          <Button type="button" variant="ghost" size="xs"
                             onClick={() => void toggleReveal(key)}
                           >
                             {revealed.has(key.id) ? 'Hide' : 'Reveal'}
-                          </button>
-                          <button
-                            className="shrink-0 text-[11px] text-muted hover:text-ink"
+                          </Button>
+                          <Button type="button" variant="ghost" size="xs"
                             onClick={() =>
                               void runVaultAction(() => window.api.keyVaultCopyKey(key.providerId, key.id))
                             }
                           >
                             Copy
-                          </button>
-                          <button
-                            className="shrink-0 text-[11px] text-ink"
+                          </Button>
+                          <Button type="button" variant="outline" size="xs"
                             onClick={() => void insertKey(key)}
                           >
                             Insert
-                          </button>
-                          <button
-                            className="shrink-0 text-[11px] text-muted hover:text-ink"
+                          </Button>
+                          <Button type="button" variant="ghost" size="xs"
                             onClick={() => setKeyForm({ id: key.id, name: key.name, value: '', note: key.note })}
                           >
                             Edit
-                          </button>
-                          <button
-                            className="shrink-0 text-[11px] text-muted hover:text-ink"
+                          </Button>
+                          <Button type="button" variant="ghost" size="xs"
                             onClick={() => {
                               void requestConfirm({
                                 title: `Delete key "${withVisibleControls(key.name)}"?`,
@@ -470,37 +517,47 @@ export function KeyVaultModal() {
                             }}
                           >
                             Delete
-                          </button>
+                          </Button>
                         </div>
                         {key.note && <div className="truncate text-[10px] text-muted">{key.note}</div>}
                       </div>
                     ))}
 
                     {keyForm && (
-                      <div className="flex flex-col gap-2 rounded-slab border border-border bg-canvas p-3">
+                      // Enter in any field saves the key (plan S36) — the
+                      // form had no key at all — and Save carries ↩ to say so.
+                      <div
+                        className="flex flex-col gap-2 rounded-slab border border-border bg-canvas p-3"
+                        onKeyDown={event => {
+                          if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+                          if (!(event.target instanceof HTMLInputElement)) return
+                          event.preventDefault()
+                          saveKeyForm()
+                        }}
+                      >
                         <div className="text-xs text-ink">{keyForm.id ? 'Edit key' : 'New key'}</div>
-                        <input
-                          className="rounded-chip border border-border bg-surface px-2 py-1 text-xs"
+                        <Input
+                          className="h-7 text-[12px]"
                           placeholder="Key name (e.g. main)"
                           value={keyForm.name}
                           onChange={e => setKeyForm({ ...keyForm, name: e.target.value })}
                         />
-                        <input
-                          className="rounded-chip border border-border bg-surface px-2 py-1 text-xs"
+                        <Input
+                          className="h-7 text-[12px]"
                           type="password"
                           placeholder={keyForm.id ? 'Value (leave blank to keep current)' : 'Value'}
                           value={keyForm.value}
                           onChange={e => setKeyForm({ ...keyForm, value: e.target.value })}
                         />
-                        <input
-                          className="rounded-chip border border-border bg-surface px-2 py-1 text-xs"
+                        <Input
+                          className="h-7 text-[12px]"
                           placeholder="Note (optional)"
                           value={keyForm.note}
                           onChange={e => setKeyForm({ ...keyForm, note: e.target.value })}
                         />
                         <div className="flex justify-end gap-2">
                           <Button variant="ghost" size="sm" onClick={() => setKeyForm(null)}>Cancel</Button>
-                          <Button size="sm" onClick={saveKeyForm}>Save</Button>
+                          <Button size="sm" onClick={saveKeyForm}>Save<Kbd binding="Enter" tone="onAccent" /></Button>
                         </div>
                       </div>
                     )}
@@ -511,11 +568,15 @@ export function KeyVaultModal() {
           )}
         </div>
 
-        <DialogFooter className="justify-start text-[10px] leading-relaxed text-muted">
+        {/* The explanatory note stays as body text above the footer (it
+            occupied the whole footer with no way out but Escape); the footer
+            is now the close-only `Close ⎋` (plan H5). */}
+        <p className="border-t border-border px-4 py-2 text-[10px] leading-relaxed text-muted">
           Reference keys from prompt templates with {'{{key:Provider/Key}}'} · Encrypted with the OS
           keyring · One unlock per app launch · An inserted key sits in the saved draft (or terminal
           scrollback) until sent or cleared
-        </DialogFooter>
+        </p>
+        <DialogActions onCancel={() => void requestClose()} cancelLabel="Close" />
       </DialogContent>
     </Dialog>
   )

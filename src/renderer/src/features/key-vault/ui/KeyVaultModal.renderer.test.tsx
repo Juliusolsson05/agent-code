@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { ConfirmHost } from '@renderer/components/ui/confirm-dialog'
 import { KeyVaultModal } from './KeyVaultModal'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
@@ -63,4 +64,38 @@ it('keeps a failed key edit available for retry', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await screen.findByText('Disk unavailable')
   expect(screen.getByPlaceholderText('Note (optional)')).toHaveValue('keep my edits')
+})
+
+// Plan S36: the key form saves on Enter, a typed key is never thrown away by
+// one Escape, and the provider list is a one-Tab-stop tablist.
+it('saves a new key on Enter from its fields and labels Save ↩', async () => {
+  open()
+  fireEvent.click(await screen.findByRole('button', { name: '+ New Key' }))
+  fireEvent.change(screen.getByPlaceholderText('Key name (e.g. main)'), { target: { value: 'ci' } })
+  const value = screen.getByPlaceholderText('Value')
+  fireEvent.change(value, { target: { value: 'secret' } })
+  expect(screen.getByRole('button', { name: 'Save' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+  fireEvent.keyDown(value, { key: 'Enter' })
+  await waitFor(() => expect(api.keyVaultPutKey).toHaveBeenCalledWith(expect.objectContaining({ name: 'ci', value: 'secret' })))
+})
+
+it('asks before Escape discards a key being typed', async () => {
+  render(<WorkspaceProvider workspace={{ state: { sessions: {}, tabs: [], activeTabId: '', pinnedSessionIds: [], stage: oneLaneStage() } } as unknown as Workspace}>
+    <KeyVaultModal />
+    <ConfirmHost />
+  </WorkspaceProvider>)
+  fireEvent.click(await screen.findByRole('button', { name: '+ New Key' }))
+  const value = screen.getByPlaceholderText('Value')
+  fireEvent.change(value, { target: { value: 'secret' } })
+  fireEvent.keyDown(value, { key: 'Escape' })
+  expect(await screen.findByRole('dialog', { name: 'Discard this key?' })).toBeInTheDocument()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel' })) })
+})
+
+it('makes the provider list one Tab stop and closes from Close ⎋', async () => {
+  open()
+  const tab = await screen.findByRole('tab', { name: 'Brave' })
+  expect(tab).toHaveAttribute('tabindex', '0')
+  expect(tab).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('button', { name: 'Close' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
 })
