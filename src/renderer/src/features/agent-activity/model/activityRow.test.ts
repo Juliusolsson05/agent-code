@@ -167,6 +167,15 @@ describe('what counts as "needs you" (one field changed on a real idle record)',
     hit.limitHit = { at: 2_000, source: 'transcript' }
     expect(rowFor({ kind: 'claude' }, hit).reason).toBe('Hit a usage limit')
 
+    // The banner with the process still alive: the provider looks busy, and
+    // that must not hide the limit.
+    const stillAlive = idle()
+    stillAlive.turnStartedAt = 1_000
+    stillAlive.limitHit = { at: 2_000, source: 'transcript' }
+    stillAlive.processActive = true
+    stillAlive.sessionStatus = 'running'
+    expect(rowFor({ kind: 'claude' }, stillAlive).reason).toBe('Hit a usage limit')
+
     const pastIt = idle()
     pastIt.turnStartedAt = 3_000
     pastIt.limitHit = { at: 2_000, source: 'transcript' }

@@ -115,7 +115,8 @@ export function useFleetNotes(
     const loopIds: string[] = []
     for (const id of sessionIds) {
       const meta = sessions[id]
-      if (!meta || meta.kind === 'terminal') continue
+      // Neither a shell nor an extension view can have a note or a loop.
+      if (!meta || meta.kind === 'terminal' || meta.kind === 'extension-view') continue
       loopIds.push(id)
       const identity = tldrIdentityForSession(id, meta)
       if (identity) seen.add(identity)

@@ -164,7 +164,12 @@ export function attentionReason(
   // reading of "no evidence", not a claim that Grok never fails.
   const failure = terminalProviderFailure(runtime, meta)
   if (failure) return `Turn failed: ${firstLine(failure.message)}`
-  if (isLimitIdle(runtime) && !isWorking(runtime)) return 'Hit a usage limit'
+  // NO "and not working" guard (Grok review of #1105): Claude can sit on its
+  // "usage limit reached" banner with the process alive, so processActive and
+  // the derived session status both still say running — exactly the case this
+  // rule exists for. isLimitIdle already drops a hit older than the current
+  // turn, which is what stops a resumed agent keeping the reason.
+  if (isLimitIdle(runtime)) return 'Hit a usage limit'
   // Two different claims, so two different sentences (review of #1105):
   // `failed-safe` KNOWS the prompt was not delivered (re-send it), while
   // `uncertain` only could not confirm it was absorbed (go and look).
