@@ -136,13 +136,47 @@ export function migrateWorkspaceToStage(
   // here, and the throw is what put bootstrap into its locked fallback with
   // the disk file untouched. `undefined` is not corruption: a v2 file has no
   // `projects`, and a v3 file has no `tabs`.
-  for (const [field, value] of [['projects', persisted.projects], ['tabs', persisted.tabs]] as const) {
+  //
+  // `buried` and `sessions` join the rule for the same reason (#1245): v2
+  // buried records carry their own `sessionMeta`, and `sessions` is the pool,
+  // so a PRESENT-but-malformed one may still hold the only copy of an agent.
+  // Migrating it to empty would let the next autosave erase that copy; the
+  // typed throw keeps the file untouched behind the locked fallback. An
+  // ABSENT `sessions` holds nothing and migrates as an empty pool.
+  for (const [field, value] of [['projects', persisted.projects], ['tabs', persisted.tabs], ['buried', persisted.buried]] as const) {
     if (value !== undefined && !Array.isArray(value)) {
       throw new MalformedWorkspaceContainerError(
         `workspace.json has a malformed \`${field}\`; refusing to migrate it to an empty pool`,
       )
     }
   }
+  // `detachedSessions` too: it is the ONLY owner of every parked v2 agent (24
+  // of 27 on the owner's real workspace). A malformed one silently migrated
+  // those agents as unowned and dropped them, and rehydrate then reported a
+  // complete restore, so autosave would have written a 3-agent file over the
+  // 27-agent one (#1245 review). It must lock like the pool itself.
+  for (const [field, value] of [['sessions', persisted.sessions], ['detachedSessions', persisted.detachedSessions]] as const) {
+    if (value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+      throw new MalformedWorkspaceContainerError(`workspace.json has a malformed \`${field}\`; refusing to migrate it to an empty pool`)
+    }
+  }
+  // A damaged project or tab ENTRY (null, or no string id) is container
+  // corruption too (#1256 review A, steering q21). It is not empty: it WAS a
+  // real project, and with its id gone, every agent placed in it (v3
+  // `projectId` stamps; v2 tile trees and detached records naming the tab)
+  // silently became unowned and was dropped, and rehydrate then unlocked
+  // autosave. Measured on the owner's real files: one null v2 tab kept 6 of
+  // 27 agents, one null v3 project 3 of 13. Nothing can prove which agents
+  // the lost entry held, so it locks like a malformed container.
+  for (const [field, list] of [['projects', persisted.projects], ['tabs', persisted.tabs]] as const) {
+    if (Array.isArray(list) && (list as unknown[]).some(entry => entry === null || typeof entry !== 'object'
+      || typeof (entry as { id?: unknown }).id !== 'string' || (entry as { id: string }).id.length === 0)) {
+      throw new MalformedWorkspaceContainerError(
+        `workspace.json has a damaged \`${field}\` entry; the agents it held cannot be placed, so it is not migrated`,
+      )
+    }
+  }
+  const legacyInput = { ...persisted, sessions: persisted.sessions ?? {} }
   // --- Rule 1.
   const projects: ProjectRef[] = Array.isArray(persisted.projects)
     ? persisted.projects
@@ -152,7 +186,7 @@ export function migrateWorkspaceToStage(
           title: typeof project.title === 'string' ? project.title : '',
           ...(typeof project.cwd === 'string' ? { cwd: project.cwd } : {}),
         }))
-    : (persisted.tabs ?? []).map(tab => ({ id: tab.id, title: tab.title }))
+    : (legacyInput.tabs ?? []).map(tab => ({ id: tab.id, title: tab.title }))
   const projectIds = new Set<TabId>(projects.map(project => project.id))
   // Degenerate guard: every writer keeps >=1 project (rehydrate mints one), but
   // a hand-emptied file must still migrate to something renderable. '' is
@@ -163,7 +197,7 @@ export function migrateWorkspaceToStage(
     : (projects[0]?.id ?? '')
 
   // --- Rules 2, 3, 7.
-  const legacy = legacyMemberships(persisted)
+  const legacy = legacyMemberships(legacyInput)
   // Rule 9 (#1030 item 2): a v2 file with zero tabs still carried its buried
   // panes — burial was independent of tabs there. Here every session needs a
   // project to live in, so with none left the re-parent target was '' and
@@ -239,8 +273,17 @@ export function migrateWorkspaceToStage(
 
   // --- Rule 4. A file that already carries a `stage` wins over a stale v2
   // envelope sitting beside it (the intermediate #992 builds wrote both).
-  const sourceStage = persisted.stage ?? persisted.dispatchMode?.tiled
+  // The first stage that has usable lanes: a hybrid file with a corrupt
+  // `stage.lanes` beside an intact v2 envelope keeps the envelope's layout
+  // instead of falling to the default (#1245 review).
+  const sourceStage = [persisted.stage, persisted.dispatchMode?.tiled]
+    .find(candidate => candidate && Array.isArray(candidate.lanes))
   let stage: TiledDispatchState
+  // A stage whose `lanes` is not a list carries no usable layout at all; it
+  // takes the seeded default below like a file with no stage (#1245). Only
+  // layout is lost: every session lives in the pool, not in a lane. Unlike a
+  // malformed `projects`/`tabs` (rule 8), nothing the next autosave writes
+  // can destroy data the file still held.
   if (sourceStage) {
     // Compose the same durability chain autosave uses, so a lane pointing at
     // a session the pool dropped cannot survive the migration (the
@@ -264,7 +307,13 @@ export function migrateWorkspaceToStage(
       ...(durable.laneWeights ? { laneWeights: durable.laneWeights } : {}),
     }
   } else {
-    const seed = legacyEntrySeed(persisted)
+    // The one repair that replaces a whole layout says so (#1256 review B):
+    // a present stage or envelope whose lanes are unusable is not the
+    // "file never had lanes" case the seed below exists for.
+    if (persisted.stage !== undefined || persisted.dispatchMode?.tiled !== undefined) {
+      console.warn('[workspace] stage layout unusable (lanes is not a list); using the seeded default layout')
+    }
+    const seed = legacyEntrySeed(legacyInput)
     stage = defaultSeededStage(seed !== null && poolIds.has(seed) ? seed : null)
   }
 
