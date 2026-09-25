@@ -486,7 +486,7 @@ function handleRequest(
       patchLive(pocket.pocketId, prev => ({ focusAddressTick: prev.focusAddressTick + 1 }))
       return
     case 'open-external':
-      if (pocket.url) void window.api.openRenderedExternalUrl({ url: pocket.url }).then(r => { if (!r.ok) showToast('Could not open that page in your browser') })
+      if (pocket.url) void window.api.openRenderedExternalUrl({ url: pocket.url }).then(r => { if (!r.ok) showToast('Could not open that page in your browser.') })
       return
     case 'navigate':
       if (!isAllowedTopLevelUrl(request.url)) return

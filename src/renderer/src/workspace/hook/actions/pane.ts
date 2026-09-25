@@ -1230,7 +1230,7 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[parentId]
       if (!parentMeta) {
-        showToast('Could not create linked agent: parent agent is gone')
+        showToast('Could not create linked agent: parent agent is gone.')
         return
       }
       // If the parent is ITSELF a linked agent, anchor the new agent
@@ -1250,7 +1250,7 @@ export function usePaneActions(
       // The child is filed in its parent's project.
       const parentTab = sessionPlacement(snapshot, rootParentId)?.tab
       if (!parentTab) {
-        showToast('Could not create linked agent: parent tab not found')
+        showToast('Could not create linked agent: parent tab not found.')
         return
       }
 
@@ -1336,14 +1336,14 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
       if (!parentMeta) {
-        throw new Error('Could not create orchestration agent: parent agent is gone')
+        throw new Error('Could not create orchestration agent: parent agent is gone.')
       }
 
       const rootParentId = parentMeta.orchestrationRootId ?? params.parentId
       const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
       const parentTab = sessionPlacement(snapshot, rootParentId)?.tab
       if (!parentTab) {
-        throw new Error('Could not create orchestration agent: parent tab not found')
+        throw new Error('Could not create orchestration agent: parent tab not found.')
       }
 
       const cwd = params.cwd ?? rootParentMeta.cwd

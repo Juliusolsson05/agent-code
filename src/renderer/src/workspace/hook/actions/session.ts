@@ -947,7 +947,7 @@ export function useSessionActions(
         if (readyError) {
           const message = readyError instanceof Error && readyError.message.length > 0
             ? readyError.message
-            : `Could not wake session ${sessionId}`
+            : `Could not wake session ${sessionId}.`
           // WHY this is here and not beside the recovery result: recovery
           // succeeding is NOT the wake succeeding. After a successful recover
           // this function still waits on readiness, and on timeout it kills a

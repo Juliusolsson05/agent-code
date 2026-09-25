@@ -41,7 +41,9 @@ const RANGES: ReadonlyArray<{ id: AgentActivityRange; label: string }> = [
   { id: '24h', label: '24 hours' },
   { id: '7d', label: '7 days' },
   { id: '30d', label: '30 days' },
-  { id: 'all', label: 'All Time' },
+  // Sentence case like its siblings: range options read as values
+  // ("7 days"), not commands (ledger G-31 ruling, round-2 review C1).
+  { id: 'all', label: 'All time' },
 ]
 
 function totalAgents(counts: AgentCounts): number {

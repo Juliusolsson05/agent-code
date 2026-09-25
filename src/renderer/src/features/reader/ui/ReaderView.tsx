@@ -495,14 +495,16 @@ function ReaderHeader({
           {/* Plain actions, so the shared outline Button (review C10 on
               PR #1221). They were a hand-rolled bordered style whose hover
               only moved the border, beside `Button outline` everywhere else.
-              xs height with the strip's 11px text keeps them level with the
-              session pills to the right, which stay bespoke because they are
-              toggles (G-9's exception list). */}
+              The pills' own padding (py-1, 11px, h-auto), not the xs 24px
+              height, keeps them level with the session pills to the right:
+              xs came out ~2px shorter than the pills' ~26px (round-2
+              review C). The pills stay bespoke because they are toggles
+              (G-9's exception list). */}
           <Button
             type="button"
             variant="outline"
             size="xs"
-            className="gap-1.5 text-[11px]"
+            className="h-auto gap-1.5 py-1 text-[11px]"
             onClick={onSelectOlder}
             disabled={!canSelectOlder}
             aria-label="Show older assistant message"
@@ -515,7 +517,7 @@ function ReaderHeader({
             type="button"
             variant="outline"
             size="xs"
-            className="gap-1.5 text-[11px]"
+            className="h-auto gap-1.5 py-1 text-[11px]"
             onClick={onSelectNewer}
             disabled={!canSelectNewer}
             aria-label="Show newer assistant message"

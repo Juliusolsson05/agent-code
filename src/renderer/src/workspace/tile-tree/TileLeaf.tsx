@@ -373,7 +373,7 @@ export function TileLeaf({
           sessionId,
           err instanceof Error && err.message.length > 0
             ? err.message
-            : 'Could not wake agent; draft preserved',
+            : 'Could not wake agent; draft preserved.',
         )
         throw err
       }
@@ -951,7 +951,7 @@ export function TileLeaf({
                     sessionId,
                     err instanceof Error && err.message.length > 0
                       ? err.message
-                      : 'Could not restart agent',
+                      : 'Could not restart agent.',
                   )
                 })
               }}

@@ -27,13 +27,6 @@ export const feedDisclosureClass =
   'inline-flex items-center min-h-[44px] px-1 -mx-1 text-[11px] text-muted hover:text-ink active:text-ink cursor-pointer select-none'
 
 /**
- * UserBand — a horizontal highlight band that sits behind a *user
- * prompt* so real user turns are easy to spot when scanning a long
- * feed. Only ever wraps text content that originated as a user prompt.
- * Never wraps tool_result output (even though tool_result blocks live
- * under role='user' on the wire) — see the comment in ConversationRow.
- */
-/**
  * The feed's previous / next pair for paged tool output (code blocks, long
  * text, multi-edit chunks).
  *
@@ -80,6 +73,13 @@ export function FeedPagerButtons({ hasPrevious, hasNext, onPrevious, onNext, nex
   )
 }
 
+/**
+ * UserBand — a horizontal highlight band that sits behind a *user
+ * prompt* so real user turns are easy to spot when scanning a long
+ * feed. Only ever wraps text content that originated as a user prompt.
+ * Never wraps tool_result output (even though tool_result blocks live
+ * under role='user' on the wire) — see the comment in ConversationRow.
+ */
 export function UserBand({ children }: { children: ReactNode }) {
   return (
     // WHY var-tracked bleed: the band must extend edge-to-edge across the

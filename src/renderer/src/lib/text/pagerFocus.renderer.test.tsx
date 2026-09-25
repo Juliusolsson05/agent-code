@@ -22,15 +22,26 @@ describe('feed pager focus', () => {
     fireEvent.click(next)
     expect(document.activeElement).toBe(next)
     expect(next).toHaveAttribute('aria-disabled', 'true')
-    // An end is a no-op, not a crash or a wrap-around.
+    // An end is a no-op: the same page, the same range. Without the guard,
+    // a disabled "next" pushed a page start past the end (an empty page).
+    const range = () => screen.getByText(/^characters/).textContent
+    const page = () => document.querySelector('pre')!.textContent
+    const [lastRange, lastPage] = [range(), page()]
     fireEvent.click(next)
-    expect(screen.getByText(/characters/).textContent).toContain(`of`)
+    expect(range()).toBe(lastRange)
+    expect(page()).toBe(lastPage)
     expect(screen.getByRole('button', { name: 'previous' })).not.toHaveAttribute('aria-disabled')
   })
 
-  it('announces the start as unavailable instead of hiding "previous"', () => {
+  it('announces the start as unavailable instead of hiding "previous", and does nothing there', () => {
     render(<PagedTextViewer source={lines(TEXT_PAGE_MAX_LINES + 10)} />)
-    expect(screen.getByRole('button', { name: 'previous' })).toHaveAttribute('aria-disabled', 'true')
+    const previous = screen.getByRole('button', { name: 'previous' })
+    expect(previous).toHaveAttribute('aria-disabled', 'true')
+    const range = screen.getByText(/^characters/).textContent
+    const page = document.querySelector('pre')!.textContent
+    fireEvent.click(previous)
+    expect(screen.getByText(/^characters/).textContent).toBe(range)
+    expect(document.querySelector('pre')!.textContent).toBe(page)
   })
 })
 

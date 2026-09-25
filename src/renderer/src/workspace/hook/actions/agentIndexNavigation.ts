@@ -66,7 +66,7 @@ export function useAgentIndexNavigationActions(
           showToast(
             error instanceof Error && error.message.length > 0
               ? error.message
-              : `Could not wake agent ${initialTarget.label}`,
+              : `Could not wake agent ${initialTarget.label}.`,
           )
           return false
         }

@@ -231,7 +231,7 @@ function NativeServerRow({ server, onCopyIn }: { server: NativeMcpServer; onCopy
         <span className="text-ink">{server.name}</span>
         <span className="ml-2 text-[10px] text-muted">{getRendererProviderCapabilities(server.provider).shortLabel} · {server.source}</span>
         <div className="truncate text-[10px] text-muted">{server.summary}</div>
-        {/* The disabled Copy in's reason, visible (it was the button's hover
+        {/* The disabled Copy In's reason, visible (it was the button's hover
             title, and a disabled button is out of the Tab order). */}
         {!server.copyable ? (
           <div className="text-[10px] text-muted">Cannot be copied: not a standard MCP config.</div>

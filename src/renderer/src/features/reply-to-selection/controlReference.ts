@@ -20,5 +20,24 @@ export const controlReference = [
     "commandIds": [
       "reply-to-selection"
     ]
+  },
+  {
+    "id": "reply-to-reader-message",
+    "title": "Reply to the Reader's message",
+    "purpose": "Quote a whole assistant message from the keyboard, where no text selection is possible.",
+    "ui": "In Reader Mode, pick the message with Older / Newer (Option+Up / Option+Down), then run Reply to Reader Message from the palette.",
+    "prerequisites": "Reader Mode open on an agent, with an assistant message shown.",
+    "workflow": [
+      "Open Reader Mode",
+      "pick the message",
+      "invoke Reply to Reader Message",
+      "edit the follow-up",
+      "submit to the agent being read."
+    ],
+    "outcome": "The composer of the agent being read contains the quoted message above the existing draft.",
+    "cautions": "A prepared reply is not a delivered prompt. The quote goes to the agent Reader shows, not to the focused grid pane.",
+    "commandIds": [
+      "reply-to-reader-message"
+    ]
   }
 ] satisfies FeatureReference[]

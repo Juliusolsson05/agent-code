@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Select } from '@renderer/components/ui/select'
 import type { DictationAudioInput } from '@renderer/app-state/settings/types'
@@ -133,7 +134,7 @@ export function DictationAudioInputRow({ value, onChange }: Props) {
         </p>
       ) : null}
       {inputs === null && !error ? <p role="status" className="text-[11px] text-muted">Looking for microphones…</p> : null}
-      {hasAccess && inputs?.length === 0 ? <p role="status" className="text-[11px] text-muted">No microphones found. Connect an audio input and refresh.</p> : null}
+      {hasAccess && inputs?.length === 0 ? <EmptyState size="inline" role="status" className="px-0 py-0">No microphones found. Connect an audio input and refresh.</EmptyState> : null}
       {error ? <p role="alert" className="text-[11px] leading-5 text-danger">{error}</p> : null}
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => actions.current.refresh()}>Refresh Devices</Button>

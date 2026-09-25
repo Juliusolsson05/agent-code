@@ -177,7 +177,7 @@ function PocketSetup({ sessionId, workspace }: { sessionId: SessionId; workspace
   if (meta?.builtInMcpDomains?.includes('browser')) return null
   return <button type="button" className="shrink-0 border-b border-border bg-surface px-2 py-1 text-left text-[11px] text-ink-dim hover:text-ink" disabled={connecting} onClick={() => {
     setConnecting(true)
-    void reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'browser', true, { reloaded: 'Browser tools connected', failed: 'Could not connect browser tools' }).finally(() => setConnecting(false))
+    void reloadSessionWithBuiltInMcpChoice(workspace, sessionId, 'browser', true, { reloaded: 'Browser tools connected', failed: 'Could not connect browser tools.' }).finally(() => setConnecting(false))
   }}>
     {connecting ? 'Connecting…' : 'Connect Browser Tools · Reload Agent'}
   </button>

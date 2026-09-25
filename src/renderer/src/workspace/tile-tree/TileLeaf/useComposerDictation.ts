@@ -1171,7 +1171,7 @@ export function useComposerDictation({
       debug('start:error', {
         message: err instanceof Error ? err.message : String(err),
       }, 'ERROR')
-      const message = err instanceof Error ? err.message : 'Could not start dictation'
+      const message = err instanceof Error ? err.message : 'Could not start dictation.'
       reportMessage(message)
       if (sinkRef.current.kind === 'terminal') {
         setDictationOverlayState({ errorMessage: message })

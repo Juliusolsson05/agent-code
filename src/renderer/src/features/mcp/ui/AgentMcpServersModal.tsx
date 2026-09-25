@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useMemo, useState } from 'react'
 
 import {
@@ -198,7 +199,7 @@ export function AgentMcpServersModal() {
               </div>
             )
           })}
-          {rows.length === 0 ? <div className="py-2 text-muted">No MCP servers apply to this agent.</div> : null}
+          {rows.length === 0 ? <EmptyState size="inline" className="px-0">No MCP servers apply to this agent.</EmptyState> : null}
         </div>
         {/* The confirm RELOADS the agent's process (a running turn is cut
             off), so it advertises and wires no commit key: Tab to it or

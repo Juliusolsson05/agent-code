@@ -478,7 +478,7 @@ export function AgentTerminalLeaf({
             // Report parse failures on the surviving pane rather than silently
             // swallowing them or generating an unhandled renderer rejection.
             if (!disposed) showPaneToastRef.current(sessionId,
-              error instanceof Error ? error.message : 'Could not replay agent terminal')
+              error instanceof Error ? error.message : 'Could not replay agent terminal.')
           })
         backlogQueue.length = 0
         attachedBackfillDone = true
@@ -530,7 +530,7 @@ export function AgentTerminalLeaf({
             sessionId,
             err instanceof Error && err.message.length > 0
               ? err.message
-              : 'Could not wake agent terminal',
+              : 'Could not wake agent terminal.',
           )
         })
 

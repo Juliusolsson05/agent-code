@@ -33,4 +33,17 @@ describe('SettingsBar caffeinate toggle', () => {
     act(() => useCaffeinateStore.setState({ status: { supported: true, active: true } as never }))
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
   })
+
+  it('keeps the why-tooltip reachable when caffeinate is unsupported (round-2 review C6)', () => {
+    // Off macOS the toggle is disabled, and its hover title is the only place
+    // that says why. The button primitive turns pointer events off for
+    // disabled controls, which would hide that title, so the unsupported
+    // branch turns them back on.
+    act(() => useCaffeinateStore.setState({ status: { supported: false, active: false } as never }))
+    render(<SettingsBar />)
+    const toggle = screen.getByRole('button', { name: 'Keep the machine awake (caffeinate)' })
+    expect(toggle).toBeDisabled()
+    expect(toggle).toHaveAttribute('title', 'Caffeinate is only available on macOS.')
+    expect(toggle.className).toContain('disabled:pointer-events-auto')
+  })
 })

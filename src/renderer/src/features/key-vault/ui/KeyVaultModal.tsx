@@ -328,7 +328,7 @@ export function KeyVaultModal() {
                 // Clear visible plaintext BEFORE locking: a "locked"
                 // status line over revealed secrets was a review finding.
                 clearSecrets()
-                void window.api.keyVaultLock().catch(err => setError(err instanceof Error ? err.message : 'Could not lock vault'))
+                void window.api.keyVaultLock().catch(err => setError(err instanceof Error ? err.message : 'Could not lock vault.'))
               }}
             >
               Lock Now
