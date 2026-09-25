@@ -114,6 +114,11 @@ export type CliUpdateState =
       wantedLatest: string
       reason: 'session-active'
       checkedAt: number
+      /** Set when the user clicked "Update now" (#1243). The automatic path
+       *  stays silent by design, but an explicit click that makes the banner
+       *  vanish with no update and no reason reads as a broken button, so
+       *  this deferral is shown, with what to do about it. */
+      requestedByUser?: true
     }
   /** User told us not to auto-update (setting: 'off'), but a newer version
    *  is available. Renders a passive info banner offering to switch back
