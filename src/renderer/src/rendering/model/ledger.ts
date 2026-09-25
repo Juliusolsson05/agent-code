@@ -200,6 +200,11 @@ export function createSessionLedger(): (input: LedgerInput) => RenderLedger {
     if (
       last &&
       last.input.provider === input.provider &&
+      // The policy became an INPUT in #1177 (it was a lookup by provider, so
+      // the provider comparison covered it). Production resolves one stable
+      // object per provider, but a caller that swaps the policy under the same
+      // provider must get a recomputed ledger, not the previous decisions.
+      last.input.policy === input.policy &&
       last.input.committed === input.committed &&
       last.input.live === input.live &&
       last.input.notices === input.notices &&
