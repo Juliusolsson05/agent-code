@@ -463,7 +463,7 @@ entry when it lands.
 | M3 | CommandSortControl | good (Esc/Tab/↑↓/Home/End/Enter) | visuals only (T1/T7) | done (no change: already on popover tokens + row-selected) |
 | M4 | ExplorerPane context menu | good | visuals (T7) | done |
 | M5 | PathInput dropdown | good | visuals (T7) | done (+ combobox ARIA) |
-| M6 | NewAgentPlacementOverlay | capture ↑↓ Enter Esc; focus never moved; footer px-3 | legend with Kbd; T3 footer | todo |
+| M6 | NewAgentPlacementOverlay | capture ↑↓ Enter Esc; focus never moved; footer px-3 | legend with Kbd; T3 footer | done |
 | M7 | TldrOverlay / GoalLoopPane | hold/latch; no focus | hint chips for release/dismiss | todo |
 | M8 | GlobalToast / CaffeinateToast | click-only dismiss; caffeinate z-50 under scrim | keyboard dismiss path; layering note (functional part → issue) | todo |
 | M9 | RenderingDebugInspector | prose "Press Esc" | Kbd | todo |
@@ -778,6 +778,12 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **M6 New Agent (⌘N) type chooser:** the corner "Choose agent type…" note
+  is gone; the card's footer reads `↑ ↓ move  ↩ create` · `Cancel ⎋`
+  (ghost, was outline; px-4 py-3); the highlighted type is the row-selected
+  colour with an accent bar (was a solid accent fill); ↑ at the top / ↓ at
+  the bottom stop (they wrapped); Home/End jump; the card uses popover
+  colours and is 360 wide.
 - **M4/M5 Explorer right-click menu / path suggestions:** both use the
   popover background, border and theme shadow (were surface + shadow-lg /
   a hard black shadow); the focused explorer menu item is highlighted with
@@ -868,6 +874,9 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 M6: placement overlay — clamp (D4), Home/End/⌃N⌃P, listbox
+  focus owner with option ids, legend + Cancel ⎋ in its footer, T7 rows.
+  Confirm-red: the new test fails on the pre-change file.
 - 2026-09-25 M3–M5: sort menu already correct; Explorer context menu and
   PathInput dropdown on popover tokens + T7 rows; PathInput gains combobox
   ARIA (listbox/option ids, aria-activedescendant). Confirm-red: the new
