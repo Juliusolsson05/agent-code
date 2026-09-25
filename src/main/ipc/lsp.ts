@@ -23,17 +23,6 @@ import type {
 
 const MAX_LSP_CONTENT_BYTES = 1_048_576
 const MAX_LSP_DOCUMENTS_PER_RENDERER = 256
-/**
- * Minimum time between two automatic re-opens of one backed document whose
- * server went away (see `lsp:change-document`). Long enough that a server
- * which dies on startup restarts a couple of times a minute at most instead of
- * on every debounced keystroke; short enough that a one-off crash or
- * retirement heals within the user's next few edits.
- */
-const LSP_REOPEN_COOLDOWN_MS = 30_000
-
-/** The authorized open a backed document was created with, reused to re-open it. */
-type BackedDocumentOpen = { language: string; workspaceRoot: string; filePath: string | null }
 
 function validPosition(position: LspPosition): boolean {
   return (
@@ -82,21 +71,11 @@ export function registerLspIpc(
    * never advanced its synced version, so every later hover and completion
    * re-issued a doomed round trip instead of one no-op per version.
    *
-   * This map is what makes the difference sayable: a URI in it was supposed
+   * This set is what makes the difference sayable: a URI in it was supposed
    * to have a document, so a change that finds none is the loss. A URI not in
    * it never had one, so a change is a no-op and resolves.
-   *
-   * The value is the AUTHORIZED open (resolved root and file path, not the
-   * renderer's claim), kept so a backed document whose server went away can
-   * be re-opened from its next edit — see `lsp:change-document`.
    */
-  const lspBackedDocuments = new Map<string, BackedDocumentOpen>()
-  /** When each backed document was last re-opened; see LSP_REOPEN_COOLDOWN_MS. */
-  const lastReopenAt = new Map<string, number>()
-  const forgetBackedDocument = (clientUri: string): void => {
-    lspBackedDocuments.delete(clientUri)
-    lastReopenAt.delete(clientUri)
-  }
+  const lspBackedDocuments = new Set<string>()
 
   const serializeDocument = async <T>(clientUri: string, task: () => Promise<T>): Promise<T> => {
     const previous = documentQueues.get(clientUri) ?? Promise.resolve()
@@ -122,7 +101,7 @@ export function registerLspIpc(
       if (!documents) return
       for (const [clientUri, refs] of documents) {
         ownerByDocument.delete(clientUri)
-        forgetBackedDocument(clientUri)
+        lspBackedDocuments.delete(clientUri)
         for (let i = 0; i < refs; i++) {
           void serializeDocument(clientUri, () => lspManager.closeDocument(clientUri))
         }
@@ -267,13 +246,7 @@ export function registerLspIpc(
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
             })
-            if (opened) {
-              lspBackedDocuments.set(params.clientUri, {
-                language: params.language,
-                workspaceRoot: context.workspaceRoot,
-                filePath: context.filePath,
-              })
-            }
+            if (opened) lspBackedDocuments.add(params.clientUri)
           } catch (err) {
             // Keep rollback inside the same IPC queue entry. A renderer
             // navigation may already have queued its own cleanup behind this
@@ -287,7 +260,7 @@ export function registerLspIpc(
         })
       } catch (err) {
         removeOwnedDocument(evt.sender.id, params.clientUri)
-        if (!ownerByDocument.has(params.clientUri)) forgetBackedDocument(params.clientUri)
+        if (!ownerByDocument.has(params.clientUri)) lspBackedDocuments.delete(params.clientUri)
         throw err
       }
     },
@@ -313,28 +286,9 @@ export function registerLspIpc(
     // this IPC call now resolves only once the open ahead of it finishes,
     // which during a cold server spawn is seconds; that is the right trade
     // against acknowledging a write that never happened.
-    const applied = await serializeDocument(clientUri, async () => {
-      if (await lspManager.changeDocument(clientUri, content)) return true
-      // A BACKED document with no manager record lost its server: a crash, or
-      // a deliberate retirement of a wedged one (#924). Before this, the
-      // editor stayed without hover, completion and diagnostics until it was
-      // remounted, and the rejection below reached a renderer that swallows
-      // it (`editorLanguageFeatures` returns false), so nothing ever told the
-      // user or recovered. Re-open with the text the user just typed instead;
-      // `openDocument` spawns a fresh server exactly as a first open does.
-      //
-      // WHY a cooldown: a server that dies on startup would otherwise be
-      // re-spawned on every debounced keystroke. One attempt per window per
-      // document bounds that to a restart rate, and a failed attempt still
-      // rejects below, which is the pre-existing "loud" outcome.
-      const open = lspBackedDocuments.get(clientUri)
-      if (!open) return false
-      const now = Date.now()
-      const last = lastReopenAt.get(clientUri)
-      if (last !== undefined && now - last < LSP_REOPEN_COOLDOWN_MS) return false
-      lastReopenAt.set(clientUri, now)
-      return await lspManager.openDocument({ clientUri, content, ...open })
-    })
+    const applied = await serializeDocument(clientUri, () =>
+      lspManager.changeDocument(clientUri, content),
+    )
     // Only a URI that was actually backed by a server document can LOSE one.
     // For every other URI this is the documented fail-open no-op — see
     // `lspBackedDocuments`.
@@ -350,7 +304,7 @@ export function registerLspIpc(
         await lspManager.closeDocument(clientUri)
       } finally {
         removeOwnedDocument(evt.sender.id, clientUri)
-        if (!ownerByDocument.has(clientUri)) forgetBackedDocument(clientUri)
+        if (!ownerByDocument.has(clientUri)) lspBackedDocuments.delete(clientUri)
       }
     })
   })

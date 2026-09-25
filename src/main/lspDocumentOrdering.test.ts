@@ -452,6 +452,128 @@ describe('#924 — a newer intent must not wait out an obsolete request', () => 
 })
 
 describe('#924 fix pass — a busy server is not a wedged one', () => {
+  it('lets a split-view edit through when a sibling request is queued behind the one it wakes', async () => {
+    // Review round 1 (A1), reproduced as written by the reviewer. B's hover
+    // queues behind A's on the shared server document and has not
+    // subscribed to intent yet. A's edit wakes A's hover only; B then took
+    // the queue and read only B's own (unchanged) epoch, so A's edit waited
+    // out the full 15 s: acknowledged at 15,250 ms.
+    vi.useFakeTimers()
+    try {
+      const { manager } = managerWithServer({ sendRequest: async () => await new Promise(() => {}) })
+      for (const alias of ['a', 'b']) {
+        await manager.openDocument({ ...OPEN, clientUri: `inmemory://${alias}`, content: `draft ${alias}` })
+      }
+      const first = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(1)
+      const second = manager.getHover('inmemory://b', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(1)
+      let applied = false
+      const change = manager.changeDocument('inmemory://a', 'edited A').then(() => { applied = true })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(applied).toBe(true)
+      await vi.advanceTimersByTimeAsync(30_000)
+      await Promise.all([first, second, change])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('lets a sibling edit through when it lands while a request is restoring its draft', async () => {
+    // Review round 1 (A1), second entrance: A's request is mid-restore of
+    // its own draft (its didChange notification is suspended) when B is
+    // edited. A subscribed after B's notification had passed and compared
+    // only A's epoch.
+    vi.useFakeTimers()
+    try {
+      const { manager } = managerWithServer({ sendRequest: async () => await new Promise(() => {}) })
+      const internal = manager as unknown as {
+        sendNotificationIfOpen: (server: unknown, method: string, params: unknown) => Promise<void>
+      }
+      for (const alias of ['a', 'b']) {
+        await manager.openDocument({ ...OPEN, clientUri: `inmemory://${alias}`, content: `draft ${alias}` })
+      }
+      // B was opened last, so the server holds B's text and A's hover must
+      // restore A's draft first. Suspend exactly that notification.
+      let releaseRestore: (() => void) | undefined
+      const record = internal.sendNotificationIfOpen
+      internal.sendNotificationIfOpen = async (server, method, params) => {
+        if (method === 'textDocument/didChange' && !releaseRestore) {
+          await new Promise<void>(resolve => { releaseRestore = resolve })
+        }
+        return await record(server, method, params)
+      }
+      const hover = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(releaseRestore).toBeTypeOf('function')
+
+      let applied = false
+      const change = manager.changeDocument('inmemory://b', 'edited B').then(() => { applied = true })
+      await vi.advanceTimersByTimeAsync(1)
+      releaseRestore?.()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(applied).toBe(true)
+      await vi.advanceTimersByTimeAsync(30_000)
+      await Promise.all([hover, change])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops counting an abandoned request once the server finally answers it', async () => {
+    // Review round 1 (A2): the slow-server test answers before the 15 s
+    // stuck-check fires, so deleting the decrement for an ALREADY-counted
+    // request survived. Without it, non-overlapping slow requests would
+    // accumulate and retire a server that never had more than one stuck.
+    vi.useFakeTimers()
+    try {
+      let answer: ((value: null) => void) | undefined
+      const { manager, server } = managerWithServer({
+        sendRequest: async () => await new Promise(resolve => { answer = resolve }),
+      })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'text' })
+      const hover = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(1)
+      void manager.changeDocument('inmemory://a', 'text 2')
+      await vi.advanceTimersByTimeAsync(15_300)
+      await expect(hover).resolves.toBeNull()
+      expect(server.abandonedRequests).toBe(1)
+
+      answer?.(null)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(server.abandonedRequests).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('actually tells the server to cancel a request a newer edit abandoned', async () => {
+    // Review round 1 (A3): the error-answer test passes through the grace
+    // timeout even when no cancellation is sent, so removing
+    // `cancellation.cancel()` survived. An unsent cancel leaves obsolete
+    // work running on the server.
+    vi.useFakeTimers()
+    try {
+      let cancelled = false
+      const { manager } = managerWithServer({
+        sendRequest: async (_method, _params, token) => {
+          ;(token as { onCancellationRequested: (listener: () => void) => void })
+            .onCancellationRequested(() => { cancelled = true })
+          return await new Promise(() => {})
+        },
+      })
+      await manager.openDocument({ ...OPEN, clientUri: 'inmemory://a', content: 'text' })
+      const hover = manager.getHover('inmemory://a', { line: 0, character: 0 })
+      await vi.advanceTimersByTimeAsync(1)
+      void manager.changeDocument('inmemory://a', 'text 2')
+      await vi.advanceTimersByTimeAsync(300)
+      await expect(hover).resolves.toBeNull()
+      expect(cancelled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('never retires a slow server that answers every abandoned request', async () => {
     // A server still indexing can be several seconds behind, and every
     // keystroke abandons the request in flight. The first cut counted an
@@ -553,19 +675,12 @@ describe('#922 — text accepted during authorization must not vanish', () => {
     expect(text).toBe('second')
   })
 
-  it('re-opens a backed document whose server went away, once per cooldown', async () => {
+  it('rejects a change for a document that WAS open and is now gone', async () => {
     // The other half of #922. Routing the change through the queue fixes the
     // ordering; the boolean is what stops the silent acknowledgement when the
     // document the renderer is editing has disappeared underneath it.
-    //
-    // #1108 fix pass: rejecting was not enough on its own. The renderer's
-    // sync gate swallows the rejection, so after a crash or a retirement the
-    // editor sat without LSP until it was remounted. The change now re-opens
-    // the document on a fresh server with the text just typed; a second loss
-    // inside the cooldown still rejects, so a server that dies on startup is
-    // not re-spawned on every keystroke.
     ipcHandlers.clear()
-    const { manager, server, notifications } = managerWithServer()
+    const { manager, server } = managerWithServer()
     registerLspIpc(manager, { authorize: async () => '/repo' } as never, {} as never)
 
     const sender = { id: 1, once: () => {}, on: () => {}, isDestroyed: () => false }
@@ -579,30 +694,11 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       authorization: { kind: 'editor-root' },
     })
 
-    const internal = manager as unknown as {
-      discardServer: (s: unknown, kill?: boolean) => void
-      getOrCreateServer: () => Promise<unknown>
-      servers: Map<string, unknown>
-    }
-    // The replacement a fresh spawn would produce.
-    const replacement = { ...server, generation: 'gen-2', closed: false, abandonedRequests: 0 }
-    internal.getOrCreateServer = async () => {
-      internal.servers.set('server', replacement)
-      return replacement
-    }
-
     // The server dies, exactly as a crash does: its documents go with it.
-    internal.discardServer(server, false)
-    notifications.length = 0
+    ;(manager as unknown as { discardServer: (s: unknown, kill?: boolean) => void })
+      .discardServer(server, false)
 
     await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'second'))
-      .resolves.toBeUndefined()
-    const reopened = notifications.find(n => n.method === 'textDocument/didOpen')
-    expect((reopened?.params as { textDocument?: { text: string } })?.textDocument?.text).toBe('second')
-
-    // Lost again inside the cooldown: no second spawn, and the loss is loud.
-    internal.discardServer(replacement, false)
-    await expect(ipcHandlers.get('lsp:change-document')!(evt, 'inmemory://a', 'third'))
       .rejects.toThrow('LSP document is not open')
   })
 

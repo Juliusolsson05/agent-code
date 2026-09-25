@@ -153,8 +153,7 @@ const LSP_ABANDONED_REQUEST_GRACE_MS = 250
  * cancellation AND never answers leaks one pending RPC per abandonment, and
  * the LSP connection holds a response handler for each. The cap turns an
  * unbounded leak into a bounded one followed by a deliberate restart: the next
- * edit of a backed document re-opens it on a fresh process (ipc/lsp.ts). A
- * request only counts once it has stayed unanswered for the full request
+ * open spawns a fresh process, as after a crash. A request only counts once it has stayed unanswered for the full request
  * budget after being abandoned — see `noteAbandonedRequest` for why a shorter
  * window retired healthy servers that were merely busy.
  */
@@ -459,6 +458,26 @@ export class LspManager extends EventEmitter {
    * for. One lost answer beats a keystroke waiting out 15 s.
    */
   private readonly documentIntentWaiters = new Map<string, Set<() => void>>()
+  /**
+   * How many intents each SERVER document has seen, whichever alias raised
+   * them (#1108 review round 1, A1).
+   *
+   * WHY waiters alone were not enough: a waiter only hears intents that
+   * arrive AFTER it subscribes, and the catch-up check at subscription time
+   * read only the requesting CLIENT's epoch. A sibling's intent landing
+   * before the subscription was therefore invisible. Two real windows hit
+   * that: a request from alias B queued behind alias A's request on the
+   * shared queue (A's edit woke A's request, B's was not subscribed yet),
+   * and a sibling edit arriving while a request was still restoring its own
+   * draft. Either way the sibling's edit waited out the full 15 s: the
+   * exact stall #924 is about, still reachable in split view.
+   *
+   * A request records this counter when it first knows its server document
+   * (before joining the shared queue), and `onIntentPast` treats any
+   * movement as intent. Dropped with the server document it counts, so it
+   * is bounded by open documents.
+   */
+  private readonly serverDocumentIntentEpochs = new Map<string, number>()
   private completionResolveSequence = 0
 
   async ensureSemanticLegend(
@@ -711,6 +730,7 @@ export class LspManager extends EventEmitter {
           })
         }
         this.serverDocuments.delete(shared.key)
+        this.serverDocumentIntentEpochs.delete(shared.key)
         return
       }
       if (shared.activeClientUri !== clientUri || !server) return
@@ -764,9 +784,11 @@ export class LspManager extends EventEmitter {
    * past that budget.
    *
    * `discardServer` is the same path a crash takes: documents are dropped and
-   * diagnostics cleared. `lsp:change-document` then re-opens a backed
-   * document on its next edit (ipc/lsp.ts), so an open editor recovers instead
-   * of losing LSP until it remounts.
+   * diagnostics cleared, and an editor that stays open has no LSP until it is
+   * remounted — the same as after a crash today. Re-opening automatically is
+   * #1208: a first cut here re-opened from `lsp:change-document` and review
+   * showed it could re-authorize a root the window had lost, skip physical
+   * path checks, and drop reference counts, so it needs its own design.
    */
   private noteAbandonedRequest(server: ServerRecord, settles: Promise<unknown>): void {
     let counted = false
@@ -821,6 +843,10 @@ export class LspManager extends EventEmitter {
         if (!ctx) return null
         await ctx.server.initialized
         if ((this.documentIntentEpochs.get(clientUri) ?? 0) !== intentEpoch) return null
+        // Recorded BEFORE joining the shared queue, so a sibling's intent that
+        // lands while this request waits there (or while it restores its
+        // draft below) still counts — see `serverDocumentIntentEpochs`.
+        const sharedIntentEpoch = this.serverDocumentIntentEpochs.get(ctx.doc.serverDocumentKey) ?? 0
         return await this.serializeServerDocument(ctx.doc.serverDocumentKey, async () => {
           if (
             this.docs.get(clientUri) !== ctx.doc ||
@@ -851,7 +877,7 @@ export class LspManager extends EventEmitter {
 
           const cancellation = new CancellationTokenSource()
           let timeout: ReturnType<typeof setTimeout> | undefined
-          const abandonment = this.onIntentPast(ctx.doc.serverDocumentKey, intentEpoch, clientUri)
+          const abandonment = this.onIntentPast(ctx.doc.serverDocumentKey, intentEpoch, clientUri, sharedIntentEpoch)
           try {
             const pending = ctx.server.connection.sendRequest<T>(
               method,
@@ -1145,6 +1171,10 @@ export class LspManager extends EventEmitter {
   }
 
   private notifyDocumentIntent(serverDocumentKey: string): void {
+    this.serverDocumentIntentEpochs.set(
+      serverDocumentKey,
+      (this.serverDocumentIntentEpochs.get(serverDocumentKey) ?? 0) + 1,
+    )
     // Copy before notifying: a woken waiter removes itself, and mutating the
     // set we are iterating is how that becomes an intermittent skip.
     const waiters = this.documentIntentWaiters.get(serverDocumentKey)
@@ -1167,6 +1197,7 @@ export class LspManager extends EventEmitter {
     serverDocumentKey: string,
     epoch: number,
     clientUri: string,
+    sharedEpoch: number,
   ): { promise: Promise<void>; cancel: () => void } {
     let wake!: () => void
     const promise = new Promise<void>(resolve => { wake = resolve })
@@ -1181,7 +1212,12 @@ export class LspManager extends EventEmitter {
         this.documentIntentWaiters.delete(serverDocumentKey)
       }
     }
-    if ((this.documentIntentEpochs.get(clientUri) ?? 0) !== epoch) wake()
+    if (
+      (this.documentIntentEpochs.get(clientUri) ?? 0) !== epoch ||
+      (this.serverDocumentIntentEpochs.get(serverDocumentKey) ?? 0) !== sharedEpoch
+    ) {
+      wake()
+    }
     return { promise, cancel }
   }
 
@@ -1476,7 +1512,10 @@ export class LspManager extends EventEmitter {
       this.emit('diagnostics', { clientUri: doc.clientUri, diagnostics: [] })
     }
     for (const [key, doc] of this.serverDocuments) {
-      if (doc.serverGeneration === server.generation) this.serverDocuments.delete(key)
+      if (doc.serverGeneration === server.generation) {
+        this.serverDocuments.delete(key)
+        this.serverDocumentIntentEpochs.delete(key)
+      }
     }
   }
 
