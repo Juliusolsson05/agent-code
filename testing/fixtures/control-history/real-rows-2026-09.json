@@ -1,0 +1,46 @@
+{
+ "source": "Real rows from the owner's ~/.config/agent-code/control-history/events.jsonl (2026-09-05..24, 5,885 rows). Rows carry only ids, timestamps, capability ids, callers and payload digests (prompts and results live in payloads/, not included), so they are committed unredacted. `prefix` is rows 1-3 verbatim (one externalControl.status call). `keyedReceived` is the first real keyed `received` row from an external caller, verbatim; tests damage it (change its kind, as a newer build's event would look after a downgrade) or cut it mid-line (a torn append).",
+ "prefix": [
+  {
+   "sequence": 1,
+   "at": "2026-09-05T08:37:23.199Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95caa49c-eb60-44e2-9b62-938ce2243d11",
+   "kind": "received",
+   "capabilityId": "externalControl.status",
+   "caller": "application:70afc66f-7160-4a3e-83bd-e12eafa58f46",
+   "payload": "b85bb9227778026c8624fa7520197de14e91d19d2fa058c873f7a2a222d47e6c"
+  },
+  {
+   "sequence": 2,
+   "at": "2026-09-05T08:37:23.224Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95caa49c-eb60-44e2-9b62-938ce2243d11",
+   "kind": "dispatched",
+   "capabilityId": "externalControl.status",
+   "caller": "application:70afc66f-7160-4a3e-83bd-e12eafa58f46",
+   "payload": "e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1"
+  },
+  {
+   "sequence": 3,
+   "at": "2026-09-05T08:37:23.245Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95caa49c-eb60-44e2-9b62-938ce2243d11",
+   "kind": "result",
+   "capabilityId": "externalControl.status",
+   "caller": "application:70afc66f-7160-4a3e-83bd-e12eafa58f46",
+   "payload": "c90d856f8ace6e59d84a856413fb065a793fc8411220d20559ef1be67789250e"
+  }
+ ],
+ "keyedReceived": {
+  "sequence": 120,
+  "at": "2026-09-05T08:41:16.772Z",
+  "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+  "callId": "7767847f-18ec-4163-bbbb-f76fc36d294d",
+  "kind": "received",
+  "capabilityId": "agents.prompt",
+  "caller": "external:agent-code-control",
+  "requestKey": "c18-conversation-summary-20260905-01",
+  "payload": "08481b9146f04e63076cfb6a7fdada617e60417a74bde0e8c8f2da92f2fcebef"
+ }
+}
