@@ -536,6 +536,22 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (07:45) — **Merged #1260** (`d525d457`, closes #1246).
+  - **Disposition correction (steering q24):** reviewer B's writeFile residual was not fixed. It is filed as #1285 and noted on #1260.
+  - **Stage 3 hunts C2, C4 and C6 are done:** `temp/quality-loop/hunt-c2.md`, `hunt-c4.md` and `hunt-c6.md`. Only C1, C7, C8 and C9 remain, then the C3/C5 second sweeps.
+    - C2 filed #1279–#1283.
+    - C4 filed #1269–#1272.
+    - C6 filed #1273–#1278. #1273 is **P1**: a live Claude `proxy-events.jsonl` reached 2.37 GB today, 92.9 % of it `body_b64`.
+  - **New PRs:**
+    - **#1284 + claude-code-headless#62:** a per-file request-body budget. The trailer is `Refs #1273` (steering q24), because the live-file retention residual stays open on #1273. Reviewers are Codex × 2; a Claude reviewer was blocked by the folder-trust dialog and replaced.
+    - **#1286 (#1269, #1270):** the New Agent overlay owns no input while hidden, reopens its latch after a failed create, and the q22 raw spawn toasts in `pane.ts` are gone. Reviewers are Pi and Grok.
+  - **Round-2 fixes pushed:**
+    - #1264: a deleted folder is consumed, not retried forever. The shared `MISSING_WORKSPACE_FOLDER_PREFIX` was added, and #1267 is filed for q22 at the source. Both reviewers said MERGE-READY, and the minors are fixed.
+    - #1266: the page epoch now covers the plain open path, and pending opens are subtracted. The A1 TOCTOU is #1268.
+  - **#1265:** both reviewers said MERGE.
+  - **Waiting on CI:** #1257, #1258, #1262–#1266, #1284, #1286. #1261 (the intermittent extension test) hit #1258 again.
+  - **Process note:** cancelling stale runs by SHA also cancelled main's push run; it was re-run. Filter on `event=pull_request` next time.
+
 - 2026-09-25 (06:55) — **Merged #1256** (`451842b5`, closes #1245) and
   **#1259** (`9c6e48fc`, closes #1249) plus grok-code-headless#4 (`97e3038`).
   - **P2 C3 batch:** #1262, #1263, #1264 and #1265 are open, with review
