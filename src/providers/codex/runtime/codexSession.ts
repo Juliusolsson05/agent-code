@@ -236,6 +236,8 @@ export class CodexSession extends EventEmitter {
   private tldrHooks: PrivateCodexTldrHooks | null = null
   private exited = false
   private composerReady = false
+  /** Whether `composer-occupied` is the last readiness published (#800). */
+  private nativeDraftPublished = false
 
   private readonly cwd: string
   private readonly cols: number
@@ -329,6 +331,7 @@ export class CodexSession extends EventEmitter {
     }
     this.exited = false
     this.composerReady = false
+    this.nativeDraftPublished = false
     this.emit('input-readiness', {
       ready: false,
       reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
@@ -554,6 +557,7 @@ export class CodexSession extends EventEmitter {
       // Forward screen snapshots.
       this.headless.on('screen', snap => {
         this.markComposerReady(snap.plain)
+        this.publishNativeComposer()
         this.emit('screen', {
           plain: snap.plain,
           markdown: snap.markdown,
@@ -642,6 +646,7 @@ export class CodexSession extends EventEmitter {
       this.headless.on('exit', ({ exitCode, signal }) => {
         this.exited = true
         this.composerReady = false
+        this.nativeDraftPublished = false
         this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
         this.emit('exit', { exitCode, signal })
       })
@@ -869,6 +874,15 @@ export class CodexSession extends EventEmitter {
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
           this.markComposerReady(screen)
+          // #800: the screen check above passes for ANY `›` row, including a
+          // human's draft, and a paste would then append to that draft and
+          // submit both. Only the package's attribute-aware `drafted` blocks;
+          // `unknown` keeps today's behaviour so a frame we cannot read never
+          // stalls a prompt (the Claude gate once latched occupied for 186 s).
+          if (this.nativeComposerState() === 'drafted') {
+            resolve({ kind: 'occupied', reason: 'human-draft' })
+            return
+          }
           resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
           return
         }
@@ -941,6 +955,38 @@ export class CodexSession extends EventEmitter {
       return { kind: approval.kind, resolvable: approval.actions.length > 0 }
     }
     return null
+  }
+
+  /**
+   * The native composer as codex-headless reads it from the live buffer and
+   * its cell attributes (#800, #1313): `empty` only with Codex's own
+   * empty-composer hint, `drafted` for plain typed cells, an attachment or the
+   * queue hint, `unknown` for everything else. `unknown` is neither ready nor
+   * occupied; callers must not map it to either.
+   */
+  nativeComposerState(): 'empty' | 'drafted' | 'unknown' {
+    const headless = this.headless as { getComposerState?: () => 'empty' | 'drafted' | 'unknown' } | null
+    return headless?.getComposerState?.() ?? 'unknown'
+  }
+
+  /**
+   * Publish a native draft as `composer-occupied`, and its clearing as
+   * `ready` (#800). Before this, readiness latched once at startup, so a
+   * draft typed into the TUI was invisible: the pane offered to send, and a
+   * send appended to the draft. Only after the startup latch (an unpainted
+   * composer is still `provider-not-ready`), and `unknown` publishes nothing,
+   * so a running turn or a frame we cannot read never flaps the pane.
+   */
+  private publishNativeComposer(): void {
+    if (!this.composerReady || this.exited) return
+    const state = this.nativeComposerState()
+    if (state === 'drafted' && !this.nativeDraftPublished) {
+      this.nativeDraftPublished = true
+      this.emit('input-readiness', { ready: false, reason: 'composer-occupied' })
+    } else if (state === 'empty' && this.nativeDraftPublished) {
+      this.nativeDraftPublished = false
+      this.emit('input-readiness', { ready: true, reason: 'ready' })
+    }
   }
 
   private markComposerReady(screen: string): void {
