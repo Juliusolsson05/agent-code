@@ -115,11 +115,17 @@ export function useBulkProviderSwitchActions(
     sessionIds: SessionId[],
     targetKind: AgentProviderKind,
     policy: BulkSwitchPolicy,
+    control?: { shouldStop?: () => boolean },
   ) => Promise<void>
-  returnLastProviderSwitchBatch: () => Promise<void>
+  returnLastProviderSwitchBatch: (control?: { shouldStop?: () => boolean }) => Promise<void>
 } {
   const switchAgentsToProvider = useCallback(
-    async (sessionIds: SessionId[], targetKind: AgentProviderKind, policy: BulkSwitchPolicy) => {
+    async (
+      sessionIds: SessionId[],
+      targetKind: AgentProviderKind,
+      policy: BulkSwitchPolicy,
+      control?: { shouldStop?: () => boolean },
+    ) => {
       if (sessionIds.length === 0) return
 
       // Sequential, not concurrent. switchAgentProvider → replaceSession mutates
@@ -151,7 +157,18 @@ export function useBulkProviderSwitchActions(
       // is the only one who can decide whether the loss mattered.
       const counts: Record<SwitchStrategy, number> = { native: 0, raw: 0, shrunk: 0 }
 
-      for (const sessionId of sessionIds) {
+      // #1271: the modal locks the app while this runs, and with compaction
+      // each agent can take up to five minutes, so a batch of N could hold
+      // every input for N x 5 min with reload the only way out. The user can
+      // now ask to stop: checked BEFORE each agent, never mid-switch, because
+      // interrupting a replaceSession could strand the agent between
+      // providers. The agent in flight finishes; the rest are not attempted.
+      let notAttempted = 0
+      for (const [index, sessionId] of sessionIds.entries()) {
+        if (control?.shouldStop?.()) {
+          notAttempted = sessionIds.length - index
+          break
+        }
         // Read meta fresh each iteration — earlier switches have already mutated
         // the session map. We capture originalKind/cwd/title BEFORE the switch
         // because afterward this id is dead (replaceSession mints a new one).
@@ -239,12 +256,13 @@ export function useBulkProviderSwitchActions(
       const base = `Switched ${pluralAgents(switched.length)} to ${providerLabel(targetKind)}${tally ? `: ${tally}` : ''}`
       // Notes exist only when some agent's switch lost something; those are the
       // summaries worth reading, so they get the lossy duration.
-      showToast(summarize(base, { skipped, failed }, notes), notes.size > 0 ? LOSSY_SWITCH_TOAST_MS : undefined)
+      const stopped = notAttempted > 0 ? `Stopped: ${pluralAgents(notAttempted)} not attempted. ` : ''
+      showToast(stopped + summarize(base, { skipped, failed }, notes), notes.size > 0 || stopped ? LOSSY_SWITCH_TOAST_MS : undefined)
     },
     [refs, sessionActions, setRuntimes, setState, showToast],
   )
 
-  const returnLastProviderSwitchBatch = useCallback(async () => {
+  const returnLastProviderSwitchBatch = useCallback(async (control?: { shouldStop?: () => boolean }) => {
     const batch = refs.stateRef.current.lastProviderSwitchBatch
     if (!batch) {
       showToast('No switched batch to return')
@@ -259,7 +277,17 @@ export function useBulkProviderSwitchActions(
     // these have to survive: this modal is the only return affordance there is.
     const unreturned: typeof batch.agents = []
 
-    for (const agent of batch.agents) {
+    // Same stop as the forward switch (#1312 review A): Return runs under the
+    // same modal lock. Agents after the stop are NOT attempted and stay in
+    // the remembered batch, so a later Return finishes them.
+    let notAttempted = 0
+    for (const [index, agent] of batch.agents.entries()) {
+      if (control?.shouldStop?.()) {
+        const rest = batch.agents.slice(index)
+        notAttempted = rest.length
+        unreturned.push(...rest)
+        break
+      }
       const meta = refs.stateRef.current.sessions[agent.sessionId]
       // Only return agents still sitting where the forward switch left them.
       // Closed (no meta) or manually-moved (kind changed) agents are skipped so
@@ -335,7 +363,8 @@ export function useBulkProviderSwitchActions(
     })
 
     const base = `Returned ${pluralAgents(returned)} to ${providerLabel(batch.sourceKind)}`
-    showToast(summarize(base, { skipped, failed }, notes), notes.size > 0 ? LOSSY_SWITCH_TOAST_MS : undefined)
+    const stopped = notAttempted > 0 ? `Stopped: ${pluralAgents(notAttempted)} not returned yet. ` : ''
+    showToast(stopped + summarize(base, { skipped, failed }, notes), notes.size > 0 || stopped ? LOSSY_SWITCH_TOAST_MS : undefined)
   }, [refs, sessionActions, setRuntimes, setState, showToast])
 
   return { switchAgentsToProvider, returnLastProviderSwitchBatch }

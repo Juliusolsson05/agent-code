@@ -173,7 +173,23 @@ export function activeClaudeComposerText(screen: string): string {
     // the last column free (calibrated on the recorded 64-column frames, body
     // 61 + the two-column prefix = 63). Comparing against the divider width
     // itself never fired on a real screen (#1219 review, Pi F3).
-    const hardCut = width !== null && previous.length >= width - 1 && content.length > 0 && !/^\s/u.test(content)
+    // Judged in CELLS, and by whether the continuation's first character
+    // would still have fit (#1292): a wide (CJK) character is one UTF-16 unit
+    // but two cells, and with an odd free width it cannot use the last cell,
+    // so a full CJK row can be one cell short. For single-width text this is
+    // exactly the old `length >= width - 1`.
+    //
+    // Only a FULL row (width - 1 cells, measured per grapheme cluster, #1292)
+    // is a hard cut. A row one cell short is ambiguous once the terminal has
+    // dropped trailing spaces: a wide character that could not use the last
+    // cell, or a soft wrap whose real space sat in that cell (#1310 review,
+    // steering q34 — both a Latin and a CJK row can end that way). Joining it
+    // without the space confirmed pastes that had not landed; keeping the
+    // space costs a timeout at worst. A full visible row has no cell left for
+    // a space, so it cannot be a soft wrap.
+    const previousCells = displayWidth(previous)
+    const hardCut = width !== null && content.length > 0 && !/^\s/u.test(content)
+      && previousCells >= width - 1
     text = hardCut ? text.trimEnd() + content : `${text} ${content}`
   }
   return text
@@ -363,3 +379,87 @@ export function pollPasteAbsorbed(
     tick()
   })
 }
+
+/**
+ * Terminal cells a string occupies (#1292): 2 for East Asian wide/fullwidth
+ * characters and emoji, 0 for combining marks, 1 otherwise. The ranges are the
+ * ones terminals (xterm's unicode handler, Ink's string-width) treat as wide
+ * for the scripts people actually type; exhaustive Unicode tables are not
+ * needed to decide whether a composer line was full. Kept local: string-width
+ * is only a transitive dependency here, and pulling it in for one comparison
+ * would couple this shared module to its release cadence.
+ */
+function displayWidth(text: string): number {
+  let cells = 0
+  for (const cluster of graphemes(text)) cells += clusterWidth(cluster)
+  return cells
+}
+
+/**
+ * Width of ONE grapheme cluster, the unit Ink's string-width (and so Claude's
+ * wrapping) measures (steering q33). Measuring code points instead made a ZWJ
+ * sequence like 👩‍💻 four cells instead of two, which made a soft wrap look
+ * full, dropped its real space and confirmed a different paste.
+ *   - an emoji sequence (ZWJ, VS16 presentation, skin tone) is 2;
+ *   - VS15 asks for text presentation, 1;
+ *   - a zero-width format character (U+200B, U+2060, U+FEFF…) is 0;
+ *   - a pictograph is 2 only with DEFAULT emoji presentation
+ *     (\p{Emoji_Presentation}, which includes the regional indicators of a
+ *     flag). A text-presentation one (🌡 U+1F321, 🗓 U+1F5D3) is 1;
+ *   - otherwise the cluster's first code point decides (a combining mark
+ *     rides on its base and adds nothing).
+ *
+ * WHY every doubt resolves NARROW (#1310 final review, A and C): the two
+ * mistakes are not symmetric. An undercount makes a hard cut look soft; the
+ * join keeps a space and the delivery times out. An OVERcount makes a soft
+ * wrap look full; the join drops its real space and a different paste
+ * confirms, the early Enter this detector must never produce. The blanket
+ * pictograph range 1F300-1F64F counted 🌡 as 2, and a lone U+200B counted 1;
+ * both let a one-cell-short row pass as full.
+ */
+function clusterWidth(cluster: string): number {
+  const first = cluster.codePointAt(0)!
+  if (cluster.includes('\ufe0e')) return 1
+  if (cluster.includes('\u200d') || cluster.includes('\ufe0f') || /[\u{1f3fb}-\u{1f3ff}]/u.test(cluster)) return 2
+  if (/^\p{Mn}|^\p{Me}/u.test(cluster)) return 0
+  if (/^\p{Cf}+$/u.test(cluster)) return 0
+  if (/\p{Emoji_Presentation}/u.test(cluster)) return 2
+  return isWide(first) ? 2 : 1
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+function graphemes(text: string): string[] {
+  return Array.from(graphemeSegmenter.segment(text), part => part.segment)
+}
+
+function isWide(code: number): boolean {
+  // East_Asian_Width W and F (Unicode 15), the table terminals and Ink's
+  // string-width use, in the ranges people actually type: CJK and Hangul,
+  // fullwidth forms and punctuation. Emoji are NOT in this table: clusterWidth
+  // decides them by \p{Emoji_Presentation} (✅ ❌ ⚡ ⭐ 🚀 🟡, counted in the
+  // owner's own messages, all have it), because a blanket pictograph range
+  // also covers text-presentation symbols that are one cell.
+  for (const [low, high] of WIDE_RANGES) {
+    if (code < low) return false
+    if (code <= high) return true
+  }
+  return false
+}
+
+// Sorted, non-overlapping [low, high] code point ranges of width 2.
+const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x1100, 0x115f], [0x231a, 0x231b], [0x2329, 0x232a], [0x23e9, 0x23ec], [0x23f0, 0x23f0],
+  [0x23f3, 0x23f3], [0x25fd, 0x25fe], [0x2614, 0x2615], [0x2648, 0x2653], [0x267f, 0x267f],
+  [0x2693, 0x2693], [0x26a1, 0x26a1], [0x26aa, 0x26ab], [0x26bd, 0x26be], [0x26c4, 0x26c5],
+  [0x26ce, 0x26ce], [0x26d4, 0x26d4], [0x26ea, 0x26ea], [0x26f2, 0x26f3], [0x26f5, 0x26f5],
+  [0x26fa, 0x26fa], [0x26fd, 0x26fd], [0x2705, 0x2705], [0x270a, 0x270b], [0x2728, 0x2728],
+  [0x274c, 0x274c], [0x274e, 0x274e], [0x2753, 0x2755], [0x2757, 0x2757], [0x2795, 0x2797],
+  [0x27b0, 0x27b0], [0x27bf, 0x27bf], [0x2b1b, 0x2b1c], [0x2b50, 0x2b50], [0x2b55, 0x2b55],
+  [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xa000, 0xa4cf],
+  [0xa960, 0xa97f], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f],
+  [0xff00, 0xff60], [0xffe0, 0xffe6], [0x16fe0, 0x16fe4], [0x17000, 0x18aff], [0x1b000, 0x1b2ff],
+  [0x1f004, 0x1f004], [0x1f0cf, 0x1f0cf], [0x1f18e, 0x1f18e], [0x1f191, 0x1f19a], [0x1f200, 0x1f2ff],
+  [0x20000, 0x3fffd],
+]
+

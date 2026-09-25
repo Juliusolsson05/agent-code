@@ -634,8 +634,18 @@ export function useKeybinds(
       // Unified placement-overlay predicate — matches App.tsx's
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.
+      //
+      // #1286 review A: the flag alone is not ownership. The overlay is
+      // retained under display:none by Reader, Spotlight and a fullscreen
+      // editor, where it renders nothing; gating on the flag there ate the
+      // Escape that should leave the takeover (closing an overlay the user
+      // never saw) and dropped every chord, the palette's included. Same
+      // rule as the TLDR/goal latches above: input ownership follows the
+      // mounted DOM. Hidden, the request stays open and shows when its
+      // surface returns.
       const placementOverlayOpen =
-        newAgentPlacementOpen || linkedAgentParentId !== null
+        (newAgentPlacementOpen || linkedAgentParentId !== null)
+        && document.querySelector('[data-new-agent-overlay]') != null
 
       // Placement overlay (create-new, attach-detached, or linked
       // agent) and the two draft modals (reorder / pin) all share
@@ -658,8 +668,8 @@ export function useKeybinds(
       if (placementOverlayOpen || reorderTabsOpen || pinAgentsOpen) {
         if (k === 'Escape') {
           e.preventDefault()
-          if (newAgentPlacementOpen) closeNewAgentPlacement()
-          if (linkedAgentParentId !== null) closeLinkedAgent()
+          if (placementOverlayOpen && newAgentPlacementOpen) closeNewAgentPlacement()
+          if (placementOverlayOpen && linkedAgentParentId !== null) closeLinkedAgent()
           if (reorderTabsOpen) closeReorderTabs()
           if (pinAgentsOpen) closePinAgents()
           return

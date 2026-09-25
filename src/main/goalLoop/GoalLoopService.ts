@@ -424,6 +424,46 @@ export class GoalLoopService extends EventEmitter {
     timer.unref?.()
   }
 
+  /**
+   * Move a loop to the session that replaced its own (#1279).
+   *
+   * WHY this exists: loops are keyed by local session id, and every
+   * replacement path (reload, provider switch, resume, rewind, MCP toggle,
+   * Reload Agents) gives the pane a NEW id and kills the old one. The loop
+   * stayed filed under the dead id: the pane, `useGoalLoops` and the new
+   * process's goal_loop_complete all look it up by the new id and found
+   * nothing, so the loop silently vanished. The renderer owns the old -> new
+   * mapping (it commits the swap), so it tells main at that commit, exactly
+   * as it remaps pins, lanes and relationships.
+   *
+   * WHY an active loop arrives PAUSED (interrupted), not active: the new
+   * process has not proved its hooks or produced a turn edge, and the
+   * restart path already treats a severed observation this way ("never
+   * blind-continue a loop the user did not re-arm"). The user resumes it from
+   * the pane, which now finds it.
+   *
+   * Refused (null) when there is nothing to move, or when the successor
+   * already has a loop that has not ended, so a carry can never overwrite a
+   * loop the new session started itself.
+   */
+  async carry(fromSessionId: string, toSessionId: string): Promise<GoalLoopState | null> {
+    if (fromSessionId === toSessionId) return null
+    const loop = this.loops.get(fromSessionId)
+    if (!loop) return null
+    const existing = this.loops.get(toSessionId)
+    if (existing && existing.phase !== 'ended') return null
+    // Drops every per-process tracker of the dead id and pauses an active
+    // loop, the same as its `removed` event would; that event may still
+    // arrive later and then finds nothing to do.
+    this.interrupt(fromSessionId)
+    const paused = this.loops.get(fromSessionId) ?? loop
+    this.loops.delete(fromSessionId)
+    const moved: GoalLoopState = { ...paused, sessionId: toSessionId, updatedAt: this.now().toISOString() }
+    this.loops.set(toSessionId, moved)
+    await this.persist()
+    return { ...moved }
+  }
+
   snapshot(): Record<string, GoalLoopState> {
     return Object.fromEntries([...this.loops.entries()].map(([id, loop]) => [id, { ...loop }]))
   }

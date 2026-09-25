@@ -154,6 +154,9 @@ export function useWorkspace(
   // says "are we past the once-only effect", not "is the on-disk state
   // intact". See useBootstrap for the four possible terminal values.
   const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
+  // The last save error while saves keep failing, null once one succeeds
+  // (#1244). Shown by RestoreBanner; see useAutoSave for the threshold.
+  const [saveFailure, setSaveFailure] = useState<string | null>(null)
   const setSessionAgentViewModeOverride = useCallback((
     sessionId: SessionId,
     override: AgentViewModeOverride | null,
@@ -1039,7 +1042,7 @@ export function useWorkspace(
     // Renderers must subscribe through useSessionRuntime/useWorkspaceContext.
     get runtimes() { return refs.latestRuntimesRef.current },
     runtimeServices: createElement(WorkspaceRuntimeServices, {
-      state, refs, bootstrapComplete, draftChanges, pickerCancel,
+      state, refs, bootstrapComplete, draftChanges, pickerCancel, onSaveHealth: setSaveFailure,
     }),
     activeTab,
     spotlight,
@@ -1049,6 +1052,7 @@ export function useWorkspace(
     // on "is it tiled?"; both questions are gone, so the field is the grid.
     stage: state.stage,
     restoreStatus,
+    saveFailure,
     setReaderModeTarget,
     toggleReaderMode,
     setReaderModeSession,
