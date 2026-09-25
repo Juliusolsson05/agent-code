@@ -452,20 +452,33 @@ const sleep = (ms: number): Promise<void> =>
 async function rollbackWrittenPrompt(
   io: PromptDeliveryIo,
 ): Promise<'cleared' | 'restored' | 'unrecoverable'> {
-  const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
-    // #1291: the session's ATTRIBUTE-AWARE reading first — the same one the
-    // prompt gate trusts. After a kill empties the composer, Claude repaints
-    // placeholder text into it (a prompt suggestion, a hint), and only cell
-    // attributes tell that dim text from typing. The text-only read called it
-    // a draft, so all 64 kills "failed" and the prompt was yanked back and
-    // stranded: 4 of 5 recorded rollbacks ended that way.
+  const readComposer = (): 'empty' | 'drafted' | 'unpainted' => {
+    // #1291: after a kill empties the composer, Claude repaints placeholder
+    // text into it (a prompt suggestion, a hint). The text-only read calls any
+    // unrecognised row 'drafted', so all 64 kills "failed" and the prompt was
+    // yanked back and stranded: 4 of 5 recorded rollbacks ended that way.
     //
-    // The text-only read stays as the fallback for sessions without the
-    // capability. It fails closed (an unrecognised row is 'drafted'), and that
-    // error direction is the safe one: a false 'drafted' aborts and restores,
-    // whereas a false 'empty' would report success over half a prompt.
-    io.session.getComposerState?.()
-      ?? parseClaudeComposerState(io.session.snapshotScreen?.() ?? '', null)
+    // The rule (#1309 review):
+    //  - the text-only read stays the base. It fails closed, and its 'empty'
+    //    (a bare prompt marker) is trustworthy;
+    //  - it is overruled to 'empty' only when the LIVE cell attributes show a
+    //    painted placeholder: dim cells and no typed (plain) cells. A leftover
+    //    character under the inverse cursor has no dim cells, so it stays
+    //    'drafted';
+    //  - text and attributes come from the live buffer at the same instant,
+    //    never the per-frame cache, which lags a 25 ms kill loop and can
+    //    stall behind pendingWrites.
+    // A false 'drafted' aborts and restores; a false 'empty' would report
+    // success over half a prompt, so every doubt resolves to 'drafted'.
+    const live = io.session.readComposer?.()
+    const screen = live?.screen ?? io.session.snapshotScreen?.() ?? ''
+    const textOnly = parseClaudeComposerState(screen, null)
+    if (textOnly !== 'drafted') return textOnly
+    const attributes = live?.attributes
+    if (attributes && attributes.plain === 0 && attributes.dim > 0
+      && parseClaudeComposerState(screen, attributes) === 'empty') return 'empty'
+    return 'drafted'
+  }
 
   // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
   //

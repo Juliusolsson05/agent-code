@@ -733,8 +733,10 @@ export class ClaudeSession extends EventEmitter {
     return this.headless?.getScreen() ?? ''
   }
 
-  getComposerState(): 'empty' | 'drafted' | 'unpainted' | null {
-    return this.headless?.getComposerState() ?? null
+  readComposer(): { screen: string; attributes: { dim: number; inverse: number; plain: number } | null } | null {
+    if (!this.headless) return null
+    // Same instant: text and attributes both from the live buffer.
+    return { screen: this.headless.getScreen(), attributes: this.headless.getComposerAttributes() }
   }
 
   snapshotScreenAsMarkdown(): string {
