@@ -597,6 +597,10 @@ export const KILL_CALLERS = [
   'close.lane',
   'close.tab',
   'close.agent-activity',
+  // The Sessions list right-click menu (#1180): the clicked row's agent, not
+  // the focused one — distinct from close.focused in the journal for exactly
+  // that reason.
+  'close.context-menu',
   'close.extension-surface',
   // ── renderer, bulk and automation ──────────────────────────────────────
   'bulk.close-old-agents',

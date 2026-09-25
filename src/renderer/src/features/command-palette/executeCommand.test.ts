@@ -209,7 +209,7 @@ describe('history policy', () => {
     expect(recordCommandUse).toHaveBeenCalledWith('new-tab', 'native-menu')
   })
 
-  it.each(['palette', 'native-menu', 'keybinding'] as const)(
+  it.each(['palette', 'native-menu', 'keybinding', 'context-menu'] as const)(
     'records %s invocations',
     async source => {
       await dispatchCommand({ id: 'new-tab', source, ctx: makeContext() })
