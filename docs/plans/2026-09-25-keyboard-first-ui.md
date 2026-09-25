@@ -449,7 +449,7 @@ entry when it lands.
 
 | # | Surface | Keys today | Fix | Status |
 |---|---|---|---|---|
-| M1 | AppearanceMenu (`feed`) | Escape only; focus never enters | dropdown-menu primitive | todo |
+| M1 | AppearanceMenu (`feed`) | Escape only; focus never enters | dropdown-menu primitive | done |
 | M2 | SkillMenu (`skills/ui/SkillsGrid`) | none; closes on mouseLeave | dropdown-menu primitive; ConfirmDialog | done |
 | M3 | CommandSortControl | good (Esc/Tab/↑↓/Home/End/Enter) | visuals only (T1/T7) | todo |
 | M4 | ExplorerPane context menu | good | visuals (T7) | todo |
@@ -546,6 +546,13 @@ Sharp corners and one light theme.
   no longer closes it; the menu paints above Settings, popover colours +
   theme shadow, items are rounded option rows with the row-highlight colour;
   a long "Reveal <path>" truncates inside max 360px.
+- **M1 Appearance (status bar eye):** Tab to the eye (ring visible), Enter
+  opens with focus on the first mode; ↓ walks the mode tiles row by row then
+  the swatches then High Contrast; Enter/Space applies and the panel STAYS
+  open (live preview); the highlighted swatch shows a thin focus-colour
+  outline, the chosen one keeps its ink ring; section labels are 10px
+  "MODE"/"ACCENT"; Escape closes and the ring returns to the eye; the panel
+  uses popover colours + theme shadow instead of the old hard rgba.
 
 ## Tasks
 
@@ -620,6 +627,9 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 M1: AppearanceMenu on DropdownMenu radio/checkbox items (menu
+  stays open on select). Confirm-red observed: all 3 tests fail on the
+  pre-change component.
 - 2026-09-25 M2: SkillMenu on DropdownMenu. Confirm-red observed: both
   keyboard tests (Enter opens + Enter selects; Escape returns focus) fail on
   the pre-change component. The existing Hide test now drives the keyboard
