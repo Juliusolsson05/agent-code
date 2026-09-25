@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { setPocketView } from '@renderer/features/browser-pocket/actions'
 import { useSpotlightPocketMode } from '@renderer/features/browser-pocket/state/spotlightPocketMode'
@@ -118,32 +118,21 @@ function SpotlightPocketModes({ sessionId, workspace }: { sessionId: SessionId; 
     workspace.updateBrowserPocket(s => setPocketView(s, sessionId, next === 'agent' ? 'collapsed' : 'open'))
   }
   return (
-    <div
-      className="ml-auto flex flex-shrink-0 items-center rounded-control border border-border text-[10px]"
-      role="radiogroup"
-      aria-label="Spotlight layout"
-      // Arrows move AND choose (the APG radio rule, lib/radioGroupKeys).
-      // Before this the group announced itself as a radiogroup but was three
-      // separate Tab stops with no arrow keys.
-      onKeyDown={radioGroupKeyDown}
-    >
-      {(['split', 'browser', 'agent'] as const).map(option => (
-        <button
-          key={option}
-          type="button"
-          role="radio"
-          aria-checked={mode === option}
-          // Roving: the chosen layout is the group's one Tab stop.
-          tabIndex={mode === option ? 0 : -1}
-          onClick={() => choose(option)}
-          // rounded-control on the option too, so the inset focus ring follows
-          // the group's rounded ends instead of drawing square corners over
-          // them.
-          className={`rounded-control px-2 py-0.5 capitalize outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring ${mode === option ? 'bg-accent text-accent-fg' : 'text-ink-dim hover:text-ink'}`}
-        >
-          {option}
-        </button>
-      ))}
-    </div>
+    // The shared segmented control in radio mode (UI pass, G-10): arrows
+    // move AND choose (the k9 rule), one Tab stop. This group's own markup
+    // was the model for the primitive.
+    <SegmentedControl
+      className="ml-auto"
+      size="sm"
+      semantics="radio"
+      label="Spotlight layout"
+      value={mode}
+      onChange={choose}
+      options={[
+        { value: 'split', label: 'Split' },
+        { value: 'browser', label: 'Browser' },
+        { value: 'agent', label: 'Agent' },
+      ]}
+    />
   )
 }

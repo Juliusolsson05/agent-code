@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 
 import { Button } from '@renderer/components/ui/button'
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
@@ -20,7 +21,6 @@ import {
 } from '@renderer/workspace/dispatch/gridShape'
 import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
-import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
 import type { DispatchGridRow, TabId } from '@renderer/workspace/types'
 
 // The Grid Dispatch shape editor.
@@ -296,36 +296,23 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                 {/* A real radio group: the "(•)" glyphs were the only signal of
                     which option was on, so assistive tech heard two plain
                     buttons. */}
-                <div
-                  role="radiogroup"
-                  aria-label={`Row ${index + 1} nested agents`}
-                  className="flex items-center gap-3 pl-12 text-[10px]"
-                  // Shared radio keys: arrows move AND choose (APG, a draft
-                  // edit until Apply). A focused radio keeps its own Enter,
-                  // so Enter here never reaches the dialog's Apply (K3).
-                  onKeyDown={radioGroupKeyDown}
-                >
-                  <span className="uppercase text-muted">Nested agents</span>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={draft.capChildren === false}
-                    tabIndex={draft.capChildren === false ? 0 : -1}
-                    onClick={() => setRowCap(index, false)}
-                    className={`rounded-control outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${draft.capChildren === false ? 'text-accent' : 'text-muted hover:text-ink'}`}
-                  >
-                    {draft.capChildren === false ? '(•)' : '( )'} Show all
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={draft.capChildren !== false}
-                    tabIndex={draft.capChildren !== false ? 0 : -1}
-                    onClick={() => setRowCap(index, true)}
-                    className={`rounded-control outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${draft.capChildren !== false ? 'text-accent' : 'text-muted hover:text-ink'}`}
-                  >
-                    {draft.capChildren !== false ? '(•)' : '( )'} Cap
-                  </button>
+                {/* The shared segmented control in radio mode (UI pass, G-10/G-25):
+                    the ASCII "(•)" / "( )" radios were the only ones of their
+                    kind. Arrows move AND choose in the draft (k9); a focused
+                    radio keeps its Enter, so it never reaches Apply (K3). */}
+                <div className="flex items-center gap-3 pl-12 text-[10px]">
+                  <span className="uppercase tracking-wider text-muted">Nested agents</span>
+                  <SegmentedControl
+                    size="sm"
+                    semantics="radio"
+                    label={`Row ${index + 1} nested agents`}
+                    value={draft.capChildren === false ? 'all' : 'cap'}
+                    onChange={next => setRowCap(index, next === 'cap')}
+                    options={[
+                      { value: 'all', label: 'Show all' },
+                      { value: 'cap', label: 'Cap' },
+                    ]}
+                  />
                 </div>
               </>
             )}

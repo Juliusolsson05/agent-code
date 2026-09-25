@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
 import { useListNavigation } from '@renderer/lib/useListNavigation'
@@ -28,9 +29,9 @@ import { ConversationRow } from '@renderer/features/conversations/ui/Conversatio
 type Props = { open: boolean; focusSearch: boolean; workspace: Workspace; onClose: () => void }
 
 const SCOPES: Array<{ id: ConversationScope; label: string }> = [
-  { id: 'cwd', label: 'this folder' },
-  { id: 'repository', label: 'repository' },
-  { id: 'everywhere', label: 'everywhere' },
+  { id: 'cwd', label: 'This Folder' },
+  { id: 'repository', label: 'Repository' },
+  { id: 'everywhere', label: 'Everywhere' },
 ]
 
 export function ConversationsPicker({ open, focusSearch, workspace, onClose }: Props) {
@@ -193,11 +194,8 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
           <Kbd binding="Escape" />
         </div>
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-[11px] text-muted">
-          <div role="group" aria-label="Scope" className="flex overflow-hidden rounded-slab border border-border">
-            {SCOPES.map(s => (
-              <button key={s.id} type="button" aria-pressed={scope === s.id} onClick={() => setScope(s.id)} className={`px-2 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring ${scope === s.id ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{s.label}</button>
-            ))}
-          </div>
+          {/* The shared segmented look (UI pass, G-10). */}
+          <SegmentedControl size="sm" label="Scope" value={scope} onChange={setScope} options={SCOPES.map(s => ({ value: s.id, label: s.label }))} />
           <div role="group" aria-label="Providers" className="flex gap-1">
             {AGENT_PROVIDER_KINDS.filter(kind => enabledKinds.has(kind)).map(kind => (
               <button key={kind} type="button" aria-pressed={providers.includes(kind)} onClick={() => toggleProvider(kind)} className={`rounded-control border border-border px-2 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${providers.includes(kind) ? 'bg-row-selected-bg text-row-selected-fg' : 'hover:bg-row-hover-bg'}`}>{kind}</button>

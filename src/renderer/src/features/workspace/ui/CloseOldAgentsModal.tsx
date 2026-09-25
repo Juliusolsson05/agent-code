@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { Input } from '@renderer/components/ui/input'
 import { Select } from '@renderer/components/ui/select'
 import type { SessionKind } from '@shared/types/providerKind'
@@ -543,34 +544,15 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
               <div className="text-[10px] uppercase tracking-wider text-muted">
                 Project scope
               </div>
-              <div className="mt-1 flex items-center gap-2">
-                {/* A two-state switch: aria-pressed carries the state (it was
-                    colour only) and each half takes the focus ring. */}
-                <button
-                  type="button"
-                  aria-pressed={scopeMode === 'all'}
-                  onClick={() => setScopeMode('all')}
-                  className={`rounded-control px-2.5 py-1.5 text-[11px] border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-                    scopeMode === 'all'
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
-                  }`}
-                >
-                  All projects
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={scopeMode === 'selected'}
-                  onClick={() => setScopeMode('selected')}
-                  className={`rounded-control px-2.5 py-1.5 text-[11px] border outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-                    scopeMode === 'selected'
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
-                  }`}
-                >
-                  Selected projects
-                </button>
-              </div>
+              {/* The shared segmented look (UI pass, G-10); toggle-button
+                  semantics as before (aria-pressed, each a Tab stop). */}
+              <SegmentedControl
+                className="mt-1"
+                label="Project scope"
+                value={scopeMode}
+                onChange={setScopeMode}
+                options={[{ value: 'all', label: 'All projects' }, { value: 'selected', label: 'Selected projects' }] as const}
+              />
               <label className="mt-3 flex items-center gap-2 text-[11px] text-ink-dim">
                 <input
                   type="checkbox"

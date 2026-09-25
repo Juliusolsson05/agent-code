@@ -90,7 +90,7 @@ describe('ConversationsPicker', () => {
     const ws = workspace()
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
     await screen.findByText('break down this project')
-    const chip = screen.getByRole('button', { name: 'everywhere' })
+    const chip = screen.getByRole('button', { name: 'Everywhere' })
 
     // `true` = the default survived, which is what lets a real browser deliver
     // the chip's own click.

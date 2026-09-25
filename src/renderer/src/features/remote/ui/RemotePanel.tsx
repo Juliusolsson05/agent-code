@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import QRCode from 'qrcode'
 
 import {
@@ -204,34 +205,20 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     colour only), and each half takes the focus ring. The ON
                     half stays disabled (choosing it again is a no-op) but is
                     announced as pressed. */}
-                <div className="flex flex-shrink-0" role="group" aria-label="Reach">
-                  <button
-                    type="button"
-                    aria-pressed={status.transport === 'lan'}
-                    className={`rounded-l-control border px-3 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-                      status.transport === 'lan'
-                        ? 'border-border bg-control-active-bg text-control-active-fg'
-                        : 'border-border text-control-fg hover:bg-control-hover-bg hover:text-ink'
-                    }`}
-                    disabled={busy || status.transport === 'lan'}
-                    onClick={() => switchTransport('lan')}
-                  >
-                    LAN
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={status.transport === 'tunnel'}
-                    className={`rounded-r-control border border-l-0 px-3 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-                      status.transport === 'tunnel'
-                        ? 'border-border bg-control-active-bg text-control-active-fg'
-                        : 'border-border text-control-fg hover:bg-control-hover-bg hover:text-ink'
-                    }`}
-                    disabled={busy || status.transport === 'tunnel'}
-                    onClick={() => switchTransport('tunnel')}
-                  >
-                    Tunnel
-                  </button>
-                </div>
+                {/* The shared segmented look (UI pass, G-10), with toggle-button
+                    semantics ON PURPOSE: switching reach starts or stops a
+                    tunnel, so an arrow key must not do it. Choosing the active
+                    half again is a no-op (the primitive ignores it), and both
+                    halves wait while a switch is in flight. */}
+                <SegmentedControl<'lan' | 'tunnel'>
+                  label="Reach"
+                  value={status.transport}
+                  onChange={next => switchTransport(next)}
+                  options={[
+                    { value: 'lan', label: 'LAN', disabled: busy },
+                    { value: 'tunnel', label: 'Tunnel', disabled: busy },
+                  ]}
+                />
               </div>
             </div>
           )}

@@ -85,7 +85,7 @@ describe('SpotlightView header', () => {
     const { getByRole, updateBrowserPocket } = renderSpotlight()
     const group = getByRole('radiogroup', { name: 'Spotlight layout' })
     const radios = within(group).getAllByRole('radio')
-    expect(radios.map(radio => radio.textContent)).toEqual(['split', 'browser', 'agent'])
+    expect(radios.map(radio => radio.textContent)).toEqual(['Split', 'Browser', 'Agent'])
 
     // One Tab stop: the chosen layout.
     expect(radios.map(radio => radio.tabIndex)).toEqual([0, -1, -1])
