@@ -52,10 +52,9 @@ afterEach(() => {
 // we want.
 //
 // The harness builds the minimal honest WorkspaceRefs/state the handlers
-// actually touch; it is NOT a full workspace. Desktop-only side channels
-// (ghostAppend, gitWorktrees) are deliberately outside the feed and only
-// fire on paths this test does not drive (ghost changes, session-started
-// worktree refresh).
+// actually touch; it is NOT a full workspace. The desktop-only side channel
+// (gitWorktrees) is deliberately outside the feed and only fires on a path
+// this test does not drive (session-started worktree refresh).
 
 // The harness refs now live in ./testing/workspaceRefsForTest so every
 // subscription test builds the same minimal workspace (imported as makeRefs).
@@ -727,11 +726,7 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     const fake = createFakeSessionFeed()
     const state = { sessions: {} } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
-    const ghostAppend = vi.fn()
-    Object.defineProperty(window, 'api', {
-      configurable: true,
-      value: { ghostAppend },
-    })
+    Object.defineProperty(window, 'api', { configurable: true, value: {} })
 
     function Harness(): React.JSX.Element {
       const refs = useRef<WorkspaceRefs | null>(null)
@@ -789,7 +784,9 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     // turn_started + block_started are ordering boundaries and are visible
     // immediately. The 1,000 obsolete input prefixes wait as ONE snapshot.
     expect(runtimes['burst-1']?.semantic.currentTurn?.blocks[0]?.inputJson).toBe('')
-    expect(ghostAppend).toHaveBeenCalledTimes(1)
+    // The block's ghost was minted by the visible boundary, before the burst.
+    const ghostBefore = [...(runtimes['burst-1']?.ghosts.values() ?? [])]
+    expect(ghostBefore).toHaveLength(1)
 
     act(() => {
       vi.advanceTimersByTime(100)
@@ -798,9 +795,11 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(runtimes['burst-1']?.semantic.currentTurn?.blocks[0]?.inputJson).toBe(
       'x'.repeat(1_000),
     )
-    // One initial ghost plus one latest cumulative snapshot. The pre-fix hook
-    // invoked IPC 1,001 times here and journaled every growing copy.
-    expect(ghostAppend).toHaveBeenCalledTimes(2)
+    // The ghost moved once, straight to the latest cumulative snapshot. The
+    // pre-fix hook rewrote it for every one of the 1,001 growing copies.
+    const ghostAfter = [...(runtimes['burst-1']?.ghosts.values() ?? [])]
+    expect(ghostAfter).toHaveLength(1)
+    expect(ghostAfter[0]).not.toBe(ghostBefore[0])
 
     act(() => {
       fake.emitSemantic({
@@ -1239,11 +1238,7 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     const fake = createFakeSessionFeed()
     const state = { sessions: {} } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
-    const ghostAppend = vi.fn()
-    Object.defineProperty(window, 'api', {
-      configurable: true,
-      value: { ghostAppend },
-    })
+    Object.defineProperty(window, 'api', { configurable: true, value: {} })
 
     function Harness(): React.JSX.Element {
       const refs = useRef<WorkspaceRefs | null>(null)
@@ -1380,7 +1375,6 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       configurable: true,
       value: {
         gitWorktrees: vi.fn(async () => ({ ok: false })),
-        ghostAppend: vi.fn(),
       },
     })
 
@@ -1483,7 +1477,6 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       configurable: true,
       value: {
         gitWorktrees: vi.fn(async () => ({ ok: false })),
-        ghostAppend: vi.fn(),
       },
     })
 
@@ -1587,7 +1580,6 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       configurable: true,
       value: {
         gitWorktrees: vi.fn(async () => ({ ok: false })),
-        ghostAppend: vi.fn(),
       },
     })
 
@@ -1681,7 +1673,7 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
         sessions: { [sessionId]: { cwd: '/repo', kind: 'claude', ...meta } },
       } as unknown as WorkspaceState
       let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: emptyRuntime() }
-      Object.defineProperty(window, 'api', { configurable: true, value: { ghostAppend: vi.fn(), gitWorktrees: vi.fn(async () => ({ ok: false })) } })
+      Object.defineProperty(window, 'api', { configurable: true, value: { gitWorktrees: vi.fn(async () => ({ ok: false })) } })
       function Harness(): React.JSX.Element {
         const refs = useRef<WorkspaceRefs | null>(null)
         if (refs.current === null) refs.current = makeRefs(state)

@@ -67,7 +67,6 @@ describe('spoken name identity across the agent lifecycle', () => {
           .mockResolvedValueOnce({ sessionId: 'local-successor' })
           .mockResolvedValueOnce({ sessionId: 'brand-new' }),
         killOwnedSession: vi.fn(async () => false),
-        ghostRead: vi.fn(async () => []),
       },
     })
 
@@ -119,7 +118,6 @@ describe('spoken name identity across the agent lifecycle', () => {
       value: {
         spawnSession: vi.fn().mockResolvedValue({ sessionId: 'local-successor' }),
         killOwnedSession: vi.fn(async () => false),
-        ghostRead: vi.fn(async () => []),
       },
     })
 

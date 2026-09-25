@@ -17,7 +17,6 @@ import {
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
-  ghostsToPersist,
   reconcileUpstream,
 } from '@renderer/session-runtime/ghosts'
 import {
@@ -371,9 +370,6 @@ export async function loadInitialHistoryForSession({
       let nextGhosts = current.ghosts
       for (const entry of initialEntries) {
         nextGhosts = reconcileUpstream(entry, nextGhosts)
-      }
-      for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
-        window.api.ghostAppend(sessionId, ghost)
       }
 
       // Bootstrap-load equivalent of the live-ingest stamping in

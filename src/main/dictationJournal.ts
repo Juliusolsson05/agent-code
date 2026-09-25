@@ -1,6 +1,7 @@
 // Per-dictation-session debug-event writer.
 //
-// Mirrors src/main/ghostJournal.ts deliberately: same 100 ms drain
+// Modelled on the former GhostJournal (removed 2026-09-25 with the on-disk
+// ghost log; see storage/legacyGhostLogs.ts): same 100 ms drain
 // cadence, same mkdir-on-first-write trick, same "process owns the
 // writer until quit, flushAll on before-quit" lifecycle. The two files
 // are intentionally near-duplicates — refactoring them into a shared
@@ -48,7 +49,7 @@ import { app } from 'electron'
 import type { DictationDebugEvent, DictationDebugEventInput } from '@preload/api/types.js'
 
 /**
- * Flush interval matches the ghostJournal cadence (which itself mirrors
+ * Flush interval matches the former GhostJournal cadence (which itself mirrored
  * upstream Claude's transcript batcher). Anything shorter just burns
  * syscalls on hot streaming paths; anything longer risks tail events
  * never reaching disk if the app exits unexpectedly.
@@ -77,7 +78,7 @@ export class DictationDebugJournal {
   private timer: NodeJS.Timeout | null = null
   private ensuredDir = false
   /**
-   * Same overlap guard as GhostJournal: `scheduleDrain` arms a timer
+   * Same overlap guard as the former GhostJournal: `scheduleDrain` arms a timer
    * and nulls it inside the callback before awaiting `drain()`, so a
    * new `append` arriving during the drain could in principle schedule
    * a second drain. This boolean short-circuits that. macOS APFS
@@ -154,7 +155,7 @@ export class DictationDebugJournal {
     } catch {
       // Directory-creation only needed on first-ever write for this
       // session. Once it succeeds, every subsequent append hits the
-      // file directly. Same duplicated-try shape as GhostJournal —
+      // file directly. Same duplicated-try shape as the former GhostJournal —
       // pre-checking with `stat` would cost a syscall on every drain.
       if (!this.ensuredDir) {
         await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 })

@@ -126,8 +126,9 @@ function scopeUnits(units: ShadowUnit[], hasEntries: boolean, hasGhosts: boolean
       // reconstruction they cannot exist on the input side; comparing them
       // would report the extraction gap as a pipeline miss.
       if (isOptimistic && !hasEntries) return false
-      // Ghost journals only exist for sessions after journaling shipped
-      // (~June 24); expected g- rows from before that are unreconstructable.
+      // Ghost journals only exist for sessions between journaling shipping
+      // (~June 24) and its removal (2026-09-25); expected g- rows outside
+      // that window are unreconstructable.
       if (isGhost && !hasGhosts) return false
       if (!isGhost && !isOptimistic && !hasEntries) return false
     }

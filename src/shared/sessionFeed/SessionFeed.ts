@@ -72,7 +72,7 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 // runtime checks. The one READ beside them, loadHistory (#1177), exposes
 // only transcript content the listeners already stream; it was an ad-hoc
 // extra on the phone's transport and a pair of raw `window.api` calls on the
-// desktop until both moved onto the contract. Desktop-only surfaces (ghost journal, git worktrees,
+// desktop until both moved onto the contract. Desktop-only surfaces (git worktrees,
 // feed-debug, LSP, editor FS) stay on `window.api` — they are not session
 // I/O and the phone must never need them.
 export interface SessionFeed {

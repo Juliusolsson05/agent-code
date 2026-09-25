@@ -54,20 +54,6 @@ export class WorkspaceFileStore {
    * path, so the user is not silently working in a workspace that cannot save.
    */
   private readOnlyReason: string | null = null
-  /**
-   * Did this run load a COMPLETE workspace.json from disk (#1223)?
-   *
-   * `sessionIds()` is the only record of which sessions exist, and ghost-log
-   * retention deletes what it does not list. So "which sessions exist" may be
-   * trusted only when the file was actually read in full at startup. A missing
-   * file (fresh install, OR a user who moved it aside to troubleshoot, which
-   * this machine's state dir shows is a habit), an empty file, a partial
-   * decode (discarded windows, invalid container) or an unreadable one all
-   * mean the real owners are unknown. A save later in the run does not upgrade
-   * this: the moved-aside file's sessions would still be missing from it.
-   * tmuxRecovery draws the same line for the same reason.
-   */
-  private sessionOwnershipComplete = false
 
   /**
    * The exact bytes of an older-version file this store loaded, held until
@@ -165,7 +151,6 @@ export class WorkspaceFileStore {
       return
     }
     this.file = parsed.file
-    this.sessionOwnershipComplete = parsed.completeness.kind === 'complete'
     if (parsed.sourceVersion < WORKSPACE_FILE_VERSION) this.preUpgradeOriginal = { text, fromVersion: parsed.sourceVersion }
     if (parsed.migratedFromV1) {
       // eslint-disable-next-line no-console
@@ -195,13 +180,6 @@ export class WorkspaceFileStore {
   /** Why saving is refused, for the startup warning that tells the user. */
   refusalReason(): string | null {
     return this.readOnlyReason
-  }
-
-  /** Whether `sessionIds()` is known to list every session the user has (see
-   *  `sessionOwnershipComplete`). False means: do not treat absence from it
-   *  as proof that a session is gone. */
-  sessionOwnershipKnown(): boolean {
-    return this.readOnlyReason === null && this.sessionOwnershipComplete
   }
 
   /** Union of every window's committed session ids. */

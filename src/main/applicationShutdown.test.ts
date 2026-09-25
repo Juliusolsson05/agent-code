@@ -38,7 +38,6 @@ function harness() {
     stopDetachedTmuxSweep: vi.fn(async (): Promise<void> => undefined),
     drainWorkspace: vi.fn(async (): Promise<void> => undefined),
     drainDictationHistory: vi.fn(async (): Promise<void> => undefined),
-    flushGhosts: vi.fn(async (): Promise<void> => undefined),
     flushRecordings: vi.fn(async (): Promise<void> => undefined),
     flushDictationDebug: vi.fn(async (): Promise<void> => undefined),
     flushPasteDebug: vi.fn(async (): Promise<void> => undefined),
@@ -219,14 +218,14 @@ describe('application shutdown composition', () => {
   it('reports diagnostic write failures after awaiting them without inventing native ownership uncertainty', async () => {
     const h = harness()
     const journal = deferred()
-    h.services.flushGhosts.mockImplementation(() => journal.promise)
+    h.services.flushRecordings.mockImplementation(() => journal.promise)
     h.install()
     h.app.quit()
-    await vi.waitFor(() => expect(h.services.flushGhosts).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(h.services.flushRecordings).toHaveBeenCalledOnce())
     expect(h.onQuitAllowed).not.toHaveBeenCalled()
     journal.reject(new Error('debug disk full'))
     await vi.waitFor(() => expect(h.onQuitAllowed).toHaveBeenCalledOnce())
-    expect(h.onDiagnosticError).toHaveBeenCalledWith('ghosts', expect.any(Error))
+    expect(h.onDiagnosticError).toHaveBeenCalledWith('recordings', expect.any(Error))
     expect(h.onShutdownError).not.toHaveBeenCalled()
   })
 })
