@@ -298,6 +298,12 @@ export function migrateWorkspaceToStage(
       ...(durable.laneWeights ? { laneWeights: durable.laneWeights } : {}),
     }
   } else {
+    // The one repair that replaces a whole layout says so (#1256 review B):
+    // a present stage or envelope whose lanes are unusable is not the
+    // "file never had lanes" case the seed below exists for.
+    if (persisted.stage !== undefined || persisted.dispatchMode?.tiled !== undefined) {
+      console.warn('[workspace] stage layout unusable (lanes is not a list); using the seeded default layout')
+    }
     const seed = legacyEntrySeed(legacyInput)
     stage = defaultSeededStage(seed !== null && poolIds.has(seed) ? seed : null)
   }

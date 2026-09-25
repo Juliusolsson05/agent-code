@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import { MalformedWorkspaceContainerError, migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
@@ -88,7 +88,11 @@ describe('malformed stage entries in a real v3 workspace (#1245)', () => {
     const stage = workspace.stage as unknown as { lanes: unknown[] }
     const survivor = (stage.lanes[1] as { selectedSessionId: string }).selectedSessionId
     stage.lanes[0] = null
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const migrated = migrateWorkspaceToStage(workspace)
+    // The repair is reported, with how many entries it replaced.
+    expect(warn).toHaveBeenCalledWith('[workspace] replaced malformed stage lanes with empty slots', { count: 1 })
+    warn.mockRestore()
     expect(Object.keys(migrated.sessions).sort()).toEqual(Object.keys(workspace.sessions ?? {}).sort())
     // The slot stays (lane indices, weights and focus keep their meaning),
     // empty, and the other lane keeps its agent.
@@ -104,6 +108,15 @@ describe('malformed stage entries in a real v3 workspace (#1245)', () => {
     expect((migrated.stage.rows ?? []).reduce((sum, row) => sum + row.length, 0)).toBe(2)
   })
 
+  it('keeps every agent and both lanes when the rows container itself is not a list', () => {
+    const workspace = liveV3Workspace()
+    ;(workspace.stage as unknown as { rows: unknown }).rows = 5
+    const migrated = migrateWorkspaceToStage(workspace)
+    expect(Object.keys(migrated.sessions)).toHaveLength(Object.keys(workspace.sessions ?? {}).length)
+    expect(migrated.stage.lanes).toHaveLength(2)
+    expect(migrated.stage.rows).toEqual([{ length: 2 }])
+  })
+
   it('keeps every agent when the lanes container itself is not a list', () => {
     const workspace = liveV3Workspace()
     ;(workspace.stage as unknown as { lanes: unknown }).lanes = 5
@@ -117,10 +130,13 @@ describe('malformed stage entries in a real v3 workspace (#1245)', () => {
 // An ENTRY that holds nothing is repaired; a present-but-malformed CONTAINER
 // that may hold the only copy of an agent keeps rule 8's deliberate lock.
 describe('malformed entries and containers in a real v2 workspace (#1245)', () => {
-  it('keeps every agent when a tab entry is null', () => {
+  it.each([
+    ['null', null],
+    ['id-less', { title: 'no id' }],
+  ])('keeps every agent when a tab entry is %s', (_label, entry) => {
     const workspace = liveWorkspace()
     const expected = Object.keys(migrateWorkspaceToStage(liveWorkspace()).sessions).sort()
-    ;(workspace.tabs as unknown[]).push(null)
+    ;(workspace.tabs as unknown[]).push(entry)
     const migrated = migrateWorkspaceToStage(workspace)
     expect(Object.keys(migrated.sessions).sort()).toEqual(expected)
     expect(migrated.projects).toHaveLength((workspace.tabs as unknown[]).length - 1)
@@ -135,6 +151,7 @@ describe('malformed entries and containers in a real v2 workspace (#1245)', () =
   it.each([
     ['buried', (workspace: Record<string, unknown>) => { workspace.buried = {} }],
     ['sessions', (workspace: Record<string, unknown>) => { workspace.sessions = 5 }],
+    ['sessions (a list)', (workspace: Record<string, unknown>) => { workspace.sessions = [] }],
     // The only owner of 24 of the 27 real agents: migrating it as empty
     // dropped them all and reported a complete restore (#1256 review).
     ['detachedSessions (a number)', (workspace: Record<string, unknown>) => { workspace.detachedSessions = 5 }],
