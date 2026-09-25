@@ -478,7 +478,7 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
         // highlight joins the one row-highlight token (plan T7): it was
         // accent/15 with a surface-hi hover, found nowhere else.
         'group flex cursor-pointer items-center gap-3 rounded-control px-3 py-2',
-        highlighted ? 'bg-row-selected-bg' : 'hover:bg-row-hover-bg',
+        'border-l-2', highlighted ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent hover:bg-row-hover-bg',
       )}
     >
       <input

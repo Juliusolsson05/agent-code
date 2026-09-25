@@ -35,7 +35,7 @@ export function ConversationRow({ row, selected, index, onHover, onSelect, itemP
       onMouseEnter={itemProps ? undefined : onHover}
       onClick={itemProps ? undefined : onSelect}
       {...itemProps}
-      className={`cursor-pointer border-b border-border px-3 py-2 last:border-b-0 ${selected ? 'bg-row-selected-bg text-row-selected-fg' : 'text-ink-dim hover:bg-row-hover-bg'} ${row.available ? '' : 'opacity-60'}`}
+      className={`cursor-pointer border-b border-border px-3 py-2 last:border-b-0 ${selected ? 'border-l-2 border-l-accent bg-row-selected-bg text-row-selected-fg' : 'border-l-2 border-l-transparent text-ink-dim hover:bg-row-hover-bg'} ${row.available ? '' : 'opacity-60'}`}
     >
       <div className="flex items-center gap-2 text-[12px]">
         <span className="w-4 text-center font-semibold text-accent select-none">{providerGlyph(row.provider)}</span>

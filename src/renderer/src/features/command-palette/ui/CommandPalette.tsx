@@ -1855,8 +1855,8 @@ function OpenCommandPalette({
                           font-code
                           ${
                             i === selectedIndex
-                              ? 'bg-row-selected-bg text-row-selected-fg'
-                              : 'text-ink-dim hover:bg-row-hover-bg'
+                              ? 'border-l-2 border-l-accent bg-row-selected-bg text-row-selected-fg'
+                              : 'border-l-2 border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                           }
                         `}
                         onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}
@@ -1934,8 +1934,8 @@ function OpenCommandPalette({
                         text-[13px] font-code
                         ${
                           i === selectedIndex
-                            ? 'bg-row-selected-bg text-row-selected-fg'
-                            : 'text-ink-dim hover:bg-row-hover-bg'
+                            ? 'border-l-2 border-l-accent bg-row-selected-bg text-row-selected-fg'
+                            : 'border-l-2 border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                         }
                         ${i === starredBoundaryIndex ? 'border-b border-border' : ''}
                       `}
@@ -2017,9 +2017,9 @@ function OpenCommandPalette({
                           ${
                             i === selectedIndex
                               ? mode === 'ai-workspace-clear'
-                                ? 'bg-row-danger-selected-bg text-row-selected-fg'
-                                : 'bg-row-selected-bg text-row-selected-fg'
-                              : 'text-ink-dim hover:bg-row-hover-bg'
+                                ? 'border-l-2 border-l-danger bg-row-danger-selected-bg text-row-selected-fg'
+                                : 'border-l-2 border-l-accent bg-row-selected-bg text-row-selected-fg'
+                              : 'border-l-2 border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                           }
                         `}
                         onMouseMove={() => { if (i !== selectedIndex) setSelectedIndex(i) }}
@@ -2113,8 +2113,8 @@ function OpenCommandPalette({
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
+                        ? 'border-l-2 border-l-accent bg-row-selected-bg text-row-selected-fg'
+                        : 'border-l-2 border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                     data-palette-row={i}

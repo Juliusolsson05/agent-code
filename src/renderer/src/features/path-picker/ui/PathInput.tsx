@@ -313,8 +313,8 @@ export function PathInput({
                   transition-colors duration-75
                   ${
                     active
-                      ? 'bg-row-selected-bg text-ink'
-                      : 'text-ink-dim hover:bg-row-hover-bg'
+                      ? 'border-l-2 border-l-accent bg-row-selected-bg text-ink'
+                      : 'border-l-2 border-l-transparent text-ink-dim hover:bg-row-hover-bg'
                   }
                 `}
               >

@@ -571,7 +571,7 @@ feeds the rows below G-1.
 | G-5 | Composer action strip | Send is a raw ~20px button beside Stop `Button sm` (h-7); terminal says "Submit"; Stop overrides hover by className | `Button sm` for Send, one verb (Send), Stop on a real variant | done (Send + terminal Send on `Button sm` with ↩; Stop gets ⎋; Stop's hover-only danger kept, a documented choice) |
 | G-6 | Composer textarea | `bg-canvas border-border`; focus is a JS-toggled `border-accent`, not the ring | input tokens + T4 ring (keep the focused-pane accent as a PANE signal only if it is one) | todo |
 | G-7 | Row hover | 34 `hover:bg-surface-hi` (16 files) vs 35 `hover:bg-row-hover-bg` | rows `hover:bg-row-hover-bg`, controls `hover:bg-control-hover-bg` | done (29 sites classified row vs control; AskUserQuestion option cards keep their card hover; both tokens default to surface-hi, so the default themes look the same and custom themes now style rows and controls separately) |
-| G-8 | Selected rows | ~13 selected rows lack the accent rail (palette ×4, Conversations, AgentActivity, KeyVault, PathInput, Usage ×2); Explorer active = `bg-accent-soft`; WorkflowViewSelector ●; Incidents card | T7 recipe everywhere | todo |
+| G-8 | Selected rows | ~13 selected rows lack the accent rail (palette ×4, Conversations, AgentActivity, KeyVault, PathInput, Usage ×2); Explorer active = `bg-accent-soft`; WorkflowViewSelector ●; Incidents card | done (palette ×4 + danger rail on AI-workspace clear, Conversations, Agent Activity, Key Vault providers, PathInput, Usage rail, Explorer active file; the unselected rows keep a transparent rail slot. Kept: WorkflowViewSelector's ● + activity tints, Incidents card; both carry an activity dimension the plain recipe does not) |
 | G-9 | Hand-rolled bordered buttons (~80) | CustomSkillsRow ×8, browser pocket ×8, CLI banner ×3, palette row actions, ThemePicker, AgentActivity Close, AI workspace, EditorTabs Save/Save All, viewBridge Retry, feed/condition buttons | `Button` variants | todo |
 | G-10 | Missing SegmentedControl | 7 toggle-group recipes (Spotlight ×2, Reader, Remote split, Conversations scope/providers, CloseOld/BulkSwitch scope, Performance tabs, PathPicker tabs) | one primitive | todo |
 | G-11 | Missing Select | raw selects (Performance ×2, ProviderEnablement, Dictation input, MergeTabs, CloseOld, BulkSwitch ×2), no focus ring on several | one `Select` on input tokens | todo |
@@ -866,6 +866,11 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-8 Selected rows:** the command palette, Conversations, Agent Activity,
+  Key Vault providers, the path picker's list, Usage's provider rail and the
+  Explorer's active file all show the same selection: the row fill plus a
+  2px accent bar on the left (red bar for the palette's "clear AI workspace"
+  choice). Text must not jump sideways when the highlight moves.
 - **G-26 Side panels (Git, Worktrees, AI Workspace, Agent Status):** one
   header look: the panel name as a small label (plus the agent / workspace
   name for Agent Status and AI Workspace), actions as small ghost buttons

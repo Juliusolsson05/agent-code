@@ -292,8 +292,8 @@ export function UsageModal({ open, onClose }: Props) {
                       // `chip` rendered each 200px entry as a stadium.
                       className={
                         isActive
-                          ? 'rounded-control border border-border bg-row-selected-bg px-2 py-1.5 text-left text-[11px] text-ink outline-none focus-visible:ring-1 focus-visible:ring-focus-ring'
-                          : 'rounded-control border border-transparent px-2 py-1.5 text-left text-[11px] text-muted outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring'
+                          ? 'rounded-control border border-transparent border-l-2 border-l-accent bg-row-selected-bg px-2 py-1.5 text-left text-[11px] text-ink outline-none focus-visible:ring-1 focus-visible:ring-focus-ring'
+                          : 'rounded-control border border-transparent border-l-2 px-2 py-1.5 text-left text-[11px] text-muted outline-none hover:bg-row-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring'
                       }
                     >
                       <span className="font-medium">{providerLabel(entry.id)}</span>

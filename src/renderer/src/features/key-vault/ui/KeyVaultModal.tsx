@@ -393,8 +393,8 @@ export function KeyVaultModal() {
                     // as their selection.
                     className={`truncate rounded-control px-2 py-1 text-left text-[12px] outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                       provider.id === selectedProviderId
-                        ? 'bg-row-selected-bg text-ink'
-                        : 'text-muted hover:bg-row-hover-bg hover:text-ink'
+                        ? 'border-l-2 border-l-accent bg-row-selected-bg text-ink'
+                        : 'border-l-2 border-l-transparent text-muted hover:bg-row-hover-bg hover:text-ink'
                     }`}
                     onClick={() => selectProvider(provider.id, false)}
                     title={provider.name}

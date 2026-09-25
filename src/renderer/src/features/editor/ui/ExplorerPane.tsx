@@ -1067,12 +1067,16 @@ function TreeEntries({
                   onContextMenu(entry, event.clientX, event.clientY, event.currentTarget)
                 }}
                 data-tree-path={entry.path}
-                className={`group flex h-[22px] w-full items-center gap-1.5 pr-2 text-left transition-colors ${
+                // The app's one selected-row look (plan T7, UI pass G-8): the
+                // active file was an accent-soft fill with no rail, the only
+                // selection of its kind. Every row carries the 2px rail slot
+                // (transparent when unselected) so selection never shifts text.
+                className={`group flex h-[22px] w-full items-center gap-1.5 border-l-2 pr-2 text-left transition-colors ${
                   isActive
-                    ? 'bg-accent-soft text-ink'
+                    ? 'border-l-accent bg-row-selected-bg text-ink'
                     : isActiveParent
-                      ? 'text-ink hover:bg-row-hover-bg'
-                      : 'text-ink-dim hover:bg-row-hover-bg hover:text-ink'
+                      ? 'border-l-transparent text-ink hover:bg-row-hover-bg'
+                      : 'border-l-transparent text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                 }`}
                 style={rowStyle}
                 title={entry.path}
