@@ -530,8 +530,8 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
 | K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | done (wraps, ~4-line cap that scrolls; role=alert; Buttons, Overwrite destructive-outline) |
 | K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | todo |
-| K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | todo |
-| K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | todo |
+| K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | done (one details popover on hover OR focus-within) |
+| K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | done (status spelled out in the same popover; buttons aria-describedby it) |
 | K2-10 | Dispatch "new" / goal-loop chips (`dispatch/DispatchAgentList.tsx:369,378,670,697`) | explanation title-only | aria-describedby on the row | todo |
 | K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | done (UnsupportedProviderNotes under the provider row, both dialog modes) |
 | K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | todo |
@@ -828,6 +828,11 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-8/9 Pocket strip (collapsed browser pocket at the bottom of a lane):**
+  hovering OR tabbing into the strip opens one panel above it with the page
+  thumbnail and the status spelled out (URL, what the agent is doing, why the
+  page failed, what "3 err" means, the dev-server ports). The panel now uses
+  the menu surface and a theme shadow. The strip's buttons show focus rings.
 - **K2-17 Settings › Command keybindings:** a category whose commands are
   hidden by "Navigation Commands" being off shows one grey line under its
   heading saying so, instead of every locked Palette box explaining itself
@@ -1560,3 +1565,7 @@ Sharp corners and one light theme.
   refs), which removes any dependence on effect ordering and is React's
   recommended pattern. Full renderer suite green (1738). If that test fails
   again, the cause is something else. Treat it as a new bug, never rerun.
+- 2026-09-25 K2-8/9: PocketStrip details popover (role=tooltip) replaces five
+  hover titles and the mouse-only thumbnail. The port chip got an accessible
+  name ("Open localhost:N in the pocket"), since its text is only ":5173".
+  Confirm-red: the strip test fails on the pre-change strip.
