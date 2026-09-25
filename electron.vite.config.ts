@@ -46,6 +46,10 @@ const headlessAlias = [
   // loads node:sqlite and talks HTTP/SSE to the TUI's own server.
   { find: /^opencode-terminal-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-terminal-headless/src')}/$1` },
   { find: 'opencode-terminal-headless', replacement: resolve(__dirname, 'packages/opencode-terminal-headless/src/index.ts') },
+  // The native Pi TUI's reader. Main-only like its siblings: it listens on a
+  // Unix socket for its bridge extension and tails Pi's session files.
+  { find: /^pi-terminal-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/pi-terminal-headless/src')}/$1` },
+  { find: 'pi-terminal-headless', replacement: resolve(__dirname, 'packages/pi-terminal-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
   // `agent-voice-dictation` is a git submodule like the other local packages,
@@ -85,6 +89,7 @@ const headlessExclude = [
   'grok-code-headless',
   'opencode-headless',
   'opencode-terminal-headless',
+  'pi-terminal-headless',
   'agent-transcript-parser',
   'agent-voice-dictation',
   // Compile the submodule from source so a recursive clone does not have a
@@ -133,6 +138,18 @@ function copyMainRuntimeResourcesPlugin(): Plugin {
       // fail before Electron even launches on fresh submodule checkouts.
       from: resolve(__dirname, 'packages/claude-code-headless/src/proxy/mitmAddon.py'),
       to: resolve(__dirname, 'out/main/mitmAddon.py'),
+    },
+    {
+      // WHY the Pi bridge is copied as a raw .ts file, not bundled: Pi loads
+      // it itself (`pi -e <file>`, through its own jiti), inside the user's
+      // pi process — it must never be part of Agent Code's bundle. The
+      // extension is self-contained by contract (pi-terminal-headless
+      // src/bridge/extension.ts, rule 3), so this one file is all it needs.
+      // `out/main/runtime/**` is asarUnpack'ed, so the packaged app hands pi
+      // a real filesystem path. Dev, preview and dist all copy it here; the
+      // same entry exists in scripts/copy-packaged-resources.mjs.
+      from: resolve(__dirname, 'packages/pi-terminal-headless/src/bridge/extension.ts'),
+      to: resolve(__dirname, 'out/main/runtime/pi/bridge.ts'),
     },
   ]
 

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { JsonlEntry, SubAgentState } from '@preload/api/types.js'
-import { SubAgentWatcherManager } from './index.js'
+import { SubAgentWatcherManager, subagentsDirFromTranscript } from './index.js'
 
 // #743 end to end: a parent tool_result recorded BEFORE the sidecar is
 // discovered still flips the sub-agent to done once the watcher claims it,
@@ -77,5 +77,20 @@ describe('SubAgentWatcherManager parent completion', () => {
     } finally {
       manager.stopAll()
     }
+  })
+})
+
+describe('subagentsDirFromTranscript', () => {
+  // Only Claude names a transcript after its session id; deriving a sibling
+  // `<id>/subagents` from any other provider's file name invents a directory
+  // that never exists and starts a 600 ms poller per pane for nothing.
+  it('derives the Claude sidecar directory', () => {
+    expect(subagentsDirFromTranscript('/p/9a0b-uuid.jsonl')).toBe(join('/p', '9a0b-uuid', 'subagents'))
+  })
+
+  it('refuses Grok (chat_history.jsonl) and Pi (<ISO timestamp>_<id>.jsonl) file names', () => {
+    expect(subagentsDirFromTranscript('/g/session/chat_history.jsonl')).toBeNull()
+    // A real recorded Pi file name (pi-terminal-headless testing/fixtures/live/plain.json).
+    expect(subagentsDirFromTranscript('/s/--p--/2026-09-22T23-57-42-771Z_709ab74b-2d9d-434a-9298-d7dc22c53d42.jsonl')).toBeNull()
   })
 })

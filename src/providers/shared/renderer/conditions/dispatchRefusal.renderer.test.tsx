@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   describeConditionRefusal,
-  makeDispatchFromOnSend,
+  makeOutletDispatch,
   refusalOf,
   type ConditionRefusal,
   type ConditionRefusalReason,
@@ -131,7 +131,7 @@ describe('reading a resolver’s answer (#1070)', () => {
 describe('the dispatcher reports what it used to discard (#1070)', () => {
   it('reports a refusal, with the action that was refused', async () => {
     const refusals: ConditionRefusal[] = []
-    const dispatch = makeDispatchFromOnSend(
+    const dispatch = makeOutletDispatch(
       async () => {},
       async () => ({ ok: false, reason: 'option-not-found' }),
       refusal => refusals.push(refusal),
@@ -145,7 +145,7 @@ describe('the dispatcher reports what it used to discard (#1070)', () => {
 
   it('reports nothing when the resolver accepted', async () => {
     const onRefused = vi.fn()
-    const dispatch = makeDispatchFromOnSend(async () => {}, async () => ({ ok: true }), onRefused)
+    const dispatch = makeOutletDispatch(async () => {}, async () => ({ ok: true }), onRefused)
 
     await dispatch(action)
 
@@ -159,7 +159,7 @@ describe('the dispatcher reports what it used to discard (#1070)', () => {
     // The `void dispatch(action)` contract: a rejection here is an unhandled
     // promise rejection on top of a silent failure. Both used to happen.
     const refusals: ConditionRefusal[] = []
-    const dispatch = makeDispatchFromOnSend(
+    const dispatch = makeOutletDispatch(
       async () => {},
       resolver ? resolve : undefined,
       refusal => refusals.push(refusal),
@@ -180,7 +180,7 @@ describe('the dispatcher reports what it used to discard (#1070)', () => {
     // half goes to the reporter; the cause goes to the console.
     const journal = vi.spyOn(console, 'error').mockImplementation(() => {})
     const cause = new Error('ipc died')
-    const dispatch = makeDispatchFromOnSend(async () => {}, async () => { throw cause }, vi.fn())
+    const dispatch = makeOutletDispatch(async () => {}, async () => { throw cause }, vi.fn())
 
     await dispatch(action)
 
@@ -193,12 +193,15 @@ describe('the dispatcher reports what it used to discard (#1070)', () => {
     // toast for a write it could not make. Reporting here too would double the
     // message for the one arm that was never silent.
     const onRefused = vi.fn()
-    const onSend = vi.fn(async () => {})
-    const dispatch = makeDispatchFromOnSend(onSend, async () => ({ ok: false, reason: 'timeout' }), onRefused)
+    const onPtyAction = vi.fn(async () => {})
+    const dispatch = makeOutletDispatch(onPtyAction, async () => ({ ok: false, reason: 'timeout' }), onRefused)
+    const escape = { kind: 'pty', id: 'esc', label: 'Escape', data: '\u001b' } as const
 
-    await dispatch({ kind: 'pty', id: 'esc', label: 'Escape', data: '\u001b' })
+    await dispatch(escape)
 
-    expect(onSend).toHaveBeenCalledWith('\u001b')
+    // The WHOLE action reaches the surface (#1177): the phone must send the
+    // id for the desktop to verify, the desktop writes `data`.
+    expect(onPtyAction).toHaveBeenCalledWith(escape)
     expect(onRefused).not.toHaveBeenCalled()
   })
 })
@@ -209,7 +212,7 @@ describe('a refused answer reaches the user through the real view (#1070)', () =
     // resolver that refuses exactly as the #1025 validator does when the
     // question has been replaced under the user.
     const refusals: ConditionRefusal[] = []
-    const dispatch = makeDispatchFromOnSend(
+    const dispatch = makeOutletDispatch(
       async () => {},
       async () => ({ ok: false, reason: 'option-not-found' }),
       refusal => refusals.push(refusal),
@@ -256,7 +259,7 @@ describe('a refused answer reaches the user through the real view (#1070)', () =
             },
           },
         } as never}
-        onSend={async () => {}}
+        onPtyAction={async () => {}}
         onResolveCustom={async () => ({ ok: false, reason: 'option-not-found' })}
         onConditionRefused={refusal => refusals.push(refusal)}
         interactionActive

@@ -210,3 +210,43 @@ describe('installSessionShutdownGate', () => {
     expect(fake.app.quit).not.toHaveBeenCalled()
   })
 })
+
+
+// The update exit: a pending self-update REPLACES the final quit (issue #1120).
+// Calling quitAndInstall after a plain app.quit() races the process exit and
+// silently drops the update — this pins the ordering the consulted review
+// required: install INSTEAD of quit, on the drain-resolved path only.
+describe('installSessionShutdownGate update exit', () => {
+  it('installs the pending update INSTEAD of the final quit after drain', async () => {
+    const fake = createFakeApp()
+    const install = vi.fn()
+    const { promise, resolve } = deferred()
+    const gate = installSessionShutdownGate({
+      app: fake.app,
+      drain: () => promise,
+      onQuitAllowed: vi.fn(),
+      update: { pending: () => true, install },
+    })
+    void gate
+    fake.emitWillQuit()
+    resolve()
+    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce())
+    expect(fake.app.quit).not.toHaveBeenCalled()
+  })
+
+  it('quits normally when no update is pending', async () => {
+    const fake = createFakeApp()
+    const install = vi.fn()
+    const { promise, resolve } = deferred()
+    installSessionShutdownGate({
+      app: fake.app,
+      drain: () => promise,
+      onQuitAllowed: vi.fn(),
+      update: { pending: () => false, install },
+    })
+    fake.emitWillQuit()
+    resolve()
+    await vi.waitFor(() => expect(fake.app.quit).toHaveBeenCalledOnce())
+    expect(install).not.toHaveBeenCalled()
+  })
+})

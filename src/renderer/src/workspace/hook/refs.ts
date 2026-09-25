@@ -9,7 +9,7 @@ import type {
   SpotlightState,
 } from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
-import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
 
 // -----------------------------------------------------------------------------
 // Ref factory for the workspace hook.
@@ -32,7 +32,7 @@ export type WorkspaceRefs = {
   latestRuntimesRef: MutableRefObject<Record<SessionId, SessionRuntime>>
   dangerousAgentsRef: MutableRefObject<boolean>
   useProxyStreamingRef: MutableRefObject<boolean>
-  defaultBuiltInMcpDomainsRef: MutableRefObject<ConfigurableBuiltInMcpDomain[]>
+  defaultBuiltInMcpDomainsRef: MutableRefObject<BuiltInMcpDefaultsInput>
   seenUuidsRef: MutableRefObject<Record<SessionId, Set<string>>>
   /** History-boundary window identity per session (grok Stage 5). Decisions
    *  come from session-runtime/historyBoundary.ts — the phone and replay apply
@@ -70,7 +70,7 @@ export function useWorkspaceRefs(
   initialRuntimes: Record<SessionId, SessionRuntime>,
   dangerousAgentsEnabled: boolean,
   useProxyStreaming: boolean,
-  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[],
+  defaultBuiltInMcpDomains: BuiltInMcpDefaultsInput,
 ): WorkspaceRefs {
   // Each `useRef(...)` already hands back a stable ref OBJECT across
   // renders. But the surrounding `{ ... }` literal does NOT — without

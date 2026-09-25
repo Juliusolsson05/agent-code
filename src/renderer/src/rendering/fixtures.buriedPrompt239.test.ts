@@ -7,6 +7,7 @@ import {
 } from '@renderer/rendering/observations/local'
 import { collectSemanticCandidates } from '@renderer/rendering/observations/semantic'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // FIXTURE: buried-prompt-239 — the first end-to-end pipeline run.
@@ -69,6 +70,7 @@ describe('fixture: buried-prompt-239 (end-to-end collectors → ledger → rows)
     })
     return createSessionLedger()({
       provider: 'codex',
+      policy: getRendererProviderCapabilities('codex').ledgerPolicy.suppression,
       committed: committed.candidates,
       live: [...semantic.candidates, ...opt],
       statics: lifecycle,

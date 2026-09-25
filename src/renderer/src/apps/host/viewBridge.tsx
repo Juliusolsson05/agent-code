@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
 import { createFrameHost } from '@renderer/apps/host/frameHost'
+import { ExtensionLoadingShell } from '@renderer/apps/host/extensionLoadingShell'
 import { clearFrameDispatch, discardPendingCommands, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
 import { THEME_CHANGED_EVENT } from '@renderer/app-state/settings/theme'
 import type { ExtensionListEntry } from '@shared/types/extensions'
@@ -200,9 +201,13 @@ function buildViewComponent(
         if (!data) return
         if (data.kind === 'agent-code-ext:resize') {
           if (typeof data.height !== 'number' || !Number.isFinite(data.height)) return
+          // Width ceiling exists so a broken extension cannot demand a
+          // tab-sized modal; it is NOT a product cap on extension stages.
+          // 1920 keeps a full-HD game/table modal reportable while the
+          // viewport scale below still shrinks it onto small windows.
           setContentHeight(Math.min(Math.max(Math.round(data.height), 80), 1400))
           if (typeof data.width === 'number' && Number.isFinite(data.width)) {
-            setContentWidth(Math.min(Math.max(Math.round(data.width), 240), 1200))
+            setContentWidth(Math.min(Math.max(Math.round(data.width), 240), 1920))
           }
         } else if (data.kind === 'agent-code-ext:boot') {
           // iframe.load also fires for a 404 body. The bootstrap announcement is
@@ -313,9 +318,7 @@ function buildViewComponent(
         className={fill ? 'relative h-full w-full' : 'relative min-h-[120px]'}
         style={scaledBox}
       >
-        {status === 'loading' ? (
-          <div className="px-6 py-8 text-[12px] text-muted">Loading {displayName}…</div>
-        ) : null}
+        {status === 'loading' ? <ExtensionLoadingShell displayName={displayName} /> : null}
         {status === 'failed' ? (
           // The host modal sizes to max-content (AppHostSurface, #969), so an
           // unconstrained error message would lay out on one line and stretch the

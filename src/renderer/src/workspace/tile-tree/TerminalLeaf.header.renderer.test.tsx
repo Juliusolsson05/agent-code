@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -63,6 +63,7 @@ const workspace = {
   // Never settles: the header must not wait on the PTY.
   ensureSessionLive: vi.fn(() => new Promise(() => {})),
   showPaneToast: vi.fn(),
+  markTerminalUsed: vi.fn(),
 } as unknown as Workspace
 
 function leaf(showStatusMode = true) {
@@ -146,5 +147,19 @@ describe('TerminalLeaf shared header', () => {
     store.workspaceRuntimes = { shell: { tailMode: true } }
     const { container } = render(leaf())
     expect(statusRow(container)).toHaveTextContent('TAIL')
+  })
+})
+
+describe('TerminalLeaf last-used stamping (#1178)', () => {
+  it('counts the user typing, even while the shell is still waking', () => {
+    // attachTerminal never settles in this harness, so the leaf is in its
+    // buffering state — the branch that used to return before any stamp.
+    const markTerminalUsed = vi.mocked(workspace.markTerminalUsed)
+    markTerminalUsed.mockClear()
+    const { container } = render(leaf())
+    const host = container.querySelector('.flex-1.min-h-0.min-w-0.overflow-hidden.relative')
+    if (!host) throw new Error('xterm host element not found')
+    fireEvent.keyDown(host, { key: 'l' })
+    expect(markTerminalUsed).toHaveBeenCalledWith('shell')
   })
 })

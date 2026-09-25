@@ -6,9 +6,9 @@ export const usageCommands: CommandDef[] = [
     id: 'usage.open',
     category: 'workspace-tools',
     title: 'Open Usage',
-    description: 'Open provider usage for Claude and Codex.',
+    description: 'Open provider usage for every enabled provider.',
     surface: 'app',
-    keywords: ['quota', 'tokens', 'limits', 'claude', 'codex', 'usage'],
+    keywords: ['quota', 'tokens', 'limits', 'claude', 'codex', 'grok', 'zai', 'usage'],
     getState: ({ flags }) => panel(flags.usageModalOpen),
     run: ({ ui, flags }) => {
       // Round-trips. Everything below this line follows the same shape, and

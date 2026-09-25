@@ -1,0 +1,135 @@
+# {"recordedBy":"scripts/browser-pocket/record-fixtures.mts","what":"pid ppid comm (basename only) for the Agent Code app subtree","recordedAt":"2026-09-23T02:15:20.334Z","platform":"darwin-arm64","tag":"agents-and-tmux-terminal","root":"15073","recorderPid":"80230","pageServerPort":"62678"}
+4624 96832 zsh
+4630 4624 npm exec vite preview --port 4173 --strictPort
+4663 4630 node
+4664 4663 esbuild
+8234 78955 zsh
+8239 8234 npm exec vite --config vite.dev.config.ts --host 127.0.0.1 --port 5292 --strictPort
+8267 8239 node
+8273 8267 esbuild
+38659 37847 npm exec todoist-mcp
+38820 38659 node
+43857 42859 npm exec todoist-mcp
+43997 43857 node
+44966 44067 npm exec todoist-mcp
+45001 44966 node
+78499 78955 zsh
+78574 78499 node
+78575 78499 tail
+78577 78574 Google Chrome
+78752 78577 Google Chrome Helper
+78753 78577 Google Chrome Helper
+78755 78577 Google Chrome Helper
+78764 78577 Google Chrome Helper (Renderer)
+78786 78577 Google Chrome Helper (Renderer)
+79459 46252 zsh
+79461 79459 git
+79462 79459 tail
+79463 79461 sh
+79500 79463 git
+79717 79500 git
+79719 79717 git
+79720 79719 git
+79721 79720 git-remote-https
+79731 79719 git
+80006 81647 zsh
+80030 80006 tmux
+80031 80006 tail
+80173 78577 Google Chrome Helper
+80205 80030 node
+80230 80205 node
+80284 80230 esbuild
+80350 80230 ps
+95922 95890 npm exec todoist-mcp
+96695 95922 node
+15449 15073 opencode
+16282 15449 npm exec xcodebuildmcp mcp
+16349 16282 node
+15073 15072 Electron
+15184 15073 Electron Helper
+15210 15073 Electron Helper
+15329 15073 Electron Helper (Renderer)
+15330 15073 Electron Helper (Renderer)
+15346 15073 Electron Helper
+15347 15073 Electron Helper
+15452 15073 AgentCodeDictationHotkeyHelper-f6cf2f845d72
+16538 15073 Electron Helper (Renderer)
+33242 15073 Electron Helper (Renderer)
+37338 15073 mitmdump
+37847 15073 grok
+38395 15073 mitmdump
+38461 15073 opencode
+38635 15073 opencode
+38695 15073 opencode
+38735 38461 npm exec xcodebuildmcp mcp
+38797 38635 npm exec xcodebuildmcp mcp
+38982 38735 node
+39014 38797 node
+39083 38695 npm exec xcodebuildmcp mcp
+39423 39083 node
+42859 15073 grok
+44067 15073 grok
+46251 15073 mitmdump
+58318 15073 mitmdump
+78361 15073 cloudflared
+78954 15073 mitmdump
+81384 15073 Electron Helper
+81646 15073 mitmdump
+85244 15073 mitmdump
+88321 15073 mitmdump
+89803 15073 mitmdump
+93352 15073 Electron Helper (Renderer)
+95890 15073 grok
+96831 15073 mitmdump
+37339 15073 claude
+37365 37339 npm exec todoist-mcp
+37403 37365 node
+37621 15073 codex
+37707 37621 node_repl
+37708 37621 node
+37907 37708 node_repl
+39983 15073 opencode
+40100 39983 npm exec xcodebuildmcp mcp
+40141 40100 node
+88578 15073 tmux
+95928 15073 grok
+85245 15073 claude
+85309 85245 npm exec todoist-mcp
+85362 85309 node
+89804 15073 claude
+89983 89804 npm exec todoist-mcp
+90030 89983 node
+58319 15073 claude
+58360 58319 npm exec todoist-mcp
+58401 58360 node
+77500 58319 caffeinate
+37852 15073 grok
+15750 15073 opencode
+15879 15750 npm exec xcodebuildmcp mcp
+15923 15879 node
+77184 78955 caffeinate
+78955 15073 claude
+79006 78955 npm exec todoist-mcp
+79090 79006 node
+77218 81647 caffeinate
+81647 15073 claude
+81703 81647 npm exec todoist-mcp
+81856 81703 node
+88322 15073 claude
+88375 88322 npm exec todoist-mcp
+88431 88375 node
+96832 15073 claude
+96874 96832 npm exec todoist-mcp
+96921 96874 node
+38396 15073 claude
+38444 38396 npm exec todoist-mcp
+38495 38444 node
+44014 15073 grok
+44150 15073 grok
+46252 15073 claude
+46286 46252 npm exec todoist-mcp
+46350 46286 node
+79322 46252 caffeinate
+80307 1680 Python
+1682 1680 zsh
+88574 1680 zsh

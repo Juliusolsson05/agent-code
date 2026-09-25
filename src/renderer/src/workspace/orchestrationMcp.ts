@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { KillCaller } from '@shared/lifecycle/events'
 import type {
   OrchestrationAgentMessage,
   OrchestrationAgentOutput,
@@ -154,6 +155,7 @@ export type OrchestrationCloseSession = (
   options?: {
     silentIfSoleTarget?: { headline: string }
     captureUndo?: boolean
+    killCaller?: KillCaller
   },
 ) => Promise<boolean>
 
@@ -180,6 +182,9 @@ export async function closeOrchestrationAgent(params: {
     silentIfSoleTarget: {
       headline: closeRequestHeadline(params.state, params.parentSessionId),
     },
+    // A model reaping its own child. Tagged apart from human closes so a
+    // journal full of kills can be traced to an orchestration loop (#1135).
+    killCaller: 'orchestration.close-agent',
   }).catch(() => false)
   // Report what happened. Previously this returned the id unconditionally, so
   // an agent whose close did not take (already gone) was told it had closed
@@ -243,6 +248,7 @@ export async function closeOrchestrationRun(params: {
       const closed = await params.closeSession(sessionId, {
         silentIfSoleTarget: { headline },
         captureUndo: false,
+        killCaller: 'orchestration.close-run',
       })
       if (closed) closedSessionIds.push(sessionId)
       else skippedSessionIds.push(sessionId)
@@ -562,10 +568,17 @@ export function terminalProviderFailure(
 const SEMANTIC_FAILURE_SOURCE: Partial<Record<SessionKind, string>> = {
   opencode: 'opencode-sse',
   codex: 'proxy',
+  // Pi: the bridge reports a reply pi ended with stopReason 'error' as an
+  // api_error (recorded: pi-terminal-headless testing/fixtures/live/error.json).
+  pi: 'pi-bridge',
 }
 
-/** errorType names that are not the provider giving up (see above). */
-const NON_TERMINAL_ERROR_TYPES = new Set(['MessageAbortedError', 'instance', 'part_overflow'])
+/**
+ * errorType names that are not the provider giving up (see above). Pi's
+ * 'aborted' is an Esc or an abort request — the user stopping a turn, which
+ * is not a failed agent.
+ */
+const NON_TERMINAL_ERROR_TYPES = new Set(['MessageAbortedError', 'instance', 'part_overflow', 'aborted'])
 
 function claudeEntryText(entry: Record<string, unknown>): string {
   const message = entry.message as { content?: unknown } | undefined

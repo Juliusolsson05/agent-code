@@ -4,7 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
 import { viewComponentFor } from '@renderer/apps/host/viewBridge'
 import { refreshInstalledExtensions } from '@renderer/apps/host/installedExtensionsState'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 
@@ -61,7 +61,7 @@ export function ExtensionViewLeaf({ sessionId, workspace, onFocusRequest, focuse
             extensionId,
             showToast,
             // Closing the extension's own view closes the pane it lives in.
-            closeSurface: () => workspace.closeSession(sessionId),
+            closeSurface: () => workspace.closeSession(sessionId, { killCaller: 'close.extension-surface' }),
           })
         : null,
     [extensionId, showToast, workspace, sessionId],

@@ -33,7 +33,7 @@ it.each(['spawn', 'retirement'] as const)('retires an uncommittable successor wh
   useAppStore.getState().setWorkspaceState(previous => ({ ...previous, tabs: [], sessions: Object.fromEntries(Object.entries(previous.sessions).filter(([id]) => id !== 'source')) }))
   useAppStore.getState().setWorkspaceRuntimes(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => id !== 'source')))
   await act(async () => { finish(); expect(await replacement!).toBeUndefined(); await vi.runAllTimersAsync() })
-  expect(killOwnedSession).toHaveBeenCalledWith({ sessionId: 'successor', cwd: '/recorded/project', kind: 'claude', providerRuntime: undefined })
+  expect(killOwnedSession).toHaveBeenCalledWith({ sessionId: 'successor', cwd: '/recorded/project', kind: 'claude', providerRuntime: undefined, caller: 'replace.orphaned-successor' })
   expect(useAppStore.getState().workspaceState.tabs).toEqual([])
   expect(useAppStore.getState().workspaceState.sessions).toEqual({})
   expect(useAppStore.getState().workspaceRuntimes.successor).toBeUndefined()

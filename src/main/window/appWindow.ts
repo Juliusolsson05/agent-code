@@ -3,6 +3,7 @@ import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
 import { openAllowedExternalUrl } from '@main/window/externalNavigation.js'
+import { installGuestGuard } from '@main/browserPocket/guestGuard.js'
 // The window's geometry type is the PERSISTED one on purpose: bounds only
 // exist here to be saved and restored, and two structurally identical
 // `WindowBounds` declarations would be free to drift apart.
@@ -216,6 +217,13 @@ export function buildAppWindow(options: {
       // This matters MORE with several windows, not less: a second monitor's
       // window is frequently the occluded one while its agents keep working.
       backgroundThrottling: false,
+      // The lane browser pocket (#1142) is an in-DOM <webview>, not a
+      // WebContentsView, because a WebContentsView always paints ABOVE all HTML:
+      // the palette, dialogs and the ⌘L/⌘G peeks could never cover a page, and
+      // this app shows several pockets at once (spec §5.2). Safe only because
+      // installGuestGuard below fails closed on every attach: pocket partitions
+      // and http(s) only, no preload, sandboxed. Never enable one without the other.
+      webviewTag: true,
     },
   })
 
@@ -289,6 +297,12 @@ export function buildAppWindow(options: {
       console.warn('[window] blocked or failed external open:', err)
     })
     return { action: 'deny' }
+  })
+
+  installGuestGuard(window, {
+    // A page asked for a real popup (OAuth needs window.opener, D9): the
+    // renderer offers "open in your browser" instead.
+    onBlockedPopup: url => { if (!window.isDestroyed()) window.webContents.send('browser-pocket:blocked-popup', { url }) },
   })
 
   window.webContents.on('will-navigate', event => {

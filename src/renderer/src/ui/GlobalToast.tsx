@@ -1,6 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
+import { GlobalToastContext } from '@renderer/ui/GlobalToastContext'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -27,17 +29,18 @@ import { useAppStore } from '@renderer/app-state/hooks'
 // is unaffected by it moving up, whereas lowering the dialog would break the
 // modal stacking the entire surface registry depends on.
 
-type GlobalToastContextValue = {
-  showToast: (message: string, durationMs?: number) => void
+const MANAGED_SKILLS_WARNING_REPEAT_MS = 60_000
+
+function userMcpUnavailableMessage(servers: readonly { name: string; reason: string }[]): string {
+  const [first] = servers
+  if (servers.length === 1 && first) return `MCP server ${first.name} wasn't attached: ${first.reason}. See Settings → MCP.`
+  return `${servers.length} MCP servers weren't attached (${servers.map(server => server.name).join(', ')}). See Settings → MCP.`
 }
 
-const GlobalToastContext = createContext<GlobalToastContextValue>({
-  showToast: () => {},
-})
-
-export function useGlobalToast(): GlobalToastContextValue {
-  return useContext(GlobalToastContext)
-}
+// The context and its hook live in GlobalToastContext.ts (#1177) so rows can
+// raise toasts without importing this provider's store and IPC wiring; the
+// re-export keeps existing desktop-chrome imports working.
+export { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 export function GlobalToastProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null)
@@ -59,6 +62,67 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
       .find(entry => entry.manifest.id === event.extensionId)?.manifest.name
       ?? event.extensionId
     showToast(`${name}: ${event.message}`, 6000)
+  }), [showToast])
+
+  // #1133: a TLDR/Goal skill could not be prepared and agents were launched
+  // without it. WHY the global toast and not a pane toast or condition:
+  // - The fault is machine-wide skill health, not something one pane did.
+  // - Restoring a workspace fires this once per pane. The single slot collapses
+  //   fifteen identical warnings into one, where pane toasts would put the
+  //   same banner in every pane.
+  // - Provider conditions are interactive TUI states with actions. This has
+  //   nothing to answer.
+  // 10 s and click-to-dismiss follow the warning-grade precedent above: long
+  // enough to read the Settings path, and dismissable so it never reads as
+  // stuck. The lasting record is the skill's health in Settings, which this
+  // text points to.
+  //
+  // WHY a 60 s repeat window per skill set: main warns on EVERY launch while
+  // the skill stays broken (each new pane, orchestration child and wake). The
+  // single slot only collapses one restore burst. Without the window, a
+  // broken skill re-raised the same 10 s toast all day, pushed out extension
+  // notifications that share the slot, and brought back a toast the user had
+  // just dismissed mid-burst. The key is the skill SET, so a newly failing
+  // skill (TLDR, then TLDR+Goal) still shows at once. Main's journal keeps
+  // every occurrence, so nothing diagnostic is lost here. Per window, because
+  // every window gets the broadcast and each has its own user-visible slot.
+  const lastSkillsWarningRef = useRef<{ key: string; at: number } | null>(null)
+  useEffect(() => window.api.onManagedSkillsUnavailable?.(event => {
+    const key = [...event.skills].sort().join(',')
+    const now = Date.now()
+    const last = lastSkillsWarningRef.current
+    if (last && last.key === key && now - last.at < MANAGED_SKILLS_WARNING_REPEAT_MS) return
+    lastSkillsWarningRef.current = { key, at: now }
+    showToast(managedSkillsUnavailableMessage(event.skills), 10_000)
+  }), [showToast])
+
+  // #1143: a user MCP server an agent asked for was left out of its launch.
+  // Global toast for the managed-skills reasons above (main may launch before
+  // any window claims the pane; a restore fires this per pane). Same repeat
+  // window, keyed by the server+reason set, so one broken server does not
+  // re-raise the same toast for every restored agent.
+  const lastUserMcpWarningRef = useRef<{ key: string; at: number } | null>(null)
+  useEffect(() => window.api.onUserMcpUnavailable?.(event => {
+    const key = event.servers.map(server => `${server.name}:${server.reason}`).sort().join('|')
+    const now = Date.now()
+    const last = lastUserMcpWarningRef.current
+    if (last && last.key === key && now - last.at < MANAGED_SKILLS_WARNING_REPEAT_MS) return
+    lastUserMcpWarningRef.current = { key, at: now }
+    showToast(userMcpUnavailableMessage(event.servers), 10_000)
+  }), [showToast])
+
+  // #1143: an agent changed the user's MCP servers through the mcp_servers
+  // domain. Always surfaced — the user's MCP list decides what code runs in
+  // every future agent, so a change to it must never be silent.
+  useEffect(() => window.api.onUserMcpAgentChange?.(event => {
+    showToast(`${event.message}. See Settings → MCP.`, 8000)
+  }), [showToast])
+
+  // #1161: an agent proposed or withdrew a skill through the skills domain.
+  // Always surfaced for the same reason as MCP changes: skills are
+  // instructions every future agent may load.
+  useEffect(() => window.api.onManagedSkillsAgentChange?.(event => {
+    showToast(`${event.message}. See Settings → Skills.`, 8000)
   }), [showToast])
 
   const dismiss = useCallback(() => {

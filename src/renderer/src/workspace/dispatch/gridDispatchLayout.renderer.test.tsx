@@ -16,6 +16,7 @@ import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recor
 // unit test shipped as a no-op because the component undid it on render.
 
 const appState = vi.hoisted(() => ({
+  settings: { browserPocketEnabled: false },
   workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),
@@ -107,12 +108,10 @@ vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
     )
   },
 }))
-vi.mock('@providers/registry.renderer', () => ({
-  getRendererProvider: () => ({
-    TileLeaf: ({ sessionId }: { sessionId: string }) => (
-      <div data-testid="lane-agent" data-session-id={sessionId} />
-    ),
-  }),
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
+  TileLeaf: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="lane-agent" data-session-id={sessionId} />
+  ),
 }))
 
 // Loaded through the shared lift: the file on disk is a v2 workspace whose lane

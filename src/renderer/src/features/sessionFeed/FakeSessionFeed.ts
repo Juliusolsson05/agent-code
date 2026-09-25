@@ -15,6 +15,9 @@ import type {
   SessionSubAgentsEvent,
   Unsub,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
+  SessionHistoryPage,
+  SessionHistoryRequest,
 } from '@shared/sessionFeed/types'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
@@ -31,6 +34,7 @@ export type FakeFeedCall =
   | { method: 'sendInput'; sessionId: string; data: string; pasteId: string | undefined }
   | { method: 'deliverPrompt'; sessionId: string; prompt: string }
   | { method: 'resolveCondition'; sessionId: string; action: ConditionCustomAction }
+  | { method: 'loadHistory'; request: SessionHistoryRequest }
 
 export interface FakeSessionFeed extends SessionFeed {
   /** Every command invocation, in order — assert on this. */
@@ -39,6 +43,9 @@ export interface FakeSessionFeed extends SessionFeed {
   nextSendInputResult: boolean
   nextDeliverPromptResult: PromptDeliveryResult
   nextResolveConditionResult: ResolveConditionResult
+  /** The page loadHistory resolves with, or an Error it rejects with (the
+   *  contract reports failure as a rejection on every transport). */
+  nextLoadHistoryResult: SessionHistoryPage | Error
   emitStarted(e: SessionStartedEvent): void
   emitInputReadiness(e: SessionInputReadinessEvent): void
   emitScreen(e: SessionScreenEvent): void
@@ -46,6 +53,7 @@ export interface FakeSessionFeed extends SessionFeed {
   emitJsonlError(e: SessionJsonlErrorEvent): void
   emitTranscriptDiagnostic(e: SessionTranscriptDiagnosticEvent): void
   emitHistoryBoundary(e: SessionHistoryBoundaryEvent): void
+  emitProviderSessionChanged(e: SessionProviderSessionChangedEvent): void
   emitSemantic(e: SessionSemanticEvent): void
   emitConditions(e: SessionConditionsEvent): void
   emitProcessState(e: SessionProcessStateEvent): void
@@ -66,6 +74,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     jsonlError: new Set<(e: SessionJsonlErrorEvent) => void>(),
     transcriptDiagnostic: new Set<(e: SessionTranscriptDiagnosticEvent) => void>(),
     historyBoundary: new Set<(e: SessionHistoryBoundaryEvent) => void>(),
+    providerSessionChanged: new Set<(e: SessionProviderSessionChangedEvent) => void>(),
     semantic: new Set<(e: SessionSemanticEvent) => void>(),
     conditions: new Set<(e: SessionConditionsEvent) => void>(),
     processState: new Set<(e: SessionProcessStateEvent) => void>(),
@@ -92,6 +101,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
       acceptance: { kind: 'transport', acceptedAt: 123 },
     },
     nextResolveConditionResult: { ok: true },
+    nextLoadHistoryResult: { entries: [], hasMore: false },
 
     onSessionStarted: cb => subscribe(listeners.started, cb),
     onSessionInputReadiness: cb => subscribe(listeners.inputReadiness, cb),
@@ -100,6 +110,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     onSessionJsonlError: cb => subscribe(listeners.jsonlError, cb),
     onSessionTranscriptDiagnostic: cb => subscribe(listeners.transcriptDiagnostic, cb),
     onSessionHistoryBoundary: cb => subscribe(listeners.historyBoundary, cb),
+    onSessionProviderSessionChanged: cb => subscribe(listeners.providerSessionChanged, cb),
     onSessionSemanticEvent: cb => subscribe(listeners.semantic, cb),
     onSessionConditions: cb => subscribe(listeners.conditions, cb),
     onSessionProcessState: cb => subscribe(listeners.processState, cb),
@@ -118,6 +129,12 @@ export function createFakeSessionFeed(): FakeSessionFeed {
       feed.calls.push({ method: 'resolveCondition', sessionId, action })
       return feed.nextResolveConditionResult
     },
+    loadHistory: async request => {
+      feed.calls.push({ method: 'loadHistory', request })
+      const result = feed.nextLoadHistoryResult
+      if (result instanceof Error) throw result
+      return result
+    },
 
     emitStarted: e => emit(listeners.started, e),
     emitInputReadiness: e => emit(listeners.inputReadiness, e),
@@ -126,6 +143,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     emitJsonlError: e => emit(listeners.jsonlError, e),
     emitTranscriptDiagnostic: e => emit(listeners.transcriptDiagnostic, e),
     emitHistoryBoundary: e => emit(listeners.historyBoundary, e),
+    emitProviderSessionChanged: e => emit(listeners.providerSessionChanged, e),
     emitSemantic: e => emit(listeners.semantic, e),
     emitConditions: e => emit(listeners.conditions, e),
     emitProcessState: e => emit(listeners.processState, e),

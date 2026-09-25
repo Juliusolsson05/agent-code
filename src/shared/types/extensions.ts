@@ -48,6 +48,29 @@ export type ExtensionContributions = {
   settings?: ExtensionSettingContribution[]
   keybindings?: ExtensionKeybindingContribution[]
   themes?: ExtensionThemeContribution[]
+  services?: ExtensionServiceContribution[]
+}
+
+/**
+ * A bundled Node entry the host runs as a long-lived service process
+ * (Electron utilityProcess), started explicitly by the extension's own runtime
+ * or view — never auto-started, so nothing native begins running without a
+ * user-visible action from the extension that owns it.
+ *
+ * Services are the VS Code sidecar pattern (LSP servers, dev-server launchers,
+ * device bridges) with one deliberate difference: the power is a consented,
+ * per-extension capability rather than a default of the platform. A service is
+ * native code with the user's privileges — `service.run` gates the host's
+ * lifecycle/RPC conveniences and the consent dialog says exactly that; it is a
+ * trust boundary, not a sandbox claim.
+ */
+export type ExtensionServiceContribution = {
+  /** Namespaced `<extensionId>.…`, like every other contributed id. */
+  id: string
+  /** Optional display name for Settings/runtime surfaces. */
+  title?: string
+  /** Built JS module exporting the service contract. Must stay inside the bundle. */
+  entry: string
 }
 
 /**
@@ -98,6 +121,37 @@ export type ExtensionCapability =
   // borrow. This explicit grant is the narrow channel used by timers and other
   // requested background work to report a short status to application windows.
   | 'notifications.show'
+  // Tier 2 — native sidecar processes. `service.run` covers the whole service
+  // lifecycle surface (start/stop/status/invoke) for BOTH transports; the
+  // broker arms below cannot compile without their REQUIRED_CAPABILITY entry.
+  // Consent copy must state that a service is native code running with the
+  // user's privileges — the grant is trust, not a sandbox.
+  | 'service.run'
+  // Tier 2 — own-service messaging. A frame/runtime may fetch
+  // `agent-code-ext://<extId>/__bundle/<rev>/__service/<serviceId>/<path>`;
+  // the host proxies to that service's loopback endpoint. The child CSP stays
+  // connect-src 'self' — this is a namespace right over the extension's own
+  // origin, never arbitrary network (enforced in serviceTransport.ts).
+  | 'service.transport'
+  // Tier 2 — host-owned LAN exposure (service.expose). The service itself binds
+  // loopback; only under this grant does the HOST bind the machine's interfaces
+  // and reverse-proxy, and the listener dies with the service. This is the one
+  // network power the host can genuinely enforce (not just consent to), which
+  // is why it is a separate capability from service.run.
+  | 'net.listen'
+  // Tier 2 — brokered outbound fetch (net.fetch) from runtime/view to
+  // user-entered addresses. v1 policy: literal private/loopback IPs only; no
+  // DNS names, no public egress. Widening is a future policy decision with its
+  // own consent copy, never a silent change.
+  | 'net.connect'
+  // Tier 2 — brokered HTTPS fetch to the EXACT public origins the manifest
+  // lists in `networkOrigins` (#1150). The consent dialog names every origin,
+  // and the list is bound to the bundle hash like every other grant, so the
+  // extension's code cannot add a destination at runtime. This is the
+  // "explicit future policy decision" the net.connect note above anticipated:
+  // widening happens by NAMING servers, never by relaxing the private-address
+  // rule for arbitrary hosts.
+  | 'net.origins'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
@@ -106,6 +160,11 @@ export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'fs.read',
   'fs.write',
   'notifications.show',
+  'service.run',
+  'service.transport',
+  'net.listen',
+  'net.connect',
+  'net.origins',
 ]
 
 /**
@@ -148,6 +207,11 @@ export type ExtensionManifest = {
   /** Capabilities beyond Tier 0 this extension requests. The user grants (or
    *  declines) them at install; absent/empty means Tier 0 only. */
   permissions?: ExtensionCapability[]
+  /** Exact public HTTPS origins (`https://api.example.com`) that `net.fetch`
+   *  may reach under the `net.origins` capability. Present if and only if
+   *  `net.origins` is requested; validated entry by entry at install
+   *  (manifest.ts) and shown verbatim in the consent dialog. */
+  networkOrigins?: string[]
 }
 
 /** One row in the install ledger (`extensions.json`). */

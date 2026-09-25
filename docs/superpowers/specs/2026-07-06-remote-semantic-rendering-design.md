@@ -1,5 +1,12 @@
 # Remote Semantic Rendering — the desktop feed on the phone
 
+> **Status (2026-09-24, #1177):** the build-level alias/stub table described
+> here is gone. The phone mounts the real row modules, and the capabilities that
+> differ per app arrive through the typed `RendererHost` context
+> (`src/renderer/src/features/rendererHost/`); the phone's feed mapping is the
+> desktop's own `useAgentFeedModel` / `AgentFeed`. See
+> `docs/plans/2026-09-24-phone-shared-rendering.md`.
+
 **Date:** 2026-07-06
 **Status:** Approved direction (user delegated approach); implementation in progress
 **Parent:** 2026-07-06-remote-mobile-companion-design.md · issue #420

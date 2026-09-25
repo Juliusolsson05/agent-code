@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { REMOTE_OUTPUT_MAX_BYTES } from '@shared/remoteOutputLimits.js'
-import { manager, server, pairDevice, connect, waitFor } from './RemoteServer.testSupport.js'
+import { manager, feedTap, server, pairDevice, connect, waitFor } from './RemoteServer.testSupport.js'
 
 describe('remote slow-consumer isolation', () => {
   it('bounds a paused socket while a healthy consumer receives every ordered event', async () => {
@@ -16,6 +16,10 @@ describe('remote slow-consumer isolation', () => {
     try {
       for (let index = 0; index < 160; index++) {
         manager.emit('screen', { sessionId: 'synthetic', recent: `${index}:` + 'x'.repeat(64 * 1024), index })
+        // Main coalesces screens per 100 ms window since #1177. Flushing each
+        // frame models large repaints spaced past the window — the traffic
+        // that can still back up a paused socket — so every index crosses.
+        feedTap.flush()
         peak = Math.max(peak, slowSocket.bufferedAmount)
         await waitFor(healthy.frames, frames => frames.some(frame => {
           const value = frame as { payload?: { index?: number } }

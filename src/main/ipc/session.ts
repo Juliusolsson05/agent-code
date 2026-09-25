@@ -8,14 +8,16 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { PromptDeliveryOptions } from '@shared/types/providerConfig.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
 import type {
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
 } from '@shared/types/session.js'
@@ -63,6 +65,9 @@ import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 export function registerSessionIpc(
   manager: SessionManager,
   pasteDebugJournals: PasteDebugJournalRegistry,
+  // The shared session feed tap (#1177), for the one ordering barrier this
+  // file owns: deliver-prompt flushes committed rows before replying (#1181).
+  feedTap: Pick<SessionFeedTap, 'flushCommitted'>,
   appRunJournal?: AppRunJournal,
 ): void {
   ipcMain.handle(
@@ -171,17 +176,23 @@ export function registerSessionIpc(
   ipcMain.handle('session:kill', async (evt, sessionId: string) => {
     const lease = captureSessionWindowLease(sessionId)
     if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
+    // No caller on this legacy id-only channel: it has no renderer consumer
+    // today, so a kill.request with `caller: 'unknown'` from here is itself the
+    // signal that something started using it (#1135).
     const killed = await manager.kill(sessionId)
     releaseSession(lease)
     return killed
   })
 
-  ipcMain.handle('session:kill-owned', async (evt, options: SessionOwnershipOptions) => {
+  ipcMain.handle('session:kill-owned', async (evt, options: SessionKillOptions) => {
     const lease = captureSessionWindowLease(options.sessionId)
     // A stale window must not dispose another window's current view, even if
     // its saved provider/cwd still happen to match. Main-internal shutdown and
     // custody cleanup retain their direct manager authority.
     if (lease && (lease.windowId !== windowIdFor(evt.sender) || !isSessionWindowLeaseCurrent(lease))) return false
+    // `options.caller` is forwarded untouched; killOwned re-validates it
+    // against KILL_CALLERS, so a renderer cannot write free text into the
+    // journal through it.
     const killed = await manager.killOwned(options)
     // WHY the release is conditional (#935 Codex review): killOwned returns
     // false for two different situations. One is "there was nothing to close"
@@ -352,6 +363,7 @@ export function registerSessionIpc(
       prompt: string,
       imagePaths?: string[],
       deliveryId?: string,
+      options?: PromptDeliveryOptions,
     ) => {
       const record = typeof deliveryId === 'string' && deliveryId.length > 0
         ? (event: string, data?: Record<string, unknown>) => {
@@ -362,7 +374,20 @@ export function registerSessionIpc(
             })
           }
         : undefined
-      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId)
+      const result = await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId,
+        options?.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : undefined)
+      // ORDER BARRIER (#1181): send the committed rows before the answer.
+      // Claude's acceptance IS main seeing the prompt's JSONL line, and that
+      // line is buffered in the session feed tap's JSONL burst and sent on the next
+      // setImmediate. The reply to this invoke would otherwise overtake it,
+      // because the await above resumes in a microtask. The renderer removes
+      // its pending "Sending…" row the moment the reply lands. Without this
+      // flush the prompt blinked out of the feed until the batch arrived
+      // (PR #1183 review, Claude 1). Both messages then travel the same
+      // renderer channel in this order. Flushing early costs nothing: it is
+      // the same batch, just sent now, and an empty buffer is a no-op.
+      feedTap.flushCommitted(sessionId)
+      return result
     },
   )
 

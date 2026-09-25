@@ -83,8 +83,24 @@ type TrackedSighting = {
   flushedCount: number
 }
 
+/**
+ * Where coalesced sightings go: the recorder that armed this capture. Passed
+ * at ARM time (#1177) rather than read from `window.api` at send time,
+ * because arming is the one moment a caller proves a recorder exists — the
+ * desktop host's recording bridge and the desktop debug command both arm
+ * with main's append IPC. A row module that reached for `window.api` itself
+ * had to survive on hosts without one (the phone) through try/catch; now an
+ * unarmed session simply has no sink, and nothing here knows a transport.
+ */
+export type RenderShapeSightingsSink = (
+  sessionId: string,
+  generation: string,
+  sightings: RenderShapeSighting[],
+) => Promise<RenderShapeAppendResult>
+
 type SessionObserverState = {
   generation: string
+  append: RenderShapeSightingsSink
   keys: Map<string, TrackedSighting>
   /** Dedup keys, not snapshot objects. Counts continue changing while an IPC
    * is in flight; materializing only at send time prevents stale-count queue
@@ -154,11 +170,12 @@ export function isRenderShapeCaptureArmed(sessionId: string, generation?: string
 /** Arm capture for one session. Idempotent. Called by the recording toggle
  *  command (capture rides session recording — plan §Step 1) and by the
  *  capture context's mount sync (which ARMS ONLY — see that file's WHY). */
-export function armRenderShapeCapture(sessionId: string, generation: string): void {
+export function armRenderShapeCapture(sessionId: string, generation: string, append: RenderShapeSightingsSink): void {
   if (!sessionId || !generation) return
   const key = sessionGenerationKey(sessionId, generation)
   if (!sessionsByGeneration.has(key)) sessionsByGeneration.set(key, {
     generation,
+    append,
     keys: new Map(),
     queue: [],
     queuedKeys: new Set(),
@@ -415,7 +432,7 @@ async function transmitOne(
 ): Promise<void> {
   if (snapshots.length === 0) return
   try {
-    const result: RenderShapeAppendResult = await window.api.appendRenderShapeSightings(
+    const result: RenderShapeAppendResult = await state.append(
       sessionId,
       state.generation,
       snapshots.map(snapshot => snapshot.sighting),
@@ -443,8 +460,7 @@ async function transmitOne(
     }
     dropSnapshots(state, snapshots)
   } catch {
-    // window.api absent (tests without preload) or IPC failure — swallowed
-    // by contract. Keep the snapshots for the final stop handshake, but do
+    // Sink failure (an IPC rejection) — swallowed by contract. Keep the snapshots for the final stop handshake, but do
     // not manufacture a polling protocol on top of an event-driven recorder.
     state.failures += 1
     removeQueued(state, snapshots.map(snapshot => snapshot.key))

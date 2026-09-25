@@ -1,6 +1,14 @@
 # Rendering Rewrite — The Plan (2026-07-06)
 
-Status: **the canonical plan.** Supersedes `rendering-rewrite-practical-plan.md`
+Status: **SHIPPED** (PR #555, merged 2026-07-18). Kept as the design record,
+not a live work list. The progress sections below are historical: the
+`AGENT_CODE_RENDER_PIPELINE` / `AGENT_CODE_RENDER_SHADOW` flags, runtime shadow
+mode and the soak gate were deleted at cutover (`legacy-deletion-manifest.md`),
+the `view/` bridge lives at `src/renderer/src/features/feed/ledger/`, and the
+per-provider policy table moved into each provider's `ledgerPolicy.ts` (#1177).
+For the current system read ARCHITECTURE.md §8.3 and `rendering-system.md`.
+
+Original status: **the canonical plan.** Supersedes `rendering-rewrite-practical-plan.md`
 (2026-05-22), `docs/superpowers/plans/2026-05-22-rendering-tdd-rewrite.md` (the
 8-phase original), and the planning threads in #172. The knowledge dump
 (`rendering-knowledge-dump.md`) remains the evidence bible; the

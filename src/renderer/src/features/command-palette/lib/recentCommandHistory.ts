@@ -43,9 +43,9 @@ export type RecentCommandEntry = {
 /** Mirrors CommandInvocationSource's user-driven members. Duplicated as a
  *  literal union rather than imported so this disposable local cache does not
  *  take a dependency on the command-execution layer. */
-export type RecentCommandSource = 'palette' | 'native-menu' | 'keybinding'
+export type RecentCommandSource = 'palette' | 'native-menu' | 'keybinding' | 'context-menu'
 
-const RECENT_COMMAND_SOURCES: readonly string[] = ['palette', 'native-menu', 'keybinding']
+const RECENT_COMMAND_SOURCES: readonly string[] = ['palette', 'native-menu', 'keybinding', 'context-menu']
 
 // Bound 1: how many entries we keep. The palette has on the order of
 // tens of commands, so 50 comfortably covers "everything the user

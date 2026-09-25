@@ -1,4 +1,5 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
+import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -194,12 +195,27 @@ export type CommandPickerVisibility = 'default' | 'advanced' | 'experimental' | 
 
 export type CommandContext = {
   workspace: Workspace
+  /**
+   * The agent this invocation acts on, when the caller chose one explicitly
+   * (#1180: the Sessions list right-click menu). Absent for the palette,
+   * keybindings and the app menu, which act on the focused agent exactly as
+   * before.
+   *
+   * Read it ONLY through `commandTarget(ctx)`, never `commandTargetSessionId`
+   * directly: a command that resolves focus while `target` is set acts on the
+   * wrong agent, silently. A command may carry `contextMenu` metadata only
+   * once every path in its `when` and `run` uses `commandTarget(ctx)`
+   * (commandTarget.renderer.test.ts enforces this for every opted-in command).
+   */
+  target?: SessionId
   ui: {
     openNewTabPicker: () => void
     openReorderTabs: () => void
     /** Open the Merge Project Tabs modal (#913); the modal performs the merge. */
     openMergeProjectTabs: () => void
-    openSettings: () => void
+    /** Open Settings, optionally on one category (a SettingCategoryId; an
+     *  unknown id falls back to "all"). */
+    openSettings: (category?: string) => void
     /** Open the command palette. Exists so ⌘⇧P has a command to name instead
      *  of a hard-coded callback that nothing could rebind or collision-check. */
     openCommandPalette: () => void
@@ -210,6 +226,7 @@ export type CommandContext = {
     /** Open the read-only Keyboard Shortcuts reference. */
     openKeyboardShortcuts: () => void
     openCloseOldAgents: () => void
+    openCloseCompletedAgents: () => void
     openBulkProviderSwitch: () => void
     openProviderSwitchPicker: (sessionId: string) => void
     openRewindPrompt: (sessionId: string) => void
@@ -229,6 +246,15 @@ export type CommandContext = {
     /** Open the Agent Analytics modal (#964); the modal fetches its own summary. */
     openAgentAnalytics: () => void
     openKeyVault: () => void
+    /** Open the Add MCP server dialog (#1143). */
+    openMcpServerDialog: () => void
+    /** Open the Add skills dialog (#1161). */
+    openAddSkillDialog: () => void
+    /** Ask the Skills grid to check every installed skill for updates. */
+    requestSkillUpdateCheck: () => void
+    /** Open "Agent MCP Servers…" for the captured command-target agent. The
+     *  modal stages choices and performs one reload on Apply. */
+    openAgentMcpServers: (sessionId: string) => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void
     toggleDebugPanel: () => void
@@ -301,6 +327,7 @@ export type CommandContext = {
     closeKeyboardShortcuts: () => void
     closeAgentActivity: () => void
     closeCloseOldAgents: () => void
+    closeCloseCompletedAgents: () => void
     closeBulkProviderSwitch: () => void
     closeConversations: () => void
     closeReorderTabs: () => void
@@ -316,6 +343,10 @@ export type CommandContext = {
     usageHeaderLevel: UsageHeaderLevel
     dangerousAgentsEnabled: boolean
     aggressiveDebugPersistenceEnabled: boolean
+    /** Experimental Browser Pocket master switch (#1142). Optional so the many
+     *  hand-built test contexts need no edit; absent means off, which is the
+     *  shipped default. */
+    browserPocketEnabled?: boolean
     /**
      * Visibility of the surfaces a command can dismiss.
      *
@@ -351,6 +382,8 @@ export type CommandContext = {
     agentActivityOpen: boolean
     /** The Close Old Agents modal is on screen. */
     closeOldAgentsOpen: boolean
+    /** The Close Completed Agents modal is on screen. */
+    closeCompletedAgentsOpen: boolean
     /** The Switch Agents modal is on screen. */
     bulkProviderSwitchOpen: boolean
     /** The Conversations picker is on screen. */
@@ -509,6 +542,30 @@ export type CommandDef = {
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
+  /**
+   * Offer this command in the Sessions list right-click menu (#1180), which
+   * runs it for the clicked row's agent through `ctx.target`.
+   *
+   * WHY metadata on the command rather than a hand-written menu: the menu then
+   * has the palette's titles, `when` filtering and effective shortcuts for
+   * free, and cannot drift from them. Only commands that honour
+   * `commandTarget(ctx)` end to end may declare it.
+   */
+  contextMenu?: CommandContextMenuPlacement
+}
+
+export type CommandContextMenuGroup = 'identity' | 'agent' | 'copy' | 'close'
+
+export type CommandContextMenuPlacement = {
+  group: CommandContextMenuGroup
+  /** Order within the group; lower first. */
+  order: number
+  /** A menu-specific label, for commands whose palette title names focus
+   *  ("Close Focused Session" reads wrong on a right-clicked row). */
+  title?: string
+  /** Only offer it when the row reports this live state (e.g. a goal loop
+   *  that can be stopped), which the command's own `when` cannot see. */
+  requires?: 'goal-loop'
 }
 
 /** The unavailable half of `CommandAvailability`, as a command declares it. */

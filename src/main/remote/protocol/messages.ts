@@ -238,6 +238,11 @@ export type OutboundFrame =
         | 'jsonl-entries'
         | 'jsonl-error'
         | 'history-boundary'
+        // Added with the shared session feed tap (#1177). Additive, like
+        // every other v2 frame: a phone bundle that predates them finds no
+        // listener set for the channel and drops the frame.
+        | 'transcript-diagnostic'
+        | 'provider-session-changed'
         | 'semantic-event'
         | 'conditions'
         | 'process-state'

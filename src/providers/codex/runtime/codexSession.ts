@@ -36,6 +36,8 @@ import type {
 } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { addCodexUserMcpLaunchConfig, type CodexShellPolicyStyle } from '@providers/shared/runtime/userMcpLaunch.js'
+import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding.js'
 
 
@@ -118,6 +120,9 @@ export type CodexSessionOptions = {
   shellSessionId?: string
   useProxy?: boolean
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  /** Already filtered and secret-resolved by main (#1143). */
+  userMcpServers?: ResolvedUserMcpServer[]
+  userMcpCodexShellPolicy?: CodexShellPolicyStyle
   beforeResumeOwnershipAcquire?: () => Promise<void>
 }
 
@@ -144,6 +149,10 @@ export type CodexSessionEvents = {
   // generation boundary. This provider never emits it today; it exists so the
   // shared event map can carry providers whose transcripts rewrite in place.
   'history-boundary': [{ type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
+  // Declared for AgentSession contract parity (Pi, decision D4): an in-TUI
+  // session switch the runtime follows. This provider never emits it — a
+  // Claude/Codex pane changes session only through a respawn.
+  'provider-session-changed': [{ providerSessionId: string; transcriptFile: string | null; reason: string }]
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
   // Declared, never emitted. This provider latches a coarse ready boolean and
@@ -239,6 +248,8 @@ export class CodexSession extends EventEmitter {
   private readonly shellSessionId: string | null
   private readonly useProxy: boolean
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
+  private readonly userMcpServers: ResolvedUserMcpServer[]
+  private readonly userMcpCodexShellPolicy: CodexShellPolicyStyle | undefined
   private readonly beforeResumeOwnershipAcquire: (() => Promise<void>) | null
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
@@ -260,6 +271,8 @@ export class CodexSession extends EventEmitter {
     this.shellSessionId = options.shellSessionId ?? null
     this.useProxy = options.useProxy === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.userMcpServers = options.userMcpServers ?? []
+    this.userMcpCodexShellPolicy = options.userMcpCodexShellPolicy
     this.beforeResumeOwnershipAcquire =
       options.beforeResumeOwnershipAcquire ?? null
     // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
@@ -342,6 +355,10 @@ export class CodexSession extends EventEmitter {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
     addCodexBuiltInMcpLaunchConfig(this.builtInMcpServers, args, cleanEnv)
+    // #1143. Main dry-ran this same translator and reported anything it
+    // refuses, so the return value (dropped servers) is empty here by
+    // construction; it is not re-reported.
+    addCodexUserMcpLaunchConfig(this.userMcpServers, args, cleanEnv, this.userMcpCodexShellPolicy)
     excludeExternalControlFromCodex(args, cleanEnv.CODEX_HOME)
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single

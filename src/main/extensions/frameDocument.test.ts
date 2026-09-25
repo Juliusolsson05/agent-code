@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildFrameDocument, childFrameCsp } from '@main/extensions/frameDocument.js'
+import { buildFrameDocument, childFrameCsp, NET_FETCH_ARGS_JS, SERVICE_INVOKE_ARGS_JS } from '@main/extensions/frameDocument.js'
+import { isExtensionJson } from '@shared/types/extensionJson.js'
+import { buildRuntimeDocument } from '@main/extensions/runtimeDocument.js'
+import type { ExtensionManifest } from '@shared/types/extensions.js'
 
 // Guards for the extension frame's containment boundary. Every case here is a defect
 // an adversarial review actually demonstrated against this file — they are regression
@@ -181,5 +184,65 @@ describe('the emitted document is not truncated by its own contents', () => {
     const body = html.slice(moduleStart, html.indexOf('</script>', moduleStart))
     expect(body).toContain("addEventListener('pagehide'")
     expect(body).toContain("import('./' + ENTRY)")
+  })
+})
+
+// ── VIEW / RUNTIME net.fetch PARITY ──
+// The view bootstrap used to send undefined/null init fields while the runtime
+// bootstrap omitted them, so `net.fetch(url, { headers: null })` worked in a
+// runtime and was refused in a view. Both now splice in ONE snippet; these pin
+// what it builds and that both documents really use it.
+describe('net.fetch arguments are built identically in views and runtimes', () => {
+  const netFetchArgs = new Function(`${NET_FETCH_ARGS_JS}; return netFetchArgs;`)() as (url: string, init?: unknown) => Record<string, unknown>
+
+  it('omits null and undefined init fields instead of sending them', () => {
+    expect(netFetchArgs('https://api.example.com/x', { headers: null, body: undefined, responseType: null }))
+      .toEqual({ url: 'https://api.example.com/x' })
+    expect(netFetchArgs('https://api.example.com/x')).toEqual({ url: 'https://api.example.com/x' })
+    expect(netFetchArgs('https://api.example.com/x', null)).toEqual({ url: 'https://api.example.com/x' })
+  })
+
+  it('passes the SDK fields through, and still honours the init.method alias (#1157)', () => {
+    const headers = [{ name: 'accept', value: 'application/json' }]
+    expect(netFetchArgs('https://api.example.com/x', { httpMethod: 'POST', headers, body: '{}', responseType: 'base64' }))
+      .toEqual({ url: 'https://api.example.com/x', httpMethod: 'POST', headers, body: '{}', responseType: 'base64' })
+    expect(netFetchArgs('https://api.example.com/x', { method: 'PUT' })).toEqual({ url: 'https://api.example.com/x', httpMethod: 'PUT' })
+  })
+
+  it('is the construction both bootstraps actually use', () => {
+    const view = buildFrameDocument(base)
+    const runtime = buildRuntimeDocument({ id: 'example', apiVersion: 2, entry: 'runtime.js' } as ExtensionManifest, 'test-nonce')
+    for (const html of [view, runtime]) {
+      expect(html).toContain(NET_FETCH_ARGS_JS)
+      expect(html).toMatch(/fetch: \(url, init\) => .*netFetchArgs\(url, init\)/)
+    }
+  })
+})
+
+// services.invoke(id, name) used to reach main as params: undefined, which the
+// JSON admission refused as "exceeds the JSON limits" (Agent Code Poker 0.3.0's
+// Host button). Pin the omission and that both bootstraps use the snippet.
+describe('service.invoke arguments omit an absent params', () => {
+  const serviceInvokeArgs = new Function(`${SERVICE_INVOKE_ARGS_JS}; return serviceInvokeArgs;`)() as (serviceId: string, name: string, params?: unknown) => Record<string, unknown>
+
+  it('leaves the params key out when the author passes none', () => {
+    const args = serviceInvokeArgs('poker.lan-host', 'status')
+    expect(args).toEqual({ serviceId: 'poker.lan-host', name: 'status' })
+    expect('params' in args).toBe(false)
+    expect(isExtensionJson({ method: 'service', extensionId: 'poker', revision: 'r', request: { method: 'service.invoke', ...args } })).toBe(true)
+  })
+
+  it('keeps real JSON params, null included', () => {
+    expect(serviceInvokeArgs('s', 'n', { seat: 2 })).toEqual({ serviceId: 's', name: 'n', params: { seat: 2 } })
+    expect(serviceInvokeArgs('s', 'n', null)).toEqual({ serviceId: 's', name: 'n', params: null })
+  })
+
+  it('is the construction both bootstraps actually use', () => {
+    const view = buildFrameDocument(base)
+    const runtime = buildRuntimeDocument({ id: 'example', apiVersion: 2, entry: 'runtime.js' } as ExtensionManifest, 'test-nonce')
+    for (const html of [view, runtime]) {
+      expect(html).toContain(SERVICE_INVOKE_ARGS_JS)
+      expect(html).toMatch(/invoke: \(serviceId, name, params\) => .*serviceInvokeArgs\(serviceId, name, params\)/)
+    }
   })
 })

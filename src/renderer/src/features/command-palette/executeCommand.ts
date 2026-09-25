@@ -1,6 +1,7 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { resolveCommandAvailability } from '@renderer/features/command-palette/resolveInvocation'
-import { recordCommandUse } from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { recordCommandUse, type RecentCommandSource } from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,12 @@ export type CommandInvocationSource =
   | 'native-menu'
   /** The user pressed a configured chord. */
   | 'keybinding'
+  /**
+   * The user picked an item in an agent's right-click menu (#1180). Always
+   * carries an explicit `ctx.target`, so admission is evaluated against the
+   * clicked agent, not the focused one.
+   */
+  | 'context-menu'
   /** App code, a background flow, or a test. Never a user signal. */
   | 'programmatic'
 
@@ -51,11 +58,23 @@ export type CommandInvocationSource =
  * personalized ranking — otherwise a background caller could quietly promote a
  * command the user has never chosen to the top of their palette.
  */
-const USER_SOURCES: ReadonlySet<CommandInvocationSource> = new Set([
+const USER_SOURCES: ReadonlySet<CommandInvocationSource> = new Set<RecentCommandSource>([
   'palette',
   'native-menu',
   'keybinding',
+  'context-menu',
 ])
+
+/**
+ * Narrowing form of `USER_SOURCES.has`. WHY a guard instead of the cast that
+ * used to sit at the call site: the cast told tsc that every user source was
+ * one the history cache knew, so adding 'context-menu' here (#1180) compiled
+ * while the cache silently discarded it on read. With the guard, the history
+ * union must name every user source or this stops type-checking.
+ */
+function isUserSource(source: CommandInvocationSource): source is RecentCommandSource {
+  return USER_SOURCES.has(source)
+}
 
 export type CommandDispatchOutcome =
   /** Admitted and completed without throwing. The only outcome that counts as use. */
@@ -132,6 +151,28 @@ export type DispatchableRow = {
  */
 const inFlight = new Set<string>()
 
+/**
+ * The single-flight identity of one invocation: the command, plus the agent it
+ * acts on when it acts on one.
+ *
+ * WHY the agent is part of it (#1180 review): keyed by id alone, "Reload
+ * Agent" on row B from the Sessions menu came back `in-flight` — silently —
+ * while row A's reload was still running, because the two were "the same
+ * command". They are not the same operation. The agent is the RESOLVED target
+ * (explicit or focus), not merely `ctx.target`, so a palette reload of the
+ * focused agent A and a menu reload of A still collide: that pair is the
+ * double-spawn this set exists to stop.
+ *
+ * Only session-surface commands and explicitly targeted invocations take a
+ * target in the key. App/workspace commands (New Tab, toggles) are not about
+ * an agent, and keying them by whatever happens to be focused would let a
+ * focus change mid-flight start a second copy.
+ */
+function flightKey(id: string, command: CommandDef | undefined, ctx: CommandContext): string {
+  if (ctx.target === undefined && command?.surface !== 'session') return id
+  return `${id}\u0000${commandTarget(ctx) ?? ''}`
+}
+
 /** Test seam: the in-flight set is module state, so a failing test must be
  *  able to leave it clean for the next one. Not used by product code. */
 export function __resetInFlightForTests(): void {
@@ -176,6 +217,7 @@ export async function dispatchCommand(
 
   return runGuarded({
     id,
+    key: flightKey(id, command, ctx),
     source,
     ctx,
     reportError,
@@ -218,6 +260,7 @@ export async function dispatchResolvedRow(options: {
 
   return runGuarded({
     id: row.id,
+    key: flightKey(row.id, command, ctx),
     source,
     ctx,
     reportError,
@@ -236,18 +279,20 @@ export async function dispatchResolvedRow(options: {
  */
 async function runGuarded(options: {
   id: string
+  /** Single-flight identity (`flightKey`); `id` stays the reported id. */
+  key: string
   source: CommandInvocationSource
   ctx: CommandContext
   reportError?: (message: string, error: unknown) => void
   label: string
   run: (ctx: CommandContext) => void | Promise<void>
 }): Promise<CommandDispatchOutcome> {
-  const { id, source, ctx, reportError, label, run } = options
+  const { id, key, source, ctx, reportError, label, run } = options
 
-  if (inFlight.has(id)) {
+  if (inFlight.has(key)) {
     return { status: 'in-flight', id, source }
   }
-  inFlight.add(id)
+  inFlight.add(key)
 
   try {
     // `await` covers both shapes: a sync `run` that throws rejects the
@@ -259,7 +304,7 @@ async function runGuarded(options: {
     reportError?.(`Command failed: ${label}`, error)
     return { status: 'failed', id, source, error }
   } finally {
-    inFlight.delete(id)
+    inFlight.delete(key)
   }
 
   // History is recorded ONLY here — after a successful, admitted, user-driven
@@ -271,8 +316,8 @@ async function runGuarded(options: {
   // Transient agent-index rows are excluded too: their ids embed a session id
   // that can never rank a future palette open, so recording them would evict
   // real commands from a bounded history for no benefit.
-  if (USER_SOURCES.has(source) && !isTransientRowId(id)) {
-    recordCommandUse(id, source as 'palette' | 'native-menu' | 'keybinding')
+  if (isUserSource(source) && !isTransientRowId(id)) {
+    recordCommandUse(id, source)
   }
 
   return { status: 'ran', id, source }

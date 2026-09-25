@@ -1,6 +1,9 @@
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
-
-export type UsageProviderKind = Extract<AgentProviderKind, 'claude' | 'codex'>
+// #1102: usage sources are no longer 1:1 with agent provider kinds — z.ai is
+// read through the user's OpenCode credential, hence the compound id. The
+// alias keeps ~a dozen existing call sites compiling while new code uses
+// UsageSourceId; it is not a permanent second name.
+export type UsageSourceId = 'claude' | 'codex' | 'grok' | 'opencode:zai'
+export type UsageProviderKind = UsageSourceId
 
 export type UsageSeverity = 'normal' | 'warning' | 'critical' | 'unknown'
 

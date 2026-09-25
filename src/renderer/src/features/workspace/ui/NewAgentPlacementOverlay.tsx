@@ -10,9 +10,11 @@ import type {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { MISSING_PROVIDER_HINT, useMissingProviders } from '@renderer/features/setup/store'
 import {
+  filterSessionSpawnChoices,
   SESSION_SPAWN_CHOICES,
   type AgentProviderChoice,
 } from '@renderer/workspace/providerChoices'
+import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 
 // New Agent… — a kind picker. Pick what to create; it lands in the pool.
 //
@@ -78,13 +80,21 @@ export function NewAgentPlacementOverlay({
   // refuses 'terminal' (a shell cannot be an orchestration/linked child).
   // Ordinary creation offers Terminal too (#865): terminals are full pool
   // sessions since #671.
+  // Enablement filter first (#1102), linked-agent filter second: a disabled
+  // provider is not an option in either mode, and `terminal` survives only
+  // the ordinary path. Filtering at render, not module level — enablement
+  // changes arrive over IPC while this module is already loaded.
+  const enabledKinds = useEnabledAgentProviderKinds()
   const kindOptions = useMemo(
-    () => linkedMode
-      ? KIND_OPTIONS.filter((option): option is AgentProviderChoice =>
-          isAgentProviderKind(option.kind),
-        )
-      : KIND_OPTIONS,
-    [linkedMode],
+    () => {
+      const enabled = filterSessionSpawnChoices(KIND_OPTIONS, enabledKinds)
+      return linkedMode
+        ? enabled.filter((option): option is AgentProviderChoice =>
+            isAgentProviderKind(option.kind),
+          )
+        : enabled
+    },
+    [linkedMode, enabledKinds],
   )
 
   // Shared by the Enter keybind and the click handler so both paths behave

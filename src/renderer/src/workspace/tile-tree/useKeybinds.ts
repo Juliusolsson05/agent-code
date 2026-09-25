@@ -1,5 +1,5 @@
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { dismissGoalLoop, useGoalLoopView } from '@renderer/features/goal-loop/viewState'
 import { useEffect, useMemo, useRef } from 'react'
 
@@ -278,6 +278,10 @@ const SPOTLIGHT_FOCUS_MODE_COMMAND_IDS: ReadonlySet<string> = new Set([
   'open-command-palette',
   'toggle-tail',
   'jump-latest-message',
+  // The pocket is half of what Spotlight shows (#1142): opening/collapsing it
+  // acts on the Spotlight agent (commandTargetSessionId answers the takeover
+  // first), so it passes the same visible-owner test as Tail.
+  'toggle-browser-pocket',
 ])
 
 /** Chord -> candidate commands, built once per override change. */

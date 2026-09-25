@@ -70,9 +70,22 @@ async function createAgentWithDelivery(delivery: PromptDeliveryResult): Promise<
         // straight through: these cases are about bootstrap-delivery failure
         // handling, and deduplication has its own suite.
         createAgentCallOnce: async (_key: string, run: () => Promise<unknown>) => await run(),
+        // A waiting prompt is recorded on the bridge so `wait_agents` sees the
+        // child as working (#1134 review). These cases only read the reply.
+        notePromptPending: vi.fn(() => 1),
+        notePromptPendingSettled: vi.fn(),
       } as never,
       sessionManager: {
         deliverPromptToAgent: vi.fn(async () => delivery),
+        // A not-ready child now keeps its prompt and waits for its composer
+        // (#854). Never resolving models the honest case for these tests: the
+        // wait outlives the tool call, so the call's answer cannot depend on
+        // it.
+        deliverPromptWhenReady: vi.fn(() => new Promise<never>(() => {})),
+        // Claude-shaped: it has a readiness gate to wait on. Providers without
+        // one keep the old failure reply instead (#854 review), which has its
+        // own case in orchestrationBootstrapPending.system.test.ts.
+        canWaitForPromptReadiness: vi.fn(() => true),
       } as never,
     },
   )
@@ -98,7 +111,7 @@ async function sendManagedPromptWithDelivery(delivery: PromptDeliveryResult): Pr
     { sessionId: 'session-1', cwd: '/tmp/project', domains: ['agent_management'] },
     {
       agentManagementBridge: {
-        sendPrompt: vi.fn(async () => delivery),
+        sendPrompt: vi.fn(async () => ({ sessionId: 'agent-1', displayLabel: 'B7', delivery })),
       } as never,
     },
   )
@@ -215,8 +228,85 @@ describe('createBuiltInMcpServer Agent Management domain', () => {
   })
 })
 
+describe('Agent Management targets by visible label or spoken name (#1145)', () => {
+  async function call(
+    name: string,
+    args: Record<string, unknown>,
+    bridge: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const server = createBuiltInMcpServer(
+      { sessionId: 'caller', cwd: '/tmp/project', domains: ['agent_management'] },
+      { agentManagementBridge: bridge as never },
+    )
+    const client = new Client({ name: 'agent-management-target-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      const result = await client.callTool({ name, arguments: args })
+      const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? '{}'
+      // A schema rejection is answered by the SDK as plain "MCP error …"
+      // text, not our JSON envelope; surface it as such for the assertions.
+      return text.startsWith('{') ? JSON.parse(text) as Record<string, unknown> : { schemaError: text }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  }
+
+  it('forwards the label unresolved and echoes which agent received the prompt', async () => {
+    // Main must NOT resolve: only the renderer holds the row stream, and it
+    // resolves against the state the send then acts on.
+    const sendPrompt = vi.fn(async () => ({
+      sessionId: 'codex-b28',
+      displayLabel: 'B28',
+      delivery: { ok: true, acceptance: { kind: 'user', acceptedAt: 1 } },
+    }))
+    const value = await call('agent_management_send_prompt', { label: 'b28', prompt: 'Redo the decor' }, { sendPrompt })
+    expect(sendPrompt).toHaveBeenCalledWith({ callerSessionId: 'caller', target: { label: 'b28' }, prompt: 'Redo the decor' })
+    expect(value).toMatchObject({ ok: true, sessionId: 'codex-b28', displayLabel: 'B28' })
+  })
+
+  it('accepts a spoken name on read and close, and labels/names on bulk read', async () => {
+    const readAgent = vi.fn(async () => ({ agent: { sessionId: 'a' }, messages: [] }))
+    const closeAgent = vi.fn(async () => ({ closedSessionId: 'a', displayLabel: 'B9' }))
+    const readAgents = vi.fn(async () => ({ agents: [], outputs: [] }))
+    await call('agent_management_read_agent', { name: 'Apollo' }, { readAgent })
+    expect(readAgent).toHaveBeenCalledWith(expect.objectContaining({ target: { name: 'Apollo' } }))
+    expect(await call('agent_management_close_agent', { label: 'B9' }, { closeAgent })).toMatchObject({ ok: true, displayLabel: 'B9' })
+    expect(closeAgent).toHaveBeenCalledWith({ callerSessionId: 'caller', target: { label: 'B9' } })
+    await call('agent_management_read_agents', { labels: ['B5', 'B16'], names: ['Apollo'] }, { readAgents })
+    expect(readAgents).toHaveBeenCalledWith(expect.objectContaining({ labels: ['B5', 'B16'], names: ['Apollo'] }))
+  })
+
+  it('refuses zero or several target fields before anything reaches the renderer', async () => {
+    const sendPrompt = vi.fn()
+    for (const args of [{ prompt: 'x' }, { sessionId: 's', label: 'B2', prompt: 'x' }]) {
+      expect(await call('agent_management_send_prompt', args, { sendPrompt })).toMatchObject({ ok: false, error: 'invalid_target' })
+    }
+    expect(sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('rejects a pinned-star or free-text label at the schema, like ac_agents_search', async () => {
+    const readAgent = vi.fn()
+    for (const label of ['★1', 'the codex one', '28']) {
+      expect(await call('agent_management_read_agent', { label }, { readAgent })).toHaveProperty('schemaError')
+    }
+    expect(readAgent).not.toHaveBeenCalled()
+  })
+})
+
 describe('orchestration create-agent delivery disposition', () => {
-  it('preserves a healthy child when readiness merely needs more time', async () => {
+  it('keeps a healthy child AND its prompt when readiness merely needs more time', async () => {
+    // This case used to assert the failure reply — `ok: false` with
+    // `disposition: retry-same-session`, the child preserved. Preserving the
+    // child was right; telling the caller to retry was not (#854). The journal
+    // says 47 of 55 recorded bootstrap failures were states like this one that
+    // clear on their own, and the invited retry is what writes prompt bytes
+    // without Enter and orphans a draft.
+    //
+    // So the assertion moves with the behaviour: the call succeeds, the child
+    // comes back, and the prompt is reported as pending rather than failed.
     const { value, closeAgent } = await createAgentWithDelivery({
       ok: false,
       stage: 'before-write',
@@ -229,12 +319,12 @@ describe('orchestration create-agent delivery disposition', () => {
     })
 
     expect(value).toMatchObject({
-      ok: false,
-      sessionId: 'child-1',
-      disposition: 'retry-same-session',
-      cleanupAttempted: false,
-      agentClosed: false,
+      ok: true,
+      promptSubmitted: false,
+      promptPending: true,
+      promptPendingReason: 'composer still warming',
     })
+    expect((value.agent as { sessionId: string }).sessionId).toBe('child-1')
     expect(closeAgent).not.toHaveBeenCalled()
   })
 
@@ -306,5 +396,42 @@ describe('createBuiltInMcpServer root management domain (#906)', () => {
     expect(unwired.names.some(name => name.startsWith('ac_'))).toBe(false)
     expect(unwired.instructions).not.toContain('Root Agent Code Management')
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ area: 'mcp.root_management', name: 'registrar.missing' }))
+  })
+})
+
+describe('orchestration child domains (#1143 review round 2)', () => {
+  async function createChild(parentDomains: BuiltInMcpDomain[], requested: BuiltInMcpDomain[]) {
+    const createAgent = vi.fn(async () => ({ sessionId: 'child-1', kind: 'claude' as const, cwd: '/tmp/project' }))
+    const server = createBuiltInMcpServer(
+      { sessionId: 'session-1', cwd: '/tmp/project', domains: parentDomains },
+      {
+        orchestrationBridge: {
+          createAgent,
+          createAgentCallOnce: async (_key: string, run: () => Promise<unknown>) => await run(),
+        } as never,
+        sessionManager: {} as never,
+      },
+    )
+    const client = new Client({ name: 'child-domain-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      await client.callTool({ name: 'orchestration_create_agent', arguments: { kind: 'claude', builtInMcpDomains: requested } })
+      return (createAgent.mock.calls[0] as unknown as [{ builtInMcpDomains?: BuiltInMcpDomain[] }])[0].builtInMcpDomains
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  }
+
+  it('never hands a child mcp_servers or root_management that the parent does not hold', async () => {
+    // Orchestration is on by default, so without this clamp any agent could
+    // mint MCP management (or root control) for a child it drives.
+    expect(await createChild(['orchestration'], ['tldr', 'mcp_servers', 'root_management'])).toEqual(['tldr'])
+  })
+
+  it('still passes them on when the parent holds them itself', async () => {
+    expect(await createChild(['orchestration', 'mcp_servers'], ['mcp_servers'])).toEqual(['mcp_servers'])
   })
 })

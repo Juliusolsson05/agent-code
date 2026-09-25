@@ -9,6 +9,7 @@ import type {
   DeleteAgentCodeInstalledSkillRequest,
   InstallAgentCodeGitHubSkillsRequest,
   SetAgentCodeInstalledSkillEnabledRequest,
+  SetAgentCodeInstalledSkillProvidersRequest,
 } from '@shared/types/agentCodeInstalledSkills.js'
 
 export const agentCodeInstalledSkillsApi = {
@@ -16,8 +17,9 @@ export const agentCodeInstalledSkillsApi = {
     ipcRenderer.invoke('agent-code-installed-skills:get'),
   auditAgentCodeInstalledSkills: (): Promise<AgentCodeInstalledSkillsSnapshot> =>
     ipcRenderer.invoke('agent-code-installed-skills:audit'),
-  discoverAgentCodeGitHubSkills: (url: string): Promise<AgentCodeInstalledSkillDiscoveryResult> =>
-    ipcRenderer.invoke('agent-code-installed-skills:discover', url),
+  /** Accepts an `npx skills add …` command, owner/repo, or a GitHub/skills.sh URL. */
+  discoverAgentCodeGitHubSkills: (input: string): Promise<AgentCodeInstalledSkillDiscoveryResult> =>
+    ipcRenderer.invoke('agent-code-installed-skills:discover', input),
   installAgentCodeGitHubSkills: (
     request: InstallAgentCodeGitHubSkillsRequest,
   ): Promise<AgentCodeInstalledSkillsMutationResult> =>
@@ -26,6 +28,10 @@ export const agentCodeInstalledSkillsApi = {
     request: SetAgentCodeInstalledSkillEnabledRequest,
   ): Promise<AgentCodeInstalledSkillsMutationResult> =>
     ipcRenderer.invoke('agent-code-installed-skills:set-enabled', request),
+  setAgentCodeInstalledSkillProviders: (
+    request: SetAgentCodeInstalledSkillProvidersRequest,
+  ): Promise<AgentCodeInstalledSkillsMutationResult> =>
+    ipcRenderer.invoke('agent-code-installed-skills:set-providers', request),
   checkAgentCodeInstalledSkillForUpdates: (
     skillId: string,
   ): Promise<AgentCodeInstalledSkillUpdateResult> =>

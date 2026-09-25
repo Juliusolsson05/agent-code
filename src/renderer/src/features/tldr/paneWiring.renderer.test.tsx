@@ -8,9 +8,9 @@ import { dismissTldr, toggleTldr } from './viewState'
 
 // Replace only the expensive provider/xterm leaf, retaining the real tree,
 // related selection, surface selection, ownership boundary and TLDR overlay.
-vi.mock('@providers/registry.renderer', () => ({ getRendererProvider: () => ({
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
   TileLeaf: ({ sessionId }: { sessionId: string }) => <div>Feed {sessionId}</div>,
-}) }))
+}))
 vi.mock('@renderer/workspace/tile-tree/AgentTerminalLeaf', () => ({ AgentTerminalLeaf: ({ sessionId }: { sessionId: string }) => <div>Agent terminal {sessionId}</div> }))
 vi.mock('@renderer/workspace/tile-tree/TerminalLeaf', () => ({ TerminalLeaf: () => <div>Shell terminal</div> }))
 const originalApi = window.api

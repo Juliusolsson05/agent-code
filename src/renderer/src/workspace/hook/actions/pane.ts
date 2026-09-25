@@ -1,5 +1,5 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { AGENT_PROVIDER_CHOICES } from '@renderer/workspace/providerChoices'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
+import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -29,6 +29,7 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
+import type { KillCaller } from '@shared/lifecycle/events'
 import type { ClosedTab, SingleClosedEntry, UndoCloseStack } from '@renderer/lib/undoClose'
 import { resolveDispatchSpawnTarget } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { fileSessionInProject, workspaceWithoutSessions } from '@renderer/workspace/pool'
@@ -59,6 +60,8 @@ import {
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
 
 // -----------------------------------------------------------------------------
@@ -213,6 +216,20 @@ export type CloseSessionOptions = {
    * feature was dead. The renderer CAN ask, at the exact line that mutates.
    */
   requireConfirmation?: { headline: string }
+  /**
+   * Who is closing, journaled by main on every `kill.request` this close
+   * issues — the named session AND each approved linked child (#1135).
+   *
+   * WHY on the options rather than a separate argument: a close is one
+   * approved operation, and the children it ends die because of that same
+   * request, so they must carry the same tag. It rides the CloseOperation to
+   * the kill boundary for exactly that reason.
+   *
+   * WHY optional, defaulting to 'unknown' rather than guessing "user close":
+   * a close path that forgot to say who it is must appear in the journal as a
+   * gap to fix, not be mislabelled as a human gesture.
+   */
+  killCaller?: KillCaller
 }
 
 /**
@@ -322,6 +339,8 @@ type CloseOperation = {
    *  position — because by the removing commit the earlier members are gone. */
   approvalTabs: ReadonlyMap<TabId, { tab: Tab; tabIndex: number }>
   admit?: CloseSessionOptions['onlyIf']
+  /** Tag for every kill this operation issues; see CloseSessionOptions.killCaller. */
+  killCaller: KillCaller
   visited: Set<SessionId>
   pending: Set<SessionId>
   /** What actually committed, in commit order: the only input to the
@@ -343,6 +362,7 @@ function beginCloseOperation(
   rootId: SessionId | null,
   approvedTargets: readonly CloseTargetSnapshot[],
   admit: CloseSessionOptions['onlyIf'],
+  killCaller: KillCaller,
 ): CloseOperation {
   const approved = new Map<SessionId, ApprovedCloseTarget>()
   const approvalTabs = new Map<TabId, { tab: Tab; tabIndex: number }>()
@@ -361,6 +381,7 @@ function beginCloseOperation(
     approved,
     approvalTabs,
     admit,
+    killCaller,
     visited: new Set(),
     pending: new Set(approved.keys()),
     commits: [],
@@ -831,6 +852,34 @@ export function usePaneActions(
       const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
+      // #1102 central guard (review finding #2): the DEFAULT kind bypassed
+      // every per-command enablement gate because per-kind commands are
+      // generated with the default filtered out. Resolve the effective spawn
+      // kind HERE — a disabled default falls back to the first enabled agent
+      // kind, and with none enabled the split declines instead of silently
+      // spawning a provider the user turned off. Callers that pass an explicit
+      // kind keep the per-command `when:` gates; an explicitly-passed disabled
+      // kind still declines (spawn validation covers it) rather than being
+      // silently redirected.
+      // AGENT kinds only (final review, blockers 1+2): 'terminal' and
+      // 'extension-view' are SessionKinds but not providers — the guard used
+      // to swallow them into the first enabled agent, turning ⌥T into a
+      // Claude spawn, and its no-providers throw blocked terminal splits in a
+      // world this very PR makes reachable. Non-agent kinds pass through.
+      const effectiveKind: SessionKind = !AGENT_PROVIDER_KINDS.includes(kind as AgentProviderKind)
+        ? kind
+        : (() => {
+          const enabledAgentKinds = enabledAgentProviderKindsSnapshot()
+          if (enabledAgentKinds.size === 0) {
+            throw new Error('No providers are enabled. Enable one in Settings → Providers.')
+          }
+          // The default kind resolves to the first ENABLED kind when the
+          // stored default is disabled — spawn something the user allows, or
+          // decline when nothing is allowed; never the disabled default.
+          return enabledAgentKinds.has(kind as AgentProviderKind)
+            ? kind
+            : [...AGENT_PROVIDER_KINDS].find(candidate => enabledAgentKinds.has(candidate))!
+        })()
       // ONE Dispatch creation flow for every session kind.
       //
       // WHY terminals no longer take a separate path: they used to be inserted
@@ -914,7 +963,7 @@ export function usePaneActions(
         // actually own, which is exactly the kind of comment that outlives
         // the code it describes.
         sessionId = await sessionActions.spawn(cwd, {
-          kind,
+          kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
           builtInMcpOverrides,
@@ -985,12 +1034,13 @@ export function usePaneActions(
         // ownership check may then find the backend already gone, harmlessly.
         await window.api.killOwnedSession({
           sessionId,
-          kind,
+          kind: effectiveKind,
           ...(providerRuntime ? { providerRuntime } : {}),
           cwd,
+          caller: 'spawn.unplaced',
         })
           .catch(() => undefined)
-        await sessionActions.killSession(sessionId)
+        await sessionActions.killSession(sessionId, 'spawn.unplaced')
         return
       }
       closeNewAgentPlacement()
@@ -1138,7 +1188,7 @@ export function usePaneActions(
       // If the owning project disappeared during spawn, retire only this new
       // process instead of leaving an unowned live session behind.
       if (!placed) {
-        await sessionActions.killSession(sessionId, { cwd, kind, providerRuntime })
+        await sessionActions.killSession(sessionId, 'spawn.unplaced', { cwd, kind, providerRuntime })
         return null
       }
       if (placement?.selectCreated !== false) closeNewAgentPlacement()
@@ -1259,8 +1309,18 @@ export function usePaneActions(
       // without the MCP bridge. Reuse the picker's supported combinations so
       // direct calls cannot silently launch a structured child after the user
       // requested a TUI. Main separately validates the actual factory.
-      if (!AGENT_PROVIDER_CHOICES.some(choice => choice.kind === params.kind && choice.providerRuntime === params.providerRuntime)) {
-        throw new Error(`${params.kind} does not support the requested ${params.providerRuntime ?? 'structured'} runtime`)
+      // #1102: enablement also gates orchestration children — a disabled
+      // provider must not come back through the MCP create_agent door.
+      //
+      // WHY the EFFECTIVE runtime, not the raw request: a terminal-only
+      // provider (Pi) has exactly one runtime, so a caller that names only
+      // `{ kind: 'pi' }` asked for it. Comparing the raw, absent runtime with
+      // the choice's 'terminal' refused every kind-only Pi create even though
+      // main would have normalized it (Astra review, finding 3). OpenCode is
+      // untouched: its absent runtime still means the structured one.
+      const providerRuntime = effectiveProviderRuntime(params.kind, params.providerRuntime)
+      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && choice.providerRuntime === providerRuntime)) {
+        throw new Error(`${params.kind} does not support the requested ${providerRuntime ?? 'structured'} runtime`)
       }
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
@@ -1319,7 +1379,7 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
-        ...(params.providerRuntime ? { providerRuntime: params.providerRuntime } : {}),
+        ...(providerRuntime ? { providerRuntime } : {}),
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })
@@ -1436,7 +1496,7 @@ export function usePaneActions(
       // judge the same workspace. Its boolean is deliberately not a refusal:
       // main rejecting an ownership-conflict pane still lets the renderer drop
       // that stale pane (paneRecoveryOwnership tests), as it always has.
-      await killSessionBackendIfOwned(refs, targetId)
+      await killSessionBackendIfOwned(refs, targetId, operation.killCaller)
 
       setRuntimes(prev => {
         const next = { ...prev }
@@ -1527,7 +1587,7 @@ export function usePaneActions(
   // A missing Dispatch target closes NOTHING — see resolveFocusedCloseTarget.
   const closeFocused = useCallback(async () => {
     const targetId = resolveFocusedCloseTarget(refs.stateRef.current)
-    if (targetId) await closeSessionRef.current?.(targetId)
+    if (targetId) await closeSessionRef.current?.(targetId, { killCaller: 'close.focused' })
   }, [refs.stateRef])
 
   // Mirrors closeFocused but operates on a caller-specified session
@@ -1615,7 +1675,13 @@ export function usePaneActions(
 
       // Built synchronously after approval, so the recorded project and meta of
       // every approved session describe the workspace the user approved.
-      const operation = beginCloseOperation(refs.stateRef.current, targetId, approved, options?.onlyIf)
+      const operation = beginCloseOperation(
+        refs.stateRef.current,
+        targetId,
+        approved,
+        options?.onlyIf,
+        options?.killCaller ?? 'unknown',
+      )
       // The named session itself. A thrown kill is recorded like any member's
       // and rethrown only AFTER the operation is recorded and reported, so bulk
       // cleanup's `failed` bucket and orchestration's catch keep working while
@@ -1703,7 +1769,13 @@ export function usePaneActions(
       const approvalState = refs.stateRef.current
       const tab = approvalState.tabs.find(candidate => candidate.id === tabId)
       if (!tab || gate.targets.length === 0) return
-      const operation = beginCloseOperation(approvalState, null, withShownLiveness(gate.targets, shown), undefined)
+      const operation = beginCloseOperation(
+        approvalState,
+        null,
+        withShownLiveness(gate.targets, shown),
+        undefined,
+        'close.tab',
+      )
       // Deepest linked descendants first, so a child always closes before the
       // parent that would otherwise be kept open for it. The project itself
       // leaves with whichever commit takes its last session; if a member
