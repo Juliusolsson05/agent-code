@@ -134,3 +134,156 @@ describe('AI Workspace editor file authority', () => {
     await expect(readFile(filePath, 'utf8')).resolves.toBe('recreated')
   })
 })
+
+// #1246: one malformed row used to throw inside load(); the rejected load was
+// cached, so every AI Workspace operation failed for the rest of the process,
+// and list() read updatedAt / entry.status unguarded. Real workspaces from the
+// owner's ai-workspaces.json (testing/fixtures/ai-workspace, redacted).
+describe('malformed rows in a real registry (#1246)', () => {
+  async function realState() {
+    const { readFile: read } = await import('fs/promises')
+    return (JSON.parse(await read(join(import.meta.dirname,
+      '../../../testing/fixtures/ai-workspace/real-workspaces-2026-09-25.json'), 'utf8')) as {
+      state: { workspaces: Array<Record<string, any>> }
+    }).state
+  }
+  async function registryFor(state: unknown) {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-ai-workspace-malformed-'))
+    tempRoots.push(root)
+    const statePath = join(root, 'ai-workspaces.json')
+    const source = JSON.stringify(state)
+    await writeFile(statePath, source)
+    return { root, statePath, source, registry: new AiWorkspaceRegistry(statePath) }
+  }
+
+  it('sets a bad entry and a bad workspace aside and keeps every other operation working', async () => {
+    const state = await realState()
+    const [kept, broken] = state.workspaces
+    // A newer or hand-edited file: one entry with a non-string path, one
+    // workspace with a non-string timestamp.
+    kept!.entries.push({ ...kept!.entries[0], entryId: 'bad-entry', path: 42 })
+    broken!.updatedAt = 1789000000
+    const { root, source, registry } = await registryFor(state)
+
+    const listed = await registry.list()
+    expect(listed.map(workspace => workspace.workspaceId)).toEqual([kept!.workspaceId])
+    expect(listed[0]!.fileCount).toBe(1)
+    // Writes work too, and the bad rows' bytes survive the save that drops them.
+    await registry.create({ name: 'Fresh' })
+    const { readdir, readFile: read } = await import('fs/promises')
+    const preserved = (await readdir(root)).filter(name => name.startsWith('ai-workspaces.json.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await read(join(root, preserved[0]!), 'utf8')).toBe(source)
+  })
+
+  it('keeps an entry whose stored status is malformed, with an unknown status', async () => {
+    const state = await realState()
+    state.workspaces[0]!.entries[0]!.status = null
+    const { registry } = await registryFor(state)
+    const listed = await registry.list()
+    const workspace = listed.find(candidate => candidate.workspaceId === state.workspaces[0]!.workspaceId)!
+    expect(workspace.fileCount).toBe(1)
+    // Reported as stale until refreshed, never as a healthy file.
+    expect(workspace.staleCount).toBe(1)
+  })
+
+  it.each([
+    ['entries not a list', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[1]!.entries = 5 }],
+    ['a non-string name', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[1]!.name = 7 }],
+    ['a non-string entryId', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[1]!.entries[0].entryId = 7 }],
+  ])('keeps the other workspace working when one row has %s', async (_label, damage) => {
+    const state = await realState()
+    damage(state)
+    const { registry } = await registryFor(state)
+    expect((await registry.list()).map(workspace => workspace.workspaceId)).toContain(state.workspaces[0]!.workspaceId)
+  })
+
+  it('drops mistyped optional fields instead of passing them to the UI (review A)', async () => {
+    const state = await realState()
+    state.workspaces[0]!.description = { not: 'text' }
+    state.workspaces[0]!.entries[0].projectRoot = 42
+    state.workspaces[0]!.entries[0].title = 9
+    const { root, registry } = await registryFor(state)
+    const listed = (await registry.list()).find(workspace => workspace.workspaceId === state.workspaces[0]!.workspaceId)!
+    expect(listed).not.toHaveProperty('description')
+    const opened = (await registry.get(state.workspaces[0]!.workspaceId))!
+    expect(opened.entries[0]).not.toHaveProperty('projectRoot')
+    expect(opened.entries[0]!.title).toBe('file-0.md')
+    // A valid description elsewhere is untouched (round 2: a repair that
+    // dropped every description survived).
+    const other = (await registry.list()).find(workspace => workspace.workspaceId === state.workspaces[1]!.workspaceId)!
+    expect(other.description).toBe(state.workspaces[1]!.description)
+    // The repaired values are preserved before the save that drops them.
+    await registry.create({ name: 'After repair' })
+    const { readdir, readFile: read } = await import('fs/promises')
+    const copies = (await readdir(root)).filter(name => name.startsWith('ai-workspaces.json.invalid-'))
+    expect(copies).toHaveLength(1)
+    expect(JSON.parse(await read(join(root, copies[0]!), 'utf8')).workspaces[0].description).toEqual({ not: 'text' })
+  })
+
+  it.each([
+    ['an entry field', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[0]!.entries[0].title = 9 }],
+    ['a workspace field', (state: { workspaces: Array<Record<string, any>> }) => { state.workspaces[0]!.description = { not: 'text' } }],
+  ])('preserves the original before a save drops a repaired %s', async (_label, damage) => {
+    const state = await realState()
+    damage(state)
+    const { root, source, registry } = await registryFor(state)
+    await registry.create({ name: 'After repair' })
+    const { readdir, readFile: read } = await import('fs/promises')
+    const copies = (await readdir(root)).filter(name => name.startsWith('ai-workspaces.json.invalid-'))
+    expect(await Promise.all(copies.map(name => read(join(root, name), 'utf8')))).toEqual([source])
+  })
+
+  it('does not keep a workspace in memory whose create was refused (round 2)', async () => {
+    const state = await realState()
+    state.workspaces[1]!.updatedAt = 1789000000
+    const { root, source, registry } = await registryFor(state)
+    const { createHash } = await import('node:crypto')
+    const { mkdir } = await import('fs/promises')
+    const occupied = join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`)
+    await mkdir(occupied)
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow()
+    expect((await registry.list()).map(workspace => workspace.name)).not.toContain('Blocked')
+    await rm(occupied, { recursive: true })
+    await registry.create({ name: 'Blocked' })
+    const reopened = new AiWorkspaceRegistry(join(root, 'ai-workspaces.json'))
+    expect((await reopened.list()).map(workspace => workspace.name)).toContain('Blocked')
+  })
+
+  it.each([
+    ['workspaces not a list', { workspaces: 5 }],
+    ['a typo\'d key', { workspces: [{ workspaceId: 'typo-key' }] }],
+    ['a top-level list', []],
+  ])('still refuses a malformed container (%s), which the next save would erase', async (_label, document) => {
+    const { statePath, source, registry } = await registryFor(document)
+    await expect(registry.list()).rejects.toThrow('storage is invalid')
+    const { readFile: read } = await import('fs/promises')
+    expect(await read(statePath, 'utf8')).toBe(source)
+  })
+
+  it('keeps reads working when the copy cannot be made, and refuses saves until it can', async () => {
+    const state = await realState()
+    state.workspaces[1]!.updatedAt = 1789000000
+    const { root, statePath, source, registry } = await registryFor(state)
+    const { createHash } = await import('node:crypto')
+    const { mkdir, readFile: read } = await import('fs/promises')
+    const occupied = join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`)
+    await mkdir(occupied)
+    expect((await registry.list()).map(workspace => workspace.workspaceId)).toEqual([state.workspaces[0]!.workspaceId])
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow()
+    expect(await read(statePath, 'utf8')).toBe(source)
+    await rm(occupied, { recursive: true })
+    await registry.create({ name: 'Now' })
+    expect(await read(occupied, 'utf8')).toBe(source)
+  })
+
+  it('does not cache a failed load: the next call re-reads the file', async () => {
+    const state = await realState()
+    const { statePath, registry } = await registryFor(state)
+    const { chmod } = await import('fs/promises')
+    await chmod(statePath, 0o000)
+    await expect(registry.list()).rejects.toThrow()
+    await chmod(statePath, 0o600)
+    expect(await registry.list()).toHaveLength(2)
+  })
+})

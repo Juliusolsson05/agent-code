@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { STATE_DIR } from '@main/storage/paths.js'
+import { preserveInvalidBytes } from '@main/storage/preserveInvalidBytes.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import {
   atomicWriteTextFile,
@@ -48,6 +49,61 @@ function errorMessage(err: unknown): string {
   if (e.code === 'EISDIR') return 'is a directory'
   if (e.code === 'EACCES' || e.code === 'EPERM') return 'permission denied'
   return e.message ?? 'filesystem operation failed'
+}
+
+const UNKNOWN_STATUS: AiWorkspaceFileStatus = {
+  exists: false,
+  readable: false,
+  staleReason: 'status unknown; refresh the workspace',
+  size: null,
+  mtimeMs: null,
+}
+
+function usableWorkspace(raw: unknown): raw is AiWorkspaceRecord {
+  const workspace = raw as AiWorkspaceRecord | null
+  return workspace !== null && typeof workspace === 'object'
+    && typeof workspace.workspaceId === 'string' && typeof workspace.name === 'string'
+    && typeof workspace.createdAt === 'string' && typeof workspace.updatedAt === 'string'
+    && Array.isArray(workspace.entries)
+}
+
+function usableEntry(raw: unknown): raw is AiWorkspaceRecord['entries'][number] {
+  const entry = raw as AiWorkspaceRecord['entries'][number] | null
+  return entry !== null && typeof entry === 'object'
+    && typeof entry.entryId === 'string' && typeof entry.path === 'string'
+}
+
+function usableStatus(raw: unknown): boolean {
+  const status = raw as AiWorkspaceFileStatus | null
+  return status !== null && typeof status === 'object'
+    && typeof status.exists === 'boolean' && typeof status.readable === 'boolean'
+}
+
+// WHY optional and display fields are repaired field by field (#1260 review
+// A): a row that passes the identity checks still reaches the renderer, and
+// one `description: {}` made the command palette's text helper throw, taking
+// the whole picker down. A mistyped optional field is dropped; a mistyped
+// required display field gets the value the UI would derive anyway.
+function withUsableWorkspaceFields(workspace: AiWorkspaceRecord): AiWorkspaceRecord {
+  const repaired: AiWorkspaceRecord = { ...workspace }
+  if (repaired.description !== undefined && typeof repaired.description !== 'string') delete repaired.description
+  if (repaired.scope !== undefined && !isPlainObject(repaired.scope)) delete repaired.scope
+  return repaired
+}
+
+function withUsableEntryFields(entry: AiWorkspaceFileEntry, fallbackAttachedAt: string): AiWorkspaceFileEntry {
+  const repaired: AiWorkspaceFileEntry = { ...entry }
+  if (typeof repaired.title !== 'string') repaired.title = basename(repaired.path)
+  if (typeof repaired.attachedAt !== 'string') repaired.attachedAt = fallbackAttachedAt
+  for (const field of ['description', 'sourceSessionId', 'sourceAgentLabel', 'taskId', 'projectRoot', 'gitBranch'] as const) {
+    if (repaired[field] !== undefined && typeof repaired[field] !== 'string') delete repaired[field]
+  }
+  if (repaired.metadata !== undefined && !isPlainObject(repaired.metadata)) delete repaired.metadata
+  return repaired
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function normalizePath(path: string): string {
@@ -108,6 +164,8 @@ export interface AiWorkspaceRegistry {
 export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
+  /** The loaded file while set-aside rows are not yet preserved; see load(). */
+  private owedCopy: { text: string; setAside: number } | null = null
   private saveQueue: Promise<void> = Promise.resolve()
   private readonly knownFilePaths = new Set<string>()
   private readonly gitContextCache = new Map<
@@ -126,7 +184,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async create(params: AiWorkspaceCreateParams): Promise<AiWorkspaceRecord> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const name = params.name.trim()
     if (!name) throw new Error('AI Workspace name is required')
 
@@ -208,7 +266,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async attachFile(params: AiWorkspaceAttachFileParams): Promise<AiWorkspaceFileEntry> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const workspace = this.requiredWorkspace(params.workspaceId)
     // WHY AI Workspace accepts absolute paths instead of forcing project-root
     // containment:
@@ -264,7 +322,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   async detachFile(
     params: AiWorkspaceDetachFileParams,
   ): Promise<{ removed: boolean; remaining: number }> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const workspace = this.requiredWorkspace(params.workspaceId)
     const normalized = params.path
       ? await realpath(normalizePath(params.path)).catch(() => normalizePath(params.path!))
@@ -288,7 +346,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async clear(workspaceId: string): Promise<{ removed: number }> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const workspace = this.requiredWorkspace(workspaceId)
     const removed = workspace.entries.length
     workspace.entries = []
@@ -299,7 +357,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
   }
 
   async delete(workspaceId: string): Promise<{ deleted: boolean }> {
-    await this.ensureLoaded()
+    await this.ensureWritable()
     const deleted = this.workspaces.delete(workspaceId)
     if (deleted) {
       await this.save()
@@ -380,33 +438,104 @@ export class AiWorkspaceRegistry extends EventEmitter {
     }
   }
 
+  /** For every user mutation: the owed evidence copy (see load()) is made
+   *  BEFORE memory changes (#1260 round 2). Checking only inside save() let
+   *  create() insert a workspace, fail its save, and then report it as
+   *  created on a retry, although it was never written. */
+  private async ensureWritable(): Promise<void> {
+    await this.ensureLoaded()
+    await this.preserveOwedCopy()
+  }
+
   private async ensureLoaded(): Promise<void> {
-    this.loadPromise ??= this.load()
+    // A failed load is not cached (#1246): a transient read error used to
+    // fail every AI Workspace operation for the rest of the process.
+    this.loadPromise ??= this.load().catch(error => {
+      this.loadPromise = null
+      throw error
+    })
     await this.loadPromise
   }
 
   private async load(): Promise<void> {
+    let text: string
     try {
-      const text = await readFile(this.stateFile, 'utf8')
-      const parsed = JSON.parse(text) as PersistedAiWorkspaceState
-      for (const workspace of parsed.workspaces ?? []) {
-        for (const entry of workspace.entries) {
-          const normalized = normalizePath(entry.path)
-          // Migrate live legacy symlink entries in memory so their editor and
-          // LSP identities agree. Stale references intentionally retain their
-          // lexical path: preserving a useful broken-link explanation is more
-          // valuable than dropping an entry merely because realpath fails.
-          entry.path = await realpath(normalized).catch(() => normalized)
-        }
-        this.workspaces.set(workspace.workspaceId, workspace)
-        for (const entry of workspace.entries) this.knownFilePaths.add(normalizePath(entry.path))
-      }
-      // Stored statuses are allowed to be slightly stale at startup.
-      // Refreshing all references here made first use perform an uncapped
-      // filesystem sweep. The selected workspace is refreshed when opened.
+      text = await readFile(this.stateFile, 'utf8')
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
     }
+    const parsed = JSON.parse(text) as { workspaces?: unknown }
+    // A malformed CONTAINER still refuses: every save rewrites the whole
+    // file, so migrating it as empty would erase whatever it held.
+    //
+    // The `workspaces` list must be PRESENT (#1260 review): every file this
+    // store writes carries it, so an object without it (a typo'd key, a
+    // top-level list, another program's JSON) was not written here, and
+    // loading it as zero workspaces let the next save erase it uncopied.
+    if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.workspaces)) {
+      throw new Error('AI Workspace storage is invalid; the original file is untouched.')
+    }
+    // WHY per-row validation (#1246): one row with a non-string path threw in
+    // resolve(), the rejected load was cached, and every operation failed for
+    // the rest of the process; list() also read updatedAt and entry.status
+    // unguarded. A bad workspace or entry is set aside for itself, the file's
+    // bytes are preserved before the next save can drop it, and an entry
+    // whose only damage is its cached status keeps a status of "unknown"
+    // (statuses are a refreshable cache, not the user's data).
+    let setAside = 0
+    const workspaces: AiWorkspaceRecord[] = []
+    for (const raw of (parsed.workspaces ?? []) as unknown[]) {
+      if (!usableWorkspace(raw)) {
+        setAside++
+        continue
+      }
+      const entries: AiWorkspaceRecord['entries'] = []
+      for (const entry of raw.entries) {
+        if (!usableEntry(entry)) {
+          setAside++
+          continue
+        }
+        // A REPAIR counts like a set-aside row (#1260 round 2): the next save
+        // writes the repaired values, so the original bytes must be copied
+        // first or a recoverable value (say, a description stored as an
+        // object) is lost without evidence.
+        if (!usableStatus(entry.status)) {
+          entry.status = { ...UNKNOWN_STATUS }
+          setAside++
+        }
+        const usable = withUsableEntryFields(entry, raw.createdAt)
+        if (JSON.stringify(usable) !== JSON.stringify(entry)) setAside++
+        entries.push(usable)
+      }
+      const workspace = withUsableWorkspaceFields({ ...raw, entries })
+      if (JSON.stringify({ ...workspace, entries: [] }) !== JSON.stringify({ ...raw, entries: [] })) setAside++
+      workspaces.push(workspace)
+    }
+    if (setAside > 0) {
+      // A failed copy must not fail the load (#1257 review B, same rule): the
+      // rows are only dropped by a SAVE, so the copy is owed before the next
+      // save instead, which retries it and is refused while it fails.
+      this.owedCopy = { text, setAside }
+      await this.preserveOwedCopy().catch(error => {
+        console.warn(`[ai-workspace] could not preserve ${setAside} malformed row(s) yet; saves wait for it:`, error)
+      })
+    }
+    for (const workspace of workspaces) {
+      for (const entry of workspace.entries) {
+        const normalized = normalizePath(entry.path)
+        // Migrate live legacy symlink entries in memory so their editor and
+        // LSP identities agree. Stale references intentionally retain their
+        // lexical path: preserving a useful broken-link explanation is more
+        // valuable than dropping an entry merely because realpath fails.
+        entry.path = await realpath(normalized).catch(() => normalized)
+      }
+      this.workspaces.set(workspace.workspaceId, workspace)
+      for (const entry of workspace.entries) this.knownFilePaths.add(normalizePath(entry.path))
+    }
+    // Stored statuses are allowed to be slightly stale at startup.
+    // Refreshing all references here made first use perform an uncapped
+    // filesystem sweep. The selected workspace is refreshed when opened.
   }
 
   private requiredWorkspace(workspaceId: string): AiWorkspaceRecord {
@@ -473,8 +602,19 @@ export class AiWorkspaceRegistry extends EventEmitter {
     }
   }
 
+  private async preserveOwedCopy(): Promise<void> {
+    if (!this.owedCopy) return
+    const { text, setAside } = this.owedCopy
+    const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text)
+    this.owedCopy = null
+    console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
+  }
+
   private async save(): Promise<void> {
-    const next = this.saveQueue.then(() => this.writeStateFile())
+    const next = this.saveQueue.then(async () => {
+      await this.preserveOwedCopy()
+      await this.writeStateFile()
+    })
     this.saveQueue = next.catch(() => undefined)
     await next
   }
