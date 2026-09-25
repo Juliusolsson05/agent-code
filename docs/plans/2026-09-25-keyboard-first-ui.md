@@ -432,7 +432,7 @@ entry when it lands.
 | S24 | ConfirmCloseDialog (editor) | autoFocus Save&Close | DialogActions-like 3-button footer with chips; K1 | done |
 | S25 | ConfirmDeleteDialog (editor) | autoFocus Cancel | DialogActions danger | done |
 | S26 | KeyboardShortcutsModal | search focus; no arrows; font-mono chips | Kbd chips; ↑↓ over results; Close ⎋ | done |
-| S27 | ThemeEditorModal (SettingsPage) | name autoFocus; secondary buttons | DialogActions; T3 | todo |
+| S27 | ThemeEditorModal (SettingsPage) | name autoFocus; secondary buttons | DialogActions; T3 | done |
 | S28 | AgentCodeConventionsEditorModal | window.confirm; raw buttons | ConfirmDialog; T8; ⌘↵ save chip | todo |
 | S29 | AgentCodeCustomSkillsModal | as S28 | as S28 | todo |
 | S30 | AgentMcpServersModal | no Enter; `max-w-xl` no-op | size preset; Close ⎋ | todo |
@@ -691,6 +691,12 @@ Sharp corners and one light theme.
   standard input (ring only on keyboard focus); ↓ from search moves into
   the list (inset ring) where ↑↓ scroll, PgUp/PgDn page from the search box;
   footer `Close ⎋`; 860 wide (was 720).
+- **S27 Theme editor (Settings → Appearance → New/Edit theme):** standard
+  surface and header (was popover background + panel-header bars); the
+  header keeps only a ghost `Show Schema` toggle (its "Close" is gone);
+  footer `Cancel ⎋` · `Save a Copy` (edit only) · `Save & Apply ⌘↩`, save
+  errors in red at the left; editing then pressing Escape asks "Discard
+  theme changes?"; body py-3.
 
 ## Tasks
 
@@ -765,6 +771,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S27: Theme editor on DialogHeader/DialogActions (Cmd+Enter),
+  header Close removed, dirty-draft discard confirm (B7's D3 condition),
+  exported for its test. Confirm-red: both tests fail on the pre-change
+  component (exported only).
 - 2026-09-25 S26: Keyboard Shortcuts — Kbd chips (aria-visible: the chord
   is the content), shared Input, focusable results region (↓ from search,
   PgUp/PgDn page from search), flat rows, close-only footer. Confirm-red:
