@@ -20,6 +20,11 @@ const MAX_HISTORY_FILE_BYTES = 512 * 1024
  * preserve a conversation; it is deliberately independent of PTY routing IDs. */
 export class TldrStore extends EventEmitter {
   private records: Record<string, TldrRecord> | null = null
+  /** The last revision of each record set aside at load (#1247 review A):
+   *  every reader keeps the HIGHER revision when a read and a change event
+   *  race, so an identity that reports again after its record was set aside
+   *  must continue above it, not restart at 1 and be discarded as stale. */
+  private readonly setAsideRevisions = new Map<string, number>()
   private tail: Promise<unknown> = Promise.resolve()
   private historyFileCount: number | null = null
 
@@ -95,6 +100,10 @@ export class TldrStore extends EventEmitter {
         || typeof record.updatedAt !== 'string' || !Number.isFinite(Date.parse(record.updatedAt))
         || !validCompletion(record)) {
         setAside++
+        const revision = (raw as { revision?: unknown } | null)?.revision
+        if (validTldrIdentity(identity) && Number.isSafeInteger(revision) && (revision as number) >= 1) {
+          this.setAsideRevisions.set(identity, revision as number)
+        }
         continue
       }
       // Rebuilt field by field, as before: whatever else a hand edit or a newer
@@ -117,13 +126,7 @@ export class TldrStore extends EventEmitter {
    *  content digest so relaunching over the same bytes, before any write
    *  replaces them, does not pile up identical copies. */
   private async preserveOriginal(source: string, setAside: number): Promise<void> {
-    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
-    const copy = `${this.file}.invalid-${digest}.json`
-    try {
-      await writeFile(copy, source, { mode: 0o600, flag: 'wx' })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
+    const copy = await preserveBytes(`${this.file}.invalid`, source)
     console.warn(`[${this.label.toLowerCase()}] set aside ${setAside} invalid record(s); original preserved at ${copy}`)
   }
 
@@ -193,7 +196,22 @@ export class TldrStore extends EventEmitter {
     // whether the old contents parsed. Repairing a corrupt file must not count
     // as a new one, or the eviction below would delete real histories.
     const existed = await stat(path).then(() => true, () => false)
-    const previous = existed ? await this.readHistory(identity).catch(() => []) : []
+    // An unreadable history (for example one entry a newer build wrote over
+    // today's limit) used to read as EMPTY here, and the rename below then
+    // replaced that identity's whole timeline with one entry (#1247 review
+    // A). Its bytes are preserved first, and every entry that still
+    // validates is carried forward.
+    const previous = existed
+      ? await this.readHistory(identity).catch(async () => {
+        const raw = await readFile(path, 'utf8').catch(() => null)
+        if (raw === null) return []
+        // No `.json` extension: history eviction counts and deletes every
+        // `*.json` in this directory, and preserved evidence is neither.
+        const copy = await preserveBytes(`${path}.invalid`, raw, '')
+        console.warn(`[${this.label.toLowerCase()}] history for one identity was unreadable; original preserved at ${copy}`)
+        return salvageHistory(raw, identity)
+      })
+      : []
     // An agent re-posting an unchanged status is not a new moment in the task;
     // keeping it would bury real transitions under identical rows. The KIND
     // matters too (#1182), for the one case where a completion row and a goal
@@ -244,7 +262,8 @@ export class TldrStore extends EventEmitter {
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
       // (#1182). The agent sets a new goal exactly when it is given new work.
-      const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: (records[identity]?.revision ?? 0) + 1 }
+      const previousRevision = records[identity]?.revision ?? this.setAsideRevisions.get(identity) ?? 0
+      const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: previousRevision + 1 }
       await this.commit(identity, records, record, authorized)
       // The current record is already durable and acknowledged. History is the
       // secondary view of it, so a history failure (a full disk, a corrupt file)
@@ -330,6 +349,41 @@ function validCompletion(record: TldrRecord): boolean {
   if (record.completedAt === undefined && record.completionNote === undefined) return true
   return typeof record.completedAt === 'string' && Number.isFinite(Date.parse(record.completedAt))
     && typeof record.completionNote === 'string' && storedTextValid(record.completionNote)
+}
+
+/** Write `bytes` to `<prefix>-<digest>.json` exactly once, atomically.
+ *
+ *  WHY temp + rename and a byte comparison (#1247 review A): a crash in a
+ *  direct write left an empty or partial copy under the final name, and
+ *  "the name already exists" was then taken as proof the evidence was safe,
+ *  while the next write dropped the original record. An existing copy counts
+ *  only if its bytes are identical; anything else gets a fresh name. */
+async function preserveBytes(prefix: string, bytes: string, extension = '.json'): Promise<string> {
+  const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
+  let copy = `${prefix}-${digest}${extension}`
+  const existing = await readFile(copy, 'utf8').catch(() => null)
+  if (existing === bytes) return copy
+  if (existing !== null) copy = `${prefix}-${digest}-${randomUUID()}${extension}`
+  const temporary = `${copy}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' })
+    await rename(temporary, copy)
+  } finally {
+    await unlink(temporary).catch(() => {})
+  }
+  return copy
+}
+
+/** The entries of an unreadable history document that still validate, in
+ *  order, when the document is at least the right identity's list. */
+function salvageHistory(raw: string, identity: string): TldrHistoryEntry[] {
+  try {
+    const document = JSON.parse(raw) as { version?: unknown; identity?: unknown; entries?: unknown }
+    if (document.version !== 1 || document.identity !== identity || !Array.isArray(document.entries)) return []
+    return document.entries.filter(validHistoryEntry).slice(0, TLDR_HISTORY_LIMIT)
+  } catch {
+    return []
+  }
 }
 
 /** Whether stored text is exactly what this build would have written.

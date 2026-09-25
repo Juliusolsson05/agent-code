@@ -1,5 +1,6 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -373,6 +374,56 @@ describe('one invalid record in a real store (#1247)', () => {
     await new TldrStore(file).read([realRecords.atLimit])
     await new TldrStore(file).read([realRecords.atLimit])
     expect((await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))).toHaveLength(1)
+  })
+
+  it('does not trust a partial copy left by a crash, and keeps the copy private', async () => {
+    const document = structuredClone(realRecords.tldr)
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file, source } = await storeWith('tldr.json', document)
+    // A crash mid-write left an empty file under the final digest name.
+    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
+    await writeFile(join(directory, `tldr.json.invalid-${digest}.json`), '')
+    const store = new TldrStore(file)
+    const other = Object.keys(document.records).find(id => id !== realRecords.atLimit)!
+    await store.update(other, 'Still here.', () => true)
+    const copies = (await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))
+    const contents = await Promise.all(copies.map(name => readFile(join(directory, name), 'utf8')))
+    expect(contents).toContain(source)
+    const full = copies[contents.indexOf(source)]!
+    expect((await stat(join(directory, full))).mode & 0o777).toBe(0o600)
+  })
+
+  it('continues an identity above its set-aside revision, so readers do not discard it as stale', async () => {
+    const document = structuredClone(realRecords.tldr) as { version: 1; records: Record<string, { text: string; revision: number }> }
+    const record = document.records[realRecords.atLimit]!
+    record.text += '.'
+    const { store } = await storeWith('tldr.json', document)
+    expect((await store.update(realRecords.atLimit, 'Reporting again.', () => true)).revision).toBe(record.revision + 1)
+  })
+
+  it('keeps the valid history entries and preserves the file when one entry is unreadable', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-history-'))
+    directories.push(directory)
+    const file = join(directory, 'tldr.json')
+    const store = new TldrStore(file)
+    await store.update('agent-1', 'First.', () => true)
+    await store.update('agent-1', 'Second.', () => true)
+    const historyDirectory = join(directory, 'tldr-history')
+    const [name] = (await readdir(historyDirectory)).filter(entry => entry.endsWith('.json'))
+    const path = join(historyDirectory, name!)
+    const history = JSON.parse(await readFile(path, 'utf8')) as { entries: Array<{ text: string }> }
+    // A newer build's over-limit entry, on top of the older valid one.
+    history.entries[0]!.text = 'x'.repeat(401)
+    const raw = JSON.stringify(history)
+    await writeFile(path, raw)
+
+    await store.update('agent-1', 'Third.', () => true)
+    expect((await store.history('agent-1')).map(entry => entry.text)).toEqual(['Third.', 'First.'])
+    const preserved = (await readdir(historyDirectory)).filter(entry => entry.includes('.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await readFile(join(historyDirectory, preserved[0]!), 'utf8')).toBe(raw)
+    // Evidence is not history: it must not count toward (or be evicted as) a history file.
+    expect(preserved[0]!.endsWith('.json')).toBe(false)
   })
 
   it('still refuses a malformed document container, which a write would destroy whole', async () => {
