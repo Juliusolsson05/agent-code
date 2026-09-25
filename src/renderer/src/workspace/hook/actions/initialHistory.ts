@@ -98,12 +98,47 @@ function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
  *
  * Non-fatal on purpose: a missing or unreadable log only loses provisional
  * rows, never the committed history this loader exists to load.
+ *
+ * WHY each restored ghost is re-dated to its own `createdAt`, orphaned
+ * (#1227 review): what a ghost PAINTS is decided by render rule 4, "an orphan
+ * newer than the committed tail". Its logged `updatedAt` is not when its turn
+ * happened. For an orphaned ghost it is the renderer clock when it gave up
+ * (last delta + 30 s TTL), which lands after the turn's own final commit on
+ * any agent that then went idle. For a ghost the log never saw orphaned (the
+ * app reloaded inside the TTL) the first sweep after this restore orphans it
+ * at restore time, the newest thing in the pane. Both painted committed turns
+ * a second time at the bottom of real restored feeds: every Codex text ghost
+ * (its response-id turnId never matches the rollout, so reconcile cannot
+ * supersede it) and Claude tool calls committed above the loaded window.
+ *
+ * `createdAt` is when the proxy first saw the turn. A crash-mid-turn ghost
+ * was created after the last thing the transcript committed (the turn never
+ * got that far), so it still passes rule 4 and paints — the one case the
+ * log exists for. A ghost of any turn that DID commit was created before its
+ * own commit, so the tail passes it and rule 4 hides it. Rule 5 (sidecar
+ * shape) is untouched. The ghost is marked orphaned now because the process
+ * that could have committed it is gone; the in-memory map wins the merge, so
+ * a live pane re-reading its log keeps its live ghosts' real state.
+ *
+ * Nothing is written back: ghostsToPersist diffs against these values, and
+ * the next restore re-derives them from the unchanged log.
  */
 async function readPersistedGhosts(sessionId: SessionId): Promise<Map<string, GhostEntry>> {
   try {
     const raw = await window.api.ghostRead?.(sessionId)
     if (!Array.isArray(raw) || raw.length === 0) return new Map()
-    return reduceGhostLogSansSuperseded(raw as never[]) as Map<string, GhostEntry>
+    const reduced = reduceGhostLogSansSuperseded(raw as never[]) as Map<string, GhostEntry>
+    const restored = new Map<string, GhostEntry>()
+    for (const [uuid, ghost] of reduced) {
+      // A log line with no usable createdAt (never written by ghosts.ts, but
+      // the log is a file) keeps its own updatedAt: no worse than before.
+      const createdAt = typeof ghost._atp.createdAt === 'number' ? ghost._atp.createdAt : ghost._atp.updatedAt
+      restored.set(uuid, {
+        ...ghost,
+        _atp: { ...ghost._atp, updatedAt: createdAt, orphanedAt: createdAt },
+      })
+    }
+    return restored
   } catch (err) {
     console.warn('[ghost] restore read failed:', err)
     return new Map()
