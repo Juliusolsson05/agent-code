@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
+import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
 import { RemoteServer } from '@main/remote/RemoteServer.js'
 import type { RemoteSessionControl } from '@main/remote/RemoteServer.js'
@@ -49,6 +50,8 @@ function makeManager(): FakeManager {
 let dir: string
 let manager: FakeManager
 let feedSource: SessionFeedSource
+// Main's tap outlives any one server, so restartWithDeps re-sinks the same one.
+let feedTap: SessionFeedTap
 let server: RemoteServer
 let token: string
 let wsUrl: string
@@ -91,7 +94,8 @@ beforeEach(async () => {
   const pairing = new DevicePairing({ secret: randomBytes(32), registry })
   activeRegistry = registry
   activePairing = pairing
-  feedSource = new SessionFeedSource(manager as never)
+  feedTap = new SessionFeedTap(manager as never)
+  feedSource = new SessionFeedSource(manager as never, feedTap)
   server = new RemoteServer({
     manager,
     feedSource,
@@ -114,6 +118,7 @@ afterEach(async () => {
   feed = null
   await server.stop()
   feedSource.dispose()
+  feedTap.dispose()
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
 })
 
@@ -191,6 +196,11 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     for (let frame = 0; frame < 30; frame += 1) {
       manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
       manager.emit('process-state', { sessionId: frame % 2 ? 's1' : 's2', active: true })
+      // Since #1177 main coalesces screens per 100 ms window before they reach
+      // the phone. Flushing each frame stands in for repaints spaced past that
+      // window, so every frame still crosses and the client-side rate limit
+      // under test is actually exercised.
+      feedTap.flush()
     }
     await vi.waitFor(() => expect(screens).toBe(30))
     offList()
@@ -217,6 +227,8 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     const offScreen = f.onSessionScreen(() => { screens += 1 })
     for (let frame = 0; frame < 20; frame += 1) {
       manager.emit('screen', { sessionId: frame % 2 ? 's1' : 's2', plain: `frame ${frame}`, cursor: null })
+      // See the previous test: one crossing per frame despite main's coalescer.
+      feedTap.flush()
     }
     await vi.waitFor(() => expect(screens).toBe(20))
     offScreen()
@@ -521,6 +533,10 @@ describe('remote reconnect after bounded output overflow', () => {
       await writeFile(transcript, Array.from({ length: 310 }, (_, i) => JSON.stringify(entry(i))).join('\n') + '\n')
       for (let i = 0; i < 160; i++) {
         manager.emit('screen', { sessionId: 's1', recent: `${i}:` + 'x'.repeat(64 * 1024) })
+        // Main coalesces screens (#1177); flushing each one models a producer
+        // whose large frames are spaced past the window, which is the traffic
+        // that can still overflow a paused socket.
+        feedTap.flush()
         if (i % 8 === 0) await new Promise(setImmediate)
       }
       await vi.waitFor(() => expect(serverSocket.readyState).toBe(NodeWebSocket.CLOSED))
@@ -569,7 +585,7 @@ async function restartWithDeps(extra: {
 }): Promise<void> {
   await server.stop()
   feedSource.dispose()
-  feedSource = new SessionFeedSource(manager as never)
+  feedSource = new SessionFeedSource(manager as never, feedTap)
   server = new RemoteServer({
     manager,
     feedSource,

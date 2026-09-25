@@ -2238,7 +2238,7 @@ export function useIpcSubscriptions(
         // WHY it scans `appended` and not the raw burst: `appended` is the
         // post-dedupe set (uuids already in `seen` never reach it), and a
         // RESUMED pane replays its last ~200 lines through this exact channel
-        // (main/sessions/jsonlCoalescer.ts). Scanning the burst meant every
+        // (main/sessions/sessionFeedTap.ts). Scanning the burst meant every
         // restart re-detected old carriers — and the census found one session
         // with 63 consecutive rate-limit records, so a replay could re-arm the
         // guard's exception dozens of times for an episode that ended days ago.

@@ -107,13 +107,15 @@ type Pending = {
 type RemoteReply = Omit<Extract<OutboundFrame, { type: 'reply' }>, 'type' | 'id'>
 
 export class WebSocketSessionFeed implements SessionFeed {
-  private readonly listeners: Record<FeedChannel | 'sub-agents', Set<(e: never) => void>> = {
+  private readonly listeners: Record<FeedChannel, Set<(e: never) => void>> = {
     started: new Set(),
     'input-readiness': new Set(),
     screen: new Set(),
     'jsonl-entries': new Set(),
     'jsonl-error': new Set(),
     'history-boundary': new Set(),
+    'transcript-diagnostic': new Set(),
+    'provider-session-changed': new Set(),
     'semantic-event': new Set(),
     conditions: new Set(),
     'process-state': new Set(),
@@ -122,9 +124,6 @@ export class WebSocketSessionFeed implements SessionFeed {
     // onSessionRemoved — desktop panes learn removal via workspace state);
     // the phone consumes it internally to prune its session list below.
     removed: new Set(),
-    // The server never emits sub-agents in v1 (SessionFeedSource doesn't tap
-    // it yet); the set exists so onSessionSubAgents satisfies the contract
-    // and starts working the moment the server adds the channel.
     'sub-agents': new Set(),
   }
   private readonly sessionListListeners = new Set<(s: RemoteSessionSummary[]) => void>()
@@ -267,30 +266,25 @@ export class WebSocketSessionFeed implements SessionFeed {
     return this.sub('jsonl-error', cb)
   }
   /**
-   * Channel-health diagnostics are not relayed to remote clients yet.
-   *
-   * WHY a no-op rather than a `sub(...)`: the host does not forward this
-   * channel over the websocket, so subscribing would wait for frames that
-   * never arrive and look wired when it is not. The one consumer today (#881,
-   * clearing an OpenCode terminal's "server never answered" banner when the
-   * server turns out to be merely late) concerns a pane the phone does not
-   * render. When the phone does need it, the frame has to be added at the host
-   * first, and this is where it lands.
+   * Relayed since #1177, when the phone started sinking from the same
+   * main-side tap as the desktop. It used to be a deliberate no-op because
+   * the host never forwarded the channel; a listener that looked wired but
+   * never fired was the kind of silent gap the shared tap removes.
    */
-  onSessionTranscriptDiagnostic(_cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
-    return () => {}
+  onSessionTranscriptDiagnostic(cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub {
+    return this.sub('transcript-diagnostic', cb)
   }
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
     return this.sub('history-boundary', cb)
   }
   /**
-   * No phone frame, like the transcript diagnostic above: the event rebinds
-   * the desktop pane's durable identity (workspace.json), which the phone
-   * does not own. The phone's transcript already follows the switch through
-   * the history-boundary reset and the new rows that come after it.
+   * Relayed since #1177 for the same reason as the diagnostic above. Main
+   * flushes the OLD session's buffered rows before this crosses (see
+   * SessionFeedTap), so a listener can trust that every earlier row belongs to
+   * the previous provider session.
    */
-  onSessionProviderSessionChanged(_cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
-    return () => {}
+  onSessionProviderSessionChanged(cb: (e: SessionProviderSessionChangedEvent) => void): Unsub {
+    return this.sub('provider-session-changed', cb)
   }
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub {
     return this.sub('semantic-event', cb)
@@ -444,7 +438,7 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   // --- internals ---
 
-  private sub<E>(channel: FeedChannel | 'sub-agents', cb: (e: E) => void): Unsub {
+  private sub<E>(channel: FeedChannel, cb: (e: E) => void): Unsub {
     const set = this.listeners[channel] as Set<(e: E) => void>
     set.add(cb)
     return () => set.delete(cb)

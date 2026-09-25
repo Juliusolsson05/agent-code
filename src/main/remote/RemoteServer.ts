@@ -325,6 +325,11 @@ export class RemoteServer extends EventEmitter {
           input: backend.input,
         })
       }
+      // The sub-agent watcher is shared with the desktop since #1177 and only
+      // emits on change, so a fleet that is already running when remote is
+      // enabled would never reach this cache from live events alone.
+      const subAgents = this.deps.feedSource.getSubAgentsSnapshot(session.sessionId)
+      if (subAgents) this.lastSubAgents.set(session.sessionId, subAgents)
     }
 
     try {

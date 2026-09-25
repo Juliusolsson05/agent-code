@@ -82,7 +82,7 @@ export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
 // Bulk variant used by main during bootstrap bursts. Payload is an
 // array of {entry, file} tuples for a single session — the renderer
 // folds them in one setState instead of paying one render per entry.
-// See main/sessions/jsonlCoalescer.ts for the WHY. Uses the neutral
+// See the JSONL burst coalescing in main/sessions/sessionFeedTap.ts for the WHY. Uses the neutral
 // AgentTranscriptEntry directly; preload's `JsonlEntry` alias of the
 // same type remains at the preload boundary for its other consumers.
 export type SessionJsonlEntriesEvent = {

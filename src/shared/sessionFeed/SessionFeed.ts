@@ -37,6 +37,19 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 // gains capability; remote code importing anything else from core is a
 // boundary violation.
 //
+// Doctrine change (#1177, docs/plans/2026-09-24-phone-shared-rendering.md).
+// The original boundary also said remote must RE-IMPLEMENT whatever core
+// logic it needed rather than share it, and accepted the duplication. The
+// copies drifted, and the phone rendered worse because of it: its main-side
+// feed had none of the desktop's ordering barriers and was missing two
+// channels. Both implementations of this interface are now fed by ONE
+// main-side, transport-neutral SessionFeedTap (main/sessions/sessionFeedTap.ts),
+// so the event ORDER a listener observes is the same on either side by
+// construction. What stays walled is capability, not code: the command
+// surface below is still exactly the remote-safe set, and raw PTY never
+// reaches a remote sink. Shared seams must stay transport-neutral — a
+// parameter that only makes sense for the phone is still a violation.
+//
 // WHY listeners are global (fire for ALL sessions; callers dispatch by
 // `sessionId` in the callback) instead of per-session subscribe(sessionId):
 // this mirrors the existing one-listener-per-event-type shape in
