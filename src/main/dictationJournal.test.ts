@@ -88,7 +88,7 @@ it('keeps the #1299 tail visible: activity and real audio after the socket close
   const summaries = written.filter(line => line.event === 'journal:high-frequency-summary')
   expect(summaries.at(-1)!.data!.untilTMs as number).toBeGreaterThan(closeAt + 23 * 3600_000)
   expect(summaries.some(line => line.data!.maxPeak === 0.5 && line.data!.nonZeroPeaks === 1)).toBe(true)
-  expect(summaries.at(-1)!.data!.lastChunkIndex).toBe(100_000 + 24 * 3600 - 1)
+  expect(summaries.at(-1)!.data!.lastChunkIndex).toEqual({ 'CHUNK/main:received': 100_000 + 24 * 3600 - 1 })
   // Bounded: one summary per minute, not one line per event.
   expect(summaries.length).toBeLessThanOrEqual(24 * 60 + 2)
   expect((await stat(path)).size).toBeLessThan(2048 + (24 * 60 + 2) * 400)
@@ -119,3 +119,85 @@ it("writes an evicted press's queued events before shutdown completes", async ()
   await registry.flushAll()
   expect(await readFile(dictationDebugLogPath('press-0'), 'utf8')).toContain('deepgram:close')
 })
+
+// Round 2 of the #1301 review.
+
+it('writes a summary to disk every minute, not only at the final flush', async () => {
+  const path = await tempFile()
+  const journal = new DictationDebugJournal(path, { maxBytes: 2048 })
+  fill(journal)
+  // Ten minutes of chunks, one per second; no flush() (a crash would skip it).
+  for (let s = 0; s < 600; s++) {
+    clock += 1000
+    journal.append(chunk(s))
+  }
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const summaries = (await lines(path)).filter(line => line.event === 'journal:high-frequency-summary')
+  expect(summaries.length).toBeGreaterThanOrEqual(9)
+  const gaps = summaries.slice(1).map((line, i) => line.tMs - summaries[i]!.tMs)
+  expect(Math.max(...gaps)).toBeLessThanOrEqual(61_000)
+})
+
+it('counts every repeat and every non-zero peak, and closes a window at a kept event', async () => {
+  const path = await tempFile()
+  const journal = new DictationDebugJournal(path, { maxBytes: 2048 })
+  fill(journal)
+  for (let i = 0; i < 60; i++) journal.append(chunk(i))
+  journal.append(sample(0.2))
+  journal.append(sample(0.8))
+  journal.append(close)
+  journal.append(sample(0.3))
+  await journal.flush()
+  const written = await lines(path)
+  const tail = written.slice(written.findIndex(line => line.event === 'journal:high-frequency-suppressed') + 1)
+  expect(tail.map(line => line.event)).toEqual(['journal:high-frequency-summary', 'deepgram:close', 'journal:high-frequency-summary'])
+  expect(tail[0]!.data).toMatchObject({ counts: { 'CHUNK/main:received': 60, 'AUDIO_LEVEL/sample': 2 }, maxPeak: 0.8, nonZeroPeaks: 2 })
+  expect(tail[2]!.data).toMatchObject({ counts: { 'AUDIO_LEVEL/sample': 1 }, maxPeak: 0.3, nonZeroPeaks: 1 })
+})
+
+it('never evicts the press it just handed out', () => {
+  const registry = new DictationDebugJournalRegistry()
+  for (let i = 0; i < 64; i++) registry.get(`press-${i}`)
+  const newest = registry.get('press-64')
+  expect(registry.get('press-64')).toBe(newest)
+  expect(registry.size).toBe(64)
+})
+
+it('waits for a write already in flight when shutting down, and keeps the budget across eviction', async () => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-dictation-user-'))
+  dirs.push(userData.dir)
+  const { appendFile: realAppend, mkdir } = await import('node:fs/promises')
+  await mkdir(join(userData.dir, 'dictation-debug'), { recursive: true })
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let blocked = true
+  let landed = 0
+  const appendFile = (async (...args: Parameters<typeof realAppend>) => {
+    if (blocked) await gate
+    await realAppend(...args)
+    landed += 1
+  }) as typeof realAppend
+  const registry = new DictationDebugJournalRegistry({ appendFile })
+  const first = registry.get('press-0')
+  // Past a small real budget is not available through the registry, so push
+  // this press past 16 MiB with one large event.
+  first.append({ layer: 'IPC', event: 'big', data: { pad: 'x'.repeat(16 * 1024 * 1024) } })
+  // Let the 100 ms timer start the (blocked) write.
+  await new Promise(resolve => setTimeout(resolve, 150))
+  for (let i = 1; i <= 64; i++) registry.get(`press-${i}`)
+  // Re-created while the evicted write is still in flight: the budget holds.
+  registry.get('press-0').append(chunk(1))
+  const shutdown = registry.flushAll()
+  let finished = false
+  void shutdown.then(() => { finished = true })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  expect(finished).toBe(false)
+  blocked = false
+  release()
+  await shutdown
+  expect(landed).toBeGreaterThanOrEqual(1)
+  const text = await readFile(dictationDebugLogPath('press-0'), 'utf8')
+  expect(text).toContain('journal:high-frequency-suppressed')
+  expect(text).not.toContain('"event":"main:received"')
+})
+

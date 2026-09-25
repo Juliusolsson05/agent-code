@@ -115,7 +115,10 @@ type SuppressedSummary = {
   counts: Record<string, number>
   maxPeak: number
   nonZeroPeaks: number
-  lastChunkIndex: number | null
+  /** Highest chunk index seen per `layer/event`: the renderer and main count
+   *  from 0 while Deepgram counts from 1, so one merged maximum invented a
+   *  chunk that never existed (#1301 review round 2). */
+  lastChunkIndex: Record<string, number>
 }
 
 /**
@@ -131,15 +134,12 @@ export class DictationDebugJournal {
   private queue: string[] = []
   private timer: NodeJS.Timeout | null = null
   private ensuredDir = false
-  /**
-   * Same overlap guard as the former GhostJournal: `scheduleDrain` arms a timer
-   * and nulls it inside the callback before awaiting `drain()`, so a
-   * new `append` arriving during the drain could in principle schedule
-   * a second drain. This boolean short-circuits that. macOS APFS
-   * serialises `appendFile` at the FS level, but relying on that is
-   * implementation-defined.
-   */
-  private draining = false
+  /** Bytes this writer has accounted for (file + queue); the registry reads it
+   *  when evicting, so a re-created writer keeps the budget even while this
+   *  one's last write is still in flight (#1301 review round 2). */
+  get accountedBytes(): number {
+    return this.bytesQueued
+  }
   /**
    * Wall-clock anchor for `tMs`. Latched on first append rather than
    * in the constructor — a session that never emits an event also
@@ -158,7 +158,12 @@ export class DictationDebugJournal {
 
   constructor(
     private readonly filePath: string,
-    private readonly options: { maxBytes?: number; initialBytes?: number } = {},
+    private readonly options: {
+      maxBytes?: number
+      initialBytes?: number
+      /** Test seam for a slow or blocked disk; production uses appendFile. */
+      appendFile?: typeof appendFile
+    } = {},
   ) {
     this.bytesQueued = options.initialBytes ?? 0
   }
@@ -195,7 +200,7 @@ export class DictationDebugJournal {
   }
 
   private accumulate(input: DictationDebugEventInput, tMs: number): void {
-    const summary = this.summary ??= { sinceTMs: tMs, counts: {}, maxPeak: 0, nonZeroPeaks: 0, lastChunkIndex: null }
+    const summary = this.summary ??= { sinceTMs: tMs, counts: {}, maxPeak: 0, nonZeroPeaks: 0, lastChunkIndex: {} }
     const key = `${input.layer}/${input.event}`
     summary.counts[key] = (summary.counts[key] ?? 0) + 1
     const data = input.data ?? {}
@@ -204,7 +209,7 @@ export class DictationDebugJournal {
       if (data.peak > summary.maxPeak) summary.maxPeak = data.peak
     }
     const index = typeof data.chunkIndex === 'number' ? data.chunkIndex : typeof data.pendingChunkIndex === 'number' ? data.pendingChunkIndex : null
-    if (index !== null && (summary.lastChunkIndex === null || index > summary.lastChunkIndex)) summary.lastChunkIndex = index
+    if (index !== null && (summary.lastChunkIndex[key] === undefined || index > summary.lastChunkIndex[key]!)) summary.lastChunkIndex[key] = index
   }
 
   private emitSummary(now: number, untilTMs: number): void {
@@ -243,16 +248,25 @@ export class DictationDebugJournal {
     }, FLUSH_INTERVAL_MS)
   }
 
-  private async drain(): Promise<void> {
-    if (this.draining) return
+  /**
+   * Drains are CHAINED, not skipped (#1301 review round 2). The old guard
+   * returned at once while a timed drain was writing, so a flush() during a
+   * slow append resolved before that append landed: an eviction or a clean
+   * quit could exit with the batch (and the summary in it) unwritten. Each
+   * drain now waits for the one before it, and flush() awaits the chain.
+   */
+  private drainChain: Promise<void> = Promise.resolve()
+
+  private drain(): Promise<void> {
+    const next = this.drainChain.then(() => this.drainOnce())
+    this.drainChain = next.catch(() => undefined)
+    return next
+  }
+
+  private async drainOnce(): Promise<void> {
     if (this.queue.length === 0) return
-    this.draining = true
-    try {
-      const batch = this.queue.splice(0).join('')
-      await this.appendRaw(batch)
-    } finally {
-      this.draining = false
-    }
+    const batch = this.queue.splice(0).join('')
+    await this.appendRaw(batch)
     // A write that arrived during the drain may have armed the timer;
     // if not, arm it now so late arrivals get picked up.
     if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
@@ -260,7 +274,7 @@ export class DictationDebugJournal {
 
   private async appendRaw(content: string): Promise<void> {
     try {
-      await appendFile(this.filePath, content, { mode: 0o600 })
+      await (this.options.appendFile ?? appendFile)(this.filePath, content, { mode: 0o600 })
     } catch {
       // Directory-creation only needed on first-ever write for this
       // session. Once it succeeds, every subsequent append hits the
@@ -269,7 +283,7 @@ export class DictationDebugJournal {
       if (!this.ensuredDir) {
         await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 })
         this.ensuredDir = true
-        await appendFile(this.filePath, content, { mode: 0o600 })
+        await (this.options.appendFile ?? appendFile)(this.filePath, content, { mode: 0o600 })
       } else {
         // Already ensured the dir — re-throw so the caller's logs see
         // the real fs error. Swallowing would silently lose events.
@@ -292,7 +306,10 @@ export class DictationDebugJournalRegistry {
     let j = this.journals.get(debugSessionId)
     if (!j) {
       const path = dictationDebugLogPath(debugSessionId)
-      j = new DictationDebugJournal(path, { initialBytes: existingSize(path) })
+      // An evicted writer's last write may still be in flight, so the file
+      // can be smaller than what that writer accounted for; take the larger.
+      const evicted = this.evictedBytes.get(debugSessionId) ?? 0
+      j = new DictationDebugJournal(path, { initialBytes: Math.max(existingSize(path), evicted), appendFile: this.options.appendFile })
       this.journals.set(debugSessionId, j)
       // Insertion order is age: evict the oldest press (flushing it first),
       // never the one just asked for. See MAX_OPEN_JOURNALS.
@@ -323,6 +340,11 @@ export class DictationDebugJournalRegistry {
 
   /** Flushes started by dispose(), until they settle; see flushAll. */
   private readonly disposing = new Set<Promise<void>>()
+  /** Accounted bytes of evicted writers whose final flush has not landed;
+   *  see get(). Entries leave when that flush settles, so this stays small. */
+  private readonly evictedBytes = new Map<string, number>()
+
+  constructor(private readonly options: { appendFile?: typeof appendFile } = {}) {}
 
   get size(): number {
     return this.journals.size
@@ -331,11 +353,15 @@ export class DictationDebugJournalRegistry {
   dispose(debugSessionId: string): void {
     const j = this.journals.get(debugSessionId)
     if (!j) return
+    this.evictedBytes.set(debugSessionId, j.accountedBytes)
     const flushing = j.flush().catch(err => {
       console.warn('[dictationJournal] dispose flush error:', err)
     })
     this.disposing.add(flushing)
-    void flushing.finally(() => this.disposing.delete(flushing))
+    void flushing.finally(() => {
+      this.disposing.delete(flushing)
+      this.evictedBytes.delete(debugSessionId)
+    })
     this.journals.delete(debugSessionId)
   }
 }
