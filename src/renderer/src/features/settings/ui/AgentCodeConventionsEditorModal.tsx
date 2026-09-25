@@ -100,6 +100,10 @@ export function AgentCodeConventionsEditorModal({
   // Radix calls this for Escape and the corner close alike, so a one-press
   // Escape can never silently drop an edited draft (B7's D3 condition).
   const requestClose = async (nextOpen: boolean) => {
+    // In flight (save / clear / preview), nothing hides the dialog (steering
+    // note k5, the k3 rule): a save that lands after closure — or a revision
+    // conflict it reports — would otherwise be invisible.
+    if (!nextOpen && busy) return
     if (!nextOpen && dirty && !(await requestConfirm({
       title: 'Discard unsaved convention changes?',
       confirmLabel: 'Discard Changes',
@@ -365,14 +369,17 @@ export function AgentCodeConventionsEditorModal({
             Enter), Cancel ⎋ goes through requestClose so a dirty draft asks
             first (B7's D3 condition, since F7). The destructive Clear rides at
             the far left as a red-outline extra. Guards carried over from the
-            hand-built footer (k3): Save and Clear wait while busy; Cancel was
-            never disabled here and still is not. */}
+            hand-built footer (k3): Save and Clear wait while busy — and since
+            steering note k5, Cancel and Escape wait too (requestClose refuses
+            while busy), so a save's result is never hidden by a close. */}
         <DialogActions
           confirmLabel={enabled && !base.enabled ? 'Save & Enable' : 'Save Changes'}
           confirmKey="Cmd+Enter"
           confirmDisabled={busy}
           onConfirm={() => void save()}
           onCancel={() => void requestClose(false)}
+          cancelDisabled={busy}
+          escapeCancels={!busy}
           extraActions={
             <Button
               type="button"

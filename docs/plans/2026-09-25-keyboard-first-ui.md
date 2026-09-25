@@ -712,7 +712,10 @@ Sharp corners and one light theme.
   (it restarts the agent — Tab or click).
 - **S31 Add / Edit MCP server:** 640 wide (was stuck at 520); `Add Server ⌘↩`
   / `Save ⌘↩`; Delete… stays two-step at the far left; pasting a config and
-  pressing Escape asks "Discard this MCP server config?".
+  pressing Escape asks "Discard this MCP server config?" — also when ONLY a
+  secret field was changed (typing into a secret and emptying it again is
+  not a change); while a save runs, Cancel disables, loses ⎋, and Escape /
+  outside clicks wait (same in the Conventions editor).
 
 ## Tasks
 
@@ -787,6 +790,19 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k5 (valid, both high): (1) Edit Server's dirty
+  predicate ignored `secretEdits`, so a secret-only edit was discarded by
+  Escape/Cancel without asking — now included (key present = edited; typed
+  then emptied deletes the key = reverted; explicit Clear '' = a change).
+  (2) Add/Edit Server and the Conventions editor stayed closable while
+  saving — each now reports/guards in-flight state (savingRef /
+  `busy` in requestClose) + cancelDisabled + escapeCancels. Tests: secret-
+  only Escape asks; typed-then-emptied closes without asking; deferred Edit
+  save holds against Cancel and Escape (with NO dirty draft, so only the
+  in-flight guard can hold it — the first version edited a secret and the
+  dirty confirm masked the guard's removal); deferred Conventions save.
+  Mutation-checked: removing the secret predicate, the MCP saving guard, or
+  the Conventions busy guard each fails its test.
 - 2026-09-25 S30/S31: MCP dialogs on DialogActions + size md; Agent MCP
   confirm has no key (it reloads the agent); Add/Edit server Cmd+Enter with
   a dirty-draft discard confirm (child reports dirtiness via a ref). Title

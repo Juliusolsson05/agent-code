@@ -133,6 +133,47 @@ describe('MCP server dialog', () => {
     expect(api.userMcpSave.mock.calls[0]![0].secrets).toEqual({})
   })
 
+  it('asks before Escape discards a SECRET-ONLY edit (steering note k5)', async () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<><McpServerDialog /><ConfirmHost /></>)
+    const field = screen.getByLabelText('Secret beeper-authorization')
+    fireEvent.change(field, { target: { value: 'new-token' } })
+    fireEvent.keyDown(field, { key: 'Escape' })
+    expect(await screen.findByRole('dialog', { name: 'Discard this MCP server config?' })).toBeInTheDocument()
+    expect(useAppStore.getState().mcpServerDialog).not.toBeNull()
+    // Settle the app-wide confirm so it cannot leak into the next test.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard Changes' })) })
+  })
+
+  it('treats a secret typed and emptied again as no change, and closes without asking', async () => {
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<><McpServerDialog /><ConfirmHost /></>)
+    const field = screen.getByLabelText('Secret beeper-authorization')
+    fireEvent.change(field, { target: { value: 'x' } })
+    fireEvent.change(field, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await vi.waitFor(() => expect(useAppStore.getState().mcpServerDialog).toBeNull())
+  })
+
+  it('cannot be closed by Cancel or Escape while an edit is saving (steering note k5)', async () => {
+    let settle!: () => void
+    api.userMcpSave.mockReturnValue(new Promise(resolve => {
+      settle = () => resolve({ ok: true, snapshot: { servers: [server()], native: [], claudeManagedPolicy: false } })
+    }))
+    useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
+    render(<McpServerDialog />)
+    // Save WITHOUT edits, so nothing is dirty: only the in-flight guard can
+    // be what keeps the dialog open below (a dirty draft would also hold it,
+    // by asking — which would make this test prove the wrong thing).
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    await vi.waitFor(() => expect(cancel).toBeDisabled())
+    expect(cancel.querySelector('[data-slot="kbd"]')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(useAppStore.getState().mcpServerDialog).not.toBeNull()
+    await act(async () => { settle() })
+  })
+
   it('refuses to save over a server that changed elsewhere while the editor was open (review round 1)', () => {
     useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
     render(<McpServerDialog />)
