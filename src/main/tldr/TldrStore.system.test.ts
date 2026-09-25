@@ -261,8 +261,14 @@ describe('Goal MCP', () => {
 
     const broken = JSON.stringify({ version: 1, records: { 'agent-1': { ...legacy.records['agent-1'], completedAt: '2026-09-02T00:00:00.000Z' } } })
     await writeFile(file, broken)
-    await expect(new TldrStore(file).read(['agent-1'])).rejects.toThrow('storage is invalid')
+    // Not guessed into a goal-without-completion: the record is set aside
+    // (#1247), its bytes preserved, and the file itself is not rewritten by a
+    // read.
+    expect(await new TldrStore(file).read(['agent-1'])).toEqual({})
     expect(await readFile(file, 'utf8')).toBe(broken)
+    const preserved = (await readdir(directory)).filter(name => name.startsWith('goal.json.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await readFile(join(directory, preserved[0]!), 'utf8')).toBe(broken)
   })
 
   // Review of #1182: behaviours only a direct store test can pin.
@@ -310,3 +316,68 @@ describe('Goal MCP', () => {
   })
 })
 
+
+// #1247: one invalid record used to make the whole store refuse, so every
+// agent's tldr_update and goal_set failed, the peeks and Agent Activity went
+// empty and the enforcement hooks threw. Real records from the owner's files
+// (testing/fixtures/tldr-store, texts redacted to same-length markers).
+const realRecords = JSON.parse(await readFile(join(import.meta.dirname,
+  '../../../testing/fixtures/tldr-store/real-records-2026-09-25.json'), 'utf8')) as {
+  tldr: { version: 1; records: Record<string, { text: string }> }
+  goal: { version: 1; records: Record<string, { text: string; completedAt?: string; completionNote?: string }> }
+  atLimit: string
+}
+
+describe('one invalid record in a real store (#1247)', () => {
+  async function storeWith(name: string, document: unknown, options?: ConstructorParameters<typeof TldrStore>[2]) {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-tldr-invalid-'))
+    directories.push(directory)
+    const file = join(directory, name)
+    const source = JSON.stringify(document)
+    await writeFile(file, source)
+    return { directory, file, source, store: new TldrStore(file, undefined, options) }
+  }
+
+  it('sets aside an over-limit TLDR (a newer build, then a downgrade) and keeps every other agent working', async () => {
+    const document = structuredClone(realRecords.tldr)
+    // One character past today's limit, on the real record that sits AT it.
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file, source, store } = await storeWith('tldr.json', document)
+    const others = Object.keys(document.records).filter(id => id !== realRecords.atLimit)
+
+    expect(Object.keys(await store.read(Object.keys(document.records))).sort()).toEqual([...others].sort())
+    const written = await store.update(others[0]!, 'Still reporting.', () => true)
+    expect(written.text).toBe('Still reporting.')
+    // The set-aside record's bytes survive the rewrite that drops it.
+    const preserved = (await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))
+    expect(preserved).toHaveLength(1)
+    expect(await readFile(join(directory, preserved[0]!), 'utf8')).toBe(source)
+    expect(JSON.parse(await readFile(file, 'utf8')).records).not.toHaveProperty(realRecords.atLimit)
+    // The damaged identity can simply report again.
+    expect((await store.update(realRecords.atLimit, 'Back.', () => true)).text).toBe('Back.')
+  })
+
+  it('keeps the other goals and lets the damaged identity set a new goal when one completion is half-written', async () => {
+    const document = structuredClone(realRecords.goal)
+    const [completed, other] = Object.keys(document.records)
+    delete document.records[completed!]!.completionNote
+    const { store } = await storeWith('goal.json', document, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    expect(Object.keys(await store.read([completed!, other!]))).toEqual([other])
+    expect((await store.update(completed!, 'A fresh goal.', () => true)).text).toBe('A fresh goal.')
+  })
+
+  it('does not write a second copy of the same damaged bytes on every launch', async () => {
+    const document = structuredClone(realRecords.tldr)
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file } = await storeWith('tldr.json', document)
+    await new TldrStore(file).read([realRecords.atLimit])
+    await new TldrStore(file).read([realRecords.atLimit])
+    expect((await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))).toHaveLength(1)
+  })
+
+  it('still refuses a malformed document container, which a write would destroy whole', async () => {
+    const { file, source } = await storeWith('tldr.json', { version: 2, records: realRecords.tldr.records })
+    await expect(new TldrStore(file).read([realRecords.atLimit])).rejects.toThrow('storage is invalid')
+    expect(await readFile(file, 'utf8')).toBe(source)
+  })
+})

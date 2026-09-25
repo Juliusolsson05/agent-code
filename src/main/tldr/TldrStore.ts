@@ -75,14 +75,27 @@ export class TldrStore extends EventEmitter {
       throw new Error('TLDR storage is invalid; the original file has been preserved.')
     }
     const records = Object.create(null) as Record<string, TldrRecord>
+    // WHY an invalid RECORD is set aside instead of refusing the store (#1247):
+    // the refusal was never cached as a result, so every read and write
+    // re-failed. Every agent's tldr_update and goal_set then failed, the peeks
+    // and Agent Activity went empty, and the enforcement hooks threw, all for
+    // one record, typically one a newer build with a larger text limit wrote
+    // before a downgrade (the owner's real file already has a record at
+    // exactly today's 400-char limit). The file's rule is still "refuse and
+    // preserve rather than guess": the record is not repaired, its identity
+    // simply has no current record, and the original bytes are preserved
+    // beside the file before any write can drop it. A malformed CONTAINER
+    // above still refuses, since writing through it would destroy every record.
+    let setAside = 0
     for (const [identity, raw] of Object.entries(document.records)) {
       const record = raw as TldrRecord
       if (!validTldrIdentity(identity) || !record || typeof record.text !== 'string'
-        || normalizeTldrText(record.text) !== record.text
+        || !storedTextValid(record.text)
         || !Number.isSafeInteger(record.revision) || record.revision < 1
         || typeof record.updatedAt !== 'string' || !Number.isFinite(Date.parse(record.updatedAt))
         || !validCompletion(record)) {
-        throw new Error('TLDR storage is invalid; the original file has been preserved.')
+        setAside++
+        continue
       }
       // Rebuilt field by field, as before: whatever else a hand edit or a newer
       // build left in the file does not survive into memory. The completion
@@ -95,8 +108,23 @@ export class TldrStore extends EventEmitter {
           : {}),
       }
     }
+    if (setAside > 0) await this.preserveOriginal(source, setAside)
     this.records = records
     return records
+  }
+
+  /** Byte-for-byte copy of a file whose records were set aside. Named by the
+   *  content digest so relaunching over the same bytes, before any write
+   *  replaces them, does not pile up identical copies. */
+  private async preserveOriginal(source: string, setAside: number): Promise<void> {
+    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
+    const copy = `${this.file}.invalid-${digest}.json`
+    try {
+      await writeFile(copy, source, { mode: 0o600, flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+    console.warn(`[${this.label.toLowerCase()}] set aside ${setAside} invalid record(s); original preserved at ${copy}`)
   }
 
   read(identities: string[]): Promise<Record<string, TldrRecord>> {
@@ -301,12 +329,24 @@ export class TldrStore extends EventEmitter {
 function validCompletion(record: TldrRecord): boolean {
   if (record.completedAt === undefined && record.completionNote === undefined) return true
   return typeof record.completedAt === 'string' && Number.isFinite(Date.parse(record.completedAt))
-    && typeof record.completionNote === 'string' && normalizeTldrText(record.completionNote) === record.completionNote
+    && typeof record.completionNote === 'string' && storedTextValid(record.completionNote)
+}
+
+/** Whether stored text is exactly what this build would have written.
+ *  normalizeTldrText THROWS for text it rejects (over the limit, empty), which
+ *  is right for a new update and wrong for validating a stored record: the
+ *  throw escaped the per-record check and failed the whole store (#1247). */
+function storedTextValid(text: string): boolean {
+  try {
+    return normalizeTldrText(text) === text
+  } catch {
+    return false
+  }
 }
 
 function validHistoryEntry(value: unknown): value is TldrHistoryEntry {
   const entry = value as TldrHistoryEntry
-  return Boolean(entry) && typeof entry.text === 'string' && normalizeTldrText(entry.text) === entry.text
+  return Boolean(entry) && typeof entry.text === 'string' && storedTextValid(entry.text)
     && typeof entry.writtenAt === 'string' && Number.isFinite(Date.parse(entry.writtenAt))
     && Number.isSafeInteger(entry.revision) && entry.revision >= 1
     && (entry.completed === undefined || entry.completed === true)
