@@ -326,7 +326,6 @@ export type ComposerSubmitIo = {
   send: (data: string, pasteId?: string) => Promise<void>
   deliverPrompt: (prompt: string, imagePaths?: string[]) => Promise<PromptDeliveryResult>
   pasteId: string
-  getScreen: () => string | undefined
 }
 
 // Does a tool name identify Agent Code's OWN orchestration spawn verb? The

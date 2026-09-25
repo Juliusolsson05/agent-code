@@ -211,7 +211,6 @@ function makeRefs(state: WorkspaceState, runtimes: Record<SessionId, SessionRunt
     useProxyStreamingRef: ref(false),
     defaultBuiltInMcpDomainsRef: ref([]),
     seenUuidsRef: ref({}),
-    latestScreenRef: ref({}),
     undoStackRef: ref({}),
     bootstrapTimersRef: ref(new Map()),
     persistedFeedDebugIdRef: ref({}),

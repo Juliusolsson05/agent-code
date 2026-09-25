@@ -287,8 +287,7 @@ export interface SessionManager {
 // for the migration rationale.
 //
 // Local aliases used below just narrow AgentSession for the
-// duck-typed-optional-method call sites (awaitPastePlaceholder,
-// awaitReadyForPrompt), so the callers keep reading naturally.
+// duck-typed-optional-method call sites (awaitReadyForPrompt), so the callers keep reading naturally.
 type AgentSessionLike = AgentSession
 
 type RegistryLifecycle = {
@@ -4388,45 +4387,6 @@ export class SessionManager extends EventEmitter {
       if (oldest === undefined) break
       this.recentCodexSessionRuns.delete(oldest)
     }
-  }
-
-  /**
-   * Claude-specific accessor for the paste-submit event-driven path
-   * in `src/renderer/.../claudePaste.ts`. Returns the live ClaudeSession
-   * cast through `unknown` because AgentSessionLike doesn't (and
-   * shouldn't) expose `awaitPastePlaceholder` — that's a Claude-only
-   * affordance and adding it to the cross-provider interface would
-   * force every other runtime to ship a no-op stub.
-   *
-   * Returns `null` for missing sessions or non-Claude kinds. Callers
-   * MUST treat null as a benign "couldn't reach this session" and
-   * fall through to whatever non-event-driven path they were using
-   * before; the absence of a Claude session is not an error worth
-   * crashing over.
-   */
-  async awaitClaudePastePlaceholder(
-    sessionId: string,
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'appeared'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-    | { kind: 'no-session' }
-  > {
-    const entry = this.sessions.get(sessionId)
-    if (!entry || entry.kind !== 'claude') return { kind: 'no-session' }
-    // The cross-provider AgentSessionLike interface doesn't carry
-    // `awaitPastePlaceholder`; ClaudeSession does. We assert via a
-    // structural duck-type so misconfigured Claude provider builds
-    // (a future ClaudeSession that loses the method) surface as
-    // 'no-session' rather than a TypeError.
-    // No cast: awaitPastePlaceholder is now a typed optional on
-    // AgentSession (see @shared/types/session.ts).
-    const session = entry.session
-    if (typeof session.awaitPastePlaceholder !== 'function') {
-      return { kind: 'no-session' }
-    }
-    return session.awaitPastePlaceholder(opts)
   }
 
   /**

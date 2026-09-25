@@ -9,7 +9,7 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 // stable across providers so historical dumps stay comparable. The
 // actual submit routing moved to the provider composerSubmit
 // capability (#394 phase 2c-4).
-import { CLAUDE_PASTE_THRESHOLD } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
+import { CLAUDE_PASTE_THRESHOLD } from '@shared/claude/pasteConfirm'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
@@ -35,7 +35,8 @@ import { reportLifecycle } from '@renderer/lifecycle/report'
 //      Escape forwards, Shift+Enter inserts a literal newline.
 //      The submit path forks by provider because Claude and
 //      Codex have DIFFERENT paste + submit timing requirements
-//      (see claudePaste.ts for the debounce story).
+//      (see @shared/claude/pasteConfirm and main's
+//      providers/claude/runtime/promptDelivery.ts for the paste story).
 //   3. Bash-style prompt history — Up/Down cycle through previous
 //      prompts when the composer is empty. Modifier combos fall
 //      through to the PTY-forward path so OS line navigation
@@ -357,7 +358,6 @@ export function useComposerKeybinds({
             () => workspace.ensureSessionLive(sessionId, 'tile-leaf.deliver-retry'),
           ),
         pasteId,
-        getScreen: () => workspace.latestScreenRef.current[sessionId],
       })
       // Accepted: the sent prompt leaves the draft, keeping anything another
       // writer added during the send (draftAfterAcceptance).

@@ -14,6 +14,7 @@ import {
   sendToSessionWindow,
 } from '@main/window/windowRegistry.js'
 import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
+import { screenInterest, screenTailHistory } from '@main/sessions/screenInterest.js'
 
 // Session event forwarder — the desktop WINDOW SINK over the SessionFeedTap.
 //
@@ -32,7 +33,10 @@ import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 //      `emptyRuntime()` for an unrecognized id, so a misrouted event grows a
 //      ghost runtime rather than being ignored.
 //   2. The IPC channel names (`session:<tap channel>`).
-//   3. The screen alias (#746), an IPC-edge byte optimisation.
+//   3. The screen alias (#746), an IPC-edge byte optimisation, and the
+//      screen-interest gate (#762): frames go only to a renderer that holds a
+//      lease (screenInterest.ts), while every frame still feeds the debug
+//      screen-tail history.
 //   4. Broadcast-only events that are machine-wide rather than per session.
 //
 // terminal-data and agent-pty-data are intentionally separate channels from
@@ -63,8 +67,17 @@ export function wireSessionForwarder(
     // `removed` is a cleanup signal the tap needed for its own buffers; the
     // desktop learns removal from workspace state, and never had an IPC
     // channel for it.
-    if (channel === 'removed') return
+    if (channel === 'removed') {
+      screenTailHistory.forget(payload.sessionId)
+      return
+    }
     if (channel === 'screen') {
+      const frame = payload as { sessionId: string } & AgentScreenSnapshot
+      // Recorded for EVERY frame, forwarded or not: debug bundles read this
+      // history, and it must not depend on whether a panel happened to be
+      // open (#762, screenInterest.ts).
+      screenTailHistory.record(frame.sessionId, frame.recent)
+      if (!screenInterest.wants(frame.sessionId)) return
       // WHY the alias happens here and not in the tap or the manager (#746):
       // the remote server and the recorder-independent readers take the full
       // payload; only the renderer IPC edge pays structured-clone bytes for
@@ -72,11 +85,7 @@ export function wireSessionForwarder(
       // back. (The session recorder taps this send, so recordings carry the
       // wire form; replay treats screen frames as no-op ticks and never reads
       // the fields.)
-      sendToSessionWindow(
-        payload.sessionId,
-        'session:screen',
-        aliasScreenSnapshotForWire(payload as { sessionId: string } & AgentScreenSnapshot),
-      )
+      sendToSessionWindow(frame.sessionId, 'session:screen', aliasScreenSnapshotForWire(frame))
       return
     }
     sendToSessionWindow(payload.sessionId, `session:${channel}`, payload)
