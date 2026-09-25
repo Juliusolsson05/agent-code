@@ -88,6 +88,27 @@ describe('Reply to Reader Message', () => {
     expect(h.submitDraft).not.toHaveBeenCalled()
   })
 
+  it('never quotes a lagging publication after Reader switches agents (steering k12)', () => {
+    // Reader switched from A (session-1) to B (session-2), but B's body has
+    // not published yet, so the stash still names A. Offering the command
+    // here quoted A's old message into A's draft while the reader showed B.
+    const h = harness()
+    const view = render(<ReaderView workspace={h.workspace} />)
+    ;(h.workspace.readerMode as { focusedSessionId: string }).focusedSessionId = 'session-2'
+    expect(command.when!(h.ctx)).toBe(false)
+    command.run(h.ctx)
+    expect(h.setDraftInput).not.toHaveBeenCalled()
+    expect(h.drafts['session-1']).toBe('my half-written reply')
+    expect(h.drafts['session-2']).toBe('other agent draft')
+
+    // Once B's body renders, it publishes B's message, and the quote goes to B.
+    view.rerender(<ReaderView workspace={{ ...h.workspace } as Workspace} />)
+    expect(command.when!(h.ctx)).toBe(true)
+    command.run(h.ctx)
+    expect(h.drafts['session-2']).toBe(prefixDraftWithQuote('other agent draft', 'Agent B answer').draft)
+    expect(h.drafts['session-1']).toBe('my half-written reply')
+  })
+
   it('is unavailable, and a stray run is a no-op, when Reader shows no message', () => {
     const h = harness({ entries: [] })
     render(<ReaderView workspace={h.workspace} />)

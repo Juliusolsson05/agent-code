@@ -34,14 +34,23 @@ function validPendingSelection(workspace: Workspace): PendingSelection | null {
   return pending
 }
 
-// The Reader's selected message, only while Reader Mode is actually open and
-// the message belongs to a live agent. The stash is module state that can
-// outlive the reader for a commit, so the open-reader check is what stops a
-// closed reader's last message from staying quotable.
+// The Reader's selected message, only while Reader Mode is actually open ON
+// THAT AGENT and the message belongs to a live agent. The stash is module
+// state that can lag the reader by a commit, in two ways:
+//   - the reader closed, and the last message is still published;
+//   - the reader SWITCHED from agent A to B (setReaderModeSession), and B's
+//     body has not published yet, so the stash still names A. Without the
+//     session match, the command offered, and ran, a quote of A's old
+//     message into A's draft while the reader showed B (steering k12).
+// So the published message must belong to the session the reader is focused
+// on right now. In the rare case where Reader falls back to the tab's first
+// agent because its focused session left the tab, the command is simply
+// unavailable until useReaderModeSanity repairs the state.
 function validReaderMessage(workspace: Workspace): ReaderMessage | null {
-  if (!workspace.readerMode) return null
+  const reader = workspace.readerMode
+  if (!reader) return null
   const message = peekReaderMessage()
-  if (!message) return null
+  if (!message || message.sessionId !== reader.focusedSessionId) return null
   const meta = workspace.state.sessions[message.sessionId]
   if (!meta || !isAgentSessionKind(meta.kind)) return null
   return message
