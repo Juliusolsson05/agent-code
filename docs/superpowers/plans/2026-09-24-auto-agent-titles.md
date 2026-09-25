@@ -1,6 +1,6 @@
 # Agent titles: let opted-in agents maintain a short current-job label
 
-Fixes #1210. Branch `feat/auto-agent-titles` · Worktree `.worktrees/auto-agent-titles` · Base `origin/main` @ `6d9ec6a7` (2026-09-24)
+Fixes #1210. Branch `feat/auto-agent-titles` · Worktree `.worktrees/auto-agent-titles` · Base `origin/main` @ `e2768246` after rebase (2026-09-24)
 Status: approved for full build by the user's “implement all of this” instruction.
 Decomposition: `docs/decomposition/auto-agent-titles.md` — its stages govern execution.
 
@@ -71,16 +71,16 @@ Run focused tests for each stage, then typecheck, lint, build and the project's 
 - 2026-09-24: Stage 0 source/corpus census recorded in decomposition. Fresh worktree from `origin/main`; unrelated root-worktree changes remain untouched.
 - 2026-09-24: Stages 1–3 implemented. Fail-first tests captured missing reducer, control capability, MCP tool, and hook behavior before the implementation. The real two-window Electron control test confirmed exact owner routing and manual precedence; undo/replacement tests confirmed durable title locks. Stage 3 provider verdict is in the decomposition: Claude/Codex have turn reminders; OpenCode/Grok/Pi currently use the tool and managed skill without a turn reminder.
 - 2026-09-24: Typecheck, package build/output verification, and 133 focused tests across 12 files passed. `npm run check` reached the full suite: 6,633 passed, two failed. The command-history storage failure reproduces on clean `origin/main` under Node 25.5.0 (filed as #1212). A legacy settings hydration test timed out only in the feature branch's full parallel run; it passed alone on both branches and in clean main's full run, so its cause remains unresolved. Clean main's full run had a separate extension-frame failure that did not appear on this branch. No production change was inferred from those failures.
-- 2026-09-24: One independent review round (ownership and provider integration) found a stalled-hook path, all-window title routing, old automatic title carryover for unrelated conversations, false Grok skill wording, inherited subagent title access, and a pre-revocation in-flight write. Commit `cd821179` fixes the first three and covers the real Resume Auto Title surface. All 137 focused tests in 13 files, typecheck, and package build/output verification pass after the fixes; reverting each of the three fixes made its regression test fail. Grok wording is corrected here and in README. Transport-level subagent exclusion and in-flight write ordering require provider/retirement contracts beyond this feature and are tracked in #1213 and #1214; Grok skill/hook delivery is #1215.
+- 2026-09-24: One independent review round (ownership and provider integration) found a stalled-hook path, all-window title routing, old automatic title carryover for unrelated conversations, false Grok skill wording, inherited subagent title access, and a pre-revocation in-flight write. Commit `351a0c53` fixes the first three and covers the real Resume Auto Title surface. All 137 focused tests in 13 files, typecheck, and package build/output verification pass after the fixes; reverting each of the three fixes made its regression test fail. Grok wording is corrected here and in README. Transport-level subagent exclusion and in-flight write ordering require provider/retirement contracts beyond this feature and are tracked in #1213 and #1214; Grok skill/hook delivery is #1215. Rebasing onto `origin/main` at `e2768246` applied cleanly; typecheck and all 137 focused tests passed again.
 
 ## Review disposition
 
 | Finding | Verdict | Disposition |
 |---|---|---|
-| Optional title read can outwait provider hook deadline | valid | Fixed in `cd821179`; 750 ms fail-open read preserves TLDR/Goal/Goal Loop hook handling. |
-| Title routing observes unrelated loading windows | valid | Fixed in `cd821179`; session window lease selects an explicit registered control owner. |
-| Unrelated conversation inherits previous automatic title | valid | Fixed in `cd821179`; auto provenance/title is dropped for a new conversation. |
+| Optional title read can outwait provider hook deadline | valid | Fixed in `351a0c53`; 750 ms fail-open read preserves TLDR/Goal/Goal Loop hook handling. |
+| Title routing observes unrelated loading windows | valid | Fixed in `351a0c53`; session window lease selects an explicit registered control owner. |
+| Unrelated conversation inherits previous automatic title | valid | Fixed in `351a0c53`; auto provenance/title is dropped for a new conversation. |
 | Grok receives no native managed skill | valid | Documentation corrected; native discovery and hook delivery tracked in #1215. |
-| Subagent can use inherited bearer to title parent pane | valid, provider transport work | Main-agent-only skill/tool guidance added in `cd821179`; hard exclusion tracked in #1213. |
+| Subagent can use inherited bearer to title parent pane | valid, provider transport work | Main-agent-only skill/tool guidance added in `351a0c53`; hard exclusion tracked in #1213. |
 | Admitted title write can finish after revocation | valid, lifecycle work | New requests are denied; manual precedence and unrelated-conversation reset limit the effect. Atomic ordering tracked in #1214. |
-| Resume UI surface was untested | valid coverage gap | Real surface test added in `cd821179` and mutation checked. |
+| Resume UI surface was untested | valid coverage gap | Real surface test added in `351a0c53` and mutation checked. |
