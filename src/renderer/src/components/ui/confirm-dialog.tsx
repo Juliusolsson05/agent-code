@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
-import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { DialogActions, focusDialogActionOnOpen } from '@renderer/components/ui/dialog-actions'
 
 // ConfirmDialog + requestConfirm — the in-app replacement for window.confirm
 // (keyboard-first plan decision D8; B7 and the steering reviewer concurred).
@@ -105,23 +105,14 @@ export function ConfirmDialog({
   tone = 'default',
   onResolve,
 }: ConfirmDialogProps) {
-  const contentRef = React.useRef<HTMLDivElement>(null)
   const danger = tone === 'danger'
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onResolve(false) }}>
       <DialogContent
-        ref={contentRef}
         size="sm"
-        onOpenAutoFocus={event => {
-          // Radix would focus the first tabbable element, which is Cancel
-          // (DialogActions puts it left of confirm) — correct for danger by
-          // accident of layout. Make both outcomes explicit so a footer
-          // reorder can never silently move focus onto a destructive button.
-          event.preventDefault()
-          const buttons = contentRef.current?.querySelectorAll<HTMLButtonElement>('[data-slot="dialog-footer"] button')
-          const target = danger ? buttons?.[0] : buttons?.[buttons.length - 1]
-          target?.focus()
-        }}
+        // Explicit for both tones so a footer reorder can never silently move
+        // focus onto a destructive button (see focusDialogActionOnOpen).
+        onOpenAutoFocus={focusDialogActionOnOpen(danger ? 'cancel' : 'confirm')}
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

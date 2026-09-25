@@ -154,6 +154,31 @@ export function focusedControlOwnsSpace(target: EventTarget | null): boolean {
   return target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA' || target.tagName === 'INPUT'
 }
 
+/**
+ * `onOpenAutoFocus` handler that lands focus on one of this dialog's
+ * DialogActions buttons (keyboard-first plan K1).
+ *
+ * WHY it exists: a DESTRUCTIVE dialog must open with focus on Cancel so that
+ * a reflexive Enter cancels. Radix's default — "the first tabbable element" —
+ * happened to be Cancel in most footers only because Cancel is rendered
+ * first; any body control (a checkbox, a list) or a footer reorder silently
+ * moved focus elsewhere. Keyed on `data-dialog-action`, not DOM order, so the
+ * choice survives layout changes. Non-destructive single-commit dialogs use
+ * 'confirm' so Enter-on-open commits.
+ *
+ * Falls back to Radix's default when the button is absent (a confirm-only
+ * footer asked for 'cancel'), so focus is never left on <body>.
+ */
+export function focusDialogActionOnOpen(which: 'cancel' | 'confirm') {
+  return (event: Event) => {
+    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+    const target = root?.querySelector<HTMLButtonElement>(`[data-dialog-action="${which}"]:not(:disabled)`)
+    if (!target) return
+    event.preventDefault()
+    target.focus()
+  }
+}
+
 export function DialogActions({
   confirmLabel,
   onConfirm,
@@ -230,7 +255,7 @@ export function DialogActions({
         </div>
       ) : null}
       {onCancel ? (
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+        <Button variant="ghost" size="sm" data-dialog-action="cancel" onClick={onCancel}>
           {cancelLabel}
           {escapeCancels ? <Kbd binding="Escape" /> : null}
         </Button>
@@ -238,6 +263,7 @@ export function DialogActions({
       <Button
         variant={tone === 'danger' ? 'destructive' : 'default'}
         size="sm"
+        data-dialog-action="confirm"
         disabled={blocked}
         onClick={onConfirm}
       >

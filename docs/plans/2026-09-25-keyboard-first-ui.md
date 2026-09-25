@@ -399,7 +399,7 @@ entry when it lands.
 
 | # | Surface (file) | Keys today | Fix | Status |
 |---|---|---|---|---|
-| S1 | CloseConfirmationDialog (`workspace/ui`) | default focus Cancel; no Enter; no hints | DialogActions (danger, focus Cancel, chips); body px-4 (flush today) | todo |
+| S1 | CloseConfirmationDialog (`workspace/ui`) | default focus Cancel; no Enter; no hints | DialogActions (danger, focus Cancel, chips); body px-4 (flush today) | done |
 | S2 | PinAgentsModal (`dispatch-pin`) | ↑↓ j/k Space Enter; bare `<kbd>` legend in body; p-5 | legend → DialogActions legend; useListNavigation; T3 anatomy + header | todo |
 | S3 | ReorderTabsModal | ↑↓, two-phase Enter; no hints; p-5, outline Cancel | legend (↑↓ move · ↵ pick/drop); DialogActions; T3 | todo |
 | S4 | AgentViewModePickerModal | ↑↓ Enter; no hints | useListNavigation; legend; chips | todo |
@@ -553,6 +553,10 @@ Sharp corners and one light theme.
   outline, the chosen one keeps its ink ring; section labels are 10px
   "MODE"/"ACCENT"; Escape closes and the ring returns to the eye; the panel
   uses popover colours + theme shadow instead of the old hard rgba.
+- **S1 Close confirmation (close a working agent; Close Tab over several):**
+  the target list and the "Undo Close restores…" note are inset 16px from
+  the dialog edge (they ran flush before); width 440; focus ring on Cancel
+  at open; `Cancel ⎋` + red `Close 2` with no chip; list rows 12px.
 
 ## Tasks
 
@@ -627,6 +631,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S1: CloseConfirmationDialog on DialogActions (danger,
+  confirmKey null) + `focusDialogActionOnOpen` helper extracted into
+  dialog-actions (ConfirmDialog migrated onto it). Confirm-red observed for
+  the new focus/chip test on the pre-change dialog. The "exactly two
+  answers" test now compares accessible names (chips are aria-hidden
+  decoration).
 - 2026-09-25 M1: AppearanceMenu on DropdownMenu radio/checkbox items (menu
   stays open on select). Confirm-red observed: all 3 tests fail on the
   pre-change component.
