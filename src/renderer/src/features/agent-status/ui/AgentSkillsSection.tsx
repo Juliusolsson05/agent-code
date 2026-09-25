@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { AGENT_CODE_MANAGED_SKILLS_CHANGED_EVENT } from '@renderer/features/settings/lib/agentCodeManagedSkillsEvents'
@@ -76,7 +77,7 @@ function SkillInventory({ kind, cwd }: { kind: SessionKind; cwd: string }) {
           {state.status === 'error' ? <p role="alert" className="px-2 pb-2 text-danger">Could not load installed skills. Refresh to try again.</p> : null}
           {state.status === 'ready' ? (
             <>
-              {state.snapshot.skills.length === 0 ? <p className="px-2 pb-2 text-muted">No installed skills found in the checked locations.</p> : (
+              {state.snapshot.skills.length === 0 ? <EmptyState size="inline" className="px-2 pt-0 pb-2">No installed skills found in the checked locations.</EmptyState> : (
                 <ul className="divide-y divide-border/70">
                   {state.snapshot.skills.map(skill => (
                     <li key={skill.path} className="min-w-0 px-2 py-2">

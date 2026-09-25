@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useState } from 'react'
 import { Alert } from '@renderer/components/ui/alert'
 
@@ -95,7 +96,7 @@ export function AiWorkspaceFileList({
             Loading AI Workspace…
           </div>
         ) : entries.length === 0 ? (
-          <div className="px-2 py-1 text-muted">No files attached.</div>
+          <EmptyState size="inline" className="px-2 py-1">No files attached.</EmptyState>
         ) : (
           entries.map(entry => {
             const stale = !entry.status.exists || !entry.status.readable

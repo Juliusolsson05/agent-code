@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import type { MonitorIncident, MonitorIncidentSummary } from '@shared/performance/monitorIncidents.js'
@@ -39,7 +40,8 @@ export function Incidents({ incidents, readIncident = readLiveIncident, focus = 
       .catch(() => {}).finally(() => { if (!disposed) setLoading(false) })
     return () => { disposed = true }
   }, [readIncident, revision, selected])
-  if (!incidents.length) return <p className="text-muted">No incidents detected in the available history. Missing or dropped samples may limit coverage.</p>
+  // The whole tab is empty, so the list-size EmptyState (G-39).
+  if (!incidents.length) return <EmptyState>No incidents detected in the available history. Missing or dropped samples may limit coverage.</EmptyState>
   return <div className="grid gap-4 md:grid-cols-[260px_minmax(0,1fr)]">
     <div className="space-y-2" aria-label="Detected incidents">{[...incidents].reverse().map(incident => <button key={`${incident.at}:${incident.id}`} className={`block w-full rounded-slab border p-3 text-left ${selected?.at === incident.at && selected.id === incident.id ? 'border-accent bg-accent/5' : 'border-border bg-canvas'}`} onClick={() => setSelected(incident)}>
       <div className="font-medium capitalize">{incident.rule.replace(/-/g, ' ')}</div>

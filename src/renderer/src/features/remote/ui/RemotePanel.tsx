@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useCallback, useEffect, useState } from 'react'
 import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import QRCode from 'qrcode'
@@ -257,9 +258,11 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
 
           {/* Devices */}
           <div className="border-t border-border pt-3 flex flex-col gap-2">
-            <div className="font-medium">Paired devices</div>
+            <div className="font-medium">Paired Devices</div>
             {devices.length === 0 ? (
-              <div className="text-ink-dim">No devices paired yet.</div>
+              // The shared empty state (G-39): it was `text-ink-dim`, one step
+              // brighter than every other "nothing here" line.
+              <EmptyState size="inline" className="px-0 py-0">No devices paired yet.</EmptyState>
             ) : (
               devices.map(device => (
                 <div key={device.deviceId} className="flex items-center justify-between gap-2">
