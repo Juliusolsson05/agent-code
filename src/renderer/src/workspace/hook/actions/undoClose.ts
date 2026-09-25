@@ -106,6 +106,11 @@ export function carryDurableMeta(spawned: SessionMeta | undefined, closed: Sessi
     // alone orders rows inside a project, and undo puts things BACK.
     ...(closed.projectId !== undefined ? { projectId: closed.projectId } : {}),
     ...(closed.joinedAt !== undefined ? { joinedAt: closed.joinedAt } : {}),
+    // A terminal's last use (#1178). Undo re-attaches the SAME still-alive
+    // tmux session, so its history of use is the closed one's; dropping it
+    // would hand the restored shell a fresh floor and make it look unused
+    // since the moment it came back (review of #1179).
+    ...(closed.lastUsedAt !== undefined ? { lastUsedAt: closed.lastUsedAt } : {}),
   }
 }
 
