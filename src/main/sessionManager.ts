@@ -5542,9 +5542,6 @@ export class SessionManager extends EventEmitter {
     return buffer ? { raw: buffer.read(), capChars: buffer.cap } : null
   }
 
-  /** Latest screen snapshot observed for a live session, or null before the
-   *  first frame. See the cache fields' WHY comment — this exists for
-   *  late-attaching consumers (remote companion) to seed their state. */
   /**
    * Retained Codex proxy state across every live session (#369): flows the
    * adapters still hold and their undrained SSE text. Sampled into the
@@ -5564,6 +5561,9 @@ export class SessionManager extends EventEmitter {
     return { flows, bufferedChars }
   }
 
+  /** Latest screen snapshot observed for a live session, or null before the
+   *  first frame. See the cache fields' WHY comment — this exists for
+   *  late-attaching consumers (remote companion) to seed their state. */
   getScreenSnapshot(sessionId: string): AgentScreenSnapshot | null {
     return this.lastScreenSnapshot.get(sessionId) ?? null
   }
