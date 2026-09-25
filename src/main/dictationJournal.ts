@@ -65,6 +65,37 @@ const FLUSH_INTERVAL_MS = 100
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 
 /**
+ * Per-file byte budget (#1276).
+ *
+ * WHY: the 14-day prune bounds how LONG files live, not how big one gets.
+ * One press whose recorder ran 32.8 h (#1299) wrote a 1.196 GB file, and
+ * 96 % of it was per-chunk and per-sample events: recorder:dataavailable,
+ * the CHUNK layer, deepgram:chunk:*, deepgram:message and AUDIO_LEVEL
+ * `sample`, each several times a second. Only 17 events in the whole file
+ * were lifecycle. 16 MiB holds tens of minutes of full-detail capture,
+ * far more than a normal press, and past it the lifecycle, error and stop
+ * events still land, because those are what an investigation reads.
+ */
+const MAX_JOURNAL_BYTES = 16 * 1024 * 1024
+
+/**
+ * How many journals the registry keeps (#1276). A press id is a fresh UUID
+ * that is never reused, and nothing disposed of them, so a long-running app
+ * kept one writer per press forever. The oldest is flushed and evicted.
+ */
+const MAX_OPEN_JOURNALS = 64
+
+/** The events that repeat per audio chunk or level sample; see
+ *  MAX_JOURNAL_BYTES for the measured share. */
+function isHighFrequency(input: DictationDebugEventInput): boolean {
+  return input.layer === 'CHUNK'
+    || input.event === 'sample'
+    || input.event === 'recorder:dataavailable'
+    || input.event.startsWith('deepgram:chunk:')
+    || input.event === 'deepgram:message'
+}
+
+/**
  * Append-only writer for a single dictation session's debug log. The
  * companion registry below keeps one per debugSessionId.
  *
@@ -94,7 +125,14 @@ export class DictationDebugJournal {
    */
   private sessionStartedAtMs: number | null = null
 
-  constructor(private readonly filePath: string) {}
+  /** Bytes handed to the writer so far; see MAX_JOURNAL_BYTES. */
+  private bytesQueued = 0
+  private suppressedHighFrequency = false
+
+  constructor(
+    private readonly filePath: string,
+    private readonly options: { maxBytes?: number } = {},
+  ) {}
 
   /**
    * Enqueue one event for the next drain. Returns immediately; the
@@ -110,7 +148,21 @@ export class DictationDebugJournal {
       tMs: now - this.sessionStartedAtMs,
       ...input,
     }
-    this.queue.push(JSON.stringify(event) + '\n')
+    if (this.bytesQueued >= (this.options.maxBytes ?? MAX_JOURNAL_BYTES) && isHighFrequency(input)) {
+      if (this.suppressedHighFrequency) return
+      // Say so once, in the file itself, so a reader knows the chunk trail
+      // ends here by design and not because the stream stopped.
+      this.suppressedHighFrequency = true
+      this.push({ ts: now, tMs: event.tMs, layer: 'META', event: 'journal:high-frequency-suppressed', data: { afterBytes: this.bytesQueued } })
+      return
+    }
+    this.push(event)
+  }
+
+  private push(event: DictationDebugEvent): void {
+    const line = JSON.stringify(event) + '\n'
+    this.bytesQueued += Buffer.byteLength(line)
+    this.queue.push(line)
     this.scheduleDrain()
   }
 
@@ -184,6 +236,13 @@ export class DictationDebugJournalRegistry {
     if (!j) {
       j = new DictationDebugJournal(dictationDebugLogPath(debugSessionId))
       this.journals.set(debugSessionId, j)
+      // Insertion order is age: evict the oldest press (flushing it first),
+      // never the one just asked for. See MAX_OPEN_JOURNALS.
+      while (this.journals.size > MAX_OPEN_JOURNALS) {
+        const oldest = this.journals.keys().next().value
+        if (oldest === undefined || oldest === debugSessionId) break
+        this.dispose(oldest)
+      }
     }
     return j
   }
@@ -200,6 +259,10 @@ export class DictationDebugJournalRegistry {
       }),
     )
     await Promise.all(drains)
+  }
+
+  get size(): number {
+    return this.journals.size
   }
 
   dispose(debugSessionId: string): void {
