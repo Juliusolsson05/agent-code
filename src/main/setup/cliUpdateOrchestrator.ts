@@ -210,6 +210,8 @@ export class CliUpdateOrchestrator extends EventEmitter {
         wantedLatest: latestVersion,
         reason: 'session-active',
         checkedAt: Date.now(),
+        // The manual path: the banner explains itself (#1243).
+        requestedByUser: true,
       })
       return
     }

@@ -44,7 +44,7 @@ type BannerEntry = {
   undismissable?: boolean
 }
 
-function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry | null {
+export function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry | null {
   const label = cli === 'claude' ? 'Claude Code' : 'Codex'
   switch (state.kind) {
     case 'updating':
@@ -122,9 +122,17 @@ function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry |
           },
         },
       }
+    case 'deferred':
+      // Automatic deferrals stay silent ("we'll do it later" needs no
+      // banner). A deferral of the user's own click is answered (#1243):
+      // before, the banner simply vanished with no update and no reason.
+      if (!state.requestedByUser) return null
+      return {
+        tone: 'info',
+        text: `${label} ${state.wantedLatest} is ready, but ${label} agents are running. Close them to update (now ${state.from}).`,
+      }
     case 'idle':
     case 'up-to-date':
-    case 'deferred':
     default:
       return null
   }
