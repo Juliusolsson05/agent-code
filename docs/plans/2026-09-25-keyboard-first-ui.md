@@ -515,6 +515,45 @@ hard-coded rgba shadows and `shadow-lg`/`shadow-2xl`).
 | X4 | Stale comments (`defaults.ts` dictation) | done |
 | X5 | Undefined theme tokens (`text-fg`, `bg-surface-raised`) outside the S-rows — found in S10/S11 | done (N2/N3) |
 
+### Keyboard sweep 2 (Task 7): unverified until a row is worked
+
+Source: a whole-app read-only sweep on 2026-09-25 (Explore agent, then each
+row re-read before work). Ranked by impact. "title-only" = information that
+exists only in a hover `title`, which no keyboard or touch user can reach.
+
+| # | Surface (file:line at sweep time) | Gap | Target | Status |
+|---|---|---|---|---|
+| K2-1 | Goal-loop overlay (`features/goal-loop/GoalLoopPane.tsx:34,152`; gate `useKeybinds.ts:524-560`) | `role="dialog"`, but the capture gate eats every key except ⎋ and the toggle chord, so Tab, Enter and Space never reach Pause/Resume/Raise cap/Stop; focus is never moved in | let focus-navigation keys through inside the overlay; focus the first action on open; return focus on close | todo |
+| K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | todo |
+| K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | todo |
+| K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | todo (N13) |
+| K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
+| K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | todo |
+| K2-7 | Editor tab error `!` (`editor/ui/EditorTabs.tsx:201`) | error detail title-only | accessible description + banner | todo |
+| K2-8 | PocketStrip preview (`browser-pocket/ui/PocketStrip.tsx:33-37,64`) | thumbnail on mouseenter only | same handlers on focus/blur | todo |
+| K2-9 | PocketStrip status spans (`PocketStrip.tsx:58-62`) | agent/paused/failure/err-count title-only | visible or focusable status text | todo |
+| K2-10 | Dispatch "new" / goal-loop chips (`dispatch/DispatchAgentList.tsx:369,378,670,697`) | explanation title-only | aria-describedby on the row | todo |
+| K2-11 | MCP dialog disabled provider (`mcp/ui/McpServerDialog.tsx:326,461`) | reason in label title; disabled input unfocusable | visible muted reason | todo |
+| K2-12 | Pane header / agent title (`TileLeaf/PaneHeader.tsx:177`, `AgentTitleHeader.tsx:38`) | full path/title title-only | reachable via focusable header or status | todo |
+| K2-13 | Worktree badge (`TileLeaf/SessionBadges.tsx:56`) | branch/touched files title-only | reveal on focus / Agent Status | todo |
+| K2-14 | Provider tool rows (CommandView, CodeEditView, Claude read/web/agent, Codex embedded-op/plan/tool-result) | truncated full command/path title-only | show full text when expanded | todo |
+| K2-15 | PocketedLeaf viewport note (`PocketedLeaf.tsx:115`) | title-only | visible helper / menu | todo |
+| K2-16 | McpServersRow summary + Unsupported reason (`McpServersRow.tsx:183,252`) | title-only | inline reason | todo |
+| K2-17 | Keybindings palette checkbox suppressed reason (`CommandKeybindingsRow.tsx` PaletteToggle) | reason title-only for sighted keyboard users | visible "Hidden while X is off" | todo |
+| K2-18 | SkillsGrid "shared" chip + ●/— cells (`skills/ui/SkillsGrid.tsx:498,586`) | meaning title-only | column legend | todo |
+| K2-19 | Dictation history WPM caveat (`DictationHistoryRow.tsx:106`) | title-only | footnote | todo |
+| K2-20 | Close Old "not observed yet" (`CloseOldAgentsModal.tsx:712`) | guidance title-only | visible second line | todo |
+| K2-21 | Bulk switch exhausted source (`BulkProviderSwitchModal.tsx:777`) | disabled reason title-only | inline reason | todo |
+| K2-22 | Perf Overview incident markers (`ResourceCharts.tsx:84` → `TimeSeriesChart.tsx:184`) | marker label only in SVG title | include in keyboard readout | todo |
+| K2-23 | WorktreesBar category (`worktrees/ui/WorktreesBar.tsx:338,345`) | meaning title-only | visible/expandable | todo |
+| K2-24 | TopConsumers caveats (`performance-monitor/overview/TopConsumers.tsx:95,105`) | title-only | visible marker ("≥") | todo |
+
+Ruling for the title-only family (K2-5…K2-24): one pattern, not 20 local
+fixes. Where information matters for a decision (K2-5/6/11/17/20/21), it
+becomes visible text. Where it is detail (paths, counts), it becomes
+reachable on focus. Pure decoration keeps its `title`. Cost if wrong: some
+rows stay hover-only; recorded per row.
+
 ## Owner visual checklist
 
 What to eyeball per surface once built (the app is never launched here). One
