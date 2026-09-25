@@ -64,6 +64,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
+import { curatedSpawnMessage } from '@renderer/workspace/spawn/errorMessage'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -968,8 +969,8 @@ export function usePaneActions(
           resumeSessionId,
           builtInMcpOverrides,
         })
-      } catch {
-        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent'))
+      } catch (err) {
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err))
         return
       }
 
@@ -1132,8 +1133,8 @@ export function usePaneActions(
       let sessionId: SessionId
       try {
         sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
-      } catch {
-        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent'))
+      } catch (err) {
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err))
         return null
       }
 
@@ -1179,7 +1180,7 @@ export function usePaneActions(
         await sessionActions.killSession(sessionId, 'spawn.unplaced', { cwd, kind, providerRuntime })
         // Say why nothing appeared (#1286 review A3): the overlay stays open
         // and Enter works again, and without this a retry looked arbitrary.
-        showToast('Could not create agent: its project was closed while it was starting')
+        showToast(`Could not create ${kind === 'terminal' ? 'terminal' : 'agent'}: its project was closed while it was starting`)
         return null
       }
       if (placement?.selectCreated !== false) closeNewAgentPlacement()
@@ -1237,8 +1238,8 @@ export function usePaneActions(
       let sessionId: SessionId
       try {
         sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind, providerRuntime })
-      } catch {
-        showToast(spawnFailureToast('linked agent'))
+      } catch (err) {
+        showToast(spawnFailureToast('linked agent', err))
         return
       }
 
@@ -1920,12 +1921,16 @@ export function usePaneActions(
 
 /** What the user sees when creating an agent or terminal fails to spawn.
  *
- *  WHY never the rejection's own text (steering q22, #1270): it is the raw
- *  provider exception relayed through IPC and can carry environment values,
- *  proxy URLs or scoped MCP tokens. Main journals the raw error before it
- *  rethrows, so nothing is lost for debugging; the safe sentence is the one
- *  main's recovery and the reload path already show. (A missing workspace
- *  folder, whose text main curates as safe, is #1267's to carry through.) */
-function spawnFailureToast(what: string): string {
-  return `Could not create ${what}: ${SESSION_START_FAILED_MESSAGE}`
+ *  WHY never the rejection's raw text (steering q22, #1270): a raw provider
+ *  exception relayed through IPC can carry environment values, proxy URLs or
+ *  scoped MCP tokens, and main journals it before it rethrows. But the three
+ *  curated failures (Claude proxy startup, a missing workspace folder, a
+ *  missing provider CLI) are safe and name the fix, and without them a
+ *  deleted worktree looked retryable and a missing CLI gave no pointer to
+ *  File › Setup… (#1286 review C1). `spawn` has already mapped its rejection
+ *  through sessionSpawnErrorMessage; this re-reads it with the same
+ *  recognizer, so anything else is still the generic sentence. */
+function spawnFailureToast(what: string, err: unknown): string {
+  const curated = err instanceof Error ? curatedSpawnMessage(err.message) : null
+  return `Could not create ${what}: ${curated ?? SESSION_START_FAILED_MESSAGE}`
 }

@@ -25,3 +25,10 @@ it('keeps main\'s curated missing-folder text, without the IPC wrapper', () => {
 it('keeps the actionable Claude proxy rewrite', () => {
   expect(sessionSpawnErrorMessage('claude', new Error('Timed out waiting for mitmproxy'), true)).toContain('Claude proxy startup failed')
 })
+
+// #1286 review C2: main's ProviderCliNotFoundError is curated and names the
+// fix (File › Setup…). It arrives wrapped by IPC and must survive as itself.
+it('keeps main\'s curated CLI-not-found sentence, without the IPC wrapper', () => {
+  const relayed = "Error invoking remote method 'session:spawn': ProviderCliNotFoundError: claude CLI not found. Open Setup (File › Setup…) to install it or enter its path."
+  expect(sessionSpawnErrorMessage('claude', new Error(relayed), false)).toBe('claude CLI not found. Open Setup (File › Setup…) to install it or enter its path.')
+})

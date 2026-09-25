@@ -186,3 +186,21 @@ it('never toasts the raw spawn rejection from splitFocused or createLinkedAgent'
   harness.mounted.unmount()
 })
 
+// #1286 review C1: `spawn` already turned the rejection into a safe message
+// (sessionSpawnErrorMessage). The curated ones carry the fix, so a create
+// must show them; only the generic flattening hides the raw text.
+it('shows the curated spawn failures a create can act on', async () => {
+  const curated = [
+    'Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment.',
+    'Workspace folder is missing: /repo/.worktrees/gone',
+    'codex CLI not found. Open Setup (File › Setup…) to install it or enter its path.',
+  ]
+  for (const message of curated) {
+    const harness = mountPaneActions(state(), { spawn: vi.fn().mockRejectedValue(new Error(message)) })
+    await act(async () => {
+      expect(await harness.actions.createDetachedDispatchAgent({ kind: 'codex' })).toBeNull()
+    })
+    expect(harness.showToast).toHaveBeenCalledWith(`Could not create agent: ${message}`)
+    harness.mounted.unmount()
+  }
+})
