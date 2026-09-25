@@ -114,7 +114,7 @@ describe('ConversationsPicker', () => {
     install()
     const ws = workspace({ activeTab: null, newTab: vi.fn(async () => { throw new Error('newTab already toasted this') }) })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Everywhere' }))
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     await waitFor(() => expect(ws.newTab).toHaveBeenCalled())
@@ -127,7 +127,7 @@ describe('ConversationsPicker', () => {
     const ws = workspace({ state: { ...base.state, stage: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 } } })
     render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
     // Without a pane only the everywhere scope lists rows.
-    fireEvent.click(screen.getByRole('button', { name: 'everywhere' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Everywhere' }))
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     expect(await screen.findByText(/no agent pane is selected/)).toBeInTheDocument()
