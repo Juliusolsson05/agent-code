@@ -33,7 +33,7 @@ const rows = [
 function response(over: Partial<ConversationListResponse> = {}): ConversationListResponse {
   return { rows, total: 5, hiddenChildren: 2, nextCursor: null, family: { repoRoot: '/fixture/repo', roots: ['/fixture/repo'] }, timing: { ms: 3 }, ...over }
 }
-function install(list = vi.fn(async () => response())) {
+function install(list: Mock = vi.fn(async () => response())) {
   Object.defineProperty(window, 'api', { configurable: true, value: { listConversations: list, loadInitialHistory: vi.fn(async () => ({ entries: [], hasMore: false })) } })
   return list
 }
