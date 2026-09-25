@@ -227,6 +227,10 @@ type Props = {
   }) => void
 }
 
+/** Exported for AgentFeed (#1177), which maps a runtime onto these props
+ *  once for every surface that paints an agent feed. */
+export type FeedProps = Props
+
 // VisibleDecision + DebugVisibleRow moved to ../types.ts.
 // debugKeyForEntry + debugLabelForEntry moved to ../lib/helpers.ts.
 

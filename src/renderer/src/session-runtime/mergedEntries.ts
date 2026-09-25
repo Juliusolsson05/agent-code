@@ -104,7 +104,7 @@
 // rows at the bottom of every feed again.
 
 import type { Entry } from '@shared/types/transcript'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import type { ClaudeContentBlock, GhostEntry } from 'agent-transcript-parser/ghost'
 import { mergeWithUpstream } from 'agent-transcript-parser/ghost'
 
@@ -146,7 +146,9 @@ function ghostHasSidecarShape(ghost: GhostEntry): boolean {
  * design.
  */
 export function selectMergedEntries(
-  runtime: SessionRuntime,
+  // A slice, not SessionRuntime (#1177): these are the only planes the
+  // predicate reads, and the phone's feed has no full runtime to pass.
+  runtime: Pick<RuntimeRenderInput, 'entries' | 'ghosts' | 'lastJsonlEntryAt' | 'semantic'>,
   currentTurnId: string | null,
 ): Entry[] {
   const { ghosts, entries, lastJsonlEntryAt } = runtime

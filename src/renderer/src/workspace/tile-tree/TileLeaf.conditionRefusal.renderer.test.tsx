@@ -23,7 +23,7 @@ import { TileLeaf } from './TileLeaf'
 // renders a button that invokes the real `onConditionRefused` prop with a real
 // refusal. Everything after that point — the describer, the toast surface, the
 // duration — is the app's own, unmocked. The one thing this cannot see is
-// whether `makeDispatchFromOnSend` calls the reporter at all; that is covered
+// whether `makeOutletDispatch` calls the reporter at all; that is covered
 // against the real dispatcher in
 // src/providers/shared/renderer/conditions/dispatchRefusal.renderer.test.tsx.
 
