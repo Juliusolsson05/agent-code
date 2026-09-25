@@ -217,7 +217,7 @@ export function ExplorerPane({
         })
       } catch (err) {
         if (generation !== loadGenerationRef.current) return
-        const message = err instanceof Error ? err.message : 'Could not read directory.'
+        const message = err instanceof Error ? err.message : 'Could not read folder.'
         if (path === '') setError(message)
         setNodes(prev => {
           const current = prev[path]

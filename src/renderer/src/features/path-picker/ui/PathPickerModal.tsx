@@ -332,7 +332,7 @@ export function PathPickerModal({
         onInteractOutside={event => { if (busy) event.preventDefault() }}
       >
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle>New Tab — Working Directory</DialogTitle>
+          <DialogTitle>New Tab — Working Folder</DialogTitle>
           <DialogDescription className="sr-only">
             Choose a provider and working directory, then start or resume a session.
           </DialogDescription>
