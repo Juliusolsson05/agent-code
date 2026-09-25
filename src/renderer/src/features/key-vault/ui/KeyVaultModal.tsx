@@ -70,6 +70,15 @@ export function KeyVaultModal() {
   // inline input row follows the same pattern as "New provider…".
   const [providerRename, setProviderRename] = useState<{ id: string; name: string } | null>(null)
   const [keyForm, setKeyForm] = useState<KeyForm>(null)
+  // What the form held when it OPENED (steering note k6): an Edit form is
+  // seeded with the key's name and note, so "non-empty" is not "changed".
+  // The value field is always opened blank — for an edit, blank means "keep
+  // the current secret" — so any typed value is a change in both modes.
+  const [keyFormBaseline, setKeyFormBaseline] = useState<{ name: string; note: string }>({ name: '', note: '' })
+  const openKeyForm = (form: NonNullable<KeyForm>) => {
+    setKeyForm(form)
+    setKeyFormBaseline({ name: form.name, note: form.note })
+  }
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -146,27 +155,53 @@ export function KeyVaultModal() {
   // secret the user just copied from a provider console. Escape, an outside
   // click and Close route through requestClose, which asks before throwing an
   // edited key form away; an untouched or absent form closes at once.
-  const keyFormDirty = keyForm !== null && (keyForm.value !== '' || keyForm.name !== '' || keyForm.note !== '')
-  const requestClose = async () => {
-    if (keyFormDirty && !(await requestConfirm({
+  const keyFormDirty = keyForm !== null && (
+    keyForm.value !== ''
+    || keyForm.name !== keyFormBaseline.name
+    || keyForm.note !== keyFormBaseline.note
+  )
+  // THE one transition guard (steering note k6): every path that would
+  // replace or drop an edited key form — closing the vault, switching
+  // provider by arrow or click, opening another key's Edit, "+ New Key" —
+  // asks here first and proceeds only on confirmation. The confirm is
+  // destructive-toned, so it opens with focus on Cancel. (Locking the vault
+  // is deliberately NOT routed here: clearing plaintext on lock is a
+  // security action that must not wait on a dialog.)
+  //
+  // Runs `proceed` SYNCHRONOUSLY when nothing is at stake: an untouched form
+  // must not add a microtask of delay (or an await) to every provider switch
+  // and Edit — only a real edit waits on the confirm.
+  const withKeyFormGuard = (proceed: () => void) => {
+    if (!keyFormDirty) {
+      proceed()
+      return
+    }
+    void requestConfirm({
       title: 'Discard this key?',
       description: 'The name and value you typed will be lost.',
       confirmLabel: 'Discard Key',
       tone: 'danger',
-    }))) return
-    closeKeyVault()
+    }).then(confirmed => { if (confirmed) proceed() })
   }
+  const requestClose = () => withKeyFormGuard(closeKeyVault)
 
   // The provider list is a vertical TABLIST (plan S36, same as Usage's rail):
   // one Tab stop, ↑↓ move focus and selection together, Home/End jump, wrap.
   const providerRefs = useRef(new Map<string, HTMLButtonElement>())
+  const selectProvider = (providerId: string, focus: boolean) => {
+    if (providerId === selectedProviderId) return
+    // Switching provider drops the form, so it goes through the guard.
+    withKeyFormGuard(() => {
+      setSelectedProviderId(providerId)
+      setKeyForm(null)
+      setProviderRename(null)
+      if (focus) providerRefs.current.get(providerId)?.focus()
+    })
+  }
   const selectProviderIndex = (index: number) => {
     if (providers.length === 0) return
     const provider = providers[((index % providers.length) + providers.length) % providers.length]!
-    setSelectedProviderId(provider.id)
-    setKeyForm(null)
-    setProviderRename(null)
-    providerRefs.current.get(provider.id)?.focus()
+    selectProvider(provider.id, true)
   }
   const onProviderKeyDown = (event: React.KeyboardEvent) => {
     const current = Math.max(0, providers.findIndex(provider => provider.id === selectedProviderId))
@@ -267,7 +302,7 @@ export function KeyVaultModal() {
   const selectedProvider = providers.find(p => p.id === selectedProviderId) ?? null
 
   return (
-    <Dialog open onOpenChange={nextOpen => { if (!nextOpen) void requestClose() }}>
+    <Dialog open onOpenChange={nextOpen => { if (!nextOpen) requestClose() }}>
       <DialogContent size="lg" className="flex max-h-[85vh] flex-col overflow-hidden">
         {/* `flex` has to accompany `flex-row` here. DialogHeader's base class
             list is a plain block, so flex-row/items-center/justify-between
@@ -361,7 +396,7 @@ export function KeyVaultModal() {
                         ? 'bg-row-selected-bg text-ink'
                         : 'text-muted hover:bg-row-hover-bg hover:text-ink'
                     }`}
-                    onClick={() => { setSelectedProviderId(provider.id); setKeyForm(null); setProviderRename(null) }}
+                    onClick={() => selectProvider(provider.id, false)}
                     title={provider.name}
                   >
                     {/* The row the Delete below acts on: escaped here too, so
@@ -421,7 +456,7 @@ export function KeyVaultModal() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setKeyForm({ name: '', value: '', note: '' })}
+                          onClick={() => withKeyFormGuard(() => openKeyForm({ name: '', value: '', note: '' }))}
                         >
                           + New Key
                         </Button>
@@ -498,7 +533,7 @@ export function KeyVaultModal() {
                             Insert
                           </Button>
                           <Button type="button" variant="ghost" size="xs"
-                            onClick={() => setKeyForm({ id: key.id, name: key.name, value: '', note: key.note })}
+                            onClick={() => withKeyFormGuard(() => openKeyForm({ id: key.id, name: key.name, value: '', note: key.note }))}
                           >
                             Edit
                           </Button>
@@ -576,7 +611,7 @@ export function KeyVaultModal() {
           keyring · One unlock per app launch · An inserted key sits in the saved draft (or terminal
           scrollback) until sent or cleared
         </p>
-        <DialogActions onCancel={() => void requestClose()} cancelLabel="Close" />
+        <DialogActions onCancel={requestClose} cancelLabel="Close" />
       </DialogContent>
     </Dialog>
   )

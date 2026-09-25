@@ -743,7 +743,9 @@ Sharp corners and one light theme.
   every field is the standard input (were pills); the row actions (Reveal,
   Copy, Insert, Edit, Delete, Rename) are small ghost/outline buttons with
   focus rings (were bare text); the key form's `Save ↩` saves on Enter; with
-  a key half-typed, Escape asks "Discard this key?"; the long note sits
+  a key half-typed, Escape, switching provider (arrow or click), opening
+  another key's Edit or "+ New Key" all ask "Discard this key?" (focus on
+  Cancel) — an untouched Edit form never asks; the long note sits
   above a footer that is now just `Close ⎋`; 860 wide.
 
 ## Tasks
@@ -819,6 +821,16 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k6 (valid): (1, high) provider switch by
+  arrow/click cleared a typed key without asking — every form-replacing
+  path (close, provider switch, Edit, + New Key) now goes through one
+  `withKeyFormGuard` (synchronous when nothing is at stake, confirm only
+  for a real edit; lock stays unguarded — clearing plaintext on lock must
+  not wait). (2, medium) an untouched Edit read as dirty — dirtiness now
+  compares against the form's OPENED baseline (value always opens blank =
+  keep current). Confirm-red: 3 new tests fail on 5ccef960. Mutations: guard
+  bypass on provider switch fails 3 tests; baseline → "non-empty" fails the
+  untouched-Edit test.
 - 2026-09-25 S36: Key Vault — provider tablist (roving), Input primitive
   (5 pill inputs), Button for 7 text-link actions (scripted), key-form Enter
   save + discard confirm (B7's D3 condition), close-only footer with the
