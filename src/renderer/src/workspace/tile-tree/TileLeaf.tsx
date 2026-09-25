@@ -59,8 +59,9 @@ import {
 
 const MAX_TRACKED_VISIBLE_SUBMIT_SURFACES = 2_048
 
-// Claude paste-state-machine constants + helpers moved to
-// ./TileLeaf/claudePaste.ts. Image helpers moved to
+// Claude paste detection lives in @shared/claude/pasteConfirm and runs in
+// main's prompt delivery (the renderer paste helpers were removed as dead
+// code in #762). Image helpers moved to
 // ./TileLeaf/claudeImages.ts. Label helpers moved to
 // ./TileLeaf/labels.ts. See those files for the full rationale on
 // the paste debounce, the image size/format gates, and the pane

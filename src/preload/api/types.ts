@@ -382,7 +382,7 @@ export type DictationDebugEvent = DictationDebugEventInput & {
 // because the file is local 0o600 and the whole point is to see
 // what the user actually pasted vs. what reached Claude.
 export type PasteDebugLayer =
-  | 'RENDER'   // composer keydown, state snapshot, call into claudePaste fn
+  | 'RENDER'   // composer keydown, state snapshot, composer submit
   | 'IPC'      // renderer-side IPC write (paste payload, submit \r)
   | 'PTY'      // main-side PTY write (sha8 + byte count) — pairs with IPC
   | 'SCREEN'   // [Pasted text #N] placeholder observed to appear / clear

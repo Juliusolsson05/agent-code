@@ -32,6 +32,9 @@ import {
   windowIdFor,
 } from '@main/window/windowRegistry.js'
 import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
+import { screenInterest, screenTailHistory } from '@main/sessions/screenInterest.js'
+import type { AgentScreenSnapshot } from '@shared/types/session.js'
+import type { ScreenTailSample } from '@shared/debug/screenTail.js'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -249,11 +252,56 @@ export function registerSessionIpc(
     manager.detachAgentPty(sessionId)
   })
 
+  // #762. Live `session:screen` frames are forwarded only while a renderer
+  // holds a lease for that session (see sessions/screenInterest.ts for why
+  // nothing else needs them). The acquire also pushes the current screen down
+  // the ordinary `session:screen` path, the same seed `session:recover` sends,
+  // so an opening debug panel is correct at once even for an idle backend that
+  // emits no further frame, and the renderer needs no second way to apply a
+  // screen. Leases are owned by the calling webContents and document (see
+  // sessions/screenInterest.ts for why not a navigation event), and dropped
+  // when the webContents is destroyed, because a renderer that dies never
+  // runs its cleanup.
+  const leaseOwnersWatched = new Set<number>()
+  const watchLeaseOwner = (sender: Electron.WebContents): number => {
+    const owner = sender.id
+    if (!leaseOwnersWatched.has(owner)) {
+      leaseOwnersWatched.add(owner)
+      sender.once('destroyed', () => {
+        screenInterest.dropOwner(owner)
+        leaseOwnersWatched.delete(owner)
+      })
+    }
+    return owner
+  }
+  // Sent by the preload on every page load, whether or not the page ever
+  // leases: it is what retires a reloaded page's leases (steering q15).
+  ipcMain.handle('session:screen-document', (evt, document: string): void => {
+    screenInterest.enterDocument(watchLeaseOwner(evt.sender), document)
+  })
+  ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
+    screenInterest.acquire(watchLeaseOwner(evt.sender), sessionId, document)
+    const screen = manager.getScreenSnapshot(sessionId)
+    if (screen) sendToSessionWindow(sessionId, 'session:screen', aliasScreenSnapshotForWire({ sessionId, ...screen }))
+  })
+  ipcMain.handle('session:screen-release', (evt, sessionId: string, document: string) => {
+    screenInterest.release(evt.sender.id, sessionId, document)
+  })
+  // Debug bundles read the screen on demand instead of holding a lease: the
+  // latest raw snapshot plus the tail history main records from every frame.
+  ipcMain.handle('session:get-screen-debug', (_evt, sessionId: string): {
+    screen: AgentScreenSnapshot | null
+    samples: ScreenTailSample[]
+  } => ({
+    screen: manager.getScreenSnapshot(sessionId),
+    samples: screenTailHistory.samples(sessionId),
+  }))
+
   ipcMain.handle(
     'session:input',
     (_evt, sessionId: string, data: string, pasteId?: string) => {
       // Optional pasteId journals THIS write into the per-paste debug
-      // dump. Only set by the Agent Code paste flow (claudePaste.ts) —
+      // dump. Only set by the composer's paste flow (useComposerKeybinds) —
       // never set on keystrokes, agent-pty bridging, or other normal
       // I/O. Pairs against the renderer's IPC:write:* events by sha8
       // + byte count, same way dictation pairs renderer-produced
@@ -277,7 +325,7 @@ export function registerSessionIpc(
       // between and reports the wrong cause — the same misdiagnosis this
       // replaces, just narrower.
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
-      // `pasteId` is set only by the Agent Code paste flow (claudePaste.ts) and
+      // `pasteId` is set only by the composer's paste flow (useComposerKeybinds) and
       // never by keystrokes, so it is also the exact renderer-side attribution
       // signal required by SessionManager's prompt-delivery ownership fence.
       const attributedPasteId = typeof pasteId === 'string' && pasteId.length > 0
@@ -395,25 +443,6 @@ export function registerSessionIpc(
     'session:resize',
     (_evt, sessionId: string, cols: number, rows: number) => {
       manager.resize(sessionId, cols, rows)
-    },
-  )
-
-  // Event-driven paste-submit (Track C of the paste-submit harness PR).
-  // Renderer's claudePaste.ts invokes this AFTER writing the bracketed
-  // paste payload but BEFORE writing `\r`. We resolve as soon as
-  // Claude's TUI renders `[Pasted text #N]`, falling back to a 2 s
-  // timeout if the placeholder never appears (future Claude UI rename
-  // insurance). See `claudePaste.ts` and
-  // `packages/claude-code-headless/src/ClaudeCodeHeadless.ts:awaitPastePlaceholder`
-  // for the full rationale chain.
-  ipcMain.handle(
-    'claude:await-paste-placeholder',
-    async (
-      _evt,
-      sessionId: string,
-      opts?: { timeoutMs?: number; pollIntervalMs?: number },
-    ) => {
-      return manager.awaitClaudePastePlaceholder(sessionId, opts)
     },
   )
 

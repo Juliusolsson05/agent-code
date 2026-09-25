@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 import { AgentInlineTerminal } from '@renderer/features/debug/ui/AgentInlineTerminal'
+import { useScreenLease } from '@renderer/features/debug/useScreenLease'
 
 // DebugPanel — inline diagnostic overlay showing the raw state of the
 // focused pane. Toggled via "Toggle Debug Panel" in the command palette.
@@ -35,6 +36,9 @@ export function DebugPanel({
   onClose,
 }: Props) {
   const [rawTerminalOpen, setRawTerminalOpen] = useState(false)
+  // The raw and markdown screen below need live frames, which main forwards
+  // only while a debug surface holds a lease (#762).
+  useScreenLease(sessionId)
   // WHY disable the inline xterm while the pane itself is terminal:
   // AgentInlineTerminal is not a passive transcript viewer; it attaches to and
   // resizes the same provider PTY as AgentTerminalLeaf. If both are mounted,
