@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 
 import type { DevDebugModule, DevDebugModuleProps } from '@renderer/features/debug/devModules/types'
+import { useScreenLease } from '@renderer/features/debug/useScreenLease'
 
 export const headlessSnapshotProbeModule: DevDebugModule = {
   id: 'headless-snapshot-probe',
@@ -10,6 +11,8 @@ export const headlessSnapshotProbeModule: DevDebugModule = {
 }
 
 function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps) {
+  // Screen frames arrive only while leased (#762, useScreenLease).
+  useScreenLease(sessionId)
   // Wrap-tolerant by default (#1113), so the probe agrees with what
   // `placeholderCount` counts in production rather than missing every pill the
   // composer happened to wrap.

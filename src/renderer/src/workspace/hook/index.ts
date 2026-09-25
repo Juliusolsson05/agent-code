@@ -1051,7 +1051,6 @@ export function useWorkspace(
     setReaderModeTarget,
     toggleReaderMode,
     setReaderModeSession,
-    latestScreenRef: refs.latestScreenRef,
     getRuntime,
     // Patch a session's runtime (sessionId, partial). Used by TileLeaf for
     // pane toasts and the prompt-suggestion chip's apply/dismiss handlers.
