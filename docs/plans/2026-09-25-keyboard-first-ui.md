@@ -525,7 +525,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 |---|---|---|---|---|
 | K2-1 | Goal-loop overlay (`features/goal-loop/GoalLoopPane.tsx:34,152`; gate `useKeybinds.ts:524-560`) | `role="dialog"`, but the capture gate eats every key except ⎋ and the toggle chord, so Tab, Enter and Space never reach Pause/Resume/Raise cap/Stop; focus is never moved in | let focus-navigation keys through inside the overlay; focus the first action on open; return focus on close | done (verified; gate admits unmodified Tab/Enter/Space inside the overlay; overlay focuses first action, wraps Tab, restores focus) |
 | K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | done (hover counts only if the pointer moved after the focused pane last changed) |
-| K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | todo |
+| K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | done (+ T4 ring on the three header icon buttons) |
 | K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
 | K2-5 | PaneToast (`TileLeaf/PaneToast.tsx:36`) | `line-clamp-3`, full text title-only | expandable / copyable full text | todo |
 | K2-6 | Editor status banner (`editor/ui/EditorStatusBanner.tsx:33`) | error text truncated before an Overwrite/Reload choice | wrap/clamp with details toggle | todo |
@@ -828,6 +828,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-3 Explorer header (editor sidebar):** Tab to "+", press Enter: the
+  new file/folder menu opens right under the button (it opened in the
+  window's top left corner). ↻, • and + show the thin focus ring.
 - **K2-2 Enter with the mouse parked over another pane:** leave the mouse
   resting over pane A's composer (with a draft), move to pane B with ⌥↓
   (B has a draft, focus not in a text field), and press Enter: B's draft
@@ -1511,3 +1514,6 @@ Sharp corners and one light theme.
   submit-active-composer command (a keypress) keeps picking what bare Enter
   picks. Confirm-red: the keyboard-moved test fails on the pre-change
   registry; the moved-pointer test pins the behaviour the hover rule exists for.
+- 2026-09-25 K2-3: keyboard click (`detail === 0`) anchors the menu at the
+  button's bottom-left (+2px). Mouse path unchanged and pinned. Confirm-red:
+  the keyboard test fails on the pre-change pane.

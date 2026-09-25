@@ -639,7 +639,7 @@ export function ExplorerPane({
               queuedLoadsRef.current.clear()
               for (const path of expandedRef.current) void loadDirectory(path)
             }}
-            className="flex h-5 w-5 items-center justify-center rounded-control text-muted hover:bg-surface-hi hover:text-ink"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-surface-hi hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             ↻
           </button>
@@ -650,7 +650,7 @@ export function ExplorerPane({
               showHidden ? 'Hide hidden and ignored files' : 'Show hidden and ignored files'
             }
             onClick={() => setShowHidden(prev => !prev)}
-            className={`flex h-5 w-5 items-center justify-center rounded-control hover:bg-surface-hi ${
+            className={`flex h-5 w-5 items-center justify-center rounded-control outline-none hover:bg-surface-hi focus-visible:ring-1 focus-visible:ring-focus-ring ${
               showHidden ? 'text-ink' : 'text-muted hover:text-ink'
             }`}
           >
@@ -663,9 +663,18 @@ export function ExplorerPane({
             onClick={event => {
               event.stopPropagation()
               menuInvokerRef.current = event.currentTarget
+              // `detail === 0` is a keyboard-activated click (Enter/Space):
+              // its clientX/Y are 0, so the menu opened in the window's top
+              // left corner, far from the button (K2-3). Anchor it under the
+              // button instead, like the tree's Shift+F10 path does.
+              if (event.detail === 0) {
+                const rect = event.currentTarget.getBoundingClientRect()
+                setMenu(clampedMenu(rect.left, rect.bottom + 2, null))
+                return
+              }
               setMenu(clampedMenu(event.clientX, event.clientY, null))
             }}
-            className="flex h-5 w-5 items-center justify-center rounded-control text-muted hover:bg-surface-hi hover:text-ink"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-surface-hi hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             +
           </button>
