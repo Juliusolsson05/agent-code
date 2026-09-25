@@ -193,6 +193,28 @@ describe('what counts as "needs you" (one field changed on a real idle record)',
     expect(attentionReason(meta, idle(), loop({ phase: 'ended', endReason: 'done' }))).toBeNull()
   })
 
+  it('a FAILED compaction, which the unread rule leaves out with the running and done ones', () => {
+    const runtime = idle()
+    runtime.conditions = {
+      provider: 'claude',
+      ts: 1,
+      conditions: { 'claude.compaction': { kind: 'claude.compaction', state: { visible: true, phase: 'error' }, actions: [] } },
+    } as unknown as ProviderConditionSnapshot
+    expect(rowFor({ kind: 'claude' }, runtime).reason).toBe('Compaction failed')
+  })
+
+  it('a start that failed and then exited is a failure, not an ordinary exit', () => {
+    // The exit handler sets `exited` first; the wake-failure path adds the
+    // error on top. The row must show the error.
+    const runtime = idle()
+    runtime.exited = 1
+    runtime.processStatus = 'failed'
+    runtime.processError = 'claude exited before it was ready'
+    const row = rowFor({ kind: 'claude' }, runtime)
+    expect(row.section).toBe('needs-you')
+    expect(row.reason).toBe('Error: claude exited before it was ready')
+  })
+
   it('never asks a terminal anything, even when its runtime carries a condition snapshot', () => {
     // Provider capability lookups throw for 'terminal' (correction 4); a naive
     // loop over sessions would crash on the first shell.
@@ -254,6 +276,13 @@ describe('row names on the owner\'s real fleet: title, then Goal, then folder', 
     expect(codex.length).toBeGreaterThan(0)
     expect(codex.every(row => row.kind === 'codex')).toBe(true)
     expect(filterActivityRows(rows, 'no-such-agent-anywhere')).toEqual([])
+    // A Goal is searchable even when a title wins the name.
+    const titled = ownerFleet.find(item => item.title.trim())!
+    const withTitleGoal = buildActivityRows(workspaceOf({ [titled.sessionId]: { kind: 'claude', title: titled.title, builtInMcpDomains: ['goal'] } }), {}, {
+      ...EMPTY_FLEET_NOTES,
+      goals: { [titled.sessionId]: { text: 'Fix authentication', updatedAt: '', revision: 1 } },
+    })
+    expect(filterActivityRows(withTitleGoal, 'authentication')).toHaveLength(1)
   })
 })
 

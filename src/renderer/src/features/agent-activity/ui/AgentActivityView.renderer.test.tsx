@@ -112,10 +112,40 @@ describe('Agent Activity, full screen', () => {
     expect(within(row).getByText('Waiting for review comments')).toBeInTheDocument()
   })
 
-  it('reads nothing while closed', () => {
-    render(<AgentActivityView open={false} workspace={fleet()} onClose={vi.fn()} />)
+  it('reads and subscribes to nothing while closed, and lets go of its subscriptions on close', async () => {
+    const subscriptions = { tldr: 0, goal: 0, loop: 0 }
+    const unsubscribed = { tldr: 0, goal: 0, loop: 0 }
+    const track = (key: keyof typeof subscriptions) => () => {
+      subscriptions[key] += 1
+      return () => { unsubscribed[key] += 1 }
+    }
+    Object.assign(window.api, {
+      onTldrChanged: track('tldr'), onGoalChanged: track('goal'), onGoalLoopChanged: track('loop'),
+    })
+    readGoalLoops.mockClear()
+    const workspace = fleet()
+    const mounted = render(<AgentActivityView open={false} workspace={workspace} onClose={vi.fn()} />)
+    mounted.rerender(<AgentActivityView open={false} workspace={{ ...workspace, runtimes: { ...workspace.runtimes } }} onClose={vi.fn()} />)
     expect(readTldrs).not.toHaveBeenCalled()
     expect(readGoals).not.toHaveBeenCalled()
+    expect(readGoalLoops).not.toHaveBeenCalled()
+    expect(subscriptions).toEqual({ tldr: 0, goal: 0, loop: 0 })
+
+    mounted.rerender(<AgentActivityView open workspace={workspace} onClose={vi.fn()} />)
+    await act(async () => { await Promise.resolve() })
+    expect(subscriptions).toEqual({ tldr: 1, goal: 1, loop: 1 })
+
+    mounted.rerender(<AgentActivityView open={false} workspace={workspace} onClose={vi.fn()} />)
+    expect(unsubscribed).toEqual({ tldr: 1, goal: 1, loop: 1 })
+  })
+
+  it('leaves Enter on a focused footer button to the button', async () => {
+    const { workspace, list } = await openView()
+    fireEvent.keyDown(list, { key: ' ' })
+    const button = screen.getByRole('button', { name: 'Close 1 selected' })
+    fireEvent.keyDown(button, { key: 'Enter' })
+    // Not intercepted as "open the highlighted agent".
+    expect(workspace.focusAgentBySessionId).not.toHaveBeenCalled()
   })
 
   it('selects with Space and closes the selection with ⌫, through the confirming bulk flow', async () => {
@@ -153,8 +183,12 @@ describe('Agent Activity, full screen', () => {
     fireEvent.keyDown(list, { key: 'ArrowDown' })
     fireEvent.keyDown(list, { key: ' ' }) // idle-old
     fireEvent.keyDown(list, { key: 'o' })
-    fireEvent.change(screen.getByRole('textbox', { name: 'Filter agents' }), { target: { value: 'other' } })
-    list.focus()
+    const filter = screen.getByRole('textbox', { name: 'Filter agents' })
+    fireEvent.change(filter, { target: { value: 'other' } })
+    // Tab, not list.focus(): the keyboard path back to the list with the
+    // query kept is the thing under test (review of #1105).
+    fireEvent.keyDown(filter, { key: 'Tab' })
+    expect(list).toHaveFocus()
     fireEvent.keyDown(list, { key: ' ' }) // idle-new, the only row shown now
     fireEvent.keyDown(list, { key: 'Backspace' })
     expect(workspace.closeAgentActivitySelection).toHaveBeenCalledWith([

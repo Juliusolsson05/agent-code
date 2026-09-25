@@ -138,6 +138,14 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
   // agent under the user's cursor, and ⌫ would close the wrong one.
   const highlightedRow = rows.find(row => row.sessionId === highlighted) ?? rows[0] ?? null
 
+  // Pin the fallback to its SESSION as soon as it is shown (review of #1105).
+  // Without this the highlight stayed "whatever is first", so an agent moving
+  // ahead in the list between opening and Enter silently changed which agent
+  // Enter opened — the same slide the session-keyed highlight exists to stop.
+  useEffect(() => {
+    if (highlightedRow && highlightedRow.sessionId !== highlighted) setHighlighted(highlightedRow.sessionId)
+  }, [highlighted, highlightedRow])
+
   // Drop selections whose agents are GONE (closed elsewhere, or by the last
   // bulk close). Pruned against every row, not the filtered ones, so "select
   // these three, then filter to find two more" keeps the first three: the
@@ -151,11 +159,16 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
     })
   }, [allRows])
 
+  // Keyed on the highlighted SESSION id, not the row object (review of
+  // #1105): rows are rebuilt on every runtime update and every 10s tick, and
+  // depending on the object yanked a user who had scrolled away back to the
+  // highlight on each rebuild.
+  const highlightedId = highlightedRow?.sessionId ?? null
   useEffect(() => {
-    if (!highlightedRow || !listRef.current) return
-    const element = listRef.current.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(highlightedRow.sessionId)}"]`)
+    if (!highlightedId || !listRef.current) return
+    const element = listRef.current.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(highlightedId)}"]`)
     element?.scrollIntoView?.({ block: 'nearest' })
-  }, [highlightedRow])
+  }, [highlightedId])
 
   const focusAgent = useCallback((row: ActivityRow) => {
     // Shows the agent on its lane, or on the focused lane when it is parked,
@@ -203,7 +216,19 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
   }, [highlightedRow, rows])
 
   const onListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // A focused button (the footer's "Close N selected") keeps its native
+    // Enter/Space activation (review of #1105: Enter on it used to open the
+    // highlighted agent instead, and Space toggled a row).
+    if (event.target instanceof HTMLButtonElement) return
     const inFilter = event.target === filterRef.current
+    // Tab from the filter lands on the list WITH the query kept, so filtered
+    // rows can be selected from the keyboard. Esc would clear the query, and
+    // there was no other way back (review of #1105).
+    if (inFilter && event.key === 'Tab' && !event.shiftKey) {
+      event.preventDefault()
+      listRef.current?.focus()
+      return
+    }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       move(event.key === 'ArrowDown' ? 1 : -1)
@@ -339,7 +364,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
         </div>
 
         <footer className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-border px-6 py-2 text-[11px] text-muted">
-          <span>↑↓ move · Enter open · Space select · ⌘A select all · ⌫ close · type to filter · Esc dismiss</span>
+          <span>↑↓ move · Enter open · Space select · ⌘A select all · ⌫ close · type to filter (Tab back to the list) · Esc dismiss</span>
           {selectedRows.length > 0 ? (
             <button
               type="button"

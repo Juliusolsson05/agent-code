@@ -73,6 +73,12 @@ export type ActivityRow = {
   section: ActivitySection
   /** Why the row is in `needs-you` (or `exited`), in plain words. */
   reason: string | null
+  /**
+   * The agent's full Goal, kept apart from `name` so the filter finds it even
+   * when an explicit title wins the name (review of #1105: "Backend" with Goal
+   * "Fix authentication" did not match "authentication").
+   */
+  goal: string | null
   project: string
   pinned: boolean
   /** On at least one lane. A session CAN occupy several (decomposition,
@@ -132,14 +138,25 @@ export function attentionReason(
   // Terminals have no provider: capability lookups throw for them
   // (decomposition, correction 4), and a shell asks nothing of the user.
   if (!isAgentProviderKind(kind) || !runtime) return null
-  if (isSessionExited(runtime)) return null
-
-  if (conditionRequiresAttention(runtime.conditions)) {
-    const label = dispatchAttentionLabelFromConditions(runtime.conditions)
-    return label ? CONDITION_REASONS[label] ?? label : 'Waiting for you'
-  }
+  // Process failures BEFORE the exit check (review of #1105): a provider that
+  // dies before it is input-ready gets `exited` from the exit handler first,
+  // and the wake-failure path then adds `processStatus: 'failed'` and the
+  // error on top. Checking exit first hid that failed start as an ordinary
+  // exit — the orchestration lifecycle orders them the same way, failed first.
   if (runtime.processError) return `Error: ${runtime.processError}`
   if (runtime.processStatus === 'failed') return 'Failed to start'
+  if (isSessionExited(runtime)) return null
+
+  // `conditionRequiresAttention` is the unread rule, and it deliberately
+  // leaves compaction out: a running or finished compaction is progress. A
+  // FAILED one is not, and the provider policy labels only that phase
+  // (`ERROR`), so the label is checked on its own (review of #1105 — the
+  // first cut read the label only inside the attention branch, where a failed
+  // compaction could never reach it).
+  const label = dispatchAttentionLabelFromConditions(runtime.conditions)
+  if (conditionRequiresAttention(runtime.conditions) || label === 'ERROR') {
+    return label ? CONDITION_REASONS[label] ?? label : 'Waiting for you'
+  }
   // `meta` is REQUIRED here even though the signature makes it optional:
   // without it no provider branch runs and the answer is always null
   // (decomposition, correction 6). Grok never reads failed at all
@@ -283,6 +300,7 @@ export function buildActivityRows(
       detail: detailFor(kind, runtime, tldr),
       section,
       reason: reason ?? (section === 'exited' ? 'Exited' : null),
+      goal: goal?.text.trim() || null,
       project: indexRow.tabTitle,
       pinned: pinned.has(indexRow.sessionId),
       onLane: onLane.has(indexRow.sessionId),
@@ -323,8 +341,8 @@ export function sortActivityRows(rows: ActivityRow[]): ActivityRow[] {
 }
 
 /**
- * Type-to-filter. Matches the name, the second line, the reason, the project
- * and the provider, because the user remembers an agent by whichever of those
+ * Type-to-filter. Matches the name, the Goal, the second line, the reason,
+ * the project and the provider, because the user remembers an agent by whichever of those
  * they saw last. Every word must match somewhere (AND), so "codex review"
  * narrows instead of widening.
  */
@@ -332,7 +350,7 @@ export function filterActivityRows(rows: ActivityRow[], query: string): Activity
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (words.length === 0) return rows
   return rows.filter(row => {
-    const haystack = [row.name, row.detail, row.reason, row.project, row.kind]
+    const haystack = [row.name, row.goal, row.detail, row.reason, row.project, row.kind]
       .filter(Boolean)
       .join('\n')
       .toLowerCase()
