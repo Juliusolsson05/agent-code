@@ -17,14 +17,23 @@ live.
   session-recording research under `session-recording/`).
 - **`design/`** — living subsystem design (conditions, ghost system).
 - **`plans_and_ideas/`** — active/near-term plans and idea notes.
-- **`superpowers/`** — dated planning space: `plans/` (feature/fix plans) and
-  `specs/` (design specs). Accumulates by date; a plan carries a `Status:` header
-  once it ships or is superseded.
+- **`plans/`** — one plan per branch, `YYYY-MM-DD-<outcome>.md`, written with the
+  [`writing-plans`](https://github.com/Juliusolsson05/agent-skills/tree/main/skills/writing-plans)
+  skill. The plan is the branch's first commit and is kept true until merge
+  (rulings, scope corrections, review dispositions). It carries a live `Status:`
+  line during the PR; there is no post-merge freeze, because the PR and the
+  project memory record what shipped.
+- **`specs/`** — design specs, only for designs that need approval before a plan
+  can be written. Otherwise the design lives in the plan.
+- **`superpowers/`** — historical `plans/` and `specs/` written with the former
+  superpowers plugin (retired 2026-09-24). Not written to anymore; kept in place
+  so existing links resolve.
 - **`decomposition/`** — stage decompositions written *before* implementation for
-  work where the case set is not yet enumerated (`staged-decomposition`). One
-  file per subsystem, named for the subsystem rather than a date, because the
-  document is revised in place when a stage disproves it — unlike `superpowers/`
-  plans, which are executed once and then frozen with a `Status:` header.
+  risky work: several sources of truth, a stalled attempt, an unrecorded
+  subsystem ([`staged-decomposition`](https://github.com/Juliusolsson05/agent-skills/tree/main/skills/staged-decomposition)).
+  One file per subsystem, named for the subsystem rather than a date, because
+  the document is revised in place when a stage disproves it — unlike plans,
+  which belong to one branch.
 - **`command-style.md`** — command-authoring conventions.
 - **`screenshots/`** — README assets.
 
