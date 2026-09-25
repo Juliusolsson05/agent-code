@@ -543,6 +543,21 @@ export function useKeybinds(
             return
           }
         } else {
+          // The overlay's OWN buttons (Pause / Resume / Raise cap / Stop /
+          // Close) need Tab to move between them and Enter/Space to press
+          // them (K2-1). This gate used to swallow every key in capture phase,
+          // before the event could reach a button, so the dialog was
+          // mouse-only. Only those three keys, only unmodified, and only
+          // when focus is already inside the overlay. Everything else,
+          // letters included, is still consumed so nothing reaches the
+          // dimmed composer underneath.
+          const overlayOwnsTarget =
+            e.target instanceof Element && e.target.closest('[data-goal-loop-overlay]') !== null
+          if (
+            overlayOwnsTarget
+            && !e.metaKey && !e.ctrlKey && !e.altKey
+            && (e.key === 'Tab' || e.key === 'Enter' || e.key === ' ')
+          ) return
           e.preventDefault()
           e.stopPropagation()
           // The toggle chord comes from the binding index rather than a

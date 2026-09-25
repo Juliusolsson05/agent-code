@@ -1,6 +1,6 @@
 import { Button } from '@renderer/components/ui/button'
 import { Kbd } from '@renderer/components/ui/kbd'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
@@ -31,7 +31,28 @@ function describe(loop: GoalLoopState): string {
  * attribute being mounted (#1021), so a latched state that renders any other
  * markup would reopen the invisible-trap bug. */
 function GoalLoopOverlay({ children }: { children: ReactNode }) {
+  // Keyboard ownership (K2-1). The overlay stamps the APP interaction-owner
+  // marker and the router consumes every key while it is latched, so it has
+  // to hold focus itself, or a keyboard user sees buttons they cannot reach:
+  //   - on open, focus moves to the first action (rAF: the pane's own focus
+  //     effects run in the same commit and would take it straight back);
+  //   - Tab / Shift+Tab wrap inside, because focus that left this
+  //     app-owning surface would land where the router admits no key;
+  //   - on close, focus returns to whatever held it before (the composer,
+  //     usually) instead of dropping to <body>.
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const frame = requestAnimationFrame(() => {
+      ref.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      if (previous?.isConnected) previous.focus()
+    }
+  }, [])
   return <div
+    ref={ref}
     data-agent-code-interaction-owner="app"
     data-goal-loop-overlay=""
     role="dialog"
@@ -39,6 +60,19 @@ function GoalLoopOverlay({ children }: { children: ReactNode }) {
     className="absolute inset-0 z-50 bg-canvas text-ink"
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
+    onKeyDown={event => {
+      if (event.key !== 'Tab') return
+      const buttons = [...(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])]
+      if (buttons.length === 0) return
+      const index = buttons.indexOf(document.activeElement as HTMLElement)
+      const last = buttons.length - 1
+      const next = event.shiftKey ? (index <= 0 ? last : index - 1) : (index === last || index < 0 ? 0 : index + 1)
+      // Only the wrap needs taking over; within the row the browser's own
+      // Tab order is the same, but handling every Tab here keeps focus from
+      // ever escaping when a button is disabled mid-press.
+      event.preventDefault()
+      buttons[next]?.focus()
+    }}
   >
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 py-16 text-center">
       {children}

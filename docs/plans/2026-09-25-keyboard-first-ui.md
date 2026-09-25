@@ -523,7 +523,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 
 | # | Surface (file:line at sweep time) | Gap | Target | Status |
 |---|---|---|---|---|
-| K2-1 | Goal-loop overlay (`features/goal-loop/GoalLoopPane.tsx:34,152`; gate `useKeybinds.ts:524-560`) | `role="dialog"`, but the capture gate eats every key except ⎋ and the toggle chord, so Tab, Enter and Space never reach Pause/Resume/Raise cap/Stop; focus is never moved in | let focus-navigation keys through inside the overlay; focus the first action on open; return focus on close | todo |
+| K2-1 | Goal-loop overlay (`features/goal-loop/GoalLoopPane.tsx:34,152`; gate `useKeybinds.ts:524-560`) | `role="dialog"`, but the capture gate eats every key except ⎋ and the toggle chord, so Tab, Enter and Space never reach Pause/Resume/Raise cap/Stop; focus is never moved in | let focus-navigation keys through inside the overlay; focus the first action on open; return focus on close | done (verified; gate admits unmodified Tab/Enter/Space inside the overlay; overlay focuses first action, wraps Tab, restores focus) |
 | K2-2 | Composer Enter routing (`TileLeaf/composerEnterRegistry.ts:65-78`, hover from `ComposerInput.tsx`) | "hovered wins over focused": a pointer parked over pane A redirects Enter from the keyboard-focused pane B | hover wins only after a real pointer move since the last keyboard navigation | todo |
 | K2-3 | Explorer `+` menu (`editor/ui/ExplorerPane.tsx:660`) | keyboard-activated click has clientX/Y 0, so the menu opens at the window corner | anchor to the button rect when `event.detail === 0` | todo |
 | K2-4 | Feed scroller (known N13, `feed/ui/Feed.tsx:1179`) | not focusable; keyboard scroll never counts as engagement; Reply-to-Selection needs a mouse selection | handled in N13 | scroller + engagement done in N13; keyboard quoting is open (see Execution notes) |
@@ -828,6 +828,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-1 Goal loop overlay (⌘⇧G on an agent running a loop):** focus lands
+  on the first action (Pause/Resume). Tab and Shift+Tab cycle the buttons,
+  Enter/Space press them, Escape closes, and focus returns to the composer.
 - **Caffeinate feedback:** messages ("caffeinate stopped…") now appear in
   the normal top-right app toast, above any open dialog, instead of their
   own bottom-right card that hid under dialog scrims.
@@ -1488,3 +1491,11 @@ Sharp corners and one light theme.
   instead of filed. CaffeinateToastSurface is now an adapter onto GlobalToast
   (5 s, "Caffeinate: " prefix). Confirm-red: the new GlobalToast test fails
   with the pre-change surface.
+- 2026-09-25 K2-1: verified by reading. The latched gate preventDefault +
+  stopPropagation'd every keydown in capture phase. The fix admits only
+  unmodified Tab/Enter/Space whose target is inside `[data-goal-loop-overlay]`
+  (letters are still consumed, so nothing types under the overlay).
+  GoalLoopOverlay holds focus itself (it is an app-owner surface, so focus
+  outside it reaches no admitted key). Driven through the REAL router harness.
+  Confirm-red: the controls test fails with either useKeybinds or GoalLoopPane
+  at HEAD; removing the restore fails the focus-return test.
