@@ -64,6 +64,17 @@ export const lspApi = {
     authorization: LspDocumentAuthorization
   }): Promise<void> => ipcRenderer.invoke('lsp:open-document', params),
 
+  /** #1208: ask for a document back after its server was lost. Main
+   *  re-authorizes with THIS call's authorization; see ipc/lsp.ts. */
+  reopenLspDocument: (params: {
+    clientUri: string
+    content: string
+    language: string
+    workspaceRoot: string
+    filePath?: string | null
+    authorization: LspDocumentAuthorization
+  }): Promise<boolean> => ipcRenderer.invoke('lsp:reopen-document', params),
+
   changeLspDocument: (clientUri: string, content: string): Promise<void> =>
     ipcRenderer.invoke('lsp:change-document', clientUri, content),
 
