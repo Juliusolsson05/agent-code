@@ -931,7 +931,17 @@ export function useIpcSubscriptions(
       // that must stand.
       if (message.includes('(db_path_recovered_late)')) {
         void loadInitialHistoryForSession({ sessionId, refs, setRuntimes }).then(healed => {
-          if (!healed) updateRuntime(sessionId, { transcriptStatus: 'error', transcriptError: message, transcriptChannelError: message })
+          if (healed) return
+          // Only onto a pane that still exists: updateRuntime would create an
+          // orphan runtime for one closed while the heal was in flight.
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            return {
+              ...prev,
+              [sessionId]: { ...current, transcriptStatus: 'error', transcriptError: message, transcriptChannelError: message },
+            }
+          })
         })
       }
     })

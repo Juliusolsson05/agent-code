@@ -311,6 +311,18 @@ describe('an OpenCode Terminal pane whose server never came up (#881)', () => {
       await waitFor(() => pane.runtime().transcriptChannelError?.includes('db_path_recovered_late') === true, 'the lifetime banner')
       expect(pane.surfaces().transcriptStatus).toBe('error')
       expect(pane.runtime().transcriptChannelError).toContain("missing from this pane's transcript")
+
+      // #1229 review, round 2: a later read that succeeds (a retry, a reload,
+      // a parent's hydrate) has the dark-window rows, so the banner's claim
+      // is now false and must not keep the pane "unavailable" to parents.
+      scope.serveHistoryFrom(pane.dbPath!)
+      await act(async () => {
+        await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
+      })
+      expect(pane.runtime().entries.some(entry => entry.type === 'user')).toBe(true)
+      expect(pane.runtime().transcriptChannelError).toBeFalsy()
+      expect(pane.surfaces().transcriptStatus).toBe('ready')
+      expect(managedTranscriptUnavailableReason(pane.runtime(), pane.meta)).not.toBe('transcript_unavailable')
     } finally {
       dbPathResolver.answer = null
     }
