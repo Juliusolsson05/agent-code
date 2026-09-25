@@ -1,4 +1,4 @@
-import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { hasAppInteractionOwner, isInPaneInteractionOwner } from '@renderer/lib/interaction-ownership'
 
 export type ComposerEnterTargetHandle = {
   /** Stable identity across re-registrations (the session id). TileLeaf
@@ -80,13 +80,28 @@ function isDispatchRowTarget(target: EventTarget | null): boolean {
   return Boolean(element.closest('[data-dispatch-row="true"]'))
 }
 
+// WHY a listbox counts only while it has the keyboard (review of #1221,
+// Claude reviewer A, F1): this used to treat ANY [role="listbox"] in the
+// document as an open popup. #1221 gave the inline condition option list
+// (ConditionOptionList) listbox semantics, and that list lives inside
+// long-lived strips: the Claude resume strip and the Codex command approval.
+// One agent waiting on an approval therefore disabled Enter-to-send and
+// Submit Active Composer in EVERY pane for as long as it waited, even under
+// display:none in a retained tab. A listbox owns Enter only when the user is
+// actually in it: focus is inside it, or the focused control drives it as a
+// combobox (aria-controls, the palette / picker pattern). Menus are different:
+// they are always transient popups, so their mere presence still counts.
 function hasOpenKeyboardOwner(): boolean {
   if (hasAppInteractionOwner()) return true
-  return Boolean(
-    document.querySelector(
-      '[role="menu"],[role="listbox"]',
-    ),
-  )
+  if (document.querySelector('[role="menu"]')) return true
+  const active = document.activeElement
+  if (!active || active === document.body) return false
+  const controls = active.getAttribute('aria-controls')
+  for (const listbox of Array.from(document.querySelectorAll('[role="listbox"]'))) {
+    if (listbox.contains(active)) return true
+    if (controls && listbox.id && controls.split(/\s+/).includes(listbox.id)) return true
+  }
+  return false
 }
 
 function pickTarget(): ComposerEnterTargetHandle | null {
@@ -118,6 +133,13 @@ function ensureListener(): void {
     if (event.key !== 'Enter') return
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
     if (isEditableTarget(event.target)) return
+    // Enter aimed INSIDE a pane-scoped prompt belongs to that prompt, never
+    // to a composer (review of #1221, reviewer A, F3). Without this, focus on
+    // a ConditionPromptShell's root (it has no Enter-confirm of its own) let
+    // Enter fall through to pickTarget(), which submitted ANOTHER pane's
+    // hovered draft while the user was reading the prompt. useKeybinds makes
+    // the same promise for unmodified keys; this router is the other half.
+    if (isInPaneInteractionOwner(event.target)) return
 
     // WHY the interactive guard now skips Dispatch rows: a real action button
     // or link must keep its native Enter (activating it). A Dispatch row only
