@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Select } from '@renderer/components/ui/select'
 
 import {
   Dialog,
@@ -115,21 +116,21 @@ function MergeDraft({ tabs, initialTargetId, onCancel, onConfirm }: Omit<Props, 
         <label className="text-[10px] uppercase tracking-wider text-muted" htmlFor="merge-target">
           Keep
         </label>
-        <select
+        <Select
           id="merge-target"
           value={targetId}
           onChange={event => {
             const next = event.target.value
             setDraft({ targetId: next, sources: defaultSourcesFor(tabs, next) })
           }}
-          className="rounded-control mt-1 w-full border border-input-border bg-input-bg px-2 py-1 text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+          className="mt-1 w-full"
         >
           {/* Source and destination of a merge that moves every agent
               (#1049 re-review). */}
           {tabs.map(tab => (
             <option key={tab.id} value={tab.id}>{withVisibleControls(tab.label)}</option>
           ))}
-        </select>
+        </Select>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">

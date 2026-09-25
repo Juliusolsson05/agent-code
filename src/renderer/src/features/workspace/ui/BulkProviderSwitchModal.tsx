@@ -1,4 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { Select } from '@renderer/components/ui/select'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -703,7 +704,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 Switch
               </label>
               <div className="mt-1">
-                <select
+                <Select
                   value={directionKey}
                   onChange={e => {
                     setDirectionChoice(e.target.value)
@@ -714,14 +715,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                     setConfirmedSessionIds(null)
                   }}
                   aria-label="Switch direction"
-                  className="rounded-control px-2 py-1.5 bg-input-bg border border-input-border text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+                  
                 >
                   {directions.map(item => (
                     <option key={item.key} value={item.key}>
                       {providerLabel(item.source)} → {providerLabel(item.target)}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
             </div>
 

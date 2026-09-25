@@ -1,4 +1,5 @@
 import { Timeline } from './Timeline'
+import { Select } from '@renderer/components/ui/select'
 import { Overview } from './overview/Overview'
 import { useAgentIdentities } from './agentIdentity'
 import { useEffect, useMemo, useState } from 'react'
@@ -152,7 +153,7 @@ function Recordings({ snapshot, request, onRequestHandled }: { snapshot: Monitor
   }
   return <div className="space-y-5">
     <section className="rounded-slab border border-border bg-canvas p-4 space-y-3"><h2 className="font-medium">Local performance report</h2><p className="text-[11px] leading-5 text-muted">Includes bounded metric rollups, operation histograms, incidents, coverage and build metadata. It contains no prompts, transcript text, paths, DOM, audio, environment variables or stacks. Nothing is uploaded.</p>
-      <label className="text-muted">Range <select className="ml-2 rounded-control border border-border bg-canvas p-1 text-ink" value={range} onChange={event => setRange(Number(event.target.value))}><option value={15 * 60_000}>15 minutes</option><option value={24 * 60 * 60_000}>24 hours</option><option value={7 * 24 * 60 * 60_000}>7 days</option></select></label>
+      <label className="text-muted">Range <Select size="sm" className="ml-2" value={range} onChange={event => setRange(Number(event.target.value))}><option value={15 * 60_000}>15 minutes</option><option value={24 * 60 * 60_000}>24 hours</option><option value={7 * 24 * 60 * 60_000}>7 days</option></Select></label>
       <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>Save Performance Report</Button><Button size="sm" variant="destructive-outline" disabled={busy || snapshot.history?.exporting} onClick={() => void clear()}>Clear Local History</Button></div>
       <p className="text-[11px] text-muted">{preview ? `${preview.dataClasses.join(', ')} · estimated ${(preview.estimatedBytes / 1024).toFixed(1)} KiB · local file only` : 'Preparing report preview…'}</p>
       <p className="text-[11px] text-muted">{snapshot.history ? `${(snapshot.history.bytes / 1024 / 1024).toFixed(1)} MiB stored · ${snapshot.history.state}${snapshot.history.shortened ? ' · shortened' : ''}` : 'History is warming up.'}</p>
@@ -191,7 +192,7 @@ function Processes() {
   }, [offset, sort])
   return <section className="space-y-4">
     <div className="flex items-center justify-between gap-3"><div><h2 className="font-medium">All managed processes</h2><p className="mt-1 text-[11px] text-muted">Includes background and detached agents. Shared helpers are counted once in application totals.</p></div>
-      <label className="text-muted">Sort <select className="ml-2 rounded-control border border-border bg-canvas p-1 text-ink" value={sort} onChange={event => { setSort(event.target.value as 'cpu' | 'memory'); setOffset(0) }}><option value="cpu">CPU</option><option value="memory">Memory</option></select></label>
+      <label className="text-muted">Sort <Select size="sm" className="ml-2" value={sort} onChange={event => { setSort(event.target.value as 'cpu' | 'memory'); setOffset(0) }}><option value="cpu">CPU</option><option value="memory">Memory</option></Select></label>
     </div>
     {error && <p role="status" className="text-muted">Process readings delayed.</p>}
     <div className="overflow-auto rounded-slab border border-border"><table className="w-full text-left text-[11px] tabular-nums">

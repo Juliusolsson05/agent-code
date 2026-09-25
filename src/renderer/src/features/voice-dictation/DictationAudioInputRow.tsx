@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { Select } from '@renderer/components/ui/select'
 import type { DictationAudioInput } from '@renderer/app-state/settings/types'
 import { Button } from '@renderer/components/ui/button'
 import { dictationAudioInputError } from './audioInput'
@@ -99,7 +100,7 @@ export function DictationAudioInputRow({ value, onChange }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <select
+      <Select
         aria-label="Audio Input Device"
         aria-describedby={descriptionId}
         value={value?.deviceId ?? ''}
@@ -112,7 +113,7 @@ export function DictationAudioInputRow({ value, onChange }: Props) {
             if (device) onChange({ deviceId: id, label: device.label })
           }
         }}
-        className="w-full min-w-0 rounded-control border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+        className="w-full"
       >
         <option value="">Automatic — prefer built-in microphone</option>
         <option value="default">System default{systemDefault ? ` — ${systemDefault.replace(/^default\s*-\s*/i, '')}` : ''}</option>
@@ -122,7 +123,7 @@ export function DictationAudioInputRow({ value, onChange }: Props) {
         {devices.map((device, index) => (
           <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${index + 1}`}</option>
         ))}
-      </select>
+      </Select>
       <p id={descriptionId} className="text-[11px] leading-5 text-muted">
         Changes apply to your next recording. For a closed MacBook, choose your headset or an external microphone.
       </p>

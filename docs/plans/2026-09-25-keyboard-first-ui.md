@@ -574,7 +574,7 @@ feeds the rows below G-1.
 | G-8 | Selected rows | ~13 selected rows lack the accent rail (palette ×4, Conversations, AgentActivity, KeyVault, PathInput, Usage ×2); Explorer active = `bg-accent-soft`; WorkflowViewSelector ●; Incidents card | done (palette ×4 + danger rail on AI-workspace clear, Conversations, Agent Activity, Key Vault providers, PathInput, Usage rail, Explorer active file; the unselected rows keep a transparent rail slot. Kept: WorkflowViewSelector's ● + activity tints, Incidents card; both carry an activity dimension the plain recipe does not) |
 | G-9 | Hand-rolled bordered buttons (~80) | CustomSkillsRow ×8, browser pocket ×8, CLI banner ×3, palette row actions, ThemePicker, AgentActivity Close, AI workspace, EditorTabs Save/Save All, viewBridge Retry, feed/condition buttons | `Button` variants | todo |
 | G-10 | Missing SegmentedControl | 7 toggle-group recipes (Spotlight ×2, Reader, Remote split, Conversations scope/providers, CloseOld/BulkSwitch scope, Performance tabs, PathPicker tabs) | one primitive | todo |
-| G-11 | Missing Select | raw selects (Performance ×2, ProviderEnablement, Dictation input, MergeTabs, CloseOld, BulkSwitch ×2), no focus ring on several | one `Select` on input tokens | todo |
+| G-11 | Missing Select | raw selects (Performance ×2, ProviderEnablement, Dictation input, MergeTabs, CloseOld, BulkSwitch ×2), no focus ring on several | done (`Select` native primitive, 3 sizes; all 8 raw selects migrated; Performance's two and ProviderEnablement's gained the focus ring they lacked; Dictation's input moved off the control tokens) |
 | G-12 | Raw text/number inputs (~12) | ExtensionSettingRow ×2 (square), ExternalControlRow (no focus), SkillsGrid, CustomSkills ×2, CloseOld ×2, BulkSwitch, AgentActivity filter, Pocket URL | `Input` / `NumberInput` | todo |
 | G-13 | Error boxes (7 recipes) + errors shown as muted text | Analytics/Usage, CustomSkills/Conventions, AddSkill, ViewPrompts, Conversations, Keybindings (ink text), Explorer/Skills/UpdateChannel | partly done (`Alert` primitive; 7 plain error boxes migrated: Custom Skills, Conventions editor, Add Skill, View Prompts, Usage, Analytics, AI Workspace; the keybindings conflict banner onto the soft/border tokens. Kept: Custom Skills' composite boxes with embedded buttons, and Conversations' full-width strip. Errors shown as muted text (Usage provider, Performance, Git) are still open) |
 | G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | done (`EmptyState` list/inline; Agent Activity, Conversations ×2, palette, Search in Files, Top consumers ×2, Skills sections, prompt-template sections; periods and curly quotes; 5 italic loading lines made plain `role=status`; 3 of them rendered errors as muted text and now use `Alert`) |
@@ -866,6 +866,10 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-11 Dropdowns (native selects):** one look everywhere: Performance's
+  Range and Sort, Settings › Providers' OpenCode usage source, Settings ›
+  Dictation input device, Merge Project Tabs, Close Old Agents, Bulk
+  Provider Switch. All show the focus ring.
 - **G-13/G-14 Errors, empty and loading states:** inline errors are one
   red box with a soft fill (Custom Skills, Conventions, Add Skill, View
   Prompts, Usage, Analytics, AI Workspace, and the settings rows that

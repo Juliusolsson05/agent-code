@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Select } from '@renderer/components/ui/select'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useProviderEnablementStore } from '@renderer/features/providers/store'
@@ -117,17 +118,17 @@ function OpencodeUsageSourceRow() {
         <div className="text-[12px] font-semibold text-ink">OpenCode usage source</div>
         <div className="mt-0.5 text-[10px] text-muted">{choiceError || hint}</div>
       </div>
-      <select
+      <Select
         aria-label="OpenCode usage source"
         disabled={pending || blocked}
         value={snapshot.opencodeUsageSource}
         onChange={event => { void choose(event.target.value as OpencodeUsageSource) }}
-        className="rounded-chip border border-border bg-surface-hi px-2 py-1 text-[10px] text-ink disabled:opacity-50"
+        size="xs"
       >
         {OPENCODE_USAGE_SOURCES.map(source => (
           <option key={source} value={source}>{source === 'none' ? 'none' : 'z.ai'}</option>
         ))}
-      </select>
+      </Select>
     </div>
   )
 }

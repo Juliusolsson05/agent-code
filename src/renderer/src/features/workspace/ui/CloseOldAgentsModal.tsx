@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { Select } from '@renderer/components/ui/select'
 import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { closeGrantedSessions } from '@renderer/workspace/bulkClose'
@@ -519,16 +520,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                   // the input focus tokens on :focus-visible, like <Input>.
                   className="rounded-control w-24 px-2 py-1.5 bg-input-bg border border-input-border text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
                 />
-                <select
+                <Select
                   value={thresholdUnit}
                   onChange={e => setThresholdUnit(e.target.value as ThresholdUnit)}
                   aria-label="Threshold unit"
-                  className="rounded-control px-2 py-1.5 bg-input-bg border border-input-border text-[12px] text-ink outline-none focus-visible:border-input-border-focus focus-visible:ring-1 focus-visible:ring-focus-ring"
+                  
                 >
                   <option value="minutes">minutes</option>
                   <option value="hours">hours</option>
                   <option value="days">days</option>
-                </select>
+                </Select>
               </div>
               {!thresholdValid && (
                 <div className="mt-1 text-[10px] text-danger">
