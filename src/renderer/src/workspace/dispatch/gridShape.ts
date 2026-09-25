@@ -107,9 +107,9 @@ export type NormalizedGrid = {
  * rejecting one.
  */
 export function normalizeGridShape(tiled: TiledDispatchState): NormalizedGrid {
-  const lanes = tiled.lanes ?? []
+  const lanes = usableLanes(tiled.lanes)
   const rows = withMigratedIndexFraction(
-    repairRowLengths(tiled.rows, lanes.length),
+    repairRowLengths(usableRows(tiled.rows, lanes.length), lanes.length),
     tiled,
   )
 
@@ -125,6 +125,52 @@ export function normalizeGridShape(tiled: TiledDispatchState): NormalizedGrid {
         ? Math.min(tiled.focusedLane, Math.max(0, lanes.length - 1))
         : 0,
   }
+}
+
+/**
+ * Non-object lane entries (a `null` from a hand edit or a torn write) become
+ * EMPTY slots rather than being removed (#1245). A lane only ever holds a
+ * selection, never a session, so nothing is lost; keeping the slot keeps every
+ * other lane's index, weight and focus meaning what it meant. Before this, the
+ * first reader of `lane.selectedSessionId` threw during rehydrate and startup
+ * fell back to the locked recovery shell with none of the user's agents shown.
+ * Returns the SAME array when every entry is usable (see repairRowLengths on
+ * why reference stability matters here).
+ */
+function usableLanes(lanes: TiledDispatchState['lanes'] | undefined): TiledDispatchState['lanes'] {
+  if (!Array.isArray(lanes)) return []
+  if (lanes.every(lane => lane !== null && typeof lane === 'object')) return lanes
+  const repaired = lanes.map(lane => (lane !== null && typeof lane === 'object' ? lane : {}))
+  console.warn('[workspace] replaced malformed stage lanes with empty slots', { count: lanes.length - lanes.filter(lane => lane !== null && typeof lane === 'object').length })
+  return repaired
+}
+
+/** A non-object row entry (#1245) is replaced, at its own index, by an
+ *  UNBOUND row covering exactly the lanes no valid row accounts for. Dropping
+ *  it instead let repairRowLengths hand its lanes to the LAST row, so the
+ *  user's first lanes silently moved under another row's project binding,
+ *  height and index width, and autosave made that permanent (#1256 review).
+ *  Any further bad entries are dropped. Same array when every entry is usable. */
+function usableRows(rows: DispatchGridRow[] | undefined, laneCount: number): DispatchGridRow[] | undefined {
+  if (!Array.isArray(rows)) return undefined
+  const usable = (row: unknown): row is DispatchGridRow => row !== null && typeof row === 'object'
+  // Persisted JSON: the declared type is what a well-formed file holds.
+  const entries: unknown[] = rows
+  if (entries.every(usable)) return rows
+  const covered = entries.filter(usable)
+    .reduce((sum, row) => sum + (Number.isInteger(row.length) && row.length > 0 ? row.length : 0), 0)
+  const remainder = laneCount - covered
+  let replaced = false
+  const kept: DispatchGridRow[] = []
+  for (const row of entries) {
+    if (usable(row)) kept.push(row)
+    else if (!replaced && remainder > 0) {
+      kept.push({ length: remainder })
+      replaced = true
+    }
+  }
+  console.warn('[workspace] repaired malformed stage rows', { count: entries.filter(row => !usable(row)).length })
+  return kept
 }
 
 /**
