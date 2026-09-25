@@ -5,6 +5,9 @@ import {
   type ResultPart,
 } from '@providers/shared/renderer/protocols/media/imageAttachment'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
+// One marker for every layer that recognizes a locally minted prompt row;
+// see its module for why it is not a per-file literal.
+import { OPTIMISTIC_PROMPT_UUID_PREFIX } from '@renderer/session-runtime/optimisticPrompt'
 
 // Codex rollout primitives + conversion helpers.
 //
@@ -47,7 +50,7 @@ export function extractCodexProviderSessionId(entry: Record<string, unknown>): s
  *  entries array doesn't confuse the check. */
 export function isOptimisticCodexUserEntry(entry: Entry | undefined): boolean {
   if (!entry || entry.type !== 'user') return false
-  return typeof entry.uuid === 'string' && entry.uuid.startsWith('optimistic-codex-user:')
+  return typeof entry.uuid === 'string' && entry.uuid.startsWith(OPTIMISTIC_PROMPT_UUID_PREFIX)
 }
 
 /** Parse a Codex-emitted JSON payload safely. Returns null on any

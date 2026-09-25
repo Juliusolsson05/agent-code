@@ -16,6 +16,7 @@ import {
   providerTaskNotificationFromEntry,
 } from '@providers/registry.renderer.capabilities'
 import type { Entry, ToolUseBlock } from '@shared/types/transcript'
+import { unwrapClaudePastedContent } from '@shared/claude/pastedContent'
 import type { ProviderDurableEntryKind } from '@shared/types/providerConfig'
 
 // ---------------------------------------------------------------------------
@@ -393,7 +394,18 @@ export function collectCommittedCandidates(
       // assistant-text candidates exclusively) but for optimistic-prompt
       // reconciliation: the committed user row owns its optimistic stand-in
       // by normalized text (marker+text, never tail position).
-      normalizedTextKey: text ? normalizeTextKey(text) : undefined,
+      //
+      // A PASTED Claude prompt is committed inside Claude's <pasted_content>
+      // envelope, while the pending row carries what the user typed. Keyed on
+      // the raw text, the two never matched, so both painted until the send
+      // settled (PR #1183 review, Codex 3). The user key is the envelope's
+      // inner text. unwrapClaudePastedContent is the same strict whole-string
+      // unwrap main uses to recognise the accepted prompt, and it returns null
+      // for anything that is not exactly one envelope, so no other row's key
+      // changes.
+      normalizedTextKey: text
+        ? normalizeTextKey(e.type === 'user' ? (unwrapClaudePastedContent(text) ?? text) : text)
+        : undefined,
       ownedToolUseIds: mined.toolUse.length > 0 ? mined.toolUse : undefined,
       ownedToolResultIds: mined.toolResult.length > 0 ? mined.toolResult : undefined,
     })

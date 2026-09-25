@@ -8,6 +8,7 @@ import {
   buildCommittedOwnership,
   decideLiveCandidate,
 } from '@renderer/rendering/model/ownership'
+import pastedTypedPrompt from '../../../../../testing/fixtures/prompt-acceptance/pasted-typed-prompt-2026-09-20.json'
 
 // #1181: an optimistic prompt row is owned only by a committed user row with
 // the same text that is NOT OLDER than the submit.
@@ -66,5 +67,30 @@ describe('optimistic prompt ownership by a committed twin', () => {
     // A missing time proves nothing, so the old conservative behavior stands.
     expect(decide(null, T)).toMatchObject({ selected: false })
     expect(decide(T - 60 * 60_000, null)).toMatchObject({ selected: false })
+  })
+
+  it('a pasted Claude prompt is owned through its <pasted_content> envelope', () => {
+    // Claude commits a pasted prompt inside its own envelope while the pending
+    // row carries the typed text. Without unwrapping, both rows painted until
+    // the send settled (PR #1183 review). The committed row is the real
+    // recording, not a hand-written shape: the collector keys typed-prompt
+    // recognition on fields (permissionMode) an invented row would omit.
+    const entry = pastedTypedPrompt.transcriptEntry
+    const committedAtMs = Date.parse(entry.timestamp)
+    const typed = entry.message.content
+      .replace(/^<pasted_content id="cade">\n/, '')
+      .replace(/\n<\/pasted_content id="cade">$/, '')
+    const committed = collectCommittedCandidates([entry], 'claude', 's1')
+    expect(committed.candidates).toHaveLength(1)
+    const [optimistic] = collectOptimisticCandidates(
+      [{ uuid: 'optimistic-codex-user:sub-2', text: typed, submittedAtMs: committedAtMs - 300 }],
+      'claude',
+      's1',
+    )
+    expect(decideLiveCandidate(
+      optimistic!,
+      buildCommittedOwnership(committed.candidates),
+      SUPPRESSION_POLICY.claude,
+    )).toMatchObject({ selected: false, reason: 'optimistic-owned-by-committed' })
   })
 })
