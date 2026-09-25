@@ -18,6 +18,7 @@ import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/term
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { isEngagementKeydown } from '@renderer/workspace/tile-tree/engagementKeydown'
 import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
@@ -629,7 +630,9 @@ export function TerminalLeaf({
       // querying its cursor must neither clear unread state nor schedule React
       // work. DOM capture attributes engagement without guessing from bytes
       // and runs even when xterm stops the keyboard event from bubbling.
-      onKeyDownCapture={() => acknowledgeSession(sessionId)}
+      // Filtered: keys the workspace router consumed (pane navigation) and bare
+      // modifiers aren't engagement. See engagementKeydown.ts.
+      onKeyDownCapture={event => { if (isEngagementKeydown(event)) acknowledgeSession(sessionId) }}
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >

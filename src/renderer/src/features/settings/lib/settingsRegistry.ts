@@ -612,6 +612,18 @@ export function getSettingsRegistry(
       },
     },
     {
+      id: 'agent-completion-indicator',
+      category: 'workspace',
+      title: 'Agent Completion Indicator',
+      description: 'Stripe an agent pane header when it finishes while you are elsewhere, until you stop on it or interact with it.',
+      keywords: ['completion', 'finished', 'done', 'unread', 'stripes', 'header', 'agent', 'pane', 'notification'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.showAgentCompletionIndicator,
+        onToggle: (ctx, value) => ctx.onChange({ showAgentCompletionIndicator: value }),
+      },
+    },
+    {
       id: 'worktree-badges',
       category: 'workspace',
       title: 'Worktree Badges',
