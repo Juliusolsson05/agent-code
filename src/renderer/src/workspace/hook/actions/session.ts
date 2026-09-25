@@ -1437,6 +1437,7 @@ export function useSessionActions(
         // newConversation), and not into a process without Goal Loop tools:
         // it could never call goal_loop_complete (#1287 review A).
         if (!opts?.newConversation && builtInMcpDomains?.includes('goal_loop')) carryGoalLoops(idMap)
+        else stopGoalLoops([oldId])
         setRuntimes(prev => {
           // Replacement can await spawn and backend retirement while the user
           // keeps editing. Transfer the latest draft in the same state update
@@ -1673,6 +1674,7 @@ export function useSessionActions(
       // defaults; one that lost goal_loop keeps no loop it cannot complete
       // (#1287 review A).
       carryGoalLoops(new Map([...idMap].filter(([, newId]) => goalLoopCapable.has(newId))))
+      stopGoalLoops([...idMap].filter(([, newId]) => !goalLoopCapable.has(newId)).map(([oldId]) => oldId))
       for (const [newId, meta] of Object.entries(freshSessions)) {
         if (!hasDurableProviderSession(meta)) continue
         void loadInitialHistoryForSession({
@@ -1787,6 +1789,22 @@ export function useSessionActions(
  *  lanes and relationships. Fire-and-forget: a failed carry leaves the loop
  *  where it was (the pre-#1279 behaviour), never blocks the swap, and main
  *  refuses to overwrite a loop the successor already has. */
+/** End the loop of each replaced pane that did NOT get it carried (#1287
+ *  review A2): its old id is gone from the workspace, so no pane could ever
+ *  resume or stop it, and a successor without goal_loop could not complete
+ *  it. Same rule AgentMcpServersModal applies before its own reload. Runs
+ *  after the commit, so a replacement that failed keeps its loop. A pane
+ *  with no loop gets a harmless null back. */
+function stopGoalLoops(oldIds: readonly string[]): void {
+  const control = window.api?.controlGoalLoop
+  if (!control) return
+  for (const sessionId of oldIds) {
+    void control({ sessionId, action: 'stop' }).catch(error => {
+      console.warn('[goal-loop] stopping the replaced pane\'s loop failed:', error)
+    })
+  }
+}
+
 function carryGoalLoops(idMap: ReadonlyMap<string, string>): void {
   const carry = window.api?.carryGoalLoop
   if (!carry) return

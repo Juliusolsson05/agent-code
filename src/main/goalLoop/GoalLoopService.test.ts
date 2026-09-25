@@ -1099,6 +1099,12 @@ describe('GoalLoopService.carry (#1279)', () => {
     const moved = await svc.carry('s1', 's2')
     expect(moved).toMatchObject({ sessionId: 's2', goal: 'G.', phase: 'paused', pauseReason: 'interrupted' })
     expect(svc.snapshot()['s1']).toBeUndefined()
+    // Persisted under the new id BY THE CARRY, before anything else writes
+    // (#1287 review B2: a later complete() used to mask a missing persist).
+    await vi.waitFor(async () => {
+      const persisted = JSON.parse(await readFile(storePath, 'utf8')) as { loops: Record<string, unknown> }
+      expect(Object.keys(persisted.loops)).toEqual(['s2'])
+    })
     manager.emit('removed', { sessionId: 's1' })
     expect(svc.snapshot()['s2']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
     // The successor's own completion now finds it.
