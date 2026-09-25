@@ -63,6 +63,7 @@ import {
   type CommittedSeenLedger,
 } from '@renderer/session-runtime/ingest/committedRecords'
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   gcHiddenOrphanGhosts,
@@ -911,6 +912,19 @@ export function useIpcSubscriptions(
         transcriptError: message,
         ...((channelStopped || sessionSwitched || serverUnreachable) ? { transcriptChannelError: message } : {}),
       })
+      // #1117. The late-opened channel is positioned at the database's
+      // current head, so everything the TUI committed while the path was
+      // unavailable counts as already seen and is never emitted. The package
+      // cannot heal that — it cannot tell a dark-window row from last week's —
+      // but a history read can: it admits only uuids this pane does not hold
+      // and places them in order around the rows it does (placeHistoryEntries).
+      // So the reload the message asks the user for is done here, once, the
+      // moment the channel is readable again. A load that succeeds also writes
+      // `ready` over this error (nothing set the lifetime banner above), and
+      // one that fails leaves the error standing, which is still true.
+      if (message.includes('(db_path_recovered_late)')) {
+        void loadInitialHistoryForSession({ sessionId, refs, setRuntimes })
+      }
     })
 
     // #881. The one diagnostic the renderer acts on, and the reason the
