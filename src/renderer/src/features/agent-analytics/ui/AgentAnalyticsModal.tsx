@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
 
 import { Button } from '@renderer/components/ui/button'
 import { BarChart } from '@renderer/components/charts/BarChart'
@@ -273,9 +274,7 @@ export function AgentAnalyticsModal({ open, onClose }: Props) {
 
         <div className="overflow-auto px-4 py-3">
           {error ? (
-            <div className="rounded-slab mb-3 border border-danger bg-danger/10 px-3 py-2 text-[11px] text-danger" role="alert">
-              {error}
-            </div>
+            <Alert className="mb-3">{error}</Alert>
           ) : null}
 
           {!showing ? (

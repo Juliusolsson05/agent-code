@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { Alert } from '@renderer/components/ui/alert'
 import type { ConversationPrompt } from '@shared/conversations/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -131,9 +132,7 @@ export function ViewPromptsModal({
           className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         >
           {loadError && (
-            <div role="alert" className="mb-3 rounded-slab border border-danger/40 bg-danger/10 px-3 py-2 text-[12px] text-danger">
-              {loadError}
-            </div>
+            <Alert className="mb-3">{loadError}</Alert>
           )}
           <PromptList
             prompts={prompts}

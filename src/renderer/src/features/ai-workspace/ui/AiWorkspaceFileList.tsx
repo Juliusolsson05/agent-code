@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
 
 import { Button } from '@renderer/components/ui/button'
 import { PanelHeader } from '@renderer/components/ui/panel-header'
@@ -87,12 +88,7 @@ export function AiWorkspaceFileList({
       />
       <div className="min-h-0 flex-1 overflow-auto py-1">
         {error ? (
-          <div
-            role="alert"
-            className="rounded-slab mx-2 mb-1 border border-danger/40 bg-danger/10 px-2 py-1 text-danger"
-          >
-            {error}
-          </div>
+          <Alert className="mx-2 mb-1">{error}</Alert>
         ) : null}
         {loading ? (
           <div role="status" aria-live="polite" className="px-2 py-1 text-muted">

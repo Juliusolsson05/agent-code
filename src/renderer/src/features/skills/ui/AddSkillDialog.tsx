@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -246,7 +247,7 @@ export function AddSkillDialog() {
               </div>
             </>
           ) : null}
-          {error ? <div role="alert" className="rounded-slab border border-danger p-2 text-[11px] text-danger">{error}</div> : null}
+          {error ? <Alert>{error}</Alert> : null}
         </div>
 
         {/* Install writes a repository's skill files into provider folders:

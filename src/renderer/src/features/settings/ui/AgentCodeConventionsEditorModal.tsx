@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Alert } from '@renderer/components/ui/alert'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -342,7 +343,7 @@ export function AgentCodeConventionsEditorModal({
             </div>
           ) : null}
 
-          {error ? <div role="alert" className="rounded-slab border border-danger px-2 py-1 text-[11px] text-danger">{error}</div> : null}
+          {error ? <Alert>{error}</Alert> : null}
           {notice ? <div role="status" className="rounded-slab border border-accent px-2 py-1 text-[11px] text-accent">{notice}</div> : null}
 
           {revisionConflict ? (

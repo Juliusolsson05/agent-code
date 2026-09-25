@@ -458,7 +458,7 @@ export function CommandKeybindingsRow() {
         <div
           ref={conflictRef}
           role="alert"
-          className="rounded-slab border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-ink"
+          className="rounded-slab border border-danger-border bg-danger-soft px-3 py-2 text-[11px] text-ink"
           onKeyDown={event => {
             // Escape backs out of the conflict, not out of Settings: stopped
             // here so the page's own Escape handling never sees it.
