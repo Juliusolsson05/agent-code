@@ -128,12 +128,19 @@ export type PaneSurfaces = {
   copyLastResponse: string | null
 }
 
-export function surfacesOf(state: WorkspaceState, runtimes: Record<SessionId, SessionRuntime>): PaneSurfaces {
-  const runtime = runtimes[SESSION_ID] ?? emptyRuntime()
-  const kind = state.sessions[SESSION_ID]?.kind
-  const managed = listManagedAgentDescriptors({ state, runtimes, callerSessionId: PARENT_ID })
-    .agents.find(item => item.agent.sessionId === SESSION_ID)?.agent
-  const status = buildAgentStatusModel(state, runtime, SESSION_ID)
+// Shared with the Pi pane harness (piTerminalPane.tsx): the surfaces are the
+// same functions for every provider, and only the pane's ids differ.
+export function surfacesOf(
+  state: WorkspaceState,
+  runtimes: Record<SessionId, SessionRuntime>,
+  sessionId: SessionId = SESSION_ID,
+  parentId: SessionId = PARENT_ID,
+): PaneSurfaces {
+  const runtime = runtimes[sessionId] ?? emptyRuntime()
+  const kind = state.sessions[sessionId]?.kind
+  const managed = listManagedAgentDescriptors({ state, runtimes, callerSessionId: parentId })
+    .agents.find(item => item.agent.sessionId === sessionId)?.agent
+  const status = buildAgentStatusModel(state, runtime, sessionId)
   const fields = status ? [...identityFields(status), ...runtimeFields(status), ...errorFields(status)] : []
   return {
     sessionStatus: runtime.sessionStatus,
@@ -146,8 +153,8 @@ export function surfacesOf(state: WorkspaceState, runtimes: Record<SessionId, Se
     dispatchActivity: dispatchActivity(runtime),
     dispatchSubtitle: dispatchSubtitle(runtime, kind),
     dispatchBadge: dispatchUnreadBadge(runtime, kind)?.text ?? null,
-    lifecycle: listOrchestrationAgents({ state, runtimes, parentSessionId: PARENT_ID })
-      .find(record => record.sessionId === SESSION_ID)?.lifecycleState,
+    lifecycle: listOrchestrationAgents({ state, runtimes, parentSessionId: parentId })
+      .find(record => record.sessionId === sessionId)?.lifecycleState,
     managedBackend: managed?.backendState,
     managedActivity: managed?.activityState,
     agentStatus: Object.fromEntries(fields.map(field => [field.label, field.value])),
@@ -159,7 +166,7 @@ export function surfacesOf(state: WorkspaceState, runtimes: Record<SessionId, Se
 // passes each through untouched; this is that mapping. A channel with no feed
 // method (transcript diagnostics, raw PTY bytes) reaches no runtime in the app
 // either, so it is recorded and not delivered.
-function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown): boolean {
+export function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown): boolean {
   switch (channel) {
     case 'session:started': feed.emitStarted(payload as Parameters<FakeSessionFeed['emitStarted']>[0]); return true
     case 'session:input-readiness': feed.emitInputReadiness(payload as Parameters<FakeSessionFeed['emitInputReadiness']>[0]); return true
@@ -175,6 +182,11 @@ function deliverToFeed(feed: FakeSessionFeed, channel: string, payload: unknown)
     case 'session:semantic-event': feed.emitSemantic(payload as Parameters<FakeSessionFeed['emitSemantic']>[0]); return true
     case 'session:sub-agents': feed.emitSubAgents(payload as Parameters<FakeSessionFeed['emitSubAgents']>[0]); return true
     case 'session:exit': feed.emitExit(payload as Parameters<FakeSessionFeed['emitExit']>[0]); return true
+    // Both are real preload channels with feed methods (IpcSessionFeed). Pi's
+    // pane depends on them: a session switch inside the TUI moves the pane's
+    // identity, and its history window resets.
+    case 'session:history-boundary': feed.emitHistoryBoundary(payload as Parameters<FakeSessionFeed['emitHistoryBoundary']>[0]); return true
+    case 'session:provider-session-changed': feed.emitProviderSessionChanged(payload as Parameters<FakeSessionFeed['emitProviderSessionChanged']>[0]); return true
     default: return false
   }
 }
@@ -209,7 +221,7 @@ type PaneHarnessProps = {
 
 // The workspace hook's own wiring (hook/index.ts): useWorkspaceHelpers supplies
 // updateRuntime/appendFeedDebug, which useIpcSubscriptions writes through.
-function PaneHarness({ feed, refs, setState, setRuntimes }: PaneHarnessProps): null {
+export function PaneHarness({ feed, refs, setState, setRuntimes }: PaneHarnessProps): null {
   const { updateRuntime, appendFeedDebug } = useWorkspaceHelpers(setRuntimes, refs)
   useIpcSubscriptions(feed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   return null

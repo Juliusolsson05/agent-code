@@ -7,7 +7,7 @@ export const controlReference = [
     "id": "pins",
     "title": "Pinned agents",
     "purpose": "Keep selected sessions easy to reach across project filters.",
-    "ui": "Pin Agents dialog and Dispatch pinned section.",
+    "ui": "Pin Agents dialog, Dispatch pinned section, and Pin/Unpin in a Sessions row's right-click menu.",
     "prerequisites": "Existing agents.",
     "workflow": [
       "Select the exact sessions",
@@ -18,6 +18,7 @@ export const controlReference = [
     "cautions": "Pinning changes visibility/order, not ownership or backend lifetime.",
     "commandIds": [
       "pin-agents",
+      "pin-agent",
       "unpin-agent"
     ]
   }

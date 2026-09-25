@@ -3,6 +3,8 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
+
 // ---------------------------------------------------------------------------
 // Provider import boundaries (Phase 1 of the evidence-first rendering plan,
 // PR #554 — "Import rules, non-negotiable").
@@ -14,6 +16,12 @@ import { describe, expect, it } from 'vitest'
 //   4. providers/shared/renderer/** never imports a specific provider.
 //   5. features/feed/** selects capabilities through the registry but never
 //      imports a provider's renderer modules directly.
+//   6. src/providers/** never imports the workspace (@renderer/workspace/**)
+//      — the REVERSE of rule 5, added with #1177. Rows are mounted by the
+//      desktop pane AND the phone; a provider module that reached into the
+//      desktop pane's store or TileLeaf directory dragged workspace code into
+//      every host and made the provider registry import the pane that mounts
+//      it (registry.renderer.ts → TileLeaf, now deleted).
 //
 // WHY a filesystem-scanning test and not an ESLint plugin/dep-cruiser
 // config: the plan explicitly asks for "one narrow boundary test with a
@@ -31,7 +39,9 @@ import { describe, expect, it } from 'vitest'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const srcRoot = resolve(testDir, '..') // src/
-const PROVIDERS = ['claude', 'codex', 'opencode'] as const
+// Derived from the registry's own list: the hand-written ['claude','codex',
+// 'opencode'] never checked Grok, and would not have checked Pi either.
+const PROVIDERS = AGENT_PROVIDER_KINDS
 type Provider = (typeof PROVIDERS)[number]
 
 function listSourceFiles(dir: string): string[] {
@@ -132,7 +142,7 @@ function formatViolations(violations: Violation[]): string {
     .join('\n')
 }
 
-describe('provider renderer import boundaries (plan PR #554, rules 1–5)', () => {
+describe('provider renderer import boundaries (plan PR #554 rules 1–5, #1177 rule 6)', () => {
   it('extracts every supported literal import spelling, including no-space side effects', () => {
     expect(importSpecifiers(`
       import"../../codex/renderer"
@@ -174,6 +184,24 @@ describe('provider renderer import boundaries (plan PR #554, rules 1–5)', () =
       () => true,
     )
     expect(violations, formatViolations(violations)).toEqual([])
+  })
+
+  it('rule: provider code never imports the desktop workspace', () => {
+    // A plain specifier check is enough here: the workspace is only ever
+    // reached through its alias (providers sit in a different source root,
+    // so a relative path into src/renderer/src/workspace would be absurd).
+    const violations: Violation[] = []
+    for (const file of listSourceFiles(join(srcRoot, 'providers'))) {
+      for (const specifier of importSpecifiers(readFileSync(file, 'utf-8'))) {
+        if (specifier === '@renderer/workspace' || specifier.startsWith('@renderer/workspace/')) {
+          violations.push({ file: relToSrc(file), specifier, rule: 'src/providers/** must not import @renderer/workspace/**' })
+        }
+      }
+    }
+    expect(
+      violations,
+      violations.map(v => `\n  ${v.file}\n    imports ${v.specifier}\n    fix: take the value through the provider's io/capability contract or a shared type module`).join('\n'),
+    ).toEqual([])
   })
 
   it('rule: features/feed selects capabilities via the registry, never provider renderer imports', () => {

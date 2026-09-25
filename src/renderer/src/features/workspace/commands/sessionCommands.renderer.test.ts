@@ -310,115 +310,6 @@ describe('Rendering Debug Mode command', () => {
   })
 })
 
-function mcpCommandContext(kind: 'claude' | 'codex' | 'opencode'): {
-  context: CommandContext
-  replaceSession: ReturnType<typeof vi.fn>
-} {
-  const replaceSession = vi.fn().mockResolvedValue('replacement')
-  const workspace = {
-    state: {
-      activeTabId: 'tab-mcp',
-      stage: oneLaneStage('agent'),   pinnedSessionIds: [],
-      sessions: {
-        agent: {
-          cwd: '/projects/mcp',
-          kind,
-          providerSessionId: 'provider-session',
-          builtInMcpDomains: [],
-          projectId: 'tab-mcp',
-          joinedAt: 0,
-        },
-      },
-      tabs: [{
-        id: 'tab-mcp',
-      }],
-    },
-    replaceSession,
-    showPaneToast: vi.fn(),
-  } as unknown as Workspace
-  return {
-    context: {
-      workspace,
-      ui: { closePalette: vi.fn() },
-      flags: {},
-    } as unknown as CommandContext,
-    replaceSession,
-  }
-}
-
-describe('built-in MCP provider command policy', () => {
-  const workflowCommand = sessionCommands.find(command => command.id === 'enable-workflow-mcp')
-  const orchestrationCommand = sessionCommands.find(
-    command => command.id === 'enable-orchestration-mcp',
-  )
-  const agentManagementCommand = sessionCommands.find(
-    command => command.id === 'enable-agent-management-mcp',
-  )
-
-  it('offers Workflow MCP to Codex and OpenCode but not Claude', () => {
-    if (!workflowCommand) throw new Error('Workflow MCP command is missing')
-
-    expect(workflowCommand.when?.(mcpCommandContext('codex').context)).toBe(true)
-    expect(workflowCommand.when?.(mcpCommandContext('claude').context)).toBe(false)
-    expect(workflowCommand.when?.(mcpCommandContext('opencode').context)).toBe(true)
-  })
-
-  it('keeps the Workflow runtime guard inert for Claude', async () => {
-    if (!workflowCommand) throw new Error('Workflow MCP command is missing')
-    const { context, replaceSession } = mcpCommandContext('claude')
-
-    await workflowCommand.run(context)
-
-    expect(replaceSession).not.toHaveBeenCalled()
-  })
-
-  it('still toggles Workflow MCP for a Codex session', async () => {
-    if (!workflowCommand) throw new Error('Workflow MCP command is missing')
-    const { context, replaceSession } = mcpCommandContext('codex')
-
-    await workflowCommand.run(context)
-
-    expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
-      kind: 'codex',
-      resumeSessionId: 'provider-session',
-      builtInMcpOverrides: { workflows: true },
-      // Every capability reload now pins its target: Dispatch focus can move
-      // while the replacement is in flight, and an unpinned reload would apply
-      // the change to whichever pane became focused.
-      targetSessionId: 'agent',
-    })
-  })
-
-  it('advertises general MCP toggles to OpenCode now that launch config is injected', () => {
-    if (!orchestrationCommand) throw new Error('Orchestration MCP command is missing')
-    expect(orchestrationCommand.when?.(mcpCommandContext('opencode').context)).toBe(true)
-  })
-
-  it('offers Agent Management to every provider launcher', () => {
-    if (!agentManagementCommand) throw new Error('Agent Management MCP command is missing')
-    expect(agentManagementCommand.when?.(mcpCommandContext('claude').context)).toBe(true)
-    expect(agentManagementCommand.when?.(mcpCommandContext('codex').context)).toBe(true)
-    expect(agentManagementCommand.when?.(mcpCommandContext('opencode').context)).toBe(true)
-  })
-
-  it('toggles Agent Management for one existing session through replacement', async () => {
-    if (!agentManagementCommand) throw new Error('Agent Management MCP command is missing')
-    const { context, replaceSession } = mcpCommandContext('claude')
-
-    await agentManagementCommand.run(context)
-
-    expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
-      kind: 'claude',
-      resumeSessionId: 'provider-session',
-      builtInMcpOverrides: { agent_management: true },
-      // Every capability reload now pins its target: Dispatch focus can move
-      // while the replacement is in flight, and an unpinned reload would apply
-      // the change to whichever pane became focused.
-      targetSessionId: 'agent',
-    })
-  })
-})
-
 // ---------------------------------------------------------------------------
 // Which capability gates which command.
 //
@@ -457,7 +348,7 @@ describe('capability gates', () => {
     capabilityOverride.current = null
   })
 
-  function contextWithAgent(): CommandContext {
+  function contextWithAgent(kind = 'claude'): CommandContext {
     return {
       workspace: {
         state: {
@@ -466,7 +357,7 @@ describe('capability gates', () => {
           sessions: {
             agent: {
               cwd: '/projects/app',
-              kind: 'claude',
+              kind,
               providerSessionId: 'provider-abc',
               projectId: 'tab',
               joinedAt: 0,
@@ -492,9 +383,9 @@ describe('capability gates', () => {
     'switch-provider',
   ] as const
 
-  function availableUnder(features: Record<string, unknown>): string[] {
+  function availableUnder(features: Record<string, unknown> | null, kind?: string): string[] {
     capabilityOverride.current = features
-    const ctx = contextWithAgent()
+    const ctx = contextWithAgent(kind)
     return GATED.filter(id => {
       const command = sessionCommands.find(candidate => candidate.id === id)
       if (!command) throw new Error(`command ${id} is missing`)
@@ -511,6 +402,16 @@ describe('capability gates', () => {
     ['switchTargets', ['codex'], ['switch-provider']],
   ])('%s enables exactly %s', (capability, value, expected) => {
     expect(availableUnder({ [capability as string]: value })).toEqual(expected)
+  })
+
+  it('a Pi pane gets every transcript operation except Rewind, which has no composer to land in', () => {
+    // Real capabilities, and a pane restored kind-only (no providerRuntime),
+    // which is the shape the catalog, split chords and switches produce. Pi
+    // DECLARES transcriptRewind (its adapter really rewinds). The command is
+    // what stays hidden, by the effective terminal runtime, because rewind
+    // hands the prompt back as a composer draft and pi's TUI owns its own
+    // input (#896).
+    expect(availableUnder(null, 'pi')).toEqual(['view-prompts', 'reload-agent', 'copy-resume-command', 'duplicate-agent', 'switch-provider'])
   })
 
   it('offers nothing to a provider that declares nothing', () => {

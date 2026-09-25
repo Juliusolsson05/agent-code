@@ -18,6 +18,7 @@ import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/term
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { isEngagementKeydown } from '@renderer/workspace/tile-tree/engagementKeydown'
 import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
@@ -141,6 +142,13 @@ export function TerminalLeaf({
   ensureSessionLiveRef.current = workspace.ensureSessionLive
   const showPaneToastRef = useRef(workspace.showPaneToast)
   showPaneToastRef.current = workspace.showPaneToast
+  // Typing and pasting are the plainest proof a shell is in use, and the one
+  // signal its foreground poll cannot see: a quick `ls` starts and ends inside
+  // one poll, and editing a command line changes no foreground at all (#1178).
+  // A ref, like the two above, because the xterm handlers are bound once per
+  // mount. Optional-called: test harnesses hand this leaf a partial workspace.
+  const markTerminalUsedRef = useRef(workspace.markTerminalUsed)
+  markTerminalUsedRef.current = workspace.markTerminalUsed
   // The DOM node xterm.js renders into. We give it a fresh ref on
   // every mount; xterm's open() attaches on top.
   const containerRef = useRef<HTMLDivElement>(null)
@@ -206,6 +214,7 @@ export function TerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
+    let offUserInput: (() => void) | null = null
     let offTerminalData: (() => void) | null = null
     // Nullable like the disposables above: xterm init can throw before the
     // follow wiring ever runs, and cleanup must survive that path.
@@ -355,6 +364,7 @@ export function TerminalLeaf({
         isActive: () => !disposed && focusedRef.current && ownerVisibleRef.current,
         paste: async text => {
           if (disposed || !ownerVisibleRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          markTerminalUsedRef.current?.(sessionId)
           return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
         },
       })
@@ -371,6 +381,25 @@ export function TerminalLeaf({
         }
         forwarder.onData(data)
       })
+
+      // Use is stamped from the user's own DOM events, not from xterm's onData
+      // (review of #1179). onData also carries the terminal's AUTOMATIC replies
+      // — cursor-position and device-attribute answers a program asks for — so
+      // a forgotten shell running something chatty would have looked in use
+      // forever. And the buffered branch above returns before any stamp, so
+      // typing while the shell woke never counted. A keydown, an IME
+      // composition and a DOM paste are human by definition, and they fire
+      // whether or not the backend is attached yet. Capture phase, because
+      // xterm's textarea handlers may stop propagation.
+      const markUsed = () => markTerminalUsedRef.current?.(sessionId)
+      container.addEventListener('keydown', markUsed, true)
+      container.addEventListener('compositionend', markUsed, true)
+      container.addEventListener('paste', markUsed, true)
+      offUserInput = () => {
+        container.removeEventListener('keydown', markUsed, true)
+        container.removeEventListener('compositionend', markUsed, true)
+        container.removeEventListener('paste', markUsed, true)
+      }
 
       // Incoming: raw bytes from the shell PTY.
       //
@@ -531,6 +560,7 @@ export function TerminalLeaf({
 
     return () => {
       disposed = true
+      offUserInput?.()
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
@@ -629,7 +659,9 @@ export function TerminalLeaf({
       // querying its cursor must neither clear unread state nor schedule React
       // work. DOM capture attributes engagement without guessing from bytes
       // and runs even when xterm stops the keyboard event from bubbling.
-      onKeyDownCapture={() => acknowledgeSession(sessionId)}
+      // Filtered: keys the workspace router consumed (pane navigation) and bare
+      // modifiers aren't engagement. See engagementKeydown.ts.
+      onKeyDownCapture={event => { if (isEngagementKeydown(event)) acknowledgeSession(sessionId) }}
       onPasteCapture={() => acknowledgeSession(sessionId)}
       onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >

@@ -11,7 +11,7 @@
 // resolver as an injected callback prevents this provider-agnostic helper from
 // importing Electron IPC or knowing about `session:resolveCondition`.
 
-import type { ConditionAction, ConditionCustomAction } from './contract'
+import type { ConditionAction, ConditionCustomAction, ConditionPtyAction } from './contract'
 
 type ResolveCustomAction = (action: ConditionCustomAction) => Promise<unknown>
 
@@ -44,24 +44,33 @@ export function makeDispatch(
   }
 }
 
-// makeDispatchFromOnSend builds a dispatcher from an ALREADY-session-bound
-// `onSend(data)` callback (the shape TileLeaf passes down: `send` is already
-// bound to the active session's id). This avoids having to re-thread sessionId
-// through the outlet just to re-bind it — the pty arm calls onSend(data), which
-// is byte-for-byte the same send path every modal uses today.
-export function makeDispatchFromOnSend(
-  onSend: (data: string) => Promise<void>,
+// makeOutletDispatch builds a dispatcher for a condition OUTLET, from an
+// already-session-bound `onPtyAction` callback.
+//
+// WHY the pty arm hands over the whole ACTION, not its bytes (#1177): the two
+// surfaces that mount an outlet write a pty choice differently. The desktop
+// writes `action.data` straight into the session (TileLeaf's
+// sendConditionKey). The phone's wire refuses arbitrary bytes: it sends the
+// action's `{id,label,data}` so the desktop can verify it against the live
+// condition menu before writing. This helper used to take `onSend(data)` and
+// throw the id away, which is why the phone could not use the provider
+// outlet at all and kept a second dispatcher and a second outlet mount of
+// its own. Handing over the action lets each surface choose its write and
+// keeps one outlet.
+export function makeOutletDispatch(
+  onPtyAction: (action: ConditionPtyAction) => Promise<void>,
   resolveCustom?: ResolveCustomAction,
   onRefused?: ConditionRefusalReporter,
 ): (action: ConditionAction) => Promise<void> {
   return async (action: ConditionAction) => {
     if (action.kind === 'pty') {
-      // The pty arm is NOT reported here. Its caller owns the answer: `onSend`
-      // returns void because the app's own `sendConditionKey` already reads
-      // main's boolean and shows a pane toast for a write it could not make.
-      // Reporting it twice would double the message for the one arm that was
-      // never silent.
-      await onSend(action.data)
+      // The pty arm is NOT reported here. Its caller owns the answer:
+      // `onPtyAction` returns void because each surface already reports its
+      // own failed write (the desktop's sendConditionKey shows a pane toast
+      // for main's false; the phone shows the desktop's refusal of an action
+      // it could not match). Reporting it twice would double the message for
+      // the one arm that was never silent.
+      await onPtyAction(action)
       return
     }
     await dispatchCustom(

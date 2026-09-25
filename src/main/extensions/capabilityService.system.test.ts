@@ -6,13 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { serializeEditorFileMutation } from '@main/editorFileIO.js'
 
 const authority = vi.hoisted(() => ({
-  capabilities: vi.fn<() => Promise<string[]>>(),
+  capabilities: vi.fn<(...args: unknown[]) => Promise<string[]>>(),
+  networkOrigins: [] as string[],
   publish: undefined as undefined | ((rows: Array<{ manifest: { id: string }; installation: { id: string; bundleSha256: string }; sha256: string; version?: string }>) => void),
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 vi.mock('./grants.js', () => ({
-  installedExtensionCapabilities: authority.capabilities,
+  installedExtensionGrant: async (...args: unknown[]) => ({ capabilities: await authority.capabilities(...args), networkOrigins: authority.networkOrigins }),
 }))
 vi.mock('./ledger.js', () => ({
   onExtensionPublication: (listener: typeof authority.publish) => {
@@ -28,29 +29,82 @@ const {
 } = await import('./capabilityService.js')
 const roots: string[] = []
 
-async function fixture(): Promise<{
+// In-memory stand-in for the OS-encrypted store: the store's own file and
+// encryption rules are covered by secrets.system.test.ts; here only the
+// broker's namespacing (which id reaches the store) is under test.
+function memorySecrets() {
+  const values = new Map<string, string>()
+  return {
+    get: async (extensionId: string, key: string) => values.get(`${extensionId}/${key}`) ?? null,
+    set: async (extensionId: string, key: string, value: string) => { values.set(`${extensionId}/${key}`, value) },
+    delete: async (extensionId: string, key: string) => { values.delete(`${extensionId}/${key}`) },
+  }
+}
+const fetchCalls: string[] = []
+const recordedFetch: typeof fetch = async input => {
+  fetchCalls.push(String(input))
+  return new Response(new Uint8Array([0xff, 0xf3, 0x44, 0xc4]), { status: 200, headers: { 'content-type': 'audio/mpeg' } })
+}
+
+type ServiceCall = { extensionId: string; revision: string; serviceId: string; name?: string; params?: unknown }
+
+async function fixture(grantServiceRun = false): Promise<{
   root: string
   notifications: Array<{ extensionId: string; message: string }>
+  serviceCalls: ServiceCall[]
   service: InstanceType<typeof ExtensionCapabilityService>
 }> {
   const root = await mkdtemp(join(tmpdir(), 'agent-code-extension-files-'))
   const notifications: Array<{ extensionId: string; message: string }> = []
+  const serviceCalls: ServiceCall[] = []
   roots.push(root)
   await mkdir(join(root, 'src'))
   await writeFile(join(root, 'src', 'note.txt'), 'hello extension\n')
-  authority.capabilities.mockResolvedValue(['fs.read', 'fs.write', 'notifications.show'])
+  authority.capabilities.mockResolvedValue([
+    'fs.read', 'fs.write', 'notifications.show', ...(grantServiceRun ? ['service.run' as const] : []),
+  ])
   return {
     root,
     notifications,
+    serviceCalls,
     service: new ExtensionCapabilityService({
       resolveSessionRoot: sessionId => sessionId === 'live-session' ? root : null,
       notify: (extensionId, message) => notifications.push({ extensionId, message }),
+      // A recording fake: the ExtensionServiceHost lifecycle itself is covered
+      // by serviceHost tests; here we verify the BROKER side — grant gate,
+      // id/revision propagation, and revocation race handling.
+      secrets: memorySecrets(),
+      fetch: recordedFetch,
+      services: {
+        start: async (extensionId, revision, serviceId) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'start' })
+          return { state: 'running', serviceId, pid: 1, endpoints: [] }
+        },
+        stop: async (extensionId, revision, serviceId) => { serviceCalls.push({ extensionId, revision, serviceId, name: 'stop' }) },
+        status: async (extensionId, revision, serviceId) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'status' })
+          return { state: 'stopped', serviceId }
+        },
+        invoke: async (extensionId, revision, serviceId, name, params) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name, params })
+          return { ok: true }
+        },
+        expose: async (extensionId, revision, serviceId, lan) => {
+          serviceCalls.push({ extensionId, revision, serviceId, name: 'expose' })
+          return lan ? { serviceId, lan: true, port: 45678 } : { serviceId, lan: false }
+        },
+        // No host-owned ports in this fake; net.fetch's refusal of them is
+        // pinned in netFetch.test.ts and wired end to end by serviceHost.
+        isHostOwnedLoopbackPort: () => false,
+      },
     }),
   }
 }
 
 afterEach(async () => {
   authority.capabilities.mockReset()
+  authority.networkOrigins = []
+  fetchCalls.length = 0
   authority.publish = undefined
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -103,7 +157,7 @@ describe('permissioned extension services', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!original || !('text' in original)) throw new Error('Expected a file read')
+      if (!original || typeof original !== 'object' || !('text' in original)) throw new Error('Expected a file read')
       const written = await service.invoke('writer', 'generation-one', {
         method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
         text: 'updated by extension\n', expectedVersion: original.version,
@@ -137,7 +191,7 @@ describe('permissioned extension services', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!original || !('text' in original)) throw new Error('Expected a file read')
+      if (!original || typeof original !== 'object' || !('text' in original)) throw new Error('Expected a file read')
       const results = await Promise.allSettled(['first', 'second'].map(text => service.invoke(
         'writer', 'generation-one', {
           method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
@@ -166,7 +220,7 @@ describe('permissioned extension services', () => {
       const original = await service.invoke('writer', 'generation-one', {
         method: 'fs.readText', sessionId: 'live-session', path: 'src/note.txt',
       })
-      if (!original || !('text' in original)) throw new Error('Expected a file read')
+      if (!original || typeof original !== 'object' || !('text' in original)) throw new Error('Expected a file read')
       const write = service.invoke('writer', 'generation-one', {
         method: 'fs.writeText', sessionId: 'live-session', path: 'src/note.txt',
         text: 'retired write', expectedVersion: original.version,
@@ -282,5 +336,87 @@ describe('permissioned extension services', () => {
     resolveGrant(['fs.read'])
     await expect(pending).rejects.toThrow('no longer active')
     service.dispose()
+  })
+})
+
+describe('service.run capability', () => {
+  it('blocks every lifecycle call without the grant and routes with it', async () => {
+    const { service, serviceCalls } = await fixture()
+    try {
+      await expect(service.invoke('timer', 'generation-one', {
+        method: 'service.start', serviceId: 'timer.worker',
+      })).rejects.toThrow('capability "service.run" is not granted')
+      expect(serviceCalls).toEqual([])
+    } finally { service.dispose() }
+
+    const granted = await fixture(true)
+    try {
+      await expect(granted.service.invoke('timer', 'generation-one', {
+        method: 'service.start', serviceId: 'timer.worker',
+      })).resolves.toEqual({ state: 'running', serviceId: 'timer.worker', pid: 1, endpoints: [] })
+      // The broker must forward ITS authenticated identity/revision, never
+      // accept one from the request — the payload schema has neither field.
+      expect(granted.serviceCalls).toEqual([
+        { extensionId: 'timer', revision: 'generation-one', serviceId: 'timer.worker', name: 'start' },
+      ])
+    } finally { granted.service.dispose() }
+  })
+})
+
+describe('net.fetch routing between net.connect and net.origins (#1150)', () => {
+  const declaredUrl = 'https://api.example.com/v1/render/voice?format=mp3'
+
+  it('reaches a declared origin only with net.origins, and only that origin', async () => {
+    const { service } = await fixture()
+    try {
+      // net.connect alone is the private-address grant; it must not become a
+      // public-internet grant just because the URL is well-formed.
+      authority.capabilities.mockResolvedValue(['net.connect'])
+      authority.networkOrigins = []
+      await expect(service.invoke('example', 'generation-one', { method: 'net.fetch', url: declaredUrl }))
+        .rejects.toThrow(/networkOrigins/)
+      expect(fetchCalls).toEqual([])
+    } finally { service.dispose() }
+
+    const declared = await fixture()
+    try {
+      authority.capabilities.mockResolvedValue(['net.origins'])
+      authority.networkOrigins = ['https://api.example.com']
+      await expect(declared.service.invoke('example', 'generation-one', {
+        method: 'net.fetch', url: declaredUrl, httpMethod: 'POST', body: '{}', responseType: 'base64',
+        headers: [{ name: 'x-api-key', value: 'sk_test_value' }],
+      })).resolves.toEqual({ status: 200, contentType: 'audio/mpeg', body: '//NExA==', bodyEncoding: 'base64' })
+      // A sibling subdomain and a different port are different origins.
+      for (const url of ['https://evil.api.example.com/x', 'https://api.example.com:8443/x', 'http://api.example.com/x']) {
+        await expect(declared.service.invoke('example', 'generation-one', { method: 'net.fetch', url })).rejects.toThrow(/neither/)
+      }
+      expect(fetchCalls).toEqual([declaredUrl])
+    } finally { declared.service.dispose() }
+  })
+
+  it('keeps private addresses on net.connect even when origins are declared', async () => {
+    const { service } = await fixture()
+    try {
+      authority.capabilities.mockResolvedValue(['net.origins'])
+      authority.networkOrigins = ['https://api.example.com']
+      await expect(service.invoke('example', 'generation-one', { method: 'net.fetch', url: 'http://192.168.1.20:5192/api/state' }))
+        .rejects.toThrow('capability "net.connect" is not granted')
+      expect(fetchCalls).toEqual([])
+    } finally { service.dispose() }
+  })
+})
+
+describe('secrets (Tier 0, #1150)', () => {
+  it('needs no grant and is namespaced by the authenticated extension id', async () => {
+    const { service } = await fixture()
+    try {
+      authority.capabilities.mockResolvedValue([])
+      await service.invoke('example', 'generation-one', { method: 'secrets.set', key: 'example.apiKey', value: 'sk_example' })
+      await expect(service.invoke('example', 'generation-one', { method: 'secrets.get', key: 'example.apiKey' })).resolves.toBe('sk_example')
+      // Another extension asking for the same key name gets its OWN namespace.
+      await expect(service.invoke('timer', 'generation-one', { method: 'secrets.get', key: 'example.apiKey' })).resolves.toBeNull()
+      await service.invoke('example', 'generation-one', { method: 'secrets.delete', key: 'example.apiKey' })
+      await expect(service.invoke('example', 'generation-one', { method: 'secrets.get', key: 'example.apiKey' })).resolves.toBeNull()
+    } finally { service.dispose() }
   })
 })

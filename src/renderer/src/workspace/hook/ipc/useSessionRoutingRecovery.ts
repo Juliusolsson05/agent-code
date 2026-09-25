@@ -76,10 +76,16 @@ export function useSessionRoutingRecovery(
             const loaded = await loadInitialHistoryForSession({
               sessionId: gap.sessionId, refs, setRuntimes: scopedSet, preserveStatusUntilLoaded: true,
               meta: { ...meta, ...history, providerSessionIdSource: 'runtime-start' },
-              readHistory: async () => {
-                const result = await window.api.loadSessionRoutingHistory(gap, history.sourceKey)
-                if (!current() || result.kind !== 'loaded') throw new Error('Saved history is unavailable for this view.')
-                return result.chunk
+              // A one-read feed: routing repair reads the owner/source-validated
+              // copy main captured for this gap, never the plain transcript read,
+              // so it overrides only loadHistory and keeps the loader's
+              // mapping, ledger and reconciliation.
+              feed: {
+                loadHistory: async () => {
+                  const result = await window.api.loadSessionRoutingHistory(gap, history.sourceKey)
+                  if (!current() || result.kind !== 'loaded') throw new Error('Saved history is unavailable for this view.')
+                  return result.chunk
+                },
               },
             })
             if (!current() || !loaded) { phase('unavailable'); return }

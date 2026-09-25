@@ -1,21 +1,19 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-// Phone toast host — the phone-side counterpart of @renderer/ui/GlobalToast,
-// aliased over it in vite.config.ts (see the stub table there).
+import { GlobalToastContext } from '@renderer/ui/GlobalToastContext'
+
+// Phone toast host — the phone's PRESENTATION of the one shared toast
+// contract (@renderer/ui/GlobalToastContext, #1177).
 //
-// WHY the phone needs its own module instead of mounting the desktop
-// provider: the desktop GlobalToastProvider reads `useAppStore` (extension
-// catalog) and subscribes `window.api.onExtensionNotification` — neither
-// exists in a phone browser. More importantly, WITHOUT any provider the
-// shared rows' `useGlobalToast()` resolves to the desktop module's no-op
-// default context, so an AskUserQuestion answer failure
-// (AskUserQuestionRow's "Could not send your answer: …") vanished without a
-// trace on the phone — the exact silent-failure class this host exists to
-// close.
-//
-// The PUBLIC API is deliberately identical to the desktop module
-// (`showToast(message, durationMs?)`) so every shared row keeps importing
-// `@renderer/ui/GlobalToast` unchanged and simply works here.
+// WHY the phone does not mount the desktop provider: GlobalToastProvider
+// reads `useAppStore` (extension catalog) and subscribes
+// `window.api.onExtensionNotification` — neither exists in a phone browser.
+// Until #1177 this file was aliased over the desktop module and re-declared
+// its own look-alike context; now it simply PROVIDES the shared context, so
+// every row's `useGlobalToast()` reaches it with no alias. Without a provider
+// the context's no-op default would swallow an AskUserQuestion answer
+// failure ("Could not send your answer: …") — the silent-failure class this
+// host exists to close.
 //
 // Presentation differs where the device differs: the desktop anchors
 // top-right (mouse-corner, z-[1200] above dialog scrims); a phone anchors
@@ -24,18 +22,6 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 // (a toast is the definition of a detached surface; hard rule 1 sanctions
 // rounding here on both devices) and the single-slot, auto-dismiss,
 // tap-to-dismiss behavior of the desktop toast.
-
-type GlobalToastContextValue = {
-  showToast: (message: string, durationMs?: number) => void
-}
-
-const GlobalToastContext = createContext<GlobalToastContextValue>({
-  showToast: () => {},
-})
-
-export function useGlobalToast(): GlobalToastContextValue {
-  return useContext(GlobalToastContext)
-}
 
 export function ToastHostProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null)

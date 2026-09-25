@@ -4,7 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
 import { deriveAppDefinitions } from '@renderer/apps/host/derive'
 import { Dialog, DialogContent, DialogTitle } from '@renderer/components/ui/dialog'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 import type { AppDefinition } from '@renderer/apps/types'
 
@@ -88,12 +88,15 @@ function OpenExtensionView({ definition }: { definition: AppDefinition }) {
           wider view: Mini Games' launcher and Blackjack were cut off, while narrower
           games fit and made the modal look stuck at their size. `max-content` sizes to
           the wrapper regardless of where the box starts, and `maxWidth` still bounds
-          it. viewBridge already scales an oversized frame to 90% of the window, so the
-          content never needs the cap to shrink it. */}
+          it. The cap is now 94vw ONLY: viewBridge scales an oversized frame to 90% of
+          the window BEFORE layout, so a hard 1160px dialog ceiling could only ever
+          CLIP a legitimately scaled stage — a 1600px game table scaled to ~1352px sat
+          behind `overflow-hidden` and read as cropped and square. The scrim budget
+          (94vw) is the real bound the cap exists to enforce. */}
       <DialogContent
         showCloseButton
         className="overflow-hidden"
-        style={{ width: 'max-content', maxWidth: 'min(1160px, 94vw)' }}
+        style={{ width: 'max-content', maxWidth: '94vw' }}
       >
         {/* Radix requires an accessible title on every Dialog; visually hidden
             because an extension owns its own header treatment. Omitting it logs

@@ -9,6 +9,7 @@ import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type { ExtensionListEntry, InstalledExtension, QuarantinedExtensionEntry } from '@shared/types/extensions.js'
 
 import { apiVersionMismatch, extensionManifestSchema } from './manifest.js'
+import { removeExtensionSecrets } from './secrets.js'
 
 // The install ledger.
 //
@@ -333,6 +334,12 @@ export async function removeExtension(id: string): Promise<void> {
   await withLedgerLock(async () => {
     const rows = await readLedger()
     const previous = rows.find(row => row.manifest.id === id)
+    // Credentials go FIRST, unlike saved state (kept on purpose, above): a
+    // crash after this line leaves an installed extension that has to ask for
+    // its key again, never an uninstalled id whose key a later install from
+    // another source could inherit. finalizeInstall also clears stale secrets
+    // on any first install, so an interrupted removal cannot leak either way.
+    if (previous) await removeExtensionSecrets(id)
     await writeLedger(rows.filter(row => row.manifest.id !== id))
     if (previous) await discardExtensionBundle(previous)
   })
@@ -352,6 +359,10 @@ export async function removeQuarantinedExtension(id: string): Promise<void> {
   await withLedgerLock(async () => {
     const { rows, preserved } = await readLedgerContents()
     if (!preserved.some(row => row.id === id)) return
+    // A preserved row may share its id with a WORKING installation (rollback).
+    // Its secrets are that working extension's secrets then: keep them. With
+    // no runnable row left, the credentials belong to nothing and go.
+    if (!rows.some(row => row.manifest.id === id)) await removeExtensionSecrets(id)
     await writeLedger(rows, { dropPreservedId: id })
   })
 }

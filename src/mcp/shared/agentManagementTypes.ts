@@ -49,6 +49,23 @@ export type ManagedAgentProject = {
 
 export type ManagedAgentRecord = {
   sessionId: string
+  /**
+   * The label the user sees beside this agent right now (`B28`, or `★2` when
+   * pinned), or null when it shows none (#1145). Users name agents by this,
+   * so a record without it left the calling model unable to map "prompt
+   * B28" to any session.
+   *
+   * WHY always present (null rather than absent): "this agent has no label"
+   * is a fact the model can repeat to the user; a missing field reads as
+   * "this tool does not know about labels", which is the bug being fixed.
+   *
+   * It is a SCREEN COORDINATE, not an identity: closing, pinning or adding
+   * an earlier row renumbers every later one. Target by `label` to resolve it
+   * at call time; never cache a label from an earlier listing.
+   */
+  displayLabel: string | null
+  /** Spoken agent name, only while the Agent names setting is on (#1145). */
+  agentName?: string
   kind: AgentProviderKind
   cwd: string
   title?: string
@@ -138,11 +155,27 @@ type AgentManagementRequestBase = {
   callerSessionId: string
 }
 
+/**
+ * How a caller names ONE target (#1145): exactly one field is set.
+ *
+ * WHY label and name travel to the renderer unresolved: only the renderer has
+ * the row stream a label indexes and the name map a name reads, and it must
+ * resolve against the SAME state snapshot the operation then acts on — a
+ * label is what the user sees now, and resolving it earlier (in main, or from
+ * a previous listing) could hand the prompt to whichever agent took that
+ * row's number since.
+ */
+export type ManagedAgentTarget = {
+  sessionId?: string
+  label?: string
+  name?: string
+}
+
 export type AgentManagementRendererRequest =
   | (AgentManagementRequestBase & { type: 'list-agents' })
   | (AgentManagementRequestBase & {
       type: 'read-agent'
-      sessionId: string
+      target: ManagedAgentTarget
       maxMessages?: number
       maxCharsPerMessage?: number
       maxCharsPerAgent?: number
@@ -150,6 +183,9 @@ export type AgentManagementRendererRequest =
   | (AgentManagementRequestBase & {
       type: 'read-agents'
       sessionIds?: string[]
+      /** Visible labels / spoken names, resolved like ManagedAgentTarget. */
+      labels?: string[]
+      names?: string[]
       includeCaller?: boolean
       maxMessagesPerAgent?: number
       maxCharsPerMessage?: number
@@ -158,12 +194,12 @@ export type AgentManagementRendererRequest =
     })
   | (AgentManagementRequestBase & {
       type: 'send-prompt'
-      sessionId: string
+      target: ManagedAgentTarget
       prompt: string
     })
   | (AgentManagementRequestBase & {
       type: 'close-agent'
-      sessionId: string
+      target: ManagedAgentTarget
     })
 
 export type AgentManagementRendererResponse =
@@ -202,6 +238,8 @@ export type AgentManagementRendererResponse =
       ok: true
       type: 'send-prompt'
       sessionId: string
+      /** Echoed so the caller can tell the user which agent it reached. */
+      displayLabel: string | null
       delivery: PromptDeliveryResult
     }
   | {
@@ -209,6 +247,7 @@ export type AgentManagementRendererResponse =
       ok: true
       type: 'close-agent'
       closedSessionId: string
+      displayLabel: string | null
     }
   | {
       requestId: string
@@ -221,6 +260,10 @@ export type AgentManagementRendererResponse =
         | 'self_target_forbidden'
         | 'transcript_unavailable'
         | 'close_would_affect_additional_sessions'
+        | 'invalid_target'
+        | 'label_not_found'
+        | 'name_not_found'
+        | 'name_ambiguous'
         | 'request_failed'
       message: string
       sessionId?: string

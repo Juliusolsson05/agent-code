@@ -17,7 +17,7 @@ export const setupCommands: CommandDef[] = [{
   surface: 'app',
   title: 'Open Setup',
   description: '**What it does:** Opens **Setup**: which agent CLIs and helper tools this Mac has, a copyable install command for each missing provider, and a manual path override.\n\n**Use when:** A provider is "not installed", a spawn says to open Setup, or you just installed a CLI and want Agent Code to find it.\n\n**Notes:** Opening it re-checks every tool. Escape closes it.',
-  keywords: ['setup', 'install', 'provider', 'cli', 'claude', 'codex', 'opencode', 'grok', 'path', 'prerequisites', 'onboarding'],
+  keywords: ['setup', 'install', 'provider', 'cli', 'claude', 'codex', 'opencode', 'grok', 'pi', 'path', 'prerequisites', 'onboarding'],
   getState: () => panel(useSetupStore.getState().requested),
   run: ({ ui }) => {
     ui.closePalette()

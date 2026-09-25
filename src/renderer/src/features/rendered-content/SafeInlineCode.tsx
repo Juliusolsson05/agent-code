@@ -4,12 +4,16 @@ import type { MouseEvent, ReactNode } from 'react'
 import { classifyInlineCodeFileTarget } from '@shared/renderedContent/targets'
 
 import { CodeRenderContext } from '@renderer/features/feed/context'
-import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
-import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 
 export function SafeInlineCode({ children }: { children?: ReactNode }) {
   const { workspaceRoot } = useContext(CodeRenderContext)
   const { showToast } = useGlobalToast()
+  // Opening is the host's (#1177). A host with no editor (the phone) gets
+  // plain inline code: the conservative file classification below is only
+  // worth running when something can act on it.
+  const { openWorkspaceFile } = useRendererHost()
   const text = String(children ?? '')
   const target = classifyInlineCodeFileTarget(text, { workspaceRoot })
 
@@ -17,8 +21,8 @@ export function SafeInlineCode({ children }: { children?: ReactNode }) {
     async (event: MouseEvent<HTMLButtonElement>) => {
       event.preventDefault()
       event.stopPropagation()
-      if (target.kind !== 'local-file' || !workspaceRoot) return
-      const result = await openFileInGlobalEditor({
+      if (target.kind !== 'local-file' || !workspaceRoot || !openWorkspaceFile) return
+      const result = await openWorkspaceFile({
         root: workspaceRoot,
         path: target.path,
         line: target.line,
@@ -26,10 +30,10 @@ export function SafeInlineCode({ children }: { children?: ReactNode }) {
       })
       if (!result.ok) showToast(`Could not open file: ${result.error}`)
     },
-    [showToast, target, workspaceRoot],
+    [openWorkspaceFile, showToast, target, workspaceRoot],
   )
 
-  if (target.kind !== 'local-file') return <code>{children}</code>
+  if (target.kind !== 'local-file' || !openWorkspaceFile) return <code>{children}</code>
 
   // WHY inline code gets only local-file activation, not generic link
   // activation: agents often wrap paths in backticks, and those are useful

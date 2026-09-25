@@ -45,7 +45,7 @@ const POLL_MS = 600
 // (the #320/#321 byte-cap machinery) and the internEntryFields/makeStringPool
 // usage — all of it existed solely to make the retained entries cheaper, and with
 // nothing retained there is nothing to clamp or intern. internEntryFields itself
-// stays in internEntry.ts (jsonlCoalescer + historyLoader still use it).
+// stays in internEntry.ts (sessionFeedTap + historyLoader still use it).
 
 type ParentResult = (toolUseId: string) => { done: boolean; error: boolean }
 

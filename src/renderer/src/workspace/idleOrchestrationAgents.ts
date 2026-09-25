@@ -242,6 +242,7 @@ export async function closeIdleOrchestrationAgents(
     sessions: deps.readState().sessions,
     closeSession: deps.closeSession,
     currentTarget: currentIdleOrchestrationCloseTarget,
+    killCaller: 'bulk.close-idle-orchestration',
   })
   deps.showToast(
     describePartialClose(outcome) ?? `Closed ${outcome.closed.length} ${agentsNoun(outcome.closed.length)}.`,

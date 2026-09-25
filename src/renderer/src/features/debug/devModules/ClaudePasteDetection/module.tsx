@@ -22,10 +22,18 @@ import { buildLifecycle, buildStats } from './timeline'
 
 // The real submit-detection rules, mirrored from claude-code-headless so we can
 // watch them fire against the same screen text the parser sees:
-//   * placeholder — ClaudeCodeHeadless.awaitPastePlaceholder polls /\[Pasted text #\d+/ at 10ms
+//   * placeholder — ClaudeCodeHeadless.awaitPastePlaceholder polls for the
+//                   collapsed-paste pill at 10ms (see #1115 on its raw-screen match)
 //   * spinner     — ScreenParser.detectActivity spinner glyph + verb…
+// `\s+` between the words, not a literal space (#1113): the composer wraps, and
+// a wrapped `[Pasted text #1]` is what production's `placeholderCount` now
+// counts (after normalizing). A probe still using the literal would report
+// "0 placeholders" for exactly the screen production reads as 1 — i.e. the
+// first tool anyone opens on the next stranded-draft report would contradict
+// the code they are debugging. This pattern runs against the raw screen, so it
+// takes the `\s+` route to the same answer.
 const DETECT_RULES: { label: string; pattern: string; flags: string }[] = [
-  { label: 'pasted-placeholder', pattern: '\\[Pasted text #\\d+', flags: 'i' },
+  { label: 'pasted-placeholder', pattern: '\\[Pasted\\s+text\\s+#\\d+', flags: 'i' },
   { label: 'spinner-activity', pattern: '^\\s*[^\\w\\s⏺]\\s+(\\S+)…', flags: 'm' },
 ]
 

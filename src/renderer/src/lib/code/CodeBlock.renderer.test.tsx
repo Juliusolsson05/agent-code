@@ -1,7 +1,10 @@
 import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { ReactNode } from 'react'
+
 import { CodeBlock } from './CodeBlock'
+import { INERT_RENDERER_HOST, RendererHostProvider } from '@renderer/features/rendererHost/RendererHostContext'
 
 const monacoRuntime = vi.hoisted(() => ({
   getMonaco: vi.fn(),
@@ -11,6 +14,17 @@ vi.mock('@renderer/lib/code/monacoRuntime', () => ({
   ensureSemanticProvider: vi.fn(),
   getMonaco: monacoRuntime.getMonaco,
 }))
+
+// Monaco is a HOST capability since #1177: a block only reaches the editor
+// path when the mounting app supplies the runtime loader. These tests act as
+// the desktop host, handing CodeBlock the (mocked) runtime module.
+const desktopHost = {
+  ...INERT_RENDERER_HOST,
+  loadMonacoRuntime: () => import('@renderer/lib/code/monacoRuntime'),
+}
+function WithMonacoHost({ children }: { children: ReactNode }) {
+  return <RendererHostProvider host={desktopHost}>{children}</RendererHostProvider>
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -62,6 +76,7 @@ describe('CodeBlock Monaco readiness', () => {
 
     const view = render(
       <CodeBlock code="const first = 1" language="typescript" engine="monaco" />,
+      { wrapper: WithMonacoHost },
     )
 
     await waitFor(() => {
@@ -99,4 +114,13 @@ describe('CodeBlock Monaco readiness', () => {
     expect(monaco.editor.createModel).toHaveBeenLastCalledWith('{"third":true}', 'json', expect.anything())
   })
 
+  it('renders a Monaco request through the static engine on a host without a runtime', () => {
+    // The phone's case: no loader, so the block must paint the same static
+    // hljs layer and never start an editor. This replaced a phone-only stub
+    // CodeBlock that re-implemented the static engine by hand.
+    const view = render(<CodeBlock code="const phone = 1" language="typescript" engine="monaco" />)
+    expect(view.container.querySelector('.code-block-static')).toHaveTextContent('const phone = 1')
+    expect(view.container.querySelector('.code-block-shell')).not.toBeInTheDocument()
+    expect(monacoRuntime.getMonaco).not.toHaveBeenCalled()
+  })
 })

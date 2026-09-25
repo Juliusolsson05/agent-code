@@ -1,3 +1,4 @@
+import { uniformBuiltInMcpDefaults } from '@mcp/shared/types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -79,7 +80,45 @@ describe('useAppStore prompt template migration', () => {
     // list. An install that explicitly cleared the domains persists `[]`,
     // which coerceSettings honours as a real choice.
     expect(useAppStore.getState().settings.defaultBuiltInMcpDomains)
-      .toEqual(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows'])
+      .toEqual(uniformBuiltInMcpDefaults(['tldr', 'goal', 'orchestration', 'agent_transcripts', 'workflows']))
+  })
+})
+
+// #973 moved installs sitting on the untouched old default (Dark + Lime) to
+// Nord + Frost. #1173 made Lime selectable again, so the same pair can now
+// also be a choice made AFTER the change. Only the stored version tells the
+// two apart, which is why this drives the real persist rehydrate (migrate →
+// merge → coerce) instead of calling coerceSettings: the bug being guarded is
+// the migration leaking back onto the every-launch path, and a unit test of
+// the helper alone could not see where it is wired.
+describe('useAppStore legacy default appearance migration', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function hydrate(version: number) {
+    const storage = createStorageMock({
+      [APP_STORE_STORAGE_KEY]: JSON.stringify({
+        state: { settings: { mode: 'dark', accent: 'lime' } },
+        version,
+      }),
+    })
+    vi.stubGlobal('localStorage', storage)
+    const { useAppStore } = await import('@renderer/app-state/store')
+    await useAppStore.persist.rehydrate()
+    return useAppStore.getState().settings
+  }
+
+  it('moves a pre-Nord (v10) Dark + Lime blob to Nord + Frost', async () => {
+    expect(await hydrate(10)).toMatchObject({ mode: 'dark-nord', accent: 'frost' })
+  })
+
+  it('keeps a Dark + Lime choice saved after the Nord default shipped (v11)', async () => {
+    expect(await hydrate(11)).toMatchObject({ mode: 'dark', accent: 'lime' })
   })
 })
 

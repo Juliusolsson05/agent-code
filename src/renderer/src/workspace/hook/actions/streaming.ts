@@ -12,6 +12,7 @@ import {
   entryTextContent,
 } from '@renderer/session-runtime/entries'
 import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
+import { OPTIMISTIC_PROMPT_UUID_PREFIX, optimisticPromptUuid } from '@renderer/session-runtime/optimisticPrompt'
 import {
   hasPendingSemanticTools,
   isSemanticTurnRunning,
@@ -257,6 +258,8 @@ export function useStreamingActions(
     sessionRunId?: string | null,
     releaseCause?: 'before-write-failure' | 'write-status-uncertain',
   ) => void
+  addPendingPromptEntry: (sessionId: SessionId, text: string, submissionId: string) => void
+  removePendingPromptEntry: (sessionId: SessionId, submissionId: string) => void
 } {
   const clearPendingRewindUndo = useCallback(
     (sessionId: SessionId) => {
@@ -658,7 +661,12 @@ export function useStreamingActions(
         }
         const optimistic: Entry = {
           type: 'user',
-          uuid: `optimistic-codex-user:${Date.now()}`,
+          // Keyed by the submission when there is one, so Feed can dim the row
+          // that is still sending (#1181; see optimisticPromptUuid). Callers
+          // without a submission id keep the old time-based suffix.
+          uuid: submissionId
+            ? optimisticPromptUuid(submissionId)
+            : `${OPTIMISTIC_PROMPT_UUID_PREFIX}${Date.now()}`,
           parentUuid: null,
           timestamp: new Date().toISOString(),
           message: {
@@ -779,6 +787,98 @@ export function useStreamingActions(
     [isCodexSession, setRuntimes],
   )
 
+  /**
+   * A pending-only prompt row for providers WITHOUT optimistic echo (Claude,
+   * #1181). It lives exactly as long as the send: the composer adds it at
+   * Enter and removes it when the send settles, whatever the outcome.
+   *
+   * WHY Claude never got the ordinary optimistic row: Claude's committed user
+   * row arrives at the moment main reports acceptance (the JSONL
+   * acknowledgement IS the acceptance), and a mid-turn prompt is represented by
+   * Claude's own queue-operation records. A row that outlived the send would
+   * double-render every prompt. A row bounded by the send has no after-life to
+   * double up.
+   *
+   * WHY this does not reuse addOptimisticCodexUserEntry: that action's
+   * mid-turn branch writes `queuedMessages`, which for Claude is owned by the
+   * queue-operation reducer (useIpcSubscriptions' claudeQueue). Writing it from
+   * here would race that reducer's enqueue burst. It also carries the Codex
+   * Stage 0 observation plumbing and the adjacent-duplicate collapse, neither of
+   * which applies to a row that is removed on settle.
+   *
+   * The narrow overlap: the JSONL tail can reach the renderer a few ms before
+   * the acceptance result does. In that gap the ledger's optimistic
+   * reconciliation (ownership.ts, 'optimistic-owned-by-committed') already
+   * hides this row behind the committed twin, so nothing paints twice.
+   */
+  const addPendingPromptEntry = useCallback(
+    (sessionId: SessionId, text: string, submissionId: string) => {
+      const trimmed = text.trim()
+      // An image-only submit has no text to show. The composer lock and the
+      // WorkIndicator still show that a send is in flight.
+      if (!trimmed) return
+      const uuid = optimisticPromptUuid(submissionId)
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        if (current.entries.some(entry => entry.uuid === uuid)) return prev
+        const pending: Entry = {
+          type: 'user',
+          uuid,
+          parentUuid: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: trimmed }],
+          },
+        }
+        return {
+          ...prev,
+          [sessionId]: appendFeedDebugLog(
+            { ...current, entries: [...current.entries, pending] },
+            {
+              layer: 'STATE',
+              kind: 'optimistic_user_add',
+              summary: `pending prompt row added · ${trimmed.slice(0, 80)}`,
+              data: { uuid, submissionId },
+            },
+          ),
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
+  // By uuid, never by text or tail position: tool-result rows and the
+  // committed twin can land after the pending row, and a repeated prompt has
+  // an identical twin elsewhere in the transcript.
+  const removePendingPromptEntry = useCallback(
+    (sessionId: SessionId, submissionId: string) => {
+      const uuid = optimisticPromptUuid(submissionId)
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current) return prev
+        const index = current.entries.findIndex(entry => entry.uuid === uuid)
+        if (index === -1) return prev
+        return {
+          ...prev,
+          [sessionId]: appendFeedDebugLog(
+            {
+              ...current,
+              entries: [...current.entries.slice(0, index), ...current.entries.slice(index + 1)],
+            },
+            {
+              layer: 'STATE',
+              kind: 'optimistic_user_remove',
+              summary: 'pending prompt row removed · send settled',
+              data: { uuid, submissionId },
+            },
+          ),
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
   return {
     beginOptimisticSubmit,
     unwindOptimisticSubmit,
@@ -786,5 +886,7 @@ export function useStreamingActions(
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
+    addPendingPromptEntry,
+    removePendingPromptEntry,
   }
 }

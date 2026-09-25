@@ -46,6 +46,9 @@ vi.mock('node:timers/promises', () => ({
   },
 }))
 
+import { decodePiConversation } from 'agent-transcript-parser'
+import { loadLiveFixture } from 'pi-terminal-headless/testing/index'
+
 import { compactSourceBeforeSwitch } from './compactBeforeSwitch.js'
 import { loadFixtureConversation } from './testing/fixtureConversations.js'
 
@@ -97,6 +100,29 @@ describe('compactSourceBeforeSwitch', () => {
 
     expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('local-session', '/compact')
     expect(mocks.read).toHaveBeenCalledTimes(2)
+  })
+
+  it('compacts a Pi source through its own /compact and hands over the summary plus what Pi kept', async () => {
+    // A real recording of pi 0.87.1 compacting: before = the rows up to the
+    // turn that was compacted, after = the whole file with its compaction
+    // row. Decoded by the real parser, so the slice this returns is exactly
+    // the portable conversation, not a mock of one.
+    const rows = Object.values(loadLiveFixture('compaction').files)[0]!
+    const compactionAt = rows.findIndex(row => row.type === 'compaction')
+    mocks.read
+      .mockResolvedValueOnce(decodePiConversation(rows.slice(0, compactionAt)))
+      .mockResolvedValueOnce(decodePiConversation(rows))
+    const manager = { ...claudeManager(), getSessionKind: vi.fn(() => 'pi') }
+
+    const result = await compactSourceBeforeSwitch(manager as never, { ...claudeRequest(), sourceKind: 'pi' as const }, requiresCompactionPlan())
+
+    // The bridge runs this as Pi's own compaction (never model text).
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('local-session', '/compact')
+    expect(result.entries[0]).toMatchObject({ kind: 'compaction', summarySource: 'carrier', summary: rows[compactionAt]!.summary })
+    const kept = rows.find(row => row.id === rows[compactionAt]!.firstKeptEntryId)!
+    expect(result.entries.map(entry => entry.source.raw)).toContain(kept)
+    // Nothing Pi summarized away travels on.
+    expect(result.entries.some(entry => entry.kind === 'message' && entry.role === 'user' && entry.content.some(part => part.kind === 'text' && part.text === 'one [probe:c1]'))).toBe(false)
   })
 
   it('does not retry when the provider rejects the compaction command', async () => {

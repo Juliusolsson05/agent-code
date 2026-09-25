@@ -3,12 +3,15 @@ import { goalLoopCommands } from '@renderer/features/goal-loop/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
+import { mcpCommands } from '@renderer/features/mcp/commands/mcpCommands'
+import { skillsCommands } from '@renderer/features/skills/commands/skillsCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
 import { setupCommands } from '@renderer/features/setup/commands/setupCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
+import { browserPocketCommands } from '@renderer/features/browser-pocket/commands/browserPocketCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
@@ -73,9 +76,16 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // regressions to users who navigate by position.
   ...globalEditorCommands,
   ...sessionCommands,
+  // Right after the session commands, where the per-capability MCP toggles it
+  // replaced used to sit (#1143), so the MCP family keeps its browse position.
+  ...mcpCommands,
+  // Beside MCP: the same page/add/bulk-action family for skills (#1161).
+  ...skillsCommands,
   ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
+  // Beside Spotlight: the pocket is what sits next to the agent in it (#1142).
+  ...browserPocketCommands,
   ...tldrCommands,
   ...goalLoopCommands,
   ...readerCommands,

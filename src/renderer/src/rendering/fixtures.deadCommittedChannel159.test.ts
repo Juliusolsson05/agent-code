@@ -5,6 +5,7 @@ import { collectLifecycleCandidates } from '@renderer/rendering/observations/loc
 import { collectSemanticCandidates } from '@renderer/rendering/observations/semantic'
 import { decideGhostCandidate } from '@renderer/rendering/model/ghostPredicate'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // FIXTURE: dead-committed-channel-159 — a permanently dead committed plane.
@@ -72,6 +73,7 @@ describe('fixture: dead-committed-channel-159', () => {
     })
     return createSessionLedger()({
       provider: 'codex',
+      policy: getRendererProviderCapabilities('codex').ledgerPolicy.suppression,
       committed: committed.candidates,
       live: semantic.candidates,
       statics: lifecycle,

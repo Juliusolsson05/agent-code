@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { createContext } from 'react'
 
 import type {
@@ -53,7 +54,10 @@ import type { ClaudeAskUserQuestionState } from '@shared/types/providerCondition
 // equality on the maps themselves would be expensive and the interesting work
 // (markdown parsing) is cached inside TextProse by text string.
 
-export const ProviderContext = createContext<AgentProvider>('claude')
+// The default applies only OUTSIDE a Feed (Feed always provides its real
+// provider), and there it is the named back-compat default, not a guess made
+// at a call site (#1177 replaced the scattered 'claude' literals).
+export const ProviderContext = createContext<AgentProvider>(DEFAULT_PROVIDER)
 
 export const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
 

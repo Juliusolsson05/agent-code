@@ -1,0 +1,17 @@
+version: 0.1.2
+files:
+  - url: Agent-Code-0.1.2-x64.zip
+    sha512: s9HDcakj6IGLq3LoevVXmhKV0h81vFRoGgFsSyZMAlVtxk/TBYk3A10+Y0EnQHEYRcuhrRQ8p4H+RsJQJ91jtg==
+    size: 428691282
+  - url: Agent-Code-0.1.2-arm64.zip
+    sha512: sIQHMX8csqY16lt0uRtdIihn1mCy3U+WCHvdUug9MWnuysqhS3Mc7VXIK+CweyjoK+tLWNe64uhXA7/DiPnGrw==
+    size: 421287799
+  - url: Agent-Code-0.1.2-x64.dmg
+    sha512: dbBAySYOl0Yio5+mg/Zd+fPj+VRzz3w995AeR+mulBnXKbEi59RbeW3WNBfwYYgCEG7xazgucg2SaKXZe9psjw==
+    size: 443118922
+  - url: Agent-Code-0.1.2-arm64.dmg
+    sha512: 1uMQFXV9kNMul/OGeGB6QHgm4rhQgBbuPLYqC5fRczkZJ5ywrHECLbqlOO9ZBZfn4i3L0wrKVS40fzX4jjBWwA==
+    size: 435810123
+path: Agent-Code-0.1.2-x64.zip
+sha512: s9HDcakj6IGLq3LoevVXmhKV0h81vFRoGgFsSyZMAlVtxk/TBYk3A10+Y0EnQHEYRcuhrRQ8p4H+RsJQJ91jtg==
+releaseDate: '2026-09-22T03:17:24.585Z'

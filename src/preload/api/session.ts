@@ -1,7 +1,7 @@
 import type { SessionRoutingGap, SessionRoutingScope, SessionRoutingResyncResult, SessionRoutingHistoryResult } from '@shared/types/sessionRouting.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
 import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
@@ -19,7 +19,7 @@ import type {
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionInputReadinessEvent,
-  SessionOwnershipOptions,
+  SessionKillOptions,
   SessionRecoveryCancellationOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
@@ -35,6 +35,7 @@ import type {
   TranscriptPathResult,
   Unsub,
   SessionHistoryBoundaryEvent,
+  SessionProviderSessionChangedEvent,
 } from '@preload/api/types.js'
 
 type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
@@ -90,7 +91,7 @@ export const sessionApi = {
   // Workspace teardown knows the persisted kind/cwd and should use that
   // ownership proof. The legacy id-only primitive remains for trusted main
   // integrations that already hold a live manager reference.
-  killOwnedSession: (options: SessionOwnershipOptions): Promise<boolean> =>
+  killOwnedSession: (options: SessionKillOptions): Promise<boolean> =>
     ipcRenderer.invoke('session:kill-owned', options),
 
   getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
@@ -150,8 +151,9 @@ export const sessionApi = {
     prompt: string,
     imagePaths?: string[],
     deliveryId?: string,
+    options?: PromptDeliveryOptions,
   ): Promise<PromptDeliveryResult> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId, ...(options ? [options] : [])),
 
   resolveCondition: (
     sessionId: string,
@@ -224,7 +226,7 @@ export const sessionApi = {
 
   // The singular `session:jsonl-entry` bridge method was removed: main
   // emits JSONL ONLY through the coalescer as `session:jsonl-entries`
-  // (see main/sessions/jsonlCoalescer.ts). A live single entry arrives as
+  // (see the JSONL burst coalescing in main/sessions/sessionFeedTap.ts). A live single entry arrives as
   // a 1-element bulk burst with ~1ms setImmediate latency, so the renderer
   // can treat every JSONL delivery identically. The old singular channel
   // was the pre-coalescer slow path that caused the bootstrap-replay
@@ -302,6 +304,11 @@ export const sessionApi = {
    *  renderer/session-runtime/historyBoundary.ts. */
   onSessionHistoryBoundary: (cb: (e: SessionHistoryBoundaryEvent) => void): Unsub =>
     subscribe('session:history-boundary', cb),
+
+  /** The pane's provider session changed without a respawn (Pi /new, /resume,
+   *  /fork). Arrives before the history reset and rows of the new session. */
+  onSessionProviderSessionChanged: (cb: (e: SessionProviderSessionChangedEvent) => void): Unsub =>
+    subscribe('session:provider-session-changed', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

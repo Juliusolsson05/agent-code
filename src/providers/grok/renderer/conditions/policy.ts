@@ -9,6 +9,7 @@
 // interaction.permission), which is native behaviour, not a policy route.
 
 import type { ProviderConditionPolicy } from '@providers/registry.renderer.capabilities'
+import { GROK_ATTENTION_CONDITION_KINDS } from '@shared/types/providerConditionAttention'
 
 export const GROK_CONDITION_POLICY: ProviderConditionPolicy = {
   destinations: {
@@ -16,7 +17,8 @@ export const GROK_CONDITION_POLICY: ProviderConditionPolicy = {
     'grok.question': 'condition-outlet',
     'grok.plan-approval': 'condition-outlet',
   },
-  attentionKinds: new Set(['grok.permission', 'grok.question', 'grok.plan-approval']),
+  // Shared with main's Agent Analytics (providerConditionAttention.ts).
+  attentionKinds: GROK_ATTENTION_CONDITION_KINDS,
   actionKinds: new Set(),
   attentionLabels: [
     { kind: 'grok.permission', label: 'ACTION' },

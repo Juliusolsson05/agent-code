@@ -67,6 +67,7 @@ describe('closeOrchestrationAgent', () => {
     // expanded target set is computable.
     expect(closeSession).toHaveBeenCalledWith('child-1', {
       silentIfSoleTarget: { headline: expect.stringContaining('asking to close') },
+      killCaller: 'orchestration.close-agent',
     })
   })
 
@@ -148,6 +149,7 @@ describe('closeOrchestrationRun', () => {
         // is a deliberate opt-out, and it should have to be re-stated here if
         // anyone changes it.
         captureUndo: false,
+        killCaller: 'orchestration.close-run',
       })
     }
   })

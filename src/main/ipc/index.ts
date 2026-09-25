@@ -1,3 +1,4 @@
+import type { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import { EditorFsRootRegistry } from './editorFsRootRegistry.js'
 import type { LspManager } from '@main/lspManager.js'
@@ -8,6 +9,7 @@ import type { SessionRecorderManager } from '@main/recording/SessionRecorderMana
 import type { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 
 import { registerSessionIpc } from '@main/ipc/session.js'
+import { registerUpdatesIpc } from '@main/ipc/updates.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
@@ -16,6 +18,7 @@ import type { ConversationService } from '@main/conversations/service.js'
 import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
+import { registerMenuIpc } from '@main/ipc/menu.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { registerGhostIpc } from '@main/ipc/ghost.js'
 import { registerDebugIpc } from '@main/ipc/debug.js'
@@ -46,6 +49,9 @@ import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
 import { registerLifecycleIpc } from '@main/ipc/lifecycle.js'
+import { registerProviderEnablementIpc } from '@main/ipc/providerEnablement.js'
+import { registerUserMcpIpc } from '@main/ipc/userMcp.js'
+import type { UserMcpService } from '@main/userMcp/service.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
 import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
@@ -71,11 +77,16 @@ import type { SystemSuspensionTracker } from '@main/systemSuspension/SystemSuspe
 // in isolation — they don't reach into module-scoped state.
 
 export type IpcDeps = {
+  /** Update channel (#1168); optional so harnesses without an updater still register. */
+  updates?: Parameters<typeof registerUpdatesIpc>[0]
   manager: SessionManager
+  userMcpService: UserMcpService
   lspManager: LspManager
   ghostJournals: GhostJournalRegistry
   dictationDebugJournals: DictationDebugJournalRegistry
   pasteDebugJournals: PasteDebugJournalRegistry
+  /** The one main-side session feed tap (#1177); see registerSessionIpc. */
+  sessionFeedTap: SessionFeedTap
   // Null in a normal build — only constructed when session recording is gated
   // on (main/index.ts). The dev-debug IPC needs it for the Attach-Recording-
   // Note handlers (plan §7b).
@@ -103,7 +114,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc(editorFsRoots)
   registerEditorFsWatchIpc(editorFsRoots)
-  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.appRunJournal)
+  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.sessionFeedTap, deps.appRunJournal)
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
@@ -111,6 +122,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)
+  registerMenuIpc()
   registerGhostIpc(deps.ghostJournals)
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
@@ -138,6 +150,8 @@ export function registerAllIpc(deps: IpcDeps): void {
     deps.sessionRecorders,
   )
   registerDebugIpc(deps.appRunJournal, lifecycleDiagnostics)
+  registerProviderEnablementIpc()
+  registerUserMcpIpc(deps.userMcpService)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)
@@ -151,4 +165,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAgentSkillsIpc(deps.agentCodeConventionsService)
   registerSystemSuspensionIpc(deps.systemSuspension)
   registerAgentActivityIpc(deps.agentActivityRecorder)
+  if (deps.updates) registerUpdatesIpc(deps.updates)
 }

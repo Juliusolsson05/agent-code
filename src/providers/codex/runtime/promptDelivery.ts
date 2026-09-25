@@ -23,6 +23,7 @@ import type {
   PromptDeliveryIo,
   PromptDeliveryResult,
 } from '@shared/types/providerConfig.js'
+import { isCodexNativeComposerEmpty } from './codexReadyForPrompt.js'
 
 export async function deliverCodexPrompt(
   io: PromptDeliveryIo,
@@ -57,6 +58,18 @@ export async function deliverCodexPrompt(
           : 'session-unusable',
       promptWritten: false,
       enterWritten: false,
+    }
+  }
+  // Legacy readiness proves only that Codex accepts input: an occupied `›`
+  // also passes. A generated restart task must not append to and submit that
+  // draft. Keep the stricter rule provider-owned and immediately before the
+  // reserved write. Plain text cannot distinguish dim placeholder content
+  // from the same words typed by a human; ambiguity is a refusal, not consent.
+  if (io.requireEmptyNativeComposer && !isCodexNativeComposerEmpty(io.session.snapshotScreen?.() ?? '')) {
+    return {
+      ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+      disposition: 'retry-after-resolve', promptWritten: false, enterWritten: false,
+      message: 'Codex native input is occupied or cannot be verified empty. View the agent and send the restart request there; no prompt was written.',
     }
   }
   if (!io.write(`\x1b[200~${io.prompt}\x1b[201~\r`)) {

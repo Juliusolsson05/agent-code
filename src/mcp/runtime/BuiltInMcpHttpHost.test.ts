@@ -249,3 +249,25 @@ describe('BuiltInMcpHttpHost', () => {
     }
   })
 })
+
+it('a browser client connected while disabled needs no second discovery or reload when enabled', async () => {
+  const { BrowserPocketController } = await import('@main/browserPocket/controller/BrowserPocketController')
+  const { createBuiltInMcpServer } = await import('./createBuiltInMcpServer')
+  const controller = new BrowserPocketController({ now: Date.now, emitDriving: () => {}, requestOpen: () => {}, setWatchedSessions: () => {}, lanePorts: () => [], requestViewport: () => {} })
+  const host = new BuiltInMcpHttpHost(scope => createBuiltInMcpServer(scope, { browserPockets: controller }))
+  await host.start()
+  const [config] = host.registerSession({ sessionId: 'browser-setup', cwd: '/tmp/project', providerKind: 'codex', domains: ['browser'] })
+  const client = new Client({ name: 'browser-setup', version: '0' })
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(config!.url), { requestInit: { headers: requestHeaders(config!) } }))
+    const discovered = (await client.listTools()).tools.map(t => t.name)
+    expect(discovered).toContain('browser_open')
+    expect(discovered).toContain('browser_evaluate')
+    expect(client.getInstructions()).toContain('browser pocket')
+    expect((await client.callTool({ name: 'browser_lane_ports', arguments: {} })).isError).toBe(true)
+    controller.setFlags({ enabled: true, allowEvaluate: false })
+    expect((await client.callTool({ name: 'browser_lane_ports', arguments: {} })).isError).not.toBe(true)
+    controller.setFlags({ enabled: false, allowEvaluate: false })
+    expect((await client.callTool({ name: 'browser_network', arguments: {} })).isError).toBe(true)
+  } finally { await client.close(); await host.stop() }
+})

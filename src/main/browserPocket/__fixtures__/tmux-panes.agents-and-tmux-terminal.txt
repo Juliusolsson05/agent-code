@@ -1,0 +1,4 @@
+# {"recordedBy":"scripts/browser-pocket/record-fixtures.mts","what":"tmux list-panes -a -F '#{session_name} #{pane_pid}'","recordedAt":"2026-09-23T02:15:21.170Z","platform":"darwin-arm64","tag":"agents-and-tmux-terminal"}
+acpocket-rec-80230 80307
+agentcode-d44915c2-9be2-4fdd-b69f-96f6bc8e9eca 1682
+agentcode-d5ffa016-2abc-4a16-9b1c-4bcff0526047 88574

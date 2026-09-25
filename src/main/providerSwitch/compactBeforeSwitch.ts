@@ -171,7 +171,15 @@ export async function compactSourceBeforeSwitch(
       throw new Error(`Could not start native ${request.sourceKind} compaction: ${delivery.message}`)
     }
 
-    if (request.sourceKind === 'claude') {
+    // Pi takes Claude's path end to end. Its compaction row stores a
+    // plaintext, portable summary. The `/compact` above reaches Pi's own
+    // compaction through the bridge (ctx.compact(); a sendUserMessage would
+    // hand the model the literal text), and the decoder puts the new boundary
+    // ahead of the rows Pi keeps. HONEST LIMIT: a FAILED Pi compaction writes
+    // nothing to the file (only the bridge's session_compact_failed event
+    // says so), so that case ends in the timeout, as Codex and OpenCode
+    // limits do below.
+    if (request.sourceKind === 'claude' || request.sourceKind === 'pi') {
       return await waitForNewCompactionOn(
         manager,
         target,
@@ -200,7 +208,8 @@ export async function compactSourceBeforeSwitch(
 
   // 'requires-portable-handoff': the source already persisted a durable
   // compaction, so no `/compact` is sent; the existing record is the baseline.
-  if (request.sourceKind === 'claude') {
+  // Pi's existing compaction is plaintext like Claude's (see above).
+  if (request.sourceKind === 'claude' || request.sourceKind === 'pi') {
     return await readSourceAs(
       source,
       target.cwd,

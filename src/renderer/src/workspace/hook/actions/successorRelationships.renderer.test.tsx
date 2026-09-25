@@ -269,6 +269,18 @@ describe('a successor keeps the relationships that make it a child (#879)', () =
     expect(h.writer.getState().sessions.successor?.agentViewModeOverride).toBe('terminal')
   })
 
+  it('keeps the browser pocket with its pocketId, so the page and its login survive the id swap', async () => {
+    // Reload / provider switch / rewind mint a NEW SessionId. The pocket's
+    // cookie partition and live guest are keyed by pocketId; losing the field
+    // here would drop the pocket and log the user out of their dev app.
+    const pocket = { pocketId: 'p-1', url: 'http://localhost:5173/', view: 'open', split: 0.4, profile: 'lane' } as const
+    const h = setup({ ...CHILD, browserPocket: pocket as never })
+
+    await replaceChild(h.hook)
+
+    expect(h.writer.getState().sessions.successor?.browserPocket).toEqual(pocket)
+  })
+
   it('carries nothing when the predecessor had no relationships', async () => {
     // The control: "always set the fields" would satisfy the four above and
     // make every reloaded pane look like somebody's orchestration child.

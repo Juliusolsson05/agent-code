@@ -7,7 +7,7 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
-import { paneLabelForSession, resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { sessionDisplayLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/hook'
@@ -57,11 +57,9 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
   const dispatchRows = buildVisibleDispatchRows(state)
   const identity = (sessionId: string, meta: (typeof sessions)[string]) => {
     const row = dispatchRows.find(row => row.sessionId === sessionId)
-    const tab = state.tabs.find(tab => resolveTabSessions(state, tab.id).includes(sessionId))
-    const localLabel = tab ? paneLabelForSession(state, tab.id, sessionId) : null
-    // Dispatch labels can shadow project-local labels. Only advertise a
-    // fallback that the app's label resolver maps back to this same session.
-    const displayLabel = row?.label ?? (localLabel && resolveAgentPaneLabel(state, localLabel)?.sessionId === sessionId ? localLabel : null)
+    // Shared with Agent Management (#1145) so both surfaces publish the one
+    // string the user reads on screen; see sessionDisplayLabel's WHY.
+    const displayLabel = sessionDisplayLabel(state, sessionId, dispatchRows)
     const runtime = store.workspaceRuntimes[sessionId]
     const displayedTitle = row
       ? dispatchRowTitle(row, runtime?.entries, runtime?.terminalForeground?.cwd)

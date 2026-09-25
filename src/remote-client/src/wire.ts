@@ -51,9 +51,14 @@ export type FeedChannel =
   | 'jsonl-entries'
   | 'jsonl-error'
   | 'history-boundary'
+  // #1177: relayed since the phone sinks from the same main-side tap as the
+  // desktop. Unknown to older desktops, which simply never send them.
+  | 'transcript-diagnostic'
+  | 'provider-session-changed'
   | 'semantic-event'
   | 'conditions'
   | 'process-state'
+  | 'sub-agents'
   | 'exit'
   | 'removed'
 

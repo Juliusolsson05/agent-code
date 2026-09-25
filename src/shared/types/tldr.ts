@@ -22,6 +22,19 @@ export type TldrRecord = {
   text: string
   updatedAt: string
   revision: number
+  /**
+   * Goal completion (#1182). Only the Goal store ever sets these; they live on
+   * the goal record itself rather than in a third store so that `goal_set`,
+   * which writes a fresh record, clears a completion by construction — no
+   * separate "is the completion newer than the goal" rule that equal
+   * timestamps could get wrong. Both present or both absent.
+   *
+   * `updatedAt` stays the time the GOAL was set; completing does not move it,
+   * because the peek's "Goal set" footer and turn enforcement both read it as
+   * "when was the goal written".
+   */
+  completedAt?: string
+  completionNote?: string
 }
 export type TldrUpdate = { identity: string; record: TldrRecord }
 
@@ -30,7 +43,9 @@ export type TldrUpdate = { identity: string; record: TldrRecord }
 // the milestone cadence the instructions ask for, while keeping each agent's
 // file small enough to rewrite atomically on every update.
 export const TLDR_HISTORY_LIMIT = 100
-export type TldrHistoryEntry = { text: string; writtenAt: string; revision: number }
+/** `completed` marks a goal-completion row (#1182); its `text` is the
+ * completion note, not a goal. Absent on every TLDR row and ordinary goal row. */
+export type TldrHistoryEntry = { text: string; writtenAt: string; revision: number; completed?: true }
 
 /** Whether this agent's provider turn hooks have reached Agent Code during this
  * app run. Enforcement is invisible when it works and silent when it does not,
@@ -65,12 +80,14 @@ export function normalizeTldrText(value: string, label = 'TLDR'): string {
 // ---------------------------------------------------------------------------
 
 export const GOAL_SKILL_NAME = 'agent-code-goal'
-export const GOAL_SKILL_DESCRIPTION = 'Record this agent’s goal — what its work is for — when Agent Code Goal MCP is available. Set it when a new task is understood; update it only when the direction changes.'
+export const GOAL_SKILL_DESCRIPTION = 'Record this agent’s goal — what its work is for — when Agent Code Goal MCP is available. Set it when a new task is understood; update it only when the direction changes; complete it only once the user has accepted the result.'
 export const GOAL_INSTRUCTIONS = `When Goal MCP is available in this session, use goal_set to record your goal: what your work is trying to achieve and why, in one plain sentence that a person switching between many agents can understand without reading the transcript. Set it as soon as you understand a new substantive task, before starting the work.
 
 Update the goal only when what you are trying to achieve changes — the user redirects you, widens or narrows the scope, or asks for a different outcome. Never update it to report progress; progress belongs in the TLDR when TLDR MCP is available.
 
 Describe the outcome, not the activity or a list of steps. Avoid issue and PR numbers unless the goal is meaningless without them, and then say in words what they are. At most ${TLDR_MAX_CHARACTERS} characters.
+
+When the goal is fully achieved AND the user has accepted it — the PR is merged, or the user said the task is done — call goal_complete with one plain sentence saying what was delivered. The user uses completed goals to close finished agents, so never complete a goal because your own part is finished, while a PR is still open, while review or CI is pending, or while anything the user asked for remains. If the user later gives you new work, set a new goal with goal_set; that clears the completion.
 
 Examples:
 - Make agent reloads and crash recovery go through one owner, so an agent is never lost or duplicated.
@@ -83,6 +100,44 @@ Only set your own goal through the available tool. If this session has no Goal M
  * whether EITHER capability is on. A Goal-only agent must not be identity-less. */
 export function hasReportingDomain(domains: readonly string[] | undefined): boolean {
   return Boolean(domains?.includes('tldr') || domains?.includes('goal'))
+}
+
+/** The built-in MCP domains that come with a product-managed skill. Listed in a
+ * fixed order so every warning names the skills in the same order, whatever
+ * order the pre-spawn reconcile reported them in. */
+export const REPORTING_DOMAINS = ['tldr', 'goal'] as const
+export type ReportingDomain = (typeof REPORTING_DOMAINS)[number]
+
+/** Main → renderer broadcast: one or more product skills could not be prepared
+ * for an agent that asked for them, and that agent was started without them
+ * (#1133). App-wide by design: skill health is machine-wide, not per-pane. */
+export const MANAGED_SKILLS_UNAVAILABLE_CHANNEL = 'managed-skills:unavailable'
+export type ManagedSkillsUnavailableEvent = { skills: ReportingDomain[] }
+
+/**
+ * The user-facing text for a skipped product skill (#1133).
+ *
+ * WHY it names Settings › Agents › Custom Skills: TLDR and Goal show up there
+ * as "Managed by TLDR/Goal MCP" rows with their health and target rows, which
+ * is the only place the user can see WHY the skill is broken (a conflicting
+ * file, recovery required, a failed deploy). The toast is only a pointer. It
+ * has to say where to look, because both outages this replaced ended with
+ * someone hunting for the cause.
+ *
+ * WHY it says the agents are running: the old behavior was "nothing starts",
+ * and a warning that reads like the old failure would send the user off to
+ * restart panes that are fine. The part that is really lost is the skill's
+ * guidance. The MCP tool still carries its own server instructions.
+ *
+ * Kept pure and shared so the text is testable without a renderer, and so any
+ * future surface (remote client, notices) says exactly the same thing.
+ */
+export function managedSkillsUnavailableMessage(skills: readonly ReportingDomain[]): string {
+  const labels = REPORTING_DOMAINS
+    .filter(domain => skills.includes(domain))
+    .map(domain => (domain === 'tldr' ? 'TLDR' : 'Goal'))
+  const subject = labels.length > 1 ? `${labels.join(' and ')} skills` : `${labels[0] ?? 'Managed'} skill`
+  return `${subject} could not be prepared, so agents started without ${labels.length > 1 ? 'them' : 'it'}. Review Settings › Agents › Custom Skills.`
 }
 
 /**
