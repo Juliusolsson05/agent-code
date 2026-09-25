@@ -1,5 +1,7 @@
 # Agent Completion Indicator
 
+> **Superseded visually by #1200** (`docs/plans/2026-09-25-completion-indicator-redesign.md`): the indicator is now the working bar drawn hollow (surface fill, 2px accent ring, accent text). Stripes and plates were removed. The seen/dwell logic below still stands.
+
 Refs #1172.
 
 ## Goal

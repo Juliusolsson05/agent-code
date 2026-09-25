@@ -1,5 +1,5 @@
 // Which keydowns in a terminal pane count as the user engaging with it, and so
-// clear its unread marker (NEW badge, completion stripes).
+// clear its unread marker (NEW badge, completion outline).
 //
 // WHY terminal panes need a filter at all: they acknowledge from a DOM
 // keydown CAPTURE handler, because xterm mixes real keys and protocol replies

@@ -243,7 +243,7 @@ export function TileLeaf({
   const acknowledgeSession = useCallback(() => {
     acknowledgeWorkspaceSession(sessionId)
   }, [acknowledgeWorkspaceSession, sessionId])
-  // #1172: the pane header's completion stripes render this same unread marker,
+  // #1172: the pane header's completion outline renders this same unread marker,
   // the one behind Dispatch's NEW badge, so the two surfaces can't disagree.
   // Engagement clears it through acknowledgeSession above; the hook adds "stayed
   // on the pane long enough to see it", and owns what "watching" means.

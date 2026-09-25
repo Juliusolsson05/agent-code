@@ -1148,48 +1148,43 @@ body,
   animation: cc-work-pulse 900ms ease-in-out infinite;
 }
 
-/* Agent Completion Indicator (#1172): a pane header striped in the accent
-   (activity) colour while an agent's finished turn is still unseen.
+/* Agent Completion Indicator (#1172, redesigned in #1200): the pane header
+   of an agent whose finished turn is still unseen, drawn as the working bar
+   HOLLOW. Status Mode paints a running agent's header row solid accent; a
+   finished-unseen one keeps the surface background with a full-accent ring,
+   and its label chip, path and trailing state turn accent. Filled means busy,
+   outlined means done-go-look: the same bar in the same colour, so the two
+   read as one family across the grid.
 
-   WHY stripes and not a solid fill: solid accent already means "working
-   right now" (Status Mode), so "finished" needs the same colour in a
-   different shape. It reads as related, but can't be mistaken for it at a
-   glance across the grid.
+   WHY not stripes, which is what this was twice (so nobody reintroduces them):
+   - #1176 used 45% diagonal accent stripes behind the text. They were faint,
+     and the owner asked for straight bars in the full activity colour.
+   - #1192 used full-accent vertical bars, with surface "plates" behind the
+     label and path so no glyph crossed a band. With a normal long path the
+     plate covered almost the whole row, leaving a few stray bars at the
+     edges. It read as a broken barcode.
+   - A live preview then tried five ways of putting the text straight on a
+     patterned accent bar (two-tone bands, pinstripes, horizontal lines). All
+     were rejected as busy: 9-10px text over any pattern looks noisy. The
+     owner picked the outline from a second round of pattern-free designs.
 
-   WHY the FULL accent (#1191): the stripes are the same signal family as the
-   working fill, so they use exactly its colour. The first version mixed the
-   accent down to 45% only to keep the header text legible on the bands; that
-   job now belongs to `.pane-header-completion-plate` below, which keeps the
-   text off the bands entirely, so the stripes no longer have to be faint.
+   WHY an inset box-shadow for the ring, not a border: it takes no layout
+   space. The row's height and the text's position are identical with or
+   without it, so the indicator appearing or clearing never shifts the header
+   or resizes a terminal pane under it. The colour-flag chunk is a child of the
+   row, so it paints over the ring in its right quarter and keeps its solid
+   slice exactly as it does on the working bar.
 
-   WHY vertical bars 7px/7px (#1191): the user asked for straight bars. The
-   diagonal 5px/5px bands repeated every ~14px along the header; a 14px
-   vertical period keeps that rhythm instead of reading as a dense barcode.
+   WHY this rule is unlayered: it has to override the row's `bg-surface
+   text-muted` utilities, and unlayered CSS beats Tailwind's `@layer
+   utilities` regardless of class order (see PaneHeader).
 
-   Static on purpose: an animated background on every finished pane would
-   pull attention across the whole grid, and the point is to be scannable,
-   not loud. */
-.pane-header-completion-stripes {
-  background-image: repeating-linear-gradient(
-    90deg,
-    var(--color-accent) 0 7px,
-    transparent 7px 14px
-  );
-}
-
-/* The surface-coloured plate the header's text sits on while striped (#1191).
-
-   WHY a plate instead of recolouring the text: half of every stripe is
-   accent and half is surface, so no single text colour contrasts with both.
-   `accent-fg` fails on the surface bands and the muted colour fails on the
-   accent bands, and each glyph visibly flickers as it crosses. On the plate the
-   label and path keep exactly the colours they have on an unstriped header.
-
-   The padding/negative-margin pair is always applied (see PaneHeader): only
-   the background toggles, so text never moves when the stripes appear or
-   clear. */
-.pane-header-completion-plate {
+   Static on purpose: an animated ring on every finished pane would pull
+   attention across the whole grid; the point is to be scannable, not loud. */
+.pane-header-completion-outline {
   background-color: var(--color-surface);
+  color: var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--color-accent);
 }
 
 /* ---------- Modal animations ---------- */
