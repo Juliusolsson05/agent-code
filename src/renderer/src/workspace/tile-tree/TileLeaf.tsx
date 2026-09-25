@@ -103,6 +103,11 @@ const MAX_TRACKED_VISIBLE_SUBMIT_SURFACES = 2_048
 // Enter/Escape/backspace-to-empty. The picker is a purely visual
 // reflection of CC's state; it doesn't gate anything.
 
+// The composer's image strip while a send is in flight (#1181). Module-level
+// so the locked composer gets the same empty array on every render instead of
+// a fresh one.
+const NO_DRAFT_IMAGES: SessionRuntime['draftImages'] = []
+
 type Props = {
   sessionId: SessionId
   runtime: SessionRuntime
@@ -1036,11 +1041,16 @@ export function TileLeaf({
       <ComposerInput
         sessionId={sessionId}
         inputRef={inputRef}
-        input={input}
+        // While locked, the VIEW is empty but the store still holds the draft
+        // (#1181). The prompt is already shown in the feed as a pending row;
+        // showing it here too read as "not sent". The store copy is what
+        // autosave persists and a session replacement transfers, so a reload
+        // or replacement mid-send cannot lose it (see draftAfterAcceptance).
+        input={composerLocked ? '' : input}
         focused={focused}
         slashMode={slashMode}
         provider={provider}
-        draftImages={runtime.draftImages}
+        draftImages={composerLocked ? NO_DRAFT_IMAGES : runtime.draftImages}
         pickerState={runtime.picker}
         historyIndex={historyIndex}
         history={history}

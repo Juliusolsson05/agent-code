@@ -1,39 +1,38 @@
 /**
- * Put a failed prompt back into the composer (#1181).
+ * What is left of the draft once its prompt was ACCEPTED.
  *
- * WHY the draft is cleared at Enter and restored on failure, instead of the
- * old "keep it editable and clear the exact snapshot on acceptance":
- * Claude's JSONL acknowledgement can take many seconds, and during that window
- * the old composer still showed the prompt as an editable draft. It read as
- * "Enter did nothing" and invited a second Enter or edits to text that was
- * already on its way. The prompt now moves into the feed as a pending row and
- * the composer locks, so on success there is nothing left to clear. Failure is
- * the only case where the text has to come back.
+ * WHY the submitted text stays in `draftInput` for the whole send (#1181):
+ * the composer VIEW is emptied and locked at Enter and the prompt is shown in
+ * the feed as a pending row, but the store keeps the draft until the provider
+ * accepts it. The store copy is the one that survives: autosave persists only
+ * `draftInput`, and a session replacement transfers only the current draft
+ * fields to the successor. The first version of #1181 cleared the draft at
+ * Enter and restored it on failure. Review showed that a renderer reload
+ * mid-send then lost the prompt for good, and that a replacement restored a
+ * failed prompt into the retired session (PR #1183 review, Codex 1 and 2).
+ * Failure therefore needs no restore at all: the draft simply becomes visible
+ * again when the lock lifts.
  *
- * WHY merge instead of overwrite: the composer is locked against typing, but
- * not every writer goes through the textarea. Dictation, prompt templates,
- * reply-to-selection and the control API write `draftInput` directly, and a
- * send can take long enough for one of them to land. Overwriting would
- * silently destroy that text. The failed prompt goes FIRST because it is the
- * older intent. Whatever arrived during the send was written to follow it.
+ * WHY strip instead of "clear if unchanged": the textarea is locked, but not
+ * every writer goes through it. Dictation appends, and reply-to-selection and
+ * templates can prepend. Text inserted during the send belongs to the NEXT
+ * prompt and must survive, while the sent prompt must not reappear. The
+ * submitted text is removed where those writers leave it (whole, at the start
+ * or at the end). Anything else is kept as-is, because guessing at an edit
+ * could delete words the user never sent.
  */
-export function draftAfterFailure(current: string, submitted: string): string {
-  if (current.trim().length === 0) return submitted
-  if (current === submitted) return current
-  return `${submitted}\n\n${current}`
+export function draftAfterAcceptance(current: string, submitted: string): string {
+  if (current === submitted) return ''
+  if (submitted.length === 0) return current
+  if (current.startsWith(submitted)) return current.slice(submitted.length).replace(/^\s+/, '')
+  if (current.endsWith(submitted)) return current.slice(0, -submitted.length).replace(/\s+$/, '')
+  return current
 }
 
-/**
- * The image half of `draftAfterFailure`. Submitted images go back first, and an
- * image that somehow still sits in the draft (same id) is not duplicated,
- * because ids are the identity that `removeDraftImage` and the submit's own
- * attachment list both key on.
- */
-export function imagesAfterFailure<T extends { id: string }>(
+/** The image half of `draftAfterAcceptance`: drop exactly the sent ids. */
+export function imagesAfterAcceptance<T extends { id: string }>(
   current: T[],
-  submitted: readonly T[],
+  submittedIds: ReadonlySet<string>,
 ): T[] {
-  if (submitted.length === 0) return current
-  const submittedIds = new Set(submitted.map(image => image.id))
-  return [...submitted, ...current.filter(image => !submittedIds.has(image.id))]
+  return current.filter(image => !submittedIds.has(image.id))
 }

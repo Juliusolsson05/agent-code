@@ -47,7 +47,8 @@ const originalApi = window.api
 
 let current!: ReturnType<typeof useWorkspace>
 let submit!: (source: 'textarea-enter' | 'global-enter' | 'button') => Promise<void>
-let sendSpy: ReturnType<typeof vi.fn>
+type SendFn = (data: string, pasteId?: string) => Promise<void>
+let sendSpy: ReturnType<typeof vi.fn<SendFn>>
 
 function Pane({ workspace, provider }: { workspace: ReturnType<typeof useWorkspace>; provider: AgentProviderKind }) {
   // Mirrors TileLeaf: `input` IS runtime.draftInput, the lock and the pending
@@ -92,11 +93,11 @@ function Pane({ workspace, provider }: { workspace: ReturnType<typeof useWorkspa
       <ComposerInput
         sessionId={SESSION}
         inputRef={{ current: null }}
-        input={input}
+        input={locked ? '' : input}
         focused
         slashMode={keys.slashMode}
         provider={provider}
-        draftImages={runtime.draftImages}
+        draftImages={locked ? [] : runtime.draftImages}
         pickerState={null}
         historyIndex={null}
         history={[]}
@@ -178,7 +179,7 @@ const BEFORE_WRITE_FAILURE: PromptDeliveryResult = {
 }
 
 beforeEach(() => {
-  sendSpy = vi.fn(async () => {})
+  sendSpy = vi.fn<SendFn>(async () => {})
   const api = new Proxy({} as Record<string, unknown>, {
     get: (_t, key) => {
       if (key === 'saveClaudeImage') return async () => ({ path: '/tmp/img.png' })
@@ -205,9 +206,12 @@ describe('Claude submit while the delivery is in flight', () => {
     act(() => { pending = submit('textarea-enter') })
     await act(async () => {})
 
-    // The composer is empty and read-only, not still holding the prompt.
-    expect(current.getRuntime(SESSION).draftInput).toBe('')
+    // The composer SHOWS nothing and is read-only, while the store keeps the
+    // draft: that copy is what autosave persists, so a reload mid-send cannot
+    // lose the prompt (PR #1183 review).
+    expect(composer().value).toBe('')
     expect(composer().readOnly).toBe(true)
+    expect(current.getRuntime(SESSION).draftInput).toBe('refactor the parser')
     // The prompt is in the feed at once, marked as not yet sent. Claude had
     // no row at all here before #1181.
     const row = screen.getByText('refactor the parser')
@@ -223,7 +227,27 @@ describe('Claude submit while the delivery is in flight', () => {
     expect(screen.queryByText('Sending…')).toBeNull()
     expect(current.getRuntime(SESSION).entries.some(e => e.uuid?.startsWith('optimistic-codex-user:'))).toBe(false)
     expect(composer().readOnly).toBe(false)
+    expect(current.getRuntime(SESSION).draftInput).toBe('')
     expect(current.getRuntime(SESSION).promptDelivery.kind).toBe('idle')
+  })
+
+  it('keeps text another writer added to the draft during the send, but not the sent prompt', async () => {
+    // Dictation writes draftInput directly, past the locked textarea. Those
+    // words are the next prompt and must survive the acceptance.
+    seed('claude')
+    const { feed, settle } = heldFeed()
+    mount('claude', feed)
+    act(() => current.setDraftInput(SESSION, 'first prompt'))
+    let pending!: Promise<void>
+    act(() => { pending = submit('textarea-enter') })
+    await act(async () => {})
+    act(() => current.setDraftInput(SESSION, 'first prompt and then more'))
+
+    await settle({ ok: true, acceptance: { kind: 'user', acceptedAt: Date.now() } })
+    await act(async () => { await pending })
+
+    expect(current.getRuntime(SESSION).draftInput).toBe('and then more')
+    expect(composer().value).toBe('and then more')
   })
 
   it('a failed send removes the pending row and puts the text and images back in the composer', async () => {
@@ -238,7 +262,10 @@ describe('Claude submit while the delivery is in flight', () => {
     let pending!: Promise<void>
     act(() => { pending = submit('textarea-enter') })
     await act(async () => {})
-    expect(current.getRuntime(SESSION).draftImages).toEqual([])
+    // Hidden from the view, never removed from the store.
+    expect(composer().value).toBe('')
+    expect(screen.queryByAltText('x.png')).toBeNull()
+    expect(current.getRuntime(SESSION).draftImages).toEqual([IMAGE])
 
     await settle(BEFORE_WRITE_FAILURE)
     await act(async () => { await pending })
@@ -246,6 +273,8 @@ describe('Claude submit while the delivery is in flight', () => {
     const runtime = current.getRuntime(SESSION)
     expect(runtime.draftInput).toBe('this will fail')
     expect(runtime.draftImages).toEqual([IMAGE])
+    expect(composer().value).toBe('this will fail')
+    expect(screen.getByAltText('x.png')).toBeTruthy()
     expect(runtime.entries.some(e => e.uuid?.startsWith('optimistic-codex-user:'))).toBe(false)
     expect(screen.queryByText('Sending…')).toBeNull()
     expect(composer().readOnly).toBe(false)
@@ -274,7 +303,7 @@ describe('Claude submit while the delivery is in flight', () => {
 })
 
 describe('the composer lock', () => {
-  it('ignores keys that would edit the draft or write to the agent, and lets Escape through', async () => {
+  it('ignores every key that would edit the draft or write to the agent', async () => {
     seed('claude', { promptSuggestion: { text: 'suggested next prompt' } as SessionRuntime['promptSuggestion'] })
     const { feed, settle } = heldFeed()
     mount('claude', feed)
@@ -287,24 +316,26 @@ describe('the composer lock', () => {
     // `/` on an empty draft normally enters slash mode by writing to the PTY,
     // and Tab normally prefills the suggestion. Both reach around a read-only
     // textarea, so the lock has to stop them in the key handler.
-    await act(async () => { fireEvent.keyDown(composer(), { key: '/' }) })
-    await act(async () => { fireEvent.keyDown(composer(), { key: 'Tab' }) })
-    await act(async () => { fireEvent.keyDown(composer(), { key: 'Enter' }) })
+    // Escape and Ctrl+C are included: main refuses raw writes for the whole
+    // Claude delivery, so they could not reach the agent anyway and only
+    // produced a false "draft preserved" toast (PR #1183 review).
+    for (const key of ['/', 'Tab', 'Enter', 'Escape']) {
+      await act(async () => { fireEvent.keyDown(composer(), { key }) })
+    }
+    await act(async () => { fireEvent.keyDown(composer(), { key: 'c', ctrlKey: true }) })
     expect(sendSpy).not.toHaveBeenCalled()
-    expect(current.getRuntime(SESSION).draftInput).toBe('')
+    expect(current.getRuntime(SESSION).draftInput).toBe('first')
     expect(feed.calls.filter(c => c.method === 'deliverPrompt')).toHaveLength(1)
-
-    // Escape is an interrupt, not an edit, and stays available.
-    await act(async () => { fireEvent.keyDown(composer(), { key: 'Escape' }) })
-    expect(sendSpy).toHaveBeenCalledWith('\x1b')
 
     await settle({ ok: true, acceptance: { kind: 'user', acceptedAt: Date.now() } })
     await act(async () => { await pending })
 
-    // Control: once unlocked, the same Tab does prefill. Without this the
-    // assertions above would pass against a handler that ignores Tab always.
+    // Control: once unlocked, the same keys act again. Without this the
+    // assertions above would pass against a handler that ignores them always.
     await act(async () => { fireEvent.keyDown(composer(), { key: 'Tab' }) })
     expect(current.getRuntime(SESSION).draftInput).toBe('suggested next prompt')
+    await act(async () => { fireEvent.keyDown(composer(), { key: 'Escape' }) })
+    expect(sendSpy).toHaveBeenCalledWith('\x1b')
   })
 })
 
