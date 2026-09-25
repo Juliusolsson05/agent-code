@@ -1,6 +1,6 @@
 # Phone on the shared rendering seams (#1177)
 
-Status: in progress (branch `refactor/phone-shared-rendering`).
+Status: implemented on branch `refactor/phone-shared-rendering` (PR pending review). The stages below are the plan as written; **Implementation notes** at the end record where the build differed and why.
 
 ## Why
 
@@ -222,3 +222,90 @@ Also:
 - The full `npm test` once at the end, not per stage.
 - No app launch: per standing instruction, verification is by source and tests.
   Live phone checks are the user's call, or the viewer's once it exists.
+
+## Implementation notes
+
+What the build decided that the plan did not say, or said differently.
+
+- **Stage 1.**
+  - `main/index.ts` builds the one tap at the forwarder's old place in startup,
+    so its manager listeners keep that position in each event's listener list.
+  - The remote controller is constructed earlier, so it receives the tap
+    through a getter (`getFeedTap`). Remote can only be enabled over IPC,
+    which is registered after the tap exists, so the getter always resolves.
+  - The shared sub-agent watcher emits only when a fleet changes, so the tap
+    keeps the latest fleet per session. `RemoteServer` uses that to prime late
+    joiners; the phone's private watcher used to get this by accident on its
+    first poll.
+  - One sink throwing no longer costs the other sinks their delivery. The
+    error is re-thrown on a microtask so it still surfaces.
+- **Stage 2.**
+  - Failure is a rejected promise on both transports. That kept the desktop's
+    error paths unchanged; the phone store folds the rejection back into a
+    result in one helper.
+  - `SessionPreviewPane` still calls `window.api.loadInitialHistory`
+    directly. It previews a conversation picked from a list, with no pane
+    session behind it, so it is not a session-feed read.
+- **Stage 3.**
+  - The shared core is a set of per-record steps (admission, pagination
+    anchor, timestamp cursor, placement, history reindex, the semantic step),
+    not a loop that owns the caller's burst. The desktop's queue, optimistic,
+    worktree and ghost planes interleave with those steps inside its loops,
+    and a shared loop would have had to carry them.
+  - The replay harness (`reconstructSlices.ts`) was a fifth copy of the ingest
+    glue and now calls the core too.
+  - One deliberate desktop behaviour change: history batches rebuild the tool
+    indexes in window order after merging. The result is identical when tool
+    ids are unique, and correct when they repeat.
+  - Phone fixes that came out of this stage:
+    - the #910 placement rule for initial history;
+    - a real `lastJsonlEntryAt`;
+    - a pagination cursor seeded from live bursts.
+  - An earlier draft claimed the phone leaked `prompt_suggestion` into
+    turns. That was wrong (the fold already refuses it) and was corrected
+    before commit.
+- **Stage 4.**
+  - Toasts got their own context module (`ui/GlobalToastContext.ts`), which
+    both apps provide. It is not part of the host.
+  - The render-shape observer now receives its sightings sink when it is
+    armed, instead of reading `window.api` when it sends. The recording
+    bridge that arms it is a host capability.
+  - The perf-client alias was already dead: nothing in the phone graph
+    reached it.
+  - `CodeBlock` stays one component. The host's Monaco loader decides the
+    engine, and the phone gets the desktop's own static path. `max-w-full`
+    came across from the old stub.
+- **Stage 5.**
+  - The outlet dispatcher (`makeDispatchFromOnSend` → `makeOutletDispatch`)
+    hands a pty choice to the surface as the whole action. That is what let
+    the phone move onto `ProviderConditionOutlet`.
+  - The phone gained the provider-normalized snapshot, which covers Claude
+    compaction before any screen snapshot.
+- **Stage 6.**
+  - The suppression policy reaches the pure model as a required
+    `LedgerInput.policy`, resolved by the adapter. Hand-built ledger fixtures
+    take the provider's declared policy from the registry.
+  - Grok and Pi register honest empty shape catalogs. The catalog list is a
+    full `Record<AgentProviderKind, …>`, so a new provider cannot omit one.
+- **Stage 7 — changed on purpose.** No `features/feed/public` barrel.
+  - The ~90 provider imports of `MarkerRow`, the feed contexts and nested
+    `Block`/`EntryRow` rows are legitimate row composition.
+  - A barrel would have re-exported the same modules, and changed module
+    evaluation order inside the existing registry ↔ rows cycle, with no
+    layering gain.
+  - The real violations were imports of the desktop **workspace**. All three
+    are gone:
+    - `registry.renderer.ts` and its per-provider `TileLeaf` slot are
+      deleted (all five slots held the same component);
+    - the slash-picker type now comes from the SessionFeed contract;
+    - Codex writes its own one-line paste.
+  - The existing import-boundary test gained the reverse rule instead:
+    `src/providers/**` never imports `@renderer/workspace/**`.
+- **Local verification caveats.**
+  - `npx tsc -b` reports errors in `src/main/browserPocket/*` because
+    `playwright-core` is missing from the local `node_modules`. The package
+    is declared, just not installed here; nothing on this branch touches
+    those files.
+  - The timeouts in `store.test.ts` and `ProviderEnablementRow` also fail on
+    an untouched `main` checkout.
+
