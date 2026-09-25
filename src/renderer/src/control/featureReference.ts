@@ -132,5 +132,8 @@ export const referenceOwnership = {
   "debug": "debug",
   "remote": "remote",
   "shared": "conversation",
-  "sessionFeed": "conversation"
+  "sessionFeed": "conversation",
+  // What a rendered feed row may do in the app that mounts it (#1177): no UI
+  // of its own; its behavior is the conversation page's.
+  "rendererHost": "conversation"
 } as const
