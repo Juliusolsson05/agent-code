@@ -37,3 +37,29 @@ it('stops recording when the window loses focus', () => {
   fireEvent.blur(window)
   expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
 })
+
+// #1308 review: the edges of the release rule.
+it('keeps recording while the user drags the list scrollbar', () => {
+  startRecording()
+  fireEvent.mouseDown(document.querySelector('[data-shortcut-list]')!)
+  expect(screen.getByRole('button', { name: 'Press keys… (Esc)' })).toBeInTheDocument()
+})
+
+it('lets the recorder button toggle recording off itself', () => {
+  startRecording()
+  const recorder = screen.getByRole('button', { name: 'Press keys… (Esc)' })
+  fireEvent.mouseDown(recorder)
+  fireEvent.click(recorder)
+  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+})
+
+it('ends recording even when the clicked control stops propagation', () => {
+  startRecording()
+  const stubborn = document.createElement('button')
+  stubborn.addEventListener('mousedown', event => event.stopPropagation())
+  document.body.appendChild(stubborn)
+  fireEvent.mouseDown(stubborn)
+  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  stubborn.remove()
+})
+
