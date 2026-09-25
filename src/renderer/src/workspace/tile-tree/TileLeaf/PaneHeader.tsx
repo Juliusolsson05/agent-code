@@ -19,11 +19,13 @@ import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/pane
 // green/red, but red read as "error" for merely idle panes.
 //
 // Agent Completion Indicator (#1172): a pane whose finished turn is still
-// unseen is drawn with accent STRIPES instead of the solid fill: the same
-// colour as "working" but a different shape, so "done, go look" and "busy"
-// can't be confused across the grid. "Unseen" is the session's unread marker,
-// the same one behind the Dispatch NEW badge. The leaf clears it on engagement
-// or after a dwell (useAcknowledgeAfterDwell), never on a passing focus.
+// unseen is drawn with vertical accent STRIPES instead of the solid fill: the
+// same full colour as "working" but a different shape, so "done, go look" and
+// "busy" can't be confused across the grid. The label and path sit on surface
+// plates while striped, so they stay legible over the bands (#1191). "Unseen"
+// is the session's unread marker, the same one behind the Dispatch NEW badge.
+// The leaf clears it on engagement or after a dwell (useAcknowledgeAfterDwell),
+// never on a passing focus.
 //
 // The right quarter of the strip is owned by the session's color flag when one
 // is set (PaneHeaderColorFlag). The two signals are deliberately allowed to
@@ -156,19 +158,34 @@ export function PaneHeader({
             its size never depended on its content. Feed.tsx uses the same
             container-query pattern for narrow tiles. */}
         <div className={`@container flex flex-1 items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
-          {paneLabel && (
-            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
-              {paneLabel}
+          {/* The identity plate (#1191). While the header is striped in the
+              full accent, the label and path sit on a surface-coloured plate
+              so no glyph ever overlaps a band (see
+              .pane-header-completion-plate for why recolouring the text
+              cannot work). ALWAYS rendered, with `px-1.5` cancelled by
+              `-mx-1.5`, so the text is at the same x whether or not the
+              stripes are showing; only the background toggles. `min-w-0`
+              keeps the path's truncate-start working inside it. */}
+          <span
+            data-completion-plate={completionStriped ? 'true' : 'false'}
+            className={`-mx-1.5 flex min-w-0 items-center gap-2 rounded-chip px-1.5 ${
+              completionStriped ? 'pane-header-completion-plate' : ''
+            }`}
+          >
+            {paneLabel && (
+              <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+                {paneLabel}
+              </span>
+            )}
+            {badge}
+            {/* truncate-START: every pane shares the leading path segments, so
+                clipping the end hid the one part that identifies this agent. */}
+            <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+              {/* The inner dir="ltr" is required, not decorative: the outer
+                  element's rtl direction picks WHICH edge clips, and without
+                  this the path's own characters are reordered with it. */}
+              <span dir="ltr">{shortenCwd(projectDir)}</span>
             </span>
-          )}
-          {badge}
-          {/* truncate-START: every pane shares the leading path segments, so
-              clipping the end hid the one part that identifies this agent. */}
-          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
-            {/* The inner dir="ltr" is required, not decorative: the outer
-                element's rtl direction picks WHICH edge clips, and without
-                this the path's own characters are reordered with it. */}
-            <span dir="ltr">{shortenCwd(projectDir)}</span>
           </span>
           {/* `flex-shrink-0` on the slot, and `min-width: 0` on
               `.truncate-start`, make the cwd the first thing to give way in a
@@ -185,7 +202,17 @@ export function PaneHeader({
               header had before it shared this row. */}
           {trailing ? (
             <span className="ml-auto flex flex-shrink-0 items-center gap-2 pl-1">
-              {trailing}
+              {/* Same plate as the identity group, for surface state such as
+                  TAIL (#1191). A separate inner span because the outer one's
+                  `ml-auto` owns its left margin. */}
+              <span
+                data-completion-plate={completionStriped ? 'true' : 'false'}
+                className={`-mx-1.5 flex items-center gap-2 rounded-chip px-1.5 ${
+                  completionStriped ? 'pane-header-completion-plate' : ''
+                }`}
+              >
+                {trailing}
+              </span>
             </span>
           ) : null}
         </div>
