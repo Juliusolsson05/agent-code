@@ -25,6 +25,10 @@ export class TldrStore extends EventEmitter {
    *  race, so an identity that reports again after its record was set aside
    *  must continue above it, not restart at 1 and be discarded as stale. */
   private readonly setAsideRevisions = new Map<string, number>()
+  /** The loaded file's bytes while set-aside records are not yet preserved.
+   *  The next write drops them from the file, so it must not run until a
+   *  copy exists; it retries the copy and is refused if it still fails. */
+  private unpreserved: { source: string; setAside: number } | null = null
   private tail: Promise<unknown> = Promise.resolve()
   private historyFileCount: number | null = null
 
@@ -117,7 +121,16 @@ export class TldrStore extends EventEmitter {
           : {}),
       }
     }
-    if (setAside > 0) await this.preserveOriginal(source, setAside)
+    if (setAside > 0) {
+      // A failed copy must not fail the READ (#1257 review B): a read drops
+      // nothing, and failing it would bring back #1247's symptom (every peek
+      // empty) on exactly the full or read-only disks this has to survive.
+      // The copy is owed before the first write instead; see commit().
+      this.unpreserved = { source, setAside }
+      await this.preserveOwedCopy().catch(error => {
+        console.warn(`[${this.label.toLowerCase()}] could not preserve ${setAside} invalid record(s) yet; writes wait for it:`, error)
+      })
+    }
     this.records = records
     return records
   }
@@ -125,8 +138,11 @@ export class TldrStore extends EventEmitter {
   /** Byte-for-byte copy of a file whose records were set aside. Named by the
    *  content digest so relaunching over the same bytes, before any write
    *  replaces them, does not pile up identical copies. */
-  private async preserveOriginal(source: string, setAside: number): Promise<void> {
+  private async preserveOwedCopy(): Promise<void> {
+    if (!this.unpreserved) return
+    const { source, setAside } = this.unpreserved
     const copy = await preserveBytes(`${this.file}.invalid`, source)
+    this.unpreserved = null
     console.warn(`[${this.label.toLowerCase()}] set aside ${setAside} invalid record(s); original preserved at ${copy}`)
   }
 
@@ -323,6 +339,10 @@ export class TldrStore extends EventEmitter {
     record: TldrRecord,
     authorized: () => boolean,
   ): Promise<void> {
+    // Writing now would drop set-aside records whose bytes are not yet
+    // preserved anywhere; the copy is retried, and the write refused if it
+    // still cannot be made.
+    await this.preserveOwedCopy()
     // Preserve the null prototype after every write, not just initial load.
     // Otherwise a valid opaque key such as "constructor" can read inherited
     // object properties and persist an invalid revision instead of entry 1.

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -424,6 +424,42 @@ describe('one invalid record in a real store (#1247)', () => {
     expect(await readFile(join(historyDirectory, preserved[0]!), 'utf8')).toBe(raw)
     // Evidence is not history: it must not count toward (or be evicted as) a history file.
     expect(preserved[0]!.endsWith('.json')).toBe(false)
+  })
+
+  it('keeps reads working when the copy cannot be written, and refuses writes until it can (review B)', async () => {
+    const document = structuredClone(realRecords.tldr)
+    document.records[realRecords.atLimit]!.text += '.'
+    const { directory, file, source } = await storeWith('tldr.json', document)
+    const others = Object.keys(document.records).filter(id => id !== realRecords.atLimit)
+    await chmod(directory, 0o555)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = new TldrStore(file)
+      expect(Object.keys(await store.read(others)).sort()).toEqual([...others].sort())
+      await expect(store.update(others[0]!, 'Blocked.', () => true)).rejects.toThrow()
+      expect(await readFile(file, 'utf8')).toBe(source)
+      await chmod(directory, 0o755)
+      await store.update(others[0]!, 'Now it can.', () => true)
+      const copies = (await readdir(directory)).filter(name => name.startsWith('tldr.json.invalid-'))
+      expect(await readFile(join(directory, copies[0]!), 'utf8')).toBe(source)
+    } finally {
+      warn.mockRestore()
+      await chmod(directory, 0o755)
+    }
+  })
+
+  it('sets aside a completion whose note is over the limit (a newer build, then a downgrade)', async () => {
+    const document = structuredClone(realRecords.goal) as { version: 1; records: Record<string, { completionNote?: string }> }
+    const [completed, other] = Object.keys(document.records)
+    document.records[completed!]!.completionNote = 'x'.repeat(401)
+    const { store } = await storeWith('goal.json', document, { historyDirectoryName: 'goal-history', label: 'Goal' })
+    expect(Object.keys(await store.read([completed!, other!]))).toEqual([other])
+  })
+
+  it('never answers a read for an inherited property name', async () => {
+    const { store } = await storeWith('tldr.json', structuredClone(realRecords.tldr))
+    await store.update(realRecords.atLimit, 'Written.', () => true)
+    expect(await store.read(['toString', 'constructor'])).toEqual({})
   })
 
   it('still refuses a malformed document container, which a write would destroy whole', async () => {
