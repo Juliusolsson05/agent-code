@@ -260,10 +260,15 @@ async function readEventsTail(path: string, size: number): Promise<string | null
  * The newest request body the Claude proxy addon kept after its events file
  * passed its body budget (#1273, claude-code-headless#62).
  *
+ * The addon keeps one invariant: the sidecar, when it exists, is the newest
+ * request body that is NOT in the log — past the budget (`body_omitted:
+ * "file-budget"`) or over the 2 MiB per-body cap (`"body-cap"`). An inline
+ * body removes it. So appending it never shows an older prompt as current.
+ *
  * WHY it is appended to the events text rather than given its own bundle
- * field: past the budget the log's own request events carry
- * `body_omitted: "file-budget"`, so the 5 MiB tail above has no prompt text at
- * all — the one thing a bug report most needs. The sidecar line
+ * field: past the budget the log's own request events carry no body, so the
+ * 5 MiB tail above has no prompt text at all — the one thing a bug report
+ * most needs. The sidecar line
  * (`kind: "request-body-latest"`, with the flow_id of its request) sits at
  * the end of the same JSONL, where every existing reader already looks,
  * without changing the bundle's shape. It is bounded by one request body
