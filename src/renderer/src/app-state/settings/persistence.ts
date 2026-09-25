@@ -75,6 +75,10 @@ export function coerceSettings(value: unknown): Settings {
         : DEFAULT_SETTINGS.accent),
     customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
     showStatusMode: parsed.showStatusMode !== false,
+    // On by default (#1172) and for EXISTING installs too: `!== false` so a
+    // blob written before this key existed reads as on, and only an explicit
+    // persisted `false` (the user turned it off) stays off.
+    showAgentCompletionIndicator: parsed.showAgentCompletionIndicator !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
     // `!== false`: absent → on (the #973 default); only an explicit persisted
     // `false` keeps dangerous mode off. Same idiom as useProxyStreaming.

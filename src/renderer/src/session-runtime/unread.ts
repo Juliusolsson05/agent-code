@@ -11,6 +11,13 @@ import type { SessionRuntime } from './state'
  * still surface immediately. Explicit engagement handlers (composer
  * edit/click/paste, feed scroll/click, terminal click/input, action
  * sends) clear it via acknowledgeSession().
+ * The one non-engagement clear is dwell (#1172): a pane that stays focused
+ * AND visible for SEEN_DWELL_MS (useAcknowledgeAfterDwell) counts as seen.
+ * That doesn't contradict the rule above. Arrow-key sweeps, Dispatch
+ * selection and focus sync move focus for a few hundred ms at most, and a
+ * pane that holds focus on screen for seconds really was looked at. The
+ * same marker drives both the Dispatch NEW badge and the pane header's
+ * completion stripes, so the two always agree.
  * Attention outranks ordinary output: once a permission/trust
  * prompt appears, the list should keep showing ACTION until
  * the user opens that agent or the prompt resolves. A later

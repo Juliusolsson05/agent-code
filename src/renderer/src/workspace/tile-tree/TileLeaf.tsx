@@ -30,6 +30,7 @@ import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIn
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { ComposerActions } from '@renderer/workspace/tile-tree/TileLeaf/ComposerActions'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
+import { useAcknowledgeAfterDwell } from '@renderer/workspace/tile-tree/TileLeaf/useAcknowledgeAfterDwell'
 import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
@@ -242,6 +243,13 @@ export function TileLeaf({
   const acknowledgeSession = useCallback(() => {
     acknowledgeWorkspaceSession(sessionId)
   }, [acknowledgeWorkspaceSession, sessionId])
+  // #1172: the pane header's completion stripes render this same unread marker,
+  // the one behind Dispatch's NEW badge, so the two surfaces can't disagree.
+  // Engagement clears it through acknowledgeSession above; this adds "stayed on
+  // the pane long enough to see it". `interactive` rather than `focused`: a
+  // focused pane hidden behind Reader/Settings/editor fullscreen isn't seen.
+  const completionUnseen = runtime.unreadKind !== null
+  useAcknowledgeAfterDwell(interactive, completionUnseen, acknowledgeSession)
   const setDraftImages = workspace.setDraftImages
   // Agent kinds route through the registry; undefined kind is the
   // pre-kind-persistence back-compat case (#394 phase 2c-4 — the old
@@ -812,6 +820,7 @@ export function TileLeaf({
         projectDir={runtime.projectDir}
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}
+        completionUnseen={completionUnseen}
       />
 
       {/* The starter card (#992 §4.6, Context A): a fresh agent whose feed

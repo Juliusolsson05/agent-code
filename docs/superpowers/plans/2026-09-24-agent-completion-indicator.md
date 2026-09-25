@@ -31,8 +31,9 @@ once you've actually seen the pane.
   surfaces (`TileLeaf`, `AgentTerminalLeaf`) with `focused && visible`, the unread flag,
   and their `acknowledgeSession`.
 - `PaneHeader` gains a `completionUnseen` prop. It reads the setting from the store (no
-  prop drilling through the eight layout components) and draws the stripes. Status Mode's
-  solid "working" fill takes precedence. Shell `TerminalLeaf` doesn't pass the prop, so shells
+  prop drilling through the eight layout components) and draws the stripes. A running agent
+  never stripes, whether or not Status Mode is on ("finished" would be false). So the lit fill
+  and the stripes never share a row. Shell `TerminalLeaf` doesn't pass the prop, so shells
   never stripe.
 - Setting `showAgentCompletionIndicator`: type, default `true`, persistence coerced with
   `!== false` (absent → on, explicit off honoured), and a Settings → Workspace row. It gates
@@ -44,6 +45,6 @@ once you've actually seen the pane.
 - Hook (fake timers): passing through doesn't acknowledge. Dwelling acknowledges at exactly
   1.5 s. An already-watched pane acknowledges at once. Losing focus or visibility cancels the
   dwell. Nothing happens with no unread marker.
-- PaneHeader: stripes only when the setting is on, the pane is unseen, and the pane isn't
-  lit. They never appear on the lit strip.
+- PaneHeader: stripes only when the setting is on, the pane is unseen, and the agent isn't
+  running (with or without Status Mode). Surfaces that don't opt in, meaning shells, never stripe.
 - Settings persistence: an absent key → on, and an explicit `false` → off.
