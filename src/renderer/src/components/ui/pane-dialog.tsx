@@ -206,7 +206,7 @@ export const PaneDialogContent = React.forwardRef<HTMLDivElement, PaneDialogCont
             // Centred in the PANE (absolute, not fixed), and capped to it so a
             // narrow lane still shows the whole prompt, scrolling if it must.
             PANE_DIALOG_LAYERS.content,
-            'absolute left-1/2 top-1/2 grid max-h-[calc(100%-2rem)] max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+            'absolute left-1/2 top-1/2 grid max-h-[calc(100%-2rem)] max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-float border border-border-hi bg-surface text-ink shadow-[0_16px_48px_var(--theme-shadow-color)] outline-none',
             sizeClassName,
             className,
           )}

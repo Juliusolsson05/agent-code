@@ -74,6 +74,9 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 // Full-viewport takeovers (Settings, Performance) still pass an explicit
 // width with a WHY at the call site — they are sized to the window, not to
 // content. The `92vw` cap keeps every preset inside a narrow window.
+// SHADOW (UI pass): the theme's shadow colour at a deeper spread than menus
+// (16/48 vs 8/24), so a dialog reads as the higher layer. It was Tailwind's
+// fixed black `shadow-2xl` while every menu and popover used the theme's.
 // HEIGHT (UI pass, G-20): a dialog that scrolls inside caps itself at
 // `max-h-[86vh]`, one value. The sweep found eight caps between 80 and 92vh,
 // each picked by eye, so dialogs of the same kind ended at different heights.
@@ -153,7 +156,7 @@ const DialogContent = React.forwardRef<
       // the TRACK minimum lets the child shrink first; each child still owns
       // whether its content truncates, wraps, or scrolls.
       className={cn(
-        'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+        'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-[0_16px_48px_var(--theme-shadow-color)] outline-none',
         dialogSizes[size],
         // The corner `× ⎋` (below) sits over the header's right end, so the
         // header must leave room for it. Owned HERE (UI pass, G-20): five
