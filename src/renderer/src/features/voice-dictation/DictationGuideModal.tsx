@@ -151,7 +151,9 @@ export function DictationGuideModal() {
             the confirm-only shape DialogActions supports via omitting
             onCancel. confirmOnEnter stays on — the body is prose and links,
             nothing in it owns Enter. */}
-        <DialogActions confirmLabel="Done" onConfirm={() => setOpen(false)} />
+        {/* A read-only guide: the close-only footer (plan H5), a ghost
+            "Close ⎋". "Done" was a filled confirm that only closed. */}
+        <DialogActions onCancel={() => setOpen(false)} cancelLabel="Close" />
       </DialogContent>
     </Dialog>
   )

@@ -587,7 +587,7 @@ feeds the rows below G-1.
 | G-21 | Odd font sizes in feed/conditions | 11.5/10.5/12.5px (GitOperationView ×10, grok/opencode ×7), `text-[9px]` ×46 | the 13/12/11/10 scale | todo |
 | G-22 | Raw colours/shadows | `text-white` on flags, `bg-black/20` scrim, toast `shadow-black/20`, dictation inline rgba, chart `shadow-lg` ×2, LanePortChip `shadow-sm`, `bg-canvas/34`; `bg-danger/N` vs `-soft` families | tokens | todo |
 | G-23 | Casing (DECISION pending, ask-2) | Title Case majority (28 titles, 23 confirmLabels, ~25 buttons, ~40 settings) vs sentence case minority; lowercase controls in side panels | one rule after B7 answers | titles/buttons/settings done (a scan found ~35 sentence-case strings in the Title Case majority); lowercase side-panel controls go with G-26 |
-| G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | todo |
+| G-24 | Product nouns + verbs | MCP server(s) casing ×4, Sessions vs Agents, API Key Vault vs Key Vault, Browser Pocket casing, folder vs directory, "Settings → Voice Dictation" (category is Dictation), → vs ›, Done/Dismiss/Close | one form each | done (folder everywhere; "Session" verified as the app's agent-or-terminal noun, and the control reference fixed to match; Dictation guide Done → Close; settings paths fixed in G-23. Kept on purpose: "API Key Vault" (already consistent), Reorder Tabs "Done" (it commits), → vs › separators (low value)) |
 | G-25 | Mouse-only copy + glyph collisions | 7 "click to…" strings; • ● ⟳ ★ each mean 2–4 things; ASCII `(•)` radios | keyboard-neutral copy; one meaning per glyph | todo |
 | G-26 | Side-panel headers | Git / Worktrees / AI workspace / Agent Status: 4 close treatments, lowercase labels | one `PanelHeader` | done (`PanelHeader` + `SectionLabel` primitives; Git, Worktrees, AI Workspace, Agent Status migrated; Title Case ghost actions; named closes; those files' row hovers + 9px text fixed too) |
 | G-27 | Dictation feedback layer | the dictation chip (z-40) is hidden under any dialog scrim (z-1100) | toast band, if dictation can target dialog fields (behaviour check) | done (z-[1200] per ask-2; the chip's status text is sentence case) |
@@ -1104,7 +1104,10 @@ Sharp corners and one light theme.
   tooltips, body text and empty states. Lowercase controls become Title Case.
   This supersedes G-1's sentence-case prompt labels ("Trust Folder"). UI copy
   says **folder**, never directory. Lists say **Agents**, except that a list
-  that really includes terminals says so ("Agents & Terminals"), per B6. The
+  that really includes terminals says so, per B6. Verified: the app's word for
+  "agent or terminal" is already **Session** (Dispatch's "Sessions" header,
+  Pin Session(s) commands), so those stay; only the control reference's
+  "Pin Agents" was wrong. The
   dictation chip moves to the toast band; dictation is not refused while a
   dialog is open.
 
