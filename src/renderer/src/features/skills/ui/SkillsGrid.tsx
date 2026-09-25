@@ -1,3 +1,4 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -141,33 +142,51 @@ export function SkillsGrid({ settings, onChange }: Props) {
       providers: next,
     })))
   }
-  const toggleInstalled = (skill: AgentCodeInstalledSkill) => {
-    if (skill.enabled && !window.confirm(`Turn ${skill.name} off? Agent Code removes its copies from the provider folders.`)) return
-    if (!skill.enabled && skill.pendingReview && !window.confirm(
-      `An agent proposed ${skill.name}. Review its source and files (⋯ → Source) before turning it on. Turn it on now?`,
-    )) return
+  const toggleInstalled = async (skill: AgentCodeInstalledSkill) => {
+    if (skill.enabled && !(await requestConfirm({
+      title: `Turn ${skill.name} off?`,
+      description: 'Agent Code removes its copies from the provider folders.',
+      confirmLabel: 'Turn Off',
+      tone: 'danger',
+    }))) return
+    // Not `danger`: turning a skill ON removes nothing. It is still a
+    // deliberate review gate, so it asks — but Enter-to-confirm is fine here.
+    if (!skill.enabled && skill.pendingReview && !(await requestConfirm({
+      title: `An agent proposed ${skill.name}.`,
+      description: 'Review its source and files (⋯ → Source) before turning it on. Turn it on now?',
+      confirmLabel: 'Turn On',
+    }))) return
     void run(async () => applyInstalledSkillsResult(await window.api.setAgentCodeInstalledSkillEnabled({
       expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       enabled: !skill.enabled,
     })))
   }
-  const toggleCustom = (skill: AgentCodeCustomSkill) => {
-    if (skill.enabled && !window.confirm(`Turn ${skill.name} off? Managed provider copies will be removed.`)) return
+  const toggleCustom = async (skill: AgentCodeCustomSkill) => {
+    if (skill.enabled && !(await requestConfirm({
+      title: `Turn ${skill.name} off?`,
+      description: 'Managed provider copies will be removed.',
+      confirmLabel: 'Turn Off',
+      tone: 'danger',
+    }))) return
     void run(async () => applyCustomSkillsResult(await window.api.setAgentCodeCustomSkillEnabled({
       expectedRevision: currentSkillsRevision(),
       skillId: skill.id,
       enabled: !skill.enabled,
     })))
   }
-  const removeInstalled = (
+  const removeInstalled = async (
     skill: AgentCodeInstalledSkill,
     abandonTargets?: Array<{ targetId: string; expectedConflictFingerprint: string }>,
   ) => {
     const wording = abandonTargets
       ? `Leave ${abandonTargets.length} external folder${abandonTargets.length === 1 ? '' : 's'} untouched and forget ${skill.name}?`
       : `Remove ${skill.name}? Agent Code removes its copies from the provider folders and its stored source.`
-    if (!window.confirm(wording)) return
+    if (!(await requestConfirm({
+      title: wording,
+      confirmLabel: abandonTargets ? 'Forget Skill' : 'Remove Skill',
+      tone: 'danger',
+    }))) return
     void run(async () => {
       const result = await window.api.deleteAgentCodeInstalledSkill({
         expectedRevision: currentSkillsRevision(),
@@ -236,8 +255,13 @@ export function SkillsGrid({ settings, onChange }: Props) {
           <span>{installed.recovery.message}</span>
           <div className="flex flex-wrap gap-2">
             <Button size="xs" variant="outline" onClick={() => void window.api.revealAgentCodeInstalledSkillsRecoveryFile()}>Reveal state file</Button>
-            <Button size="xs" variant="outline" onClick={() => {
-              if (!window.confirm('Reset all Agent Code-managed skill state? Existing provider folders are left untouched.')) return
+            <Button size="xs" variant="outline" onClick={async () => {
+              if (!(await requestConfirm({
+                title: 'Reset all Agent Code-managed skill state?',
+                description: 'Existing provider folders are left untouched.',
+                confirmLabel: 'Reset State',
+                tone: 'danger',
+              }))) return
               void run(async () => applyInstalledSkillsResult(await window.api.resetAgentCodeInstalledSkillsRecovery()))
             }}>Reset managed skill state</Button>
           </div>
@@ -276,7 +300,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
           chosen={chosenSkillProviders(skill.providers, supported)}
           visible={visibleSkillProviders(skill.targets)}
           disabled={busy}
-          onToggle={() => toggleCustom(skill)}
+          onToggle={() => void toggleCustom(skill)}
           onProvider={(kind, on) => setCustomProviders(skill, kind, on)}
           status={skill.health === 'active' || skill.health === 'disabled' ? null : `${HEALTH_LABELS[skill.health] ?? skill.health}`}
           targets={skill.targets}
@@ -302,7 +326,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
             chosen={chosenSkillProviders(skill.providers, supported)}
             visible={visibleSkillProviders(skill.targets)}
             disabled={busy || skill.health === 'recovery-required'}
-            onToggle={() => toggleInstalled(skill)}
+            onToggle={() => void toggleInstalled(skill)}
             onProvider={(kind, on) => setInstalledProviders(skill, kind, on)}
             badge={skill.pendingReview ? 'proposed by an agent · review' : undefined}
             source={`${skill.source.owner}/${skill.source.repository}${skill.source.path ? ` · ${skill.source.path}` : ''} @ ${skill.source.resolvedCommit.slice(0, 7)}`}
@@ -320,7 +344,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
                     onSelect: () => void window.api.revealAgentCodeInstalledSkillTarget(skill.id, target.id).then(result => { if (!result.ok) setError(result.message ?? 'Could not reveal that folder.') }),
                   })),
                   { label: 'Copy install command', onSelect: () => void navigator.clipboard?.writeText(installCommandFor(skill)) },
-                  { label: 'Remove…', danger: true, onSelect: () => removeInstalled(skill) },
+                  { label: 'Remove…', danger: true, onSelect: () => void removeInstalled(skill) },
                 ]}
               />
             )}
@@ -567,7 +591,13 @@ function ExternalRow({
                 onSelect: () => {
                   // Adopting the folder is not possible (it has no ownership
                   // record), so managing means reinstalling after it is gone.
-                  if (window.confirm(`Agent Code can only manage ${skill.name} after the existing folder is removed${skill.provenance ? ` (for example: npx skills remove -g ${skill.name})` : ''}. Open Add skills with its source?`)) onManage()
+                  void requestConfirm({
+                    title: `Agent Code can only manage ${skill.name} after the existing folder is removed.`,
+                    description: `${skill.provenance ? `For example: npx skills remove -g ${skill.name}. ` : ''}Open Add skills with its source?`,
+                    confirmLabel: 'Open Add Skills',
+                  }).then(confirmed => {
+                    if (confirmed) onManage()
+                  })
                 },
               },
               { label: hidden ? 'Show' : 'Hide', onSelect: () => onHide(!hidden) },

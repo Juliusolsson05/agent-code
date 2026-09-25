@@ -1,3 +1,4 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -351,11 +352,16 @@ export function KeyVaultModal() {
                             // — in the list and in this confirmation, which
                             // is where a whole provider's keys are destroyed
                             // (#1049 re-review).
-                            if (window.confirm(`Delete provider "${withVisibleControls(selectedProvider.name)}" and all its keys?`)) {
+                            void requestConfirm({
+                              title: `Delete provider "${withVisibleControls(selectedProvider.name)}" and all its keys?`,
+                              confirmLabel: 'Delete Provider',
+                              tone: 'danger',
+                            }).then(confirmed => {
+                              if (!confirmed) return
                               void runVaultAction(() =>
                                 window.api.keyVaultDeleteProvider(selectedProvider.id),
                               )
-                            }
+                            })
                           }}
                         >
                           Delete
@@ -451,11 +457,16 @@ export function KeyVaultModal() {
                           <button
                             className="shrink-0 text-[11px] text-muted hover:text-ink"
                             onClick={() => {
-                              if (window.confirm(`Delete key "${withVisibleControls(key.name)}"?`)) {
+                              void requestConfirm({
+                                title: `Delete key "${withVisibleControls(key.name)}"?`,
+                                confirmLabel: 'Delete Key',
+                                tone: 'danger',
+                              }).then(confirmed => {
+                                if (!confirmed) return
                                 void runVaultAction(() =>
                                   window.api.keyVaultDeleteKey(key.providerId, key.id),
                                 )
-                              }
+                              })
                             }}
                           >
                             Delete

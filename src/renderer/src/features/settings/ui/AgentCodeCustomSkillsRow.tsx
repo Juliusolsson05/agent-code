@@ -1,3 +1,4 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -205,9 +206,15 @@ function AgentCodeCustomSkillsModal({
     return result.ok
   }
 
-  const requestClose = (nextOpen: boolean) => {
+  // Async since window.confirm was replaced by requestConfirm (plan D8);
+  // Escape reaches this through Radix, so a dirty draft always asks first.
+  const requestClose = async (nextOpen: boolean) => {
     if (!nextOpen && busy) return
-    if (!nextOpen && dirty && !window.confirm('Discard unsaved custom skill changes?')) return
+    if (!nextOpen && dirty && !(await requestConfirm({
+      title: 'Discard unsaved custom skill changes?',
+      confirmLabel: 'Discard Changes',
+      tone: 'danger',
+    }))) return
     onOpenChange(nextOpen)
   }
 
@@ -276,7 +283,12 @@ function AgentCodeCustomSkillsModal({
 
   const toggle = async (skill: AgentCodeCustomSkill) => {
     if (busy) return
-    if (skill.enabled && !window.confirm(`Disable ${skill.name}? Managed provider copies will be removed.`)) return
+    if (skill.enabled && !(await requestConfirm({
+      title: `Disable ${skill.name}?`,
+      description: 'Managed provider copies will be removed.',
+      confirmLabel: 'Disable Skill',
+      tone: 'danger',
+    }))) return
     setBusy(true)
     setError(null)
     try {
@@ -299,7 +311,11 @@ function AgentCodeCustomSkillsModal({
     const wording = abandonTargets
       ? `Leave ${abandonTargets.length} external file${abandonTargets.length === 1 ? '' : 's'} untouched and forget ${skill.name}?`
       : `Delete ${skill.name}? Managed copies will be removed first.`
-    if (!window.confirm(wording)) return
+    if (!(await requestConfirm({
+      title: wording,
+      confirmLabel: abandonTargets ? 'Forget Skill' : 'Delete Skill',
+      tone: 'danger',
+    }))) return
     setBusy(true)
     setError(null)
     try {
@@ -326,7 +342,7 @@ function AgentCodeCustomSkillsModal({
     : undefined
 
   return (
-    <Dialog open={open} onOpenChange={requestClose}>
+    <Dialog open={open} onOpenChange={next => void requestClose(next)}>
       <DialogContent className="flex max-h-[90vh] w-[min(880px,95vw)] flex-col overflow-hidden font-code">
         <DialogHeader>
           <DialogTitle>{draft ? (draft.skillId ? `Edit ${draft.name}` : 'New custom skill') : 'Custom Skills'}</DialogTitle>
@@ -399,8 +415,12 @@ function AgentCodeCustomSkillsModal({
                 <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void showPreview()}>
                   Preview generated skill
                 </button>
-                <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => {
-                  if (dirty && !window.confirm('Discard unsaved custom skill changes?')) return
+                <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={async () => {
+                  if (dirty && !(await requestConfirm({
+                    title: 'Discard unsaved custom skill changes?',
+                    confirmLabel: 'Discard Changes',
+                    tone: 'danger',
+                  }))) return
                   setDraft(null)
                   setBaseDraft(null)
                   setConflictTargets([])
@@ -496,8 +516,13 @@ function AgentCodeCustomSkillsModal({
               <span>{current.recovery.message}</span>
               <div className="flex gap-2">
                 <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal state file</button>
-                <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => {
-                  if (!window.confirm('Reset all unreadable Agent Code-managed skill state? Existing provider copies will be left untouched.')) return
+                <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={async () => {
+                  if (!(await requestConfirm({
+                    title: 'Reset all unreadable Agent Code-managed skill state?',
+                    description: 'Existing provider copies will be left untouched.',
+                    confirmLabel: 'Reset State',
+                    tone: 'danger',
+                  }))) return
                   void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult)
                 }}>Reset state</button>
               </div>
@@ -507,7 +532,7 @@ function AgentCodeCustomSkillsModal({
         </div>
 
         <DialogFooter>
-          <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => requestClose(false)}>Close</button>
+          <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void requestClose(false)}>Close</button>
           {draft ? (
             <button type="button" disabled={busy || revisionConflict} className="rounded-control border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
               {draft.enabled ? 'Save & Enable' : 'Save draft'}

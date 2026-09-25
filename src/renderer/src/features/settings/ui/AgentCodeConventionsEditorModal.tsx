@@ -1,3 +1,4 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -94,8 +95,15 @@ export function AgentCodeConventionsEditorModal({
   const conflicts = shownSnapshot.targets.filter(target =>
     (target.state === 'conflict' || target.state === 'retired') && target.conflictFingerprint)
 
-  const requestClose = (nextOpen: boolean) => {
-    if (!nextOpen && dirty && !window.confirm('Discard unsaved convention changes?')) return
+  // Async since window.confirm was replaced by requestConfirm (plan D8).
+  // Radix calls this for Escape and the corner close alike, so a one-press
+  // Escape can never silently drop an edited draft (B7's D3 condition).
+  const requestClose = async (nextOpen: boolean) => {
+    if (!nextOpen && dirty && !(await requestConfirm({
+      title: 'Discard unsaved convention changes?',
+      confirmLabel: 'Discard Changes',
+      tone: 'danger',
+    }))) return
     onOpenChange(nextOpen)
   }
 
@@ -158,7 +166,7 @@ export function AgentCodeConventionsEditorModal({
       : base.enabled
         ? 'Disable conventions and clear the saved rules? Managed copies will be removed first.'
         : 'Clear the saved convention rules?'
-    if (!window.confirm(clearConfirmation)) return
+    if (!(await requestConfirm({ title: clearConfirmation, confirmLabel: 'Clear Rules', tone: 'danger' }))) return
     setBusy(true)
     setError(null)
     setRevisionConflict(false)
@@ -196,7 +204,7 @@ export function AgentCodeConventionsEditorModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={requestClose}>
+    <Dialog open={open} onOpenChange={next => void requestClose(next)}>
       <DialogContent className="flex max-h-[88vh] w-[min(780px,94vw)] flex-col overflow-hidden font-code">
         <DialogHeader>
           <DialogTitle>Agent Code Conventions</DialogTitle>
@@ -253,8 +261,12 @@ export function AgentCodeConventionsEditorModal({
             <button
               type="button"
               className="rounded-control border border-control-border px-2 py-1 text-[11px]"
-              onClick={() => {
-                if (markdown.trim() && !window.confirm('Replace the current draft with the starter conventions?')) return
+              onClick={async () => {
+                if (markdown.trim() && !(await requestConfirm({
+                  title: 'Replace the current draft with the starter conventions?',
+                  confirmLabel: 'Replace Draft',
+                  tone: 'danger',
+                }))) return
                 setMarkdown(AGENT_CODE_CONVENTIONS_STARTER)
                 setWarnings([])
                 setPreview(null)
@@ -286,8 +298,12 @@ export function AgentCodeConventionsEditorModal({
                         <button
                           type="button"
                           className="rounded-control border border-danger px-1.5 py-0.5 text-danger"
-                          onClick={() => {
-                            if (!window.confirm(`Replace the reviewed file at ${withVisibleControls(target.displayPath)}?`)) return
+                          onClick={async () => {
+                            if (!(await requestConfirm({
+                              title: `Replace the reviewed file at ${withVisibleControls(target.displayPath)}?`,
+                              confirmLabel: 'Replace File',
+                              tone: 'danger',
+                            }))) return
                             const next = [
                               ...overwriteApprovals.filter(value => value.targetId !== target.id),
                               { targetId: target.id, expectedConflictFingerprint: target.conflictFingerprint! },
@@ -349,7 +365,7 @@ export function AgentCodeConventionsEditorModal({
             {base.enabled ? 'Disable and clear' : abandonApprovals.length > 0 ? 'Leave selected and clear' : 'Clear saved rules'}
           </button>
           <div className="flex gap-2">
-            <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => requestClose(false)}>Cancel</button>
+            <button type="button" className="rounded-control border border-control-border px-2 py-1 text-[11px]" onClick={() => void requestClose(false)}>Cancel</button>
             <button type="button" disabled={busy} className="rounded-control border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
               {enabled && !base.enabled ? 'Save & Enable' : 'Save changes'}
             </button>

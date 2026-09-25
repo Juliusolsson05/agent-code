@@ -392,7 +392,7 @@ entry when it lands.
 | F4 | `DialogContent size` presets + close button convergence | done (presets exist; call sites migrate in their S-rows) |
 | F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | done |
 | F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | done (fixed-key legends in PathPicker/AgentActivity/BulkSwitch move with their S-rows) |
-| F7 | `ConfirmDialog` + replace `window.confirm` ×17 (destructive: focus Cancel, and never ⌘↩ — steering note 1; quit/close paths stay native — B7) | todo |
+| F7 | `ConfirmDialog` + replace `window.confirm` ×17 (destructive: focus Cancel, and never ⌘↩ — steering note 1; quit/close paths stay native — B7) | done (17/17 replaced; none was on a quit/close path) |
 | F8 | `dropdown-menu` primitive (D9) | todo |
 
 ### Dialogs (Radix)
@@ -533,6 +533,13 @@ Sharp corners and one light theme.
   "Browser" tooltip, the close toast ("… — <chord> Undo Close"), and the
   empty focused lane hint all show the NEW chord; unbinding one drops the
   chord cleanly (no empty parentheses).
+- **F7 confirms (Skills grid ⋯/toggles, Conventions + Custom Skills editors
+  incl. Escape on a dirty draft, Key Vault deletes, workflow resume):** the
+  confirm appears ABOVE the dialog that asked, sm width, title + detail line,
+  verb button (never "OK"); a destructive one opens with the focus ring on
+  Cancel and the red button carries no ↩ chip; Escape closes only the
+  confirm. Also check nothing behind it stalls while it is open (streaming
+  feeds keep moving — native confirm used to freeze them).
 
 ## Tasks
 
@@ -595,6 +602,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 F7: `components/ui/confirm-dialog.tsx` (ConfirmDialog,
+  requestConfirm, ConfirmHost registered last in modalSurfaces); all 17
+  `window.confirm` sites migrated, dirty-draft close guards made async (B7's
+  D3 condition: Escape on a dirty editor asks instead of discarding). New
+  module; confirm-red by mutation: forcing `confirmKey='Enter'` for danger
+  fails the "never commits on dialog-level Enter/⌘↩" test.
 - 2026-09-25 F6: `features/command-keybindings/useCommandChord.ts`; 9 sites
   resolved live or reworded. Confirm-red observed: WelcomeEmpty test fails
   on the pre-change component. Existing close-toast tests (default ⌘⇧T) stay

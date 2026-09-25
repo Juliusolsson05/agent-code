@@ -1,3 +1,4 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -87,7 +88,12 @@ export function AgentCodeConventionsRow() {
     if (!snapshot || busy) return
     if (snapshot.health === 'recovery-required' || snapshot.health === 'unsupported') return
     if (snapshot.enabled) {
-      if (!window.confirm('Disable conventions? Managed skill copies will be removed, but your saved rules will remain.')) return
+      if (!(await requestConfirm({
+        title: 'Disable conventions?',
+        description: 'Managed skill copies will be removed, but your saved rules will remain.',
+        confirmLabel: 'Disable Conventions',
+        tone: 'danger',
+      }))) return
       setBusy(true)
       try {
         applyResult(await window.api.disableAgentCodeConventions(snapshot.revision))
@@ -196,8 +202,13 @@ export function AgentCodeConventionsRow() {
             <button
               type="button"
               className="rounded-control border border-danger px-2 py-1"
-              onClick={() => {
-                if (!window.confirm('Reset all unreadable Agent Code-managed skill state? The shared state file will be removed, and any existing provider copies will be left untouched.')) return
+              onClick={async () => {
+                if (!(await requestConfirm({
+                  title: 'Reset all unreadable Agent Code-managed skill state?',
+                  description: 'The shared state file will be removed, and any existing provider copies will be left untouched.',
+                  confirmLabel: 'Reset State',
+                  tone: 'danger',
+                }))) return
                 void window.api.resetAgentCodeConventionsRecovery().then(applyResult)
               }}
             >
