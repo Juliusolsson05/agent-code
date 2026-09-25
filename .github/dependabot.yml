@@ -27,6 +27,27 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # Routine bumps of these need a migration, not a bump. A group PR is
+      # all-or-nothing, so one of them turned #987 (30 packages) red and held
+      # every safe bump behind it for a week. Leaving them in as separate PRs
+      # would not help: seven known-red PRs fill open-pull-requests-limit (3)
+      # and starve the group. Like the major ignore above, update-types
+      # ignores apply to routine version updates only, so a security fix for
+      # any of these still arrives. Drop an entry when its issue lands.
+      - dependency-name: "monaco-editor"                  # #1201: namespaces and worker paths moved
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@modelcontextprotocol/sdk"      # #1202: moves with workflow-mcp's pin
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "zod"                            # #1202
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@openai/codex-sdk"              # #1202
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "acorn"                          # #1202
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "vscode-languageserver-protocol" # #1203: needs vscode-jsonrpc 9 with it
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "esbuild"                        # #1204: a pre-1.0 minor is breaking
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
 
   # Submodule pointers intentionally stay outside Dependabot. They represent
   # coordinated Agent Code releases, not ordinary dependencies, so updating one
