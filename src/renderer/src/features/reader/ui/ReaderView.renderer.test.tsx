@@ -486,7 +486,7 @@ describe('Reader follows only a reader who is following', () => {
     const view = render(<ReaderView workspace={workspace} />)
     view.rerender(<ReaderView workspace={workspace} />)
 
-    expect(screen.getByText('no assistant message yet')).toBeTruthy()
+    expect(screen.getByText('No assistant message yet.')).toBeTruthy()
   })
 })
 

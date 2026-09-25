@@ -11,6 +11,7 @@ import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCo
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { Button } from '@renderer/components/ui/button'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { Kbd } from '@renderer/components/ui/kbd'
 import { eventMatchesKeybinding } from '@shared/keybindings'
 import { DEFAULT_PROVIDER, isAgentProviderKind, isAgentSessionKind } from '@shared/types/providerKind'
@@ -427,8 +428,10 @@ function ReaderBody({
           </article>
         </div>
       ) : (
-        <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center text-muted text-[12px] font-code">
-          no assistant message yet
+        // The shared "nothing here" sentence (G-39): it was lowercase with no
+        // period. The flex box only centres it in the reading area.
+        <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center font-code">
+          <EmptyState>No assistant message yet.</EmptyState>
         </div>
       )}
       {/* Pane toast, rendered here as well as in TileLeaf.
