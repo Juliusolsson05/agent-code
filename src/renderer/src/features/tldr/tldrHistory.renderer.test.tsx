@@ -16,6 +16,11 @@ afterEach(() => { cleanup(); dismissTldr(); window.api = originalApi })
 const entry = (text: string, revision: number): TldrHistoryEntry => ({ text, revision, writtenAt: new Date(Date.now() - revision * 60_000).toISOString() })
 const workspaceWith = (sessions: Record<string, unknown>) => ({ state: { sessions } }) as unknown as Workspace
 
+// The meta row renders its parts (kind chip, Current, age) as separate
+// elements; joined here the way a reader scans them, so an assertion names the
+// parts and their order rather than the markup.
+const metaOf = (item: Element) => [...item.querySelector('[data-slot="history-meta"]')!.children].map(part => part.textContent).join(' · ')
+
 const at = (text: string, revision: number, minutesAgo: number): TldrHistoryEntry => ({ text, revision, writtenAt: new Date(Date.now() - minutesAgo * 60_000).toISOString() })
 
 function historyApi(entries: TldrHistoryEntry[], goals: TldrHistoryEntry[] = []) {
@@ -65,7 +70,7 @@ describe('TLDR history', () => {
     })} />)
     const list = await screen.findByRole('list', { name: 'TLDR history' })
     expect(api.readGoalHistory).toHaveBeenCalledWith('summary-1')
-    const rows = [...list.querySelectorAll('li')].map(item => ({ text: item.querySelector('p')!.textContent, meta: item.querySelector('span')!.textContent! }))
+    const rows = [...list.querySelectorAll('li')].map(item => ({ text: item.querySelector('p')!.textContent, meta: metaOf(item) }))
     expect(rows.map(row => row.text)).toEqual([
       'Tests pass; opening the PR.', 'Let users see what each agent is for.', 'Reading the store.', 'Add a history view.',
     ])
@@ -98,7 +103,7 @@ describe('TLDR history', () => {
       pane: { cwd: '/project', kind: 'claude', tldrIdentity: 'summary-1', builtInMcpDomains: ['goal'] },
     })} />)
     const list = await screen.findByRole('list', { name: 'TLDR history' })
-    const metas = [...list.querySelectorAll('li')].map(item => item.querySelector('span')!.textContent!)
+    const metas = [...list.querySelectorAll('li')].map(item => metaOf(item))
     expect(metas[0]).toMatch(/^Goal completed · Current · /)
     expect(metas[1]).toMatch(/^Goal · /)
     expect(metas[1]).not.toContain('completed')
