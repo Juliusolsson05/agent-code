@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest'
 
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { makeRefs, sessionActionsWithSpawn, stateWriter } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
+import { MissingWorkspaceDirectoryError } from '@main/workspaceDirectory'
 import { freshStage } from '@renderer/workspace/dispatch/gridShape'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
@@ -121,5 +122,46 @@ it('names the project when none of its agents came back', async () => {
   const harness = mount(state, refs, writer, vi.fn().mockRejectedValue(new Error(recorded)))
   await act(async () => { await harness.undo() })
   expect(harness.showToast).toHaveBeenCalledWith('Could not restore project "agent-code": Session failed to start. Check provider setup and retry.', 8000)
+  harness.unmount()
+})
+
+// #1264 review B R2-1: a worktree removed after its branch merged. Main refuses
+// the spawn with MissingWorkspaceDirectoryError; ipcRenderer.invoke relays it
+// as Electron's `Error invoking remote method '<channel>': ${String(error)}`
+// wrapper, built here from the real class so a change to main's message fails
+// this test. No journal holds one (the undo stack is in-memory), hence built,
+// not recorded. Before the fix the entry was pushed back forever and the older
+// close below was unreachable.
+it('consumes a close whose folder is gone, says so, and restores the older close', async () => {
+  const { state, refs, writer } = setup()
+  const gone = '/projects/agent-code/.worktrees/merged-branch'
+  refs.undoStackRef.current.push({
+    type: 'session', closedAt: Date.now(), sessionId: 'gone-pane',
+    sessionMeta: { cwd: gone, kind: 'claude', title: 'Merged work', projectId: 'tab-parent', joinedAt: 2 },
+  })
+  const relayed = `Error invoking remote method 'session:spawn': ${String(new MissingWorkspaceDirectoryError(gone))}`
+  const spawn = vi.fn().mockRejectedValueOnce(new Error(relayed)).mockResolvedValueOnce('restored-older')
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  expect(harness.showToast).toHaveBeenCalledWith(`Could not restore "Merged work": its folder no longer exists (${gone})`, 8000)
+  expect(spawn).toHaveBeenCalledTimes(2)
+  expect(refs.undoStackRef.current.length).toBe(0)
+  expect(Object.keys(refs.stateRef.current.sessions)).toContain('restored-older')
+  harness.unmount()
+})
+
+it('consumes a project whose every folder is gone instead of retrying it forever', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  const gone = '/projects/agent-code/.worktrees/merged-branch'
+  refs.undoStackRef.current.push({
+    type: 'tab', closedAt: Date.now(), tab: { id: 'closed-tab', title: 'merged-branch' }, tabIndex: 0,
+    sessions: [{ sessionId: 'one', meta: { cwd: gone, kind: 'claude', projectId: 'closed-tab', joinedAt: 1 } }],
+  })
+  const relayed = `Error invoking remote method 'session:spawn': ${String(new MissingWorkspaceDirectoryError(gone))}`
+  const harness = mount(state, refs, writer, vi.fn().mockRejectedValue(new Error(relayed)))
+  await act(async () => { await harness.undo() })
+  expect(harness.showToast).toHaveBeenCalledWith(`Could not restore project "merged-branch": its folder no longer exists (${gone})`, 8000)
+  expect(refs.undoStackRef.current.length).toBe(0)
   harness.unmount()
 })
