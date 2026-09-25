@@ -828,6 +828,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **Caffeinate feedback:** messages ("caffeinate stopped…") now appear in
+  the normal top-right app toast, above any open dialog, instead of their
+  own bottom-right card that hid under dialog scrims.
 - **k9 radio groups (Settings choices such as Theme / Update channel /
   Agent view mode, Spotlight layout, Grid Dispatch "Nested agents"):**
   arrows now SELECT as they move (Theme previews each theme as you arrow).
@@ -1479,3 +1482,9 @@ Sharp corners and one light theme.
   fails 3 group tests; always clicking (no already-checked skip) fails the
   Settings re-fire assertion; Color flag at HEAD (radiogroup) fails both
   listbox tests.
+- 2026-09-25 caffeinate toast: the pending "file an issue" item was re-read as
+  a UX inconsistency (a second toast look at z-50 under z-[1100] scrims, and a
+  region mounted with its text), not a functional bug, so it is fixed here
+  instead of filed. CaffeinateToastSurface is now an adapter onto GlobalToast
+  (5 s, "Caffeinate: " prefix). Confirm-red: the new GlobalToast test fails
+  with the pre-change surface.
