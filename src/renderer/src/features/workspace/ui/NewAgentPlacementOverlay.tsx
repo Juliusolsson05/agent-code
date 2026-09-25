@@ -1,6 +1,7 @@
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import { Button } from '@renderer/components/ui/button'
 import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
@@ -144,6 +145,13 @@ export function NewAgentPlacementOverlay({
       || (event.ctrlKey && !event.metaKey && !event.altKey && (event.key === 'n' || event.key === 'p'))
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' && event.key !== 'Enter' && !isMove(event)) return
+      // A FOCUSED BUTTON OWNS ITS OWN ENTER (steering note k8, the #862 rule).
+      // This listener is document-wide and capture-phase, so without this a
+      // Tab to `Cancel ⎋` + Enter was swallowed here and CREATED the
+      // highlighted agent — the visible cancel did the opposite. The option
+      // rows never hold focus (tabIndex -1 + mousedown prevented), so the
+      // only buttons that can are the footer's. Escape stays overlay-wide.
+      if (event.key === 'Enter' && focusedControlOwnsEnter(event.target)) return
       event.stopPropagation()
       event.preventDefault()
       if (event.key === 'Escape') {

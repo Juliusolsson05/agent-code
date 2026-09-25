@@ -108,5 +108,29 @@ describe('NewAgentPlacementOverlay OpenCode runtime choices', () => {
     expect(screen.getByText('create')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
   })
+
+  it('lets Enter on a focused Cancel cancel, and never create an agent (steering note k8)', () => {
+    const createDetachedDispatchAgent = vi.fn(async () => undefined)
+    const onClose = vi.fn()
+    const workspace = {
+      activeTab: { id: 'tab-1', title: 'Project' },
+      state: { activeTabId: 'tab-1', tabs: [{ id: 'tab-1', title: 'Project' }], sessions: {} },
+      createDetachedDispatchAgent,
+    } as unknown as Workspace
+    render(<NewAgentPlacementOverlay open workspace={workspace} onClose={onClose} linkedAgentParentId={null} projectIntent={null} />)
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    cancel.focus()
+    // true = default NOT prevented, so the real browser still delivers
+    // Cancel's click; happy-dom does not synthesize it, hence the click below.
+    expect(fireEvent.keyDown(cancel, { key: 'Enter' })).toBe(true)
+    expect(createDetachedDispatchAgent).not.toHaveBeenCalled()
+    fireEvent.click(cancel)
+    expect(onClose).toHaveBeenCalled()
+    // Space on Cancel is untouched by the overlay's capture listener too.
+    expect(fireEvent.keyDown(cancel, { key: ' ' })).toBe(true)
+    // …and Enter from the list still creates.
+    fireEvent.keyDown(screen.getByRole('listbox', { name: 'Agent type' }), { key: 'Enter' })
+    expect(createDetachedDispatchAgent).toHaveBeenCalledOnce()
+  })
 })
 

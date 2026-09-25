@@ -878,6 +878,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k8 (valid, wrong-action): the placement
+  overlay's document capture listener consumed EVERY Enter, so Tab to Cancel
+  + Enter created the highlighted agent. Fixed with the shared
+  focusedControlOwnsEnter rule (Escape stays overlay-wide). Fail-first on
+  a0902c4a; mutation (drop the guard) fails the test; Space on Cancel is
+  untouched; Enter from the list still creates.
 - 2026-09-25 M8/N17: Global + pane toasts are always-mounted live regions;
   the global toast is a dismiss button; text-white → text-accent-fg.
   Confirm-red: both toast tests fail on the pre-change files. Caffeinate
