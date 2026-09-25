@@ -28,6 +28,7 @@ import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
+import { clearReaderMessage, setReaderMessage } from '@renderer/features/reply-to-selection/lib/readerMessageStash'
 
 // ReaderView — single-message read mode for a focused session.
 //
@@ -266,6 +267,18 @@ function ReaderBody({
   const canSelectOlder = selectedIndex > 0
   const canSelectNewer = selectedIndex >= 0 && selectedIndex < messages.length - 1
   const text = selectedMessage?.text ?? null
+
+  // Publish the selected message for "Reply to Reader Message" (K2-4; the
+  // stash has the WHY). A usage-limit notice is not quotable text, so it
+  // publishes nothing, the same as the article's data-quote-scope below.
+  // The message id is part of the key so moving Older/Newer republishes.
+  const publishedText = selectedMessage && !selectedMessage.notice && text ? text : null
+  const publishedId = selectedMessage?.id ?? null
+  useEffect(() => {
+    if (!publishedText || !publishedId) { clearReaderMessage(sessionId); return }
+    setReaderMessage({ sessionId, messageId: publishedId, text: publishedText })
+    return () => clearReaderMessage(sessionId)
+  }, [sessionId, publishedId, publishedText])
 
   // WHY selection is read through refs inside the keydown handler
   // instead of closing over `messages`/`selectedIndex` directly:

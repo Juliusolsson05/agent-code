@@ -9,6 +9,8 @@ import {
 } from '@renderer/features/reply-to-selection/lib/selectionStash'
 import type { PendingSelection } from '@renderer/features/reply-to-selection/lib/selectionStash'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { peekReaderMessage } from '@renderer/features/reply-to-selection/lib/readerMessageStash'
+import type { ReaderMessage } from '@renderer/features/reply-to-selection/lib/readerMessageStash'
 
 // Validate a stashed selection against current workspace state.
 //
@@ -30,6 +32,19 @@ function validPendingSelection(workspace: Workspace): PendingSelection | null {
   if (!meta) return null
   if (!isAgentSessionKind(meta.kind)) return null
   return pending
+}
+
+// The Reader's selected message, only while Reader Mode is actually open and
+// the message belongs to a live agent. The stash is module state that can
+// outlive the reader for a commit, so the open-reader check is what stops a
+// closed reader's last message from staying quotable.
+function validReaderMessage(workspace: Workspace): ReaderMessage | null {
+  if (!workspace.readerMode) return null
+  const message = peekReaderMessage()
+  if (!message) return null
+  const meta = workspace.state.sessions[message.sessionId]
+  if (!meta || !isAgentSessionKind(meta.kind)) return null
+  return message
 }
 
 export const replyToSelectionCommands: CommandDef[] = [
@@ -98,6 +113,34 @@ export const replyToSelectionCommands: CommandDef[] = [
         pending.sessionId,
         truncated ? 'Quoted selection (truncated)' : 'Quoted selection',
       )
+    },
+  },
+  {
+    // Keyboard path to quoting (ledger K2-4, UNCONFIRMED for the owner):
+    // Reply to Selection needs a mouse text selection, and this quotes the
+    // Reader's selected message instead (⌥↑ / ⌥↓ pick it). Palette only; no
+    // default chord. Same insertion contract as Reply to Selection: the quote
+    // is prefixed, the draft is kept below it, nothing is sent, and it lands
+    // in the agent being READ, never the hidden grid's focused pane.
+    id: 'reply-to-reader-message',
+    category: 'session',
+    surface: 'session',
+    title: 'Reply to Reader Message',
+    description: '**What it does:** Prefixes the composer of the agent you are reading with the message Reader Mode has selected, wrapped in the same tag as Reply to Selection.\n\n**Use when:** You are reading in Reader Mode and want to respond to one message without selecting text with the mouse.\n\n**Notes:** Only appears in Reader Mode with a message shown. Pick the message with Older / Newer (⌥↑ / ⌥↓). Your existing draft is kept below the quote; nothing is sent.',
+    keywords: ['reply', 'quote', 'reader', 'message', 'respond', 'cite', 'keyboard'],
+    when: ({ workspace }) => validReaderMessage(workspace) !== null,
+    getState: ({ workspace }) => {
+      const message = validReaderMessage(workspace)
+      return message ? value(`"${quoteSnippet(message.text, 40)}"`) : null
+    },
+    run: ({ workspace }) => {
+      const message = validReaderMessage(workspace)
+      if (!message) return
+      const currentDraft = workspace.getRuntime(message.sessionId).draftInput
+      const { draft, truncated } = prefixDraftWithQuote(currentDraft, message.text)
+      workspace.setDraftInput(message.sessionId, draft)
+      parkComposerCaretAtEnd(message.sessionId)
+      workspace.showPaneToast(message.sessionId, truncated ? 'Quoted message (truncated)' : 'Quoted message')
     },
   },
 ]
