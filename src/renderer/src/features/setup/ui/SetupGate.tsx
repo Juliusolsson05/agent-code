@@ -239,7 +239,7 @@ export function SetupGate() {
           // failed `brew install` (homebrewInstaller's 8 MiB buffer). Unbounded,
           // it pushed the footer — and the only button that answers the panel —
           // past the bottom of the viewport (#1047 review).
-          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-danger/50 bg-danger/10 px-4 py-3 text-[11px] leading-5 text-danger">
+          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-danger-border bg-danger-soft px-4 py-3 text-[11px] leading-5 text-danger">
             {shownError}
           </div>
         ) : null}

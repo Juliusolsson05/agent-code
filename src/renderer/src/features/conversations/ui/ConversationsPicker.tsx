@@ -256,7 +256,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
           {/* The prose " · ↑↓ ↵ resume" became chips (plan H3). */}
           <KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'resume' }]} className="text-[10px]" />
         </div>
-        {banner && <div role="alert" className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger">{banner}</div>}
+        {banner && <div role="alert" className="border-b border-danger-border bg-danger-soft px-4 py-2 text-[12px] text-danger">{banner}</div>}
         <div className="flex min-h-0 flex-1">
           <div
             ref={listRef}

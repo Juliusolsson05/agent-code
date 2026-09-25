@@ -142,7 +142,7 @@ export function ComposerInput({
       ) : null}
 
       {promptDelivery.kind === 'uncertain' ? (
-        <div className="mb-2 rounded-slab border border-warning/50 bg-warning/10 p-2 text-[11px] text-ink">
+        <div className="mb-2 rounded-slab border border-warning-border bg-warning-soft p-2 text-[11px] text-ink">
           {/* Two different truths behind one failure code. enterWritten=false
               means main never pressed Enter, so the prompt is provably NOT
               with Claude — it is stranded, unsubmitted, in the agent's own

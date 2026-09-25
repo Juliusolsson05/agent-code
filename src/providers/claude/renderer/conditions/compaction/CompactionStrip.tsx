@@ -20,7 +20,7 @@ export function CompactionStrip({
     <div
       className={`flex-shrink-0 border-t px-5 py-2 font-code text-[12px] leading-[1.6] ${
         isError
-          ? 'text-danger border-danger/30 bg-danger/8'
+          ? 'text-danger border-danger-border bg-danger-soft'
           : 'text-ink border-border bg-surface'
       }`}
     >

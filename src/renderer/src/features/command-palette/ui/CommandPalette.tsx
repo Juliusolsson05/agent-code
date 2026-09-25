@@ -1986,7 +1986,7 @@ function OpenCommandPalette({
                 {aiWorkspaceError ? (
                   <div
                     role="alert"
-                    className="rounded-slab mx-2 my-1 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                    className="rounded-slab mx-2 my-1 border border-danger-border bg-danger-soft px-2 py-2 text-[11px] text-danger"
                   >
                     {aiWorkspaceError}
                   </div>
@@ -2056,7 +2056,7 @@ function OpenCommandPalette({
                 {aiWorkspaceError ? (
                   <div
                     role="alert"
-                    className="rounded-slab mb-3 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                    className="rounded-slab mb-3 border border-danger-border bg-danger-soft px-2 py-2 text-[11px] text-danger"
                   >
                     {aiWorkspaceError}
                   </div>

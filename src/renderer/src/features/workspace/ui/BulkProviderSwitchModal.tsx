@@ -685,7 +685,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           )}
 
           {exhaustedProviders.length > 0 && (
-            <div className="rounded-slab mt-3 border border-danger/50 bg-danger/10 px-3 py-2">
+            <div className="rounded-slab mt-3 border border-danger-border bg-danger-soft px-3 py-2">
               {exhaustedProviders.map(item => (
                 // One line per exhausted provider, rendered as a single text
                 // node so the whole claim ("who, how full, until when") is one
@@ -786,7 +786,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             </label>
 
             {sourceConfirmArmed && compactOnSource && (
-              <div className="rounded-slab border border-warning/50 bg-warning/10 px-3 py-2 text-[11px] text-ink">
+              <div className="rounded-slab border border-warning-border bg-warning-soft px-3 py-2 text-[11px] text-ink">
                 {`Compact ${pluralAgents(matchingRows.length)} on ${sourceLabel} first — this rewrites their live history and uses ${sourceLabel} quota.`}
               </div>
             )}
