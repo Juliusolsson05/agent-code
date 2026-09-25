@@ -642,6 +642,12 @@ describe('GoalLoopService', () => {
     // start() persists immediately; without a preserved copy that write must
     // not happen, or the unreadable loop (and here every loop) is gone.
     expect(await readFile(file, 'utf8')).toBe(source)
+    // Once the copy can be made, the next write makes it and persists: the
+    // service reads only at start, so a refusal must not last the process.
+    await rm(join(directory, `goal-loop.json.invalid-${digest}.json`), { recursive: true })
+    await store.write({})
+    expect(await readFile(join(directory, `goal-loop.json.invalid-${digest}.json`), 'utf8')).toBe(source)
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, loops: {} })
   })
 
   it('keeps a malformed file in place when its quarantine name cannot take it', async () => {

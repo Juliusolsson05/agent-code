@@ -83,6 +83,10 @@ export class GoalLoopStore {
    * only copy.
    */
   private writesRefused: string | null = null
+  /** How to discharge the refusal: the owed copy or move, retried before each
+   *  write. The service reads only once, at start, so "until a read
+   *  succeeds" alone would disable persistence for the whole process. */
+  private owedPreservation: (() => Promise<void>) | null = null
 
   read(): Promise<Record<string, GoalLoopState>> {
     return this.serialize(async () => {
@@ -119,6 +123,7 @@ export class GoalLoopStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           this.writesRefused = null
+          this.owedPreservation = null
           return {}
         }
         // WHY move it aside instead of just throwing, as TldrStore does:
@@ -130,6 +135,7 @@ export class GoalLoopStore {
         // writes are refused instead, so that rewrite cannot replace it.
         await rename(this.file, this.quarantineFile).catch(moveError => {
           this.writesRefused = `the unreadable file could not be moved to ${this.quarantineFile} (${String(moveError)})`
+          this.owedPreservation = () => rename(this.file, this.quarantineFile)
         })
         throw error
       }
@@ -144,18 +150,29 @@ export class GoalLoopStore {
           copy = await preserveBytes(`${this.file}.invalid`, source)
         } catch (copyError) {
           this.writesRefused = `${setAside} unreadable loop(s) could not be preserved (${String(copyError)})`
+          this.owedPreservation = async () => { await preserveBytes(`${this.file}.invalid`, source) }
           throw new Error(`Goal Loop storage has unreadable loops that could not be preserved; writes are refused until it is fixed: ${String(copyError)}`)
         }
         console.warn(`[goal-loop] set aside ${setAside} unreadable loop(s) (${setAsideIds.join(', ')}); original preserved at ${copy}`)
       }
       this.writesRefused = null
+      this.owedPreservation = null
       return valid
     })
   }
 
   async write(states: Record<string, GoalLoopState>): Promise<void> {
     return this.serialize(async () => {
-      if (this.writesRefused) throw new Error(`Goal Loop storage is protected: ${this.writesRefused}`)
+      if (this.writesRefused) {
+        try {
+          await this.owedPreservation?.()
+          if (!this.owedPreservation) throw new Error('nothing to retry')
+        } catch {
+          throw new Error(`Goal Loop storage is protected: ${this.writesRefused}`)
+        }
+        this.writesRefused = null
+        this.owedPreservation = null
+      }
       const temporary = `${this.file}.${randomUUID()}.tmp`
       await mkdir(dirname(this.file), { recursive: true })
       try {
