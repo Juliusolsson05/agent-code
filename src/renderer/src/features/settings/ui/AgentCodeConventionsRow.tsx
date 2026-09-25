@@ -197,12 +197,12 @@ export function AgentCodeConventionsRow() {
         <div className="rounded-slab flex flex-col gap-2 border border-danger px-2 py-2 text-[10px] text-danger">
           <span>{snapshot.recovery.message}</span>
           <div className="flex gap-2">
-            <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
+            <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
               Reveal state file
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="rounded-control border border-danger px-2 py-1"
+              variant="destructive-outline" size="xs"
               onClick={async () => {
                 if (!(await requestConfirm({
                   title: 'Reset all unreadable Agent Code-managed skill state?',
@@ -214,7 +214,7 @@ export function AgentCodeConventionsRow() {
               }}
             >
               Reset state
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}

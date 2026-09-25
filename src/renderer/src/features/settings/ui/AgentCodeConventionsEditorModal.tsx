@@ -264,9 +264,9 @@ export function AgentCodeConventionsEditorModal({
           )}
 
           <div className="flex flex-wrap gap-2">
-            <button
+            <Button
               type="button"
-              className="rounded-control border border-control-border px-2 py-1 text-[11px]"
+              variant="outline" size="xs"
               onClick={async () => {
                 if (markdown.trim() && !(await requestConfirm({
                   title: 'Replace the current draft with the starter conventions?',
@@ -279,7 +279,7 @@ export function AgentCodeConventionsEditorModal({
               }}
             >
               Insert starter
-            </button>
+            </Button>
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void showPreview()}>
               Preview Generated Skill
             </Button>
@@ -301,9 +301,9 @@ export function AgentCodeConventionsEditorModal({
                     <>
                       <Button type="button" variant="outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}>Reveal</Button>
                       {target.canOverwrite && target.conflictFingerprint ? (
-                        <button
+                        <Button
                           type="button"
-                          className="rounded-control border border-danger px-1.5 py-0.5 text-danger"
+                          variant="destructive-outline" size="xs"
                           onClick={async () => {
                             if (!(await requestConfirm({
                               title: `Replace the reviewed file at ${withVisibleControls(target.displayPath)}?`,
@@ -319,7 +319,7 @@ export function AgentCodeConventionsEditorModal({
                           }}
                         >
                           Replace reviewed file
-                        </button>
+                        </Button>
                       ) : null}
                       {target.conflictFingerprint ? (
                         <label className="flex items-center gap-1 text-danger">

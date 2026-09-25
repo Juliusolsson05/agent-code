@@ -434,22 +434,22 @@ function AgentCodeCustomSkillsModal({
                   <span>A newer managed-skill revision exists. Choose how to continue.</span>
                   {draft.skillId && current.skills.some(skill => skill.id === draft.skillId) ? (
                     <>
-                      <button type="button" className="rounded-control border border-warning px-2 py-1" onClick={() => {
+                      <Button type="button" variant="outline" size="xs" onClick={() => {
                         const latest = current.skills.find(skill => skill.id === draft.skillId)
                         if (latest) edit(draftFromSkill(latest), current.revision)
-                      }}>Reload saved skill</button>
-                      <button type="button" className="rounded-control border border-warning px-2 py-1" onClick={() => {
+                      }}>Reload saved skill</Button>
+                      <Button type="button" variant="outline" size="xs" onClick={() => {
                         setBaseRevision(current.revision)
                         setRevisionConflict(false)
                         setError(null)
-                      }}>Keep my draft</button>
+                      }}>Keep my draft</Button>
                     </>
                   ) : (
-                    <button type="button" className="rounded-control border border-warning px-2 py-1" onClick={() => {
+                    <Button type="button" variant="outline" size="xs" onClick={() => {
                       setBaseRevision(current.revision)
                       setRevisionConflict(false)
                       setError(null)
-                    }}>Retry with latest revision</button>
+                    }}>Retry with latest revision</Button>
                   )}
                 </div>
               ) : null}
@@ -486,7 +486,7 @@ function AgentCodeCustomSkillsModal({
                             <Button aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} variant="outline" size="sm" disabled={busy || Boolean(skill.managedBy) || skill.health === 'recovery-required' || skill.health === 'unsupported'} onClick={() => void toggle(skill)}>
                               {skill.enabled ? 'Disable' : 'Enable'}
                             </Button>
-                            <button type="button" aria-label={`Delete ${skill.name}`} disabled={busy || Boolean(skill.managedBy)} className="rounded-control border border-danger px-2 py-1 text-[10px] text-danger disabled:opacity-50" onClick={() => void remove(skill)}>Delete</button>
+                            <Button type="button" aria-label={`Delete ${skill.name}`} disabled={busy || Boolean(skill.managedBy)} variant="destructive-outline" size="xs" onClick={() => void remove(skill)}>Delete</Button>
                           </div>
                         </div>
                         {skill.targets.length ? (
@@ -495,9 +495,9 @@ function AgentCodeCustomSkillsModal({
                         {abandon.length > 0 ? (
                           <div className="rounded-slab flex items-center justify-between gap-2 border border-danger p-2 text-[10px] text-danger">
                             <span>Modified or historical files were preserved.</span>
-                            <button type="button" aria-label={`Leave files and forget ${skill.name}`} className="rounded-control border border-danger px-2 py-1" onClick={() => void remove(skill, abandon)}>
+                            <Button type="button" aria-label={`Leave files and forget ${skill.name}`} variant="destructive-outline" size="xs" onClick={() => void remove(skill, abandon)}>
                               Leave files and forget skill
-                            </button>
+                            </Button>
                           </div>
                         ) : null}
                       </div>
@@ -517,8 +517,8 @@ function AgentCodeCustomSkillsModal({
             <div className="rounded-slab flex flex-col gap-2 border border-danger p-2 text-[10px] text-danger">
               <span>{current.recovery.message}</span>
               <div className="flex gap-2">
-                <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal state file</button>
-                <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={async () => {
+                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal state file</Button>
+                <Button type="button" variant="destructive-outline" size="xs" onClick={async () => {
                   if (!(await requestConfirm({
                     title: 'Reset all unreadable Agent Code-managed skill state?',
                     description: 'Existing provider copies will be left untouched.',
@@ -526,7 +526,7 @@ function AgentCodeCustomSkillsModal({
                     tone: 'danger',
                   }))) return
                   void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult)
-                }}>Reset state</button>
+                }}>Reset state</Button>
               </div>
             </div>
           ) : null}
@@ -565,10 +565,10 @@ function TargetList({ skill, targets, onError }: {
               is about; it has no path (#1037 review). */}
           <span className="min-w-0 flex-1 truncate text-muted">{target.state === 'unsupported' ? target.providers.join(' + ') : withVisibleControls(target.displayPath || target.id)} · {target.state}</span>
           {target.state === 'installed' || target.state === 'conflict' || target.state === 'retired' ? (
-            <button
+            <Button
               type="button"
               aria-label={`Reveal ${skill.name} at ${target.displayPath || target.id}`}
-              className="rounded-control border border-control-border px-1.5 py-0.5"
+              variant="outline" size="xs"
               onClick={() => {
                 void window.api.revealAgentCodeCustomSkillTarget(skill.id, target.id)
                   .then(result => onError(result.ok
@@ -578,7 +578,7 @@ function TargetList({ skill, targets, onError }: {
                     ? cause.message
                     : 'Could not reveal the custom skill target.'))
               }}
-            >Reveal</button>
+            >Reveal</Button>
           ) : null}
         </div>
       ))}

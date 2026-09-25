@@ -1,4 +1,5 @@
 import { THEME_MODES } from '@renderer/app-state/settings/types'
+import { Button } from '@renderer/components/ui/button'
 import type { Settings, ThemeModeValue } from '@renderer/app-state/settings/types'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -91,20 +92,20 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
             custom
           </span>
           <span className="hidden flex-shrink-0 items-center gap-1 group-hover:flex group-focus-within:flex">
-            <button
+            <Button
               type="button"
               onClick={() => onEdit(theme)}
-              className="rounded-control border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
+              variant="outline" size="xs"
             >
               Edit
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => onDelete(theme)}
-              className="rounded-control border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger"
+              variant="destructive-outline" size="xs"
             >
               Delete
-            </button>
+            </Button>
           </span>
         </div>
       ))}

@@ -2129,26 +2129,26 @@ function OpenCommandPalette({
                       <div className="min-w-0 flex-1 text-[12px] truncate">{withVisibleControls(template.title)}</div>
                       {template.scope === 'custom' && (
                         <div className="flex flex-shrink-0 items-center gap-1">
-                          <button
+                          <Button
                             type="button"
-                            className="rounded-control border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
+                            variant="outline" size="xs"
                             onClick={e => {
                               e.stopPropagation()
                               enterEditPromptTemplateMode(template)
                             }}
                           >
                             Edit
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="rounded-control border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger hover:text-danger"
+                            variant="destructive-outline" size="xs"
                             onClick={e => {
                               e.stopPropagation()
                               deletePromptTemplate(template)
                             }}
                           >
                             Delete
-                          </button>
+                          </Button>
                         </div>
                       )}
                       <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">

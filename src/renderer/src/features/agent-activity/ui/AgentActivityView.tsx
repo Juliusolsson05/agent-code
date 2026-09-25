@@ -522,7 +522,7 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
         </div>
       </div>
       <div className="flex flex-shrink-0 gap-1" onClick={event => event.stopPropagation()}>
-        <button
+        <Button
           type="button"
           tabIndex={-1}
           onMouseDown={event => event.preventDefault()}
@@ -532,10 +532,10 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
           // view, and two same-named buttons that do different things is the
           // ambiguity a screen reader user cannot see past.
           aria-label={`Close ${row.name}`}
-          className="rounded-control border border-danger-border px-2 py-0.5 text-[11px] text-danger hover:bg-danger-soft"
+          variant="destructive-outline" size="xs"
         >
           Close
-        </button>
+        </Button>
       </div>
     </div>
   )
