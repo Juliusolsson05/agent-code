@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { GoalLoopState } from '@shared/types/goalLoop.js'
 import { GoalLoopStore } from './GoalLoopStore.js'
@@ -12,6 +13,12 @@ async function makeStore(): Promise<{ store: GoalLoopStore; file: string }> {
   directories.push(directory)
   const file = join(directory, 'goal-loop.json')
   return { store: new GoalLoopStore(file), file }
+}
+// Set-aside copies are digest-named beside the file (never the whole-file
+// `.corrupt` name, which a copy must not replace).
+async function preservedCopies(file: string): Promise<string[]> {
+  const names = (await readdir(dirname(file))).filter(name => name.startsWith('goal-loop.json.invalid-'))
+  return Promise.all(names.map(name => readFile(join(dirname(file), name), 'utf8')))
 }
 const loop = (overrides: Partial<GoalLoopState> = {}): GoalLoopState => ({
   sessionId: 's1', goal: 'Ship it.', loopPrompt: 'Keep shipping.', phase: 'active',
@@ -44,9 +51,96 @@ describe('GoalLoopStore', () => {
     expect(await readFile(store.quarantineFile, 'utf8')).toBe('{broken')
     expect((await store.read())['s1']).toEqual(loop())
   })
-  it('rejects structurally invalid entries', async () => {
+  it('sets a structurally invalid entry aside instead of reading it', async () => {
     const { store, file } = await makeStore()
-    await writeFile(file, JSON.stringify({ version: 1, loops: { s1: { phase: 'zooming' } } }))
-    await expect(store.read()).rejects.toThrow()
+    const source = JSON.stringify({ version: 1, loops: { s1: { phase: 'zooming' } } })
+    await writeFile(file, source)
+    expect(await store.read()).toEqual({})
+    expect(await preservedCopies(file)).toEqual([source])
+  })
+})
+
+// #1248: one loop this build cannot read (a newer build's phase, then a
+// downgrade) used to move the WHOLE file aside; the service started empty and
+// its next write made every other loop's loss permanent. Real loops from the
+// owner's goal-loop.json (testing/fixtures/goal-loop, prompts redacted).
+describe('one unreadable loop in a real store (#1248)', () => {
+  const real = async () => (JSON.parse(await readFile(join(import.meta.dirname,
+    '../../../testing/fixtures/goal-loop/real-loops-2026-09-25.json'), 'utf8')) as {
+    document: { version: 1; loops: Record<string, GoalLoopState> }
+  }).document
+
+  it('keeps every other loop, preserves the original bytes, and survives the next write', async () => {
+    const { store, file } = await makeStore()
+    const document = await real()
+    const [newer, kept] = Object.keys(document.loops)
+    ;(document.loops[newer!] as { phase: string }).phase = 'waiting-on-review'
+    const source = JSON.stringify(document)
+    await writeFile(file, source)
+
+    const loops = await store.read()
+    expect(Object.keys(loops)).toEqual([kept])
+    expect(loops[kept!]).toEqual(document.loops[kept!])
+    // Copied, not moved: the file still holds the loops that were read.
+    expect(await preservedCopies(file)).toEqual([source])
+    expect(await readFile(file, 'utf8')).toBe(source)
+
+    await store.write(loops)
+    expect(Object.keys(await new GoalLoopStore(file).read())).toEqual([kept])
+    expect(await preservedCopies(file)).toEqual([source])
+  })
+
+  it('counts only readable loops against the size limit', async () => {
+    // 200 readable loops plus one this build cannot read: the unreadable one
+    // must not push a trustworthy document over the limit and wipe it.
+    const { store, file } = await makeStore()
+    const loops: Record<string, unknown> = {}
+    for (let index = 0; index < 200; index++) loops[`s${index}`] = loop({ sessionId: `s${index}`, phase: 'paused', pauseReason: 'user' })
+    loops.newer = { ...loop({ sessionId: 'newer' }), phase: 'waiting-on-review' }
+    await writeFile(file, JSON.stringify({ version: 1, loops }))
+    expect(Object.keys(await store.read())).toHaveLength(200)
+  })
+
+  it('does not trust a partial copy a crash left under the final name', async () => {
+    const { store, file } = await makeStore()
+    const source = JSON.stringify({ version: 1, loops: { s1: loop(), newer: { ...loop({ sessionId: 'newer' }), phase: 'waiting-on-review' } } })
+    await writeFile(file, source)
+    const digest = createHash('sha256').update(source).digest('hex').slice(0, 16)
+    await writeFile(join(dirname(file), `goal-loop.json.invalid-${digest}.json`), '')
+    expect(Object.keys(await store.read())).toEqual(['s1'])
+    expect(await preservedCopies(file)).toContain(source)
+  })
+
+  // Review B: only `phase` was ever shown to be rejected. Each field's check
+  // matters on its own (a garbage budget or timestamp would reach the cap gate
+  // and the strip), so each is pinned: that loop is set aside, the other kept.
+  it.each([
+    ['pauseReason', { pauseReason: 'naptime' }],
+    ['endReason', { endReason: 'shrug' }],
+    ['sessionId', { sessionId: '' }],
+    ['goal', { goal: 5 }],
+    ['loopPrompt', { loopPrompt: null }],
+    ['completionSummary', { completionSummary: 7 }],
+    ['maxContinuations', { maxContinuations: 0 }],
+    ['continuationsDelivered', { continuationsDelivered: -1 }],
+    ['consecutiveDeliveryFailures', { consecutiveDeliveryFailures: 1.5 }],
+    ['startedAt', { startedAt: 'yesterday' }],
+    ['updatedAt', { updatedAt: 'soon' }],
+  ])('sets aside a loop whose %s is invalid', async (_field, damage) => {
+    const { store, file } = await makeStore()
+    await writeFile(file, JSON.stringify({ version: 1, loops: { good: loop({ sessionId: 'good' }), bad: { ...loop({ sessionId: 'bad' }), ...damage } } }))
+    expect(Object.keys(await store.read())).toEqual(['good'])
+  })
+
+  it.each([
+    ['a different version', { version: 2, loops: {} }],
+    ['loops as a list', { version: 1, loops: [] }],
+    ['loops as a string', { version: 1, loops: 'x' }],
+  ])('moves a malformed container aside: %s', async (_label, document) => {
+    const { store, file } = await makeStore()
+    const source = JSON.stringify(document)
+    await writeFile(file, source)
+    await expect(store.read()).rejects.toThrow('storage is invalid')
+    expect(await readFile(store.quarantineFile, 'utf8')).toBe(source)
   })
 })
