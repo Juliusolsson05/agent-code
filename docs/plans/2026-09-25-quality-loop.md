@@ -536,6 +536,13 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 (10:05) — **Merged claude-code-headless#62** (`2ce428cf`). #1284 now points at that merge commit.
+  - **Round 2 is complete and its findings fixed** for #1284, #1286, #1287, #1297, #1298, #1300 and #1301. All of them, plus #1257, #1258, #1263, #1264 and #1266, now only wait on CI: 13 PRs are queued on congested runners.
+  - **New PR #1308** fixes #1272 (the shortcut recorder releases on outside click or blur). It has 3 reviewers.
+  - **#1299 corrected (steering q29):** 230,747 non-zero audio samples came after `deepgram:close`, so a silence stop alone is not enough. "Stop when the provider stream closes" is now the first proposal. The defaults are an owner call.
+  - **#1301 design changed (q29):** past the budget, events go into per-minute summaries instead of a single suppression marker. Replaying the 1.2 GB file gives 17.6 MB, and the 26 h post-close tail stays visible.
+  - **Watchdog:** the goal loop is active (6 of 200). The keyboard loop is done and waiting on the owner (#1221). The steering reviewer is active.
+
 - 2026-09-25 (09:35) — **Merged #1265** (`9bb035c2`, closes #1243).
   - **All Stage 3 hunts are done.** C7 filed #1302–#1306, all P3.
   - **New P1 #1299:** dictation kept the mic open 32.8 h (Deepgram streamed for 6.8 h). There is no max duration and no silence stop. The defaults are an owner call.
