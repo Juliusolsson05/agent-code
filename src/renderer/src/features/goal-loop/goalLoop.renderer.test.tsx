@@ -76,6 +76,52 @@ describe('GoalLoopPane', () => {
   })
 })
 
+describe('GoalLoopPane control focus (ledger G-41)', () => {
+  // Pause becomes Resume only once MAIN reports the new phase, and that swap
+  // unmounted the focused button, so focus fell to <body>. The phase change
+  // is driven here the way production drives it: the change ping, then a
+  // re-read.
+  // Restore the default read even when a test fails midway, so one failure
+  // cannot leave the next test starting on a paused loop.
+  afterEach(() => {
+    api.readGoalLoops.mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, loop()])))
+  })
+  const pingThenRead = async (next: GoalLoopState) => {
+    api.readGoalLoops.mockResolvedValue({ s1: next })
+    const listener = api.onGoalLoopChanged.mock.calls.at(-1)![0]
+    listener()
+  }
+
+  it('hands focus from the overlay\'s Pause to its Resume when main reports paused', async () => {
+    toggleGoalLoop()
+    render(<GoalLoopPane sessionId="s1" />)
+    // The overlay first shows "No goal loop" until the read resolves, and the
+    // loop's overlay is a different node, so query afresh each time.
+    const inOverlay = (name: string) => screen.queryAllByRole('button', { name }).find(el => el.closest('[data-goal-loop-overlay]'))
+    await waitFor(() => expect(inOverlay('Pause')).toBeTruthy())
+    const pause = inOverlay('Pause')!
+    pause.focus()
+    pause.click()
+    await pingThenRead(loop({ phase: 'paused', pauseReason: 'user' }))
+    await waitFor(() => expect(inOverlay('Resume')).toBeTruthy())
+    expect(document.activeElement).toBe(inOverlay('Resume'))
+  })
+
+  it('does not take focus back if the user moved on before main answered', async () => {
+    render(<GoalLoopPane sessionId="s1" />)
+    const pause = await screen.findByRole('button', { name: 'Pause' })
+    pause.focus()
+    pause.click()
+    const elsewhere = document.createElement('textarea')
+    document.body.appendChild(elsewhere)
+    elsewhere.focus()
+    await pingThenRead(loop({ phase: 'paused', pauseReason: 'user' }))
+    await screen.findByRole('button', { name: 'Resume' })
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+  })
+})
+
 describe('GoalLoopPane interaction ownership (#1004)', () => {
   // The strip is passive status chrome, not a blocking surface. The keyboard
   // router bails on every chord while ANY element claims app interaction

@@ -22,10 +22,22 @@ import { useLayoutEffect, useRef } from 'react'
  * a long output puts "collapse" at its end, and following focus there would
  * throw the reader to the bottom of what they just opened.
  *
+ * The swap may be ASYNC. The goal-loop strip's Pause becomes Resume only when
+ * main reports the new phase back. So the carry happens only if focus is
+ * still unowned (<body>) when the swap lands. If the user moved on in the
+ * meantime, their new focus wins. For a synchronous swap the pressed control
+ * has just been removed, so focus is always unowned at that point.
+ *
+ * `counterpartRef` may point at a CONTAINER when the next control depends on
+ * the new state (the goal-loop strip's controls). Its first enabled button
+ * or tab stop then takes focus.
+ *
  * A layout effect, not a passive one: focus lands before paint, so there is
  * no frame where <body> owns focus and a document-level router (type-to-
  * focus) could claim the next key.
  */
+const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 export function useSwapFocus<T extends HTMLElement = HTMLButtonElement>(swapKey: unknown) {
   const counterpartRef = useRef<T>(null)
   const pending = useRef<FocusOptions | null>(null)
@@ -38,7 +50,12 @@ export function useSwapFocus<T extends HTMLElement = HTMLButtonElement>(swapKey:
     const options = pending.current
     if (!options) return
     pending.current = null
-    counterpartRef.current?.focus(options)
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    const el = counterpartRef.current
+    if (!el) return
+    const target = el.matches(FOCUSABLE) ? el : el.querySelector<HTMLElement>(FOCUSABLE)
+    target?.focus(options)
   }, [swapKey])
 
   return { counterpartRef, beforeSwap }

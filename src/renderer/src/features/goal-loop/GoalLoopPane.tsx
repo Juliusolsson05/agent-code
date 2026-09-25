@@ -1,12 +1,13 @@
 import { Button } from '@renderer/components/ui/button'
 import { Kbd } from '@renderer/components/ui/kbd'
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { GOAL_LOOP_MAX_CONTINUATIONS_CEILING } from '@shared/types/goalLoop'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoop'
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { useSwapFocus } from '@renderer/lib/useSwapFocus'
 
 const PHASE_LABEL: Record<GoalLoopState['phase'], string> = {
   active: 'active', paused: 'paused', ended: 'ended',
@@ -133,6 +134,10 @@ export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string;
     read()
     return () => { current = false; unsubscribe() }
   }, [sessionId])
+  // One carrier per surface: the strip and the latched overlay each draw
+  // their own controls, and focus must stay in the surface that was pressed.
+  const stripFocus = useSwapFocus<HTMLSpanElement>(loop?.phase)
+  const overlayFocus = useSwapFocus<HTMLDivElement>(loop?.phase)
   if (!loop) {
     if (!latched) return null
     // #1021: the latch is app-wide and running the command is an explicit
@@ -159,7 +164,14 @@ export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string;
   // the button is not offered at all.
   const raisedCap = Math.min(loop.maxContinuations + 25, GOAL_LOOP_MAX_CONTINUATIONS_CEILING)
   const canRaise = loop.phase === 'paused' && loop.pauseReason === 'cap' && raisedCap > loop.maxContinuations
-  const control = (action: GoalLoopControlAction) => () => {
+  // Pause becomes Resume and Stop becomes Dismiss: each press unmounts the
+  // control that had focus, once main reports the new phase. Focus is
+  // carried to the pressed surface's first control for the new phase (G-41,
+  // useSwapFocus, declared above the early return so the hook order holds).
+  // Dismiss removes the strip itself, so there is nothing to carry to, and
+  // type-to-focus reclaims the pane.
+  const control = (action: GoalLoopControlAction, surface: 'strip' | 'overlay' = 'strip') => (event: ReactMouseEvent<HTMLButtonElement>) => {
+    ;(surface === 'strip' ? stripFocus : overlayFocus).beforeSwap(event.currentTarget)
     // A rejected control call changes nothing in main, and the next changed
     // ping re-reads the truth; the catch only keeps a rejection from becoming
     // an unhandled one in the renderer.
@@ -185,7 +197,7 @@ export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string;
     {/* The goal is agent-authored and sits beside Resume, Raise cap and Stop
         — the controls that grant it more turns (#1049 re-review). */}
     <span className="truncate">Goal loop · {PHASE_LABEL[loop.phase]} · {describe(loop)} · {withVisibleControls(loop.goal)}</span>
-    <span className="flex shrink-0 gap-2">
+    <span ref={stripFocus.counterpartRef} className="flex shrink-0 gap-2">
       {loop.phase === 'active' && <Button type="button" variant="ghost" size="xs" onClick={control('pause')}>Pause</Button>}
       {loop.phase === 'paused' && <Button type="button" variant="ghost" size="xs" onClick={control('resume')}>Resume</Button>}
       {canRaise && <Button type="button" variant="ghost" size="xs" onClick={control('raise-cap')}>Raise Cap</Button>}
@@ -205,12 +217,12 @@ export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string;
         <p className="max-w-xl whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">{withVisibleControls(loop.goal)}</p>
         <p className="text-xs">{describe(loop)} continuations · started {loop.startedAt}</p>
         {loop.completionSummary && <p className="max-w-xl text-xs">{loop.endReason}: {withVisibleControls(loop.completionSummary)}</p>}
-        <div className="flex gap-3 text-sm">
-          {loop.phase === 'active' && <Button type="button" variant="outline" size="sm" onClick={control('pause')}>Pause</Button>}
-          {loop.phase === 'paused' && <Button type="button" variant="outline" size="sm" onClick={control('resume')}>Resume</Button>}
-          {canRaise && <Button type="button" variant="outline" size="sm" onClick={control('raise-cap')}>Raise Cap to {raisedCap}</Button>}
-          {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="sm" onClick={control('stop')}>Stop</Button>}
-          {loop.phase === 'ended' && <Button type="button" variant="outline" size="sm" onClick={control('dismiss')}>Dismiss</Button>}
+        <div ref={overlayFocus.counterpartRef} className="flex gap-3 text-sm">
+          {loop.phase === 'active' && <Button type="button" variant="outline" size="sm" onClick={control('pause', 'overlay')}>Pause</Button>}
+          {loop.phase === 'paused' && <Button type="button" variant="outline" size="sm" onClick={control('resume', 'overlay')}>Resume</Button>}
+          {canRaise && <Button type="button" variant="outline" size="sm" onClick={control('raise-cap', 'overlay')}>Raise Cap to {raisedCap}</Button>}
+          {loop.phase !== 'ended' && <Button type="button" variant="destructive-outline" size="sm" onClick={control('stop', 'overlay')}>Stop</Button>}
+          {loop.phase === 'ended' && <Button type="button" variant="outline" size="sm" onClick={control('dismiss', 'overlay')}>Dismiss</Button>}
           {/* The latch is one app-wide flag and this overlay is opaque over
               the whole pane, so it needs an exit that does not depend on
               remembering the chord. Escape is deliberately NOT bound here: in
