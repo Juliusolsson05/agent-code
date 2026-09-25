@@ -7,8 +7,9 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import {
   exportDebugTraceFiles,
   recordHtmlTraceSnapshot,
-  recordScreenTailSnapshot,
 } from '@renderer/features/debug/renderTrace'
+import type { AgentScreenSnapshot } from '@shared/types/session'
+import type { ScreenTailSample } from '@shared/debug/screenTail'
 import {
   buildCommittedAssistantText,
   buildSemanticRenderUnits,
@@ -270,8 +271,10 @@ function buildRenderDiagnostics(runtime: SessionRuntime, kind: string): Record<s
 //     that should only be exported through main's exact pane/run projection.
 //
 //   screen / screenMarkdown / recentScreen / recentScreenMarkdown
-//     Tail-truncated to SCREEN_TAIL_LINES.
-function buildStateSnapshot(runtime: SessionRuntime): Record<string, unknown> {
+//     Tail-truncated to SCREEN_TAIL_LINES. Taken from MAIN's latest snapshot
+//     when available (#762): the renderer's copy only moves while a debug
+//     surface holds a screen lease, so it is usually stale or empty.
+export function buildStateSnapshot(runtime: SessionRuntime, mainScreen: AgentScreenSnapshot | null): Record<string, unknown> {
   const {
     entries: _entries,
     toolUseIndex: _toolUseIndex,
@@ -296,10 +299,10 @@ function buildStateSnapshot(runtime: SessionRuntime): Record<string, unknown> {
 
   return {
     ...rest,
-    screen: tailLines(screen, SCREEN_TAIL_LINES),
-    screenMarkdown: tailLines(screenMarkdown, SCREEN_TAIL_LINES),
-    recentScreen: tailLines(recentScreen, SCREEN_TAIL_LINES),
-    recentScreenMarkdown: tailLines(recentScreenMarkdown, SCREEN_TAIL_LINES),
+    screen: tailLines(mainScreen?.plain ?? screen, SCREEN_TAIL_LINES),
+    screenMarkdown: tailLines(mainScreen?.markdown ?? screenMarkdown, SCREEN_TAIL_LINES),
+    recentScreen: tailLines(mainScreen?.recent ?? recentScreen, SCREEN_TAIL_LINES),
+    recentScreenMarkdown: tailLines(mainScreen?.recentMarkdown ?? recentScreenMarkdown, SCREEN_TAIL_LINES),
     // Counts are preserved so you can see "there were 2145 entries
     // in the feed" without having to open the JSONL.
     _counts: {
@@ -488,7 +491,11 @@ export async function assembleAndSaveDebugBundle(params: {
 
   const html = capturePaneHtml(sessionId)
   recordHtmlTraceSnapshot(sessionId, html.raw, 'manual')
-  recordScreenTailSnapshot(sessionId, runtime.recentScreen)
+  // Main owns the screen now (#762): its latest snapshot and the tail history
+  // it records from every frame. A failed read degrades to the renderer's copy
+  // and no samples, never to a failed bundle.
+  const screenDebug: { screen: AgentScreenSnapshot | null; samples: ScreenTailSample[] } =
+    await window.api.getScreenDebug(sessionId).catch(() => ({ screen: null, samples: [] }))
 
   // Manual bundles include a bounded proxy tail because a human just
   // asked for a forensic snapshot. Autosave bundles intentionally skip
@@ -511,7 +518,7 @@ export async function assembleAndSaveDebugBundle(params: {
     },
     {
       name: FILE_NAMES.state,
-      content: JSON.stringify(buildStateSnapshot(runtime), null, 2),
+      content: JSON.stringify(buildStateSnapshot(runtime, screenDebug.screen), null, 2),
     },
     {
       name: FILE_NAMES.feedDebug,
@@ -542,7 +549,7 @@ export async function assembleAndSaveDebugBundle(params: {
     ...(proxySection?.sessionMeta
       ? [{ name: FILE_NAMES.proxySessionMeta, content: proxySection.sessionMeta }]
       : []),
-    ...exportDebugTraceFiles(sessionId),
+    ...exportDebugTraceFiles(sessionId, screenDebug.samples),
     ...(performanceSnapshot?.files ?? []),
   ]
 

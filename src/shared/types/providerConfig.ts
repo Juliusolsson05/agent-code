@@ -362,8 +362,8 @@ export type MainProviderConfig = {
    * The io bag deliberately passes the AgentSession plus a bound
    * write-with-liveness function rather than the SessionManager:
    * providers must not depend on the manager (dependency arrow), and
-   * the typed optionals they need (awaitReadyForPrompt /
-   * awaitPastePlaceholder) live on AgentSession since phase 2a.
+   * the typed optional they need (awaitReadyForPrompt) lives on
+   * AgentSession since phase 2a.
    */
   /**
    * Optional provider-owned history source, for providers whose durable
@@ -409,8 +409,8 @@ export type MainProviderConfig = {
    * The io bag deliberately passes the AgentSession plus a bound
    * write-with-liveness function rather than the SessionManager:
    * providers must not depend on the manager (dependency arrow), and
-   * the typed optionals they need (awaitReadyForPrompt /
-   * awaitPastePlaceholder) live on AgentSession since phase 2a.
+   * the typed optional they need (awaitReadyForPrompt) lives on
+   * AgentSession since phase 2a.
    */
   deliverPrompt: (io: PromptDeliveryIo) => Promise<PromptDeliveryResult>
 }

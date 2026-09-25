@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { expect, it, vi } from 'vitest'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { LspManager } from '@main/lspManager.js'
@@ -11,6 +12,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
 
 import { wireSessionForwarder } from './forwarder.js'
+import { screenInterest, screenTailHistory } from './screenInterest.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import { SessionFeedTap } from './sessionFeedTap.js'
 
@@ -98,6 +100,57 @@ it('broadcasts a managed-skill warning to every window, carrying domain names on
     manager.emit('managed-skills-unavailable', { sessionId: 'pane', skills: ['tldr', 'goal'] })
     expect(broadcastToWindows).toHaveBeenCalledWith('managed-skills:unavailable', { skills: ['tldr', 'goal'] })
   } finally {
+    manager.removeAllListeners()
+  }
+})
+
+it('forwards screen frames only to a leased session, and records every frame for debug bundles (#762)', () => {
+  // session:screen was 93% of recorded IPC bytes and nothing live reads it.
+  // An unleased session's frames stay in main; the tail history still sees
+  // them, because a debug bundle must not depend on a panel having been open.
+  const manager = new EventEmitter() as SessionManager & EventEmitter
+  manager.list = () => []
+  const sent: string[] = []
+  wire.receive = (channel, payload) => {
+    if (channel === 'session:screen') sent.push((payload as { plain: string }).plain)
+  }
+  const forwarder = wireSessionForwarder(manager, new EventEmitter() as LspManager)
+  // A real frame: the recorded Claude Code 2.1.278 screen from the #1113
+  // capture (idle, then with a composer draft). What the gate forwards is
+  // exactly what the provider painted.
+  const recorded = JSON.parse(readFileSync(
+    new URL('../../../testing/fixtures/image-absorption/wrapped-image-pill-2026-09-21.json', import.meta.url), 'utf8',
+  )) as { deliveries: { wrapped: { baseline: { screen: string }; after: { screen: string } } } }
+  const idle = recorded.deliveries.wrapped.baseline.screen
+  const drafted = recorded.deliveries.wrapped.after.screen
+  // `recent` is the wider window (Codex scrollback) and is what the history
+  // must record, so it differs from `plain` here to pin that (#1236 review C).
+  const frame = (screen: string) => ({ sessionId: 'pane', plain: screen.slice(-200), markdown: screen, recent: screen, recentMarkdown: screen })
+  try {
+    manager.emit('screen', frame(idle))
+    forwarder.flush()
+    expect(sent).toEqual([])
+
+    screenInterest.acquire(7, 'pane', 'doc')
+    manager.emit('screen', frame(drafted))
+    forwarder.flush()
+    expect(sent).toEqual([drafted.slice(-200)])
+
+    screenInterest.release(7, 'pane', 'doc')
+    manager.emit('screen', frame(idle))
+    forwarder.flush()
+    expect(sent).toEqual([drafted.slice(-200)])
+
+    // Every frame reached the tail history, forwarded or not (idle, drafted,
+    // idle again: the dedupe only collapses consecutive repeats).
+    expect(screenTailHistory.samples('pane')).toHaveLength(3)
+    expect(screenTailHistory.samples('pane')[1]!.content.length).toBeGreaterThan(drafted.slice(-200).trimEnd().length)
+    manager.emit('removed', { sessionId: 'pane' })
+    forwarder.flush()
+    expect(screenTailHistory.samples('pane')).toEqual([])
+  } finally {
+    screenInterest.dropOwner(7)
+    wire.receive = () => {}
     manager.removeAllListeners()
   }
 })

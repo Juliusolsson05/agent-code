@@ -127,6 +127,12 @@ vi.mock('@renderer/features/debug/devDebugConfig', () => ({
 
 describe('terminal dimension ownership across main-surface takeovers', () => {
   beforeEach(() => {
+    // The mounted DebugPanel takes a screen lease (#762); the bridge is the
+    // only window.api this suite's surfaces touch.
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { acquireScreenLease: vi.fn(async () => {}), releaseScreenLease: vi.fn(async () => {}) },
+    })
     harness.paneMounts = {}
     harness.paneUnmounts = {}
     const runtime = emptyRuntime()
@@ -184,6 +190,7 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
 
   afterEach(() => {
     cleanup()
+    Reflect.deleteProperty(window, 'api')
   })
 
   it('hands dimension ownership to the inline terminal while Settings hides the retained pane terminal', async () => {

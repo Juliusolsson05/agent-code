@@ -1,6 +1,6 @@
-// Claude paste-commit detection — THE ONE implementation, shared by both the
-// desktop composer (renderer: claudePaste.ts) and the remote/runtime delivery
-// path (main: providers/claude/runtime/promptDelivery.ts).
+// Claude paste-commit detection — THE ONE implementation, used by prompt
+// delivery in main (providers/claude/runtime/promptDelivery.ts), which every
+// composer, remote and runtime prompt goes through.
 //
 // WHY this module exists (the bug it kills):
 //   Claude's TUI buffers bracketed-paste bytes on a ~100ms accumulator; an
@@ -32,7 +32,7 @@
  * engages, so a plain `text + \r` in one write is safe and needs no
  * confirmation. Above it, OR with any newline, the paste route + this
  * detection is mandatory. Empirical lower bound; single source for every
- * `isPasteLike` check (previously duplicated in claudePaste.ts,
+ * `isPasteLike` check (previously duplicated in the renderer's paste helpers,
  * composerSubmit.ts, useComposerKeybinds.ts, and promptDelivery.ts).
  */
 export const CLAUDE_PASTE_THRESHOLD = 100

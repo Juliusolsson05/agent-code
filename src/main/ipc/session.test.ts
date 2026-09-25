@@ -12,7 +12,9 @@ vi.mock('electron', () => ({
     },
   },
   ipcRenderer: {
-    invoke: (channel: string, ...args: unknown[]) => harness.handlers.get(channel)!({}, ...args),
+    // Asynchronous like the real one: the preload's load-time document
+    // announcement runs at import, before any handler is registered.
+    invoke: async (channel: string, ...args: unknown[]) => harness.handlers.get(channel)?.({}, ...args),
   },
 }))
 
@@ -147,5 +149,85 @@ describe('session input transcript observations', () => {
     // The legacy raw paste journal remains unchanged; Stage 0 adds a safe
     // projection and does not replace evidence collectors during observation.
     expect(append).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('screen leases (#762)', () => {
+  it('seeds the current screen on acquire, and drops a renderer\'s leases only when its document is replaced or it dies', async () => {
+    const { screenInterest } = await import('@main/sessions/screenInterest.js')
+    const manager = new EventEmitter()
+    Object.assign(manager, {
+      getScreenSnapshot: () => ({ plain: 'now', markdown: 'now', recent: 'now', recentMarkdown: 'now' }),
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    harness.routed.mockClear()
+    const sender = Object.assign(new EventEmitter(), { id: 4242 })
+    const lease = harness.handlers.get('session:screen-lease')!
+
+    // An opening debug panel is right at once, even for an idle backend:
+    // the current screen goes down the ordinary session:screen path.
+    lease({ sender }, 'pane', 'doc-1')
+    expect(screenInterest.wants('pane')).toBe(true)
+    // The same aliased wire payload the recover seed sends (recent/markdown
+    // equal to plain/markdown are dropped on the wire, #746).
+    expect(harness.routed).toHaveBeenCalledWith('pane', 'session:screen', { sessionId: 'pane', plain: 'now', markdown: 'now' })
+
+    // Any navigation, including one the window blocks, leaves the page and
+    // its leases alone: only a new document's lease or death drops them.
+    sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    expect(screenInterest.wants('pane')).toBe(true)
+    // The release is the caller's own (another webContents cannot end it).
+    const release = harness.handlers.get('session:screen-release')!
+    release({ sender: { id: 1 } }, 'pane', 'doc-1')
+    expect(screenInterest.wants('pane')).toBe(true)
+    release({ sender }, 'pane', 'doc-1')
+    expect(screenInterest.wants('pane')).toBe(false)
+
+    // A real reload whose new page never opens a debug panel: its preload's
+    // load-time announcement alone retires the old page's leases, or the
+    // heaviest IPC stream would forward forever (steering q15).
+    const announce = harness.handlers.get('session:screen-document')!
+    lease({ sender }, 'old-page', 'doc-1')
+    announce({ sender }, 'doc-2')
+    expect(screenInterest.wants('old-page')).toBe(false)
+    // Re-announcing the live document (nothing reloaded) keeps its leases,
+    // and the dead page's late release cannot touch them.
+    lease({ sender }, 'pane', 'doc-2')
+    announce({ sender }, 'doc-2')
+    release({ sender }, 'pane', 'doc-1')
+    expect(screenInterest.wants('pane')).toBe(true)
+    sender.emit('destroyed')
+    expect(screenInterest.wants('pane')).toBe(false)
+  })
+
+  it('leases a session with no screen yet without sending an empty frame', async () => {
+    const manager = new EventEmitter()
+    Object.assign(manager, { getScreenSnapshot: () => null })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    harness.routed.mockClear()
+    harness.handlers.get('session:screen-lease')!({ sender: Object.assign(new EventEmitter(), { id: 77 }) }, 'fresh', 'doc')
+    expect(harness.routed).not.toHaveBeenCalledWith('fresh', 'session:screen', expect.anything())
+  })
+})
+
+describe('session:get-screen-debug (#762)', () => {
+  it('answers with main\'s latest raw screen and the recorded tail history', async () => {
+    const { screenTailHistory } = await import('@main/sessions/screenInterest.js')
+    const manager = new EventEmitter()
+    Object.assign(manager, {
+      getScreenSnapshot: () => ({ plain: 'latest', markdown: 'latest', recent: 'latest\nmore', recentMarkdown: 'latest\nmore' }),
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    screenTailHistory.record('debug-pane', 'first frame')
+    screenTailHistory.record('debug-pane', 'second frame')
+    try {
+      const answer = await harness.handlers.get('session:get-screen-debug')!({}, 'debug-pane') as {
+        screen: { recent: string } | null; samples: Array<{ content: string }>
+      }
+      expect(answer.screen?.recent).toBe('latest\nmore')
+      expect(answer.samples.map(sample => sample.content)).toEqual(['first frame', 'second frame'])
+    } finally {
+      screenTailHistory.forget('debug-pane')
+    }
   })
 })
