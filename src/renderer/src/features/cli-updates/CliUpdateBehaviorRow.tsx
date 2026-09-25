@@ -1,4 +1,5 @@
 import type { CliUpdateBehavior } from '@shared/types/cliUpdate.js'
+import { OptionCards } from '@renderer/components/ui/option-cards'
 import { setCliUpdateBehavior, useCliUpdateStore } from '@renderer/features/cli-updates/store'
 
 // Settings row for CLI auto-update behavior.
@@ -44,28 +45,8 @@ export function CliUpdateBehaviorRow() {
   // → updated etc.) should not re-render this row.
   const behavior = useCliUpdateStore(state => state.snapshot.behavior)
   return (
-    <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
-      {OPTIONS.map(option => {
-        const active = behavior === option.value
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => setCliUpdateBehavior(option.value)}
-            className={
-              'border px-3 py-2 text-left ' +
-              (active
-                ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
-                : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink')
-            }
-          >
-            <div className="text-[11px]">{option.label}</div>
-            <div className={`mt-1 text-[10px] ${active ? 'text-control-active-fg/80' : 'text-muted'}`}>
-              {option.description}
-            </div>
-          </button>
-        )
-      })}
-    </div>
+    // The shared radio cards (UI pass, G-17): this row announced NO state
+    // (plain buttons), was square, and had no focus ring.
+    <OptionCards label="CLI Update Behavior" value={behavior} options={OPTIONS} columns={3} onChange={setCliUpdateBehavior} />
   )
 }

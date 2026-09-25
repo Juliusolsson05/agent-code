@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { OptionCards } from '@renderer/components/ui/option-cards'
 import { Alert } from '@renderer/components/ui/alert'
 
 import type { UpdateChannel, UpdateChannelSnapshot } from '@shared/updates/updateChannel'
@@ -48,30 +49,9 @@ export function UpdateChannelRow() {
   if (!snapshot) return error ? <Alert>{error}</Alert> : <div role="status" className="text-[11px] text-muted">Loading…</div>
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
-        {OPTIONS.map(option => {
-          const active = snapshot.channel === option.value
-          return (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={active}
-              onClick={() => { if (!active) choose(option.value) }}
-              className={
-                'border px-3 py-2 text-left ' +
-                (active
-                  ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
-                  : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink')
-              }
-            >
-              <div className="text-[11px]">{option.label}</div>
-              <div className={`mt-1 text-[10px] ${active ? 'text-control-active-fg/80' : 'text-muted'}`}>
-                {option.description}
-              </div>
-            </button>
-          )
-        })}
-      </div>
+      {/* The shared radio cards (UI pass, G-17): these were aria-pressed,
+          square, and had no focus ring. */}
+      <OptionCards label="Update Channel" value={snapshot.channel} options={OPTIONS} columns={2} onChange={choose} />
       <div className="text-[10px] text-muted">
         {snapshot.packaged
           ? `This copy is Agent Code ${snapshot.version}. File → Check for Updates… uses this channel.`

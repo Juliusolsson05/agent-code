@@ -580,7 +580,7 @@ feeds the rows below G-1.
 | G-14 | Empty + loading states | 8 empty-state wordings/layouts; 23 "Loading…" (some italic); two spinners | done (`EmptyState` list/inline; Agent Activity, Conversations ×2, palette, Search in Files, Top consumers ×2, Skills sections, prompt-template sections; periods and curly quotes; 5 italic loading lines made plain `role=status`; 3 of them rendered errors as muted text and now use `Alert`) |
 | G-15 | Section labels | canonical `10px uppercase tracking-wider muted` ×58 vs `tracking-wide` ×20, `tracking-[Nem]` ×15 (5 values, incl. DropdownMenuLabel), none ×several; 4 local helpers | exported `SectionLabel` | done for the look (every uppercase label on 10px / tracking-wider / no weight, DropdownMenuLabel included; banner titles and segmented controls excluded on purpose); component adoption continues opportunistically |
 | G-16 | Explorer context menu | the only floating menu not on DropdownMenu; z-30 sits under z-40 overlays | `DropdownMenu` | done differently (layer fixed: z-[1150], the menu band. Not moved onto DropdownMenu: pointer/row-anchored opening would need a virtual anchor, and its keyboard behaviour is already complete from M4) |
-| G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | `OptionCard`, one `Checkbox` | todo |
+| G-17 | Settings option cards + checkboxes | 6 copies of the option-card recipe; 2 hand-drawn checkbox squares vs native | cards done (`OptionCards` radio group: SettingsList selects, Update Channel (was aria-pressed, square, no ring), CLI update behaviour (announced no state, square, no ring)). The Checkbox primitive and stat-tile sizes are still open |
 | G-18 | Close glyph/size | × at 12/14/16px; the word "close"; ✕ (fixed in G-2) | one icon-close button | done where it matters (panel headers share one close via PanelHeader; dialogs have one corner close; ✕ gone in G-2). Kept, as contextual: in-tab closes (TabBar, EditorTabs) and the image-thumbnail remove badge |
 | G-19 | Performance Monitor | Title Case buttons, raw selects, `text-warning-fg` misuse, table cell padding, stat sizes 20/18/15px (shared with Analytics, Dictation) | primitives + one stat size | done (Title Case already matches the ruling; selects in G-11; `text-warning-fg` misuse → `text-warning`; Operations table cells padded like Processes; empty table uses EmptyState). Stat-tile sizes deferred to G-17 |
 | G-20 | Dialog max-heights + corner-close padding | 13 max-heights; pr-12/16/20 for the same `× ⎋` | done (24 dialog caps → `max-h-[86vh]`; inner list heights (30–60vh) are per-list and kept; `showCloseButton` now reserves `pr-16` on the header in DialogContent, and five hand-set values were removed; QueueStrip and the extension host had no padding and now get it) |
@@ -866,6 +866,9 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-17 Settings choice cards:** Update Channel and CLI update behaviour
+  now look and behave exactly like Theme and the other choices (rounded,
+  focus ring, one Tab stop, arrows choose).
 - **G-20 Dialog heights:** long dialogs stop at the same height (86% of
   the window) instead of anywhere between 80 and 92%. Titles never run
   under the corner × ⎋ (Queued Prompt and extension windows could).

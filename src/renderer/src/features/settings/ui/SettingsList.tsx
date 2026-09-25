@@ -1,4 +1,5 @@
 import { useAppStore } from '@renderer/app-state/hooks'
+import { OptionCards } from '@renderer/components/ui/option-cards'
 import { McpServersRow } from '@renderer/features/mcp/ui/McpServersRow'
 import { SkillsGrid } from '@renderer/features/skills/ui/SkillsGrid'
 import { UpdateChannelRow } from '@renderer/features/settings/ui/UpdateChannelRow'
@@ -25,7 +26,6 @@ import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCod
 import { AgentCodeCustomSkillsRow } from '@renderer/features/settings/ui/AgentCodeCustomSkillsRow'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
-import { radioGroupKeyDown } from '@renderer/lib/radioGroupKeys'
 
 // Settings rows are full-width, left-aligned, and two-line-capable, so they
 // override Button's default size geometry. They do NOT override its colours —
@@ -192,50 +192,15 @@ function SettingRow({
           ) : null}
 
           {control.type === 'select' ? (
-            // A RADIO GROUP (plan N14, steering k9): one Tab stop (the chosen
-            // option); ←→↑↓ and Home/End move AND choose, the APG radio
-            // pattern (lib/radioGroupKeys has the full reasoning, including
-            // why the first "arrows only move" ruling was reversed). These
-            // settings apply live, so arrowing through Theme previews each
-            // theme, exactly as native radios do; every one is reversible.
-            <div
-              className="grid gap-1.5"
-              role="radiogroup"
-              aria-label={definition.title}
-              style={{
-                gridTemplateColumns: `repeat(${control.columns ?? 1}, minmax(0, 1fr))`,
-              }}
-              onKeyDown={radioGroupKeyDown}
-            >
-              {control.options.map((option, optionIndex) => {
-                const active = control.getValue(settings) === option.value
-                const anyActive = control.options.some(item => control.getValue(settings) === item.value)
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    // Roving: only the chosen option (or the first, if none
-                    // is) is a Tab stop, so a 6-option theme picker is one Tab.
-                    tabIndex={active || (!anyActive && optionIndex === 0) ? 0 : -1}
-                    onClick={() => void control.onSelect(context, option.value)}
-                    className={`rounded-control border px-3 py-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
-                      active
-                        ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
-                        : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
-                    }`}
-                  >
-                    <div className="text-[11px]">{option.label}</div>
-                    {option.description ? (
-                      <div className={`mt-1 text-[10px] ${active ? 'text-control-active-fg/80' : 'text-muted'}`}>
-                        {option.description}
-                      </div>
-                    ) : null}
-                  </button>
-                )
-              })}
-            </div>
+            // A RADIO GROUP of cards (plan N14, steering k9): the shared
+            // OptionCards (UI pass, G-17), which owns the keyboard contract.
+            <OptionCards
+              label={definition.title}
+              value={control.options.some(option => option.value === control.getValue(settings)) ? control.getValue(settings) : null}
+              options={control.options}
+              columns={control.columns ?? 1}
+              onChange={next => void control.onSelect(context, next)}
+            />
           ) : null}
 
           {control.type === 'hotkey' ? (
