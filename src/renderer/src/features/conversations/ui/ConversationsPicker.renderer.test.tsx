@@ -225,4 +225,23 @@ describe('ConversationsPicker', () => {
     fireEvent.click(await screen.findByText('Project context bootstrapping'))
     await waitFor(() => expect(ws.newTab).toHaveBeenCalledWith('/fixture/repo', 'ededdea8-06bf-4474-b945-b3a8f8ce0fe1', 'claude'))
   })
+
+  // Steering q27: an enablement refresh (the setup check finishing, a
+  // provider toggled in another window) rebuilt the `providers` filter array
+  // with identical contents, and the reset keyed on the array's identity threw
+  // the user's highlight back to row 0, so Enter resumed a conversation the
+  // user had not chosen.
+  it('keeps the highlight when an enablement refresh leaves the filter unchanged', async () => {
+    install()
+    const ws = workspace()
+    render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={vi.fn()} />)
+    await screen.findByText('break down this project')
+    await act(async () => {})
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    await waitFor(() => expect(document.querySelector('[data-conversation-index="1"]')).toHaveAttribute('aria-selected', 'true'))
+    const { useProviderEnablementStore } = await import('@renderer/features/providers/store')
+    await act(async () => { useProviderEnablementStore.setState({ enabledKinds: new Set(useProviderEnablementStore.getState().enabledKinds) }) })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    await waitFor(() => expect(ws.replaceSession).toHaveBeenCalledWith('/fixture/repo/.worktrees/extension-platform', expect.objectContaining({ kind: 'codex' })))
+  })
 })

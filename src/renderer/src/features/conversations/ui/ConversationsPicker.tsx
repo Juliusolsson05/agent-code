@@ -81,8 +81,29 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
   }, [open, focusSearch])
   // Reset the highlight when the list's head changes (a new query, filter or
   // scope), but not when loadMore appends rows below it.
+  //
+  // `providers` is keyed by CONTENT (steering q27, #1297): the enablement
+  // effect above rebuilds the array on every store update, and the old
+  // identity dependency threw the user's highlight back to row 0 whenever
+  // enablement refreshed (a setup check finishing, a toggle in another
+  // window), so Enter resumed a conversation the user had not chosen. Pinned
+  // by 'keeps the highlight when an enablement refresh…'.
+  //
+  // WHY during render and not in an effect: CI (#1266's run) showed the
+  // effect-based reset landing AFTER a key press. That ordering came from the
+  // test's act() batching; in the app, React flushes pending passive effects
+  // before it applies a discrete key event, and a MutationObserver probe
+  // found no painted frame with a stale highlight. Resetting while rendering
+  // (React's "adjust state when a prop changes") removes the dependence on
+  // that React internal: the first paint of a new head already highlights
+  // row 0.
   const headId = response?.rows[0]?.nativeId ?? null
-  useEffect(() => { setSelected(0) }, [headId, query, scope, providers, includeChildren])
+  const highlightResetKey = JSON.stringify([headId, query, scope, providers.join(','), includeChildren])
+  const [lastHighlightResetKey, setLastHighlightResetKey] = useState(highlightResetKey)
+  if (highlightResetKey !== lastHighlightResetKey) {
+    setLastHighlightResetKey(highlightResetKey)
+    setSelected(0)
+  }
   // An inline resume error names the row it was about; moving the highlight
   // makes it stale (#1262 review B).
   useEffect(() => { setResumeError(null) }, [selected])
