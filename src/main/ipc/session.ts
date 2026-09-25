@@ -263,20 +263,40 @@ export function registerSessionIpc(
       for (let i = 0; i < count; i += 1) manager.detachAgentPty(sessionId)
     }
   }
-  ipcMain.handle('session:agent-pty-attach', (evt, sessionId: string) => {
+  // Is this call from the renderer's CURRENT page? #1311 round 2 (review A):
+  // a reload can keep the webContents id, so the sender alone cannot tell
+  // the dead page's queued detach from the live page's; without the page
+  // document, that late detach took the new page's only reference and froze
+  // its terminal. The preload stamps every call with its document (minted
+  // once per load, the same token the screen leases carry). A renderer that
+  // has not announced yet adopts the caller's document, which its own
+  // announcement then confirms.
+  const isCurrentAgentPtyDocument = (owner: number, document: string): boolean => {
+    const current = agentPtyDocuments.get(owner)
+    if (current === undefined) {
+      agentPtyDocuments.set(owner, document)
+      return true
+    }
+    return current === document
+  }
+  ipcMain.handle('session:agent-pty-attach', (evt, sessionId: string, document: string) => {
+    const owner = watchLeaseOwner(evt.sender)
+    // A dead page's attach must take no reference: nothing would release it,
+    // because that page's release already ran.
+    if (!isCurrentAgentPtyDocument(owner, document)) return null
     const buffer = manager.attachAgentPty(sessionId)
     // null = no backend, and main took no reference; nothing to own.
     if (buffer === null) return buffer
-    const owner = watchLeaseOwner(evt.sender)
     const owned = agentPtyAttaches.get(owner) ?? new Map<string, number>()
     owned.set(sessionId, (owned.get(sessionId) ?? 0) + 1)
     agentPtyAttaches.set(owner, owned)
     return buffer
   })
 
-  ipcMain.handle('session:agent-pty-detach', (evt, sessionId: string) => {
-    // Only a reference this renderer holds. After a reload released them, a
-    // late detach from the old page must not take the NEW page's reference.
+  ipcMain.handle('session:agent-pty-detach', (evt, sessionId: string, document: string) => {
+    // Only a reference the CURRENT page holds. After a reload released the
+    // old page's references, its late detach must not take the new page's.
+    if (agentPtyDocuments.get(evt.sender.id) !== document) return
     const owned = agentPtyAttaches.get(evt.sender.id)
     const count = owned?.get(sessionId) ?? 0
     if (count === 0) return

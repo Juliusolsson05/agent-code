@@ -133,11 +133,13 @@ export const sessionApi = {
    */
   // Resolves null when no agent backend exists to attach to — see
   // SessionManager.attachAgentPty for why that is distinct from ''.
+  // Both carry this page's document (#1311 round 2): main must tell a
+  // reloaded page's late detach from the live page's.
   attachAgentPty: (sessionId: string): Promise<string | null> =>
-    ipcRenderer.invoke('session:agent-pty-attach', sessionId),
+    ipcRenderer.invoke('session:agent-pty-attach', sessionId, screenLeaseDocument),
 
   detachAgentPty: (sessionId: string): Promise<void> =>
-    ipcRenderer.invoke('session:agent-pty-detach', sessionId),
+    ipcRenderer.invoke('session:agent-pty-detach', sessionId, screenLeaseDocument),
 
   // #762: live `session:screen` frames are forwarded only while a lease is
   // held (debug surfaces). Acquire also sends the current screen as one
