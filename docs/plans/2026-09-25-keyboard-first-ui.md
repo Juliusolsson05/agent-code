@@ -431,7 +431,7 @@ entry when it lands.
 | S23 | ContentSearchOverlay | ↑↓ Enter; sr-only hint | as S22 | done |
 | S24 | ConfirmCloseDialog (editor) | autoFocus Save&Close | DialogActions-like 3-button footer with chips; K1 | done |
 | S25 | ConfirmDeleteDialog (editor) | autoFocus Cancel | DialogActions danger | done |
-| S26 | KeyboardShortcutsModal | search focus; no arrows; font-mono chips | Kbd chips; ↑↓ over results; Close ⎋ | todo |
+| S26 | KeyboardShortcutsModal | search focus; no arrows; font-mono chips | Kbd chips; ↑↓ over results; Close ⎋ | done |
 | S27 | ThemeEditorModal (SettingsPage) | name autoFocus; secondary buttons | DialogActions; T3 | todo |
 | S28 | AgentCodeConventionsEditorModal | window.confirm; raw buttons | ConfirmDialog; T8; ⌘↵ save chip | todo |
 | S29 | AgentCodeCustomSkillsModal | as S28 | as S28 | todo |
@@ -685,6 +685,12 @@ Sharp corners and one light theme.
 - **S25 Editor "Delete from disk?":** opens with the ring on `Cancel ⎋`; red
   `Delete` / `Delete & Discard` has no ↩ chip; the dirty-file list is 11px
   in a py-3 body (was 10px pb-3); 440 wide.
+- **S26 Keyboard Shortcuts (⌘⇧/):** chords are the standard chips (same
+  look as every button hint; were font-mono pills); rows are flat with a
+  faint divider (were bordered rounded plates); 12px rows; search is the
+  standard input (ring only on keyboard focus); ↓ from search moves into
+  the list (inset ring) where ↑↓ scroll, PgUp/PgDn page from the search box;
+  footer `Close ⎋`; 860 wide (was 720).
 
 ## Tasks
 
@@ -759,6 +765,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S26: Keyboard Shortcuts — Kbd chips (aria-visible: the chord
+  is the content), shared Input, focusable results region (↓ from search,
+  PgUp/PgDn page from search), flat rows, close-only footer. Confirm-red:
+  both new tests fail on the pre-change file.
 - 2026-09-25 S24/S25: editor confirms on DialogActions — Close: confirm =
   Save & Close (focused, Enter saves), Discard destructive-outline extra,
   every `disabled={saving}` guard carried (k3) plus Escape/outside guards

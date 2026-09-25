@@ -12,8 +12,12 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Input } from '@renderer/components/ui/input'
+import { Kbd } from '@renderer/components/ui/kbd'
 import type { CommandCategory } from '@renderer/features/command-palette/types'
 
 // ---------------------------------------------------------------------------
@@ -113,6 +117,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
   )
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
 
   // Reset the filter on every open. A stale query from last time would present
   // as "most of my shortcuts are missing", which is the one failure this
@@ -121,7 +126,8 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return
     setQuery('')
-    requestAnimationFrame(() => inputRef.current?.focus())
+    // (Initial focus: DialogContent's onOpenAutoFocus, not a rAF racing
+    // Radix's own mount focus.)
   }, [open])
 
   const rows = useMemo<ShortcutRow[]>(() => {
@@ -196,25 +202,55 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
-      <DialogContent className="flex max-h-[86vh] w-[min(720px,94vw)] flex-col overflow-hidden">
-        <div className="flex-shrink-0 border-b border-border px-4 py-3">
+      <DialogContent
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
+        onOpenAutoFocus={event => {
+          event.preventDefault()
+          inputRef.current?.focus()
+        }}
+      >
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle>Keyboard Shortcuts</DialogTitle>
           <DialogDescription>
             {rows.length} bound command{rows.length === 1 ? '' : 's'}. Change any of them in
             Settings → Keybindings.
           </DialogDescription>
-          <input
+          {/* The shared Input (plan T4): the hand-rolled field lit an accent
+              border on ANY focus, click included. */}
+          <Input
             ref={inputRef}
             value={query}
             onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => {
+              // A reference sheet is read by scrolling. PgUp/PgDn page the
+              // results from the search box (a single-line field has no use
+              // for them), ↓ steps INTO the results so ↑↓ scroll natively.
+              if (event.key === 'PageDown' || event.key === 'PageUp') {
+                event.preventDefault()
+                const region = resultsRef.current
+                region?.scrollBy?.({ top: (event.key === 'PageDown' ? 1 : -1) * (region.clientHeight - 24) })
+              } else if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                resultsRef.current?.focus()
+              }
+            }}
+            aria-label="Search shortcuts"
             placeholder="Search by command or chord…"
-            className="rounded-control mt-2 w-full border border-border bg-input-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+            className="mt-2 h-7"
           />
-        </div>
+        </DialogHeader>
 
-        <div className="flex flex-col gap-3 overflow-auto px-4 py-3">
+        {/* The results scroll region is a Tab stop (plan K4) so the keyboard
+            can scroll it; a focus ring shows when it has focus. */}
+        <div
+          ref={resultsRef}
+          tabIndex={0}
+          aria-label="Shortcuts"
+          className="flex min-h-0 flex-col gap-3 overflow-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        >
           {grouped.length === 0 ? (
-            <div className="py-6 text-center text-xs text-ink-dim">
+            <div className="py-6 text-center text-[12px] text-ink-dim">
               No shortcut matches “{query}”.
             </div>
           ) : (
@@ -224,9 +260,11 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
                   {CATEGORY_LABELS[group.category]}
                 </div>
                 {group.rows.map(row => (
+                  // Flat rows (plan T7 / "no cards"): these were bordered
+                  // rounded plates, one per shortcut.
                   <div
                     key={row.id}
-                    className="rounded-slab flex items-center gap-2 border border-border/40 px-2 py-1 text-xs"
+                    className="flex items-center gap-2 border-b border-border/40 px-1 py-1 text-[12px] last:border-b-0"
                   >
                     <div className="min-w-0 flex-1 truncate text-ink" title={row.id}>
                       {row.title}
@@ -240,13 +278,11 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
                       ) : null}
                     </div>
                     <div className="flex flex-shrink-0 items-center gap-1">
+                      {/* The shared Kbd (plan H1/T6): this was a font-mono span
+                          styled unlike every other chord in the app. Not
+                          aria-hidden — here the chord IS the content. */}
                       {row.bindings.map(binding => (
-                        <span
-                          key={binding}
-                          className="rounded-chip border border-border bg-surface px-1.5 py-0.5 font-mono text-ink"
-                        >
-                          {displayKeybinding(binding)}
-                        </span>
+                        <Kbd key={binding} binding={binding} aria-hidden={false} className="text-ink" />
                       ))}
                     </div>
                   </div>
@@ -255,6 +291,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
             ))
           )}
         </div>
+        <DialogActions onCancel={onClose} cancelLabel="Close" />
       </DialogContent>
     </Dialog>
   )
