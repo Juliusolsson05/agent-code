@@ -153,13 +153,13 @@ left alone. The owner delegated the decisions.
 | #1141 browser pocket spec | closed: already on main via #1149 | DONE |
 | #987 30-package Dependabot group | closed; replaced by #1195 and issues #1201–#1204 | DONE |
 | #575 July OpenCode rendering draft | closed; missing parts filed as #1205 | DONE |
-| #1195 (new) Dependabot unblock + security | reviewed MERGE-READY; `dependabot.yml` holds migration packages out of the group | waiting on CI |
-| #1111 feed-debug cursors | two review rounds, MERGE-READY; follow-up #1207 | waiting on CI |
-| #1106 release-readiness ledger | archived to `docs/archive/`, open items filed as #1197–#1199 | waiting on CI |
-| #1160 README "harness orchestrator" | conflict resolved keeping main's newer sections | waiting on CI |
-| #1108 LSP ordering | two Codex rounds done; auto-reopen withdrawn (#1208); Pi review pending | review + CI |
+| #1195 (new) Dependabot unblock + security | reviewed MERGE-READY; `dependabot.yml` holds migration packages out of the group | MERGED |
+| #1111 feed-debug cursors | two review rounds, MERGE-READY; follow-up #1207 | MERGED |
+| #1106 release-readiness ledger | archived to `docs/archive/`, open items filed as #1197–#1199 | MERGED |
+| #1160 README "harness orchestrator" | conflict resolved twice keeping main's newer sections | re-running the flaky #1171 job, then merge |
+| #1108 LSP ordering | 2 Codex + 1 Pi, two rounds; auto-reopen withdrawn (#1208); #922–#924 closed | MERGED |
 
-After merge: close #923 and #924 by hand (#1108 only names #922).
+Done: #923 and #924 closed by hand after #1108 merged.
 
 ---
 
@@ -505,6 +505,11 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-25 — #1219 round 1: both Codex reviewers found real false-confirmation
+  and baseline gaps in the strip-everything approach; replaced with a
+  wrap-tolerant pattern (inserted whitespace allowed, missing whitespace not),
+  3 new mutation-proven tests; round 2 running. Steering note 1 received:
+  keep §4 in step (done), leave dialog chrome to B18, move to C1/C2 P0–P1.
 - 2026-09-25 — Stage 1 pass 1 done: 89 issues audited and labelled; #700
   closed as a duplicate. #1108 merged, and #922/#923/#924 closed. #1219 opened
   (#1118, C1 paste tail through a hard wrap), under review by 2 Codex + 1 Pi.
