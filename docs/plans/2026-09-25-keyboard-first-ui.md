@@ -1616,3 +1616,9 @@ Sharp corners and one light theme.
   must-answer shells still ignore Escape/outside. Tests renamed to the
   sentence-case labels; the new shell test pins the header, footer, focus and
   Escape contract.
+- 2026-09-25 system project (Node 24, local): 813 passed, 1 skipped, 1 failed.
+  The failure is `src/main/workflows/control.system.test.ts` (5 s timeout +
+  temp-dir ENOTEMPTY). It is pre-existing and tracked in #1107 (it needs a
+  built `packages/workflow-mcp/dist` under raw `npx vitest`). This branch
+  changes nothing under `src/main`; the CI quality gate, which builds
+  packages first, is the real gate for it.
