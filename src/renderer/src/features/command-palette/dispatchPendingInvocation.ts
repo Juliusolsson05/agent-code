@@ -55,6 +55,12 @@ export function dispatchPendingInvocation(options: {
       const gone = !useAppStore.getState().workspaceState.sessions[target]
       showToast(gone ? AGENT_GONE_MESSAGE : outcome.reason, 4000)
     }
+    // The same command is still running for this same agent (single-flight
+    // is per agent, see flightKey). From a menu the second click otherwise
+    // looks ignored.
+    if (target !== undefined && outcome.status === 'in-flight') {
+      showToast('Already running for this agent.', 3000)
+    }
     return outcome
   })
 }

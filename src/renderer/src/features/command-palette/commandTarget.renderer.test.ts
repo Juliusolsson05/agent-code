@@ -31,10 +31,15 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 // and without one Reload/Rewind/Duplicate/Copy Resume refuse on both sessions,
 // which would make "the focused agent was untouched" pass vacuously.
 
-// Focused lane 1 shows session-17 (Codex). session-23 (Claude) is the
-// recording's own subject: a detached worktree child shown in no lane.
+// Focused lane 1 shows session-17 (Codex, project tab-4). session-3 (Claude)
+// is in ANOTHER project (tab-1) and in no lane — the menu's hardest case: a
+// command that resolves anything from focus gets the agent, the project, or
+// the lane wrong, and the checks below see each.
 const FOCUSED = 'session-17' as SessionId
-const TARGET = 'session-23' as SessionId
+const TARGET = 'session-3' as SessionId
+// The two live in different projects in the recording, which is what makes
+// the Duplicate row below able to catch a clone filed by focus.
+const TARGET_PROJECT = loadRecordedDispatchWorkspace().state.sessions[TARGET]!.projectId!
 
 type Harness = {
   ctx: CommandContext
@@ -67,10 +72,11 @@ function harness(): Harness {
     closeFocused: recordingFake(calls, 'closeFocused'),
     closeSession: recordingFake(calls, 'closeSession', Promise.resolve()),
     reloadFocusedAgent: recordingFake(calls, 'reloadFocusedAgent', Promise.resolve()),
-    reloadSessionAgent: recordingFake(calls, 'reloadSessionAgent', Promise.resolve()),
+    reloadSessionAgent: recordingFake(calls, 'reloadSessionAgent', Promise.resolve({ status: 'failed', message: 'Replacement was not committed' })),
     pinSession: recordingFake(calls, 'pinSession'),
     unpinSession: recordingFake(calls, 'unpinSession'),
     splitFocused: recordingFake(calls, 'splitFocused', Promise.resolve()),
+    createDetachedDispatchAgent: recordingFake(calls, 'createDetachedDispatchAgent', Promise.resolve('clone-session')),
     showPaneToast: recordingFake(calls, 'showPaneToast'),
   } as unknown as Workspace
   // Any `ui.*` a command reaches for is recorded under its own name, so the
@@ -105,10 +111,18 @@ const EXPECTED: Record<string, {
     effect: ['unpinSession', [TARGET]],
   },
   'reload-agent': { effect: ['reloadSessionAgent', [TARGET]] },
+  // (A failed targeted reload also re-reports on TARGET — see the toast test.)
   'switch-provider': { effect: ['ui.openProviderSwitchPicker', [TARGET]] },
   'agent-mcp-servers': { effect: ['ui.openAgentMcpServers', [TARGET]] },
+  // The clone is filed under the TARGET's project, unplaced — never through
+  // `splitFocused`, which files by the focused lane (#1180 review).
   'duplicate-agent': {
-    effect: ['api.duplicateSession', [expect.objectContaining({ sourceProviderSessionId: 'provider-target' })]],
+    effect: ['createDetachedDispatchAgent', [
+      expect.objectContaining({ kind: 'claude' }),
+      { tabId: TARGET_PROJECT, anchorSessionId: TARGET },
+      expect.objectContaining({ resumeSessionId: 'clone' }),
+      { selectCreated: false },
+    ]],
   },
   'rewind-to-prompt': { effect: ['ui.openRewindPrompt', [TARGET]] },
   'view-prompts': { effect: ['ui.openViewPrompts', [TARGET]] },
@@ -138,6 +152,11 @@ beforeEach(() => __resetInFlightForTests())
 afterEach(() => vi.restoreAllMocks())
 
 describe('explicit command target (#1180)', () => {
+  it('has the target and the focused agent in different projects', () => {
+    const { sessions } = loadRecordedDispatchWorkspace().state
+    expect(sessions[TARGET]!.projectId).not.toBe(sessions[FOCUSED]!.projectId)
+  })
+
   it('covers every command that opted into the context menu', () => {
     expect(flagged.map(command => command.id).sort()).toEqual(Object.keys(EXPECTED).sort())
   })
@@ -162,6 +181,7 @@ describe('explicit command target (#1180)', () => {
     // `closeFocused()` takes none and would pass the check above.
     expect(calls.map(([callName]) => callName)).not.toContain('closeFocused')
     expect(calls.map(([callName]) => callName)).not.toContain('reloadFocusedAgent')
+    expect(calls.map(([callName]) => callName)).not.toContain('splitFocused')
   })
 
   it('refuses instead of falling back to focus when the clicked agent is gone', async () => {
@@ -190,7 +210,43 @@ describe('explicit command target (#1180)', () => {
   })
 })
 
+describe('single-flight per agent (#1180 review)', () => {
+  it('runs overlapping reloads of two different agents, and still refuses a repeat for the same one', async () => {
+    const { ctx } = harness()
+    // Hold every reload open so the dispatches genuinely overlap.
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const reload = vi.fn(async () => { await held; return { status: 'completed', sourceSessionId: TARGET, newSessionId: TARGET } })
+    ;(ctx.workspace as unknown as { reloadSessionAgent: typeof reload }).reloadSessionAgent = reload
+    const OTHER = 'session-2' as SessionId // Claude, project tab-1, in no lane
+    ;(ctx.workspace.state.sessions as Record<string, unknown>)[OTHER] = {
+      ...ctx.workspace.state.sessions[OTHER]!, providerSessionId: 'provider-other',
+    }
+
+    const first = dispatchCommand({ id: 'reload-agent', source: 'context-menu', ctx })
+    const second = dispatchCommand({ id: 'reload-agent', source: 'context-menu', ctx: { ...ctx, target: OTHER } })
+    // A second reload of the SAME agent while the first is running is the
+    // double-spawn single-flight exists to refuse, and must still be refused.
+    const repeat = await dispatchCommand({ id: 'reload-agent', source: 'context-menu', ctx })
+    release()
+
+    expect(repeat.status).toBe('in-flight')
+    expect((await first).status).toBe('ran')
+    expect((await second).status).toBe('ran')
+    expect(reload.mock.calls.map(call => (call as unknown[])[0])).toEqual([TARGET, OTHER])
+  })
+})
+
 describe('targeted pane toasts', () => {
+  it('re-reports a targeted reload failure where the wrapper can see it', async () => {
+    // reloadSessionAgent toasts internally, past the wrapper; the command
+    // re-reports its result through ctx.workspace so an off-screen failure
+    // is not silent (#1180 review).
+    const { ctx, calls } = harness()
+    await dispatchCommand({ id: 'reload-agent', source: 'context-menu', ctx })
+    expect(calls).toContainEqual(['showPaneToast', [TARGET, 'Replacement was not committed']])
+  })
+
   it('also shows a global toast while the target is off screen, and only then', () => {
     const { ctx, state } = harness()
     const showGlobalToast = vi.fn()

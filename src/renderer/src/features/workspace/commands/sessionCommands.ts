@@ -595,7 +595,24 @@ export const sessionCommands: CommandDef[] = [
     // are identical — the wrapper is exactly this call with the focused id.
     run: async ({ workspace, target }) => {
       const sessionId = commandTarget({ workspace, target })
-      if (sessionId) await workspace.reloadSessionAgent(sessionId)
+      if (!sessionId) return
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
+      const result = await workspace.reloadSessionAgent(sessionId)
+      // Re-report the outcome for a targeted (Sessions row menu) reload.
+      // reloadSessionAgent toasts through the `showPaneToast` captured inside
+      // its hook, which the menu's off-screen wrapper (targetedCommandContext)
+      // cannot intercept — so reloading an agent in no lane succeeded or
+      // FAILED with no visible word (#1180 review). Repeating the same text
+      // through `workspace.showPaneToast` rewrites the identical pane toast
+      // (single slot) and adds the global one while the agent is off screen.
+      // The palette path needs none of this: its target is on screen.
+      if (target === undefined) return
+      if (result.status === 'completed') {
+        const label = getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel
+        workspace.showPaneToast(result.newSessionId, `${label} reloaded`)
+      } else {
+        workspace.showPaneToast(sessionId, result.status === 'failed' ? result.message : result.reason)
+      }
     },
     contextMenu: { group: 'agent', order: 10 },
   },
@@ -787,22 +804,41 @@ export const sessionCommands: CommandDef[] = [
         // flow rather than newTab; the 'vertical' direction argument it used
         // to pass died with the tile tree (#992) — placement is context-places
         // now (fills the focused lane when empty, else pools).
-        await workspace.splitFocused(
-          kind,
-          {
-            resumeSessionId: newProviderSessionId,
-            builtInMcpOverrides: clonedMcpOverrides(meta),
-            // OpenCode Terminal and rendered OpenCode share a provider kind.
-            // The transcript clone should branch the current experience, not
-            // silently reinterpret a terminal clone as a rendered session.
-            providerRuntime: meta.providerRuntime,
-            // WHY cwd is part of the continuation payload: command targeting may resolve a
-            // related/orchestration child displayed inside a parent pane. That child's transcript
-            // and MCP domains must be re-registered against the CHILD worktree, not whichever
-            // physical pane happens to host its UI.
-            cwd: meta.cwd,
-          },
-        )
+        const continuation = {
+          resumeSessionId: newProviderSessionId,
+          builtInMcpOverrides: clonedMcpOverrides(meta),
+          // OpenCode Terminal and rendered OpenCode share a provider kind.
+          // The transcript clone should branch the current experience, not
+          // silently reinterpret a terminal clone as a rendered session.
+          providerRuntime: meta.providerRuntime,
+          // WHY cwd is part of the continuation payload: command targeting may resolve a
+          // related/orchestration child displayed inside a parent pane. That child's transcript
+          // and MCP domains must be re-registered against the CHILD worktree, not whichever
+          // physical pane happens to host its UI.
+          cwd: meta.cwd,
+        }
+        // #1180 review: with an explicit target (the Sessions row menu) the
+        // clone is filed under the SOURCE agent's project and left unplaced.
+        // `splitFocused` resolves ownership and placement from the focused
+        // lane, so duplicating a row from project B while focused in project
+        // A filed the clone under A — and could drop it into A's empty lane,
+        // against the menu's "nothing moves" rule (D5). The palette keeps
+        // `splitFocused`: there the source IS the focused agent, and filling
+        // an empty focused lane is the behavior users already rely on.
+        if (target !== undefined && meta.projectId) {
+          await workspace.createDetachedDispatchAgent(
+            { kind, providerRuntime: meta.providerRuntime },
+            { tabId: meta.projectId, anchorSessionId: sessionId },
+            continuation,
+            { selectCreated: false },
+          )
+          // Unplaced means nothing on screen changed, so say where it went.
+          // (A targeted pane toast also shows globally while the source is
+          // off screen — see targetedCommandContext.)
+          workspace.showPaneToast(sessionId, 'Duplicated — the copy is marked new in the Sessions list', 4000)
+        } else {
+          await workspace.splitFocused(kind, continuation)
+        }
       } catch (err) {
         // Surface the failure as a pane toast, not just console.warn. Native
         // transcript export/import crosses both a CLI and storage boundary, so

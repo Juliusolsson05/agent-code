@@ -34,6 +34,14 @@ export function useSessionMenuHost(options: {
   useLayoutEffect(() => {
     if (!request) return
     const store = useAppStore.getState()
+    // Claim the request: act only if it is STILL the pending one. A request
+    // mounts this host, and React StrictMode replays a fresh mount's layout
+    // effects with the same captured `request` — without this check the
+    // replay opened a second native menu for one right-click (#1180 review),
+    // and either menu closing cleared the row mark while the other was up.
+    // Store identity is the one thing the replay cannot fake: the first run
+    // cleared it.
+    if (store.sessionMenuRequest !== request) return
     store.clearSessionMenuRequest()
     // The row can outlive its agent by a render (the list re-renders after
     // the session map changes); a menu for a vanished agent would be built

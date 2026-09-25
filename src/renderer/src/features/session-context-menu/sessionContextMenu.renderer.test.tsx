@@ -214,6 +214,20 @@ describe('menu host', () => {
     expect(useAppStore.getState().settings.dispatchColorFlags[TARGET]).toBeUndefined()
   })
 
+  it('opens ONE menu when the request is what mounts the host, even under StrictMode', async () => {
+    // The app's real order: the row queues the request, and that request is
+    // what mounts the (otherwise closed) host. StrictMode replays a fresh
+    // mount's layout effects with the same captured request; that replay
+    // opened a second native menu (#1180 review).
+    const ctx = commandContext()
+    const showPopupMenu = installApi(async () => null)
+    act(() => { useAppStore.getState().requestSessionMenu(request()) })
+    renderHook(() => useSessionMenuHost({ commandContext: ctx, showToast: vi.fn() }), { reactStrictMode: true })
+
+    await waitFor(() => { expect(useAppStore.getState().sessionMenuOpenFor).toBeNull() })
+    expect(showPopupMenu).toHaveBeenCalledTimes(1)
+  })
+
   it('runs Show in Lane through the row\'s own click', async () => {
     const run = vi.fn()
     host(async () => 'show-in-lane')
