@@ -1,3 +1,4 @@
+import { readFileSync as readRealFile } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mkdir, readFile, writeFile, rename, unlink } = vi.hoisted(() => ({
@@ -290,5 +291,63 @@ describe('refusing to write over a file it could not read', () => {
     // did. Failing loudly is what stops a window believing it is durable.
     await expect(store.saveSlice('w1', 'not json at all', NO_GEOMETRY)).rejects.toThrow()
     expect(writeFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('whether the session list can be trusted (#1223)', () => {
+  // Ghost-log retention deletes every log whose session is not in
+  // sessionIds(). That is only safe when this run read the WHOLE workspace
+  // file. The real, sanitized v3 workspace from 2026-09-20 is the "known"
+  // case; every other startup shape must say unknown.
+  const recorded = readRealFile(
+    new URL('../../../testing/fixtures/workspace-v3/2026-09-20-live-workspace.sanitized.json', import.meta.url),
+    'utf8',
+  )
+
+  beforeEach(() => {
+    mkdir.mockReset().mockResolvedValue(undefined)
+    writeFile.mockReset().mockResolvedValue(undefined)
+    rename.mockReset().mockResolvedValue(undefined)
+    unlink.mockReset().mockResolvedValue(undefined)
+  })
+
+  it('trusts a complete workspace read from disk', async () => {
+    readFile.mockReset().mockResolvedValue(recorded)
+    const store = await WorkspaceFileStore.open()
+    expect(store.sessionOwnershipKnown()).toBe(true)
+    expect(store.sessionIds().size).toBeGreaterThan(0)
+  })
+
+  it('does not trust a missing file, which may have been moved aside', async () => {
+    readFile.mockReset().mockRejectedValue(enoent())
+    const store = await WorkspaceFileStore.open()
+    expect(store.sessionOwnershipKnown()).toBe(false)
+    // Nor does saving a fresh workspace make it trustworthy: the moved-aside
+    // file's sessions are still not in it.
+    await store.saveSlice('w1', slice(['fresh']), NO_GEOMETRY)
+    expect(store.sessionOwnershipKnown()).toBe(false)
+  })
+
+  it('does not trust an empty file', async () => {
+    readFile.mockReset().mockResolvedValue('   \n')
+    const store = await WorkspaceFileStore.open()
+    expect(store.sessionOwnershipKnown()).toBe(false)
+  })
+
+  it('does not trust a partially decoded file', async () => {
+    // The recorded workspace with one window made unreadable: the decoder
+    // discards that window, so its sessions are missing from sessionIds().
+    const damaged = JSON.parse(recorded) as { windows: unknown[] }
+    damaged.windows = [...damaged.windows, 'not-a-window']
+    readFile.mockReset().mockResolvedValue(JSON.stringify(damaged))
+    const store = await WorkspaceFileStore.open()
+    expect(store.sessionOwnershipKnown()).toBe(false)
+  })
+
+  it('does not trust a file it could not read', async () => {
+    readFile.mockReset().mockResolvedValue('{ not json')
+    const store = await WorkspaceFileStore.open()
+    expect(store.isReadOnly()).toBe(true)
+    expect(store.sessionOwnershipKnown()).toBe(false)
   })
 })
