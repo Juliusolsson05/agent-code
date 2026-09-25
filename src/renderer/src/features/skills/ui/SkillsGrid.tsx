@@ -5,6 +5,12 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Settings } from '@renderer/app-state/settings/types'
 import { Button } from '@renderer/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@renderer/components/ui/dropdown-menu'
 import { Check } from '@renderer/features/mcp/ui/McpServersRow'
 import {
   chosenSkillProviders,
@@ -609,34 +615,33 @@ function ExternalRow({
   )
 }
 
+// WHY the shared DropdownMenu (keyboard-first plan M2): this menu was a
+// hand-rolled `role="menu"` div with NO keyboard handling — no focus entry,
+// no arrows, no Escape — and it closed on `mouseLeave`, so a keyboard user
+// who opened it with Enter had nothing to move to, and a mouse user who
+// drifted one pixel outside lost it mid-aim. Radix owns focus entry, roving
+// items, typeahead, Escape back to ⋯, and layering above Settings.
 function SkillMenu({ label, items }: { label: string; items: Array<{ label: string; onSelect: () => void; danger?: boolean }> }) {
-  const [open, setOpen] = useState(false)
   return (
-    <div className="relative">
-      <Button size="xs" variant="ghost" aria-label={`Actions for ${label}`} aria-expanded={open} onClick={() => setOpen(value => !value)}>⋯</Button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 z-10 mt-1 min-w-[220px] rounded-float border border-border bg-surface py-1 shadow-lg"
-          onMouseLeave={() => setOpen(false)}
-        >
-          {items.map(item => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className={`block w-full truncate px-3 py-1 text-left text-[11px] hover:bg-control-bg ${item.danger ? 'text-danger' : 'text-ink'}`}
-              onClick={() => {
-                setOpen(false)
-                item.onSelect()
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="xs" variant="ghost" aria-label={`Actions for ${label}`}>⋯</Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[220px] max-w-[360px]">
+        {items.map(item => (
+          <DropdownMenuItem
+            key={item.label}
+            danger={item.danger}
+            // onSelect runs after Radix closes the menu and restores focus to
+            // ⋯ — so a confirm opened by the item (Remove…) returns focus to
+            // the row's own trigger when it closes, not to the page top.
+            onSelect={() => item.onSelect()}
+          >
+            <span className="truncate">{item.label}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

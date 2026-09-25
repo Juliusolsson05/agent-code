@@ -450,7 +450,7 @@ entry when it lands.
 | # | Surface | Keys today | Fix | Status |
 |---|---|---|---|---|
 | M1 | AppearanceMenu (`feed`) | Escape only; focus never enters | dropdown-menu primitive | todo |
-| M2 | SkillMenu (`skills/ui/SkillsGrid`) | none; closes on mouseLeave | dropdown-menu primitive; ConfirmDialog | todo |
+| M2 | SkillMenu (`skills/ui/SkillsGrid`) | none; closes on mouseLeave | dropdown-menu primitive; ConfirmDialog | done |
 | M3 | CommandSortControl | good (Esc/Tab/↑↓/Home/End/Enter) | visuals only (T1/T7) | todo |
 | M4 | ExplorerPane context menu | good | visuals (T7) | todo |
 | M5 | PathInput dropdown | good | visuals (T7) | todo |
@@ -540,6 +540,12 @@ Sharp corners and one light theme.
   Cancel and the red button carries no ↩ chip; Escape closes only the
   confirm. Also check nothing behind it stalls while it is open (streaming
   feeds keep moving — native confirm used to freeze them).
+- **M2 Skills ⋯ menu (Settings → Skills, a row's ⋯):** Tab to ⋯, Enter opens
+  the menu with the first item highlighted; ↑↓ move, typing a letter jumps;
+  Escape closes it and the ring is back on ⋯; moving the mouse off the menu
+  no longer closes it; the menu paints above Settings, popover colours +
+  theme shadow, items are rounded option rows with the row-highlight colour;
+  a long "Reveal <path>" truncates inside max 360px.
 
 ## Tasks
 
@@ -614,6 +620,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 M2: SkillMenu on DropdownMenu. Confirm-red observed: both
+  keyboard tests (Enter opens + Enter selects; Escape returns focus) fail on
+  the pre-change component. The existing Hide test now drives the keyboard
+  path instead of `click` (Radix opens on pointerdown/keys, not click).
 - 2026-09-25 F8: `components/ui/dropdown-menu.tsx`, dep pinned 2.1.20.
   Lockfile per B7's procedure: generated with npm 11.8
   `install --package-lock-only --save-exact`; entry diff = 15 added

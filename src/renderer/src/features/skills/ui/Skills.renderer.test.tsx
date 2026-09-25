@@ -174,15 +174,33 @@ describe('Settings → Skills grid (#1161)', () => {
     expect(screen.getByText('proposed by an agent · review')).toBeTruthy()
   })
 
-  it('lists skills other tools installed, and hides one per viewer', () => {
+  it('lists skills other tools installed, and hides one per viewer', async () => {
     const onChange = vi.fn()
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={onChange} />)
     fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))
     expect(screen.getByText('grill-me')).toBeTruthy()
     expect(screen.getByText(/npx skills · mattpocock\/skills/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Actions for grill-me' }))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Hide' }))
-    expect(onChange).toHaveBeenCalledWith({ hiddenExternalSkills: ['claude-personal-skills:grill-me'] })
+    // Opened and chosen from the KEYBOARD (plan M2): the old hand-rolled menu
+    // had no key handling at all, so Enter on ⋯ did nothing a keyboard user
+    // could follow and there was no way to reach an item.
+    const trigger = screen.getByRole('button', { name: 'Actions for grill-me' })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'Hide' }), { key: 'Enter' })
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ hiddenExternalSkills: ['claude-personal-skills:grill-me'] }))
+  })
+
+  it('closes the ⋯ menu on Escape and puts focus back on ⋯', async () => {
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Also found on this machine/ }))
+    const trigger = screen.getByRole('button', { name: 'Actions for grill-me' })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    const first = await screen.findAllByRole('menuitem')
+    await waitFor(() => expect(document.activeElement).toBe(first[0]))
+    fireEvent.keyDown(first[0], { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
   it('shows the context budget instead of a count limit', () => {
