@@ -605,6 +605,10 @@ export const KILL_CALLERS = [
   // ── renderer, bulk and automation ──────────────────────────────────────
   'bulk.close-old-agents',
   'bulk.close-idle-orchestration',
+  // Close Completed Agents… (#1182): agents whose own goal_complete said the
+  // user's task is done. Its own tag so a journal reader can tell "the agents
+  // said they were finished" from "they had been inactive for N hours".
+  'bulk.close-completed-agents',
   // Agent Activity's multi-select close (#1170). Its own tag, not
   // `close.agent-activity`: that one is a single row the user aimed at, this
   // is N kills from one approval, and a journal reader triaging "why did nine

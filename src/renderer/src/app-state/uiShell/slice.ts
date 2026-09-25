@@ -64,6 +64,7 @@ export const createUiShellSlice: StateCreator<
   agentActivityOpen: false,
   keyboardShortcutsOpen: false,
   closeOldAgentsOpen: false,
+  closeCompletedAgentsOpen: false,
   bulkProviderSwitchOpen: false,
   usageModalOpen: false,
   agentAnalyticsOpen: false,
@@ -406,6 +407,10 @@ export const createUiShellSlice: StateCreator<
     set({ closeOldAgentsOpen: true }, false, 'uiShell/openCloseOldAgents'),
   closeCloseOldAgents: () =>
     set({ closeOldAgentsOpen: false }, false, 'uiShell/closeCloseOldAgents'),
+  openCloseCompletedAgents: () =>
+    set({ closeCompletedAgentsOpen: true }, false, 'uiShell/openCloseCompletedAgents'),
+  closeCloseCompletedAgents: () =>
+    set({ closeCompletedAgentsOpen: false }, false, 'uiShell/closeCloseCompletedAgents'),
   openBulkProviderSwitch: () =>
     set({ bulkProviderSwitchOpen: true }, false, 'uiShell/openBulkProviderSwitch'),
   closeBulkProviderSwitch: () =>

@@ -17,6 +17,7 @@ import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
 import { hasOrchestrationAgents } from '@renderer/workspace/idleOrchestrationAgents'
+import { hasGoalReportingAgents } from '@renderer/workspace/completedGoalAgents'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import {
   reloadSessionWithBuiltInMcpChoice,
@@ -387,6 +388,41 @@ export const sessionCommands: CommandDef[] = [
       // palette.
       ui.closePalette()
       await workspace.closeIdleOrchestrationAgents()
+    },
+  },
+  {
+    // #1182. The payoff of goal_complete: one agent per feature, the PR
+    // merges, the agent says so, and this closes every finished one in one
+    // pass. A modal rather than the confirm dialog Close Idle Orchestration
+    // Agents uses, because the user picks which to keep and whether their
+    // lanes go too — a yes/no dialog cannot hold either choice. Hence the
+    // ellipsis: more input follows the invocation.
+    id: 'close-completed-agents',
+    category: 'workspace-tools',
+    surface: 'app',
+    title: 'Close Completed Agents…',
+    description: '**What it does:** Lists every **agent whose goal is complete** across all projects and closes the ones you keep ticked, optionally removing their lanes.\n\n**Use when:** Agents finished their features (for example the PRs merged) and are still sitting in lanes.\n\n**Notes:** Agents mark their goal complete through Goal MCP once you have accepted the work. Running agents stay open. Setting a new goal clears the completion.',
+    keywords: [
+      'close',
+      'completed',
+      'complete',
+      'done',
+      'finished',
+      'goal',
+      'merged',
+      'cleanup',
+      'lanes',
+      'batch',
+    ],
+    when: ({ workspace }) => hasGoalReportingAgents(workspace.state),
+    getState: ({ flags }) => panel(flags.closeCompletedAgentsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.closeCompletedAgentsOpen) {
+        ui.closeCloseCompletedAgents()
+        return
+      }
+      ui.openCloseCompletedAgents()
+      ui.closePalette()
     },
   },
   {

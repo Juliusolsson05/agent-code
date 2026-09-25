@@ -373,6 +373,14 @@ export type UiShellState = {
    * live key capture between the user and a one-line answer. */
   keyboardShortcutsOpen: boolean
   closeOldAgentsOpen: boolean
+  /** When true, Close Completed Agents… is open (#1182).
+   *
+   * WHY its own surface rather than a filter inside Close Old Agents: the two
+   * select on unrelated evidence. Old Agents asks "how long has nothing
+   * happened", which catches an agent waiting on review; this asks "did the
+   * agent say the user's task is done", which is true minutes after a merge.
+   * One modal answering both would make every row's reason ambiguous. */
+  closeCompletedAgentsOpen: boolean
   /** When true, the Switch Agents (bulk provider switch) modal is open.
    *
    * WHY a separate flag rather than folding it into Close Old Agents: the two

@@ -22,6 +22,9 @@ import {
 } from '@renderer/rendering/observations/semantic'
 import type { SemanticBlockLike, SemanticTurnLike } from '@renderer/rendering/observations/semantic'
 import { createUnknownRegistry } from '@renderer/rendering/model/unknowns'
+// Shared optimistic-row marker (Codex-named, provider-neutral); see its module
+// for why every layer reads one constant instead of its own literal.
+import { OPTIMISTIC_PROMPT_UUID_PREFIX } from '@renderer/session-runtime/optimisticPrompt'
 import type { UnknownBehavior } from '@renderer/rendering/model/types'
 
 // ---------------------------------------------------------------------------
@@ -101,11 +104,6 @@ export type LedgerInputBundle = {
    *  debug promise (plan D5). */
   collectorDecisions: readonly OwnershipDecision[]
 }
-
-/** Shared optimistic-row marker. Codex-named for history (it shipped for
- *  Codex first) but provider-neutral: every echo provider's submit path
- *  mints this prefix. Source of truth: workspace/hook/actions/streaming.ts. */
-const OPTIMISTIC_UUID_PREFIX = 'optimistic-codex-user:'
 
 function toTurnLike(turn: RuntimeSemanticTurn): SemanticTurnLike {
   return {
@@ -256,7 +254,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       const committedRows: RawCommittedEntry[] = []
       const optimisticRows: OptimisticPromptLike[] = []
       for (const e of slices.entries) {
-        if (e.uuid?.startsWith(OPTIMISTIC_UUID_PREFIX)) {
+        if (e.uuid?.startsWith(OPTIMISTIC_PROMPT_UUID_PREFIX)) {
           optimisticRows.push({
             uuid: e.uuid,
             text: optimisticTextOf(e),

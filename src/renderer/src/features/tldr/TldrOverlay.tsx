@@ -84,6 +84,14 @@ export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provide
   if (!visible) return null
   const record = snapshot.identity === identity ? snapshot.record : null
   const text = !enabled ? `${source.label} is off` : snapshot.error ? `${source.label} unavailable` : record?.text ?? source.missing
+  // Goal completion (#1182). Shown with the goal, not instead of it: the peek
+  // answers "what is this agent for", and "done: <note>" alone would not say
+  // what was done. Only the Goal store ever carries the pair, so the kind check
+  // is belt and braces rather than the gate. A disabled capability shows
+  // nothing stale, the same rule the text above follows.
+  const completion = enabled && kind === 'goal' && record?.completedAt && record.completionNote
+    ? { at: record.completedAt, note: record.completionNote }
+    : null
   return <div
     data-agent-code-interaction-owner="app"
     {...(kind === 'tldr' ? { 'data-tldr-overlay': '' } : { 'data-goal-overlay': '' })}
@@ -97,13 +105,16 @@ export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provide
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
   >
-    <div className="absolute inset-0 flex items-center justify-center px-6 py-16">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 py-16">
+      {completion && <span data-goal-completed="" className="text-xs font-medium uppercase tracking-wider text-accent">✓ Completed</span>}
       <p className="max-h-full max-w-xl overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere] sm:text-base">{text}</p>
+      {completion && <p className="max-w-xl whitespace-pre-wrap break-words text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">{completion.note}</p>}
     </div>
     <TldrFreshness
       runtime={runtime}
       writtenAt={enabled ? record?.updatedAt : undefined}
       writtenLabel={source.writtenLabel}
+      completedAt={completion?.at}
       // WHY this needs a completed turn: a freshly (re)loaded agent has had no
       // turn for its hooks to fire on, and a just-submitted one may still be
       // ahead of its first hook, so "never contacted" is not yet a failure. A

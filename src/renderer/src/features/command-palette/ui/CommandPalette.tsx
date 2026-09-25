@@ -265,6 +265,7 @@ function OpenCommandPalette({
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openKeyboardShortcuts = useAppStore(state => state.openKeyboardShortcuts)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
+  const openCloseCompletedAgents = useAppStore(state => state.openCloseCompletedAgents)
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
   const openProviderSwitchPicker = useAppStore(state => state.openProviderSwitchPicker)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
@@ -277,6 +278,7 @@ function OpenCommandPalette({
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
+  const closeCloseCompletedAgents = useAppStore(state => state.closeCloseCompletedAgents)
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
   const closeConversations = useAppStore(state => state.closeConversations)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
@@ -348,6 +350,7 @@ function OpenCommandPalette({
   const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
+  const closeCompletedAgentsOpen = useAppStore(state => state.closeCompletedAgentsOpen)
   const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
   const conversationsOpen = useAppStore(state => state.conversationsOpen)
   const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
@@ -534,6 +537,7 @@ function OpenCommandPalette({
         openAgentActivity,
         openKeyboardShortcuts,
         openCloseOldAgents,
+        openCloseCompletedAgents,
         openBulkProviderSwitch,
         openProviderSwitchPicker,
         openRewindPrompt,
@@ -546,6 +550,7 @@ function OpenCommandPalette({
         closeKeyboardShortcuts,
         closeAgentActivity,
         closeCloseOldAgents,
+        closeCloseCompletedAgents,
         closeBulkProviderSwitch,
         closeConversations,
         closeReorderTabs,
@@ -612,6 +617,7 @@ function OpenCommandPalette({
         keyboardShortcutsOpen,
         agentActivityOpen,
         closeOldAgentsOpen,
+        closeCompletedAgentsOpen,
         bulkProviderSwitchOpen,
         conversationsOpen,
         remotePanelOpen,
@@ -657,6 +663,7 @@ function OpenCommandPalette({
       openConversations,
       openAgentActivity,
       openCloseOldAgents,
+      openCloseCompletedAgents,
       openBulkProviderSwitch,
       openProviderSwitchPicker,
       openRewindPrompt,
@@ -668,6 +675,7 @@ function OpenCommandPalette({
       closeKeyboardShortcuts,
       closeAgentActivity,
       closeCloseOldAgents,
+      closeCloseCompletedAgents,
       closeBulkProviderSwitch,
       closeConversations,
       closeReorderTabs,
@@ -727,6 +735,7 @@ function OpenCommandPalette({
       keyboardShortcutsOpen,
       agentActivityOpen,
       closeOldAgentsOpen,
+      closeCompletedAgentsOpen,
       bulkProviderSwitchOpen,
       conversationsOpen,
       remotePanelOpen,

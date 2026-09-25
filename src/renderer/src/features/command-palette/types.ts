@@ -226,6 +226,7 @@ export type CommandContext = {
     /** Open the read-only Keyboard Shortcuts reference. */
     openKeyboardShortcuts: () => void
     openCloseOldAgents: () => void
+    openCloseCompletedAgents: () => void
     openBulkProviderSwitch: () => void
     openProviderSwitchPicker: (sessionId: string) => void
     openRewindPrompt: (sessionId: string) => void
@@ -326,6 +327,7 @@ export type CommandContext = {
     closeKeyboardShortcuts: () => void
     closeAgentActivity: () => void
     closeCloseOldAgents: () => void
+    closeCloseCompletedAgents: () => void
     closeBulkProviderSwitch: () => void
     closeConversations: () => void
     closeReorderTabs: () => void
@@ -380,6 +382,8 @@ export type CommandContext = {
     agentActivityOpen: boolean
     /** The Close Old Agents modal is on screen. */
     closeOldAgentsOpen: boolean
+    /** The Close Completed Agents modal is on screen. */
+    closeCompletedAgentsOpen: boolean
     /** The Switch Agents modal is on screen. */
     bulkProviderSwitchOpen: boolean
     /** The Conversations picker is on screen. */

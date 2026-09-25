@@ -22,6 +22,19 @@ export type TldrRecord = {
   text: string
   updatedAt: string
   revision: number
+  /**
+   * Goal completion (#1182). Only the Goal store ever sets these; they live on
+   * the goal record itself rather than in a third store so that `goal_set`,
+   * which writes a fresh record, clears a completion by construction — no
+   * separate "is the completion newer than the goal" rule that equal
+   * timestamps could get wrong. Both present or both absent.
+   *
+   * `updatedAt` stays the time the GOAL was set; completing does not move it,
+   * because the peek's "Goal set" footer and turn enforcement both read it as
+   * "when was the goal written".
+   */
+  completedAt?: string
+  completionNote?: string
 }
 export type TldrUpdate = { identity: string; record: TldrRecord }
 
@@ -30,7 +43,9 @@ export type TldrUpdate = { identity: string; record: TldrRecord }
 // the milestone cadence the instructions ask for, while keeping each agent's
 // file small enough to rewrite atomically on every update.
 export const TLDR_HISTORY_LIMIT = 100
-export type TldrHistoryEntry = { text: string; writtenAt: string; revision: number }
+/** `completed` marks a goal-completion row (#1182); its `text` is the
+ * completion note, not a goal. Absent on every TLDR row and ordinary goal row. */
+export type TldrHistoryEntry = { text: string; writtenAt: string; revision: number; completed?: true }
 
 /** Whether this agent's provider turn hooks have reached Agent Code during this
  * app run. Enforcement is invisible when it works and silent when it does not,
@@ -65,12 +80,14 @@ export function normalizeTldrText(value: string, label = 'TLDR'): string {
 // ---------------------------------------------------------------------------
 
 export const GOAL_SKILL_NAME = 'agent-code-goal'
-export const GOAL_SKILL_DESCRIPTION = 'Record this agent’s goal — what its work is for — when Agent Code Goal MCP is available. Set it when a new task is understood; update it only when the direction changes.'
+export const GOAL_SKILL_DESCRIPTION = 'Record this agent’s goal — what its work is for — when Agent Code Goal MCP is available. Set it when a new task is understood; update it only when the direction changes; complete it only once the user has accepted the result.'
 export const GOAL_INSTRUCTIONS = `When Goal MCP is available in this session, use goal_set to record your goal: what your work is trying to achieve and why, in one plain sentence that a person switching between many agents can understand without reading the transcript. Set it as soon as you understand a new substantive task, before starting the work.
 
 Update the goal only when what you are trying to achieve changes — the user redirects you, widens or narrows the scope, or asks for a different outcome. Never update it to report progress; progress belongs in the TLDR when TLDR MCP is available.
 
 Describe the outcome, not the activity or a list of steps. Avoid issue and PR numbers unless the goal is meaningless without them, and then say in words what they are. At most ${TLDR_MAX_CHARACTERS} characters.
+
+When the goal is fully achieved AND the user has accepted it — the PR is merged, or the user said the task is done — call goal_complete with one plain sentence saying what was delivered. The user uses completed goals to close finished agents, so never complete a goal because your own part is finished, while a PR is still open, while review or CI is pending, or while anything the user asked for remains. If the user later gives you new work, set a new goal with goal_set; that clears the completion.
 
 Examples:
 - Make agent reloads and crash recovery go through one owner, so an agent is never lost or duplicated.
