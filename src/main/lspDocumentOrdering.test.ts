@@ -443,7 +443,7 @@ describe('#924 — a newer intent must not wait out an obsolete request', () => 
 
       expect(server.closed).toBe(true)
       // Retiring a server drops its documents, exactly as a crash does, so the
-      // next edit re-opens on a fresh process rather than talking to a dead one.
+      // next open spawns a fresh process rather than talking to a dead one.
       expect(internal.docs.has('inmemory://a')).toBe(false)
     } finally {
       vi.useRealTimers()
@@ -518,6 +518,35 @@ describe('#924 fix pass — a busy server is not a wedged one', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('keeps no intent bookkeeping for a first open that failed', async () => {
+    // Review round 2 (reproduced as written): the shared intent counter was
+    // bumped before the server document existed, so a first open whose
+    // didOpen hit a destroyed stream left an entry that no close, discard or
+    // dispose ever reached, one per failed URI for the manager's lifetime.
+    const { manager, server } = managerWithServer()
+    const internal = manager as unknown as {
+      docs: Map<string, unknown>
+      serverDocuments: Map<string, unknown>
+      serverDocumentIntentEpochs: Map<string, number>
+      sendNotificationIfOpen: (server: unknown, method: string, params: unknown) => Promise<void>
+    }
+    // The production notification path, with only the connection failing.
+    internal.sendNotificationIfOpen = (LspManager.prototype as unknown as {
+      sendNotificationIfOpen: typeof internal.sendNotificationIfOpen
+    }).sendNotificationIfOpen
+    Object.assign(server.connection, {
+      sendNotification: async () => {
+        throw Object.assign(new Error('stream destroyed'), { code: 'ERR_STREAM_DESTROYED' })
+      },
+      dispose: () => {},
+    })
+    expect(await manager.openDocument({ ...OPEN, clientUri: 'inmemory://failed-open', content: 'draft' })).toBe(false)
+    expect(internal.docs.size).toBe(0)
+    expect(internal.serverDocuments.size).toBe(0)
+    await manager.closeDocument('inmemory://failed-open')
+    expect(internal.serverDocumentIntentEpochs.size).toBe(0)
   })
 
   it('stops counting an abandoned request once the server finally answers it', async () => {

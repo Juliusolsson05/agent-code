@@ -1156,6 +1156,7 @@ export class LspManager extends EventEmitter {
     this.servers.clear()
     this.serverDocuments.clear()
     this.documentIntentEpochs.clear()
+    this.serverDocumentIntentEpochs.clear()
   }
 
   private bumpDocumentIntent(clientUri: string): number {
@@ -1171,10 +1172,18 @@ export class LspManager extends EventEmitter {
   }
 
   private notifyDocumentIntent(serverDocumentKey: string): void {
-    this.serverDocumentIntentEpochs.set(
-      serverDocumentKey,
-      (this.serverDocumentIntentEpochs.get(serverDocumentKey) ?? 0) + 1,
-    )
+    // Counted only while the server document exists. A request records the
+    // count only after it has a document record, which implies the shared
+    // record exists, so an intent on a key with no shared record can matter to
+    // no request. Counting it anyway left an entry behind for every first open
+    // that failed before creating its record, since no close or discard ever
+    // reaches a key with no record (#1108 review round 2).
+    if (this.serverDocuments.has(serverDocumentKey)) {
+      this.serverDocumentIntentEpochs.set(
+        serverDocumentKey,
+        (this.serverDocumentIntentEpochs.get(serverDocumentKey) ?? 0) + 1,
+      )
+    }
     // Copy before notifying: a woken waiter removes itself, and mutating the
     // set we are iterating is how that becomes an intermittent skip.
     const waiters = this.documentIntentWaiters.get(serverDocumentKey)
