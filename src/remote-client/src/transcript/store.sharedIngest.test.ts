@@ -4,7 +4,11 @@ import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import { applyFeedEvent, createReplayFoldState } from '@renderer/rendering/replay/reconstructSlices'
+import { applyFeedEvent, createReplayFoldState, slicesFromState } from '@renderer/rendering/replay/reconstructSlices'
+import type { FeedChannel } from '@renderer/rendering/replay/reconstructSlices'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
+import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 import { TranscriptStore } from './store'
 
@@ -19,7 +23,18 @@ import { TranscriptStore } from './store'
 //      phone's; fed the same bursts of a real Claude or Codex transcript, both
 //      must admit the same rows in the same order with the same producer-time
 //      cursor.
-//   2. The behaviours the phone lacked, each pinned where it lives.
+//   2. Parity on RECORDINGS through to the ledger. Semantic and committed
+//      events interleaved, played into both, and the ownership ledger's rows
+//      compared. This catches what (1) cannot: a phone subscription that is
+//      missing or misrouted, a semantic step applied differently, a tool pair
+//      indexed on one side only.
+//   3. The behaviours the phone lacked, each pinned where it lives.
+//
+// What these CANNOT catch, stated so nobody leans on them for it: a wrong
+// RULE inside the shared core. Both sides call the same functions, so a bad
+// rule agrees with itself; the rules have their own tests
+// (session-runtime/ingest/*.test.ts). These pin the loops, the subscriptions
+// and the wiring around the core.
 
 const ROOT = resolve(__dirname, '../../../../testing/fixtures/conversations')
 const FILE = '/fixture/transcript.jsonl'
@@ -66,9 +81,9 @@ type Harness = {
   loadHistory: ReturnType<typeof vi.fn>
 }
 
-function harness(kind: AgentProviderKind): Harness {
+function harness(kind: AgentProviderKind, sessionId = 's'): Harness {
   const listeners = new Map<string, Set<(value: unknown) => void>>()
-  const list = [{ sessionId: 's', kind, alive: true, cwd: '/fixture', lastActivityAt: 0 }]
+  const list = [{ sessionId, kind, alive: true, cwd: '/fixture', lastActivityAt: 0 }]
   // No transcript on the host yet: the benign failure the store treats as
   // "live frames will populate the feed".
   const loadHistory = vi.fn().mockRejectedValue(new Error('no transcript yet'))
@@ -123,6 +138,77 @@ describe('phone store and desktop fold admit the same rows', () => {
       expect(replay.entries.length).toBeGreaterThan(0)
       expect(phone.entries.map(e => e.uuid)).toEqual(replay.entries.map(e => e.uuid))
       expect(phone.lastJsonlEntryAt).toBe(replay.lastJsonlEntryAt)
+    } finally {
+      unsubscribe()
+      store.dispose()
+    }
+  })
+})
+
+const RECORDINGS = resolve(__dirname, '../../../../testing/fixtures/rendering-recordings')
+
+// The SessionFeed listener each recorded IPC channel reaches on the phone.
+// Channels with no ledger plane (started) are played to the replay only.
+const PHONE_LISTENER: Partial<Record<FeedChannel, string>> = {
+  'session:jsonl-entries': 'onSessionJsonlEntries',
+  'session:semantic-event': 'onSessionSemanticEvent',
+  'session:history-boundary': 'onSessionHistoryBoundary',
+  'session:conditions': 'onSessionConditions',
+  'session:process-state': 'onSessionProcessState',
+  'session:sub-agents': 'onSessionSubAgents',
+  'session:exit': 'onSessionExit',
+  'session:jsonl-error': 'onSessionJsonlError',
+}
+
+function ledgerRowIds(slices: RuntimeLedgerSlices): string[] {
+  return createSessionLedger()(createLedgerInputAdapter()(slices).input).rows.map(row => row.candidate.id)
+}
+
+describe('phone store and desktop fold produce the same ledger rows from a recording', () => {
+  const files = readdirSync(RECORDINGS).filter(name => name.endsWith('.json')).sort()
+
+  it('has recordings with both planes to replay (the suite is not vacuous)', () => {
+    const channels = files.flatMap(name =>
+      (JSON.parse(readFileSync(join(RECORDINGS, name), 'utf8')) as { events: Array<{ ch: string }> }).events.map(e => e.ch),
+    )
+    expect(channels).toContain('session:semantic-event')
+    expect(channels).toContain('session:jsonl-entries')
+  })
+
+  it.each(files)('%s', name => {
+    const recording = JSON.parse(readFileSync(join(RECORDINGS, name), 'utf8')) as {
+      meta: { sessionId: string; provider: AgentProviderKind }
+      events: Array<{ ch: FeedChannel; payload: unknown }>
+    }
+    const { sessionId, provider } = recording.meta
+    const replay = createReplayFoldState(provider, sessionId)
+    const { store, emit } = harness(provider, sessionId)
+    const unsubscribe = store.subscribe(sessionId, () => {})
+    try {
+      for (const event of recording.events) {
+        applyFeedEvent(replay, event.ch, event.payload)
+        const listener = PHONE_LISTENER[event.ch]
+        if (listener) emit(listener, event.payload)
+      }
+      const phone = store.getSnapshot(sessionId)
+      // The ghost plane is deliberately compared EMPTY on both sides: ghosts
+      // are the desktop's optimistic fallback, which the phone does not have
+      // by design. Everything else the ledger reads comes from the two ingest
+      // paths under test.
+      const desktopRows = ledgerRowIds({ ...slicesFromState(replay), ghosts: new Map() })
+      const phoneRows = ledgerRowIds({
+        provider,
+        sessionId,
+        entries: phone.entries,
+        semanticCurrent: phone.semantic.currentTurn,
+        semanticHistory: phone.semantic.history,
+        semanticErrors: phone.semantic.errors,
+        ghosts: new Map(),
+        streamPhase: phone.phase.streamPhase,
+        lastJsonlEntryAtMs: phone.lastJsonlEntryAt,
+      })
+      expect(desktopRows.length).toBeGreaterThan(0)
+      expect(phoneRows).toEqual(desktopRows)
     } finally {
       unsubscribe()
       store.dispose()
