@@ -161,6 +161,51 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
 }
 
 /**
+ * Resolve which pending item a committed user entry retires.
+ *
+ * WHY two passes for notifications (#678), mirroring resolveRemoveCarrierTarget
+ * below: a task id is present on every recorded notification but is NOT
+ * unique — upstream reuses it when it reconciles a background shell from a
+ * previous session, so the queue can hold two different bodies under one id
+ * (divergence-stranded-background-commands.json events 111-112). `find` by id
+ * returned whichever twin was enqueued first; when the committed entry carried
+ * the second, the first was retired as `delivered-observed` with the second's
+ * uuid as its evidence and the item that actually left stayed pending — the
+ * module's defining failure, with a convincing-looking cause.
+ *
+ * Containment, not equality, is the exact test here: a committed entry can
+ * WRAP the notification (that is why prompts use prefix containment), so the
+ * stronger evidence is "this item's whole normalized body is inside the
+ * entry". The id pass remains the fallback for a reformatted body, but only
+ * when exactly one pending item carries the id — two candidates mean the id
+ * cannot say which one left, and guessing is what this module forbids.
+ *
+ * Prompts keep their single prefix pass: they have no id to be ambiguous about.
+ */
+function resolveEntryTarget(
+  pending: readonly PendingItem[],
+  entry: CommittedUserEntry,
+): PendingItem | undefined {
+  const claimants = pending.filter(item => entryClaims(item, entry))
+  if (claimants.length <= 1) return claimants[0]
+  // Several claimants are normal: Claude delivers queued notifications
+  // batched into one user turn, so one entry legitimately carries several
+  // DIFFERENT ids. Ambiguity is only two items under the SAME id.
+  const hay = normalizeForMatch(entry.text)
+  const exact = claimants.find(item => {
+    if (item.mode !== 'task-notification') return false
+    const body = normalizeForMatch(item.content)
+    return body.length > 0 && hay.includes(body)
+  })
+  if (exact) return exact
+  const first = claimants[0]!
+  if (first.mode !== 'task-notification') return first
+  const id = notificationIdOf(first.content)
+  const twins = claimants.filter(item => item.mode === 'task-notification' && notificationIdOf(item.content) === id)
+  return twins.length === 1 ? first : undefined
+}
+
+/**
  * Resolve which pending item a remove carrier names.
  *
  * WHY this is a two-pass resolve and not a single `find`: notification identity
@@ -548,7 +593,7 @@ export function applyCommittedUserEntry(
 ): ClaudeQueueState {
   if (state.debt === null || state.debt.count <= 0) return state
 
-  const claimed = state.pending.find(i => entryClaims(i, entry))
+  const claimed = resolveEntryTarget(state.pending, entry)
   if (claimed) {
     const remaining = state.debt.count - 1
     return {
