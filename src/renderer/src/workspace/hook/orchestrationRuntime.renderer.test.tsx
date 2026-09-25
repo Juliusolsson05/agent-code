@@ -43,7 +43,6 @@ beforeEach(() => {
     onAgentManagementRequest: () => () => undefined,
     resolveOrchestrationRequest: resolved,
     spawnSession,
-    ghostRead: async () => [],
     reportSessionLifecycle: vi.fn(),
     appendFeedDebugLog: async () => undefined,
   } })

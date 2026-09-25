@@ -13,7 +13,7 @@ The proxy is ahead. The file catches up. Eventually they agree.
 
 A **ghost** is a provisional `ClaudeEntry` Agent Code mints from the proxy stream, tagged `_atp.origin = 'ghost'`, with a deterministic uuid (`g-<turnId>-<blockIndex>`). It exists to bridge the gap between the two sources without producing duplicate-render bugs. When the authoritative JSONL entry lands, the ghost is *superseded* and dropped from the visible set. If it never lands, the ghost is *orphaned* and (sometimes — see the predicate) surfaces as the only record of what the proxy observed.
 
-The ghost primitive is general-purpose and lives in the standalone `agent-transcript-parser` package (`./packages/agent-transcript-parser/src/ghost.ts`, doc at `./packages/agent-transcript-parser/docs/ghost.md`). Agent Code's job is to wire it up: mint ghosts from semantic events, persist to disk, reconcile against JSONL, decide when to render.
+The ghost primitive is general-purpose and lives in the standalone `agent-transcript-parser` package (`./packages/agent-transcript-parser/src/ghost.ts`, doc at `./packages/agent-transcript-parser/docs/ghost.md`). Agent Code's job is to wire it up: mint ghosts from semantic events, reconcile against JSONL, decide when to render. (Ghosts are in memory only; see below.)
 
 ## Why ghost exists
 
@@ -27,7 +27,7 @@ The naive alternatives all fail:
 
 The design idea was: one merged feed. Authoritative entries from the file, plus provisional ghost rows when the proxy is ahead, with automatic supersedure when the file catches up. The user sees one row that transitions seamlessly from "live preview" to "committed."
 
-That plan was never fully completed (see [Phase 3: deliberately out of scope](#phase-3-deliberately-out-of-scope)). What ships today is the *bookkeeping* half of the system — minting, reconciling, persisting — combined with a tightly-scoped render path that surfaces ghosts only in the rare case where they're actually needed: when JSONL has stalled past the proxy.
+That plan was never fully completed (see [Phase 3: deliberately out of scope](#phase-3-deliberately-out-of-scope)). What ships today is the *bookkeeping* half of the system — minting, reconciling, evicting — combined with a tightly-scoped render path that surfaces ghosts only in the rare case where they're actually needed: when JSONL has stalled past the proxy.
 
 ## The two visible owners of the live turn
 
@@ -41,10 +41,11 @@ So the practical question for the ghost system is: **what is rendering ghost row
 
 Answer: a small set of fallback cases where `SemanticStreamingTurn` can't help.
 
-1. **JSONL stuck mid-turn.** The agent process gets wedged or its writer backlogs while the proxy keeps emitting events. `currentTurn` eventually clears (or doesn't), JSONL never lands. The ghost on disk is the only record of the turn.
-2. **Crash + restart.** Agent Code exited mid-turn. Semantic state was in-memory and is gone. JSONL has a partial transcript that ends before the in-flight turn. The ghost log on disk preserves what the proxy saw; on resume it surfaces the lost partial turn.
+1. **JSONL stuck mid-turn.** The agent process gets wedged or its writer backlogs while the proxy keeps emitting events. `currentTurn` eventually clears (or doesn't), JSONL never lands. The in-memory ghost is the only record of the turn while the pane is live.
 
-Both reduce to the same condition: **proxy state is past the JSONL tail with no recovery in sight.** The render predicate detects this structurally.
+That is the condition the render predicate detects structurally: **proxy state is past the JSONL tail with no recovery in sight.**
+
+**Crash + restart is no longer covered, on purpose (2026-09-25).** Ghosts used to be persisted to `<userData>/ghost-logs/<sessionId>.ghost.jsonl` so a pane that crashed mid-turn could show the lost partial turn after a restart. Nothing had read those logs since the July recovery rewrite, they had grown to 2.1 GB, and reviving the reader (#1227) showed it needs clock and identity machinery to avoid repainting committed turns. The text it would restore is also not in the agent's own resumed conversation, so showing it implies knowledge the agent does not have. The on-disk log was removed; `src/main/storage/legacyGhostLogs.ts` deletes what older builds left behind. Ghosts are in memory only and do not survive a reload.
 
 ## Architecture: components and roles
 
@@ -93,25 +94,24 @@ The whole subsystem reads in one direction — semantic events flow in, the rend
    │   ghosts whose authoritative entry just landed.                  │
    │ - Stamps lastJsonlEntryAt from the JSONL stream.                 │
    │ - Runs orphanStale every 1s with TTL=30s.                        │
-   │ - Persists changed ghosts via window.api.ghostAppend.            │
-   └────────────┬──────────────────────────────────────┬──────────────┘
-                │                                      │
-                ▼                                      ▼
-   ┌──────────────────────────┐         ┌──────────────────────────────┐
-   │ src/main/ghostJournal.ts │         │ src/renderer/src/workspace/  │
-   │ (main process)           │         │   mergedEntries.ts           │
-   │                          │         │                              │
-   │ One JSONL file per       │         │ selectMergedEntries — the    │
-   │ session under            │         │ five-rule render predicate.  │
-   │ <userData>/ghost-logs/.  │         │ Decides which ghosts (if     │
-   │ Append-only, batched     │         │ any) merge into the rendered │
-   │ at 100ms.                │         │ feed via mergeWithUpstream.  │
-   │                          │         │                              │
-   │ Read on resume by        │         │ Most ticks returns           │
-   │ src/renderer/src/        │         │ runtime.entries unchanged.   │
-   │   workspace/hook/        │         └──────────────┬───────────────┘
-   │   actions/session.ts.    │                        │
-   └──────────────────────────┘                        ▼
+   └───────────────────────────────────────┬──────────────────────────┘
+                                           │
+                                           ▼
+                                        ┌──────────────────────────────┐
+                                        │ src/renderer/src/workspace/  │
+                                        │   mergedEntries.ts           │
+                                        │                              │
+                                        │ selectMergedEntries — the    │
+                                        │ five-rule render predicate.  │
+                                        │ Decides which ghosts (if     │
+                                        │ any) merge into the rendered │
+                                        │ feed via mergeWithUpstream.  │
+                                        │                              │
+                                        │ Most ticks returns           │
+                                        │ runtime.entries unchanged.   │
+                                        └──────────────┬───────────────┘
+                                                       │
+                                                       ▼
                                           ┌─────────────────────────┐
                                           │ Feed.tsx renders this   │
                                           │ as committed transcript │
@@ -122,11 +122,10 @@ The whole subsystem reads in one direction — semantic events flow in, the rend
 ### Components
 
 - **atp ghost primitives** — `packages/agent-transcript-parser/src/ghost.ts`. Pure library: `createGhost`, `updateGhost`, `supersedeGhost`, `orphanGhost`, `reduceGhostLog`, `reduceGhostLogSansSuperseded`, `mergeWithUpstream`. No IO. Reusable outside Agent Code.
-- **Agent Code renderer reducer** — `src/renderer/src/workspace/ghosts.ts`. Bridges semantic events to atp primitives: `ghostsFromSemanticTurn`, `reconcileUpstream`, `orphanStale`, `gcSupersededGhosts`, `ghostsToPersist`. Reference-stable on no-op.
+- **Agent Code renderer reducer** — `src/renderer/src/workspace/ghosts.ts`. Bridges semantic events to atp primitives: `ghostsFromSemanticTurn`, `reconcileUpstream`, `orphanStale`, `gcSupersededGhosts`, `gcHiddenOrphanGhosts`. Reference-stable on no-op.
 - **render predicate** — `src/renderer/src/workspace/mergedEntries.ts`. The five-rule selector. Source of truth for "does this ghost surface in the feed."
-- **IPC wiring** — `src/renderer/src/workspace/hook/ipc/useIpcSubscriptions.ts`. The orchestration layer: mint on semantic, reconcile on JSONL, sweep orphans on a 1s timer (flag stale ghosts, GC superseded ghosts, GC hidden orphans — see [Eviction](#eviction-of-hidden-orphans)), stamp `lastJsonlEntryAt` from JSONL bursts, persist diffs.
-- **bootstrap on resume** — `src/renderer/src/workspace/hook/actions/session.ts` (ghost log read + reconcile against loaded JSONL tail) and `src/renderer/src/workspace/hook/actions/initialHistory.ts` (stamping `lastJsonlEntryAt` from the loaded tail).
-- **disk persistence** — `src/main/ghostJournal.ts` (writer with batched 100 ms drain), `src/main/ipc/ghost.ts` (`ghost:append` / `ghost:read`), `src/preload/api/ghost.ts` (renderer bridge).
+- **IPC wiring** — `src/renderer/src/workspace/hook/ipc/useIpcSubscriptions.ts`. The orchestration layer: mint on semantic, reconcile on JSONL, sweep orphans on a 1s timer (flag stale ghosts, GC superseded ghosts, GC hidden orphans — see [Eviction](#eviction-of-hidden-orphans)), stamp `lastJsonlEntryAt` from JSONL bursts.
+- **history load** — `src/renderer/src/workspace/hook/actions/initialHistory.ts` reconciles in-memory ghosts against the loaded JSONL tail and stamps `lastJsonlEntryAt` from it.
 - **runtime field** — `src/renderer/src/workspace/workspaceState.ts` — `SessionRuntime.ghosts: Map<string, GhostEntry>` and `SessionRuntime.lastJsonlEntryAt: number | null`.
 - **proxy-side sidecar filter** — `packages/claude-code-headless/src/proxy/ClaudeProxyAdapter.ts:isSidecarFlow`. Demotes Claude Code's auxiliary calls (title gen, branch-name, compaction summary, hook-agent) to `attribution: 'secondary'` so they don't open a turn at all. Catches most known sidecars but not the predict-next-prompt variant; the renderer-side shape filter (rule 5 below) is the backstop.
 - **the parallel live owner** — `src/renderer/src/features/feed/ui/semantic/StreamingTurn.tsx`. Reads `runtime.semantic.currentTurn` directly. Not part of the ghost system but inseparable from it: rule 3 of the predicate exists specifically because `SemanticStreamingTurn` owns the live current turn.
@@ -138,13 +137,13 @@ created ──► updated* ──► superseded ──► (evicted after 5 s)
                   \──► orphaned ──► (evicted after 5 s, once the JSONL tail has passed it)
 ```
 
-- **created** — `createGhost` mints a fresh ghost with a deterministic `(turnId, blockIndex)` uuid. `createdAt = updatedAt = now`. Append to the journal.
-- **updated** — `updateGhost` produces a revised snapshot with new content and bumped `updatedAt`. Same uuid. Append to the journal. The reducer `reduceGhostLog` picks the freshest by `updatedAt` at read time.
-- **superseded** — `supersedeGhost` sets `_atp.supersededBy = realUuid`. Triggered by `reconcileUpstream` when a JSONL entry lands that matches the ghost's `(turnId, blockIndex)` (or `tool_use_id`). Append to the journal as the final state record.
+- **created** — `createGhost` mints a fresh ghost with a deterministic `(turnId, blockIndex)` uuid. `createdAt = updatedAt = now`.
+- **updated** — `updateGhost` produces a revised snapshot with new content and bumped `updatedAt`. Same uuid.
+- **superseded** — `supersedeGhost` sets `_atp.supersededBy = realUuid`. Triggered by `reconcileUpstream` when a JSONL entry lands that matches the ghost's `(turnId, blockIndex)` (or `tool_use_id`).
 - **orphaned** — `orphanGhost` sets `_atp.orphanedAt`. Triggered by the TTL sweep (`orphanStale`, every 1 s, threshold 30 s). The ghost is now eligible for the render predicate's rule 2.
-- **evicted** — in-memory only; the journal keeps the last appended state. Superseded ghosts leave `runtime.ghosts` 5 s after supersedure (`gcSupersededGhosts`). Orphaned ghosts leave 5 s after the orphan flag **only once rule 4 hides them for good** — `updatedAt <= lastJsonlEntryAt` — and never while their turn is still `semantic.currentTurn` (`gcHiddenOrphanGhosts`, #724). See [Eviction of hidden orphans](#eviction-of-hidden-orphans).
+- **evicted** — removed from `runtime.ghosts`. Superseded ghosts leave `runtime.ghosts` 5 s after supersedure (`gcSupersededGhosts`). Orphaned ghosts leave 5 s after the orphan flag **only once rule 4 hides them for good** — `updatedAt <= lastJsonlEntryAt` — and never while their turn is still `semantic.currentTurn` (`gcHiddenOrphanGhosts`, #724). See [Eviction of hidden orphans](#eviction-of-hidden-orphans).
 
-A ghost is appended-only on disk. There is no in-place mutation, no file rewrite, no lock file. `reduceGhostLog` folds the append stream into a `Map<uuid, GhostEntry>` at read time.
+Every transition returns a new snapshot; the map is replaced, never mutated in place (see [Reference stability](#reference-stability)).
 
 ## The render predicate
 
@@ -195,23 +194,9 @@ This is not an optimization — it is **load-bearing for Feed's row memos.** If 
 
 If you add a new code path that touches the ghost map, **uphold the contract**: clone only when you actually mutate, and return the input by identity when you didn't.
 
-## Persistence and resume
+## Persistence
 
-The ghost journal lives at `<userData>/ghost-logs/<sessionId>.ghost.jsonl`. One file per session. Append-only JSONL. Owned by the main process; the renderer fires-and-forgets `window.api.ghostAppend`.
-
-Why a separate file and not the agent's own JSONL: Agent Code never writes into Claude Code's `~/.claude/projects/<proj>/<sid>.jsonl` or Codex's rollout file. Those belong to the agent and are actively written by its batched queue; two writers on the same file is a torn-line / lost-write disaster. Ghosts are also an Agent Code-internal concern — no external tool needs them.
-
-Why batched at 100 ms: matches Claude Code's own transcript batch interval (`FLUSH_INTERVAL_MS` in `claude-code-src/full/utils/sessionStorage.ts`). Per-entry fsync during streaming would be tens of writes per second across every active pane. The trade-off — up to 100 ms of data loss on hard crash — is acceptable because ghost is provisional by definition and the agent's own JSONL survives independently.
-
-On resume (`src/renderer/src/workspace/hook/actions/session.ts:199-266`):
-
-1. After session spawn, fire-and-forget `window.api.ghostRead(sessionId)`.
-2. Fold the returned entries via `reduceGhostLogSansSuperseded` (drops ghosts already superseded on disk so they don't resurface on a fresh session).
-3. Merge into `runtime.ghosts` — disk ghosts only fill slots the live runtime hasn't already produced. If a uuid exists in-memory, prefer the in-memory copy because it's strictly fresher.
-4. Run `reconcileUpstream` against `current.entries` (the JSONL tail loaded by `loadInitialHistoryForSession`). This catches the case where the previous session's ghost log has entries whose authoritative JSONL has already landed in the loaded tail — without this pass they'd resurface as orphans.
-5. Persist any newly-produced supersede records.
-
-The `lastJsonlEntryAt` field is also primed on resume from the loaded tail's max `entry.timestamp` (see `initialHistory.ts`), so the predicate's rule 4 has the right anchor against ghost `_atp.updatedAt` from the previous run.
+None. Ghosts live only in `runtime.ghosts` and are rebuilt from the live semantic stream; see [what ghost is for](#the-two-visible-owners-of-the-live-turn) for why crash-resume was dropped (2026-09-25). The history load still primes `lastJsonlEntryAt` from the loaded tail (`initialHistory.ts`), so rule 4 has the right anchor for ghosts minted after a reload.
 
 ## The orphan TTL
 
@@ -227,7 +212,6 @@ In practice, during healthy operation the orphan flag rarely fires for a real as
 The TTL does fire reliably in the genuine stuck cases:
 
 - **Live-stuck:** `currentTurn` cleared (without JSONL having caught up), semantic stream went silent, and the turn is no longer retained in semantic history → orphan after 30 s, predicate evaluates, ghost may render. Note: if `currentTurn` instead hangs alive with the same `turnId`, or if bounded semantic history still contains the completed turn, rule 3 keeps the ghost hidden and `SemanticStreamingTurn` continues to own visibility.
-- **Resume-after-crash:** ghost log loaded from disk, ghost's `updatedAt` is from before the crash → orphan sweep fires within the first second of resume → predicate evaluates against the loaded JSONL tail.
 
 ## Eviction of hidden orphans
 
@@ -236,14 +220,14 @@ Rule 4 is monotone: `lastJsonlEntryAt` only ever moves forward (every writer max
 `isGhostHiddenBehindJsonlTail` (`session-runtime/ghosts.ts`) is rule 4 extracted so two other consumers agree with the predicate exactly:
 
 - `computeProtectBound` skips hidden orphans — they have no visible claim left, so trimming their would-be committed owner cannot re-paint them.
-- `gcHiddenOrphanGhosts` (in the 1 s sweep, after `gcSupersededGhosts`) evicts them 5 s after the orphan flag — the same grace superseded ghosts get, so the orphan record has reached the journal first.
+- `gcHiddenOrphanGhosts` (in the 1 s sweep, after `gcSupersededGhosts`) evicts them 5 s after the orphan flag — the same grace superseded ghosts get (it was introduced so the orphan record could reach the on-disk log first; that log is gone, and the grace stays so both evictions run on one clock).
 
 Two exemptions are load-bearing:
 
 - **Orphans newer than the tail stay.** That is the stuck-JSONL fallback this whole subsystem exists for; they may still render and still pin the bound.
 - **Ghosts of the live `currentTurn` stay even when hidden.** `ghostsFromSemanticTurn` re-mints any block of `currentTurn` whose uuid is missing from the map, on every semantic tick. Evicting such a ghost would re-create it un-orphaned with a fresh `updatedAt` — churn, and a reset of rule 4's clock that could let it paint later as a duplicate. `currentTurn.startedAt` protects the trim bound in the meantime.
 
-Rules 1–5, the orphan TTL and which ghosts render are unchanged by eviction; on resume an evicted orphan is reloaded from the journal, hidden by the same rule, and swept again.
+Rules 1–5, the orphan TTL and which ghosts render are unchanged by eviction.
 
 ## Phase 3: deliberately out of scope
 
