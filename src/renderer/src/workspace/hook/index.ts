@@ -953,6 +953,7 @@ export function useWorkspace(
     setState,
     refs,
     sessionActions,
+    showToast,
   )
 
   const dispatchActions = useDispatchActions(
