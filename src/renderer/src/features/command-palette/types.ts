@@ -1,4 +1,5 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
+import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -194,6 +195,19 @@ export type CommandPickerVisibility = 'default' | 'advanced' | 'experimental' | 
 
 export type CommandContext = {
   workspace: Workspace
+  /**
+   * The agent this invocation acts on, when the caller chose one explicitly
+   * (#1180: the Sessions list right-click menu). Absent for the palette,
+   * keybindings and the app menu, which act on the focused agent exactly as
+   * before.
+   *
+   * Read it ONLY through `commandTarget(ctx)`, never `commandTargetSessionId`
+   * directly: a command that resolves focus while `target` is set acts on the
+   * wrong agent, silently. A command may carry `contextMenu` metadata only
+   * once every path in its `when` and `run` uses `commandTarget(ctx)`
+   * (commandTarget.renderer.test.ts enforces this for every opted-in command).
+   */
+  target?: SessionId
   ui: {
     openNewTabPicker: () => void
     openReorderTabs: () => void
@@ -528,6 +542,30 @@ export type CommandDef = {
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
+  /**
+   * Offer this command in the Sessions list right-click menu (#1180), which
+   * runs it for the clicked row's agent through `ctx.target`.
+   *
+   * WHY metadata on the command rather than a hand-written menu: the menu then
+   * has the palette's titles, `when` filtering and effective shortcuts for
+   * free, and cannot drift from them. Only commands that honour
+   * `commandTarget(ctx)` end to end may declare it.
+   */
+  contextMenu?: CommandContextMenuPlacement
+}
+
+export type CommandContextMenuGroup = 'identity' | 'agent' | 'copy' | 'close'
+
+export type CommandContextMenuPlacement = {
+  group: CommandContextMenuGroup
+  /** Order within the group; lower first. */
+  order: number
+  /** A menu-specific label, for commands whose palette title names focus
+   *  ("Close Focused Session" reads wrong on a right-clicked row). */
+  title?: string
+  /** Only offer it when the row reports this live state (e.g. a goal loop
+   *  that can be stopped), which the command's own `when` cannot see. */
+  requires?: 'goal-loop'
 }
 
 /** The unavailable half of `CommandAvailability`, as a command declares it. */

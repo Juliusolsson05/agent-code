@@ -14,6 +14,7 @@ import { readerInteractions } from '@renderer/features/reader/controlInteraction
 import { pinInteractions } from '@renderer/features/dispatch-pin/controlInteractions'
 import { pathInteractions } from '@renderer/features/path-picker/controlInteractions'
 import { editorInteractions } from '@renderer/features/editor/controlInteractions'
+import { sessionContextMenuInteractions } from '@renderer/features/session-context-menu/controlInteractions'
 
 const bindingSchema = z.object({
   id: z.string(), description: z.string(), inputType: z.enum(['keyboard', 'mouse']),
@@ -39,7 +40,7 @@ export function keybindingReference(): Array<z.infer<typeof bindingSchema>> {
   const fixed = [
     ...RESERVED_INTERACTIONS.map((entry, index) => ({ id: `reserved:${index}`, description: entry.owner, context: entry.context, bindings: entry.bindings })),
     ...composerInteractions, ...paletteInteractions, ...workspaceInteractions, ...readerInteractions,
-    ...pinInteractions, ...pathInteractions, ...editorInteractions,
+    ...pinInteractions, ...pathInteractions, ...editorInteractions, ...sessionContextMenuInteractions,
   ].map(entry => ({ ...entry, bindings: [...entry.bindings], defaults: [...entry.bindings], inputType: 'keyboard' as const, source: entry.bindings.length ? 'fixed' as const : 'external' as const, customized: false }))
   const configured = [
     { id: 'dictation.keyboard', description: 'Configured dictation hotkey; requires dictation setup and permission.', context: 'global dictation', inputType: 'keyboard' as const, value: settings.dictationShortcut, defaultValue: DEFAULT_SETTINGS.dictationShortcut, configuredEnabled: settings.dictationEnabled },

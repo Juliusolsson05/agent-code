@@ -40,6 +40,7 @@ import { controlReference as agentActivityReference } from '@renderer/features/a
 import { controlReference as browserPocketReference } from '@renderer/features/browser-pocket/controlReference'
 import { controlReference as mcpReference } from '@renderer/features/mcp/controlReference'
 import { controlReference as skillsReference } from '@renderer/features/skills/controlReference'
+import { controlReference as sessionContextMenuReference } from '@renderer/features/session-context-menu/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -82,6 +83,7 @@ export const featureReferences = [
   ...browserPocketReference,
   ...mcpReference,
   ...skillsReference,
+  ...sessionContextMenuReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -94,6 +96,7 @@ export const referenceOwnership = {
   "goal-loop": "goal-loop",
   "caffeinate": "caffeinate",
   "session-preview": "session-preview",
+  "session-context-menu": "session-context-menu",
   "voice-dictation": "dictation",
   "path-picker": "path-picker",
   "conversations": "conversations",

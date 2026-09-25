@@ -1,3 +1,4 @@
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
@@ -135,7 +136,9 @@ function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
 }
 
 function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolean {
-  const sessionId = commandTargetSessionId(ctx.workspace)
+  // The command's own target (#1180): with an explicit `ctx.target` the
+  // rendered-view policy must judge THAT agent's view, not the focused one's.
+  const sessionId = commandTarget(ctx)
   if (!sessionId) return true
   const meta = ctx.workspace.state.sessions[sessionId]
   const kind = meta?.kind

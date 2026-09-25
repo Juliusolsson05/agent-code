@@ -15,10 +15,50 @@ import type { ExtensionFailure } from '@renderer/apps/types'
  */
 export type PendingCommandInvocation = {
   id: string
-  source: 'native-menu' | 'keybinding'
+  source: 'native-menu' | 'keybinding' | 'context-menu'
+  /**
+   * The agent the command acts on, when the caller named one (#1180: the
+   * Sessions list right-click menu). Absent means "the focused agent", which is
+   * what every native-menu and keybinding invocation still means. Carried into
+   * `CommandContext.target`; see `commandTarget` for why a vanished target
+   * refuses instead of falling back to focus.
+   */
+  target?: SessionId
   /** Close the palette again once the command has run. True when the palette
    *  was not already open, so a menu click or chord does not leave it visible. */
   closeAfterRun: boolean
+}
+
+/**
+ * A Sessions row asking for its right-click menu (#1180).
+ *
+ * WHY this goes through the store and not straight to `menu:popup` from the
+ * row: the menu is built from command `when` predicates, which need a live
+ * CommandContext — and the palette host is the only place one exists (the
+ * same reason `pendingCommandInvocation` exists). The row records the request;
+ * the host builds the template, shows it, and routes the pick.
+ */
+export type SessionMenuRequest = {
+  sessionId: SessionId
+  /**
+   * The row's own left-click action, and the lane it would use.
+   *
+   * WHY a callback rather than a lane index for the host to act on: what a
+   * click does depends on which grid row's index was clicked (it selects into
+   * that row's focused lane, or moves focus to the row's first lane —
+   * TiledDispatchLayout's `selectIntoRow`). Re-deriving that in the host would
+   * be a second definition of "what clicking this row does", and the two
+   * would drift. Absent for a disabled row, whose click does nothing.
+   *
+   * A function in store state is fine here: only `settings` is persisted, and
+   * the request is cleared the moment the host picks it up.
+   */
+  showInLane?: { label: string; run: () => void }
+  /** The row's goal loop has not ended, so "Stop Goal Loop" applies. */
+  goalLoopLive: boolean
+  /** Window coordinates for a keyboard-opened menu; absent = at the cursor. */
+  x?: number
+  y?: number
 }
 
 export type UiShellState = {
@@ -58,6 +98,14 @@ export type UiShellState = {
    * invocations share ONE dispatch path rather than growing a second one.
    */
   pendingCommandInvocation: PendingCommandInvocation | null
+  /** A Sessions row menu waiting for the palette host (#1180). */
+  sessionMenuRequest: SessionMenuRequest | null
+  /**
+   * The row whose menu is on screen, so it can stay highlighted: right-click
+   * deliberately does not select the row (D5), and without a mark the user
+   * cannot tell which of twenty similar rows the menu is about.
+   */
+  sessionMenuOpenFor: SessionId | null
   pathPickerOpen: boolean
   pathPickerDefault: string
   /** When true, the Reorder Tabs modal is open.
