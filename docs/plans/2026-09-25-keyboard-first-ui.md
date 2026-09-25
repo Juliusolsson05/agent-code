@@ -444,7 +444,7 @@ entry when it lands.
 | S34 | UsageModal | ↑↓ rail; lowercase "close"; p-4 | D5 sections; Close ⎋; T3 | done |
 | S35 | AgentAnalyticsModal | "close" button; p-4 | as S34 | done |
 | S36 | KeyVaultModal | Enter in inputs; window.confirm; prose footer | ConfirmDialog; Close ⎋ | done |
-| S37 | RemotePanel | ✕ raw button gets focus | Close ⎋; T3 | todo |
+| S37 | RemotePanel | ✕ raw button gets focus | Close ⎋; T3 | done |
 | S38 | PerformanceMonitor | showCloseButton; p-4 sections | D5 sections; Close ⎋ | todo |
 | S39 | SetupGate | px-5 py-4; raw buttons; blocked Esc | T3/T8; legend when Esc blocked | todo |
 | S40 | DictationGuideModal | DialogActions Done | chips (automatic from F2); T3 | todo |
@@ -747,6 +747,10 @@ Sharp corners and one light theme.
   another key's Edit or "+ New Key" all ask "Discard this key?" (focus on
   Cancel) — an untouched Edit form never asks; the long note sits
   above a footer that is now just `Close ⎋`; 860 wide.
+- **S37 Remote Control:** standard header with the corner `× ⎋` (was a bare
+  ✕ with no focus ring that took focus on open); Enable/Disable and Show QR
+  are outline buttons; LAN/Tunnel shows the ON half in the "active control"
+  colours and announces it; Revoke is the red-outline button; 440 wide.
 
 ## Tasks
 
@@ -821,6 +825,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S37: Remote panel chrome — DialogHeader + corner close,
+  Button for Enable/Show QR/Revoke (guards kept), aria-pressed on the Reach
+  switch and the server toggle. Confirm-red: the new test fails on the
+  pre-change file.
 - 2026-09-25 steering note k6 (valid): (1, high) provider switch by
   arrow/click cleared a typed key without asking — every form-replacing
   path (close, provider switch, Edit, + New Key) now goes through one

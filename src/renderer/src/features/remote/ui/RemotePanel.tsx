@@ -5,8 +5,10 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Button } from '@renderer/components/ui/button'
 import type {
   RemotePairingIssue,
   RemoteStatus,
@@ -131,25 +133,21 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
         if (!nextOpen) onClose()
       }}
     >
+      {/* Standard chrome (plan S37): the corner `× ⎋` replaces a raw ✕ that
+          had no focus ring and took Radix's mount focus, so the panel opened
+          on its own close button; the header is DialogHeader. */}
       <DialogContent
-        className="flex max-h-[80vh] w-[440px] flex-col overflow-y-auto border-border p-0 text-[12px]"
+        size="sm"
+        showCloseButton
+        className="flex max-h-[80vh] flex-col overflow-y-auto text-[12px]"
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border select-none">
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.16em] text-muted">Remote Control</div>
-            <DialogTitle className="font-medium">Control your agents from a phone</DialogTitle>
-            <DialogDescription className="sr-only">
-              Configure the remote server, pair phones, and manage connected devices.
-            </DialogDescription>
-          </div>
-          <button
-            className="text-muted hover:text-ink px-1"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
+        <DialogHeader className="select-none pr-16">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-muted">Remote Control</div>
+          <DialogTitle>Control your agents from a phone</DialogTitle>
+          <DialogDescription className="sr-only">
+            Configure the remote server, pair phones, and manage connected devices.
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="px-4 py-3 flex flex-col gap-4">
           {/* Server toggle */}
@@ -162,17 +160,17 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                   : 'Off — phones cannot connect'}
               </div>
             </div>
-            <button
-              className={`rounded-control border px-3 py-1.5 flex-shrink-0 ${
-                status?.enabled
-                  ? 'border-border bg-surface-hi text-ink'
-                  : 'border-border bg-surface-hi text-ink-dim hover:text-ink'
-              }`}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="flex-shrink-0"
+              aria-pressed={Boolean(status?.enabled)}
               disabled={busy || status === null}
               onClick={toggleServer}
             >
               {status?.enabled ? 'Disable' : 'Enable'}
-            </button>
+            </Button>
           </div>
 
           {/* #495 A11: when the macOS application firewall silently drops
@@ -202,12 +200,18 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                       : 'Same Wi-Fi only. Switch to reach it from anywhere.'}
                   </div>
                 </div>
-                <div className="flex flex-shrink-0">
+                {/* A two-way switch: aria-pressed carries which is on (it was
+                    colour only), and each half takes the focus ring. The ON
+                    half stays disabled (choosing it again is a no-op) but is
+                    announced as pressed. */}
+                <div className="flex flex-shrink-0" role="group" aria-label="Reach">
                   <button
-                    className={`rounded-l-control border px-3 py-1.5 ${
+                    type="button"
+                    aria-pressed={status.transport === 'lan'}
+                    className={`rounded-l-control border px-3 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                       status.transport === 'lan'
-                        ? 'border-border bg-surface-hi text-ink'
-                        : 'border-border text-ink-dim hover:text-ink'
+                        ? 'border-border bg-control-active-bg text-control-active-fg'
+                        : 'border-border text-control-fg hover:bg-control-hover-bg hover:text-ink'
                     }`}
                     disabled={busy || status.transport === 'lan'}
                     onClick={() => switchTransport('lan')}
@@ -215,10 +219,12 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     LAN
                   </button>
                   <button
-                    className={`rounded-r-control border border-l-0 px-3 py-1.5 ${
+                    type="button"
+                    aria-pressed={status.transport === 'tunnel'}
+                    className={`rounded-r-control border border-l-0 px-3 py-1.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                       status.transport === 'tunnel'
-                        ? 'border-border bg-surface-hi text-ink'
-                        : 'border-border text-ink-dim hover:text-ink'
+                        ? 'border-border bg-control-active-bg text-control-active-fg'
+                        : 'border-border text-control-fg hover:bg-control-hover-bg hover:text-ink'
                     }`}
                     disabled={busy || status.transport === 'tunnel'}
                     onClick={() => switchTransport('tunnel')}
@@ -235,13 +241,9 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
             <div className="border-t border-border pt-3 flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <div className="font-medium">Pair a device</div>
-                <button
-                  className="rounded-control border border-border bg-surface-hi px-3 py-1.5 text-ink-dim hover:text-ink"
-                  disabled={busy}
-                  onClick={startPairing}
-                >
-                  {pairing ? 'New code' : 'Show QR'}
-                </button>
+                <Button type="button" variant="outline" size="sm" disabled={busy} onClick={startPairing}>
+                  {pairing ? 'New Code' : 'Show QR'}
+                </Button>
               </div>
               {pairing ? (
                 <div className="flex flex-col items-center gap-2 py-2">
@@ -296,13 +298,17 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                         : ''}
                     </div>
                   </div>
-                  <button
-                    className="rounded-control border border-border px-2 py-1 text-ink-dim hover:text-danger flex-shrink-0"
+                  <Button
+                    type="button"
+                    variant="destructive-outline"
+                    size="xs"
+                    className="flex-shrink-0"
+                    aria-label={`Revoke ${device.name}`}
                     disabled={busy}
                     onClick={() => revoke(device.deviceId)}
                   >
                     Revoke
-                  </button>
+                  </Button>
                 </div>
               ))
             )}
