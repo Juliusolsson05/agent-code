@@ -39,14 +39,8 @@ import type {
 } from '@shared/types/providerConditions'
 import { useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { ConditionPromptShell } from '@providers/shared/renderer/conditions/ConditionPromptShell'
 
 // Per-provider kind→state binding (see CodexStateByKind for the rationale
 // — eraseRegistry checks the registry literal against this, so filing a
@@ -65,39 +59,8 @@ function isRejectAction(action: ConditionAction): boolean {
   return /reject|deny|decline/i.test(action.label)
 }
 
-function ConditionButtons({
-  actions,
-  dispatch,
-}: {
-  actions: ConditionAction[]
-  dispatch: (action: ConditionAction) => Promise<void>
-}) {
-  // Initially focus the first non-destructive action so Enter accepts, not
-  // rejects — matches the trust-dialog convention.
-  const firstPrimaryIdx = actions.findIndex(a => !isRejectAction(a))
-  return (
-    <div className="flex justify-end gap-2 mt-6">
-      {actions.map((action, i) => {
-        const reject = isRejectAction(action)
-        return (
-          <Button
-            key={action.kind === 'custom' ? action.id : `pty-${i}`}
-            type="button"
-            // data-autofocus (not autoFocus): see pane-dialog.tsx (#713).
-            data-autofocus={i === firstPrimaryIdx ? '' : undefined}
-            onClick={() => {
-              void dispatch(action)
-            }}
-            variant={reject ? 'outline' : 'default'}
-          >
-            {action.label}
-          </Button>
-        )
-      })}
-    </div>
-  )
-}
-
+// The shell is shared with the other runtime-authored provider (UI pass):
+// providers/shared/renderer/conditions/ConditionPromptShell.tsx.
 function ConditionShell({
   heading,
   children,
@@ -110,25 +73,15 @@ function ConditionShell({
   dispatch: (action: ConditionAction) => Promise<void>
 }) {
   return (
-    <Dialog open>
-      <DialogContent
-        className="modal-pop w-[480px] max-w-[calc(100%-4rem)] p-6"
-        onEscapeKeyDown={event => event.preventDefault()}
-        onPointerDownOutside={event => event.preventDefault()}
-      >
-        <div className="flex items-start gap-3 mb-4">
-          <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
-          <DialogTitle className="text-[14px] font-semibold leading-[1.3]">{heading}</DialogTitle>
-          <DialogDescription className="sr-only">
-            OpenCode is waiting for an explicit response before it can continue.
-          </DialogDescription>
-        </div>
-        <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">{children}</div>
-        <div className="pl-6">
-          <ConditionButtons actions={actions} dispatch={dispatch} />
-        </div>
-      </DialogContent>
-    </Dialog>
+    <ConditionPromptShell
+      heading={heading}
+      description="OpenCode is waiting for an explicit response before it can continue."
+      actions={actions}
+      dispatch={dispatch}
+      isReject={isRejectAction}
+    >
+      {children}
+    </ConditionPromptShell>
   )
 }
 

@@ -96,6 +96,15 @@ export type DialogActionsProps = {
    */
   escapeCancels?: boolean
   /**
+   * Which footer button takes focus when the dialog opens, marked with
+   * `data-autofocus`, which DialogContent honours in BOTH modes: Radix
+   * dialogs and pane-scoped condition dialogs (#713).
+   * `focusDialogActionOnOpen` still works for Radix-only dialogs, but it
+   * rides on Radix's open-autofocus event, which a pane dialog does not
+   * have. Omit it to keep the default (the first tabbable control).
+   */
+  initialFocus?: 'cancel' | 'confirm'
+  /**
    * Keys that have no button of their own (↑↓ move, Space toggle, ⌫ back),
    * rendered as ONE compact line left of the buttons. See `KbdLegend`.
    * WHY here and not a body row: the footer is where the eye already goes for
@@ -222,6 +231,7 @@ export function DialogActions({
   confirmKey = 'Enter',
   confirmOnEnter = true,
   escapeCancels = true,
+  initialFocus,
   legend,
   extraActions,
   children,
@@ -289,7 +299,7 @@ export function DialogActions({
       ) : null}
       {extraActions}
       {onCancel ? (
-        <Button variant="ghost" size="sm" data-dialog-action="cancel" disabled={cancelDisabled} onClick={onCancel}>
+        <Button variant="ghost" size="sm" data-dialog-action="cancel" data-autofocus={initialFocus === 'cancel' ? '' : undefined} disabled={cancelDisabled} onClick={onCancel}>
           {cancelLabel}
           {escapeCancels ? <Kbd binding="Escape" /> : null}
         </Button>
@@ -299,6 +309,7 @@ export function DialogActions({
           variant={tone === 'danger' ? 'destructive' : 'default'}
           size="sm"
           data-dialog-action="confirm"
+          data-autofocus={initialFocus === 'confirm' ? '' : undefined}
           disabled={blocked}
           onClick={onConfirm}
         >

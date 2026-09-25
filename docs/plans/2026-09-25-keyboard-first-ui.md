@@ -554,6 +554,18 @@ becomes visible text. Where it is detail (paths, counts), it becomes
 reachable on focus. Pure decoration keeps its `title`. Cost if wrong: some
 rows stay hover-only; recorded per row.
 
+### General UI/UX consistency pass (Task 8)
+
+Owner, 2026-09-25: "make the UI good and consistent in general, UI and UX,
+this is supposed to be a serious application". Each row names the surface,
+the inconsistency and the target in the design system (T-rules plus the
+components/ui primitives). A second whole-app consistency sweep (read-only)
+feeds the rows below G-1.
+
+| # | Surface | Inconsistency | Target | Status |
+|---|---|---|---|---|
+| G-1 | Provider prompts: Claude trust + permission, Codex trust, Grok and OpenCode question/permission/plan | hand-laid cards: 18px "!" glyph, 14px title, pl-6 body, lowercase "cancel" / "trust this folder" / "deny" / "approve", full-size buttons; Grok's shell a clone of OpenCode's | DialogHeader + px-4 body + DialogActions (Claude/Codex) or the shared `ConditionPromptShell` (Grok/OpenCode); sentence-case labels; sm buttons; `DialogActions.initialFocus` | done |
+
 ## Owner visual checklist
 
 What to eyeball per surface once built (the app is never launched here). One
@@ -828,6 +840,12 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **G-1 Agent prompts (trust folder, permission, OpenCode/Grok questions):**
+  they now look like every other dialog: a normal header with a one-line
+  description, the path/command in a code box, and the standard footer.
+  Labels are sentence case: "Cancel · Trust folder ↩", "Deny · Approve ↩",
+  "Trust directory". The 18px "!" glyph is gone. Check a long command still
+  wraps inside the box and the buttons stay on screen in a short pane.
 - **K2-18 Settings › Skills › "Also found on this machine":** one grey key
   line under the heading explains ● and —.
 - **K2-13 Agent Status (command "Agent Status"):** Identity now lists the
@@ -1589,3 +1607,12 @@ Sharp corners and one light theme.
 - 2026-09-25 K2 sweep closed: every row is done, verified as no-change, or
   kept/deferred with a recorded reason (the title-only family ruling: decision
   information becomes visible, detail stays a title).
+- 2026-09-25 G-1: `DialogActions.initialFocus` ('cancel' | 'confirm') sets
+  `data-autofocus`, honoured by both dialog modes (focusDialogActionOnOpen
+  rides on Radix's open-autofocus, which pane dialogs lack). Claude/Codex
+  trust + Claude permission on DialogActions, and Grok + OpenCode on one
+  `ConditionPromptShell` (reject rule passed per provider, labels always
+  escaped). Behaviour unchanged: accept/approve keeps initial focus;
+  must-answer shells still ignore Escape/outside. Tests renamed to the
+  sentence-case labels; the new shell test pins the header, footer, focus and
+  Escape contract.

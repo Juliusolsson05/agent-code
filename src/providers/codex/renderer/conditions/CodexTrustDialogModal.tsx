@@ -1,11 +1,12 @@
 import type { ConditionAction } from '@shared/conditions-core/contract'
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 type Props = {
@@ -39,54 +40,35 @@ export function CodexTrustDialogModal({ state, actions, dispatch }: Props) {
   const accept = () => run('accept')
   const decline = () => run('reject')
 
+  // The app's dialog grammar (UI pass), matching Claude's trust prompt.
   return (
     <Dialog open onOpenChange={nextOpen => {
       if (!nextOpen) decline()
     }}>
       <DialogContent
-        className="modal-pop w-[480px] max-w-[calc(100%-4rem)] p-6"
+        className="modal-pop"
         onPointerDownOutside={event => event.preventDefault()}
       >
-        <div className="flex items-start gap-3 mb-4">
-          <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
-          <DialogTitle className="text-[14px] font-semibold leading-[1.3]">
-            Trust this directory?
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            Confirm whether Codex may work in the selected directory.
-          </DialogDescription>
-        </div>
-
-        <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">
-          <p className="mb-3">Codex is about to work in:</p>
+        <DialogHeader>
+          <DialogTitle>Trust this directory?</DialogTitle>
+          <DialogDescription>Codex is about to work in it.</DialogDescription>
+        </DialogHeader>
+        <div className="px-4 py-3 text-[12px] leading-[1.6] text-ink-dim">
           {state.workspace && (
-            <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
+            <pre className="mb-2 overflow-x-auto whitespace-nowrap rounded-slab bg-code-bg px-3 py-2 font-code text-[12px] text-accent">
               {withVisibleControls(state.workspace)}
             </pre>
           )}
-          <p className="text-[11.5px] text-muted">
+          <p className="text-[11px] text-muted">
             Continue only if you trust the contents of this directory.
           </p>
         </div>
-
-        <div className="flex justify-end gap-2 mt-6 pl-6">
-          <Button
-            type="button"
-            onClick={decline}
-            variant="outline"
-          >
-            cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={accept}
-            // data-autofocus, not autoFocus: this modal may render pane-scoped
-            // in a background pane, where React autoFocus would steal focus (#713).
-            data-autofocus
-          >
-            trust directory
-          </Button>
-        </div>
+        <DialogActions
+          onCancel={decline}
+          confirmLabel="Trust directory"
+          onConfirm={accept}
+          initialFocus="confirm"
+        />
       </DialogContent>
     </Dialog>
   )

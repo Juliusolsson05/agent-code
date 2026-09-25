@@ -37,7 +37,7 @@ function mountTrustView() {
 describe('claudeTrustView action dispatch', () => {
   it('accept dispatches the headless-resolved custom action, never Enter', () => {
     const dispatched = mountTrustView()
-    fireEvent.click(screen.getByRole('button', { name: 'trust this folder' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Trust folder' }))
 
     expect(dispatched).toEqual([
       {
@@ -55,7 +55,7 @@ describe('claudeTrustView action dispatch', () => {
 
   it('cancel dispatches Esc — the only keystroke whose meaning survives a re-layout', () => {
     const dispatched = mountTrustView()
-    fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     expect(dispatched).toEqual([
       { kind: 'pty', id: 'decline', label: 'No, exit', data: '\x1b' },
