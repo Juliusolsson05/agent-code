@@ -10,8 +10,12 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Input } from '@renderer/components/ui/input'
 
 // tmux is no longer listed in the SetupGate because it ships as a
 // bundled runtime artifact (#120). mitmdump will follow when its
@@ -185,7 +189,8 @@ export function SetupGate() {
       <DialogContent
         ref={panelRef}
         tabIndex={-1}
-        className="max-h-[90vh] w-[min(768px,92vw)] grid-rows-[auto_minmax(0,1fr)_auto]"
+        size="lg"
+        className="max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto]"
         aria-describedby={undefined}
         onOpenAutoFocus={event => {
           // The panel itself, not the first row: the first focusable control
@@ -201,16 +206,18 @@ export function SetupGate() {
         onEscapeKeyDown={event => { if (mustAnswer) event.preventDefault() }}
         onInteractOutside={event => { if (mustAnswer) event.preventDefault() }}
       >
-        <div className="border-b border-border px-5 py-4">
-          <DialogTitle className="text-[14px] font-normal text-ink">
+        {/* Standard header rhythm (plan T3/T5): px-4 py-3 and a 13px title;
+            this was px-5 py-4 with a 14px light title, the one dialog so. */}
+        <DialogHeader>
+          <DialogTitle>
             {noProvider ? 'No agent provider is installed yet' : 'Agent Code Setup'}
           </DialogTitle>
-          <DialogDescription className="mt-1 text-[11px] leading-5 text-muted">
+          <DialogDescription className="leading-5">
             {noProvider
               ? 'Install one of the CLIs below in a terminal, then press Retry. Or continue with a terminal now and install from there. Setup stays available from the File menu and the command palette.'
               : 'The agent CLIs and helper tools on this Mac, and how to add the ones that are missing.'}
           </DialogDescription>
-        </div>
+        </DialogHeader>
 
         <div className="min-h-0 overflow-y-auto">
           <SectionLabel>Agent providers</SectionLabel>
@@ -232,37 +239,34 @@ export function SetupGate() {
           // failed `brew install` (homebrewInstaller's 8 MiB buffer). Unbounded,
           // it pushed the footer — and the only button that answers the panel —
           // past the bottom of the viewport (#1047 review).
-          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-danger/50 bg-danger/10 px-5 py-3 text-[11px] leading-5 text-danger">
+          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-danger/50 bg-danger/10 px-4 py-3 text-[11px] leading-5 text-danger">
             {shownError}
           </div>
         ) : null}
 
-        <div className="flex items-center justify-between gap-4 border-t border-border px-5 py-4">
-          <div className="text-[11px] text-muted">
-            Any one provider is enough. A terminal pane needs none.
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              disabled={busy !== null}
-              className="rounded-control border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
-            >
+        {/* One commit, whose word is what pressing it actually does: it
+            opens the first project only while a fresh-install bootstrap is
+            waiting on this answer (#1047 review).
+            KEYS: normally Enter continues. In the MUST-ANSWER state the panel
+            refuses Escape and outside clicks (so a stray key cannot decide the
+            first project is a terminal), and for the same reason Enter is not
+            a commit there either — the button must be pressed — and the
+            legend says why Escape is off instead of leaving it silently
+            dead. Guards carried over (k3): both buttons wait while busy. */}
+        <DialogActions
+          confirmLabel={mustAnswer ? 'Continue with a Terminal' : automatic ? 'Continue' : 'Close'}
+          confirmKey={mustAnswer ? null : 'Enter'}
+          confirmDisabled={busy !== null}
+          onConfirm={() => void continueOn()}
+          legend={mustAnswer ? <span>Escape is off until you choose.</span> : undefined}
+          extraActions={
+            <Button type="button" variant="outline" size="sm" disabled={busy !== null} onClick={() => void refresh()}>
               Retry
-            </button>
-            {/* One button, whose word is what pressing it actually does:
-                it opens the first project only while a fresh-install
-                bootstrap is waiting on this answer (#1047 review). */}
-            <button
-              type="button"
-              onClick={() => void continueOn()}
-              disabled={busy !== null}
-              className="rounded-control border border-accent bg-accent px-3 py-2 text-[11px] text-accent-fg disabled:opacity-50"
-            >
-              {mustAnswer ? 'Continue with a terminal' : automatic ? 'Continue' : 'Close'}
-            </button>
-          </div>
-        </div>
+            </Button>
+          }
+        >
+          Any one provider is enough. A terminal pane needs none.
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )
@@ -351,24 +355,20 @@ function SetupRow({
 
         <div className="flex shrink-0 items-center gap-2">
           {canOverride ? (
-            <button
-              type="button"
+            <Button type="button" variant="outline" size="sm"
               disabled={busy !== null}
               onClick={() => setOverrideOpen(open => !open)}
-              className="rounded-control border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               Enter path manually…
-            </button>
+            </Button>
           ) : null}
           {!isBundled && !tool.found && target && tool.installable ? (
-            <button
-              type="button"
+            <Button type="button" variant="outline" size="sm"
               disabled={busy !== null}
               onClick={() => onInstall(target)}
-              className="rounded-control border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               {installing ? 'Installing…' : 'Install'}
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -378,13 +378,11 @@ function SetupRow({
           <code className="rounded-control min-w-0 flex-1 select-all truncate border border-border bg-canvas px-2 py-1.5 text-[11px] text-ink">
             {tool.installCommand}
           </code>
-          <button
-            type="button"
+          <Button type="button" variant="outline" size="sm"
             onClick={() => void copy(tool.installCommand!)}
-            className="rounded-control border border-border px-3 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
           >
             {copied ? 'Copied' : 'Copy'}
-          </button>
+          </Button>
           {tool.docsUrl ? (
             <a
               href={tool.docsUrl}
@@ -401,7 +399,7 @@ function SetupRow({
       {canOverride && overrideOpen ? (
         <div className="mt-2">
           <div className="flex items-center gap-2">
-            <input
+            <Input
               type="text"
               value={overridePath}
               onChange={e => setOverridePath(e.target.value)}
@@ -410,16 +408,15 @@ function SetupRow({
               }}
               placeholder={`/absolute/path/to/${tool.id}`}
               spellCheck={false}
-              className="rounded-control min-w-0 flex-1 border border-border bg-canvas px-2 py-1.5 text-[11px] text-ink placeholder:text-muted focus:border-border-hi focus:outline-none"
+              aria-label={`Path to ${tool.id}`}
+              className="h-7 min-w-0 flex-1 text-[11px]"
             />
-            <button
-              type="button"
+            <Button type="button" variant="outline" size="sm"
               disabled={busy !== null || !overridePath.trim()}
               onClick={() => void submitOverride()}
-              className="rounded-control border border-border px-3 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               Set
-            </button>
+            </Button>
           </div>
           {overrideError ? (
             <div className="mt-1 text-[11px] text-danger">{overrideError}</div>

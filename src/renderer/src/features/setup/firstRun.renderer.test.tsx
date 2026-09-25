@@ -103,16 +103,22 @@ describe('first run on a Mac with no provider (#995)', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(spawnSession).not.toHaveBeenCalled()
+    // Nor a stray Enter (plan S39): the button must be pressed, it carries no
+    // Enter chip, and the footer says why Escape is off.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(spawnSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Continue with a Terminal' }).querySelector('[data-slot="kbd"]')).toBeNull()
+    expect(screen.getByText('Escape is off until you choose.')).toBeTruthy()
     // Answer it before the test ends: the waiting bootstrap is subscribed to
     // the module-wide setup store, and left waiting it would be released by
     // the NEXT test's answer and add a second project there.
-    fireEvent.click(screen.getByRole('button', { name: 'Continue with a terminal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
   })
 
   it('"Continue with a terminal" opens a terminal project, and the run can save', async () => {
     const { hook, spawnSession } = mountMachine([noProvider()])
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a terminal' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
     expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
     // `fresh` is the one status that unlocks autosave on an empty disk.
@@ -198,7 +204,7 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     }
     const { spawnSession } = mountMachine([withMissingHelper])
     window.api.setupSkipOptional = vi.fn(async () => { throw new Error('ENOSPC: no space left on device') })
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a terminal' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
     expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
   })
@@ -208,7 +214,7 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     // flag made the modal reappear on every launch and in every window, each
     // of which is its own renderer process with its own store.
     const { api } = mountMachine([withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))])
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a terminal' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
     expect(api.setupAcknowledgeNoProviders).toHaveBeenCalledOnce()
   })
@@ -261,7 +267,7 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     await run()
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(spawnSession).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Continue with a terminal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
   })
 
@@ -272,7 +278,7 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     const check = withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))
     const { spawnSession } = mountMachine([check])
     await screen.findByRole('dialog')
-    fireEvent.click(screen.getByRole('button', { name: 'Continue with a terminal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
     // Now nothing is waiting: reopen it and the button reads Close.
     await act(async () => {
@@ -280,7 +286,7 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     })
     await screen.findByRole('dialog')
     expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Continue with a terminal' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue with a Terminal' })).toBeNull()
     expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
   })
 })

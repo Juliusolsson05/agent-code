@@ -446,7 +446,7 @@ entry when it lands.
 | S36 | KeyVaultModal | Enter in inputs; window.confirm; prose footer | ConfirmDialog; Close ⎋ | done |
 | S37 | RemotePanel | ✕ raw button gets focus | Close ⎋; T3 | done |
 | S38 | PerformanceMonitor | showCloseButton; p-4 sections | D5 sections; Close ⎋ | done |
-| S39 | SetupGate | px-5 py-4; raw buttons; blocked Esc | T3/T8; legend when Esc blocked | todo |
+| S39 | SetupGate | px-5 py-4; raw buttons; blocked Esc | T3/T8; legend when Esc blocked | done |
 | S40 | DictationGuideModal | DialogActions Done | chips (automatic from F2); T3 | todo |
 | S41 | WorkflowHistoryDialog | showCloseButton; p-3 | Close ⎋; T3 | done |
 | S42 | AppHostSurface | iframe focus | close chip only; iframe keys are the extension's | todo |
@@ -754,6 +754,12 @@ Sharp corners and one light theme.
 - **S38 Performance Monitor:** ⌘[ / ⌘] step Overview → Timeline →
   Processes → Operations → Recordings (and wrap) from anywhere; body inset
   px-4 py-3 (was p-4); header text no longer runs under the corner `× ⎋`.
+- **S39 Setup:** header/footer px-4 py-3 with a 13px title (were px-5 py-4 /
+  14px light); Install, Enter path manually…, Copy, Set and Retry are
+  standard outline buttons; the path field is the standard input; footer
+  `Retry` · `Continue ↩` / `Close ↩`, but on a fresh install with no
+  provider it reads `Continue with a Terminal` with NO chip and the left
+  says "Escape is off until you choose."; 860 wide.
 
 ## Tasks
 
@@ -828,6 +834,11 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S39: Setup — DialogHeader + DialogActions (must-answer: no
+  commit key + legend explaining the refused Escape; otherwise Enter
+  continues), 4 raw buttons → Button (scripted), Input for the path.
+  Confirm-red: the extended must-answer test fails on the pre-change file.
+  Copy: "Continue with a terminal" → "…a Terminal".
 - 2026-09-25 S38: Performance — ⌘[/⌘] over its five views, anatomy
   padding, header clears the corner close; window-sized width kept with a
   WHY. Confirm-red: the new test fails on the pre-change file.
