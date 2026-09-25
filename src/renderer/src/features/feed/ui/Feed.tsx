@@ -66,7 +66,7 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import * as perf from '@renderer/performance/client'
-import { useAppStore } from '@renderer/app-state/hooks'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 import {
   RenderDebugBoundary,
   RenderingDebugProvider,
@@ -328,7 +328,10 @@ function FeedImpl({
   askUserQuestionState,
   onDebugLog,
 }: Props) {
-  const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
+  // From the host, not the app store (#1177): the store is desktop state the
+  // phone could only fake with an untyped stub, and this switch is the ONE
+  // thing the whole Feed subtree read from it.
+  const { renderingDebugMode } = useRendererHost()
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and

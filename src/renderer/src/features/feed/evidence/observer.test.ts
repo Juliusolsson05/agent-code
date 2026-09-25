@@ -9,13 +9,14 @@ import {
   type ObserveRenderShapeInput,
 } from '@renderer/features/feed/evidence/observer'
 import type { RenderShapeSighting } from '@shared/types/renderShapes'
+import type { RenderShapeSightingsSink } from '@renderer/features/feed/evidence/observer'
 
 // Phase 2 exit gates as executable spec:
 //   - observer inert when capture is off;
 //   - one unknown prefix × thousands → ONE bounded record + counts, no
 //     IPC flood (backpressure by construction);
 //   - outcome/lifecycle transitions emit explicit records;
-//   - queue caps, final flush, missing preload, serialization-hostile
+//   - queue caps, final flush, a failing sink, serialization-hostile
 //     payloads: all swallowed, counted, never thrown.
 
 const SESSION = 'sess-observer-test'
@@ -23,6 +24,14 @@ const GENERATION = 'generation-a'
 const REPLACEMENT_GENERATION = 'generation-b'
 
 let sent: Array<{ sessionId: string; generation: string; batch: RenderShapeSighting[] }>
+
+// The observer's transport is injected at arm time since #1177. The tests keep
+// stubbing the desktop's preload surface per case (accepting, rejecting,
+// absent), so the sink they arm with forwards to whatever stub is installed
+// when a batch is actually sent.
+const sink: RenderShapeSightingsSink = (sessionId, generation, batch) =>
+  (globalThis as unknown as { window: { api: { appendRenderShapeSightings: RenderShapeSightingsSink } } })
+    .window.api.appendRenderShapeSightings(sessionId, generation, batch)
 
 function input(over: Partial<ObserveRenderShapeInput> = {}): ObserveRenderShapeInput {
   return {
@@ -40,8 +49,7 @@ function input(over: Partial<ObserveRenderShapeInput> = {}): ObserveRenderShapeI
 beforeEach(() => {
   vi.useFakeTimers()
   sent = []
-  // The observer reaches window.api only inside its own try/catch; tests run
-  // in node, so provide the minimal preload surface it touches.
+  // Tests run in node; provide the minimal preload surface the sink forwards to.
   ;(globalThis as Record<string, unknown>).window = {
     api: {
       appendRenderShapeSightings: (
@@ -72,7 +80,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
   })
 
   it('a repeated identical delta ×5000 produces ONE sighting and ONE send', async () => {
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     for (let i = 0; i < 5000; i++) {
       // Different content each tick — same structure. The fingerprint (not
       // the payload hash) is the dedup identity, so this is one key.
@@ -90,7 +98,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
   })
 
   it('lifecycle, outcome-kind, AND route transitions each emit an explicit record', async () => {
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     observeRenderShape(input({ lifecycle: 'prefix' }))
     observeRenderShape(input({ lifecycle: 'input-complete' }))
     observeRenderShape(
@@ -112,7 +120,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
   })
 
   it('the outbound queue is hard-capped live, and the final flush RECOVERS shed first-sights', async () => {
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     for (let i = 0; i < 600; i++) {
       // 600 genuinely distinct structures inside one flush window (distinct
       // key names → distinct fingerprints).
@@ -133,7 +141,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
   })
 
   it('hostile payloads (cycles) never throw into the caller', async () => {
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     type Cyc = { self?: unknown }
     const cyc: Cyc = {}
     cyc.self = cyc
@@ -142,9 +150,9 @@ describe('render-shape observer (Phase 2 gates)', () => {
     expect(sent.flatMap(s => s.batch)).toHaveLength(1) // cycle marker is a valid shape
   })
 
-  it('missing preload API is swallowed and counted, never thrown', async () => {
+  it('a failing sink (here: no preload at all) is swallowed and counted, never thrown', async () => {
     delete (globalThis as Record<string, unknown>).window
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     observeRenderShape(input())
     await expect(vi.runAllTimersAsync()).resolves.not.toThrow()
     expect(renderShapeObserverStats().failures).toBeGreaterThan(0)
@@ -166,7 +174,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
         },
       },
     }
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     observeRenderShape(input({ payload: { once: true } }))
     await vi.runAllTimersAsync()
     expect(attempts).toBe(1)
@@ -190,7 +198,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
           }),
       },
     }
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     observeRenderShape(input({ payload: { finalRace: true } }))
     await vi.advanceTimersByTimeAsync(2000)
     const stopping = disarmRenderShapeCapture(SESSION, GENERATION)
@@ -221,14 +229,14 @@ describe('render-shape observer (Phase 2 gates)', () => {
       },
     }
 
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     observeRenderShape(input({ payload: { generationA: true } }))
     await vi.advanceTimersByTimeAsync(2000)
     const stoppingGenerationA = disarmRenderShapeCapture(SESSION, GENERATION)
 
     // A session id is reused across recording toggles. The replacement owns
     // all observations from this point even while A is still awaiting main.
-    armRenderShapeCapture(SESSION, REPLACEMENT_GENERATION)
+    armRenderShapeCapture(SESSION, REPLACEMENT_GENERATION, sink)
     observeRenderShape(input({ payload: { generationB: true } }))
     expect(isRenderShapeCaptureArmed(SESSION, REPLACEMENT_GENERATION)).toBe(true)
 
@@ -249,7 +257,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
   })
 
   it('sightings are metadata-only — no payload content crosses IPC', async () => {
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     const secret = 'SECRET_COMMAND rm -rf /Users/private'
     observeRenderShape(input({ payload: { kind: 'function_call', command: secret } }))
     await vi.runAllTimersAsync()
@@ -261,7 +269,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
     ;(globalThis as Record<string, unknown>).window = {
       api: { appendRenderShapeSightings: () => Promise.resolve({ status: 'no-recorder' as const }) },
     }
-    armRenderShapeCapture(SESSION, GENERATION)
+    armRenderShapeCapture(SESSION, GENERATION, sink)
     observeRenderShape(input({ payload: { miss: true } }))
     await vi.runAllTimersAsync()
     // A later recording start has its own push and will arm fresh state, so
