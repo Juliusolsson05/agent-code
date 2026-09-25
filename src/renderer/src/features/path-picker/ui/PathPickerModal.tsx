@@ -421,7 +421,9 @@ export function PathPickerModal({
             <KbdLegend
               className="text-muted"
               items={[
-                { keys: ['Tab'], label: 'complete' },
+                // Tab completes only while suggestions show; otherwise it
+                // moves on (PathInput's k7 exit rule), so the label says so.
+                { keys: ['Tab'], label: 'complete / next' },
                 { keys: ['Up', 'Down'], label: 'browse' },
                 { keys: ['Enter'], label: preferred ? 'go there' : 'open' },
                 ...(preferred ? [{ keys: ['Shift+Enter'], label: 'new tab' }] : []),

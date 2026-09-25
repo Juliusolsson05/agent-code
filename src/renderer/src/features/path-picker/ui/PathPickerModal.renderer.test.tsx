@@ -271,7 +271,29 @@ describe('PathPickerModal keyboard', () => {
     const session = await screen.findByRole('button', { name: 'New Session' })
     expect(session.querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
     expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
-    expect(screen.getByText('complete')).toBeInTheDocument()
+    expect(screen.getByText('complete / next')).toBeInTheDocument()
     expect(screen.queryByText(/tab completes/)).toBeNull()
   })
+
+  it('lets Tab leave the path field toward the Resume list once suggestions are gone (steering note k7)', async () => {
+    // Starts at the REAL initial focus (the path field) and never focuses the
+    // list by hand. happy-dom performs no native Tab traversal, so the two
+    // halves of "Tab reaches Resume" are asserted separately: the field no
+    // longer swallows the Tab (default NOT prevented, so the browser moves
+    // focus), and the Resume list is the next tabbable element after the
+    // field in DOM order.
+    installApi(vi.fn(async () => response([row('one', 'First saved row', 'claude')])))
+    render(<PathPickerModal open defaultValue="/repo" onCancel={vi.fn()} onAccept={vi.fn()} onResume={vi.fn()} />)
+    await screen.findByText('First saved row')
+    const field = document.activeElement as HTMLElement
+    expect(field.tagName).toBe('INPUT')
+    fireEvent.keyDown(field, { key: 'Escape' }) // dismiss any suggestions first
+    expect(fireEvent.keyDown(field, { key: 'Tab' })).toBe(true)
+    expect(fireEvent.keyDown(field, { key: 'Tab', shiftKey: true })).toBe(true)
+    const tabbables = [...document.querySelectorAll<HTMLElement>('input, button, [tabindex="0"]')]
+      .filter(el => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1')
+    const after = tabbables.slice(tabbables.indexOf(field) + 1)
+    expect(after[0]).toBe(screen.getByRole('listbox', { name: 'Previous sessions' }))
+  })
 })
+

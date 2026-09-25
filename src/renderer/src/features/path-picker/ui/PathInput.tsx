@@ -182,12 +182,19 @@ export function PathInput({
       return
     }
     if (e.key === 'Tab') {
+      // THE KEYBOARD EXIT (steering note k7): Tab completes ONLY while the
+      // suggestion dropdown is showing. With no suggestions, after Escape
+      // dismissed them, or with Shift held, Tab is left to the browser and
+      // moves focus normally — to the provider toggles, the Resume list and
+      // the footer. This used to preventDefault EVERY Tab, which made the
+      // path field a focus trap inside the dialog: the Resume list (and every
+      // control after the field) could not be reached from the keyboard at
+      // all. ↓ still re-opens dismissed suggestions, so completion is one
+      // key away when wanted.
+      if (e.shiftKey || !dropdownOpen) return
       e.preventDefault()
-      if (suggestions.length === 0) return
-      // Tab always operates on suggestions, even when the dropdown is
-      // hidden — users expect tab-complete to work regardless of
-      // dropdown visibility. Applying also re-opens the dropdown so
-      // they can see the next level of completion.
+      // Applying also re-opens the dropdown so the next level of completion
+      // is visible.
       setDismissed(false)
       applySuggestion(suggestions[highlighted] ?? suggestions[0])
       return

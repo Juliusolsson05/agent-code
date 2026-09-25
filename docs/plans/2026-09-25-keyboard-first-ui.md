@@ -772,7 +772,9 @@ Sharp corners and one light theme.
   ↩ open` (+ `⇧↩ new tab` when the folder is already open); footer `Cancel
   ⎋` · `New Session ↩` / `Create & Open ↩`, or `New Tab Anyway ⇧↩` · `Go to
   Tab ↩` / `Stay Here ↩`; the Resume list is now a Tab stop — ↑↓ highlight
-  a past session, Enter resumes it; 640 wide.
+  a past session, Enter resumes it; Tab completes only while suggestions
+  show — press Escape (or have none) and Tab moves on to the Resume list
+  (legend reads `⇥ complete / next`); 640 wide.
 
 ## Tasks
 
@@ -847,6 +849,16 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 steering note k7 (valid, high): PathInput preventDefault-ed
+  EVERY Tab (incl. Shift+Tab, no suggestions, dismissed dropdown), so the
+  new Resume listbox was still unreachable — the S44 test focused the list
+  by hand and missed it. Exit rule: Tab completes only while the dropdown
+  is open; otherwise Tab/Shift+Tab traverse. Test starts at the real
+  initial focus; happy-dom has no native Tab traversal, so it asserts the
+  Tab is not prevented AND the Resume list is the next tabbable node in DOM
+  order (recorded as a verification-boundary item for the owner checklist).
+  Confirm-red on the pre-fix PathInput; mutation (drop `!dropdownOpen`)
+  fails it.
 - 2026-09-25 S44/N9: path picker anatomy + DialogActions (confirmOnEnter
   false: PathInput owns Enter/⇧Enter; chips honest to what they do), chip
   legend, provider toggle aria-pressed, busy guards on every close path;
