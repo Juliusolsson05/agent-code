@@ -762,7 +762,9 @@ export function ExplorerPane({
           ref={menuRef}
           role="menu"
           aria-label={menu.entry ? `Actions for ${menu.entry.name}` : 'Explorer actions'}
-          className="fixed z-30 min-w-[160px] rounded-float overflow-hidden border border-border bg-surface py-1 shadow-lg"
+          // Popover chrome (plan M4/T1): popover colours + theme shadow, like
+          // every other floating menu, instead of surface + shadow-lg.
+          className="fixed z-30 min-w-[160px] rounded-float overflow-hidden border border-popover-border bg-popover-bg py-1 shadow-[0_8px_24px_var(--theme-shadow-color)]"
           style={{ left: menu.x, top: menu.y }}
           onMouseDown={event => event.stopPropagation()}
           onBlur={event => {
@@ -848,7 +850,11 @@ function MenuItem({
       role="menuitem"
       autoFocus={autoFocus}
       onClick={onClick}
-      className={`flex w-full items-center px-3 py-1 text-left text-[11px] hover:bg-surface-hi ${
+      // The menu moves DOM focus between items (roving), so the focused item
+      // IS the highlight: it gets the row-selected colour, hover the row-hover
+      // colour (plan T7) — it had only a hover shade and relied on the global
+      // outline to show where the keyboard was.
+      className={`flex w-full items-center px-3 py-1 text-left text-[11px] outline-none hover:bg-row-hover-bg focus-visible:bg-row-selected-bg ${
         danger ? 'text-danger' : 'text-ink-dim hover:text-ink'
       }`}
     >
@@ -908,7 +914,7 @@ function InlineEditRow({
         onBlur={() => {
           if (!disabled) onCancel()
         }}
-        className="w-full rounded-control border border-border-hi bg-canvas px-1 py-0.5 text-[11px] text-ink outline-none"
+        className="w-full rounded-control border border-input-border-focus bg-input-bg px-1 py-0.5 text-[11px] text-ink outline-none"
       />
       {error ? (
         <span id="explorer-inline-edit-error" className="py-0.5 text-[9px] text-danger">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react'
 import type { CSSProperties } from 'react'
 import { containsInvisibleControls, withVisibleControls } from '@shared/text/visibleControls'
 
@@ -154,6 +154,8 @@ export function PathInput({
   // The dropdown is visible when we have suggestions AND the user
   // hasn't dismissed it. `dropdownOpen` is the single source of truth
   // every key / render path checks.
+  // Stable id for the combobox ↔ listbox wiring.
+  const listboxId = useId()
   const dropdownOpen = suggestions.length > 0 && !dismissed
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -254,6 +256,14 @@ export function PathInput({
         autoComplete="off"
         disabled={disabled}
         autoFocus={autoFocus}
+        // Combobox pattern (plan M5): focus stays in the field while ↑↓ move
+        // through suggestions, so the field names the highlighted one. The
+        // dropdown had no roles at all, so the highlight was never announced.
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={dropdownOpen}
+        aria-controls={dropdownOpen ? listboxId : undefined}
+        aria-activedescendant={dropdownOpen ? `${listboxId}-${highlighted}` : undefined}
       />
       {/* An escaped READ-ONLY echo of what is actually in the box (#1049
           re-review). The input itself must stay raw — it is the user's text,
@@ -268,12 +278,16 @@ export function PathInput({
         </div>
       )}
       {dropdownOpen && (
+        // Popover chrome converges (plan T1/T7): popover colours + the theme
+        // shadow token, instead of surface colours and a hard-coded rgba.
         <div
+          id={listboxId}
+          role="listbox"
           className={`
             absolute left-0 right-0 top-full mt-1 z-50
-            bg-surface border border-border-hi rounded-float
+            bg-popover-bg border border-popover-border rounded-float
             max-h-[280px] overflow-auto
-            shadow-[0_10px_30px_rgba(0,0,0,0.4)]
+            shadow-[0_8px_24px_var(--theme-shadow-color)]
             ${dropdownClassName}
           `}
         >
@@ -282,6 +296,9 @@ export function PathInput({
             return (
               <div
                 key={s.path}
+                id={`${listboxId}-${i}`}
+                role="option"
+                aria-selected={active}
                 // onMouseDown (not onClick) so the input doesn't blur
                 // before the handler runs. Clicks on the dropdown item
                 // shouldn't lose focus from the input.
@@ -292,12 +309,12 @@ export function PathInput({
                 onMouseEnter={() => setHighlighted(i)}
                 className={`
                   flex items-center gap-2
-                  px-3 py-1.5 text-[11.5px] font-code cursor-pointer
+                  px-3 py-1.5 text-[11px] font-code cursor-pointer
                   transition-colors duration-75
                   ${
                     active
-                      ? 'bg-accent-soft text-ink'
-                      : 'text-ink-dim hover:bg-surface-hi'
+                      ? 'bg-row-selected-bg text-ink'
+                      : 'text-ink-dim hover:bg-row-hover-bg'
                   }
                 `}
               >

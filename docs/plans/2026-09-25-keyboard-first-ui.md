@@ -460,9 +460,9 @@ entry when it lands.
 |---|---|---|---|---|
 | M1 | AppearanceMenu (`feed`) | Escape only; focus never enters | dropdown-menu primitive | done |
 | M2 | SkillMenu (`skills/ui/SkillsGrid`) | none; closes on mouseLeave | dropdown-menu primitive; ConfirmDialog | done |
-| M3 | CommandSortControl | good (Esc/Tab/↑↓/Home/End/Enter) | visuals only (T1/T7) | todo |
-| M4 | ExplorerPane context menu | good | visuals (T7) | todo |
-| M5 | PathInput dropdown | good | visuals (T7) | todo |
+| M3 | CommandSortControl | good (Esc/Tab/↑↓/Home/End/Enter) | visuals only (T1/T7) | done (no change: already on popover tokens + row-selected) |
+| M4 | ExplorerPane context menu | good | visuals (T7) | done |
+| M5 | PathInput dropdown | good | visuals (T7) | done (+ combobox ARIA) |
 | M6 | NewAgentPlacementOverlay | capture ↑↓ Enter Esc; focus never moved; footer px-3 | legend with Kbd; T3 footer | todo |
 | M7 | TldrOverlay / GoalLoopPane | hold/latch; no focus | hint chips for release/dismiss | todo |
 | M8 | GlobalToast / CaffeinateToast | click-only dismiss; caffeinate z-50 under scrim | keyboard dismiss path; layering note (functional part → issue) | todo |
@@ -778,6 +778,12 @@ Sharp corners and one light theme.
   rows are switches; multi-choice rows (Theme, Accent, Font, …) are one Tab
   stop — arrows move the ring WITHOUT applying, Space/Enter/click applies;
   `Close ⎋` in the header is ghost (was outline).
+- **M4/M5 Explorer right-click menu / path suggestions:** both use the
+  popover background, border and theme shadow (were surface + shadow-lg /
+  a hard black shadow); the focused explorer menu item is highlighted with
+  the row-selected colour; the path suggestion rows use row-selected /
+  row-hover and 11px text (were accent-soft and 11.5px); the explorer
+  rename field shows its focus border.
 - **S44 New Tab (⌘T) path picker:** standard header "New Tab — Working
   Directory", padded body, footer (was one p-6 card); provider toggles show
   a focus ring and announce the chosen one; the path field uses input
@@ -862,6 +868,10 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 M3–M5: sort menu already correct; Explorer context menu and
+  PathInput dropdown on popover tokens + T7 rows; PathInput gains combobox
+  ARIA (listbox/option ids, aria-activedescendant). Confirm-red: the new
+  PathInput test fails on the pre-change file.
 - 2026-09-25 S45/N14: Settings — sidebar tablist (roving, arrows select),
   page-level ⌘[/⌘] via sectionCycle, toggles → role=switch, selects →
   radiogroup with roving focus. Ruling: settings radios MOVE on arrow and
