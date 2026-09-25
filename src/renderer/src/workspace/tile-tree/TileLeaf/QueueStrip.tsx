@@ -105,16 +105,32 @@ function QueuedPromptDialog({
       }}
     >
       <DialogContent
-        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
+        size="lg"
+        className="flex max-h-[82vh] flex-col overflow-hidden"
         showCloseButton
+        onOpenAutoFocus={event => {
+          // A read-only viewer (plan S18, same as View Prompts): focus the
+          // text so ↑↓/PgUp/PgDn scroll it at once, instead of Radix's
+          // default — the corner close button, where the first arrow does
+          // nothing.
+          event.preventDefault()
+          ;(event.currentTarget as HTMLElement | null)
+            ?.querySelector<HTMLElement>('[data-queued-prompt-scroller]')
+            ?.focus()
+        }}
       >
         <DialogHeader>
-          <DialogTitle>Queued prompt</DialogTitle>
+          <DialogTitle>Queued Prompt</DialogTitle>
           <DialogDescription>
             {position} of {total} · queued for delivery
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <div
+          data-queued-prompt-scroller
+          tabIndex={0}
+          aria-label="Queued prompt text"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        >
           {message ? (
             <PagedTextViewer
               source={withVisibleControls(message.content)}

@@ -423,8 +423,8 @@ entry when it lands.
 | S15 | BulkProviderSwitchModal | "Esc" button gets focus; busy blocks Esc silently | DialogActions; busy legend; K1 focus | done |
 | S16 | RootManagementConfirmDialog | checkbox focus; no Enter | DialogActions (confirmDisabled until ack); chips | done |
 | S17 | MergeProjectTabsModal | select focus; no Enter; mx-4 mt-3 pieces | DialogActions; T3 body | done |
-| S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | todo |
-| S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | todo |
+| S18 | QueuedPromptDialog (`QueueStrip`) | showCloseButton; no footer; 2px outline-accent rows | Close ⎋; T4 rows | done |
+| S19 | DebugBundleNotePrompt | ⌘↵; "Skip" outline | DialogActions `confirmChord` ⌘↵ chip; Cancel label | done |
 | S20 | ConversationsPicker | ↑↓ Enter; "esc" label + prose | useListNavigation; legend; T4 input | todo |
 | S21 | AgentActivityView | richest keys; legend row; pt-4, 15px title | legend → DialogActions/footer legend; D3; T3/T5 | todo |
 | S22 | QuickOpenOverlay | ↑↓ Enter; sr-only hint; outline-none input | useListNavigation; legend; T4 | todo |
@@ -646,6 +646,14 @@ Sharp corners and one light theme.
   "N tabs, M agents move to …" status sits in the footer's left slot;
   `Cancel ⎋` (ghost, was outline) · `Merge ↩`; 640 wide (md, was 560);
   title no longer semibold.
+- **S18 Queued Prompt (click a queued row):** opens with the prompt TEXT
+  focused (inset ring on Tab), so ↑↓/PgDn scroll at once; corner `× ⎋`;
+  title "Queued Prompt"; 860 wide. (The strip rows' 2px outline stays until
+  N8.)
+- **S19 Debug bundle / recording note:** `Skip ⎋` (ghost, was outline) ·
+  `Save Note ⌘↩`; plain Enter is a newline; with text typed, Skip or Escape
+  first asks "Discard this note?" (red Discard Note, focus on Cancel); body
+  py-3; 640 wide.
 
 ## Tasks
 
@@ -720,6 +728,12 @@ Sharp corners and one light theme.
   d98f3f4b) note 1: an earlier `commit -a` had moved three submodule
   pointers; restored to main in a chore commit. From now on paths are staged
   explicitly, never `-a`.
+- 2026-09-25 S18/S19: Queued Prompt viewer focuses its text (read-only
+  viewer pattern); debug note on DialogActions with confirmKey Cmd+Enter and
+  a discard confirm for typed notes (B7's D3 condition). Ruling: the note's
+  cancel stays "Skip" — the bundle is already saved, "Cancel" would claim
+  otherwise. Confirm-red: all four new/updated assertions fail on the
+  pre-change files (two are the "Queued Prompt" title-case lookups).
 - 2026-09-25 steering note k4 (valid, major): Merge opens focused on its
   native Keep <select>, and focusedControlOwnsEnter did not exempt SELECT,
   so Enter to choose the kept tab bubbled to DialogActions and merged.
