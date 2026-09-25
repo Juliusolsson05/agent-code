@@ -199,6 +199,27 @@ the PR body lists them.
 12. **Type-size convergence** — *Default: dialogs, pickers, menus, settings
     only; the feed/transcript typography is out of scope.*
 
+Second opinion (B7, 2026-09-25, via ask-1): **agrees with D1, D3, D5, D8, D9**,
+with constraints that are now part of the plan (owner confirmation still
+pending — they stay UNCONFIRMED in the PR body):
+
+- D3: no dialog may lose REAL typed input on a one-press Escape — a draft or
+  a note (DebugBundleNote, AgentTitle, McpServerDialog add, ThemeEditor,
+  Conventions/CustomSkills editors, KeyVault add fields). Those either keep
+  their state across close or confirm the discard. Filters are not "real
+  input".
+- D5: ⌘[ / ⌘] must not be taken inside Monaco or any code field (they are
+  outdent/indent there); the section handler yields when the target is an
+  editor or text field.
+- D9: the lockfile for the new dependency is generated with npm 11
+  `--package-lock-only`, diffed entry by entry, and `npm ci` is confirmed
+  under BOTH npm 10.9 (Node 22.12) and npm 11 before pushing. Never a
+  wholesale regen (#1195).
+- D8: any confirm on a quit / beforeunload / window-close path stays native
+  (or goes through main's dialog) — an async in-app dialog cannot block
+  those paths.
+- D10: B7 confirms X1 (#713 keyboard side) is this loop's.
+
 ## Design
 
 ### Keyboard model (K-rules — one model, every surface)
@@ -367,7 +388,7 @@ entry when it lands.
 |---|---|---|
 | F1 | `Kbd` primitive + test | done |
 | F2 | `DialogActions` chips + `legend` + `confirmKey` + `escapeCancels` + tests | done |
-| F3 | `useListNavigation` + test | todo |
+| F3 | `useListNavigation` + test | done |
 | F4 | `DialogContent size` presets + close button convergence | todo |
 | F5 | Focus tokens: global outline → focus-ring; `.extension-loading-ring` tokens | todo |
 | F6 | `useCommandChord` + replace the ~16 hard-coded chord strings | todo |
@@ -541,3 +562,6 @@ Sharp corners and one light theme.
   3 of 5 new DialogActions tests fail on the pre-change file (chip labels,
   confirmKey null, ⌘↩ commit); the other 2 are guards (no Escape chip when
   blocked, plain Enter in a textarea is a newline).
+- 2026-09-25 F3: `lib/useListNavigation.ts` + 13 renderer tests. New module,
+  so no pre-change red; instead three mutations were each caught by one test
+  (loop default on; Home/End taken from a text field; hover scrolling).
