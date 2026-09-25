@@ -222,7 +222,7 @@ except that fixes for P0 bugs found in any stage start immediately.
   touched the same code (`git log -S`, `gh pr list --search`). Batch obvious
   closes. Use up to 3 read-only research subagents for evidence; I read every
   claim that leads to a close.
-- **Verified by:** zero open issues without a `sev:` label; every closure links evidence.
+- **Verified by:** zero open bug or UX issues without a `sev:` label (features, chores and perf roadmap items carry their `type:` label and "—" for severity, as the ledger has from pass 1); every closure links evidence.
 - **Why separate:** fixing from an untrusted backlog repeats work already done and misses what matters.
 
 ### Stage 2: fix the audited bugs
@@ -535,6 +535,26 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 ---
 
 ## 12. Progress log (newest first)
+
+- 2026-09-25 (06:55) — **Merged #1256** (`451842b5`, closes #1245) and
+  **#1259** (`9c6e48fc`, closes #1249) plus grok-code-headless#4 (`97e3038`).
+  - **P2 C3 batch:** #1262, #1263, #1264 and #1265 are open, with review
+    fixes pushed.
+  - **Steering q22:** no raw spawn IPC text in any toast; the shared
+    `SESSION_START_FAILED_MESSAGE` is used everywhere.
+  - **#1266 (#1208):** renderer-driven, main-authorized LSP reopen after
+    server loss. It is transactional against the manager's own count
+    (steering q23); three reviewers.
+  - **#1230:** moved to needs-evidence. The source settles `chalk.dim`, but
+    no raw PTY capture exists; a synthesized frame would be invented data.
+  - **#1261 (intermittent extension Electron test)** hit #1260 again; the
+    job was re-run.
+  - **Stage 1 check:** the 40 open issues without `sev:` are all
+    feature, chore or perf roadmap items (plus B18's #1220). The
+    verified-by line now says so.
+  - **P0/P1:** all remaining ones are needs-evidence or needs-owner (#327,
+    #339, #290; #369's in-code fix landed in #1238).
+  - **Next P2s:** C8 #1233/#1231 (ghosts), C3 #1097, then C6 #769/#767/#372.
 
 - 2026-09-25 (05:45) — **Merged #1236** (`b21ed712`, closes #762) and **#1254**
   (`9c1de6e3`, closes the P1 #1240). Two review rounds are done on
