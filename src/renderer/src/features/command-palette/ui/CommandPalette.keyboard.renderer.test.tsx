@@ -5,6 +5,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import { loadRecordedDispatchWorkspace } from '@renderer/workspace/testing/recordedDispatchWorkspace'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { CommandPalette } from './CommandPalette'
 
@@ -33,7 +34,7 @@ function mount() {
   // workspace methods while rendering. A plain object (the palette spreads
   // the workspace into its command context, which a Proxy would not survive).
   const recorded = loadRecordedDispatchWorkspace()
-  const workspace = { ...recorded, runtimes: {}, getRuntime: () => emptyRuntime() } as typeof recorded
+  const workspace = { ...recorded, runtimes: {}, getRuntime: () => emptyRuntime() } as unknown as Workspace
   act(() => { useAppStore.setState({ commandPaletteOpen: true }) })
   render(<WorkspaceProvider workspace={workspace}><CommandPalette /></WorkspaceProvider>)
   return screen.getByRole('combobox', { name: 'Command palette search' })
