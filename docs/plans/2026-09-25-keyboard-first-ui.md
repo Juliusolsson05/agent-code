@@ -539,7 +539,7 @@ exists only in a hover `title`, which no keyboard or touch user can reach.
 | K2-14 | Provider tool rows (CommandView, CodeEditView, Claude read/web/agent, Codex embedded-op/plan/tool-result) | truncated full command/path title-only | show full text when expanded | todo |
 | K2-15 | PocketedLeaf viewport note (`PocketedLeaf.tsx:115`) | title-only | visible helper / menu | todo |
 | K2-16 | McpServersRow summary + Unsupported reason (`McpServersRow.tsx:183,252`) | title-only | inline reason | done (per-server reasons on the row's second line; one footer key for the provider-wide “—”; Copy in reason inline; switch + expander rings) |
-| K2-17 | Keybindings palette checkbox suppressed reason (`CommandKeybindingsRow.tsx` PaletteToggle) | reason title-only for sighted keyboard users | visible "Hidden while X is off" | todo |
+| K2-17 | Keybindings palette checkbox suppressed reason (`CommandKeybindingsRow.tsx` PaletteToggle) | reason title-only for sighted keyboard users | visible "Hidden while X is off" | done (one note per category heading; suppressed title removed) |
 | K2-18 | SkillsGrid "shared" chip + ●/— cells (`skills/ui/SkillsGrid.tsx:498,586`) | meaning title-only | column legend | todo |
 | K2-19 | Dictation history WPM caveat (`DictationHistoryRow.tsx:106`) | title-only | footnote | todo |
 | K2-20 | Close Old "not observed yet" (`CloseOldAgentsModal.tsx:712`) | guidance title-only | visible second line | done |
@@ -828,6 +828,10 @@ Sharp corners and one light theme.
   extensions" shows a focus ring. Also: the Command keybindings search, the
   pocket URL bar and the headless-probe debug inputs focus with the theme ring
   instead of an accent border.
+- **K2-17 Settings › Command keybindings:** a category whose commands are
+  hidden by "Navigation Commands" being off shows one grey line under its
+  heading saying so, instead of every locked Palette box explaining itself
+  only on hover.
 - **K2-20 Close Old Agents:** a terminal marked "not observed yet" now
   says underneath "may still be running · wake it, or include running
   agents" (was a hover tooltip).
@@ -1540,3 +1544,6 @@ Sharp corners and one light theme.
 - 2026-09-25 K2-20: visible guidance under "not observed yet" (wording
   matches the real checkbox label). K2-21 verified as a false positive.
   Confirm-red: the new test fails with the pre-change modal.
+- 2026-09-25 K2-17: per-category visible note (suppression is per group, so a
+  per-row line would repeat 20+ times). Confirm-red: the note test fails on
+  the pre-change row.

@@ -513,6 +513,15 @@ export function CommandKeybindingsRow() {
             <div className="text-[10px] uppercase tracking-wide text-ink-dim">
               {CATEGORY_LABELS[group.category]}
             </div>
+            {/* Why some Palette boxes are locked, as visible text (K2-17). The
+                reason lived in a hover `title` on a disabled checkbox, which a
+                keyboard user cannot reach. Suppression is by GROUP, so it is
+                said once per category rather than on every locked row. */}
+            {[...new Set(group.rows.flatMap(row => (row.palette.kind === 'group-suppressed' ? [row.palette.groupLabel] : [])))].map(groupLabel => (
+              <div key={groupLabel} className="text-[10px] text-muted">
+                Hidden from the palette while {groupLabel} is off. Turn it on to choose each command.
+              </div>
+            ))}
             {group.rows.map(row => (
               <div
                 key={row.id}
@@ -676,11 +685,10 @@ function PaletteToggle({
       className={`flex w-16 shrink-0 items-center justify-center gap-1 ${
         suppressed ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
       }`}
-      title={
-        suppressed
-          ? `Hidden while ${state.groupLabel} is off. Turn that on to control this command individually.`
-          : 'Show this command in the command palette. Its keyboard shortcut works either way.'
-      }
+      // The suppressed reason is visible on the category heading now (K2-17);
+      // the hover text stays only for the editable case, where it is a hint
+      // and not the one explanation of a locked control.
+      title={suppressed ? undefined : 'Show this command in the command palette. Its keyboard shortcut works either way.'}
     >
       <input
         type="checkbox"

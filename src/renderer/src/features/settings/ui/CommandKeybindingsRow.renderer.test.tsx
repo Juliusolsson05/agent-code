@@ -77,4 +77,13 @@ describe('CommandKeybindingsRow', () => {
     expect(within(alert).queryByRole('button', { name: 'Replace' })).toBeNull()
     expect(document.activeElement).toBe(within(alert).getByRole('button', { name: /Cancel/ }))
   })
+
+  it('explains locked Palette boxes in visible text on their category (K2-17)', () => {
+    // On a fresh install the navigation group is off, so its commands'
+    // Palette boxes are disabled. The reason was a hover title only.
+    render(<CommandKeybindingsRow />)
+    const notes = screen.getAllByText(/Hidden from the palette while .+ is off\. Turn it on to choose each command\./)
+    expect(notes.length).toBeGreaterThan(0)
+    expect(document.querySelector('label[title^="Hidden while"]')).toBeNull()
+  })
 })
