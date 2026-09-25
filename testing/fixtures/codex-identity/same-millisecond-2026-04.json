@@ -1,0 +1,74 @@
+{
+  "source": "owner ~/.codex/sessions rollouts: 2026-04-13 (call + output, same ms), 2026-07-21 (one call, two different outputs, same ms), 2026-04-16 (two messages, same ms). Paths, ids and message text redacted; the kept output text is the recorded error string; wrapper-free shapes as recorded.",
+  "callAndOutput": [
+    {
+      "timestamp": "2026-04-13T09:06:41.517Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "name": "Edit",
+        "arguments": "{\"replace_all\":false,\"file_path\":\"src/example.ts\",\"old_string\":\"a\",\"new_str\":\"b\"}",
+        "call_id": "call_REDACTED_1"
+      }
+    },
+    {
+      "timestamp": "2026-04-13T09:06:41.517Z",
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "call_id": "call_REDACTED_1",
+        "output": "<tool_use_error>InputValidationError: Edit failed due to the following issues:\nThe required parameter `new_string` is missing\nAn unexpected parameter `new_str` was provided</tool_use_error>"
+      }
+    }
+  ],
+  "twoOutputs": [
+    {
+      "timestamp": "2026-07-21T10:55:08.435Z",
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call_output",
+        "call_id": "call_REDACTED_2",
+        "output": "{\"session_id\":88325}"
+      }
+    },
+    {
+      "timestamp": "2026-07-21T10:55:08.435Z",
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call_output",
+        "call_id": "call_REDACTED_2",
+        "output": "{\"session_id\":39977}"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "timestamp": "2026-04-16T14:34:49.436Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Continue from the summary."
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": "2026-04-16T14:34:49.436Z",
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Picking up where we left off."
+          }
+        ]
+      }
+    }
+  ]
+}
