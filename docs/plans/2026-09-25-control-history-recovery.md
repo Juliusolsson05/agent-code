@@ -54,18 +54,24 @@ This holds even when the torn bytes happen to be a complete JSON row missing onl
 A complete line fails JSON, fails the schema (for example a newer build's event kind after a downgrade), or the sequence has a gap or reorder. Rows after that point may still be fine, but what was lost cannot be known in general.
 - Preserve the original bytes as in case 2.
 - Rewrite `events.jsonl` with every row that parses and validates, in file order, renumbered `1..n`. Sequences are process-local paging cursors (`history.list` snapshots), and nothing durable references them.
-- Write `recovery.json` beside the ledger, recording:
-  - the quarantine path;
-  - the counts;
-  - a **blocked-key set**: for each damaged line that still parses as a JSON object with a string `caller` and `requestKey`, that pair;
-  - `keyedCallsBlocked: true` if any damaged line yields no object, or if there is a sequence gap. A gap means rows are missing, and a missing row could have held any key.
-- **Policy while `recovery.json` exists:**
+- **Which damaged rows can name their key (steering q13).** A row counts as exact-pair evidence ONLY when it is valid against `historyEventSchema` except for an unrecognized `kind` value: the downgrade shape, where every other byte, including `caller` and `requestKey`, is proven well-formed. Its `(caller, requestKey)` pair, if it has one, is blocked. Every other damaged row sets the **global keyed block**:
+  - unparseable bytes;
+  - an object missing or mistyping `caller` / `requestKey`;
+  - an object failing on any other field (a corrupted key value looks exactly like a valid one);
+  - a sequence gap or reorder.
+- **Policy while a recovery is unaccepted:**
   - Calls without a request key proceed normally. They never consult the journal for dedupe, so a lost row cannot cause a duplicate.
-  - A keyed call whose `(caller, requestKey)` has a `received` row among the salvaged rows proceeds normally. The executor finds its evidence.
-  - A keyed call on a blocked pair is refused at the `received` append: `history_unavailable`, `not_started`.
-  - With `keyedCallsBlocked`, every keyed call without salvaged evidence is refused the same way. Duplicate effects are worse than a refused mutation.
+  - A keyed call whose `(caller, requestKey)` has a `received` row among the salvaged rows proceeds normally. The executor finds its evidence and writes `duplicate`, never `received`.
+  - A keyed call that would write a NEW `received` row is refused when that pair is blocked, or when the global keyed block is on: `history_unavailable`, `not_started`. Duplicate effects are worse than a refused mutation.
   - Reads and unkeyed calls keep working, which ends the P1 "every call fails".
-- **Clearing:** the operator removes `recovery.json` once the preserved file has been inspected. The incident names both paths. Automatic expiry was rejected: request keys have no lifetime in the contract, so no timeout can be proven safe.
+- **Where the block lives, and why it cannot clear by accident (q13).** The source of truth is the preserved evidence:
+  - `recovery.json` records, per quarantine file, its name, sha256, blocked pairs and global flag.
+  - On every load, any `events.quarantined-*.jsonl` that `recovery.json` does not list is re-analyzed. Deleting `recovery.json` alone therefore rebuilds the block, and deleting a quarantine file alone leaves its record in place.
+  - A restart changes nothing.
+  - **Clearing is an explicit acceptance of unknown outcomes.** The operator adds the quarantine file's sha256 to `recovery-accepted.json`, after reconciling what those calls did. Naming the exact evidence digest cannot happen by restart, by deleting a file, or by accident. The incident message says so and carries the digest.
+  - Removing `recovery-accepted.json` re-blocks, the conservative direction.
+  - Deleting BOTH the evidence and its record destroys the evidence deliberately; nothing downstream can recover from that.
+  - Automatic expiry was rejected: request keys have no lifetime in the contract, so no timeout can be proven safe.
 
 ### 4. In-process write failure
 `poisoned` no longer blocks for the process lifetime. A failed append drops the cached load. The next append re-reads the disk, which is the only truth about what landed:
@@ -83,7 +89,8 @@ The fixture is the first N real rows of the owner's journal. Case 2 uses a real 
 1. **Torn tail, idempotency preserved:** a real prior call with a request key completes through the executor. A torn row is appended. Reopen, then retry the same key: the stored result comes back and the handler is **not** invoked. A new keyed call dispatches exactly once. The original bytes equal the quarantine file, and the report names it.
 2. **Torn tail after a lost result:** the result write fails, then the tail tears. Reopen and retry: `interrupted` / `unknown`, handler not invoked.
 3. **Schema-rejected received row with a key:** reopen. A retry of that key is refused `not_started` with the handler not invoked. An unkeyed call and a `history.list` read succeed. An unrelated keyed call with salvaged evidence replays.
-4. **Unparseable middle line:** a new keyed call is refused and an unkeyed call succeeds. After `recovery.json` is removed, the keyed call dispatches once.
+4. **Unparseable middle line:** a new keyed call is refused and an unkeyed call succeeds. Deleting `recovery.json` and reopening still refuses. After the quarantine digest is accepted, the keyed call dispatches once.
+4b. **(q13) Received-shaped object without key fields, mid-ledger (a valid row follows it):** a prior valid keyed call replays without running the effect, and a new keyed call is refused with the handler not invoked.
 5. **In-process failed append:** the next call recovers without a restart.
 
 ## Out of scope
