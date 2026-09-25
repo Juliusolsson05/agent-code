@@ -7,8 +7,12 @@
 - With an odd free width, a wide character can't use the last cell, so a full CJK row can be one cell short.
 
 ## Change
-- A local display-width helper: East Asian wide/fullwidth and emoji count 2 cells, combining marks count 0. No new dependency; `string-width` is only transitive.
-- The rule becomes: the break was a hard cut if the continuation's first character would not have fit on the previous line. For Latin text this is exactly the old rule (width − 1).
+- A local display-width helper, per grapheme cluster:
+  - 2 cells: East Asian wide/fullwidth, and emoji with default emoji presentation or VS16;
+  - 0 cells: combining marks and zero-width format characters;
+  - 1 cell otherwise.
+  Every doubt counts NARROW, because an overcount can confirm early and an undercount only times out. No new dependency; `string-width` is only transitive.
+- **Superseded after review (steering q34):** the first draft cut when "the continuation's first character would not have fit". Only a FULL row (width − 1 cells) is a hard cut now. A row one cell short is ambiguous, because xterm drops trailing spaces, so it keeps its space. Odd-body-width CJK rows therefore still time out; that is the #1292 residual.
 
 ## Tests
 Width sweeps for a CJK prompt and a mixed CJK + path prompt, both red on main. The existing Latin sweeps and the refusal tests stay green.

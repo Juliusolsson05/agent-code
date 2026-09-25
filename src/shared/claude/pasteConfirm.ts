@@ -402,14 +402,28 @@ function displayWidth(text: string): number {
  * full, dropped its real space and confirmed a different paste.
  *   - an emoji sequence (ZWJ, VS16 presentation, skin tone) is 2;
  *   - VS15 asks for text presentation, 1;
+ *   - a zero-width format character (U+200B, U+2060, U+FEFF…) is 0;
+ *   - a pictograph is 2 only with DEFAULT emoji presentation
+ *     (\p{Emoji_Presentation}, which includes the regional indicators of a
+ *     flag). A text-presentation one (🌡 U+1F321, 🗓 U+1F5D3) is 1;
  *   - otherwise the cluster's first code point decides (a combining mark
  *     rides on its base and adds nothing).
+ *
+ * WHY every doubt resolves NARROW (#1310 final review, A and C): the two
+ * mistakes are not symmetric. An undercount makes a hard cut look soft; the
+ * join keeps a space and the delivery times out. An OVERcount makes a soft
+ * wrap look full; the join drops its real space and a different paste
+ * confirms, the early Enter this detector must never produce. The blanket
+ * pictograph range 1F300-1F64F counted 🌡 as 2, and a lone U+200B counted 1;
+ * both let a one-cell-short row pass as full.
  */
 function clusterWidth(cluster: string): number {
   const first = cluster.codePointAt(0)!
   if (cluster.includes('\ufe0e')) return 1
   if (cluster.includes('\u200d') || cluster.includes('\ufe0f') || /[\u{1f3fb}-\u{1f3ff}]/u.test(cluster)) return 2
   if (/^\p{Mn}|^\p{Me}/u.test(cluster)) return 0
+  if (/^\p{Cf}+$/u.test(cluster)) return 0
+  if (/\p{Emoji_Presentation}/u.test(cluster)) return 2
   return isWide(first) ? 2 : 1
 }
 
@@ -422,9 +436,10 @@ function graphemes(text: string): string[] {
 function isWide(code: number): boolean {
   // East_Asian_Width W and F (Unicode 15), the table terminals and Ink's
   // string-width use, in the ranges people actually type: CJK and Hangul,
-  // fullwidth forms and punctuation, and emoji presentation symbols. The
-  // #1310 review counted ✅ ❌ ⚡ ⭐ 🚀 🟡 in the owner's own messages; a
-  // thinner table made each of them one cell and broke the same joins.
+  // fullwidth forms and punctuation. Emoji are NOT in this table: clusterWidth
+  // decides them by \p{Emoji_Presentation} (✅ ❌ ⚡ ⭐ 🚀 🟡, counted in the
+  // owner's own messages, all have it), because a blanket pictograph range
+  // also covers text-presentation symbols that are one cell.
   for (const [low, high] of WIDE_RANGES) {
     if (code < low) return false
     if (code <= high) return true
@@ -445,7 +460,6 @@ const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0xa960, 0xa97f], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f],
   [0xff00, 0xff60], [0xffe0, 0xffe6], [0x16fe0, 0x16fe4], [0x17000, 0x18aff], [0x1b000, 0x1b2ff],
   [0x1f004, 0x1f004], [0x1f0cf, 0x1f0cf], [0x1f18e, 0x1f18e], [0x1f191, 0x1f19a], [0x1f200, 0x1f2ff],
-  [0x1f300, 0x1f64f], [0x1f680, 0x1f6ff], [0x1f7e0, 0x1f7eb], [0x1f90c, 0x1f9ff], [0x1fa70, 0x1faff],
   [0x20000, 0x3fffd],
 ]
 

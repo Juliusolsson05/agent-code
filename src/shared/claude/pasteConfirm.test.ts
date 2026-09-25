@@ -220,6 +220,9 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     ['rockets', '🚀'.repeat(60)],
     ['fullwidth punctuation', '︐'.repeat(101)],
     ['check marks before a path', `${'✅'.repeat(40)} /Users/example/project/src/providers/claude/runtime/promptDelivery.ts`],
+    // #1310 final review C: a flag is one cluster of two regional
+    // indicators, two cells; it was measured as one.
+    ['a flag before a path', `done ${'🇸🇪'.repeat(30)} /Users/example/project/src/providers/claude/runtime/promptDelivery.ts`],
   ])('confirms wrapped %s at every width whose rows fill', (_name, prompt) => {
     const tail = pasteTailNeedle(prompt)
     const missed: number[] = []
@@ -298,6 +301,40 @@ describe('inline paste tail through a HARD wrap (#1118)', () => {
     const absent = `${'你'.repeat(8)}好abcdefgh`
     for (let cols = 20; cols <= 40; cols += 1) {
       expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, shown)), pasteTailNeedle(absent), 0, false)).toBeNull()
+    }
+  })
+
+  // #1310 final review (A, C): an OVERcounted width is the unsafe direction.
+  // It makes a soft-wrapped row look full, the join drops the real space, and
+  // a different paste confirms. Each of these is one cell wide to Ink and
+  // xterm but was measured as more: a text-presentation pictograph with no
+  // VS16 (🌡 U+1F321, 🗓 U+1F5D3, both East Asian Width N) and a zero-width
+  // space (U+200B, 405 of them in the owner's typed prompts).
+  it.each([
+    ['a text-presentation thermometer', '🌡'.repeat(10)],
+    ['a text-presentation calendar', `abcdefghijklmno🗓`],
+  ])('never confirms early across a soft wrap after %s', (_name, run) => {
+    const shown = `${run} XXXXZZZZ`
+    const absent = `${run}XXXXZZZZ`
+    for (let cols = 20; cols <= 40; cols += 1) {
+      expect(pasteAbsorbedVia(activeClaudeComposerText(screenAt(cols, shown)), pasteTailNeedle(absent), 0, false)).toBeNull()
+    }
+  })
+
+  // The zero-width space needs rows built as Ink wraps them: the npm
+  // wrap-ansi in this harness counts U+200B as a cell, which hides the case.
+  // Here the first row's glyphs leave exactly one cell, the soft-wrap space
+  // (dropped by xterm) sat in it, and the ZWSP adds nothing.
+  it('never confirms early across a soft wrap after a zero-width space', () => {
+    for (const cols of [20, 64, 80, 120]) {
+      const body = cols - 3
+      const first = `${'a'.repeat(body - 1)}\u200b`
+      const screen = [
+        ...recorded.slice(0, top), '─'.repeat(cols),
+        `❯\u00a0${first}`, '  XXXXZZZZ',
+        '─'.repeat(cols), ...recorded.slice(bottom + 1),
+      ].join('\n')
+      expect(pasteAbsorbedVia(activeClaudeComposerText(screen), pasteTailNeedle(`${first}XXXXZZZZ`), 0, false)).toBeNull()
     }
   })
 
