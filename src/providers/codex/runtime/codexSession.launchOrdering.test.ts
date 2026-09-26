@@ -56,6 +56,7 @@ vi.mock('codex-headless', () => {
     }
     getComposerState() { return launch.composer }
     getScreen() { return launch.screen }
+    getSettledScreen() { return launch.screen }
     getConditionSnapshot() { return { provider: 'codex', conditions: {}, ts: 0 } }
     async start() {
       launch.events.push('headless:start')

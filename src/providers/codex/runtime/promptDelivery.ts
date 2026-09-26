@@ -70,8 +70,12 @@ export async function deliverCodexPrompt(
   // browser-pocket restart was refused. The package's attribute-aware
   // reading says `empty` only with Codex's own empty-composer hint; either
   // proof is consent, anything else still refuses.
+  // The text proof reads the settled screen (#1319 review A2): the plain
+  // screen can be a paint from before bytes still being parsed, and null
+  // (bytes in flight, or a session without the method) is a refusal.
   const nativeEmpty = (io.session as { nativeComposerState?: () => string }).nativeComposerState?.() === 'empty'
-  if (io.requireEmptyNativeComposer && !nativeEmpty && !isCodexNativeComposerEmpty(io.session.snapshotScreen?.() ?? '')) {
+  const settledScreen = (io.session as { settledScreen?: () => string | null }).settledScreen?.() ?? null
+  if (io.requireEmptyNativeComposer && !nativeEmpty && !isCodexNativeComposerEmpty(settledScreen ?? '')) {
     return {
       ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
       disposition: 'retry-after-resolve', promptWritten: false, enterWritten: false,

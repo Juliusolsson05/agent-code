@@ -208,13 +208,30 @@ describe('composer submit while the agent composer is occupied', () => {
     expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
   })
 
-  // The 0.157 recording clears a draft with Ctrl+C; it must reach the agent.
-  it('lets Ctrl+C through to clear the agent\'s draft', async () => {
-    const { hook, send } = setup({
+  // Round 2 B: a draft of only an image is still a send, and must refuse too.
+  it('keeps an image-only draft and writes nothing on Enter', async () => {
+    const image = { id: 'img', mediaType: 'image/png', base64Data: 'AA==', previewUrl: 'blob:x', filename: 'x.png' }
+    const { hook, send, showPaneToast } = setup({
       provider: 'codex',
+      input: '',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied', draftImages: [image] },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Enter')) })
+    expect(send).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
+  })
+
+  // The 0.157 recording clears a draft with Ctrl+C; it must reach the agent.
+  // Round 2 B: and it must not also delete the follow-up the user typed here
+  // to send once that draft is gone (the refusal toast told them to press it).
+  it('lets Ctrl+C through to clear the agent\'s draft, keeping ours', async () => {
+    const { hook, send, setInputText } = setup({
+      provider: 'codex',
+      input: 'Status?',
       runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
     })
     await act(async () => { await hook.result.current.onKeyDown(keyEvent('c', { ctrlKey: true })) })
     expect(send).toHaveBeenCalledWith('\x03')
+    expect(setInputText).not.toHaveBeenCalled()
   })
 })

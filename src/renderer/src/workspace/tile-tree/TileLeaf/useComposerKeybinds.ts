@@ -723,7 +723,12 @@ export function useComposerKeybinds({
         return
       }
       await send('\x03')
-      setInputText('')
+      // While the agent's composer is occupied, Ctrl+C clears THAT draft, and
+      // the toast that refused Enter told the user to press it. Clearing ours
+      // too would delete the follow-up they typed to send once the agent's
+      // draft is gone (#1319 review round 2 B). Otherwise Ctrl+C keeps its
+      // terminal meaning of "abandon this line".
+      if (!composerOccupied) setInputText('')
       return
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'd') {

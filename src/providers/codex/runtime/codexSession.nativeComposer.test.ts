@@ -119,6 +119,7 @@ describe('Codex native composer (0.157 recording)', () => {
     let reads = 0
     ;(session as unknown as { headless: unknown }).headless = {
       getScreen: () => screens[Math.min(reads++, 1)]!,
+      getSettledScreen: () => screens[Math.min(reads, 1)]!,
       getComposerState: () => 'unknown',
       getConditionSnapshot: () => ({ provider: 'codex', conditions: {}, ts: Date.now() }),
     }
@@ -127,6 +128,29 @@ describe('Codex native composer (0.157 recording)', () => {
     // read there is the whole decision.
     const result = await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Status?', write } as never)
     expect(result).toMatchObject({ ok: false, promptWritten: false })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  // #1319 review round 2 A2: the parser can stay behind for longer than any
+  // number of polls (synchronized output), and the plain screen then keeps
+  // showing the bare marker from before the human's keystrokes. Only a
+  // parsed frame may prove empty; with none, nothing is written.
+  it('never consents on a bare marker that no parsed frame confirms', async () => {
+    const session = new CodexSession()
+    ;(session as unknown as { headless: unknown }).headless = {
+      getScreen: () => '› \n\n  gpt-5.6-sol high · /tmp/x',
+      getSettledScreen: () => null,
+      getComposerState: () => 'unknown',
+      getConditionSnapshot: () => ({ provider: 'codex', conditions: {}, ts: Date.now() }),
+    }
+    const readiness = await session.awaitReadyForPrompt({ timeoutMs: 400 } as never)
+    expect(readiness.kind).not.toBe('ready')
+    const write = vi.fn(() => true)
+    const restart = await deliverCodexPrompt({
+      session: { awaitReadyForPrompt: async () => ({ kind: 'ready', waitedMs: 0 }), nativeComposerState: () => 'unknown', settledScreen: () => null, snapshotScreen: () => '› \n\n  gpt-5.6-sol high · /tmp/x' },
+      sessionId: 'agent', prompt: 'Restart the server', write, requireEmptyNativeComposer: true,
+    } as never)
+    expect(restart).toMatchObject({ ok: false, promptWritten: false })
     expect(write).not.toHaveBeenCalled()
   })
 

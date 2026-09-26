@@ -899,17 +899,28 @@ export class CodexSession extends EventEmitter {
             resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
             return
           }
-          // The text proof reads the plain screen, which can lag PTY bytes
-          // still being parsed; that is exactly when the cell reading says
-          // `unknown` (#1319 review A2). A human who had just started typing
-          // would then get the prompt pasted into the draft. So a text-only
-          // proof must hold on two polls in a row (one poll interval apart,
-          // time for the pending bytes to parse) before it consents.
+          // The text proof must come from a PARSED frame (#1319 review A2).
+          // `screen` above is the plain buffer as it stands, which shows the
+          // previous paint while PTY bytes are still queued in the parser;
+          // that is exactly when the cell reading says `unknown`. A human
+          // who had just started typing would then get the prompt pasted
+          // into the draft. Round 1 required two polls in a row, but elapsed
+          // time proves nothing: the parser can stay behind for a long time
+          // under synchronized output (HeadlessTerminal's known issue). So
+          // the proof reads the settled screen, which is null while anything
+          // is unparsed; null neither consents nor refuses, it waits. The
+          // two-poll rule stays as a second guard against a frame Codex
+          // repaints between polls.
           if (isCodexNativeComposerEmpty(screen)) {
-            textOnlyEmptyPolls += 1
-            if (textOnlyEmptyPolls >= 2) {
-              resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
-              return
+            const settled = this.settledScreen()
+            if (settled !== null && isCodexNativeComposerEmpty(settled)) {
+              textOnlyEmptyPolls += 1
+              if (textOnlyEmptyPolls >= 2) {
+                resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+                return
+              }
+            } else {
+              textOnlyEmptyPolls = 0
             }
           } else {
             // Text in the composer that nothing proves is a placeholder:
@@ -1024,7 +1035,7 @@ export class CodexSession extends EventEmitter {
     const composer = this.nativeComposerState()
     const next = composer === 'drafted'
       ? 'occupied'
-      : composer === 'empty' || isCodexNativeComposerEmpty(this.headless?.getScreen() ?? '')
+      : composer === 'empty' || isCodexNativeComposerEmpty(this.settledScreen() ?? '')
         ? 'ready'
         : 'unverified'
     if (next === this.nativeComposerPublished) return
@@ -1050,6 +1061,18 @@ export class CodexSession extends EventEmitter {
 
   snapshotScreen(): string {
     return this.headless?.getScreen() ?? ''
+  }
+
+  /**
+   * The plain screen from a fully parsed frame, or null while PTY bytes are
+   * still being parsed (#1319 review A2). Every TEXT proof that the native
+   * composer is empty reads this, never `snapshotScreen()`, which can show
+   * the paint from before the human's latest keystrokes. A headless without
+   * the method (an older package) gives null, so the text proof fails closed.
+   */
+  settledScreen(): string | null {
+    const headless = this.headless as { getSettledScreen?: () => string | null } | null
+    return headless?.getSettledScreen?.() ?? null
   }
 
   snapshotScreenAsMarkdown(): string {
