@@ -543,6 +543,12 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (17:30) — **Round-1 findings fixed; round 2 is out.**
+  - **#1319:** review C found a blocker: Agent Code's own Enter on a Codex pane wrote raw into a native draft, because the composer submit bypasses the delivery gate. Submit now refuses while `composer-occupied` (every provider), and Ctrl+C passes through to clear the draft (the recorded 0.157 way). Review B's gaps are pinned (publication through the real `screen` listener; the final empty check alone).
+  - **#1324:** a non-Error throw is never read; proxy guidance is limited to Claude with the proxy on; failures journal a fixed signature (C: the posix_spawnp fact was lost from every artifact); Reload Agents keeps curated sentences.
+  - A's session for #1319 was lost in the restart, so a new A was started for round 2.
+  - **#1325** round 1 is in progress. **Next:** #1282.
+
 - 2026-09-26 (16:40) — **Goal loop restarted** (`goal_loop_start`, 200 continuations). The previous loop record did not survive the session restart, and I wrongly reported it as running. New loop prompt: act on steering notes first, batch merges per §7.4, no B18 nudges (B18 finished; #1221 merged), keep issues and labels in sync, and never stop to wait. In flight: #1319 (B and C re-reviewing) and #1324 (#1267, 3 reviewers). Next: #1280 and #1282 (C2).
 
 - 2026-09-26 (00:30) — **Batch #1318 merged** (`33fd8f83`) on the owner's explicit "yolo merge". Main CI on it is green, and it also cleared main's red run from #1221's renamed labels. All 12 members registered merged; the post-merge integration review said MERGE-READY. Issue hygiene pass: 52 recent issues labelled, status notes on #1292, #1281, #1273, #372 and #1267, duplicate #1217 closed.
