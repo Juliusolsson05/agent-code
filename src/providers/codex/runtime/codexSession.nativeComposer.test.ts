@@ -108,4 +108,25 @@ describe('Codex native composer (0.157 recording)', () => {
     session.publishNativeComposer()
     expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
+
+  // #1319 review A2: the text-only proof of empty reads the plain screen,
+  // which can lag PTY bytes still being parsed (the cell reading is then
+  // `unknown`). A single stale bare-marker read must not consent: a human who
+  // just started typing would get the prompt pasted into the draft.
+  it('does not consent on one stale bare-marker read', async () => {
+    const session = new CodexSession()
+    const screens = ['› \n\n  gpt-5.6-sol high · /tmp/x', '› half-typed human draft\n\n  gpt-5.6-sol high · /tmp/x']
+    let reads = 0
+    ;(session as unknown as { headless: unknown }).headless = {
+      getScreen: () => screens[Math.min(reads++, 1)]!,
+      getComposerState: () => 'unknown',
+      getConditionSnapshot: () => ({ provider: 'codex', conditions: {}, ts: Date.now() }),
+    }
+    const write = vi.fn(() => true)
+    // A normal delivery: its only check is the readiness gate, so a stale
+    // read there is the whole decision.
+    const result = await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Status?', write } as never)
+    expect(result).toMatchObject({ ok: false, promptWritten: false })
+    expect(write).not.toHaveBeenCalled()
+  })
 })

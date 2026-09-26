@@ -830,6 +830,9 @@ export class CodexSession extends EventEmitter {
     if (this.exited) return { kind: 'terminal', reason: 'exited' }
 
     return await new Promise(resolve => {
+      // Consecutive polls on which only the TEXT proved the composer empty
+      // (#1319 review A2); see the use below.
+      let textOnlyEmptyPolls = 0
       const tick = (): void => {
         if (this.exited) {
           resolve({ kind: 'terminal', reason: 'exited' })
@@ -877,9 +880,9 @@ export class CodexSession extends EventEmitter {
           this.markComposerReady(screen)
           // #800: the screen check above passes for ANY `›` row, including a
           // human's draft, and a paste would then append to that draft and
-          // submit both. Only the package's attribute-aware `drafted` blocks;
-          // `unknown` keeps today's behaviour so a frame we cannot read never
-          // stalls a prompt (the Claude gate once latched occupied for 186 s).
+          // submit both. The package's attribute-aware reading decides:
+          // `drafted` is occupied, `empty` is ready, and `unknown` needs the
+          // text proof below.
           const composer = this.nativeComposerState()
           if (composer === 'drafted') {
             resolve({ kind: 'occupied', reason: 'human-draft' })
@@ -892,18 +895,35 @@ export class CodexSession extends EventEmitter {
           // empty hint), or the old text proof of a bare `›` above the
           // status row, which is the only proof 0.149.1 and narrow 0.157
           // panes (no hint row) can give.
-          if (composer === 'empty' || isCodexNativeComposerEmpty(screen)) {
+          if (composer === 'empty') {
             resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
             return
           }
-          // Text in the composer that nothing proves is a placeholder: refuse
-          // AT ONCE as a human's to resolve (retry-after-resolve). Polling to
-          // the deadline instead held the delivery reservation for 15 s and
-          // answered retry-same-session, the wrong instruction for a draft.
-          // Only this write gate says occupied; readiness publication says
-          // provider-not-ready for the same frame, so nothing latches.
-          resolve({ kind: 'occupied', reason: 'human-draft' })
-          return
+          // The text proof reads the plain screen, which can lag PTY bytes
+          // still being parsed; that is exactly when the cell reading says
+          // `unknown` (#1319 review A2). A human who had just started typing
+          // would then get the prompt pasted into the draft. So a text-only
+          // proof must hold on two polls in a row (one poll interval apart,
+          // time for the pending bytes to parse) before it consents.
+          if (isCodexNativeComposerEmpty(screen)) {
+            textOnlyEmptyPolls += 1
+            if (textOnlyEmptyPolls >= 2) {
+              resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+              return
+            }
+          } else {
+            // Text in the composer that nothing proves is a placeholder:
+            // refuse AT ONCE as a human's to resolve (retry-after-resolve).
+            // Polling to the deadline instead held the delivery reservation
+            // for 15 s and answered retry-same-session, the wrong instruction
+            // for a draft. Only this write gate says occupied; readiness
+            // publication says provider-not-ready for the same frame, so
+            // nothing latches.
+            resolve({ kind: 'occupied', reason: 'human-draft' })
+            return
+          }
+        } else {
+          textOnlyEmptyPolls = 0
         }
         if (Date.now() >= deadlineAt) {
           resolve({
