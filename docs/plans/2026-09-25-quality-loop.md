@@ -543,6 +543,8 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (17:55) — **New #1326** (#1282, C2): Reload Agents re-checks ownership (a skip before each kill; a commit-time re-check that kills orphaned successors), and the live draft, images and unread marker carry over. Five fail-first tests on the recorded workspace. A post-spawn check was redundant with the commit check (its mutant survived) and was removed. Three reviewers are running. In flight: #1319 and #1324 (round 2), #1325 (round 1).
+
 - 2026-09-26 (17:30) — **Round-1 findings fixed; round 2 is out.**
   - **#1319:** review C found a blocker: Agent Code's own Enter on a Codex pane wrote raw into a native draft, because the composer submit bypasses the delivery gate. Submit now refuses while `composer-occupied` (every provider), and Ctrl+C passes through to clear the draft (the recorded 0.157 way). Review B's gaps are pinned (publication through the real `screen` listener; the final empty check alone).
   - **#1324:** a non-Error throw is never read; proxy guidance is limited to Claude with the proxy on; failures journal a fixed signature (C: the posix_spawnp fact was lost from every artifact); Reload Agents keeps curated sentences.
