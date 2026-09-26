@@ -1534,7 +1534,30 @@ export function useSessionActions(
       // Successors that can still complete a goal loop; see carryGoalLoops.
       const goalLoopCapable = new Set<SessionId>()
 
+      // Is `oldId` still the agent this loop set out to reload? (#1282) The
+      // loop awaits a kill and a spawn per agent while the user keeps
+      // working, and it used to re-check nothing: an agent closed meanwhile
+      // was respawned under a new id (an invisible orphan if its project had
+      // closed too), and one replaced meanwhile (a provider switch) got two
+      // successors on one provider transcript. Same rule as replaceSession's
+      // canCommit (#815). Read through the setState updater, the one place
+      // that sees the state as it is now, not as this closure captured it.
+      const stillReloadable = (oldId: SessionId, meta: SessionMeta): boolean => {
+        let owned = false
+        setState(prev => {
+          const current = prev.sessions[oldId]
+          owned = Boolean(current && current.cwd === meta.cwd && current.kind === meta.kind
+            && current.providerRuntime === meta.providerRuntime
+            && collectOwnedSessionIds(prev).has(oldId))
+          return prev
+        })
+        return owned
+      }
+      const oldMetas = new Map<SessionId, SessionMeta>()
+
       for (const [oldId, meta] of agentEntries) {
+        // Closed or replaced since the snapshot: nothing of ours to reload.
+        if (!stillReloadable(oldId, meta)) continue
         try {
           await killSessionBackendIfOwned(refs, oldId, 'reload.agent-sessions')
         } catch {
@@ -1569,7 +1592,10 @@ export function useSessionActions(
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
+          // Whether it is still ours is decided once, at commit, below: that
+          // check also covers an agent closed while this spawn was in flight.
           idMap.set(oldId, newId)
+          oldMetas.set(oldId, meta)
           if (builtInMcpDomains?.includes('goal_loop')) goalLoopCapable.add(newId)
           freshSessions[newId] = {
             // `agentNameId` needs no line here: withoutProvisionalProviderSession
@@ -1592,6 +1618,19 @@ export function useSessionActions(
           // path already returns this same fixed message for the same failure.
           failedIds.add(oldId)
         }
+      }
+
+      // Commit-time re-check (#1282): an agent respawned early in the loop
+      // can be closed or replaced while a LATER agent's spawn is in flight,
+      // so the per-agent check above is not the last word. Its successor is
+      // killed rather than filed.
+      for (const [oldId, newId] of [...idMap]) {
+        const meta = oldMetas.get(oldId)!
+        if (stillReloadable(oldId, meta)) continue
+        idMap.delete(oldId)
+        goalLoopCapable.delete(newId)
+        delete freshSessions[newId]
+        await killSession(newId, 'reload.orphaned-successor', { cwd: meta.cwd, kind: meta.kind ?? DEFAULT_PROVIDER, providerRuntime: meta.providerRuntime })
       }
 
       if (idMap.size === 0 && failedIds.size === 0) return
@@ -1627,7 +1666,16 @@ export function useSessionActions(
           // "Agent has exited".
           const existing = prev[newId]
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
-          restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
+          // From the LIVE predecessor runtime (#1282), not the snapshot taken
+          // before the slow kill/spawn sequence: text typed, images pasted
+          // and a "finished, not seen" marker set meanwhile all carry over.
+          const predecessor = prev[oldId] ?? oldRuntimes[oldId]
+          restored.draftInput = predecessor?.draftInput ?? existing?.draftInput ?? ''
+          if (predecessor?.draftImages?.length) restored.draftImages = predecessor.draftImages
+          if (predecessor?.unreadSince != null) {
+            restored.unreadSince = predecessor.unreadSince
+            restored.unreadKind = predecessor.unreadKind
+          }
           // Terminal-runtime agents included: their history reloads into
           // `entries` with everyone else's below, and the pane stays on the
           // raw TUI regardless (see loadInitialHistoryForSession).
