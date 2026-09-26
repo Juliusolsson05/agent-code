@@ -332,3 +332,47 @@ describe('raw PTY attach ownership (#1311)', () => {
   })
 })
 
+
+// #1267 (steering q22 at the source): session:spawn relayed the raw provider
+// exception over IPC, where every renderer surface had to remember not to
+// show it. Main launders it like recover() does; only curated, secret-free
+// failures cross as themselves.
+describe('session:spawn rejections', () => {
+  const { readFileSync } = require('node:fs') as typeof import('node:fs')
+  const { join } = require('node:path') as typeof import('node:path')
+  const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+
+  async function rejectionOf(error: Error): Promise<string> {
+    registerSessionIpc({ spawn: vi.fn(async () => { throw error }) } as never, {} as never, { flushCommitted: () => {} })
+    const handler = harness.handlers.get('session:spawn')!
+    return await Promise.resolve(handler({ sender: {} }, { cwd: '/repo', kind: 'claude' })).then(() => 'resolved', (e: Error) => e.message)
+  }
+
+  it('never relays a raw provider exception', async () => {
+    const message = await rejectionOf(new Error(`${recorded} env=ANTHROPIC_API_KEY=sk-ant-secret https://user:pass@proxy.example`))
+    expect(message).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  it('keeps the curated failures that name their fix', async () => {
+    const { MissingWorkspaceDirectoryError } = await import('@main/workspaceDirectory.js')
+    const { ProviderCliNotFoundError } = await import('@main/sessionManager.js')
+    expect(await rejectionOf(new MissingWorkspaceDirectoryError('/repo/.worktrees/gone'))).toBe('Workspace folder is missing: /repo/.worktrees/gone')
+    expect(await rejectionOf(new ProviderCliNotFoundError('codex'))).toBe('codex CLI not found. Open Setup (File › Setup…) to install it or enter its path.')
+  })
+
+  it('keeps the window-ownership refusal, which our own code writes', async () => {
+    const { claimSessionForWindow } = await import('@main/window/windowRegistry.js')
+    vi.mocked(claimSessionForWindow).mockReturnValueOnce(null as never)
+    registerSessionIpc({ spawn: vi.fn(async (_options: unknown, claim: (id: string) => void) => { claim('s1'); return 's1' }) } as never, {} as never, { flushCommitted: () => {} })
+    const handler = harness.handlers.get('session:spawn')!
+    const message = await Promise.resolve(handler({ sender: {} }, { cwd: '/repo', kind: 'claude' })).then(() => 'resolved', (e: Error) => e.message)
+    expect(message).toBe('The requesting window can no longer own this session')
+  })
+
+  it('turns a Claude proxy startup failure into the proxy guidance, not its raw text', async () => {
+    const message = await rejectionOf(new Error('Timed out waiting for mitmproxy on 127.0.0.1:51234 with token=abc'))
+    expect(message).toContain('Claude proxy startup failed')
+    expect(message).not.toContain('token=abc')
+  })
+})

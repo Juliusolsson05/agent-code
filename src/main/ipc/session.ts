@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
 
-import type { SessionManager } from '@main/sessionManager.js'
+import { ProviderCliNotFoundError, type SessionManager } from '@main/sessionManager.js'
+import { MissingWorkspaceDirectoryError } from '@main/workspaceDirectory.js'
+import { CLAUDE_PROXY_STARTUP_FAILED_MESSAGE, isClaudeProxyStartupFailure, SESSION_START_FAILED_MESSAGE } from '@shared/types/session.js'
 import { mainOperations } from '@main/performance/operations.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -35,6 +37,8 @@ import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 import { screenInterest, screenTailHistory } from '@main/sessions/screenInterest.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { ScreenTailSample } from '@shared/debug/screenTail.js'
+
+const WINDOW_CANNOT_OWN_SESSION = 'The requesting window can no longer own this session'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -88,14 +92,14 @@ export function registerSessionIpc(
       try {
         return await manager.spawn(options, sessionId => {
           lease = claimSessionForWindow(sessionId, owner)
-          if (!lease) throw new Error('The requesting window can no longer own this session')
+          if (!lease) throw new Error(WINDOW_CANNOT_OWN_SESSION)
         })
       } catch (error) {
         // A failed spawn never returns its minted id to the renderer, so no
         // pane-disposal request can clean this claim later. Release only this
         // admission; a successor recovery may already have claimed the id.
         releaseSession(lease)
-        throw error
+        throw launderSpawnError(error)
       }
     },
   )
@@ -560,4 +564,26 @@ export function registerSessionIpc(
       return await resolveTranscriptPaths(requests)
     },
   )
+}
+
+/**
+ * What a failed session:spawn tells the renderer (#1267, steering q22 at the
+ * source). IPC relays only an error's message, and a provider launch
+ * exception can carry environment values, proxy URLs or scoped MCP tokens;
+ * every renderer surface used to have to remember not to show it. recover()
+ * already flattens its failures this way (sessionManager recoverSession).
+ * Only failures whose text our own code builds from a fixed template cross
+ * as themselves: a missing workspace folder (a path the UI already shows), a
+ * missing provider CLI (names File › Setup…), and this window losing the
+ * session. A Claude proxy that would not start becomes its fixed guidance.
+ * Everything else is the one safe sentence; the raw error stays in main's
+ * log.
+ */
+function launderSpawnError(error: unknown): Error {
+  if (error instanceof MissingWorkspaceDirectoryError || error instanceof ProviderCliNotFoundError) return error
+  const raw = error instanceof Error ? error.message : String(error)
+  if (raw === WINDOW_CANNOT_OWN_SESSION) return error as Error
+  console.warn('[session:spawn] provider start failed:', error)
+  if (isClaudeProxyStartupFailure(raw)) return new Error(CLAUDE_PROXY_STARTUP_FAILED_MESSAGE)
+  return new Error(SESSION_START_FAILED_MESSAGE)
 }
