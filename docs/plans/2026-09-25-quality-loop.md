@@ -543,6 +543,8 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (16:40) — **Goal loop restarted** (`goal_loop_start`, 200 continuations). The previous loop record did not survive the session restart, and I wrongly reported it as running. New loop prompt: act on steering notes first, batch merges per §7.4, no B18 nudges (B18 finished; #1221 merged), keep issues and labels in sync, and never stop to wait. In flight: #1319 (B and C re-reviewing) and #1324 (#1267, 3 reviewers). Next: #1280 and #1282 (C2).
+
 - 2026-09-26 (00:30) — **Batch #1318 merged** (`33fd8f83`) on the owner's explicit "yolo merge". Main CI on it is green, and it also cleared main's red run from #1221's renamed labels. All 12 members registered merged; the post-merge integration review said MERGE-READY. Issue hygiene pass: 52 recent issues labelled, status notes on #1292, #1281, #1273, #372 and #1267, duplicate #1217 closed.
   - **Owner decision (2026-09-26):** keep the loop going; "we are in a really good state." Batch merges stay the default.
   - **#1319** (Codex drafts, #800/#1313): the q40 fix and the review-A fix are in `e8490f29` (a text-only empty proof must hold on two polls). B and C were restarted on that head after the session restart lost them.
