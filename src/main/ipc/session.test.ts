@@ -30,7 +30,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 // The sub-agent watcher polls real directories; nothing here is about fleets.
 vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
 
-const { registerSessionIpc } = await import('./session.js')
+const { registerSessionIpc, classifySpawnFailure } = await import('./session.js')
 const { sessionApi } = await import('@preload/api/session.js')
 const { SessionFeedTap } = await import('@main/sessions/sessionFeedTap.js')
 const { EventEmitter } = await import('node:events')
@@ -365,6 +365,48 @@ describe('session:spawn rejections', () => {
     expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude', useProxy: false })).toBe('Session failed to start. Check provider setup and retry.')
   })
 
+  // #1324 review round 2 A/B: an Error's message can be a getter. One that
+  // throws escaped as the rejection; one that answered the window sentence
+  // first and a token next was returned as-is and read again by IPC.
+  it('never lets an Error\'s own message getter reach the rejection', async () => {
+    const throwing = new Error('x')
+    Object.defineProperty(throwing, 'message', { get() { throw new Error('token=secret') } })
+    expect(await rejectionOf(throwing)).toBe('Session failed to start. Check provider setup and retry.')
+    let reads = 0
+    const shifting = new Error('x')
+    Object.defineProperty(shifting, 'message', { get: () => (reads++ === 0 ? 'The requesting window can no longer own this session' : 'token=secret') })
+    registerSessionIpc({ spawn: vi.fn(async () => { throw shifting }) } as never, {} as never, { flushCommitted: () => {} })
+    const rejected = await Promise.resolve(harness.handlers.get('session:spawn')!({ sender: {} }, { cwd: '/repo', kind: 'claude' })).then(() => null, (e: Error) => e)
+    expect(rejected).not.toBe(shifting)
+    expect(rejected!.message).toBe('The requesting window can no longer own this session')
+    expect(rejected!.message).toBe('The requesting window can no longer own this session')
+  })
+
+  // #1324 review round 2 A/B: the guidance needs BOTH a Claude spawn and
+  // useProxy exactly true (sessionManager starts mitmproxy only then).
+  it('gives no proxy guidance to a Codex proxy spawn or a Claude spawn without useProxy', async () => {
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'codex', useProxy: true })).toBe('Session failed to start. Check provider setup and retry.')
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude' })).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  // #1324 review round 2 B/C: every signature a debugger reads from the
+  // journal, one representative each, so a collapsed classifier fails here.
+  it('signs each known failure with its own code', async () => {
+    const { MissingWorkspaceDirectoryError } = await import('@main/workspaceDirectory.js')
+    const { ProviderCliNotFoundError } = await import('@main/sessionManager.js')
+    const signatureOf = (error: unknown, proxyApplies = false) => classifySpawnFailure(error, proxyApplies).signature
+    expect(signatureOf(new Error(recorded))).toBe('posix-spawnp')
+    expect(signatureOf(new MissingWorkspaceDirectoryError('/repo/gone'))).toBe('missing-workspace')
+    expect(signatureOf(new ProviderCliNotFoundError('codex'))).toBe('cli-not-found')
+    expect(signatureOf(new Error('The requesting window can no longer own this session'))).toBe('window-refused')
+    expect(signatureOf({ toString: () => 'x' })).toBe('non-error-throw')
+    expect(signatureOf(new Error('Unable to locate mitmAddon.py'), true)).toBe('claude-proxy')
+    // A Codex error naming mitmdump is what it is, not a Claude proxy failure.
+    expect(signatureOf(new Error('spawn /repo/mitmdump: ENOENT'))).toBe('enoent')
+    expect(signatureOf(new Error('spawn /usr/bin/codex EACCES'))).toBe('eacces')
+    expect(signatureOf(new Error('Session recovery was cancelled'))).toBe('unclassified')
+  })
+
   // #1324 review C: the laundered rejection is all the incident journal and
   // a debug bundle see, so the failure's identity is journaled as a fixed
   // signature, never its text.
@@ -397,7 +439,7 @@ describe('session:spawn rejections', () => {
   })
 
   it('turns a Claude proxy startup failure into the proxy guidance, not its raw text', async () => {
-    const message = await rejectionOf(new Error('Timed out waiting for mitmproxy on 127.0.0.1:51234 with token=abc'))
+    const message = await rejectionOf(new Error('Timed out waiting for mitmproxy on 127.0.0.1:51234 with token=abc'), { kind: 'claude', useProxy: true })
     expect(message).toContain('Claude proxy startup failed')
     expect(message).not.toContain('token=abc')
   })
