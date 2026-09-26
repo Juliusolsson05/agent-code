@@ -190,3 +190,31 @@ describe('composer Escape while the provider composer is occupied', () => {
     expect(ready.send).toHaveBeenCalledWith('\x1b')
   })
 })
+
+// #1319 review C: a Codex submit is one raw PTY write, not a gated delivery,
+// so while the agent's own composer held a draft (composer-occupied), Enter
+// here pasted the prompt after that draft and Codex submitted both.
+describe('composer submit while the agent composer is occupied', () => {
+  it('keeps the draft and writes nothing on Enter', async () => {
+    const { hook, send, setInputText, showPaneToast, feed } = setup({
+      provider: 'codex',
+      input: 'Status?',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Enter')) })
+    expect(send).not.toHaveBeenCalled()
+    expect(feed.calls.filter(call => call.method === 'sendInput')).toHaveLength(0)
+    expect(setInputText).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
+  })
+
+  // The 0.157 recording clears a draft with Ctrl+C; it must reach the agent.
+  it('lets Ctrl+C through to clear the agent\'s draft', async () => {
+    const { hook, send } = setup({
+      provider: 'codex',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('c', { ctrlKey: true })) })
+    expect(send).toHaveBeenCalledWith('\x03')
+  })
+})

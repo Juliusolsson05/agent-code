@@ -129,4 +129,18 @@ describe('Codex native composer (0.157 recording)', () => {
     expect(result).toMatchObject({ ok: false, promptWritten: false })
     expect(write).not.toHaveBeenCalled()
   })
+
+  // #1319 review B: the restart's final empty check must refuse on its own,
+  // even when readiness has just said ready.
+  it('refuses a restart when the final check reads a draft after readiness said ready', async () => {
+    const session = {
+      awaitReadyForPrompt: async () => ({ kind: 'ready', waitedMs: 0 }),
+      nativeComposerState: () => 'drafted',
+      snapshotScreen: () => '› typed just now\n\n  gpt-5.6-sol high · /tmp/x',
+    }
+    const write = vi.fn(() => true)
+    const result = await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Restart the server', write, requireEmptyNativeComposer: true } as never)
+    expect(result).toMatchObject({ ok: false, promptWritten: false })
+    expect(write).not.toHaveBeenCalled()
+  })
 })
