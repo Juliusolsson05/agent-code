@@ -99,7 +99,7 @@ export function registerSessionIpc(
         // pane-disposal request can clean this claim later. Release only this
         // admission; a successor recovery may already have claimed the id.
         releaseSession(lease)
-        throw launderSpawnError(error)
+        throw launderSpawnError(error, options, appRunJournal)
       }
     },
   )
@@ -573,17 +573,55 @@ export function registerSessionIpc(
  * every renderer surface used to have to remember not to show it. recover()
  * already flattens its failures this way (sessionManager recoverSession).
  * Only failures whose text our own code builds from a fixed template cross
- * as themselves: a missing workspace folder (a path the UI already shows), a
+ * as themselves: a missing workspace folder (a path the user chose and the
+ * pane header already shows; #1324 review A noted it is not secret-free in
+ * general, but it reveals nothing the UI does not), a
  * missing provider CLI (names File › Setup…), and this window losing the
  * session. A Claude proxy that would not start becomes its fixed guidance.
  * Everything else is the one safe sentence; the raw error stays in main's
  * log.
  */
-function launderSpawnError(error: unknown): Error {
+function launderSpawnError(
+  error: unknown,
+  options: Pick<SessionSpawnOptions, 'kind' | 'useProxy'> | undefined,
+  journal: AppRunJournal | undefined,
+): Error {
+  // A non-Error throw is never read (#1324 review A/B): converting it to text
+  // runs its own toString, which can throw with the very text this boundary
+  // exists to keep in main, and that throw would escape as the rejection.
+  const raw = error instanceof Error ? error.message : ''
+  const signature = spawnFailureSignature(error, raw)
+  // WHY a signature and not the message (#1324 review C): the laundered
+  // rejection is all the renderer, the incident journal and a debug bundle
+  // ever see, so the one fact that identified the recorded node-pty trap
+  // ("posix_spawnp failed") was lost to every artifact this repo debugs
+  // from. A fixed code carries that fact and nothing else.
+  journal?.record({ area: 'session.spawn', name: 'session.spawn.failed', severity: 'warn', data: { kind: options?.kind ?? null, signature } })
   if (error instanceof MissingWorkspaceDirectoryError || error instanceof ProviderCliNotFoundError) return error
-  const raw = error instanceof Error ? error.message : String(error)
   if (raw === WINDOW_CANNOT_OWN_SESSION) return error as Error
-  console.warn('[session:spawn] provider start failed:', error)
-  if (isClaudeProxyStartupFailure(raw)) return new Error(CLAUDE_PROXY_STARTUP_FAILED_MESSAGE)
+  console.warn('[session:spawn] provider start failed:', signature)
+  // Only a Claude spawn that runs the proxy (#1324 review A/B): the renderer
+  // used to require exactly that, and a Codex spawn whose error happens to
+  // mention mitmdump must not be told to disable Claude's proxy streaming.
+  if ((options?.kind ?? 'claude') === 'claude' && options?.useProxy !== false && isClaudeProxyStartupFailure(raw)) {
+    return new Error(CLAUDE_PROXY_STARTUP_FAILED_MESSAGE)
+  }
   return new Error(SESSION_START_FAILED_MESSAGE)
+}
+
+/**
+ * A fixed code for a failed spawn, safe to journal: which known failure it
+ * is, never its text. New signatures go here as they are identified from
+ * recorded incidents.
+ */
+export function spawnFailureSignature(error: unknown, raw: string): string {
+  if (error instanceof MissingWorkspaceDirectoryError) return 'missing-workspace'
+  if (error instanceof ProviderCliNotFoundError) return 'cli-not-found'
+  if (!(error instanceof Error)) return 'non-error-throw'
+  if (raw === WINDOW_CANNOT_OWN_SESSION) return 'window-refused'
+  if (raw.includes('posix_spawnp failed')) return 'posix-spawnp'
+  if (isClaudeProxyStartupFailure(raw)) return 'claude-proxy'
+  if (/\bENOENT\b/.test(raw)) return 'enoent'
+  if (/\bEACCES\b/.test(raw)) return 'eacces'
+  return 'unclassified'
 }

@@ -343,11 +343,37 @@ describe('session:spawn rejections', () => {
   const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
     '../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
 
-  async function rejectionOf(error: Error): Promise<string> {
-    registerSessionIpc({ spawn: vi.fn(async () => { throw error }) } as never, {} as never, { flushCommitted: () => {} })
+  async function rejectionOf(error: unknown, options: Record<string, unknown> = { kind: 'claude' }, journal?: { record: ReturnType<typeof vi.fn> }): Promise<string> {
+    registerSessionIpc({ spawn: vi.fn(async () => { throw error }) } as never, {} as never, { flushCommitted: () => {} }, journal as never)
     const handler = harness.handlers.get('session:spawn')!
-    return await Promise.resolve(handler({ sender: {} }, { cwd: '/repo', kind: 'claude' })).then(() => 'resolved', (e: Error) => e.message)
+    return await Promise.resolve(handler({ sender: {} }, { cwd: '/repo', ...options })).then(() => 'resolved', (e: Error) => e.message)
   }
+
+  // #1324 review A/B: a non-Error whose toString throws used to escape as
+  // the rejection, carrying whatever it threw.
+  it('never reads a non-Error throw', async () => {
+    const hostile = { toString: () => { throw new Error('token=secret') } }
+    expect(await rejectionOf(hostile)).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  // #1324 review A/B: proxy guidance only for a Claude spawn that runs the
+  // proxy; both recognised signatures reach it.
+  it('gives the Claude proxy guidance only to a Claude proxy spawn', async () => {
+    expect(await rejectionOf(new Error('spawn /repo/mitmdump: ENOENT'), { kind: 'codex', useProxy: false })).toBe('Session failed to start. Check provider setup and retry.')
+    expect(await rejectionOf(new Error('Unable to locate mitmAddon.py'), { kind: 'claude', useProxy: true })).toContain('Claude proxy startup failed')
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude', useProxy: true })).toContain('Claude proxy startup failed')
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude', useProxy: false })).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  // #1324 review C: the laundered rejection is all the incident journal and
+  // a debug bundle see, so the failure's identity is journaled as a fixed
+  // signature, never its text.
+  it('journals which known failure it was, without its text', async () => {
+    const journal = { record: vi.fn() }
+    await rejectionOf(new Error(`${recorded} env=ANTHROPIC_API_KEY=sk-ant-secret`), { kind: 'codex' }, journal)
+    expect(journal.record).toHaveBeenCalledWith(expect.objectContaining({ name: 'session.spawn.failed', data: { kind: 'codex', signature: 'posix-spawnp' } }))
+    expect(JSON.stringify(journal.record.mock.calls)).not.toContain('sk-ant')
+  })
 
   it('never relays a raw provider exception', async () => {
     const message = await rejectionOf(new Error(`${recorded} env=ANTHROPIC_API_KEY=sk-ant-secret https://user:pass@proxy.example`))
