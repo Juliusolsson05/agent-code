@@ -108,4 +108,29 @@ describe('ProviderSwitchPickerModal', () => {
     expect(second.onClose).toHaveBeenCalledOnce()
     expect(second.switchSessionProvider).not.toHaveBeenCalled()
   })
+
+  // Plan S5: the shared list keys, the listbox as focus owner, and Enter's
+  // meaning on a Switch button instead of a prose legend.
+  it('focuses the listbox, jumps with End, and switches to that destination on Enter', () => {
+    const { switchSessionProvider } = harness()
+    const listbox = screen.getByRole('listbox')
+    expect(document.activeElement).toBe(listbox)
+    fireEvent.keyDown(listbox, { key: 'End' })
+    // Whatever the LAST destination is (the list grows with providers), End
+    // highlights it and Enter switches to exactly it.
+    const options = screen.getAllByRole('option')
+    const last = options[options.length - 1]!
+    expect(listbox.getAttribute('aria-activedescendant')).toBe(last.id)
+    const [kind, runtime] = last.getAttribute('data-provider-switch-choice')!.split(':')
+    fireEvent.keyDown(listbox, { key: 'Enter' })
+    expect(switchSessionProvider).toHaveBeenCalledWith('captured-agent', kind, runtime === 'structured' ? undefined : runtime)
+  })
+
+  it('shows Switch ↩ and Cancel ⎋ instead of the old prose legend', () => {
+    harness()
+    expect(screen.getByRole('button', { name: 'Switch' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.queryByText(/Enter switch/)).toBeNull()
+  })
 })
+

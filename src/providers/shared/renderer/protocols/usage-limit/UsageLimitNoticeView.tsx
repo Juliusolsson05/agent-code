@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { Button, buttonVariants } from '@renderer/components/ui/button'
 import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { USAGE_URLS, usageLimitResetLabel, type UsageLimitActions } from './model'
@@ -12,7 +13,6 @@ export const UsageLimitNoticeView = memo(function UsageLimitNoticeView({
 }: { notice: UsageLimitNotice; sessionRunId?: string; actions?: UsageLimitActions }) {
   const resetLabel = usageLimitResetLabel(notice)
   const canSwitch = actions?.canSwitchProvider(notice, sessionRunId) ?? false
-  const actionClass = 'rounded-control border border-border px-2 py-1 text-[12px] text-ink-dim hover:border-border-hi hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent'
   return (
     <section aria-label={`${notice.provider === 'claude' ? 'Claude Code' : 'Codex'} usage notice`}
       data-renderer-id="shared.usage-limit"
@@ -28,15 +28,15 @@ export const UsageLimitNoticeView = memo(function UsageLimitNoticeView({
             <p className="mt-1 text-muted">The session reset does not raise the monthly spend cap.</p>
           )}
           <div className="mt-3 flex flex-wrap gap-2">
-            {notice.remedy === 'manage-usage' && <SafeMarkdownLink className={actionClass} href={USAGE_URLS[notice.provider]}>Manage usage ↗</SafeMarkdownLink>}
-            {actions && <button type="button" className={actionClass} onClick={actions.openUsage}>Usage overview</button>}
-            {canSwitch && <button type="button" className={actionClass} onClick={() => actions?.switchProvider(notice, sessionRunId)}>Switch provider…</button>}
+            {notice.remedy === 'manage-usage' && <SafeMarkdownLink className={buttonVariants({ variant: 'outline', size: 'sm' })} href={USAGE_URLS[notice.provider]}>Manage Usage ↗</SafeMarkdownLink>}
+            {actions && <Button type="button" variant="outline" size="sm" onClick={actions.openUsage}>Usage Overview</Button>}
+            {canSwitch && <Button type="button" variant="outline" size="sm" onClick={() => actions?.switchProvider(notice, sessionRunId)}>Switch Provider…</Button>}
           </div>
           {/* Provider text stays plain and selectable. Markdown/link parsing
               here would turn an error payload into active UI. Native details
               gives keyboard expansion without per-row state or a portal. */}
           <details className="mt-3 text-[12px] text-muted">
-            <summary className="cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">Original provider message</summary>
+            <summary className="cursor-pointer rounded-control outline-none focus-visible:ring-1 focus-visible:ring-focus-ring">Original provider message</summary>
             <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-words font-code">{notice.originalMessage}</pre>
           </details>
         </div>

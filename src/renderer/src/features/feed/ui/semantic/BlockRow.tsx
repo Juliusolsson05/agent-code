@@ -93,7 +93,7 @@ function DeferredThinking({ text, streaming }: { text: string; streaming: boolea
       <summary className="cursor-pointer select-none">
         ∴ Thinking{streaming ? '…' : ''}
         <span className="ml-2 not-italic text-ink-dim opacity-70">
-          (click to expand)
+          (expand)
         </span>
       </summary>
       {/* WHY a closed reasoning row must not parse Markdown: `<details>` only

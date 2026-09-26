@@ -1,4 +1,5 @@
 import type { SurfaceEntry } from './types'
+import { ConfirmHost } from '@renderer/components/ui/confirm-dialog'
 import { CaffeinateToastSurface } from '@renderer/features/caffeinate/surfaces/CaffeinateToastSurface'
 import { VoiceDictationSurface } from '@renderer/features/voice-dictation/surfaces/VoiceDictationSurface'
 import { TiledDispatchCountSurface } from '@renderer/features/workspace/surfaces/TiledDispatchCountSurface'
@@ -131,6 +132,13 @@ export const modalSurfaces: SurfaceEntry[] = [
   // screen has a claim to cover it. No app has a reason to sit *under* another
   // modal — if one ever does, that is a signal it should not be an app.
   { id: 'app-host', Component: AppHostSurface },
+  // The shared in-app confirm (replaced window.confirm, keyboard-first plan
+  // D8). LAST, after even app-host, because a confirm is always a question
+  // ABOUT the surface underneath it — the Conventions editor asking "discard
+  // changes?", Key Vault asking "delete key?" — so it must paint above
+  // whichever surface asked. It renders nothing until requestConfirm queues
+  // a request.
+  { id: 'confirm-dialog', Component: ConfirmHost },
 ]
 
 /**

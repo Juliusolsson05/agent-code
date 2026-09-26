@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import {
   expandSessionCloseTargets,
@@ -16,6 +17,7 @@ import {
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { useCallback, useRef } from 'react'
+import { currentCommandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
 
 import type {
   SessionId,
@@ -63,6 +65,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { clearPooledSpawnBadge, markPooledSpawn } from '@renderer/workspace/hook/actions/pooledSpawnBadge'
+import { curatedSpawnMessage } from '@renderer/workspace/spawn/errorMessage'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -425,7 +428,17 @@ type CommittedClose =
   | { kind: 'session' }
   | { kind: 'tab-removed'; tab: Tab; tabIndex: number }
 
-const UNDO_HINT = ' — ⌘⇧T Undo Close; repeat for earlier closes'
+// WHY a function and not a constant: the hint names Undo Close's CHORD, and
+// that chord is the user's (Settings → Commands & Shortcuts). A module
+// constant froze the default "⌘⇧T" into every close toast forever (plan H4).
+// Read at toast time so a rebind shows up on the next close. Unbound →
+// name the command instead of inventing a chord.
+function undoHint(): string {
+  const chord = currentCommandChordLabel('undo-close')
+  return chord
+    ? ` — ${chord} Undo Close; repeat for earlier closes`
+    : ' — run Undo Close to restore; repeat for earlier closes'
+}
 
 /** Approval uses the list the user SAW for liveness. A gate returns its
  *  post-dialog re-enumeration, whose liveness is NOW; a session approved while
@@ -530,7 +543,7 @@ function describeCommittedClose(commit: CommittedMember, undoRecorded: boolean):
   const { meta, outcome } = commit
   const kindLabel = meta?.kind ?? DEFAULT_PROVIDER
   const cwdBase = meta?.cwd.split('/').filter(Boolean).pop() ?? meta?.cwd ?? 'session'
-  const hint = undoRecorded ? UNDO_HINT : ''
+  const hint = undoRecorded ? undoHint() : ''
   if (outcome.kind === 'session') return `Closed ${kindLabel} session (${cwdBase})${hint}`
   if (!undoRecorded) return null
   if (outcome.kind === 'tab-removed') return `Closed “${outcome.tab.title}”${hint}`
@@ -577,7 +590,7 @@ function describeCloseOperation(
     const count = leftOpen.length
     reasons.push(`${count} ${named ? 'other ' : ''}${count === 1 ? 'session' : 'sessions'} stayed open because ${count === 1 ? 'it' : 'they'} changed or failed to close`)
   }
-  return `Closed ${operation.commits.length} of ${operation.approved.size} listed sessions — ${reasons.join('; ')}${undoRecorded ? UNDO_HINT : ''}`
+  return `Closed ${operation.commits.length} of ${operation.approved.size} listed sessions — ${reasons.join('; ')}${undoRecorded ? undoHint() : ''}`
 }
 
 /**
@@ -931,8 +944,8 @@ export function usePaneActions(
       if (!cwd) {
         showToast(
           kind === 'terminal'
-            ? 'Could not create dispatch terminal: no project directory found'
-            : 'Could not create dispatch agent: no project directory found',
+            ? 'Could not create dispatch terminal: no project folder found.'
+            : 'Could not create dispatch agent: no project folder found.',
         )
         return
       }
@@ -968,13 +981,7 @@ export function usePaneActions(
           builtInMcpOverrides,
         })
       } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : kind === 'terminal'
-              ? 'Failed to create dispatch terminal'
-              : 'Failed to create dispatch agent',
-        )
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))
         return
       }
 
@@ -1103,13 +1110,11 @@ export function usePaneActions(
         // should be unreachable; it stays because the next stale target must be
         // visible rather than silent.
         //
-        // WHY it also CLOSES the overlay, and unconditionally: a toast alone
-        // left the user in the dead end it was describing. The overlay only
-        // closes on a successful spawn, and `NewAgentPlacementOverlay` latches
-        // `committingRef` before calling this and clears it only in its `open`
-        // effect — so after a failure the overlay is still up with every
-        // gesture latched off, and Escape is the only way out. Advice the user
-        // cannot act on is worse than silence, not better.
+        // WHY it also CLOSES the overlay: the project the user was creating
+        // into is gone, so a retry from this overlay cannot succeed, and
+        // advice the user cannot act on is worse than silence. (Since #1270
+        // the overlay's latch does reopen after a failed create, so this is
+        // no longer the only way out; it is still the right outcome here.)
         //
         // The copy splits on `projectOverride` because the callers are not
         // alike: without one the project came from the focused LANE (Dispatch
@@ -1132,7 +1137,7 @@ export function usePaneActions(
         // resolved project will do — all are valid directories for it.
         projectCwd(snapshot, tab.id)
       if (!cwd) {
-        showToast('Could not create dispatch agent: no project directory found')
+        showToast('Could not create dispatch agent: no project folder found.')
         return null
       }
 
@@ -1140,11 +1145,7 @@ export function usePaneActions(
       try {
         sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create dispatch agent',
-        )
+        showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))
         return null
       }
 
@@ -1188,6 +1189,9 @@ export function usePaneActions(
       // process instead of leaving an unowned live session behind.
       if (!placed) {
         await sessionActions.killSession(sessionId, 'spawn.unplaced', { cwd, kind, providerRuntime })
+        // Say why nothing appeared (#1286 review A3): the overlay stays open
+        // and Enter works again, and without this a retry looked arbitrary.
+        showToast(`Could not create ${kind === 'terminal' ? 'terminal' : 'agent'}: its project was closed while it was starting`)
         return null
       }
       if (placement?.selectCreated !== false) closeNewAgentPlacement()
@@ -1218,7 +1222,7 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[parentId]
       if (!parentMeta) {
-        showToast('Could not create linked agent: parent agent is gone')
+        showToast('Could not create linked agent: parent agent is gone.')
         return
       }
       // If the parent is ITSELF a linked agent, anchor the new agent
@@ -1238,7 +1242,7 @@ export function usePaneActions(
       // The child is filed in its parent's project.
       const parentTab = sessionPlacement(snapshot, rootParentId)?.tab
       if (!parentTab) {
-        showToast('Could not create linked agent: parent tab not found')
+        showToast('Could not create linked agent: parent tab not found.')
         return
       }
 
@@ -1246,11 +1250,7 @@ export function usePaneActions(
       try {
         sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind, providerRuntime })
       } catch (err) {
-        showToast(
-          err instanceof Error && err.message.length > 0
-            ? err.message
-            : 'Failed to create linked agent',
-        )
+        showToast(spawnFailureToast('linked agent', err, rootParentMeta.cwd))
         return
       }
 
@@ -1324,14 +1324,14 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
       if (!parentMeta) {
-        throw new Error('Could not create orchestration agent: parent agent is gone')
+        throw new Error('Could not create orchestration agent: parent agent is gone.')
       }
 
       const rootParentId = parentMeta.orchestrationRootId ?? params.parentId
       const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
       const parentTab = sessionPlacement(snapshot, rootParentId)?.tab
       if (!parentTab) {
-        throw new Error('Could not create orchestration agent: parent tab not found')
+        throw new Error('Could not create orchestration agent: parent tab not found.')
       }
 
       const cwd = params.cwd ?? rootParentMeta.cwd
@@ -1929,3 +1929,19 @@ export function usePaneActions(
 // (U2, #681) — refilling it with a neighbour is precisely the displacement
 // #681 removed. So the whole helper reduced to `clearTiledLaneSessions`, which
 // the three close commits now call directly.
+
+/** What the user sees when creating an agent or terminal fails to spawn.
+ *
+ *  WHY never the rejection's raw text (steering q22, #1270): a raw provider
+ *  exception relayed through IPC can carry environment values, proxy URLs or
+ *  scoped MCP tokens, and main journals it before it rethrows. But the three
+ *  curated failures (Claude proxy startup, a missing workspace folder, a
+ *  missing provider CLI) are safe and name the fix, and without them a
+ *  deleted worktree looked retryable and a missing CLI gave no pointer to
+ *  File › Setup… (#1286 review C1). `spawn` has already mapped its rejection
+ *  through sessionSpawnErrorMessage; this re-reads it with the same
+ *  recognizer, so anything else is still the generic sentence. */
+function spawnFailureToast(what: string, err: unknown, cwd: string): string {
+  const curated = err instanceof Error ? curatedSpawnMessage(err.message, cwd) : null
+  return `Could not create ${what}: ${curated ?? SESSION_START_FAILED_MESSAGE}`
+}

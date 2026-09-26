@@ -64,7 +64,7 @@ describe('ProviderEnablementRow', () => {
 
   it('reset link appears only for user overrides and calls the API', async () => {
     await setup()
-    const resetButtons = screen.getAllByText('reset to detection')
+    const resetButtons = screen.getAllByText('Reset to Detection')
     // Only opencode has a user override in the fixture.
     expect(resetButtons.length).toBe(1)
     fireEvent.click(resetButtons[0])

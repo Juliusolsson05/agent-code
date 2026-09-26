@@ -1,5 +1,8 @@
 import { isAgentProviderKind } from '@shared/types/providerKind'
+import { useWorkspaceSurfaceHidden } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { Button } from '@renderer/components/ui/button'
+import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
+import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
@@ -75,6 +78,10 @@ export function NewAgentPlacementOverlay({
   // spawn a second unwanted agent. A ref (not state) because the latch needs
   // to gate the synchronous keydown handler path, not trigger a re-render.
   const committingRef = useRef(false)
+  // Which create owns the latch (#1286 review A2). The open effect resets the
+  // latch on every reopen, so an OLD create settling late must not reopen it
+  // for a NEW one still in flight; that let a third Enter start a duplicate.
+  const commitGenerationRef = useRef(0)
 
   // Linked mode offers agent providers only: createLinkedAgent's signature
   // refuses 'terminal' (a shell cannot be an orchestration/linked child).
@@ -122,7 +129,23 @@ export function NewAgentPlacementOverlay({
     // (#865). It honors projectIntent, so "+" on a project header files the
     // session there, and it closes this overlay itself once the session is
     // placed (closeNewAgentPlacement) — which is why onClose is NOT called.
-    void workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined)
+    //
+    // #1270: on failure the creator returns null (its toast says why) and
+    // leaves the overlay open, which is right: the user may retry or pick
+    // another kind. The latch must then open again, or Enter stays dead
+    // while the overlay's owner marker blocks every app shortcut.
+    const generation = ++commitGenerationRef.current
+    const release = () => releaseCommitLatch(generation)
+    void Promise.resolve(workspace.createDetachedDispatchAgent({ kind, providerRuntime }, projectIntent ?? undefined))
+      .then(sessionId => { if (!sessionId) release() }, release)
+  }
+
+  // Only a create that did NOT produce a session reopens the latch, and only
+  // if it is still the latest create; a success closes the overlay, and
+  // re-opening resets it (effect below).
+  function releaseCommitLatch(generation: number): void {
+    if (generation !== commitGenerationRef.current) return
+    committingRef.current = false
   }
 
   useEffect(() => {
@@ -134,23 +157,48 @@ export function NewAgentPlacementOverlay({
     committingRef.current = false
   }, [open])
 
+  // #1269: the overlay is mounted inside the retained workspace, which stays
+  // under display:none while Reader, Spotlight, Settings or a fullscreen
+  // editor own the screen, and the Command Palette (not focus-filtered) can
+  // open it there. Hidden, it must own nothing: no capture listener (it ate
+  // Escape/arrows and turned the composer's Enter into "create an agent")
+  // and no owner marker (hasAppInteractionOwner is a querySelector, blind to
+  // display:none, so the marker blocked every shortcut). `open` is kept, so
+  // the picker appears once its surface is visible again.
+  const surfaceHidden = useWorkspaceSurfaceHidden()
+  const active = open && !surfaceHidden
+
   useEffect(() => {
-    if (!open) return
-    const handled = new Set(['Escape', 'ArrowUp', 'ArrowDown', 'Enter'])
+    if (!active) return
+    // The list keys (plan K5/M6): ↑↓ and ⌃N/⌃P move, Home/End jump, and the
+    // ends CLAMP (plan D4 — this list used to wrap, unlike every other list).
+    const isMove = (event: KeyboardEvent) =>
+      event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Home' || event.key === 'End'
+      || (event.ctrlKey && !event.metaKey && !event.altKey && (event.key === 'n' || event.key === 'p'))
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!handled.has(event.key)) return
+      if (event.key !== 'Escape' && event.key !== 'Enter' && !isMove(event)) return
+      // A FOCUSED BUTTON OWNS ITS OWN ENTER (steering note k8, the #862 rule).
+      // This listener is document-wide and capture-phase, so without this a
+      // Tab to `Cancel ⎋` + Enter was swallowed here and CREATED the
+      // highlighted agent — the visible cancel did the opposite. The option
+      // rows never hold focus (tabIndex -1 + mousedown prevented), so the
+      // only buttons that can are the footer's. Escape stays overlay-wide.
+      if (event.key === 'Enter' && focusedControlOwnsEnter(event.target)) return
       event.stopPropagation()
       event.preventDefault()
       if (event.key === 'Escape') {
         onClose()
         return
       }
-      if (event.key === 'ArrowUp') {
-        setSelectedIndex(prev => (prev + kindOptions.length - 1) % kindOptions.length)
+      const last = kindOptions.length - 1
+      if (event.key === 'Home') { setSelectedIndex(0); return }
+      if (event.key === 'End') { setSelectedIndex(last); return }
+      if (event.key === 'ArrowUp' || event.key === 'p') {
+        setSelectedIndex(prev => Math.max(0, prev - 1))
         return
       }
-      if (event.key === 'ArrowDown') {
-        setSelectedIndex(prev => (prev + 1) % kindOptions.length)
+      if (event.key === 'ArrowDown' || event.key === 'n') {
+        setSelectedIndex(prev => Math.min(last, prev + 1))
         return
       }
       const option = kindOptions[selectedIndex]
@@ -161,15 +209,29 @@ export function NewAgentPlacementOverlay({
     // commitKind closes over props already listed here; listing the function
     // itself would re-register the listener on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kindOptions, linkedAgentParentId, onClose, open, projectIntent, selectedIndex, workspace])
+  }, [active, kindOptions, linkedAgentParentId, onClose, projectIntent, selectedIndex, workspace])
+
+  // The listbox takes focus on open so it is the focus OWNER that announces
+  // the highlighted option (focus-owner invariant, useListNavigation). Keys
+  // are still handled by the capture listener above, which is why they keep
+  // working even if focus is moved elsewhere by a click.
+  const listRef = useRef<HTMLDivElement>(null)
+  // `active`, not `open` (#1269): a hidden overlay must own nothing, and
+  // taking focus from the visible surface is owning it.
+  useEffect(() => {
+    if (active) listRef.current?.focus()
+  }, [active])
 
   // A project must exist to own the new session; WelcomeEmpty covers the
   // no-project boot, so this overlay simply does not render there.
-  if (!open || !workspace.activeTab) return null
+  if (!active || !workspace.activeTab) return null
 
   return (
     <div
       data-agent-code-interaction-owner="app"
+      // Read by useKeybinds' placement gate: the store flag alone does not
+      // mean this overlay is on screen (#1286 review A).
+      data-new-agent-overlay=""
       className="absolute inset-0 z-40 bg-black/20"
       // The backdrop is the mouse exit. Only a click on the backdrop ITSELF
       // dismisses: a click that bubbled up from the picker must not.
@@ -178,11 +240,9 @@ export function NewAgentPlacementOverlay({
         onClose()
       }}
     >
-      <div className="absolute left-4 top-4 pointer-events-none">
-        <div className="rounded-float border border-border bg-surface/95 px-3 py-2 text-[11px] text-ink-dim shadow-lg shadow-black/30">
-          Choose agent type with ↑/↓ and press Enter
-        </div>
-      </div>
+      {/* (The floating "Choose agent type with ↑/↓ and press Enter" hint in
+          the corner is gone: the keys are now a chip legend in the card's
+          own footer, where the eye already is — plan H3.) */}
 
       {/* pointer-events-none on the CENTERING layer, re-enabled on the card
           itself. Without this the layer is `absolute inset-0` and covers the
@@ -191,29 +251,47 @@ export function NewAgentPlacementOverlay({
           overlay had ZERO mouse exits — the only way out with a mouse was to
           create an agent you did not want. */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className="rounded-float pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
+        <div className="rounded-float pointer-events-auto w-[min(360px,92vw)] border border-popover-border bg-popover-bg shadow-[0_16px_48px_var(--theme-shadow-color)]">
           <div className="border-b border-border px-4 py-3 text-[12px] uppercase tracking-wider text-muted">
             New Agent
           </div>
-          <div className="p-2">
+          <div
+            ref={listRef}
+            role="listbox"
+            aria-label="Agent type"
+            aria-activedescendant={`new-agent-kind-${selectedIndex}`}
+            tabIndex={-1}
+            className="flex flex-col gap-1 p-2 outline-none"
+          >
             {kindOptions.map((option, index) => {
               const active = index === selectedIndex
               return (
                 <button
                   key={`${option.kind}:${option.providerRuntime ?? 'default'}`}
+                  id={`new-agent-kind-${index}`}
                   type="button"
+                  role="option"
+                  aria-selected={active}
+                  tabIndex={-1}
+                  // Hover follows the pointer only when it MOVES (the shared
+                  // list rule), and a click does not take focus from the list.
+                  onMouseMove={() => { if (!active) setSelectedIndex(index) }}
+                  onMouseDown={event => event.preventDefault()}
                   onClick={() => {
                     setSelectedIndex(index)
                     commitKind(option)
                   }}
-                  className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
+                  // Option rows (radius table: `control`) with the one row
+                  // highlight (plan T7); the solid-accent fill is for SELECTED
+                  // tabs, not a list cursor.
+                  className={`rounded-control flex w-full items-center justify-between border border-l-2 px-3 py-2 text-left ${
                     active
-                      ? 'border-accent bg-accent text-accent-fg'
-                      : 'border-border bg-canvas text-ink-dim hover:border-border-hi hover:text-ink'
+                      ? 'border-border border-l-accent bg-row-selected-bg text-ink'
+                      : 'border-border border-l-border bg-canvas text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                   }`}
                 >
                   <span className="text-[12px]">{option.label}</span>
-                  <span className={`text-[10px] ${active ? 'text-accent-fg/80' : 'text-muted'}`}>
+                  <span className="text-[10px] text-muted">
                     {isAgentProviderKind(option.kind) && missingProviders.has(option.kind)
                       ? MISSING_PROVIDER_HINT
                       : option.description}
@@ -224,9 +302,11 @@ export function NewAgentPlacementOverlay({
           </div>
           {/* A visible Cancel: the backdrop click is reachable, but a control
               is what a mouse-first user actually looks for. */}
-          <div className="flex justify-end border-t border-border px-3 py-2">
-            <Button variant="outline" size="sm" onClick={onClose}>
+          <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
+            <KbdLegend className="text-[10px] text-muted" items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'create' }]} />
+            <Button variant="ghost" size="sm" onClick={onClose}>
               Cancel
+              <Kbd binding="Escape" />
             </Button>
           </div>
         </div>

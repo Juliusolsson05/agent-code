@@ -55,7 +55,7 @@ export function useTabActions(
         showToast(
           err instanceof Error && err.message.length > 0
             ? err.message
-            : 'Failed to create session',
+            : 'Could not create session.',
         )
         throw err
       }

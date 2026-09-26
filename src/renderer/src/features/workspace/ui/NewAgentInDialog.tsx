@@ -5,11 +5,12 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
-import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 import {
   buildNewAgentInModel,
   type NewAgentInModel,
@@ -53,25 +54,23 @@ const CLOSED_MODEL: NewAgentInModel = { projects: [], initialTabId: null }
  * is "focus the empty lane, fill it", so the lane is already chosen.
  */
 export function NewAgentInDialog({ open, workspace, onClose }: Props) {
-  const dialogRef = useRef<HTMLDivElement | null>(null)
+  // The LISTBOX is the focus owner (focus-owner invariant, useListNavigation).
+  const listRef = useRef<HTMLDivElement | null>(null)
   // One-shot latch around the spawn. `open` only drops once the parent reacts
   // to onClose, so a fast second Enter would otherwise start a second agent.
   // A ref, not state: it must gate the synchronous key handler, not re-render.
   const committingRef = useRef(false)
   const [step, setStep] = useState<Step>('agent')
   const missingProviders = useMissingProviders()
-  const [agentIndex, setAgentIndex] = useState(0)
   // #1102: enablement filter — a disabled provider is not a creatable choice.
   const enabledKinds = useEnabledAgentProviderKinds()
   const providerChoices = useMemo(
     () => filterAgentProviderChoices(AGENT_PROVIDER_CHOICES, enabledKinds),
     [enabledKinds],
   )
-  // The highlighted project is held by TAB ID, not list index: the model is
-  // live while the dialog is open (an MCP operator can close an agent or a
-  // tab meanwhile), and an index would silently slide onto a different
-  // project when a row above it disappears.
-  const [projectTabId, setProjectTabId] = useState<TabId | null>(null)
+  // The project the user picked the agent FOR starts highlighted; see
+  // chooseAgent.
+  const [initialProjectTabId, setInitialProjectTabId] = useState<TabId | null>(null)
 
   // Derived only while open. The surface is always mounted and re-renders on
   // every workspace change; the model walks every tab's sessions plus the
@@ -94,25 +93,58 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
     // (an MCP `commands.run`). Resetting while hidden means the first visible
     // frame is always the agent step.
     setStep('agent')
-    setAgentIndex(0)
-    setProjectTabId(null)
+    setInitialProjectTabId(null)
     committingRef.current = false
   }, [open])
 
-  const choice = providerChoices[Math.min(agentIndex, providerChoices.length - 1)] ?? null
-  const enabledProjects = model.projects.filter(project => project.enabled)
-  const highlightedProject =
-    enabledProjects.find(project => project.tabId === projectTabId) ?? null
+  // One shared-hook instance per step (plan K5). Both always exist (hooks
+  // cannot be conditional); the key handler routes to the step's own.
+  const agentNav = useListNavigation({
+    count: providerChoices.length,
+    resetKey: open,
+    onActivate: index => chooseAgent(index),
+    idPrefix: 'new-agent-in-choice',
+  })
+  // The highlighted project is held by TAB ID, not list index (`keys`): the
+  // model is live while the dialog is open (an MCP operator can close an
+  // agent or a tab meanwhile), and an index would silently slide onto a
+  // different project when a row above it disappears. Disabled projects stay
+  // visible (their reason is readable) but the highlight skips them: parked
+  // on a disabled row, Enter would be a silent no-op that reads as broken.
+  const projectKeys = useMemo(() => model.projects.map(project => project.tabId), [model.projects])
+  const firstEnabledProject = Math.max(0, model.projects.findIndex(project => project.enabled))
+  const initialProjectIndex = model.projects.findIndex(
+    project => project.tabId === initialProjectTabId && project.enabled,
+  )
+  const projectNav = useListNavigation({
+    count: model.projects.length,
+    keys: projectKeys,
+    // Re-seeded each time the project step is entered, on the project plain
+    // New Agent… would have used (the model owns that rule), so accepting
+    // both defaults lands in the same project.
+    resetKey: `${open}:${step}:${initialProjectTabId}`,
+    initialIndex: initialProjectIndex >= 0 ? initialProjectIndex : firstEnabledProject,
+    isDisabled: index => !model.projects[index]?.enabled,
+    onActivate: index => {
+      const project = model.projects[index]
+      if (project) commit(project)
+    },
+    idPrefix: 'new-agent-in-project',
+  })
+  const nav = step === 'agent' ? agentNav : projectNav
 
-  const chooseAgent = (index: number) => {
-    setAgentIndex(index)
+  const choice = providerChoices[Math.min(agentNav.index, providerChoices.length - 1)] ?? null
+  const highlightedProject = model.projects[projectNav.index]?.enabled
+    ? model.projects[projectNav.index]!
+    : null
+
+  function chooseAgent(index: number) {
+    agentNav.setIndex(index)
     setStep('project')
-    // Start on the project plain New Agent… would have used (the model owns
-    // that rule), so accepting both defaults lands in the same project.
-    setProjectTabId(model.initialTabId)
+    setInitialProjectTabId(model.initialTabId)
   }
 
-  const commit = (project: NewAgentInProject) => {
+  function commit(project: NewAgentInProject) {
     if (!choice || !project.enabled || committingRef.current) return
     committingRef.current = true
     // Close before the spawn: it awaits an IPC round trip, and the agent is
@@ -126,24 +158,6 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
     )
   }
 
-  const moveAgent = (delta: -1 | 1) => {
-    setAgentIndex(index =>
-      Math.max(0, Math.min(providerChoices.length - 1, index + delta)),
-    )
-  }
-
-  const moveProject = (delta: -1 | 1) => {
-    // Arrows walk ENABLED projects only. A highlight parked on a disabled row
-    // turns Enter into a silent no-op, which reads as a broken dialog; the
-    // disabled row stays visible so its reason is still readable.
-    if (enabledProjects.length === 0) return
-    const current = enabledProjects.findIndex(project => project.tabId === projectTabId)
-    const next = current < 0
-      ? 0
-      : Math.max(0, Math.min(enabledProjects.length - 1, current + delta))
-    setProjectTabId(enabledProjects[next]!.tabId)
-  }
-
   return (
     <Dialog
       open={open}
@@ -152,51 +166,32 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
       }}
     >
       <DialogContent
-        ref={dialogRef}
-        tabIndex={-1}
         onOpenAutoFocus={event => {
-          // Focus the surface itself, not the first row: the key handler lives
-          // here, and a focused row button would also turn Enter into a native
-          // click on whichever row happened to be first.
+          // Focus the LISTBOX, not the first row (a focused row button would
+          // turn Enter into a native click on whichever row was first) and not
+          // the dialog surface (aria-activedescendant only announces from the
+          // focused element — focus-owner invariant, useListNavigation).
           //
-          // No focus management is needed across steps. Clicking a row focuses
-          // that row's button and the step change unmounts it; Radix's
-          // FocusScope (inside DialogContent) moves focus back to this
-          // container when the focused node is removed, so the key handler
-          // keeps listening. Focus is the primitive's job
-          // (components/ui/README.md), and an extra effect here duplicated it.
+          // Across steps the listbox element is the SAME node (only its rows
+          // change), so focus survives the step change without an effect.
           event.preventDefault()
-          dialogRef.current?.focus()
+          listRef.current?.focus()
         }}
         onKeyDown={event => {
-          const down = event.key === 'ArrowDown' || (event.ctrlKey && event.key === 'n')
-          const up = event.key === 'ArrowUp' || (event.ctrlKey && event.key === 'p')
-          if (down || up) {
-            event.preventDefault()
-            if (step === 'agent') moveAgent(down ? 1 : -1)
-            else moveProject(down ? 1 : -1)
-            return
-          }
-          if (event.key === 'Enter') {
-            // A FOCUSED BUTTON OWNS ITS OWN ENTER (focusedControlOwnsEnter, the
-            // rule components/ui/dialog-actions.tsx writes down). Everything
-            // below calls preventDefault, which also cancels that button's
-            // native Enter-click, so without this guard Tab to Cancel + Enter
-            // committed the highlighted project and SPAWNED an agent (#862 is
-            // the same bug in ProviderSwitchPickerModal, whose pattern this
-            // copied). Because list rows are not tab stops (see the rows below),
-            // the only buttons that can hold keyboard focus are the footer's —
-            // so "any focused button" and "a footer button" are the same set.
-            if (focusedControlOwnsEnter(event.target)) return
-            event.preventDefault()
+          if (event.key === 'Enter' && event.repeat) {
             // Held Enter auto-repeats. Without this one long press would pick
             // the agent and then commit the default project, starting a real
-            // agent process the user never chose a project for.
-            if (event.repeat) return
-            if (step === 'agent') chooseAgent(agentIndex)
-            else if (highlightedProject) commit(highlightedProject)
+            // agent process the user never chose a project for. Swallowed
+            // before the list sees it; a focused button is not affected
+            // because the browser does not auto-repeat button activation.
+            event.preventDefault()
             return
           }
+          // ↑↓ / ⌃N⌃P / Home / End / PgUp / PgDn / Enter via the shared hook.
+          // A FOCUSED BUTTON OWNS ITS OWN ENTER (#862): enforced inside the
+          // hook with focusedControlOwnsEnter — without it Tab to Cancel +
+          // Enter committed the highlighted project and SPAWNED an agent.
+          if (nav.onKeyDown(event)) return
           if (event.key === 'Backspace' && step === 'project') {
             // Back, not cancel: picking the wrong agent should cost one key,
             // not the whole flow. The dialog has no text input, so Backspace
@@ -205,7 +200,6 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
             setStep('agent')
           }
         }}
-        className="w-[500px] max-w-[calc(100vw-64px)]"
       >
         <DialogHeader>
           <DialogTitle>New Agent In</DialogTitle>
@@ -231,24 +225,34 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
           can still take focus from a mouse click, but that click immediately
           advances the step or commits, so the split can never persist.
         */}
-        <div className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas">
+        <div className="px-4 py-3">
+        <div
+          ref={listRef}
+          role="listbox"
+          // One Tab stop (plan K4); rows are not (see above).
+          tabIndex={0}
+          aria-label={step === 'agent' ? 'Agent' : 'Project'}
+          aria-activedescendant={nav.activeId}
+          className="rounded-slab overflow-hidden border border-border bg-canvas outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
+        >
           {step === 'agent' ? (
             providerChoices.map((option, index) => {
-              const focused = index === agentIndex
+              const focused = index === agentNav.index
               return (
                 <button
                   key={`${option.kind}:${option.providerRuntime ?? 'structured'}`}
                   type="button"
+                  {...agentNav.getItemProps(index)}
+                  role="option"
+                  aria-selected={focused}
                   tabIndex={-1}
                   data-new-agent-in-choice={`${option.kind}:${option.providerRuntime ?? 'structured'}`}
-                  onMouseEnter={() => setAgentIndex(index)}
-                  onClick={() => chooseAgent(index)}
                   className={`
-                    w-full cursor-pointer border-b border-border px-3 py-3 text-left last:border-b-0
-                    ${focused ? 'bg-accent/12' : 'bg-transparent hover:bg-surface'}
+                    w-full cursor-pointer border-b border-l-2 border-border px-3 py-2 text-left last:border-b-0
+                    ${focused ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent bg-transparent hover:bg-row-hover-bg'}
                   `}
                 >
-                  <div className="text-[12px] font-semibold text-ink">{option.label}</div>
+                  <div className="text-[12px] font-medium text-ink">{option.label}</div>
                   <div className="mt-0.5 text-[11px] text-muted">{missingProviders.has(option.kind) ? MISSING_PROVIDER_HINT : option.description}</div>
                 </button>
               )
@@ -263,30 +267,32 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
               None of this row&rsquo;s projects are open. Change them with Row Projects&hellip;
             </div>
           ) : (
-            model.projects.map(project => {
+            model.projects.map((project, index) => {
               const focused = project.enabled && project.tabId === highlightedProject?.tabId
               return (
                 <button
                   key={project.tabId}
                   type="button"
+                  {...projectNav.getItemProps(index)}
+                  role="option"
+                  aria-selected={focused}
+                  aria-disabled={!project.enabled || undefined}
                   tabIndex={-1}
                   // A real `disabled`, not a styled no-op: React drops clicks on
                   // it and assistive tech announces it, while the row (and its
                   // reason) stays in the list.
                   disabled={!project.enabled}
                   data-new-agent-in-project={project.tabId}
-                  onMouseEnter={() => { if (project.enabled) setProjectTabId(project.tabId) }}
-                  onClick={() => commit(project)}
                   className={`
-                    w-full border-b border-border px-3 py-3 text-left last:border-b-0
+                    w-full border-b border-l-2 border-border px-3 py-2 text-left last:border-b-0
                     disabled:cursor-not-allowed disabled:opacity-50
-                    ${focused ? 'bg-accent/12' : 'bg-transparent enabled:hover:bg-surface'}
+                    ${focused ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent bg-transparent enabled:hover:bg-row-hover-bg'}
                     enabled:cursor-pointer
                   `}
                 >
                   {/* Same "A · title" vocabulary as the Dispatch index and the
                       row-project picker, so a project has one name everywhere. */}
-                  <div className="text-[12px] font-semibold text-ink">
+                  <div className="text-[12px] font-medium text-ink">
                     {withVisibleControls(`${project.label} · ${project.title}`)}
                   </div>
                   {project.disabledReason ? (
@@ -298,25 +304,32 @@ export function NewAgentInDialog({ open, workspace, onClose }: Props) {
           )}
         </div>
 
-        <DialogFooter className="justify-between text-[11px] text-muted">
-          <span>
-            {step === 'agent'
-              ? '↑↓ choose · Enter next · Esc cancel'
-              : '↑↓ choose · Enter create · ⌫ back · Esc cancel'}
-          </span>
-          {/* Ghost, small: the house footer shape (DialogActions renders Cancel
-              this way). Neither button is a primary action — the rows are. */}
-          <div className="flex gap-2">
-            {step === 'project' ? (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setStep('agent')}>
-                Back
-              </Button>
-            ) : null}
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-              Cancel
+        </div>
+
+        {/* The prose legend ("↑↓ choose · Enter create · ⌫ back · Esc cancel")
+            became chips on the controls that perform them (plan H2/H3):
+            Back ⌫, Cancel ⎋, Next/Create ↩, with ↑↓ as the only legend item.
+            Next/Create is new — Enter's meaning belongs on a button, and a
+            mouse user gets a commit that is not "click the row".
+            confirmOnEnter={false}: the list owns Enter (with the repeat guard
+            above). */}
+        <DialogActions
+          confirmLabel={step === 'agent' ? 'Next' : 'Create'}
+          onConfirm={() => {
+            if (step === 'agent') chooseAgent(agentNav.index)
+            else if (highlightedProject) commit(highlightedProject)
+          }}
+          onCancel={onClose}
+          confirmOnEnter={false}
+          confirmDisabled={step === 'agent' ? !choice : !highlightedProject}
+          legend={<KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }]} />}
+          extraActions={step === 'project' ? (
+            <Button type="button" variant="ghost" size="sm" onClick={() => setStep('agent')}>
+              Back
+              <Kbd binding="Backspace" />
             </Button>
-          </div>
-        </DialogFooter>
+          ) : null}
+        />
       </DialogContent>
     </Dialog>
   )

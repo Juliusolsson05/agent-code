@@ -150,7 +150,7 @@ export function ExplorerPane({
     async (path: string): Promise<boolean> => {
       const result = await onOpenFile(path).catch(err => ({
         ok: false as const,
-        error: err instanceof Error ? err.message : 'Failed to open file.',
+        error: err instanceof Error ? err.message : 'Could not open file.',
       }))
       if (!result.ok) {
         setMutationError(result.error)
@@ -217,7 +217,7 @@ export function ExplorerPane({
         })
       } catch (err) {
         if (generation !== loadGenerationRef.current) return
-        const message = err instanceof Error ? err.message : 'Failed to read directory.'
+        const message = err instanceof Error ? err.message : 'Could not read folder.'
         if (path === '') setError(message)
         setNodes(prev => {
           const current = prev[path]
@@ -451,7 +451,7 @@ export function ExplorerPane({
           : window.api.editorCreateDirectory({ root, path })
       ).catch(err => ({
         ok: false as const,
-        error: err instanceof Error ? err.message : 'Failed to create item.',
+        error: err instanceof Error ? err.message : 'Could not create item.',
       }))
       if (!result.ok) {
         setMutationError(result.error)
@@ -498,7 +498,7 @@ export function ExplorerPane({
         })
         .catch(err => ({
           ok: false as const,
-          error: err instanceof Error ? err.message : 'Failed to rename item.',
+          error: err instanceof Error ? err.message : 'Could not rename item.',
         }))
       if (!result.ok) {
         setMutationError(result.error)
@@ -515,7 +515,7 @@ export function ExplorerPane({
       await loadDirectory(parent)
       focusTreePath(result.path)
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : 'Failed to validate rename.')
+      setMutationError(err instanceof Error ? err.message : 'Could not validate rename.')
     } finally {
       setMutationPending(false)
     }
@@ -534,7 +534,7 @@ export function ExplorerPane({
         }
         const result = await window.api.editorDelete({ root, path: entry.path }).catch(err => ({
           ok: false as const,
-          error: err instanceof Error ? err.message : 'Failed to delete item.',
+          error: err instanceof Error ? err.message : 'Could not delete item.',
         }))
         if (!result.ok) {
           setMutationError(result.error)
@@ -546,7 +546,7 @@ export function ExplorerPane({
         onFileDeleted?.(entry.path)
         focusTreePath(dirname(entry.path))
       } catch (err) {
-        setMutationError(err instanceof Error ? err.message : 'Failed to confirm deletion.')
+        setMutationError(err instanceof Error ? err.message : 'Could not confirm deletion.')
       } finally {
         setMutationPending(false)
       }
@@ -639,7 +639,7 @@ export function ExplorerPane({
               queuedLoadsRef.current.clear()
               for (const path of expandedRef.current) void loadDirectory(path)
             }}
-            className="flex h-5 w-5 items-center justify-center rounded-control text-muted hover:bg-surface-hi hover:text-ink"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             ↻
           </button>
@@ -650,7 +650,7 @@ export function ExplorerPane({
               showHidden ? 'Hide hidden and ignored files' : 'Show hidden and ignored files'
             }
             onClick={() => setShowHidden(prev => !prev)}
-            className={`flex h-5 w-5 items-center justify-center rounded-control hover:bg-surface-hi ${
+            className={`flex h-5 w-5 items-center justify-center rounded-control outline-none hover:bg-control-hover-bg focus-visible:ring-1 focus-visible:ring-focus-ring ${
               showHidden ? 'text-ink' : 'text-muted hover:text-ink'
             }`}
           >
@@ -663,9 +663,18 @@ export function ExplorerPane({
             onClick={event => {
               event.stopPropagation()
               menuInvokerRef.current = event.currentTarget
+              // `detail === 0` is a keyboard-activated click (Enter/Space):
+              // its clientX/Y are 0, so the menu opened in the window's top
+              // left corner, far from the button (K2-3). Anchor it under the
+              // button instead, like the tree's Shift+F10 path does.
+              if (event.detail === 0) {
+                const rect = event.currentTarget.getBoundingClientRect()
+                setMenu(clampedMenu(rect.left, rect.bottom + 2, null))
+                return
+              }
               setMenu(clampedMenu(event.clientX, event.clientY, null))
             }}
-            className="flex h-5 w-5 items-center justify-center rounded-control text-muted hover:bg-surface-hi hover:text-ink"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted outline-none hover:bg-control-hover-bg hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             +
           </button>
@@ -762,7 +771,15 @@ export function ExplorerPane({
           ref={menuRef}
           role="menu"
           aria-label={menu.entry ? `Actions for ${menu.entry.name}` : 'Explorer actions'}
-          className="fixed z-30 min-w-[160px] rounded-float overflow-hidden border border-border bg-surface py-1 shadow-lg"
+          // Popover chrome (plan M4/T1): popover colours + theme shadow, like
+          // every other floating menu, instead of surface + shadow-lg.
+          // z-[1150], the DropdownMenu band (UI pass, G-16): at z-30 this was the
+          // only floating menu BELOW the z-40 pane overlays (placement scrim,
+          // dictation chip). Not moved onto DropdownMenu itself: it opens at the
+          // pointer or the tree row (Shift+F10), which Radix DropdownMenu can
+          // only fake with a virtual anchor, and its own roving focus, Escape
+          // and Tab-closes behaviour are already keyboard-complete (M4).
+          className="fixed z-[1150] min-w-[160px] rounded-float overflow-hidden border border-popover-border bg-popover-bg py-1 shadow-[0_8px_24px_var(--theme-shadow-color)]"
           style={{ left: menu.x, top: menu.y }}
           onMouseDown={event => event.stopPropagation()}
           onBlur={event => {
@@ -814,7 +831,7 @@ export function ExplorerPane({
                 }}
               />
               <MenuItem
-                label={armedDelete === menu.entry.path ? 'Delete — click to confirm' : 'Delete'}
+                label={armedDelete === menu.entry.path ? 'Delete — press again to confirm' : 'Delete'}
                 danger
                 onClick={() => {
                   const entry = menu.entry
@@ -848,7 +865,11 @@ function MenuItem({
       role="menuitem"
       autoFocus={autoFocus}
       onClick={onClick}
-      className={`flex w-full items-center px-3 py-1 text-left text-[11px] hover:bg-surface-hi ${
+      // The menu moves DOM focus between items (roving), so the focused item
+      // IS the highlight: it gets the row-selected colour, hover the row-hover
+      // colour (plan T7) — it had only a hover shade and relied on the global
+      // outline to show where the keyboard was.
+      className={`flex w-full items-center px-3 py-1 text-left text-[11px] outline-none hover:bg-row-hover-bg focus-visible:bg-row-selected-bg ${
         danger ? 'text-danger' : 'text-ink-dim hover:text-ink'
       }`}
     >
@@ -908,10 +929,10 @@ function InlineEditRow({
         onBlur={() => {
           if (!disabled) onCancel()
         }}
-        className="w-full rounded-control border border-border-hi bg-canvas px-1 py-0.5 text-[11px] text-ink outline-none"
+        className="w-full rounded-control border border-input-border-focus bg-input-bg px-1 py-0.5 text-[11px] text-ink outline-none"
       />
       {error ? (
-        <span id="explorer-inline-edit-error" className="py-0.5 text-[9px] text-danger">
+        <span id="explorer-inline-edit-error" className="py-0.5 text-[10px] text-danger">
           {error}
         </span>
       ) : null}
@@ -1052,12 +1073,16 @@ function TreeEntries({
                   onContextMenu(entry, event.clientX, event.clientY, event.currentTarget)
                 }}
                 data-tree-path={entry.path}
-                className={`group flex h-[22px] w-full items-center gap-1.5 pr-2 text-left transition-colors ${
+                // The app's one selected-row look (plan T7, UI pass G-8): the
+                // active file was an accent-soft fill with no rail, the only
+                // selection of its kind. Every row carries the 2px rail slot
+                // (transparent when unselected) so selection never shifts text.
+                className={`group flex h-[22px] w-full items-center gap-1.5 border-l-2 pr-2 text-left transition-colors ${
                   isActive
-                    ? 'bg-accent-soft text-ink'
+                    ? 'border-l-accent bg-row-selected-bg text-ink'
                     : isActiveParent
-                      ? 'text-ink hover:bg-surface-hi'
-                      : 'text-ink-dim hover:bg-surface-hi hover:text-ink'
+                      ? 'border-l-transparent text-ink hover:bg-row-hover-bg'
+                      : 'border-l-transparent text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                 }`}
                 style={rowStyle}
                 title={entry.path}

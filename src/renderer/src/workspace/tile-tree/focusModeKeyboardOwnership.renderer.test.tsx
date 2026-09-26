@@ -435,4 +435,34 @@ describe('focus-mode keyboard ownership', () => {
       'keybinding',
     )
   })
+
+  // #1286 review A: the palette can open New Agent… under Reader, where the
+  // overlay is retained but renders nothing. The placement gate keyed on the
+  // store flag alone ate the Escape that leaves Reader (closing an overlay
+  // the user never saw) and dropped the palette chord.
+  it('lets Escape leave Reader and the palette open while New Agent… is open but not on screen', () => {
+    harness.appState = { ...harness.appState, newAgentPlacementOpen: true }
+    const { workspace } = makeWorkspace('reader')
+    const view = render(<KeyboardHarness workspace={workspace} />)
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' })
+    expect(workspace.toggleReaderMode).toHaveBeenCalled()
+    expect(harness.appState.closeNewAgentPlacement).not.toHaveBeenCalled()
+    fireEvent.keyDown(document, { key: 'p', code: 'KeyP', metaKey: true, shiftKey: true })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('open-command-palette', 'keybinding')
+    view.unmount()
+  })
+
+  it('still gives Escape to New Agent… when the overlay is on screen', () => {
+    harness.appState = { ...harness.appState, newAgentPlacementOpen: true }
+    const { workspace } = makeWorkspace('reader')
+    const overlay = document.createElement('div')
+    overlay.setAttribute('data-new-agent-overlay', '')
+    document.body.appendChild(overlay)
+    const view = render(<KeyboardHarness workspace={workspace} />)
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' })
+    expect(harness.appState.closeNewAgentPlacement).toHaveBeenCalled()
+    expect(workspace.toggleReaderMode).not.toHaveBeenCalled()
+    view.unmount()
+    overlay.remove()
+  })
 })

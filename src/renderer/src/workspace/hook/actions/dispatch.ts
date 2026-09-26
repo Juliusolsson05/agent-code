@@ -230,7 +230,7 @@ export function useDispatchActions(
         showToast(
           error instanceof Error && error.message.length > 0
             ? error.message
-            : 'Could not wake agent',
+            : 'Could not wake agent.',
         )
         return
       }

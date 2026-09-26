@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Kbd } from '@renderer/components/ui/kbd'
 import {
   Dialog,
   DialogContent,
@@ -63,7 +64,7 @@ export function DictationGuideModal() {
           illustrated steps rather than a confirm prompt, so the body scrolls
           inside the dialog instead of letting the surface grow past the
           viewport. */}
-      <DialogContent className="w-[min(672px,92vw)] max-h-[88vh] grid-rows-[auto_1fr_auto]">
+      <DialogContent size="md" className="max-h-[86vh] grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <DialogTitle>Configure Voice Dictation</DialogTitle>
           <DialogDescription>
@@ -73,7 +74,10 @@ export function DictationGuideModal() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-col gap-6 overflow-y-auto px-4 py-4 text-[12px] leading-relaxed">
+        {/* Body rhythm (plan T3): py-3 like every dialog body; the gap
+            between the guide's sections stays roomier than a form's (gap-4,
+            was gap-6) because these are paragraphs, not fields. */}
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed">
           <GuideStep
             number={1}
             title="Create a Deepgram account"
@@ -94,14 +98,18 @@ export function DictationGuideModal() {
             screenshotAlt="Screenshot: Deepgram signup page with the sign-up form highlighted"
           />
 
+          {/* On-screen names (Deepgram's buttons, our own Settings rows) are
+              EMPHASIS, not code: they were font-mono spans, which ignored the
+              App Font setting and read as something to type (plan T6). Keys
+              in the hotkey note below are Kbd chips instead. */}
           <GuideStep
             number={2}
             title="Create a project API key"
             body={
               <>
-                From the console, open <span className="font-mono">API Keys</span>{' '}
-                in the sidebar, click <span className="font-mono">Create a New API Key</span>,
-                give it the scope <span className="font-mono">Member</span> or
+                From the console, open <span className="font-semibold text-ink">API Keys</span>{' '}
+                in the sidebar, click <span className="font-semibold text-ink">Create a New API Key</span>,
+                give it the scope <span className="font-semibold text-ink">Member</span> or
                 broader, copy the string that appears once (Deepgram will never
                 show it again).
               </>
@@ -115,9 +123,9 @@ export function DictationGuideModal() {
             body={
               <>
                 In Agent Code, open{' '}
-                <span className="font-mono">Settings → Voice Dictation</span>,
-                paste the key into the <span className="font-mono">Deepgram API Key</span>{' '}
-                row, and press <span className="font-mono">Save</span>. Your key
+                <span className="font-semibold text-ink">Settings → Dictation</span>,
+                paste the key into the <span className="font-semibold text-ink">Deepgram API Key</span>{' '}
+                row, and press <span className="font-semibold text-ink">Save</span>. Your key
                 is encrypted with your system keyring — Agent Code never writes
                 it to disk in plaintext.
               </>
@@ -125,13 +133,13 @@ export function DictationGuideModal() {
             screenshotAlt="Screenshot: Agent Code Voice Dictation settings row with a masked API key"
           />
 
-          <div className="rounded-slab border border-border bg-panel/40 px-3 py-2 text-[11px] text-muted">
+          <div className="rounded-slab border border-border bg-panel-bg px-3 py-2 text-[11px] text-muted">
             <p className="mb-1 font-semibold text-ink">A note on the hotkey.</p>
             <p>
               Dictation is triggered with{' '}
-              <span className="font-mono">Cmd+Shift+D</span> by default: press once
+              <Kbd aria-hidden={false} binding="Cmd+Shift+D" /> by default: press once
               to record and again to finish, with no OS permission required. If
-              you prefer holding <span className="font-mono">Fn</span>{' '}
+              you prefer holding <Kbd aria-hidden={false}>fn</Kbd>{' '}
               like macOS system dictation, switch the shortcut in Settings; macOS
               will then prompt for Accessibility permission the first time you
               enable dictation.
@@ -143,7 +151,9 @@ export function DictationGuideModal() {
             the confirm-only shape DialogActions supports via omitting
             onCancel. confirmOnEnter stays on — the body is prose and links,
             nothing in it owns Enter. */}
-        <DialogActions confirmLabel="Done" onConfirm={() => setOpen(false)} />
+        {/* A read-only guide: the close-only footer (plan H5), a ghost
+            "Close ⎋". "Done" was a filled confirm that only closed. */}
+        <DialogActions onCancel={() => setOpen(false)} cancelLabel="Close" />
       </DialogContent>
     </Dialog>
   )
@@ -179,7 +189,7 @@ function GuideStep({
         aria-label={screenshotAlt}
         className="rounded-slab
           flex h-32 w-full items-center justify-center
-          border border-dashed border-border bg-panel/40
+          border border-dashed border-border bg-panel-bg
           text-[10px] uppercase tracking-wider text-muted
         "
       >

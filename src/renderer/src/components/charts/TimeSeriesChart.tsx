@@ -197,7 +197,7 @@ export function TimeSeriesChart({
       </svg>
       {snapped !== null && (
         <div
-          className="pointer-events-none absolute z-10 min-w-[140px] rounded-control border border-popover-border bg-popover-bg px-2 py-1.5 text-[10px] shadow-lg"
+          className="pointer-events-none absolute z-10 min-w-[140px] rounded-control border border-popover-border bg-popover-bg px-2 py-1.5 text-[10px] shadow-[0_8px_24px_var(--theme-shadow-color)]"
           style={{ top: MARGIN.top, ...(flip ? { right: width - tooltipLeft + 8 } : { left: tooltipLeft + 8 }) }}
         >
           <div className="mb-1 text-muted tabular-nums">{new Date(snapped).toLocaleString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', month: span > 86_400_000 ? 'short' : undefined, day: span > 86_400_000 ? 'numeric' : undefined })}</div>

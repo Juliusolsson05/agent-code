@@ -77,6 +77,11 @@ export interface PiSession {
   emit<K extends keyof AgentSessionEvents>(event: K, ...args: AgentSessionEvents[K]): boolean
 }
 
+// Backstop for the bridge-startup wait (#1315): just above the package's
+// default connect deadline (pi-terminal-headless DEFAULT_BRIDGE_CONNECT_DEADLINE_MS,
+// 30 s), which normally settles the wait long before this fires.
+const BRIDGE_STARTUP_WAIT_CAP_MS = 35_000
+
 export class PiSession extends EventEmitter implements AgentSession {
   private pty: IPty | null = null
   private headless: PiTerminalHeadless | null = null
@@ -87,6 +92,18 @@ export class PiSession extends EventEmitter implements AgentSession {
   /** Monotonic per pane: the shared history-boundary gate ignores a generation it has already seen. */
   private historyGeneration = 0
   private bridgeUnreachableReported = false
+  /**
+   * Has this start's bridge either connected or provably failed to? (#1315)
+   * Until then a programmatic prompt waits instead of failing: orchestration
+   * delivers a child's bootstrap prompt right after spawn, while the bridge
+   * extension is still connecting, and every Pi child lost it. Settled by the
+   * package's own verdicts (first `connected`, `bridge-unreachable` after its
+   * connect deadline, `bridge-listen-failed`) and by exit and stop, so a wait
+   * always ends. Deliberately only the FIRST connect: a bridge that dropped
+   * mid-session fails fast, because waiting there could hide a real fault.
+   */
+  private bridgeStartupSettled = false
+  private readonly bridgeStartupWaiters = new Set<() => void>()
 
   private readonly cwd: string
   private readonly cols: number
@@ -120,6 +137,7 @@ export class PiSession extends EventEmitter implements AgentSession {
     const generation = ++this.startGeneration
     this.exited = false
     this.bridgeUnreachableReported = false
+    this.bridgeStartupSettled = false
     this.emit('input-readiness', { ready: false, reason: 'starting' })
 
     // The complete inherited environment (a GUI-launched app still needs PATH,
@@ -236,6 +254,7 @@ export class PiSession extends EventEmitter implements AgentSession {
       // Programmatic delivery goes through the bridge, so it is exactly what
       // gates readiness; a human can always type into the TUI regardless.
       this.emit('input-readiness', state.connected ? { ready: true, reason: 'ready' } : { ready: false, reason: 'provider-not-ready' })
+      if (state.connected || state.reason === 'bridge-unreachable' || state.reason === 'bridge-listen-failed') this.settleBridgeStartup()
       if (state.connected || state.reason !== 'bridge-unreachable' || this.bridgeUnreachableReported) return
       this.bridgeUnreachableReported = true
       this.emit('jsonl-error', Object.assign(new Error(
@@ -248,6 +267,7 @@ export class PiSession extends EventEmitter implements AgentSession {
       this.pty = null
       this.headless = null
       this.exited = true
+      this.settleBridgeStartup()
       this.ptyDataSubscription?.dispose()
       this.ptyDataSubscription = null
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
@@ -267,6 +287,8 @@ export class PiSession extends EventEmitter implements AgentSession {
    * and nobody can tell (#877).
    */
   async deliverPromptText(text: string): Promise<void> {
+    if (!this.bridgeStartupSettled && this.headless && !this.exited) await this.waitForBridgeStartup()
+    // Read AFTER the wait: the pane may have stopped or restarted meanwhile.
     const headless = this.headless
     if (!headless || this.exited) throw new PiTerminalNotReadyError('pi is not running')
     const result = await headless.submitPrompt(text)
@@ -276,6 +298,28 @@ export class PiSession extends EventEmitter implements AgentSession {
     if (result.reason === 'tui-command') throw new PiTerminalTuiCommandError(result.message)
     // unknown: it may still run; the generic error means "possibly written, do not retry".
     throw new Error(result.message ?? 'pi prompt delivery outcome is unknown')
+  }
+
+  private settleBridgeStartup(): void {
+    this.bridgeStartupSettled = true
+    for (const wake of this.bridgeStartupWaiters) wake()
+    this.bridgeStartupWaiters.clear()
+  }
+
+  /** Resolves when the bridge startup settles. The cap is a backstop only:
+   *  the package's own connect deadline (30 s by default) settles it first,
+   *  and nothing here may leave a delivery hanging if that ever fails. */
+  private waitForBridgeStartup(): Promise<void> {
+    return new Promise(resolve => {
+      const done = () => {
+        clearTimeout(cap)
+        this.bridgeStartupWaiters.delete(done)
+        resolve()
+      }
+      const cap = setTimeout(done, BRIDGE_STARTUP_WAIT_CAP_MS)
+      cap.unref?.()
+      this.bridgeStartupWaiters.add(done)
+    })
   }
 
   resize(cols: number, rows: number): void {
@@ -304,6 +348,7 @@ export class PiSession extends EventEmitter implements AgentSession {
 
   async stop(): Promise<void> {
     this.startGeneration += 1
+    this.settleBridgeStartup()
     this.ptyDataSubscription?.dispose()
     this.ptyDataSubscription = null
     this.exited = true

@@ -1,3 +1,5 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -87,7 +89,12 @@ export function AgentCodeConventionsRow() {
     if (!snapshot || busy) return
     if (snapshot.health === 'recovery-required' || snapshot.health === 'unsupported') return
     if (snapshot.enabled) {
-      if (!window.confirm('Disable conventions? Managed skill copies will be removed, but your saved rules will remain.')) return
+      if (!(await requestConfirm({
+        title: 'Disable conventions?',
+        description: 'Managed skill copies will be removed, but your saved rules will remain.',
+        confirmLabel: 'Disable Conventions',
+        tone: 'danger',
+      }))) return
       setBusy(true)
       try {
         applyResult(await window.api.disableAgentCodeConventions(snapshot.revision))
@@ -117,7 +124,7 @@ export function AgentCodeConventionsRow() {
   }, [applyResult, busy, snapshot])
 
   if (!snapshot) {
-    return <div className="text-[11px] italic text-muted">{error ?? 'Loading conventions…'}</div>
+    return error ? <Alert>{error}</Alert> : <div role="status" className="text-[11px] text-muted">Loading conventions…</div>
   }
 
   const lines = snapshot.markdown ? snapshot.markdown.split('\n').length : 0
@@ -147,10 +154,10 @@ export function AgentCodeConventionsRow() {
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => setEditorOpen(true)}>
-          Edit conventions…
+          Edit Conventions…
         </Button>
         <Button variant="outline" size="sm" disabled={busy} onClick={() => void refresh()}>
-          Refresh status
+          Refresh Status
         </Button>
       </div>
 
@@ -190,19 +197,24 @@ export function AgentCodeConventionsRow() {
         <div className="rounded-slab flex flex-col gap-2 border border-danger px-2 py-2 text-[10px] text-danger">
           <span>{snapshot.recovery.message}</span>
           <div className="flex gap-2">
-            <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
-              Reveal state file
-            </button>
-            <button
+            <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
+              Reveal State File
+            </Button>
+            <Button
               type="button"
-              className="rounded-control border border-danger px-2 py-1"
-              onClick={() => {
-                if (!window.confirm('Reset all unreadable Agent Code-managed skill state? The shared state file will be removed, and any existing provider copies will be left untouched.')) return
+              variant="destructive-outline" size="xs"
+              onClick={async () => {
+                if (!(await requestConfirm({
+                  title: 'Reset all unreadable Agent Code-managed skill state?',
+                  description: 'The shared state file will be removed, and any existing provider copies will be left untouched.',
+                  confirmLabel: 'Reset State',
+                  tone: 'danger',
+                }))) return
                 void window.api.resetAgentCodeConventionsRecovery().then(applyResult)
               }}
             >
-              Reset state
-            </button>
+              Reset State
+            </Button>
           </div>
         </div>
       ) : null}

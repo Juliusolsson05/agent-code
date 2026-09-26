@@ -9,7 +9,7 @@ import type { BindingContext, CommandBindingDefault } from '@renderer/features/c
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
-import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { hasAppInteractionOwner, isInPaneInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import { selectVisibleDispatchRow } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -543,6 +543,21 @@ export function useKeybinds(
             return
           }
         } else {
+          // The overlay's OWN buttons (Pause / Resume / Raise cap / Stop /
+          // Close) need Tab to move between them and Enter/Space to press
+          // them (K2-1). This gate used to swallow every key in capture phase,
+          // before the event could reach a button, so the dialog was
+          // mouse-only. Only those three keys, only unmodified, and only
+          // when focus is already inside the overlay. Everything else,
+          // letters included, is still consumed so nothing reaches the
+          // dimmed composer underneath.
+          const overlayOwnsTarget =
+            e.target instanceof Element && e.target.closest('[data-goal-loop-overlay]') !== null
+          if (
+            overlayOwnsTarget
+            && !e.metaKey && !e.ctrlKey && !e.altKey
+            && (e.key === 'Tab' || e.key === 'Enter' || e.key === ' ')
+          ) return
           e.preventDefault()
           e.stopPropagation()
           // The toggle chord comes from the binding index rather than a
@@ -610,11 +625,27 @@ export function useKeybinds(
         if (shouldPreventOwnedApplicationShortcut(e)) e.preventDefault()
         return
       }
+      // A pane-scoped condition dialog (#713) owns the UNMODIFIED keys aimed
+      // inside it: Enter/Space on its buttons, Escape to decline, arrows,
+      // letters. Modified chords fall through on purpose. Unlike an app modal,
+      // the rest of the workspace is live, and ⌥↓ / ⌘T are how a keyboard user
+      // leaves a prompt waiting in this pane and goes on working elsewhere.
+      if (isInPaneInteractionOwner(e.target) && !cmd && !alt && !e.ctrlKey) return
       // Unified placement-overlay predicate — matches App.tsx's
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.
+      //
+      // #1286 review A: the flag alone is not ownership. The overlay is
+      // retained under display:none by Reader, Spotlight and a fullscreen
+      // editor, where it renders nothing; gating on the flag there ate the
+      // Escape that should leave the takeover (closing an overlay the user
+      // never saw) and dropped every chord, the palette's included. Same
+      // rule as the TLDR/goal latches above: input ownership follows the
+      // mounted DOM. Hidden, the request stays open and shows when its
+      // surface returns.
       const placementOverlayOpen =
-        newAgentPlacementOpen || linkedAgentParentId !== null
+        (newAgentPlacementOpen || linkedAgentParentId !== null)
+        && document.querySelector('[data-new-agent-overlay]') != null
 
       // Placement overlay (create-new, attach-detached, or linked
       // agent) and the two draft modals (reorder / pin) all share
@@ -637,8 +668,8 @@ export function useKeybinds(
       if (placementOverlayOpen || reorderTabsOpen || pinAgentsOpen) {
         if (k === 'Escape') {
           e.preventDefault()
-          if (newAgentPlacementOpen) closeNewAgentPlacement()
-          if (linkedAgentParentId !== null) closeLinkedAgent()
+          if (placementOverlayOpen && newAgentPlacementOpen) closeNewAgentPlacement()
+          if (placementOverlayOpen && linkedAgentParentId !== null) closeLinkedAgent()
           if (reorderTabsOpen) closeReorderTabs()
           if (pinAgentsOpen) closePinAgents()
           return

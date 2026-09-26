@@ -1,6 +1,7 @@
 import { useAppStore } from '@renderer/app-state/hooks'
 import { browserPocketEnablePatch } from '../setup'
 import type { CommandContext, CommandDef, CommandUnavailable } from '@renderer/features/command-palette/types'
+import { commandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
 import { toggle } from '@renderer/features/command-palette/commandState'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { SessionId } from '@renderer/workspace/types'
@@ -22,7 +23,11 @@ function target(ctx: CommandContext): SessionId | null {
 function whenPocket(ctx: CommandContext): CommandUnavailable | null {
   if (!ctx.flags.browserPocketEnabled) return OFF
   const id = target(ctx)
-  if (!id || !ctx.workspace.state.sessions[id]?.browserPocket) return { reason: 'The focused agent has no browser pocket (⌘⇧B).', presentation: 'disable' }
+  if (!id || !ctx.workspace.state.sessions[id]?.browserPocket) {
+    // Live chord (plan H4): the reason spelled "(⌘⇧B)" literally.
+    const chord = commandChordLabel('toggle-browser-pocket', ctx.flags.commandKeybindingOverrides)
+    return { reason: `The focused agent has no browser pocket${chord ? ` (${chord})` : ''}.`, presentation: 'disable' }
+  }
   return null
 }
 

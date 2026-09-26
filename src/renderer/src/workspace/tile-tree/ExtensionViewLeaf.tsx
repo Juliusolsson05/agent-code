@@ -108,7 +108,7 @@ export function ExtensionViewLeaf({ sessionId, workspace, onFocusRequest, focuse
               : 'This pane is not backed by an extension view.'}
           {loadError ? (
             <button type="button" className="mt-3 block w-full underline" onClick={() => void refreshInstalledExtensions()}>
-              Retry loading extensions
+              Retry Loading Extensions
             </button>
           ) : null}
         </div>

@@ -5,10 +5,10 @@ import type { FeatureReference } from '@control-sdk'
 export const controlReference = [
   {
     "id": "pins",
-    "title": "Pinned agents",
+    "title": "Pinned Sessions",
     "purpose": "Keep selected sessions easy to reach across project filters.",
-    "ui": "Pin Agents dialog, Dispatch pinned section, and Pin/Unpin in a Sessions row's right-click menu.",
-    "prerequisites": "Existing agents.",
+    "ui": "Pin Sessions dialog, Dispatch pinned section, and Pin/Unpin in a Sessions row's right-click menu.",
+    "prerequisites": "Existing agents or terminals.",
     "workflow": [
       "Select the exact sessions",
       "preserve the desired pin order",

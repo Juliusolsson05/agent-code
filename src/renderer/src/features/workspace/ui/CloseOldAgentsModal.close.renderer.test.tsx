@@ -136,7 +136,7 @@ describe('Close Old Agents destructive scope (#886)', () => {
 
   it('requires a selected project and refuses an invalid inactivity threshold', () => {
     mountCleanup()
-    fireEvent.click(screen.getByRole('button', { name: 'Selected projects' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Selected Projects' }))
     expect(screen.getByRole('button', { name: 'Close 0 Agents' })).toBeDisabled()
     // WHY the name comes from projectScopeLabel instead of a literal: main's
     // #908 re-keyed this picker from working directory to project TAB, and the

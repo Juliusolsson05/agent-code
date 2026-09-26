@@ -6,7 +6,7 @@ export const controlReference = [
   {
     "id": "settings",
     "title": "Settings, appearance and view behavior",
-    "purpose": "Configure appearance, workspace behavior, agent defaults, safety and input preferences. Settings → Agents → External operator MCP enables an app-managed global Codex connection and operator skill, disabled by default.",
+    "purpose": "Configure appearance, workspace behavior, agent defaults, safety and input preferences. Settings → MCP → External Operator MCP enables an app-managed global Codex connection and operator skill, disabled by default.",
     "ui": "Settings panel and its categories.",
     "prerequisites": "The relevant setting and its scope/apply/storage metadata.",
     "workflow": [

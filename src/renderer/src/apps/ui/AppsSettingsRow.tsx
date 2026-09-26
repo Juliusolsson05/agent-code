@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
+import { Input } from '@renderer/components/ui/input'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { forgetRemovedExtension, refreshInstalledExtensions } from '@renderer/apps/host/installedExtensionsState'
@@ -217,7 +219,7 @@ export function AppsSettingsRow() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex gap-2">
-        <input
+        <Input
           value={repo}
           onChange={event => setRepo(event.target.value)}
           onKeyDown={event => {
@@ -236,31 +238,33 @@ export function AppsSettingsRow() {
           autoCapitalize="off"
           autoCorrect="off"
           disabled={busy}
-          className="min-w-0 flex-1 border border-input-border bg-input-bg px-2 py-1.5 text-[13px] text-ink outline-none placeholder:text-input-placeholder focus:border-input-border-focus disabled:opacity-50"
+          className="min-w-0 flex-1"
         />
-        <button
+        <Button
           type="button"
           onClick={() => void install()}
           disabled={busy || repo.trim().length === 0}
-          className="shrink-0 border border-control-border bg-control-bg px-3 py-1.5 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+          variant="outline"
+          className="shrink-0"
         >
           {busy ? 'Installing…' : 'Install'}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           onClick={() => void loadFromFolder()}
           disabled={busy}
           title="Install from a local folder — for developing an unpublished extension"
-          className="shrink-0 border border-control-border bg-control-bg px-3 py-1.5 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+          variant="outline"
+          className="shrink-0"
         >
-          Load folder…
-        </button>
+          Load Folder…
+        </Button>
       </div>
 
       {error || loadError ? (
         <div role="alert" className="border border-border bg-row-bg px-3 py-2 text-[12px] text-ink">
           {error || loadError}
-          {loadError ? <button type="button" className="ml-3 underline" onClick={() => void refresh()}>Retry loading extensions</button> : null}
+          {loadError ? <button type="button" className="ml-3 rounded-chip underline outline-none focus-visible:ring-1 focus-visible:ring-focus-ring" onClick={() => void refresh()}>Retry Loading Extensions</button> : null}
         </div>
       ) : null}
       {notice ? <div className="text-[12px] text-muted">{notice}</div> : null}
@@ -316,15 +320,16 @@ export function AppsSettingsRow() {
                 ) : null}
               </div>
               <div className="flex shrink-0 gap-2">
-                <button
+                <Button
                   type="button"
                   onClick={() => void update(entry)}
                   disabled={busy}
-                  className="border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+                  variant="outline"
+                  size="sm"
                 >
                   {entry.origin === 'local' ? 'Reload' : 'Update'}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   onClick={() => void remove(entry)}
                   // Every other action here guards on `busy`; Remove did not, so it
@@ -333,10 +338,11 @@ export function AppsSettingsRow() {
                   // race the ledger lock now serialises — this stops the UI from
                   // inviting it in the first place.
                   disabled={busy}
-                  className="border border-control-border px-3 py-1 text-[12px] text-ink-dim outline-none hover:border-control-border-hover hover:text-ink disabled:opacity-40"
+                  variant="destructive-outline"
+                  size="sm"
                 >
                   Remove
-                </button>
+                </Button>
               </div>
             </div>
           ))}
@@ -374,14 +380,16 @@ export function AppsSettingsRow() {
                 // than a button that cannot work.
                 <div className="shrink-0 text-[12px] text-muted">Edit extensions.json to remove</div>
               ) : (
-                <button
+                <Button
                   type="button"
                   onClick={() => void removeQuarantined(row.id!)}
                   disabled={busy}
-                  className="shrink-0 border border-control-border px-3 py-1 text-[12px] text-ink-dim outline-none hover:border-control-border-hover hover:text-ink disabled:opacity-40"
+                  variant="destructive-outline"
+                  size="sm"
+                  className="shrink-0"
                 >
                   Remove
-                </button>
+                </Button>
               )}
             </div>
           ))}

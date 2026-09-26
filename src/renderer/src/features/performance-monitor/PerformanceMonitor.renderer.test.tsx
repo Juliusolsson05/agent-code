@@ -85,6 +85,18 @@ describe('monitor display lifecycle', () => {
     expect(screen.getByText('Always on · no automatic uploads')).toBeInTheDocument()
   })
 
+  it('steps through its views with ⌘] / ⌘[ from anywhere in the dialog (plan S38)', async () => {
+    api(vi.fn(async () => snapshot))
+    renderMonitor(<PerformanceMonitor onClose={vi.fn()} />)
+    const dialog = await screen.findByRole('dialog', { name: 'Performance Monitor' })
+    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.keyDown(dialog, { key: ']', code: 'BracketRight', metaKey: true })
+    expect(screen.getByRole('button', { name: 'Timeline' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.keyDown(dialog, { key: '[', code: 'BracketLeft', metaKey: true })
+    fireEvent.keyDown(dialog, { key: '[', code: 'BracketLeft', metaKey: true })
+    expect(screen.getByRole('button', { name: 'Recordings' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('ranks agents under their workspace label and goes to one only after navigation succeeds', async () => {
     api(vi.fn(async () => snapshot))
     const onClose = vi.fn()

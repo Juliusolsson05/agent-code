@@ -161,6 +161,20 @@ describe('AgentAnalyticsModal', () => {
     expect(screen.getByRole('button', { name: '30 days' }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('steps the time range with ⌘] from anywhere and closes from the corner ⎋ (plan S35)', async () => {
+    const api = installApi(async range => summary(range))
+    render(<AgentAnalyticsModal open onClose={() => {}} />)
+    await waitFor(() => expect(api).toHaveBeenCalled())
+    const pressed = () => screen.getAllByRole('button').find(button => button.getAttribute('aria-pressed') === 'true')?.textContent
+    const before = pressed()
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: ']', code: 'BracketRight', metaKey: true })
+    })
+    expect(pressed()).not.toBe(before)
+    expect(screen.queryByRole('button', { name: 'close' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Close' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+  })
+
   it('says nothing was recorded instead of showing empty totals when the range has no working time', async () => {
     installApi(async range => summary(range, {
       totals: { agentMs: 0, wallMs: 0, agents: { user: 0, orchestration: 0 } },

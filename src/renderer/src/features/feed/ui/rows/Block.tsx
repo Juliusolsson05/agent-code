@@ -199,7 +199,7 @@ export const Block = memo(function Block({
             <summary className="cursor-pointer select-none italic">
               ∴ Thinking
               <span className="ml-2 not-italic text-ink-dim opacity-70">
-                (click to expand)
+                (expand)
               </span>
             </summary>
             <div className="mt-1.5 text-ink-dim opacity-80">

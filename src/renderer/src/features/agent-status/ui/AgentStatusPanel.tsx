@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { PanelHeader } from '@renderer/components/ui/panel-header'
 import { AgentSkillsSection } from './AgentSkillsSection'
 
 import { buildAgentStatusModel } from '@renderer/features/agent-status/model/agentStatusModel'
@@ -34,38 +35,17 @@ export function AgentStatusPanel({ sessionId, workspace, onClose }: Props) {
       flex flex-col overflow-hidden
       text-[11px]
     ">
-      <div className="
-        flex items-center justify-between gap-3
-        px-3 py-2 border-b border-border
-        select-none flex-shrink-0
-      ">
-        <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-[0.16em] text-muted">
-            Agent Status
-          </div>
-          <div className="truncate text-ink font-medium">
-            {model ? model.title : 'No focused session'}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {model ? (
-            <span className="rounded-chip
-              border border-border bg-surface-hi px-1.5 py-0.5
-              text-[10px] font-code uppercase text-ink-dim
-            ">
-              {model.kind}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-muted hover:text-ink text-[16px] leading-none"
-            aria-label="Close Agent Status"
-          >
-            ×
-          </button>
-        </div>
-      </div>
+      {/* The shared side-panel header (UI pass, G-26). */}
+      <PanelHeader
+        label="Agent Status"
+        title={model ? model.title : 'No focused session'}
+        onClose={onClose}
+        actions={model ? (
+          <span className="rounded-chip border border-border bg-surface-hi px-1.5 py-0.5 text-[10px] font-code uppercase text-ink-dim">
+            {model.kind}
+          </span>
+        ) : undefined}
+      />
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3">
         {model ? <AgentStatusContent model={model} /> : <EmptyState />}
@@ -114,7 +94,7 @@ function Section({ title, fields }: { title: string; fields: AgentStatusField[] 
     <section className="rounded-slab border border-border bg-canvas">
       <div className="
         border-b border-border px-2 py-1
-        text-[10px] uppercase tracking-[0.14em] text-muted
+        text-[10px] uppercase tracking-wider text-muted
       ">
         {title}
       </div>

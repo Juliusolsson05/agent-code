@@ -39,17 +39,21 @@ export function VoiceDictationOverlay() {
   const labelText = isError
     ? truncateError(errorMessage)
     : isStopping
-      ? 'transcribing…'
+      ? 'Transcribing…'
       : isStarting
-        ? 'starting…'
+        ? 'Starting…'
         : holdToTalk
-          ? 'hold to dictate · release to paste'
-          : 'press shortcut again to finish'
+          ? 'Hold to dictate · release to paste'
+          : 'Press the shortcut again to finish'
 
+  // z-[1200], the toast band (ask-2 ruling, UI pass G-27): at z-40 the chip
+  // was hidden under every dialog scrim (z-[1100]), so dictating into a
+  // dialog field gave no "Listening" feedback at all. It sits bottom-centre
+  // and GlobalToast top-right, so sharing the band never overlaps them.
   return (
     <div
       className={`
-        pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2
+        pointer-events-none fixed bottom-4 left-1/2 z-[1200] -translate-x-1/2
         flex items-center gap-3 rounded-float border bg-surface px-3 py-2
         font-code text-[11px] leading-none
         ${isError ? 'border-danger' : 'border-border'}

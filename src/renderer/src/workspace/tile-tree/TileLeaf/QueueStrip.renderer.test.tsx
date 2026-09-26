@@ -61,12 +61,16 @@ describe('QueueStrip', () => {
     expect(within(list).queryByText(/Keep this final instruction/)).toBeNull()
 
     fireEvent.click(view)
-    const dialog = screen.getByRole('dialog', { name: 'Queued prompt' })
+    const dialog = screen.getByRole('dialog', { name: 'Queued Prompt' })
     expect(within(dialog).getByText('1 of 1 · queued for delivery')).toBeVisible()
     const exactPrompt = dialog.querySelector('pre')
     if (!exactPrompt) throw new Error('queued prompt preview did not render a pre element')
     expect(exactPrompt.textContent).toBe(prompt)
     expect(exactPrompt.className).toContain('[overflow-wrap:anywhere]')
+    // Plan S18: a read-only viewer opens with the TEXT focused (a Tab stop
+    // that scrolls on ↑↓/PgDn), not the corner close button.
+    expect(document.activeElement).toBe(within(dialog).getByLabelText('Queued prompt text'))
+    expect(document.activeElement).toHaveAttribute('tabindex', '0')
   })
 
   it('keeps Claude task notifications compact and never exposes their raw payload as a prompt', () => {
@@ -98,13 +102,13 @@ describe('QueueStrip', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: /View queued prompt:/ }))
-    expect(screen.getByRole('dialog', { name: 'Queued prompt' })).toBeVisible()
+    expect(screen.getByRole('dialog', { name: 'Queued Prompt' })).toBeVisible()
 
     rerender(<QueueStrip provider="claude" queuedMessages={[]} />)
-    expect(screen.queryByRole('dialog', { name: 'Queued prompt' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Queued Prompt' })).toBeNull()
 
     rerender(<QueueStrip provider="claude" queuedMessages={[message]} />)
-    expect(screen.queryByRole('dialog', { name: 'Queued prompt' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Queued Prompt' })).toBeNull()
   })
 
   it('collapses repeated blank lines in the summary and provider-gates notifications', () => {

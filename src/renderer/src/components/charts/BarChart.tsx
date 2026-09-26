@@ -87,7 +87,7 @@ export function BarChart({ label, series, bars, formatValue, height = 140 }: Pro
         })}
       </svg>
       {bar && (
-        <div className="pointer-events-none absolute z-10 min-w-[150px] rounded-control border border-popover-border bg-popover-bg px-2 py-1.5 text-[10px] shadow-lg"
+        <div className="pointer-events-none absolute z-10 min-w-[150px] rounded-control border border-popover-border bg-popover-bg px-2 py-1.5 text-[10px] shadow-[0_8px_24px_var(--theme-shadow-color)]"
           style={{ top: MARGIN.top, ...(flip ? { right: width - center + 10 } : { left: center + 10 }) }}>
           <div className="mb-1 text-muted">{bar.heading}</div>
           {series.map((item, index) => (

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -7,10 +8,12 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Input } from '@renderer/components/ui/input'
+import { Kbd } from '@renderer/components/ui/kbd'
 import { useSkillProviderColumns } from '@renderer/features/skills/lib/providerColumns'
 import { applyInstalledSkillsResult, currentSkillsRevision, refreshSkills } from '@renderer/features/skills/store'
 import { CandidateDetails } from '@renderer/features/skills/ui/SkillReview'
@@ -119,9 +122,17 @@ export function AddSkillDialog() {
 
   return (
     <Dialog open={target !== null} onOpenChange={open => { if (!open && !busy) close() }}>
-      <DialogContent className="flex max-h-[92vh] w-[min(860px,96vw)] flex-col overflow-hidden font-code">
+      <DialogContent
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden font-code"
+        // In flight (find or install), nothing may hide the dialog (the k3
+        // rule): onOpenChange already refused while busy; Escape and outside
+        // clicks now do too, and Cancel disables with its ⎋ chip.
+        onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
+        onInteractOutside={event => { if (busy) event.preventDefault() }}
+      >
         <DialogHeader>
-          <DialogTitle>Add skills</DialogTitle>
+          <DialogTitle>Add Skills</DialogTitle>
           <DialogDescription>
             Paste an install command, a repository or a URL. Agent Code reviews the exact commit, shows every file, and never runs anything from the repository.
           </DialogDescription>
@@ -130,10 +141,12 @@ export function AddSkillDialog() {
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 py-3 text-[11px]">
           <label className="flex flex-col gap-1">
             <span className="sr-only">Install command or source</span>
-            <input
+            {/* The shared Input (plan T1/T4): this field was square and had
+                no focus treatment beyond the browser outline. */}
+            <Input
               aria-label="Install command or source"
               autoFocus
-              className="border border-input-border bg-input-bg px-2 py-1.5 text-ink"
+              className="h-8 text-[11px]"
               value={input}
               disabled={busy}
               placeholder="npx skills add vercel-labs/agent-skills --skill web-design-guidelines"
@@ -154,8 +167,10 @@ export function AddSkillDialog() {
                   ? <>Understood: {withVisibleControls(describeSkillInstallInput(parsed.value))}</>
                   : parsed.message}
             </span>
+            {/* ↩ because Enter in the source field runs exactly this. */}
             <Button size="sm" variant="outline" disabled={busy || !parsed?.ok} onClick={() => void find()}>
-              {busy && !discovery ? 'Looking…' : 'Find skills'}
+              {busy && !discovery ? 'Looking…' : 'Find Skills'}
+              {!busy ? <Kbd binding="Enter" /> : null}
             </Button>
           </div>
           {parsed?.ok && parsed.value.notices.length > 0 ? (
@@ -164,7 +179,7 @@ export function AddSkillDialog() {
 
           {discovery ? (
             <>
-              <div className="flex items-center justify-between gap-2 border border-panel-border px-3 py-2 text-[10px] text-muted">
+              <div className="rounded-slab flex items-center justify-between gap-2 border border-border px-3 py-2 text-[10px] text-muted">
                 {/* The ref is repository-controlled text; only the commit
                     hash is ours (#1049 re-review). */}
                 <span className="min-w-0 truncate">
@@ -173,31 +188,31 @@ export function AddSkillDialog() {
                 <span className="shrink-0">{discovery.candidates.length} skill{discovery.candidates.length === 1 ? '' : 's'}</span>
               </div>
               {discovery.missingSkills.length > 0 ? (
-                <div className="border border-warning p-2 text-[10px] text-warning">
+                <div className="rounded-slab border border-warning p-2 text-[10px] text-warning">
                   Not found in this source: {discovery.missingSkills.map(name => withVisibleControls(name)).join(', ')}
                 </div>
               ) : null}
               {discovery.notices.map(notice => (
-                <div key={notice} className="border border-warning p-2 text-[10px] text-warning">{withVisibleControls(notice)}</div>
+                <div key={notice} className="rounded-slab border border-warning p-2 text-[10px] text-warning">{withVisibleControls(notice)}</div>
               ))}
               {discovery.candidates.length > 6 ? (
                 <div className="flex items-center gap-2">
-                  <input
+                  <Input
                     aria-label="Filter skills"
-                    className="min-w-0 flex-1 border border-input-border bg-input-bg px-2 py-1 text-ink"
+                    className="h-7 min-w-0 flex-1 text-[11px]"
                     placeholder="Filter…"
                     value={filter}
                     onChange={event => setFilter(event.target.value)}
                   />
                   <Button size="xs" variant="outline" onClick={() => setSelected(new Set(visible.map(candidate => candidate.candidateId)))}>
-                    Select all
+                    Select All
                   </Button>
                   <Button size="xs" variant="ghost" onClick={() => setSelected(new Set())}>None</Button>
                 </div>
               ) : null}
               <div className="flex flex-col gap-2">
                 {visible.map(candidate => (
-                  <label key={candidate.candidateId} className="flex items-start gap-3 border border-panel-border p-3">
+                  <label key={candidate.candidateId} className="rounded-slab flex items-start gap-3 border border-border p-3 hover:bg-row-hover-bg">
                     <input
                       type="checkbox"
                       aria-label={`Install ${candidate.name}`}
@@ -232,18 +247,22 @@ export function AddSkillDialog() {
               </div>
             </>
           ) : null}
-          {error ? <div role="alert" className="border border-danger p-2 text-[10px] text-danger">{error}</div> : null}
+          {error ? <Alert>{error}</Alert> : null}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={close}>Cancel</Button>
-          <Button
-            disabled={busy || !discovery || selected.size === 0 || providers.size === 0}
-            onClick={() => void install()}
-          >
-            Install {selected.size} skill{selected.size === 1 ? '' : 's'}
-          </Button>
-        </DialogFooter>
+        {/* Install writes a repository's skill files into provider folders:
+            a deliberate press, no commit key (Enter in the source field is
+            Find's). Guards carried over (k3): Cancel and Install wait while
+            busy; Install also needs a discovery, a skill and a provider. */}
+        <DialogActions
+          confirmLabel={`Install ${selected.size} Skill${selected.size === 1 ? '' : 's'}`}
+          confirmKey={null}
+          confirmDisabled={busy || !discovery || selected.size === 0 || providers.size === 0}
+          onConfirm={() => void install()}
+          onCancel={close}
+          cancelDisabled={busy}
+          escapeCancels={!busy}
+        />
       </DialogContent>
     </Dialog>
   )

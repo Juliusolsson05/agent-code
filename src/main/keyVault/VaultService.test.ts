@@ -104,7 +104,7 @@ describe('VaultService unlock gate', () => {
 
     const pending = service.reveal(provider.id, key.id)
     const rejected = expect(pending).rejects.toThrow(/locked/i)
-    service.lock() // user hits "Lock now" while the prompt is on screen
+    service.lock() // user hits "Lock Now" while the prompt is on screen
     prompt.resolve()
     await rejected
     expect(service.getStatus().unlocked).toBe(false)

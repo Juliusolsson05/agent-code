@@ -13,9 +13,9 @@ afterEach(() => { useAppStore.setState(original, true) })
 
 function startRecording() {
   render(<CommandKeybindingsRow />)
-  const add = screen.getAllByRole('button', { name: 'Add' })[0]!
+  const add = screen.getAllByRole('button', { name: /^Add a shortcut to / })[0]!
   fireEvent.click(add)
-  expect(screen.getByRole('button', { name: 'Press keys… (Esc)' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^Recording a shortcut for / })).toBeInTheDocument()
 }
 
 it('stops recording when the user clicks somewhere else', () => {
@@ -23,7 +23,7 @@ it('stops recording when the user clicks somewhere else', () => {
   const elsewhere = document.createElement('input')
   document.body.appendChild(elsewhere)
   fireEvent.mouseDown(elsewhere)
-  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
   // The next key is ordinary typing again: not swallowed, not saved.
   const before = JSON.stringify(useAppStore.getState().settings.commandKeybindingOverrides ?? {})
   const typed = fireEvent.keyDown(elsewhere, { key: 't', code: 'KeyT' })
@@ -35,7 +35,7 @@ it('stops recording when the user clicks somewhere else', () => {
 it('stops recording when the window loses focus', () => {
   startRecording()
   fireEvent.blur(window)
-  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 // #1308 review: the edges of the release rule.
@@ -52,28 +52,28 @@ function listGeometry(): HTMLElement {
 it('keeps recording while the user drags the list scrollbar', () => {
   startRecording()
   fireEvent.mouseDown(listGeometry(), { clientX: 395, clientY: 100 })
-  expect(screen.getByRole('button', { name: 'Press keys… (Esc)' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^Recording a shortcut for / })).toBeInTheDocument()
 })
 
 it('ends recording on a click in the gap between category blocks', () => {
   startRecording()
   fireEvent.mouseDown(listGeometry(), { clientX: 120, clientY: 20 })
-  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 it('ends recording on a click on another row', () => {
   startRecording()
   const row = document.querySelector('[data-shortcut-list] [data-shortcut-recorder]')!.parentElement!.parentElement!
   fireEvent.mouseDown(row)
-  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 it('lets the recorder button toggle recording off itself', () => {
   startRecording()
-  const recorder = screen.getByRole('button', { name: 'Press keys… (Esc)' })
+  const recorder = screen.getByRole('button', { name: /^Recording a shortcut for / })
   fireEvent.mouseDown(recorder)
   fireEvent.click(recorder)
-  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
 })
 
 it('ends recording even when the clicked control stops propagation', () => {
@@ -82,7 +82,7 @@ it('ends recording even when the clicked control stops propagation', () => {
   stubborn.addEventListener('mousedown', event => event.stopPropagation())
   document.body.appendChild(stubborn)
   fireEvent.mouseDown(stubborn)
-  expect(screen.queryByRole('button', { name: 'Press keys… (Esc)' })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Recording a shortcut for / })).toBeNull()
   stubborn.remove()
 })
 

@@ -91,7 +91,7 @@ export type UserMcpResolver = (params: {
 }>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
-import { SESSION_START_FAILED_MESSAGE, type PromptGateState } from '@shared/types/session.js'
+import { PROVIDER_CLI_NOT_FOUND_SUFFIX, SESSION_START_FAILED_MESSAGE, type PromptGateState } from '@shared/types/session.js'
 import {
   isCodexTranscriptObservationEventName,
   isCodexTranscriptObservationSessionId,
@@ -400,7 +400,7 @@ export class ProviderCliNotFoundError extends Error {
   constructor(kind: string) {
     // Names a real place (#995): Setup opens from File › Setup… or the
     // "Open Setup" command, and shows the install command for this CLI.
-    super(`${kind} CLI not found. Open Setup (File › Setup…) to install it or enter its path.`)
+    super(`${kind}${PROVIDER_CLI_NOT_FOUND_SUFFIX}`)
     this.name = 'ProviderCliNotFoundError'
   }
 }
@@ -845,6 +845,16 @@ export class SessionManager extends EventEmitter {
   private readonly agentPtyBuffers = new Map<string, TerminalReplayBuffer>()
   private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
+  /**
+   * The PTY size an attached raw view last asked for (#1311 review). It
+   * belongs to the VIEW, like the attach count, so it outlives the process:
+   * a successor started under the same id while the view is still attached
+   * starts at this size instead of the 120x40 default. Without it, the mounted
+   * xterm (whose own size cache had not changed) never re-sent its size, and
+   * the new process drew at the wrong width until the pane was resized.
+   * Cleared by the final detach.
+   */
+  private readonly agentPtyViewSizes = new Map<string, PtySize>()
 
   private markActivity(sessionId: string): void {
     this.lastActivityAt.set(sessionId, Date.now())
@@ -1087,8 +1097,18 @@ export class SessionManager extends EventEmitter {
       this.terminalForeground.untrack(sessionId)
     } else {
       this.agentPtyBuffers.delete(sessionId)
-      this.agentPtyAttachCounts.delete(sessionId)
+      // The restore size belongs to THIS process (it is what the process had
+      // before a view resized it), so it goes with the process; a successor
+      // gets its own at spawn (#1311 review).
       this.agentPtyRestoreSizes.delete(sessionId)
+      // NOT agentPtyAttachCounts / agentPtyViewSizes (#1281): they describe
+      // the renderer's raw-terminal VIEW, which outlives the process. A pane
+      // stays mounted through a same-id wake (recover from a delivery, a
+      // control call, a server restart), and deleting its count here stopped
+      // forwarding to it: the xterm froze on the dead process while keystrokes
+      // reached the new one unseen. The view's own detachAgentPty (on unmount,
+      // pane close included) remains the only release, and detach deletes the
+      // key whether or not a process still exists.
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
       // Once the backend is gone its user-MCP launch facts must not outlive it
       // and be reported for a successor. Unconditional (review round 2):
@@ -2983,10 +3003,19 @@ export class SessionManager extends EventEmitter {
       if (!binary) {
         throw new ProviderCliNotFoundError(kind)
       }
-      const initialSize = {
+      // The size this process would have had with no raw view attached. When a
+      // view IS attached (a same-id wake under a mounted terminal pane), the
+      // process starts at the view's size, and this natural size becomes its
+      // restore size for the final detach (#1311 review: restoring the DEAD
+      // process's pre-attach size onto its successor shrank a live PTY).
+      const naturalSize = {
         cols: options.cols ?? 120,
         rows: options.rows ?? 40,
       }
+      const attachedViewSize = (this.agentPtyAttachCounts.get(sessionId) ?? 0) > 0
+        ? this.agentPtyViewSizes.get(sessionId)
+        : undefined
+      const initialSize = attachedViewSize ? { ...attachedViewSize } : naturalSize
       let builtInMcpServers: BuiltInMcpServerConfig[] = []
       if (options.builtInMcpDomains && options.builtInMcpDomains.length > 0) {
         if (!this.builtInMcpHost) {
@@ -3102,6 +3131,7 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessionSizes.set(sessionId, initialSize)
+      if (attachedViewSize) this.agentPtyRestoreSizes.set(sessionId, { ...naturalSize })
       this.agentPtyBuffers.set(sessionId, new TerminalReplayBuffer(AGENT_PTY_BUFFER_CAP))
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
@@ -3802,6 +3832,7 @@ export class SessionManager extends EventEmitter {
       return
     }
     this.agentPtyAttachCounts.delete(sessionId)
+    this.agentPtyViewSizes.delete(sessionId)
     const restoreSize = this.agentPtyRestoreSizes.get(sessionId)
     this.agentPtyRestoreSizes.delete(sessionId)
     if (!entry || !isAgentProviderKind(entry.kind)) return
@@ -4961,6 +4992,9 @@ export class SessionManager extends EventEmitter {
     if (!entry) return
     entry.session.resize(cols, rows)
     this.sessionSizes.set(sessionId, { cols, rows })
+    // While a raw view is attached, it is the one sizing the PTY; remember
+    // its size for a same-id successor (see agentPtyViewSizes).
+    if ((this.agentPtyAttachCounts.get(sessionId) ?? 0) > 0) this.agentPtyViewSizes.set(sessionId, { cols, rows })
   }
 
   /**

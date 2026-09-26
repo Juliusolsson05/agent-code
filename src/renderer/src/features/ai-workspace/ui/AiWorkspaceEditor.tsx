@@ -201,7 +201,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
         return null
       }
       setWorkspace(null)
-      setError(err instanceof Error ? err.message : 'Failed to load AI Workspace')
+      setError(err instanceof Error ? err.message : 'Could not load AI Workspace.')
       return null
     } finally {
       if (generation === workspaceLoadGenerationRef.current) setLoading(false)
@@ -803,7 +803,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
             void window.api
               .aiWorkspaceDetachFile({ workspaceId, entryId: entry.entryId })
               .catch(err =>
-                setError(err instanceof Error ? err.message : 'Failed to remove attached file'),
+                setError(err instanceof Error ? err.message : 'Could not remove attached file.'),
               )
           }}
           onDeleteWorkspace={() => {
@@ -814,7 +814,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
             void window.api
               .aiWorkspaceDelete(workspaceId)
               .catch(err =>
-                setError(err instanceof Error ? err.message : 'Failed to delete AI Workspace'),
+                setError(err instanceof Error ? err.message : 'Could not delete AI Workspace.'),
               )
           }}
         />

@@ -42,7 +42,7 @@ export function SafeMarkdownLink({
           modifierHeld: event.metaKey || event.ctrlKey,
         })
         if (outcome === 'blocked') showToast('Blocked unsupported link')
-        else if (outcome === 'failed') showToast('Could not open link')
+        else if (outcome === 'failed') showToast('Could not open link.')
         return
       }
 

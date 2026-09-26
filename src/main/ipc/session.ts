@@ -244,11 +244,65 @@ export function registerSessionIpc(
   // as an xterm terminal. Kept separate from terminal-attach because
   // plain terminal panes and agent panes have different primary
   // renderers and different live IPC channels.
-  ipcMain.handle('session:agent-pty-attach', (_evt, sessionId: string) => {
-    return manager.attachAgentPty(sessionId)
+  //
+  // Attaches are OWNED by the calling renderer page (#1311 review), the same
+  // lifecycle as the screen leases below. The attach count now outlives the
+  // provider process (a same-id wake keeps a mounted view live), so a
+  // renderer that reloads or crashes without running its leaf cleanup would
+  // otherwise pin a count forever: raw PTY bytes forwarded to nobody, and a
+  // restore size applied to some later process. Each renderer's outstanding
+  // attaches are released when it is destroyed or loads a new document.
+  const agentPtyAttaches = new Map<number, Map<string, number>>()
+  // Each renderer's current page document, so only a real reload releases.
+  const agentPtyDocuments = new Map<number, string>()
+  const releaseAgentPtyAttaches = (owner: number): void => {
+    const owned = agentPtyAttaches.get(owner)
+    if (!owned) return
+    agentPtyAttaches.delete(owner)
+    for (const [sessionId, count] of owned) {
+      for (let i = 0; i < count; i += 1) manager.detachAgentPty(sessionId)
+    }
+  }
+  // Is this call from the renderer's CURRENT page? #1311 round 2 (review A):
+  // a reload can keep the webContents id, so the sender alone cannot tell
+  // the dead page's queued detach from the live page's; without the page
+  // document, that late detach took the new page's only reference and froze
+  // its terminal. The preload stamps every call with its document (minted
+  // once per load, the same token the screen leases carry). A renderer that
+  // has not announced yet adopts the caller's document, which its own
+  // announcement then confirms.
+  const isCurrentAgentPtyDocument = (owner: number, document: string): boolean => {
+    const current = agentPtyDocuments.get(owner)
+    if (current === undefined) {
+      agentPtyDocuments.set(owner, document)
+      return true
+    }
+    return current === document
+  }
+  ipcMain.handle('session:agent-pty-attach', (evt, sessionId: string, document: string) => {
+    const owner = watchLeaseOwner(evt.sender)
+    // A dead page's attach must take no reference: nothing would release it,
+    // because that page's release already ran.
+    if (!isCurrentAgentPtyDocument(owner, document)) return null
+    const buffer = manager.attachAgentPty(sessionId)
+    // null = no backend, and main took no reference; nothing to own.
+    if (buffer === null) return buffer
+    const owned = agentPtyAttaches.get(owner) ?? new Map<string, number>()
+    owned.set(sessionId, (owned.get(sessionId) ?? 0) + 1)
+    agentPtyAttaches.set(owner, owned)
+    return buffer
   })
 
-  ipcMain.handle('session:agent-pty-detach', (_evt, sessionId: string) => {
+  ipcMain.handle('session:agent-pty-detach', (evt, sessionId: string, document: string) => {
+    // Only a reference the CURRENT page holds. After a reload released the
+    // old page's references, its late detach must not take the new page's.
+    if (agentPtyDocuments.get(evt.sender.id) !== document) return
+    const owned = agentPtyAttaches.get(evt.sender.id)
+    const count = owned?.get(sessionId) ?? 0
+    if (count === 0) return
+    if (count === 1) owned!.delete(sessionId)
+    else owned!.set(sessionId, count - 1)
+    if (owned!.size === 0) agentPtyAttaches.delete(evt.sender.id)
     manager.detachAgentPty(sessionId)
   })
 
@@ -269,6 +323,8 @@ export function registerSessionIpc(
       leaseOwnersWatched.add(owner)
       sender.once('destroyed', () => {
         screenInterest.dropOwner(owner)
+        releaseAgentPtyAttaches(owner)
+        agentPtyDocuments.delete(owner)
         leaseOwnersWatched.delete(owner)
       })
     }
@@ -277,7 +333,13 @@ export function registerSessionIpc(
   // Sent by the preload on every page load, whether or not the page ever
   // leases: it is what retires a reloaded page's leases (steering q15).
   ipcMain.handle('session:screen-document', (evt, document: string): void => {
-    screenInterest.enterDocument(watchLeaseOwner(evt.sender), document)
+    const owner = watchLeaseOwner(evt.sender)
+    screenInterest.enterDocument(owner, document)
+    // A NEW document is a page load: the previous page's raw PTY attaches
+    // died with it. A re-announce of the live document changes nothing.
+    const previous = agentPtyDocuments.get(owner)
+    agentPtyDocuments.set(owner, document)
+    if (previous !== undefined && previous !== document) releaseAgentPtyAttaches(owner)
   })
   ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
     screenInterest.acquire(watchLeaseOwner(evt.sender), sessionId, document)

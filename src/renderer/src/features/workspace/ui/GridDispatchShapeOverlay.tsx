@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 
 import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
@@ -169,7 +170,8 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
   return (
     <Dialog open onOpenChange={next => { if (!next) onClose() }}>
       <DialogContent
-        className={`${advanced ? 'w-[560px]' : 'w-[400px]'} max-w-[calc(100vw-64px)]`}
+        // Presets (plan T2): 400/560 were two more one-off widths.
+        size={advanced ? 'md' : 'sm'}
         // Take mount focus back from Radix, which would otherwise land it on a
         // stepper button — see the inputRef note below.
         onOpenAutoFocus={event => {
@@ -181,25 +183,22 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
         <DialogHeader>
           <div className="flex items-baseline justify-between gap-3">
             <DialogTitle>Grid Dispatch</DialogTitle>
-            <div className="flex items-center gap-1 text-[10px] uppercase text-muted">
-              <button
-                type="button"
-                onClick={() => setAdvanced(false)}
-                className={advanced ? 'hover:text-fg' : 'text-accent'}
-              >
-                Simple
-              </button>
-              <span aria-hidden>│</span>
-              <button
-                type="button"
-                onClick={() => setAdvanced(true)}
-                className={advanced ? 'text-accent' : 'hover:text-fg'}
-              >
-                Advanced
-              </button>
-            </div>
+            {/* A two-state mode switch on the shared SegmentedControl (ledger
+                G-37). It was the last hand-drawn pair left after G-10: two
+                text buttons around a "│", with the accent text as the only
+                "on" look. `pressed` semantics, not `radio`: switching resizes
+                the dialog (sm ↔ md), so it waits for Enter/Space/click
+                instead of firing on every arrow. aria-pressed still says
+                which is on, so the state is never colour only. */}
+            <SegmentedControl
+              size="sm"
+              label="Dispatch mode"
+              value={advanced ? 'advanced' : 'simple'}
+              onChange={next => setAdvanced(next === 'advanced')}
+              options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }] as const}
+            />
           </div>
-          <DialogDescription className="text-[10px]">
+          <DialogDescription>
             {advanced
               ? 'Each row is its own dispatch view: its own agent index, its own projects, its own density.'
               : 'Set a lane count per row. Rows are independent — uneven rows are normal.'}
@@ -210,7 +209,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
           {rows.map((draft, index) => (
             <div
               key={index}
-              className={advanced ? 'flex flex-col gap-1.5 rounded border border-border px-2 py-2' : ''}
+              className={advanced ? 'rounded-slab flex flex-col gap-1.5 border border-border px-2 py-2' : ''}
             >
             <div className="flex items-center gap-3">
               <span className="w-12 flex-shrink-0 text-[10px] uppercase text-muted">
@@ -237,7 +236,10 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                   before the user commits to them. */}
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-[3px]">
                 {Array.from({ length: draft.length }, (_, lane) => (
-                  <span key={lane} className="h-3 w-3 rounded-[2px] bg-accent/50" />
+                  // Square, no radius: a preview of GRID lanes, and the grid
+                  // is square (styles.css hard rule 1). `rounded-[2px]` was
+                  // an arbitrary radius outside the token tiers.
+                  <span key={lane} className="h-3 w-3 bg-accent/50" />
                 ))}
               </div>
               {rows.length > 1 && (
@@ -246,7 +248,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                   onClick={() => removeRow(index)}
                   aria-label={`Remove row ${index + 1}`}
                   title={`Remove row ${index + 1}`}
-                  className="flex-shrink-0 px-1 text-xs text-muted hover:text-fg"
+                  className="rounded-control flex-shrink-0 px-1 text-[12px] text-muted outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-focus-ring"
                 >
                   ×
                 </button>
@@ -266,10 +268,10 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                         aria-checked={on}
                         onClick={() => toggleRowProject(index, tab.id)}
                         title={tab.title}
-                        className={`max-w-[10rem] truncate rounded border px-1.5 py-0.5 ${
+                        className={`rounded-control max-w-[10rem] truncate border px-1.5 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${
                           on
                             ? 'border-accent/60 text-accent'
-                            : 'border-border text-muted hover:text-fg'
+                            : 'border-border text-muted hover:text-ink'
                         }`}
                       >
                         {on ? '✓ ' : ''}{tabIndexLabel(tabIndex)} {tab.title}
@@ -282,22 +284,26 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                     <span className="text-muted">— {projectLabel(undefined)}</span>
                   )}
                 </div>
+                {/* A real radio group: the "(•)" glyphs were the only signal of
+                    which option was on, so assistive tech heard two plain
+                    buttons. */}
+                {/* The shared segmented control in radio mode (UI pass, G-10/G-25):
+                    the ASCII "(•)" / "( )" radios were the only ones of their
+                    kind. Arrows move AND choose in the draft (k9); a focused
+                    radio keeps its Enter, so it never reaches Apply (K3). */}
                 <div className="flex items-center gap-3 pl-12 text-[10px]">
-                  <span className="uppercase text-muted">Nested agents</span>
-                  <button
-                    type="button"
-                    onClick={() => setRowCap(index, false)}
-                    className={draft.capChildren === false ? 'text-accent' : 'text-muted hover:text-fg'}
-                  >
-                    {draft.capChildren === false ? '(•)' : '( )'} Show all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRowCap(index, true)}
-                    className={draft.capChildren !== false ? 'text-accent' : 'text-muted hover:text-fg'}
-                  >
-                    {draft.capChildren !== false ? '(•)' : '( )'} Cap
-                  </button>
+                  <span className="uppercase tracking-wider text-muted">Nested agents</span>
+                  <SegmentedControl
+                    size="sm"
+                    semantics="radio"
+                    label={`Row ${index + 1} nested agents`}
+                    value={draft.capChildren === false ? 'all' : 'cap'}
+                    onChange={next => setRowCap(index, next === 'cap')}
+                    options={[
+                      { value: 'all', label: 'Show All' },
+                      { value: 'cap', label: 'Cap' },
+                    ]}
+                  />
                 </div>
               </>
             )}
@@ -311,7 +317,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
               onClick={addRow}
               disabled={rows.length >= MAX_DISPATCH_ROWS || remaining < MIN_DISPATCH_TILES}
             >
-              + Add row
+              + Add Row
             </Button>
             {/* Steppers and Add row disable at the ceiling rather than
                 accepting input and clamping it silently, so the limit is
@@ -322,14 +328,11 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
           </div>
         </div>
 
-        <DialogFooter>
-          <Button type="button" onClick={onClose} variant="ghost">
-            Cancel
-          </Button>
-          <Button type="button" onClick={commit}>
-            Apply
-          </Button>
-        </DialogFooter>
+        {/* Enter applies from a number field (onInputKeyDown above), which
+            is why Apply carries ↩ while DialogActions does NOT wire Enter
+            itself: a dialog-level Enter would also fire from the row-remove
+            and Add Row buttons (see onInputKeyDown's note). */}
+        <DialogActions confirmLabel="Apply" onConfirm={commit} onCancel={onClose} confirmOnEnter={false} />
       </DialogContent>
     </Dialog>
   )

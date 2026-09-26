@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { buttonVariants } from '@renderer/components/ui/button'
 import type { ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -1024,7 +1025,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // explorer pointed at nowhere.
   const leftPercent = (splitterRatio * 100).toFixed(2)
   const rightPercent = ((1 - splitterRatio) * 100).toFixed(2)
-  const toolbarButtonClass = 'rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink'
+  // These sit in EditorTabs' action strip right after Save / Save All, which
+  // are ghost xs Buttons (G-9). They were a hand-rolled class with their own
+  // padding and no height, so one strip had two button sizes (ledger G-30).
+  // The variant's class string, not <Button>, so all four toolbar buttons
+  // keep sharing one constant.
+  const toolbarButtonClass = buttonVariants({ variant: 'ghost', size: 'xs', className: 'text-muted' })
   const editorToolbarActions = (
     <>
       <button

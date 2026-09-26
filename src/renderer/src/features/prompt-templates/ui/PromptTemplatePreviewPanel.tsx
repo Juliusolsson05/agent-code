@@ -80,7 +80,7 @@ export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPan
         */}
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1 break-words text-[13px] text-ink">{template.title}</div>
-          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+          <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-muted">
             {template.scope}
           </span>
         </div>

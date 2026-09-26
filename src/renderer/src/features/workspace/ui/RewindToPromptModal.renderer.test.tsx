@@ -54,8 +54,35 @@ describe('Rewind to Prompt modal', () => {
     await waitFor(() => { expect(screen.getByText('Refactor the queue')).toBeInTheDocument() })
     expect(listRewindPrompts).toHaveBeenCalledWith(expect.objectContaining({ sourceProviderSessionId: 'provider-target' }))
     // …and rewound on the TARGET.
-    fireEvent.click(screen.getByRole('button', { name: 'Rewind here' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Rewind Here' }))
     await waitFor(() => { expect(rewindSessionToPrompt).toHaveBeenCalledWith(TARGET, prompt.address) })
     expect(rewindFocusedToPrompt).not.toHaveBeenCalled()
   })
+
+  it('moves focus to the listbox once prompts load, and End + Enter rewinds the oldest prompt', async () => {
+    // Plan S7: the shared list keys, and the listbox (not the scroller) as
+    // the focus owner even though it only appears after the async load.
+    const recorded = loadRecordedDispatchWorkspace().state
+    const state = {
+      ...recorded,
+      sessions: { ...recorded.sessions, [TARGET]: { ...recorded.sessions[TARGET]!, providerSessionId: 'provider-target' } },
+    }
+    const prompts: RewindPrompt[] = ['newest', 'middle', 'oldest'].map((text, index) => ({
+      address: { provider: 'claude', line: 10 + index, sessionId: 'provider-target', uuid: `u${index}` },
+      text,
+      timestamp: '2026-09-24T10:00:00.000Z',
+    }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { listRewindPrompts: vi.fn(async () => prompts) } })
+    const rewindSessionToPrompt = vi.fn(async () => ({ status: 'completed' }))
+    const workspace = { state, rewindSessionToPrompt } as unknown as Workspace
+
+    render(<RewindToPromptModal open sessionId={TARGET} workspace={workspace} onClose={vi.fn()} />)
+
+    const listbox = await screen.findByRole('listbox')
+    await waitFor(() => { expect(document.activeElement).toBe(listbox) })
+    fireEvent.keyDown(listbox, { key: 'End' })
+    fireEvent.keyDown(listbox, { key: 'Enter' })
+    await waitFor(() => { expect(rewindSessionToPrompt).toHaveBeenCalledWith(TARGET, prompts[2]!.address) })
+  })
 })
+

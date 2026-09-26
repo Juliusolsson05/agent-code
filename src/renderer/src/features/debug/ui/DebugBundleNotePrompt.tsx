@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Label } from '@renderer/components/ui/label'
 import { Textarea } from '@renderer/components/ui/textarea'
 
@@ -48,14 +48,28 @@ export function DebugBundleNotePrompt({
     setNote('')
   }, [open, bundlePath])
 
+  // A typed note is REAL input (B7's condition on plan D3): Skip, Escape and
+  // an outside click all route here, and with text in the box they ask
+  // before throwing it away. An empty note skips at once — asking then would
+  // be a speed bump on the common "no note" path.
+  const skip = async () => {
+    if (note.trim() && !(await requestConfirm({
+      title: 'Discard this note?',
+      description: 'The bundle stays saved; only the note is lost.',
+      confirmLabel: 'Discard Note',
+      tone: 'danger',
+    }))) return
+    onCancel()
+  }
+
   return (
     <Dialog
       open={open}
       onOpenChange={nextOpen => {
-        if (!nextOpen) onCancel()
+        if (!nextOpen) void skip()
       }}
     >
-      <DialogContent className="w-[min(560px,92vw)]">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{heading}</DialogTitle>
           <DialogDescription asChild>
@@ -66,7 +80,7 @@ export function DebugBundleNotePrompt({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="px-4 py-4">
+        <div className="px-4 py-3">
           <Label htmlFor="debug-bundle-note" className="mb-2 block">
             {fieldLabel}
           </Label>
@@ -76,12 +90,9 @@ export function DebugBundleNotePrompt({
             rows={4}
             value={note}
             onChange={e => setNote(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault()
-                onConfirm(note)
-              }
-            }}
+            // ⌘↩ saves — wired by DialogActions' confirmKey below (it was a
+            // hand-rolled handler here, the drift DialogActions' header
+            // records). Plain Enter stays a newline.
             className="min-h-0 resize-none bg-canvas"
             placeholder={placeholder}
           />
@@ -92,21 +103,18 @@ export function DebugBundleNotePrompt({
           ) : null}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            onClick={onCancel}
-            variant="outline"
-          >
-            Skip
-          </Button>
-          <Button
-            type="button"
-            onClick={() => onConfirm(note)}
-          >
-            Save Note
-          </Button>
-        </DialogFooter>
+        {/* WHY "Skip" and not the house "Cancel": the bundle is ALREADY saved
+            when this opens; this button declines only the note. "Cancel"
+            would read as "don't save the bundle", which is not what happens
+            (DialogActions' header lists "Skip" as drift — that was about
+            labels naming a key; this one names the real action). */}
+        <DialogActions
+          confirmLabel="Save Note"
+          confirmKey="Cmd+Enter"
+          onConfirm={() => onConfirm(note)}
+          onCancel={() => void skip()}
+          cancelLabel="Skip"
+        />
       </DialogContent>
     </Dialog>
   )

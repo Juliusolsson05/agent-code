@@ -142,7 +142,7 @@ describe('Agent Activity', () => {
   it('leaves Enter on a focused footer button to the button', async () => {
     const { workspace, list } = await openView()
     fireEvent.keyDown(list, { key: ' ' })
-    const button = screen.getByRole('button', { name: 'Close 1 selected' })
+    const button = screen.getByRole('button', { name: 'Close 1 Selected' })
     fireEvent.keyDown(button, { key: 'Enter' })
     // Not intercepted as "open the highlighted agent".
     expect(workspace.focusAgentBySessionId).not.toHaveBeenCalled()
@@ -165,7 +165,7 @@ describe('Agent Activity', () => {
   it('turns a typed letter into a filter, and typing there never selects or closes', async () => {
     const { workspace, list } = await openView()
     fireEvent.keyDown(list, { key: 'o' })
-    const filter = screen.getByRole('textbox', { name: 'Filter agents' })
+    const filter = screen.getByRole('combobox', { name: 'Filter agents' })
     expect(filter).toHaveFocus()
     expect(filter).toHaveValue('o')
     fireEvent.change(filter, { target: { value: 'other repo' } })
@@ -183,7 +183,7 @@ describe('Agent Activity', () => {
     fireEvent.keyDown(list, { key: 'ArrowDown' })
     fireEvent.keyDown(list, { key: ' ' }) // idle-old
     fireEvent.keyDown(list, { key: 'o' })
-    const filter = screen.getByRole('textbox', { name: 'Filter agents' })
+    const filter = screen.getByRole('combobox', { name: 'Filter agents' })
     fireEvent.change(filter, { target: { value: 'other' } })
     // Tab, not list.focus(): the keyboard path back to the list with the
     // query kept is the thing under test (review of #1105).
@@ -200,7 +200,7 @@ describe('Agent Activity', () => {
   it('Esc in the filter clears it without dismissing the view', async () => {
     const { onClose, list } = await openView()
     fireEvent.keyDown(list, { key: 'o' })
-    const filter = screen.getByRole('textbox', { name: 'Filter agents' })
+    const filter = screen.getByRole('combobox', { name: 'Filter agents' })
     fireEvent.keyDown(filter, { key: 'Escape' })
     expect(filter).toHaveValue('')
     expect(onClose).not.toHaveBeenCalled()
@@ -214,4 +214,37 @@ describe('Agent Activity', () => {
     expect(workspace.focusAgentBySessionId).toHaveBeenCalledWith('busy')
     expect(onClose).toHaveBeenCalled()
   })
+
+  // Plan S21: the movement keys the rest of the app has, the listbox as the
+  // focus owner with an announced active row, and chips instead of prose.
+  it('opens focused on the listbox that announces the highlighted agent', async () => {
+    const onClose = vi.fn()
+    render(<AgentActivityView open workspace={fleet()} onClose={onClose} />)
+    await act(async () => { await Promise.resolve() })
+    const list = screen.getByRole('listbox', { name: 'Agents' })
+    expect(document.activeElement).toBe(list)
+    expect(list).toHaveAttribute('aria-activedescendant', 'agent-activity-row-asking')
+  })
+
+  it('jumps with End/Home from the list and opens the jumped-to agent on Enter', async () => {
+    const { workspace, list } = await openView()
+    fireEvent.keyDown(list, { key: 'End' })
+    expect(list).toHaveAttribute('aria-activedescendant', 'agent-activity-row-idle-new')
+    fireEvent.keyDown(list, { key: 'Home' })
+    expect(list).toHaveAttribute('aria-activedescendant', 'agent-activity-row-asking')
+    fireEvent.keyDown(list, { key: 'PageDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(workspace.focusAgentBySessionId).toHaveBeenCalledWith('idle-new')
+  })
+
+  it('shows the keys as a chip legend and closes from Close ⎋', async () => {
+    const { onClose } = await openView()
+    expect(screen.queryByText(/Enter open · Space select/)).toBeNull()
+    expect(document.querySelector('[data-slot="kbd-legend"]')).not.toBeNull()
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    fireEvent.click(close)
+    expect(onClose).toHaveBeenCalled()
+  })
 })
+

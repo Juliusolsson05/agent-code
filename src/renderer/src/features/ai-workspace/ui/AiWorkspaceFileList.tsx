@@ -1,4 +1,9 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useState } from 'react'
+import { Alert } from '@renderer/components/ui/alert'
+
+import { Button } from '@renderer/components/ui/button'
+import { PanelHeader } from '@renderer/components/ui/panel-header'
 
 import type { AiWorkspaceFileEntry } from '@mcp/shared/aiWorkspaceTypes'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
@@ -51,59 +56,47 @@ export function AiWorkspaceFileList({
   const [deleteArmed, setDeleteArmed] = useState(false)
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-r border-border bg-surface font-code text-[12px]">
-      <div className="flex h-8 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted">
-        {/* Model-authored, and the header's two-click Delete acts on it
-            (#1049 re-review). */}
-        <span className="min-w-0 flex-1 truncate">{withVisibleControls(title)}</span>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <button
-            type="button"
-            aria-label="Refresh AI Workspace files"
-            title="Refresh AI Workspace files"
-            onClick={onRefresh}
-            className="text-muted hover:text-ink"
-          >
-            refresh
-          </button>
-          <button
-            type="button"
-            aria-label={deleteArmed ? 'Confirm delete AI Workspace' : 'Delete AI Workspace'}
-            title="Delete AI Workspace metadata (files stay on disk)"
-            onClick={() => {
-              if (deleteArmed) onDeleteWorkspace()
-              else setDeleteArmed(true)
-            }}
-            onBlur={() => setDeleteArmed(false)}
-            className={deleteArmed ? 'text-danger' : 'text-muted hover:text-danger'}
-          >
-            {deleteArmed ? 'confirm' : 'delete'}
-          </button>
-          <button
-            type="button"
-            aria-label="Close AI Workspace"
-            title="Close AI Workspace"
-            onClick={onClose}
-            className="rounded-control border border-border bg-surface-hi px-1.5 py-0.5 text-muted hover:border-accent hover:text-ink"
-          >
-            close
-          </button>
-        </div>
-      </div>
+      {/* The shared side-panel header (UI pass, G-26). The title is
+          model-authored, and the two-click Delete acts on it (#1049
+          re-review), so it stays visible as the header's second line. */}
+      <PanelHeader
+        label="AI Workspace"
+        title={withVisibleControls(title)}
+        onClose={onClose}
+        closeLabel="Close AI Workspace"
+        actions={
+          <>
+            <Button type="button" variant="ghost" size="xs" aria-label="Refresh AI Workspace files" onClick={onRefresh}>
+              Refresh
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              aria-label={deleteArmed ? 'Confirm delete AI Workspace' : 'Delete AI Workspace'}
+              title="Delete AI Workspace metadata (files stay on disk)"
+              onClick={() => {
+                if (deleteArmed) onDeleteWorkspace()
+                else setDeleteArmed(true)
+              }}
+              onBlur={() => setDeleteArmed(false)}
+              className={deleteArmed ? 'text-danger' : 'hover:text-danger'}
+            >
+              {deleteArmed ? 'Confirm Delete' : 'Delete'}
+            </Button>
+          </>
+        }
+      />
       <div className="min-h-0 flex-1 overflow-auto py-1">
         {error ? (
-          <div
-            role="alert"
-            className="rounded-slab mx-2 mb-1 border border-danger/40 bg-danger/10 px-2 py-1 text-danger"
-          >
-            {error}
-          </div>
+          <Alert className="mx-2 mb-1">{error}</Alert>
         ) : null}
         {loading ? (
           <div role="status" aria-live="polite" className="px-2 py-1 text-muted">
             Loading AI Workspace…
           </div>
         ) : entries.length === 0 ? (
-          <div className="px-2 py-1 text-muted">No files attached.</div>
+          <EmptyState size="inline" className="px-2 py-1">No files attached.</EmptyState>
         ) : (
           entries.map(entry => {
             const stale = !entry.status.exists || !entry.status.readable
@@ -123,7 +116,7 @@ export function AiWorkspaceFileList({
                     ? 'bg-accent-soft text-ink'
                     : stale
                       ? 'text-muted opacity-70'
-                      : 'text-ink-dim hover:bg-surface-hi hover:text-ink'
+                      : 'text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                 }`}
               >
                 <button

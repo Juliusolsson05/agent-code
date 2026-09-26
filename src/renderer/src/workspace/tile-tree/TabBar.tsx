@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useShallow } from 'zustand/react/shallow'
 
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import { useCommandChordLabel, withChord } from '@renderer/features/command-keybindings/useCommandChord'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // TabBar — one row of tab chrome at the top of the window. Each tab has
@@ -24,6 +25,37 @@ type Props = {
 
 export function TabBar({ workspace, onNewTabRequest }: Props) {
   const { state, activateTab, closeTab } = workspace
+  const newTabChord = useCommandChordLabel('new-tab')
+  const closeTabChord = useCommandChordLabel('close-tab')
+  // KEYBOARD (plan N1): the strip is a WAI-ARIA tablist with roving focus,
+  // like the editor's tabs. One Tab stop (the active tab); ←/→ and Home/End
+  // move AND activate (switching project is instant and reversible — the
+  // APG "automatic activation" case); Delete closes the focused tab. Before,
+  // each tab was a `div onClick` with no role and no tabIndex: the only
+  // keyboard route was ⌘[ / ⌘] / ⌘⇧W, and nothing announced the tabs.
+  const tabRefs = useRef(new Map<string, HTMLDivElement>())
+  const onTabListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const tabs = state.tabs
+    if (tabs.length === 0) return
+    const index = Math.max(0, tabs.findIndex(tab => tab.id === state.activeTabId))
+    if (event.key === 'Delete') {
+      event.preventDefault()
+      const tab = tabs[index]
+      if (tab) void closeTab(tab.id)
+      return
+    }
+    const next =
+      event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length
+          : event.key === 'Home' ? 0
+            : event.key === 'End' ? tabs.length - 1
+              : null
+    if (next === null) return
+    event.preventDefault()
+    const tab = tabs[next]!
+    activateTab(tab.id)
+    tabRefs.current.get(tab.id)?.focus()
+  }
   // Only the running flags affect tab counts. Text, spinner, draft and debug
   // mutations must not render all tab buttons merely because their map changed.
   const runningIds = useAppStore(useShallow(store => Object.keys(store.workspaceRuntimes)
@@ -65,6 +97,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
           inherited from the bar; each tab/button opts out individually,
           which is exactly the Chrome tab-strip behavior users expect. */}
       <div className="flex items-stretch flex-1 min-w-0">
+        <div className="flex items-stretch min-w-0" role="tablist" aria-label="Project tabs" onKeyDown={onTabListKeyDown}>
         {state.tabs.map(tab => {
           const active = tab.id === state.activeTabId
           // Derive active/total pane counts from the tile tree +
@@ -77,8 +110,23 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
           return (
             <div
               key={tab.id}
+              ref={element => {
+                if (element) tabRefs.current.set(tab.id, element)
+                else tabRefs.current.delete(tab.id)
+              }}
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
               onClick={() => activateTab(tab.id)}
+              onKeyDown={event => {
+                // A div, so Enter/Space are not native activation here.
+                if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget) {
+                  event.preventDefault()
+                  activateTab(tab.id)
+                }
+              }}
               className={`
+                outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring
                 group
                 flex items-center gap-2
                 px-3 py-2
@@ -108,22 +156,29 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
               <span
                 className={`
                   flex-shrink-0 rounded-chip
-                  text-[9px] font-code font-semibold tabular-nums
+                  text-[10px] font-code font-semibold tabular-nums
                   px-1.5 py-0.5 leading-none
                   ${allDone ? 'bg-danger text-danger-fg' : 'bg-success text-success-fg'}
                 `}
               >
                 {alive}/{total}
               </span>
+              {/* Mouse affordance; the keyboard closes with Delete on the
+                  focused tab, so this stays out of the Tab order (a second
+                  stop per tab would double the strip's stops). Revealed on
+                  keyboard focus too (it appeared on hover only), and named
+                  for its tab. */}
               <button
                 type="button"
-                title="Close tab"
+                tabIndex={-1}
+                title={withChord('Close Tab', closeTabChord)}
+                aria-label={`Close ${tab.title}`}
                 onClick={e => {
                   e.stopPropagation()
                   void closeTab(tab.id)
                 }}
                 className="
-                  opacity-0 group-hover:opacity-100
+                  opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
                   transition-opacity duration-120
                   w-4 h-4 flex items-center justify-center rounded-control
                   text-muted hover:text-ink hover:bg-border
@@ -135,19 +190,23 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
             </div>
           )
         })}
+        </div>
 
         {/* + button */}
         <button
           type="button"
           onClick={onNewTabRequest}
-          title="New tab (⌘T)"
+          // Live chord (plan H4): a literal "(⌘T)" outlived any rebind.
+          title={withChord('New Tab', newTabChord)}
+          aria-label="New Tab"
           className="
             flex items-center justify-center
             w-8 flex-shrink-0
             border-r border-border
-            text-muted hover:text-ink hover:bg-surface-hi
+            text-muted hover:text-ink hover:bg-control-hover-bg
             text-[14px] leading-none
             transition-colors duration-120
+            outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring
             [-webkit-app-region:no-drag]
           "
         >

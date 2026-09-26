@@ -1,4 +1,5 @@
 import type { Entry } from '@shared/types/transcript'
+import { codexRolloutIdentity } from '@shared/codex/rolloutIdentity'
 import { asRecord } from '@shared/lib/asRecord'
 
 import {
@@ -258,8 +259,10 @@ export function stampCodexTurnId(entry: Entry, turnId: string | null): Entry {
 
 export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   const payload = asRecord(entry.payload)
-  const uuid =
-    `${String(entry.timestamp ?? Date.now())}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
+  // Shared with the marker below and main's history loader (#1288): the old
+  // `ts:id|call_id|type` rule collided for a call and its output, and for
+  // id-less items, and admission silently dropped the second.
+  const uuid = codexRolloutIdentity(entry)
   const timestamp =
     typeof entry.timestamp === 'string' ? entry.timestamp : undefined
 
@@ -607,11 +610,9 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   return []
 }
 
-/** Build the history marker for a Codex rollout entry. The format is
- *  `<timestamp>:<payload.id|call_id|type|entry.type>` — mirrors the
- *  uuid used by mapCodexRolloutToFeedEntries so the older-history
- *  loader and the dedup path see the same identity. */
+/** The history marker for a Codex rollout entry: the same identity as the
+ *  entry uuid, from the one shared rule (see codexRolloutIdentity), so the
+ *  older-history loader and the dedupe path cannot disagree. */
 export function codexHistoryMarker(entry: Record<string, unknown>): string {
-  const payload = asRecord(entry.payload)
-  return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
+  return codexRolloutIdentity(entry)
 }

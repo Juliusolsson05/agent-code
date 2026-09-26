@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { ConditionOptionList } from '@providers/shared/renderer/conditions/ConditionOptionList'
 
 // CodexApprovalPane — inline approval prompt rendered inside the pane,
 // matching how Codex's TUI draws it in the bottom pane.
@@ -38,7 +39,10 @@ const DEFAULT_OPTIONS = [
   'No, and tell Codex what to do differently',
 ]
 
-const DEFAULT_HINTS = ['y', 'p', 'esc']
+// Canonical bindings, shown as chips on the rows. They are the keys the strip's
+// handler below forwards (y → Enter, p, Escape/n), so a chip never names a
+// key that does nothing.
+const DEFAULT_HINTS = ['Y', 'P', 'Escape']
 
 // Map selected option index → PTY keystroke.
 // Index 0 = Enter (confirm default), 1 = 'p', 2 = Esc.
@@ -46,7 +50,9 @@ const OPTION_KEYS = ['\r', 'p', '\x1b']
 
 export function CodexApprovalModal({ approval, onSend, interactionActive }: Props) {
   const [localSelected, setLocalSelected] = useState(0)
-  const stripRef = useRef<HTMLDivElement>(null)
+  // The option LIST is the focus owner (aria-activedescendant); its keys
+  // bubble to the strip's handler below.
+  const listRef = useRef<HTMLDivElement>(null)
   const interactionActiveRef = useRef(interactionActive)
   interactionActiveRef.current = interactionActive
 
@@ -80,7 +86,7 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
   useEffect(() => {
     if (!approval || !interactionActive) return
     const frame = requestAnimationFrame(() => {
-      if (interactionActiveRef.current) stripRef.current?.focus()
+      if (interactionActiveRef.current) listRef.current?.focus()
     })
     return () => cancelAnimationFrame(frame)
     // Provider snapshots rebuild `approval` as a fresh object. Key on the
@@ -100,8 +106,6 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
 
   return (
     <div
-      ref={stripRef}
-      tabIndex={-1}
       role="group"
       aria-label="Codex command approval options"
       onKeyDown={e => {
@@ -135,7 +139,6 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
       bg-surface
       px-5 py-3
       font-code text-[12px] leading-[1.65]
-      outline-none
     ">
       {/* Title */}
       <div className="text-ink font-semibold mb-2">
@@ -161,26 +164,14 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
           and option text come from the screen parser so dynamic labels
           (like "don't ask again for commands that start with `git add`")
           render correctly. */}
-      <div className="flex flex-col gap-0.5 mb-2">
-        {options.map((opt, i) => (
-          <div
-            key={i}
-            className={`cursor-pointer ${i === localSelected ? 'text-ink' : 'text-ink-dim'}`}
-            onClick={() => { setLocalSelected(i); void onSend(OPTION_KEYS[i] ?? '\r') }}
-          >
-            <span className={`select-none ${i === localSelected ? 'text-accent' : 'text-transparent'}`}>
-              ›{' '}
-            </span>
-            {i + 1}. {withVisibleControls(opt)}
-            <span className="text-muted ml-1">({DEFAULT_HINTS[i] ?? ''})</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Footer hint */}
-      <div className="text-muted text-[10px]">
-        Press enter to confirm or esc to cancel
-      </div>
+      <ConditionOptionList
+        ref={listRef}
+        label="Approval choices"
+        marker="›"
+        options={options.map((label, i) => ({ label: withVisibleControls(label), shortcut: DEFAULT_HINTS[i] }))}
+        selectedIndex={localSelected}
+        onChoose={i => { setLocalSelected(i); void onSend(OPTION_KEYS[i] ?? '\r') }}
+      />
     </div>
   )
 }

@@ -61,7 +61,7 @@ describe('one ordered extension catalog per window', () => {
     render(<AppsSettingsRow />)
     expect(await screen.findByRole('alert')).toHaveTextContent('read failed')
     expect(screen.queryByText('No extensions installed.')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry loading extensions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Loading Extensions' }))
     expect(await screen.findByText('Timer')).toBeTruthy()
     expect(useAppStore.getState().installedExtensionsError).toBeNull()
   })

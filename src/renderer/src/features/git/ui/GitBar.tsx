@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { PanelHeader } from '@renderer/components/ui/panel-header'
+import { SectionLabel } from '@renderer/components/ui/section-label'
 // Shared GitBar contract — the SAME type the main handler returns and the
 // preload bridge re-exports. Deriving the renderer's view shapes from it means
 // a field change in `git:status` is a compile error in this component instead
@@ -87,29 +89,15 @@ export function GitBar({ cwd, onClose }: Props) {
       overflow-hidden
       text-[11px] font-code
     ">
-      {/* Header */}
-      <div className="
-        flex items-center justify-between
-        px-3 py-2
-        border-b border-border
-        text-[10px] text-muted uppercase tracking-wider
-        select-none flex-shrink-0
-      ">
-        <span>git</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-muted hover:text-ink text-[14px] leading-none"
-        >
-          ×
-        </button>
-      </div>
+      {/* The shared side-panel header (UI pass, G-26). Its close had no
+          accessible name and no focus style. */}
+      <PanelHeader label="Git" onClose={onClose} />
 
       {error && (
         <div className="px-3 py-4 text-muted text-center">
           {error === 'git-missing'
-            ? 'git not found — Git features disabled'
-            : 'not a git repository'}
+            ? 'Git not found — Git features are disabled.'
+            : 'Not a Git repository.'}
         </div>
       )}
 
@@ -117,21 +105,21 @@ export function GitBar({ cwd, onClose }: Props) {
         <div className="flex-1 overflow-y-auto">
           {/* Branch */}
           <div className="px-3 py-2 border-b border-border">
-            <span className="text-muted">branch </span>
+            <span className="text-muted">Branch </span>
             <span className="text-accent">{data.branch}</span>
           </div>
 
           {/* Diff summary */}
           {data.files.length > 0 && (
             <div className="border-b border-border">
-              <div className="px-3 py-1.5 text-[10px] text-muted uppercase tracking-wider select-none">
-                changes
+              <SectionLabel className="px-3 py-1.5">
+                Changes
                 <span className="ml-2 normal-case tracking-normal">
                   <span className="text-diff-add-fg">+{totalAdd}</span>
                   {' '}
                   <span className="text-diff-remove-fg">-{totalDel}</span>
                 </span>
-              </div>
+              </SectionLabel>
               <div className="flex flex-col">
                 {data.files.map(f => (
                   <div
@@ -139,7 +127,7 @@ export function GitBar({ cwd, onClose }: Props) {
                     className="
                       flex items-center gap-2
                       px-3 py-0.5
-                      hover:bg-surface-hi
+                      hover:bg-row-hover-bg
                     "
                   >
                     <span className="flex-1 min-w-0 truncate text-ink-dim" title={f.file}>
@@ -170,9 +158,7 @@ export function GitBar({ cwd, onClose }: Props) {
               submodule with a large diff doesn't dominate the bar. */}
           {data.submodules && data.submodules.length > 0 && (
             <div className="border-b border-border">
-              <div className="px-3 py-1.5 text-[10px] text-muted uppercase tracking-wider select-none">
-                submodules
-              </div>
+              <SectionLabel className="px-3 py-1.5">Submodules</SectionLabel>
               <div className="flex flex-col">
                 {data.submodules.map(s => (
                   <SubmoduleRow key={s.path} sub={s} />
@@ -184,14 +170,12 @@ export function GitBar({ cwd, onClose }: Props) {
           {/* Recent commits */}
           {data.commits.length > 0 && (
             <div>
-              <div className="px-3 py-1.5 text-[10px] text-muted uppercase tracking-wider select-none">
-                recent commits
-              </div>
+              <SectionLabel className="px-3 py-1.5">Recent Commits</SectionLabel>
               <div className="flex flex-col">
                 {data.commits.map(c => (
                   <div
                     key={c.hash}
-                    className="px-3 py-1 hover:bg-surface-hi"
+                    className="px-3 py-1 hover:bg-row-hover-bg"
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-accent flex-shrink-0">{c.hash}</span>
@@ -238,9 +222,9 @@ function SubmoduleRow({ sub }: { sub: GitSubmodule }) {
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-2 px-3 py-1 text-left hover:bg-surface-hi"
+        className="flex items-center gap-2 px-3 py-1 text-left hover:bg-row-hover-bg"
       >
-        <span className="text-muted w-2 text-[9px] tabular-nums select-none">
+        <span className="text-muted w-2 text-[10px] tabular-nums select-none">
           {open ? '▾' : '▸'}
         </span>
         <span
@@ -249,7 +233,7 @@ function SubmoduleRow({ sub }: { sub: GitSubmodule }) {
         >
           {sub.path}
         </span>
-        <span className="text-[9px] text-muted uppercase tracking-wider whitespace-nowrap">
+        <span className="text-[10px] text-muted uppercase tracking-wider whitespace-nowrap">
           {chipText}
         </span>
         <span className="flex-shrink-0 tabular-nums">
@@ -260,7 +244,7 @@ function SubmoduleRow({ sub }: { sub: GitSubmodule }) {
       </button>
 
       {open && sub.range && (
-        <div className="px-3 pb-0.5 text-[9px] text-muted tabular-nums select-none">
+        <div className="px-3 pb-0.5 text-[10px] text-muted tabular-nums select-none">
           {sub.range.from} → {sub.range.to}
         </div>
       )}
@@ -270,7 +254,7 @@ function SubmoduleRow({ sub }: { sub: GitSubmodule }) {
           {sub.files.map(f => (
             <div
               key={f.file}
-              className="flex items-center gap-2 px-6 py-0.5 hover:bg-surface-hi"
+              className="flex items-center gap-2 px-6 py-0.5 hover:bg-row-hover-bg"
             >
               <span className="flex-1 min-w-0 truncate text-ink-dim" title={f.file}>
                 {shortenPath(f.file)}

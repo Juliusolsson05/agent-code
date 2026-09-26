@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Input } from '@renderer/components/ui/input'
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import {
@@ -7,6 +9,9 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { Kbd, KbdLegend } from '@renderer/components/ui/kbd'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cn } from '@renderer/lib/utils'
 import { providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
@@ -101,7 +106,8 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
     setQuery('')
     setSelected(new Set())
     setHighlighted(null)
-    requestAnimationFrame(() => listRef.current?.focus())
+    // (Initial focus moved to DialogContent's onOpenAutoFocus — the rAF here
+    // raced Radix's own mount focus.)
   }, [open])
 
   // Which sessions the notes are read for. Closed → none, so a closed view
@@ -212,12 +218,16 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
     })
   }, [])
 
+  // Clamped (plan D4: lists clamp). Deltas of ±rows.length are Home/End.
   const move = useCallback((delta: number) => {
     if (rows.length === 0) return
     const index = highlightedRow ? rows.indexOf(highlightedRow) : -1
     const next = rows[Math.min(rows.length - 1, Math.max(0, index + delta))]
     if (next) setHighlighted(next.sessionId)
   }, [highlightedRow, rows])
+  // Rows per PageUp/PageDown. A constant, like useListNavigation's default:
+  // measuring the viewport would couple the key to layout for no user gain.
+  const PAGE = 10
 
   const onListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     // A focused button (the footer's "Close N selected") keeps its native
@@ -233,9 +243,26 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
       listRef.current?.focus()
       return
     }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    // Movement (plan K5): ↑↓ and ⌃N/⌃P everywhere, PgUp/PgDn everywhere,
+    // Home/End only from the list — in the filter they move the caret. This
+    // view keeps its own handler instead of useListNavigation because it
+    // layers type-to-filter, Tab-from-filter, Space, ⌘A and ⌫ on the same
+    // keydown, and its highlight is already a SESSION id (the reason
+    // useListNavigation grew `keys`); the movement rules are the same.
+    const ctrlOnly = event.ctrlKey && !event.metaKey && !event.altKey
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || (ctrlOnly && (event.key === 'n' || event.key === 'p'))) {
       event.preventDefault()
-      move(event.key === 'ArrowDown' ? 1 : -1)
+      move(event.key === 'ArrowDown' || event.key === 'n' ? 1 : -1)
+      return
+    }
+    if (event.key === 'PageDown' || event.key === 'PageUp') {
+      event.preventDefault()
+      move(event.key === 'PageDown' ? PAGE : -PAGE)
+      return
+    }
+    if (!inFilter && (event.key === 'Home' || event.key === 'End')) {
+      event.preventDefault()
+      move(event.key === 'End' ? rows.length : -rows.length)
       return
     }
     if (event.key === 'Enter') {
@@ -278,17 +305,30 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
       <DialogContent
         // A FIXED height (not max-h), so the dialog does not jump in size as
         // the filter narrows the list or agents change section while it is
-        // open. 960px fits name, goal, project and state on one row; the
-        // vh/vw caps keep it a modal on a small window. Positioning, surface
-        // and border are the primitive's own (#1189).
+        // open. 960px fits name, goal, project and state on one row — a
+        // deliberate width outside the presets (plan T2), kept with this WHY;
+        // the vh/vw caps keep it a modal on a small window. Positioning,
+        // surface and border are the primitive's own (#1189).
         className="flex h-[min(760px,86vh)] w-[min(960px,94vw)] flex-col overflow-hidden"
         onKeyDown={onListKeyDown}
+        onOpenAutoFocus={event => {
+          // The listbox is the focus owner of the highlight (focus-owner
+          // invariant, useListNavigation).
+          event.preventDefault()
+          listRef.current?.focus()
+        }}
         onEscapeKeyDown={event => {
           // The first Esc leaves the filter, the second dismisses. One Esc
           // throwing the whole view away because the user wanted to clear what
           // they typed would be the surprise. Handled HERE and not in the
           // keydown handler: Radix listens for Escape on the document, so a
           // React stopPropagation arrives too late to stop the close.
+          //
+          // A RECORDED EXCEPTION to plan decision D3 ("one Escape closes"):
+          // here ANY printable key on the list jumps into the filter
+          // (type-to-filter), so text can land in it without the user ever
+          // choosing the field — Esc-clears-first is the undo for that. Other
+          // dialogs' filters are fields the user deliberately focused.
           if (document.activeElement !== filterRef.current) return
           event.preventDefault()
           setQuery('')
@@ -296,31 +336,42 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
         }}
         aria-describedby="agent-activity-summary"
       >
-        <header className="flex-shrink-0 border-b border-border px-4 pb-3 pt-4">
+        {/* Standard header rhythm (plan T3/T5): px-4 py-3, 13px title — it
+            was pt-4 pb-3 with a 15px title, the one dialog that did. */}
+        <header className="flex-shrink-0 border-b border-border px-4 py-3">
           <div className="flex items-baseline justify-between gap-4">
-            <DialogTitle className="text-[15px]">Agent Activity</DialogTitle>
-            <DialogDescription id="agent-activity-summary" className="text-[12px] text-muted">
+            <DialogTitle>Agent Activity</DialogTitle>
+            <DialogDescription id="agent-activity-summary" className="mt-0 text-[11px] text-muted">
               {counts['needs-you']} need you · {counts.working} working · {counts.idle} idle
               {counts.exited > 0 ? ` · ${counts.exited} exited` : ''}
             </DialogDescription>
           </div>
-          <input
+          <Input
             ref={filterRef}
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="Type to filter by name, goal, project or provider"
+            placeholder="Type to filter by name, goal, project or provider…"
             aria-label="Filter agents"
-            className="mt-3 w-full rounded-control border border-border bg-surface px-3 py-1.5 text-[13px] text-ink outline-none placeholder:text-muted focus:border-focus-ring"
+            // While the filter has focus the arrows still move the highlight,
+            // so it is a combobox that carries the active descendant.
+            role="combobox"
+            aria-expanded
+            aria-controls="agent-activity-listbox"
+            aria-activedescendant={highlightedRow ? activityRowId(highlightedRow.sessionId) : undefined}
+            className="mt-3"
           />
         </header>
 
         <div
           ref={listRef}
-          tabIndex={-1}
+          id="agent-activity-listbox"
+          // A Tab stop (plan K4, was -1) and the focus owner of the highlight.
+          tabIndex={0}
           role="listbox"
           aria-label="Agents"
           aria-multiselectable="true"
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-2 outline-none"
+          aria-activedescendant={highlightedRow ? activityRowId(highlightedRow.sessionId) : undefined}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         >
           {sections.map(({ section, rows: sectionRows }) => {
             if (sectionRows.length === 0 && section !== 'needs-you') return null
@@ -332,7 +383,8 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
               <section key={section} role="group" aria-label={SECTION_TITLES[section]} className="mb-4">
                 <div className="sticky top-0 z-10 flex items-center justify-between bg-surface py-1.5">
                   <h3 className={cn(
-                    'text-[11px] font-medium uppercase tracking-wider',
+                    // The canonical section label (10px, tracking-wider, no weight: G-15).
+                    'text-[10px] uppercase tracking-wider',
                     section === 'needs-you' && sectionRows.length > 0 ? 'text-warning' : 'text-muted',
                   )}>
                     {SECTION_TITLES[section]} <span className="tabular-nums">{sectionRows.length}</span>
@@ -345,7 +397,7 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
                       onClick={() => selectSection(sectionRows)}
                       className="text-[11px] text-ink-dim hover:text-ink"
                     >
-                      {sectionRows.every(row => selected.has(row.sessionId)) ? 'Unselect all' : 'Select all'}
+                      {sectionRows.every(row => selected.has(row.sessionId)) ? 'Unselect All' : 'Select All'}
                     </button>
                   )}
                 </div>
@@ -369,22 +421,36 @@ export function AgentActivityView({ open, workspace, onClose }: Props) {
             )
           })}
           {rows.length === 0 && query && (
-            <div className="py-8 text-center text-[12px] text-muted">No agent matches “{query}”.</div>
+            <EmptyState role="status">No agent matches “{query}”.</EmptyState>
           )}
         </div>
 
-        <footer className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-border px-4 py-2 text-[11px] text-muted">
-          <span>↑↓ move · Enter open · Space select · ⌘A select all · ⌫ close · type to filter (Tab back to the list) · Esc dismiss</span>
-          {selectedRows.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => closeRows(selectedRows)}
-              className="rounded-control border border-danger-border px-3 py-1 text-danger hover:bg-danger-soft"
-            >
-              Close {selectedRows.length} selected
-            </button>
+        {/* The prose line "↑↓ move · Enter open · Space select · ⌘A select
+            all · ⌫ close · type to filter (Tab back to the list) · Esc
+            dismiss" became chips (plan H3); Escape moved onto a real Close
+            button. The destructive "Close N selected" rides as an extra
+            action and keeps its ⌫ chip, because ⌫ performs it. */}
+        <DialogActions
+          onCancel={onClose}
+          cancelLabel="Close"
+          legend={
+            <KbdLegend
+              items={[
+                { keys: ['Up', 'Down'], label: 'move' },
+                { keys: ['Enter'], label: 'open' },
+                { keys: ['Space'], label: 'select' },
+                { keys: ['Cmd+A'], label: 'all' },
+                { keys: ['Backspace'], label: 'close' },
+              ]}
+            />
+          }
+          extraActions={selectedRows.length > 0 ? (
+            <Button type="button" variant="destructive-outline" size="sm" onClick={() => closeRows(selectedRows)}>
+              Close {selectedRows.length} Selected
+              <Kbd binding="Backspace" />
+            </Button>
           ) : null}
-        </footer>
+        />
       </DialogContent>
     </Dialog>
   )
@@ -402,6 +468,7 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
   const hint = NAME_SOURCE_HINT[row.nameSource]
   return (
     <div
+      id={activityRowId(row.sessionId)}
       role="option"
       aria-selected={selected}
       data-session-id={row.sessionId}
@@ -409,8 +476,12 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
       onMouseEnter={onHover}
       onClick={onOpen}
       className={cn(
+        // rounded-control is legitimate here (radius table: `control` covers
+        // option rows) because these rows float inside a padded list. The
+        // highlight joins the one row-highlight token (plan T7): it was
+        // accent/15 with a surface-hi hover, found nowhere else.
         'group flex cursor-pointer items-center gap-3 rounded-control px-3 py-2',
-        highlighted ? 'bg-accent/15' : 'hover:bg-surface-hi',
+        'border-l-2', highlighted ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent hover:bg-row-hover-bg',
       )}
     >
       <input
@@ -425,7 +496,7 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
         onMouseDown={event => event.preventDefault()}
         onClick={event => event.stopPropagation()}
         onChange={onToggle}
-        className="flex-shrink-0 accent-accent"
+        className="flex-shrink-0"
       />
       <span className={cn('w-4 flex-shrink-0 text-center', row.section === 'working' ? 'text-success' : 'text-muted')}>
         {providerGlyph(row.kind)}
@@ -452,17 +523,26 @@ function ActivityRowView({ row, highlighted, selected, onHover, onToggle, onOpen
         </div>
       </div>
       <div className="flex flex-shrink-0 gap-1" onClick={event => event.stopPropagation()}>
-        <button
+        <Button
           type="button"
           tabIndex={-1}
           onMouseDown={event => event.preventDefault()}
           onClick={onClose}
           title="Close (⌫)"
-          className="rounded-control border border-danger-border px-2 py-0.5 text-[11px] text-danger hover:bg-danger-soft"
+          // Named for its AGENT: the footer now has a "Close" that closes the
+          // view, and two same-named buttons that do different things is the
+          // ambiguity a screen reader user cannot see past.
+          aria-label={`Close ${row.name}`}
+          variant="destructive-outline" size="xs"
         >
           Close
-        </button>
+        </Button>
       </div>
     </div>
   )
+}
+
+/** DOM id of a row, for aria-activedescendant. Session ids are safe in ids. */
+function activityRowId(sessionId: SessionId): string {
+  return `agent-activity-row-${sessionId}`
 }

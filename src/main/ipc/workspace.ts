@@ -43,7 +43,8 @@ export function registerWorkspaceIpc(
       // WHY this rejects rather than guessing a slot: a save from an
       // unregistered sender has no defensible destination, and picking one
       // would overwrite a real window's workspace with a stranger's. The
-      // renderer's autosave already surfaces and retries save failures.
+      // renderer's autosave retries a failed save with backoff and, after
+      // repeated failures, shows the error in RestoreBanner (#1244).
       throw new Error('workspace:save from a sender that owns no window')
     }
     await store.saveSlice(windowId, json, captureWindowGeometry(windowId))

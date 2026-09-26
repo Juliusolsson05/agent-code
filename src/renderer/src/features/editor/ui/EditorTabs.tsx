@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Button } from '@renderer/components/ui/button'
 
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { useCommandChordLabel, withChord } from '@renderer/features/command-keybindings/useCommandChord'
 
 type Props = {
   fileOrder: string[]
@@ -36,6 +38,7 @@ export function EditorTabs({
   titleForPath,
   actions,
 }: Props) {
+  const saveChord = useCommandChordLabel('save-editor-file')
   const activeTabRef = useRef<HTMLButtonElement | null>(null)
   const tabNames = useMemo(() => {
     const names = new Map(fileOrder.map(path => [path, displayNameForPath(path)]))
@@ -222,27 +225,27 @@ export function EditorTabs({
         })}
       </div>
       <div className="flex flex-shrink-0 items-center gap-1 border-l border-panel-border px-1.5">
-        <button
+        <Button
           type="button"
           disabled={saveDisabled}
           onClick={onSave}
-          title="Save active file (⌘S)"
+          title={withChord('Save active file', saveChord)}
           aria-label="Save active file"
-          className="rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
+          variant="ghost" size="xs" className="text-muted"
         >
           Save
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           disabled={saveAllDisabled}
           onClick={onSaveAll}
           aria-busy={saveAllPending || undefined}
           title={saveAllPending ? 'Saving all modified files' : 'Save all modified files'}
           aria-label="Save all modified files"
-          className="rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
+          variant="ghost" size="xs" className="text-muted"
         >
           {saveAllPending ? 'Saving…' : 'Save All'}
-        </button>
+        </Button>
         {actions}
       </div>
     </div>

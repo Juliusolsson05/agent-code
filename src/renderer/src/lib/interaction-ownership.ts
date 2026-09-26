@@ -33,3 +33,31 @@ export function hasAppInteractionOwner(root?: ParentNode): boolean {
   const queryRoot = root ?? (typeof document === 'undefined' ? null : document)
   return queryRoot?.querySelector(APP_INTERACTION_OWNER_SELECTOR) != null
 }
+
+// PANE interaction ownership (#713). A pane-scoped condition dialog owns the
+// keys aimed INSIDE it, and nothing else: the rest of the app stays live, so
+// this cannot be the app marker above, which every global router treats as
+// "stop". Routers ask about the EVENT TARGET, not about the document, because
+// "is there a pane dialog somewhere" is exactly the app-wide blocking #713
+// removes. See components/ui/pane-dialog.tsx.
+export const PANE_INTERACTION_OWNER_ATTRIBUTE = 'data-agent-code-pane-interaction-owner'
+
+/** True when `target` sits inside a pane-scoped dialog, whose own element
+ *  handlers own the key or paste. */
+export function isInPaneInteractionOwner(target: EventTarget | null): boolean {
+  return typeof Element !== 'undefined'
+    && target instanceof Element
+    && target.closest(`[${PANE_INTERACTION_OWNER_ATTRIBUTE}]`) != null
+}
+
+/**
+ * True when the pane holding `inside` (its `[data-pane-id]` root) currently
+ * shows a pane-scoped dialog. Pane-local routers that write into the COMPOSER
+ * ask this: the composer sits under that dialog's scrim, so a key or paste
+ * redirected into it would edit a draft the user cannot see, past a prompt
+ * waiting for an answer.
+ */
+export function paneHasInteractionOwner(inside: Element | null | undefined): boolean {
+  const pane = inside?.closest('[data-pane-id]')
+  return pane?.querySelector(`[${PANE_INTERACTION_OWNER_ATTRIBUTE}]`) != null
+}

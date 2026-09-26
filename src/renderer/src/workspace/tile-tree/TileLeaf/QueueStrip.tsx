@@ -105,16 +105,32 @@ function QueuedPromptDialog({
       }}
     >
       <DialogContent
-        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
         showCloseButton
+        onOpenAutoFocus={event => {
+          // A read-only viewer (plan S18, same as View Prompts): focus the
+          // text so ↑↓/PgUp/PgDn scroll it at once, instead of Radix's
+          // default — the corner close button, where the first arrow does
+          // nothing.
+          event.preventDefault()
+          ;(event.currentTarget as HTMLElement | null)
+            ?.querySelector<HTMLElement>('[data-queued-prompt-scroller]')
+            ?.focus()
+        }}
       >
         <DialogHeader>
-          <DialogTitle>Queued prompt</DialogTitle>
+          <DialogTitle>Queued Prompt</DialogTitle>
           <DialogDescription>
             {position} of {total} · queued for delivery
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <div
+          data-queued-prompt-scroller
+          tabIndex={0}
+          aria-label="Queued prompt text"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        >
           {message ? (
             <PagedTextViewer
               source={withVisibleControls(message.content)}
@@ -229,7 +245,7 @@ export function QueueStrip({
       >
         <button
           type="button"
-          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-surface-hi hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-row-hover-bg hover:text-ink outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
           aria-controls={listId}
           aria-expanded={!collapsed}
           onClick={() => setCollapsed(current => !current)}
@@ -246,7 +262,7 @@ export function QueueStrip({
             {staleCount > 0 ? ` · ${staleCount} unconfirmed` : ''}
           </span>
           <span className="shrink-0 normal-case tracking-normal" aria-hidden="true">
-            {collapsed ? '▴ show' : '▾ hide'}
+            {collapsed ? '▴ Show' : '▾ Hide'}
           </span>
         </button>
 
@@ -301,7 +317,7 @@ export function QueueStrip({
                 <li key={`${q.timestamp}:${index}`} className="min-w-0 py-0.5">
                   <button
                     type="button"
-                    className="flex w-full min-w-0 items-center gap-2 text-left text-[12px] leading-[1.5] text-ink-dim hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    className="flex w-full min-w-0 items-center gap-2 text-left text-[12px] leading-[1.5] text-ink-dim hover:text-ink outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
                     onClick={() => setSelectedPrompt(q)}
                     aria-label={`View queued prompt: ${preview ?? ''}`}
                   >

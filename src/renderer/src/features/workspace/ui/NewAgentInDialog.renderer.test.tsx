@@ -266,4 +266,41 @@ describe('NewAgentInDialog', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     expect(enumerateSessions).toHaveBeenCalled()
   })
+
+  // Plan S6: shared list keys, listbox as focus owner, keys on buttons.
+  it('focuses the listbox on both steps and shows Next ↩, then Back ⌫ and Create ↩', () => {
+    const { press } = harness()
+    const listbox = screen.getByRole('listbox')
+    expect(document.activeElement).toBe(listbox)
+    expect(screen.getByRole('button', { name: 'Next' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+    press('Enter')
+    expect(document.activeElement).toBe(screen.getByRole('listbox'))
+    expect(screen.getByRole('button', { name: 'Back' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⌫')
+    expect(screen.getByRole('button', { name: 'Create' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
+  })
+
+  it('keeps the highlighted PROJECT when a project above it closes while the dialog is open', () => {
+    // The live-list invariant the dialog documented (held by tab id): the
+    // shared hook now keeps it via `keys`. B is highlighted (index 1), then
+    // A closes: positionally, index 1 is now C — a highlight that slid would
+    // spawn in C. It must stay on B. (Highlighting the LAST row would not
+    // prove this: clamping happens to land on the same project.)
+    const { createDetachedDispatchAgent, press, mounted, workspace } = harness()
+    press('Enter') // agent step -> project step, highlight on B
+    const state = workspaceState()
+    const withoutA: WorkspaceState = {
+      ...state,
+      tabs: state.tabs.filter(tab => tab.id !== 'tabA'),
+      sessions: { b1: state.sessions.b1!, c1: state.sessions.c1! },
+      stage: { focusedLane: 1, lanes: [{ selectedSessionId: 'b1' }, {}] },
+    }
+    ;(workspace as { state: WorkspaceState }).state = withoutA
+    mounted.rerender(<NewAgentInDialog open workspace={{ ...workspace, state: withoutA } as Workspace} onClose={() => {}} />)
+    press('Enter')
+    expect(createDetachedDispatchAgent).toHaveBeenCalledWith(
+      { kind: 'claude', providerRuntime: undefined },
+      expect.objectContaining({ tabId: 'tabB' }),
+    )
+  })
 })
+

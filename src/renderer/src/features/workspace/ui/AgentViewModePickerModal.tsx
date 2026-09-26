@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
 
-import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
-import { Button } from '@renderer/components/ui/button'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
@@ -40,8 +40,8 @@ export function AgentViewModePickerModal({
   globalMode,
   onClose,
 }: Props) {
-  const dialogRef = useRef<HTMLDivElement | null>(null)
-  const wasOpenRef = useRef(false)
+  // The LISTBOX is the focus owner (focus-owner invariant, useListNavigation).
+  const listRef = useRef<HTMLDivElement | null>(null)
   const meta = sessionId ? workspace.state.sessions[sessionId] : null
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   const isAgent = isAgentProviderKind(kind)
@@ -53,7 +53,6 @@ export function AgentViewModePickerModal({
   const currentValue: PickerValue = terminalRuntime
     ? 'terminal'
     : meta?.agentViewModeOverride ?? 'default'
-  const [cursor, setCursor] = useState<PickerValue>(currentValue)
 
   const options = useMemo<Option[]>(
     () => [
@@ -81,14 +80,6 @@ export function AgentViewModePickerModal({
     [globalMode, nativeUnavailable, terminalRuntime],
   )
 
-  useEffect(() => {
-    if (open && !wasOpenRef.current) {
-      setCursor(currentValue)
-    }
-    wasOpenRef.current = open
-  }, [currentValue, open])
-
-  const cursorIndex = Math.max(0, options.findIndex(option => option.value === cursor))
   const pick = (value: PickerValue) => {
     if (!sessionId || !isAgent) return
     const option = options.find(item => item.value === value)
@@ -99,23 +90,22 @@ export function AgentViewModePickerModal({
     )
     if (ok) onClose()
   }
-  const moveCursor = (delta: -1 | 1) => {
-    const enabledIndexes = options
-      .map((option, index) => ({ option, index }))
-      .filter(item => !item.option.disabled)
-      .map(item => item.index)
-    if (enabledIndexes.length === 0) return
-    const currentEnabledIndex = enabledIndexes.findIndex(index => index === cursorIndex)
-    const fallback = delta > 0 ? 0 : enabledIndexes.length - 1
-    const nextEnabledIndex = Math.max(
-      0,
-      Math.min(
-        enabledIndexes.length - 1,
-        (currentEnabledIndex < 0 ? fallback : currentEnabledIndex) + delta,
-      ),
-    )
-    setCursor(options[enabledIndexes[nextEnabledIndex]]?.value ?? 'default')
-  }
+  // Movement, disabled-row skipping, Enter and hover go through the shared
+  // list hook (plan K5); this dialog only says what Enter means. The
+  // highlight opens on the CURRENT mode (resetKey = open), so Enter-on-open
+  // is a no-op re-apply rather than a surprise change.
+  const nav = useListNavigation({
+    count: options.length,
+    initialIndex: Math.max(0, options.findIndex(option => option.value === currentValue)),
+    resetKey: open,
+    isDisabled: index => Boolean(options[index]?.disabled) || !isAgent,
+    onActivate: index => {
+      const option = options[index]
+      if (option) pick(option.value)
+    },
+    idPrefix: 'agent-view-mode',
+  })
+  const cursor = options[nav.index]?.value ?? currentValue
 
   return (
     <Dialog
@@ -125,39 +115,16 @@ export function AgentViewModePickerModal({
       }}
     >
       <DialogContent
-        ref={dialogRef}
-        tabIndex={-1}
         onOpenAutoFocus={event => {
           event.preventDefault()
-          dialogRef.current?.focus()
+          listRef.current?.focus()
         }}
-        onKeyDown={e => {
-          if (e.key === 'ArrowUp') {
-            e.preventDefault()
-            moveCursor(-1)
-            return
-          }
-          if (e.key === 'ArrowDown') {
-            e.preventDefault()
-            moveCursor(1)
-            return
-          }
-          if (e.key === 'Enter') {
-            // A focused footer button owns its own Enter (#867). This handler
-            // sits on `DialogContent`, so without the check it `preventDefault`s
-            // the focused button's native click and runs the LIST's action
-            // instead — Tab to Cancel, Enter, and the change being abandoned is
-            // applied. Same rule `DialogActions` follows, same helper (#860),
-            // same bug #862 fixed in Switch Provider.
-            if (focusedControlOwnsEnter(e.target)) return
-            e.preventDefault()
-            pick(cursor)
-          }
-        }}
-        className="w-[500px] max-w-[calc(100vw-64px)]"
+        // A focused footer button owns its own Enter (#867) — enforced inside
+        // useListNavigation with the same focusedControlOwnsEnter predicate.
+        onKeyDown={nav.onKeyDown}
       >
         <DialogHeader>
-          <DialogTitle className="font-semibold">Agent View Mode</DialogTitle>
+          <DialogTitle>Agent View Mode</DialogTitle>
           <DialogDescription>
             {isAgent
               ? `${provider.name} session`
@@ -168,13 +135,16 @@ export function AgentViewModePickerModal({
         {/* Roving focus: rows out of the tab order need the highlight ANNOUNCED
             rather than focused, or a screen reader hears nothing as the arrows
             move (#867 review). */}
+        <div className="px-4 py-3">
         <div
+          ref={listRef}
           role="listbox"
+          tabIndex={0}
           aria-label="Agent view mode"
-          aria-activedescendant={`agent-view-mode-${cursor}`}
-          className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas"
+          aria-activedescendant={nav.activeId}
+          className="rounded-slab overflow-hidden border border-border bg-canvas outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
-          {options.map(option => {
+          {options.map((option, index) => {
             const selected = option.value === currentValue
             const focused = option.value === cursor
             const disabled = option.disabled || !isAgent
@@ -182,7 +152,7 @@ export function AgentViewModePickerModal({
               <button
                 key={option.value}
                 type="button"
-                id={`agent-view-mode-${option.value}`}
+                {...nav.getItemProps(index)}
                 role="option"
                 aria-selected={selected}
                 // Out of the tab order, with the arrow-driven highlight the
@@ -191,22 +161,18 @@ export function AgentViewModePickerModal({
                 // FOCUSED one — so the user would act on a row other than the
                 // one the dialog is showing as chosen, whatever Enter does.
                 tabIndex={-1}
-                // `tabIndex={-1}` does not stop CLICK focus — Chromium focuses
-                // a button on mousedown whatever its tabindex — and a focused
-                // row owns the next Enter, so the dialog's own Enter would bow
-                // out for the rest of the dialog's life after one click.
-                onMouseDown={event => event.preventDefault()}
+                // (Click-without-focus-theft — `tabIndex={-1}` does not stop
+                // Chromium focusing a clicked button, and a focused row owns
+                // the next Enter — now comes from getItemProps' onMouseDown.)
                 disabled={disabled}
-                onMouseEnter={() => setCursor(option.value)}
-                onClick={() => pick(option.value)}
                 className={`
-                  w-full text-left px-3 py-3 border-b border-border last:border-b-0
-                  ${focused ? 'bg-accent/12' : 'bg-transparent'}
-                  ${disabled ? 'opacity-45 cursor-not-allowed' : 'hover:bg-surface cursor-pointer'}
+                  w-full text-left px-3 py-2 border-b border-l-2 border-border last:border-b-0
+                  ${focused ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent bg-transparent'}
+                  ${disabled ? 'opacity-45 cursor-not-allowed' : 'hover:bg-row-hover-bg cursor-pointer'}
                 `}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-[12px] font-semibold text-ink">
+                  <span className="text-[12px] font-medium text-ink">
                     {option.label}
                   </span>
                   {selected && (
@@ -223,15 +189,19 @@ export function AgentViewModePickerModal({
           })}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            onClick={onClose}
-            variant="outline"
-          >
-            Cancel
-          </Button>
-        </DialogFooter>
+        </div>
+
+        {/* Apply exists so Enter's meaning is visible on a button (plan H2)
+            and a mouse user has an explicit commit besides clicking a row.
+            confirmOnEnter={false}: the list already owns Enter. */}
+        <DialogActions
+          confirmLabel="Apply"
+          onConfirm={() => pick(cursor)}
+          onCancel={onClose}
+          confirmOnEnter={false}
+          confirmDisabled={!isAgent || Boolean(options[nav.index]?.disabled)}
+          legend={<KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }]} />}
+        />
       </DialogContent>
     </Dialog>
   )

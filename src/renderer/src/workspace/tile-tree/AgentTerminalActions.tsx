@@ -1,5 +1,8 @@
 import type { JSX } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+import { Kbd } from '@renderer/components/ui/kbd'
+
 // AgentTerminalActions — pointer-clickable Submit for raw agent terminals,
 // shown only in Mouse Mode, the terminal-view sibling of ComposerActions.
 //
@@ -33,18 +36,22 @@ export type AgentTerminalActionsProps = {
 export function AgentTerminalActions({ onSubmit }: AgentTerminalActionsProps): JSX.Element {
   return (
     <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-surface px-3 py-1.5">
-      <button
-        type="button"
+      {/* "Send", the composer's word, and the composer's Button (UI pass,
+          G-5): two names and two looks for the same Enter were the same
+          action spelled differently per pane type. */}
+      <Button
+        variant="default"
+        size="sm"
         // preventDefault keeps DOM focus out of this button: a focused button
         // would pull keystrokes away from xterm — the very thing this control
         // exists to complement. Deliberately NOT stopPropagation: the owning
         // leaf's own onMouseDown must still acknowledge and re-focus xterm.
         onMouseDown={event => event.preventDefault()}
         onClick={onSubmit}
-        className="rounded-control border border-control-border bg-control-active-bg px-3 py-1 text-[11px] leading-none text-control-active-fg hover:bg-control-hover-bg"
       >
-        Submit
-      </button>
+        Send
+        <Kbd binding="Enter" tone="onAccent" />
+      </Button>
     </div>
   )
 }

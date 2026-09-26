@@ -13,6 +13,7 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { displayedWorktreeContext } from '@renderer/workspace/tile-tree/TileLeaf/displayedWorktree'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type { ClaudeCompactionState } from '@shared/types/providerConditions'
@@ -24,6 +25,9 @@ export type AgentStatusModel = {
   kind: AgentStatusKind
   title: string
   cwd: string
+  /** The worktree the badge shows (displayedWorktreeContext), so the badge's
+   *  hover-only details are reachable from the keyboard here (K2-13). */
+  worktree: { branch: string | null; path: string; active: boolean } | null
   providerSessionId: string | null
   providerSessionState: 'present' | 'none'
   runtime: {
@@ -106,6 +110,15 @@ export function buildAgentStatusModel(
     kind,
     title: sessionDisplayTitle(meta),
     cwd: meta.cwd,
+    worktree: (() => {
+      const context = displayedWorktreeContext(runtime.workContext, runtime.workActivity)
+      if (!context?.worktreePath) return null
+      return {
+        branch: context.branch ?? null,
+        path: context.worktreePath,
+        active: runtime.workActivity?.active?.worktreePath === context.worktreePath,
+      }
+    })(),
     providerSessionId,
     providerSessionState: providerSessionId ? 'present' : 'none',
     runtime: {

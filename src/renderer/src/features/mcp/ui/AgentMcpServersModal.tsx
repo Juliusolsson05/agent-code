@@ -1,3 +1,4 @@
+import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useMemo, useState } from 'react'
 
 import {
@@ -12,10 +13,10 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { BUILT_IN_MCP_SERVERS } from '@renderer/features/mcp/lib/builtInServers'
 import { useUserMcpSnapshot } from '@renderer/features/mcp/store'
 import { Check } from '@renderer/features/mcp/ui/McpServersRow'
@@ -157,12 +158,13 @@ export function AgentMcpServersModal() {
 
   return (
     <Dialog open onOpenChange={open => { if (!open) { setDraft(null); close() } }}>
-      <DialogContent className="max-w-xl">
+      {/* size md: `max-w-xl` was a no-op against the base 520px width. */}
+      <DialogContent size="md">
         <DialogHeader>
-          <DialogTitle>Agent MCP servers</DialogTitle>
+          <DialogTitle>Agent MCP Servers</DialogTitle>
           <DialogDescription>{label}</DialogDescription>
         </DialogHeader>
-        <div className="flex max-h-[60vh] flex-col overflow-y-auto px-4 py-2 text-[11px]">
+        <div className="flex max-h-[60vh] flex-col overflow-y-auto px-4 py-3 text-[11px]">
           {rows.map(row => {
             const on = effective(row)
             const explicit = current[row.key] !== undefined
@@ -177,7 +179,7 @@ export function AgentMcpServersModal() {
                 <div className="min-w-0 flex-1">
                   <span className="text-ink">{row.title}</span>
                   {row.key.startsWith('user:') ? null : (
-                    <span className="ml-2 rounded-chip border border-border px-1 text-[9px] text-muted">built-in</span>
+                    <span className="ml-2 rounded-chip border border-border px-1 text-[10px] text-muted">built-in</span>
                   )}
                   <div className="truncate text-[10px] text-muted">{row.detail}</div>
                 </div>
@@ -197,23 +199,30 @@ export function AgentMcpServersModal() {
               </div>
             )
           })}
-          {rows.length === 0 ? <div className="py-2 text-muted">No MCP servers apply to this agent.</div> : null}
+          {rows.length === 0 ? <EmptyState size="inline" className="px-0">No MCP servers apply to this agent.</EmptyState> : null}
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => setDraft({})} title="Clear this agent's choices so it follows Settings → MCP">
-            Reset to MCP settings
-          </Button>
-          <span className="flex-1 text-[10px] text-muted">
-            {changed ? 'Changes pending' : pendingReload ? 'Settings changed since this agent started' : ''}
-          </span>
-          <Button variant="outline" onClick={() => { setDraft(null); close() }}>Cancel</Button>
-          {/* Always enabled (review round 1): a user server turned on in
-              Settings after this agent started shows here as its default
-              "on", with nothing staged, and the agent only gets it on a
-              reload. The renderer cannot always know whether it is attached
-              (launch-time drops), so it must never be the one to refuse. */}
-          <Button onClick={() => void apply()}>{changed ? 'Apply & reload agent' : 'Reload agent'}</Button>
-        </DialogFooter>
+        {/* The confirm RELOADS the agent's process (a running turn is cut
+            off), so it advertises and wires no commit key: Tab to it or
+            click (plan K1/H2). Cancel ⎋. Reset rides as an extra action;
+            the pending-state line sits in the left slot.
+            The confirm is always enabled (review round 1): a user server
+            turned on in Settings after this agent started shows here as its
+            default "on", with nothing staged, and the agent only gets it on a
+            reload. The renderer cannot always know whether it is attached
+            (launch-time drops), so it must never be the one to refuse. */}
+        <DialogActions
+          confirmLabel={changed ? 'Apply & Reload Agent' : 'Reload Agent'}
+          confirmKey={null}
+          onConfirm={() => void apply()}
+          onCancel={() => { setDraft(null); close() }}
+          extraActions={
+            <Button variant="ghost" size="sm" onClick={() => setDraft({})} title="Clear this agent's choices so it follows Settings → MCP">
+              Reset to MCP Settings
+            </Button>
+          }
+        >
+          {changed ? 'Changes pending' : pendingReload ? 'Settings changed since this agent started' : null}
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )

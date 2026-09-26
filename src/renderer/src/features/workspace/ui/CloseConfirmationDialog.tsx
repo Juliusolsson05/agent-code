@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions, focusDialogActionOnOpen } from '@renderer/components/ui/dialog-actions'
 import {
   currentCloseConfirmation,
   resolveCloseConfirmation,
@@ -25,12 +24,15 @@ import { withVisibleControls } from '@shared/text/visibleControls'
  * a bare "close 4 sessions?" fixes the count but still leaves the user unable
  * to check whether the four are the four they meant.
  *
- * Keyboard contract (#867): there is deliberately NO Enter handler on this
- * dialog. Radix focuses the first tabbable control, which is Cancel, so Enter
- * on open cancels, and Enter on any Tab-focused button activates that button
- * natively. A dialog-level Enter handler would call preventDefault and could
- * turn Enter-on-Cancel into a close — the exact bug #867 found in three other
- * dialogs. The renderer test pins this.
+ * Keyboard contract (#867, keyboard-first plan K1): there is deliberately
+ * NO commit key on this dialog (`confirmKey={null}`), and focus is put on
+ * Cancel EXPLICITLY on open. Enter on open therefore cancels, and Enter on a
+ * Tab-focused Close activates it natively. A dialog-level Enter handler would
+ * call preventDefault and could turn Enter-on-Cancel into a close — the exact
+ * bug #867 found in three other dialogs. Before DialogActions this relied on
+ * Radix focusing "the first tabbable control", which was Cancel only because
+ * of footer order; the explicit focus makes it a contract instead of layout
+ * luck. Cancel shows ⎋; Close shows no chip, because no key performs it.
  */
 export function CloseConfirmationDialog() {
   const [pending, setPending] = useState<PendingCloseConfirmation | null>(
@@ -57,7 +59,7 @@ export function CloseConfirmationDialog() {
         if (!nextOpen) resolveCloseConfirmation(false)
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent size="sm" onOpenAutoFocus={focusDialogActionOnOpen('cancel')}>
         <DialogHeader>
           <DialogTitle>
             {request?.reason === 'running'
@@ -76,12 +78,17 @@ export function CloseConfirmationDialog() {
           <DialogDescription>{request ? withVisibleControls(request.summary) : null}</DialogDescription>
         </DialogHeader>
 
+        {/* One padded body (plan T3). The list and the Undo note used to sit
+            directly in the grid with no inset, so both ran flush into the
+            dialog's rounded border. */}
+        {(request && request.targets.length > 1) || live.length > 0 ? (
+        <div className="flex flex-col gap-3 px-4 py-3">
         {request && request.targets.length > 1 ? (
           <div className="rounded-slab max-h-56 overflow-auto border border-border">
             {request.targets.map(target => (
               <div
                 key={target.sessionId}
-                className="flex items-center justify-between border-b border-border/40 px-2 py-1 text-xs last:border-b-0"
+                className="flex items-center justify-between border-b border-border/40 px-2 py-1 text-[12px] last:border-b-0"
               >
                 {/* The title is model-controlled (#1049 review): a reordered
                     one misrepresents WHICH session is about to be killed. */}
@@ -101,17 +108,16 @@ export function CloseConfirmationDialog() {
             Undo Close restores the layout, but not live terminal output or unsent drafts.
           </div>
         ) : null}
+        </div>
+        ) : null}
 
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => resolveCloseConfirmation(false)}>
-            Cancel
-          </Button>
-          <Button variant="destructive" onClick={() => resolveCloseConfirmation(true)}>
-            {request && request.targets.length > 1
-              ? `Close ${request.targets.length}`
-              : 'Close'}
-          </Button>
-        </DialogFooter>
+        <DialogActions
+          tone="danger"
+          confirmKey={null}
+          confirmLabel={request && request.targets.length > 1 ? `Close ${request.targets.length}` : 'Close'}
+          onConfirm={() => resolveCloseConfirmation(true)}
+          onCancel={() => resolveCloseConfirmation(false)}
+        />
       </DialogContent>
     </Dialog>
   )

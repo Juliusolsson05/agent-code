@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
-import { focusedControlOwnsEnter } from '@renderer/components/ui/dialog-actions'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import { KbdLegend } from '@renderer/components/ui/kbd'
+import { useListNavigation } from '@renderer/lib/useListNavigation'
 import {
   providerChoiceLabel,
   enabledProviderSwitchChoices,
@@ -36,7 +36,8 @@ export function ProviderSwitchPickerModal({
   workspace,
   onClose,
 }: Props) {
-  const dialogRef = useRef<HTMLDivElement | null>(null)
+  // The LISTBOX is the focus owner (focus-owner invariant, useListNavigation).
+  const listRef = useRef<HTMLDivElement | null>(null)
   const committingRef = useRef(false)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
   const sourceKind = isAgentProviderKind(meta?.kind) ? meta.kind : null
@@ -47,19 +48,17 @@ export function ProviderSwitchPickerModal({
     () => sourceKind ? enabledProviderSwitchChoices(sourceKind, enabledKinds) : [],
     [sourceKind, enabledKinds],
   )
-  const [selectedIndex, setSelectedIndex] = useState(0)
   const missingProviders = useMissingProviders()
 
   useEffect(() => {
     if (!open) return
     // A modal instance stays mounted across invocations. Reset both pieces of
     // one-shot state so a previous selection cannot suppress or preselect the
-    // next agent's switch.
-    setSelectedIndex(0)
+    // next agent's switch. (The highlight resets through useListNavigation's
+    // resetKey below.)
     committingRef.current = false
   }, [open, sessionId, sourceKind])
 
-  const selected = choices[selectedIndex] ?? null
   const choose = (choice: AgentProviderChoice) => {
     if (!sessionId || committingRef.current) return
     committingRef.current = true
@@ -75,10 +74,16 @@ export function ProviderSwitchPickerModal({
     )
   }
 
-  const moveSelection = (delta: -1 | 1) => {
-    if (choices.length === 0) return
-    setSelectedIndex(index => Math.max(0, Math.min(choices.length - 1, index + delta)))
-  }
+  const nav = useListNavigation({
+    count: choices.length,
+    resetKey: `${open}:${sessionId}:${sourceKind}`,
+    onActivate: index => {
+      const choice = choices[index]
+      if (choice) choose(choice)
+    },
+    idPrefix: 'provider-switch-choice',
+  })
+  const selected = choices[nav.index] ?? null
 
   const currentLabel = sourceKind
     ? providerChoiceLabel(sourceKind, meta?.providerRuntime)
@@ -93,36 +98,15 @@ export function ProviderSwitchPickerModal({
       }}
     >
       <DialogContent
-        ref={dialogRef}
-        tabIndex={-1}
         onOpenAutoFocus={event => {
           event.preventDefault()
-          dialogRef.current?.focus()
+          listRef.current?.focus()
         }}
-        onKeyDown={event => {
-          if (event.key === 'ArrowDown' || (event.ctrlKey && event.key === 'n')) {
-            event.preventDefault()
-            moveSelection(1)
-            return
-          }
-          if (event.key === 'ArrowUp' || (event.ctrlKey && event.key === 'p')) {
-            event.preventDefault()
-            moveSelection(-1)
-            return
-          }
-          if (event.key === 'Enter' && selected) {
-            // A focused button owns its own Enter (focusedControlOwnsEnter —
-            // the rule components/ui/dialog-actions.tsx documents).
-            // preventDefault below also cancels that button's native click, so
-            // without this guard Tab to Cancel + Enter switched the agent to the
-            // highlighted provider instead of cancelling (#862). Rows are not
-            // tab stops (below), so the only focusable buttons are the footer's.
-            if (focusedControlOwnsEnter(event.target)) return
-            event.preventDefault()
-            choose(selected)
-          }
-        }}
-        className="w-[500px] max-w-[calc(100vw-64px)]"
+        // ↑↓ / ⌃N⌃P / Home / End / PgUp / PgDn / Enter via the shared hook.
+        // A focused button owns its own Enter (#862) — enforced inside the
+        // hook with focusedControlOwnsEnter: without it, Tab to Cancel +
+        // Enter switched the agent to the highlighted provider.
+        onKeyDown={nav.onKeyDown}
       >
         <DialogHeader>
           <DialogTitle>Switch Provider</DialogTitle>
@@ -138,17 +122,28 @@ export function ProviderSwitchPickerModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-slab mx-4 my-4 overflow-hidden border border-border bg-canvas">
+        <div className="px-4 py-3">
+        <div
+          ref={listRef}
+          role="listbox"
+          tabIndex={0}
+          aria-label="Provider destinations"
+          aria-activedescendant={nav.activeId}
+          className="rounded-slab overflow-hidden border border-border bg-canvas outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
+        >
           {choices.length === 0 ? (
             <div className="px-3 py-8 text-center text-[12px] text-muted">
               This session has no available provider destinations.
             </div>
           ) : choices.map((choice, index) => {
-            const focused = index === selectedIndex
+            const focused = index === nav.index
             return (
               <button
                 key={`${choice.kind}:${choice.providerRuntime ?? 'structured'}`}
                 type="button"
+                {...nav.getItemProps(index)}
+                role="option"
+                aria-selected={focused}
                 // Not a tab stop (#862). Keyboard selection is the arrow-driven
                 // highlight; a Tab-focused row kept DOM focus while the arrows
                 // moved the highlight, and Space — a native click on the FOCUSED
@@ -157,27 +152,33 @@ export function ProviderSwitchPickerModal({
                 // rests on the dialog surface or the footer.
                 tabIndex={-1}
                 data-provider-switch-choice={`${choice.kind}:${choice.providerRuntime ?? 'structured'}`}
-                onMouseEnter={() => setSelectedIndex(index)}
-                onClick={() => choose(choice)}
                 className={`
-                  w-full border-b border-border px-3 py-3 text-left last:border-b-0
-                  ${focused ? 'bg-accent/12' : 'bg-transparent hover:bg-surface'}
+                  w-full border-b border-l-2 border-border px-3 py-2 text-left last:border-b-0
+                  ${focused ? 'border-l-accent bg-row-selected-bg' : 'border-l-transparent bg-transparent hover:bg-row-hover-bg'}
                   cursor-pointer
                 `}
               >
-                <div className="text-[12px] font-semibold text-ink">{choice.label}</div>
+                <div className="text-[12px] font-medium text-ink">{choice.label}</div>
                 <div className="mt-0.5 text-[11px] text-muted">{missingProviders.has(choice.kind) ? MISSING_PROVIDER_HINT : choice.description}</div>
               </button>
             )
           })}
         </div>
 
-        <DialogFooter className="justify-between text-[11px] text-muted">
-          <span>↑↓ choose · Enter switch · Esc cancel</span>
-          <Button type="button" variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-        </DialogFooter>
+        </div>
+
+        {/* The prose legend "↑↓ choose · Enter switch · Esc cancel" became
+            chips: Escape and Enter on the buttons that perform them, ↑↓ in the
+            legend (plan H2/H3). Switch exists so Enter's meaning is on a
+            button; confirmOnEnter={false} because the list owns Enter. */}
+        <DialogActions
+          confirmLabel="Switch"
+          onConfirm={() => { if (selected) choose(selected) }}
+          onCancel={onClose}
+          confirmOnEnter={false}
+          confirmDisabled={!selected}
+          legend={<KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }]} />}
+        />
       </DialogContent>
     </Dialog>
   )

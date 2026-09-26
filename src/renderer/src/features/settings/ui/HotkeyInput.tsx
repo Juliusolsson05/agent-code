@@ -128,7 +128,9 @@ export function HotkeyInput({ value, onChange }: Props) {
         >
           {capturing
             ? 'Press any key or shortcut'
-            : formatBindingForDisplay(value) || 'Click to set binding'}
+            // Device-neutral copy: Enter and Space start recording as well
+            // as a click, and "Click to…" told keyboard users otherwise.
+            : formatBindingForDisplay(value) || 'Record a shortcut'}
         </button>
         <Button
           variant="outline"

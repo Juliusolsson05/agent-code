@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GoalLoopState } from '@shared/types/goalLoop'
@@ -101,6 +101,77 @@ describe('goal loop overlay keyboard dismissal', () => {
   })
 })
 
+// K2-1: the overlay's controls were unreachable from the keyboard. The gate
+// above consumed every key in capture phase, Tab and Enter included, so a
+// keyboard user could see Pause / Stop / Close and press none of them.
+describe('goal loop overlay controls from the keyboard (K2-1)', () => {
+  let frames: FrameRequestCallback[] = []
+  beforeEach(() => {
+    frames = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  })
+  afterEach(() => vi.unstubAllGlobals())
+  const flush = () => act(() => { frames.splice(0).forEach(frame => frame(performance.now())) })
+
+  it('focuses the first action, lets Tab/Enter reach the buttons, and wraps Tab inside', async () => {
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    screen.getByLabelText('Composer').focus()
+    act(() => { toggleGoalLoop() })
+    // The loop is read asynchronously; wait for its overlay (the brief
+    // "no loop" overlay before it is a different mount).
+    await screen.findByText('Goal loop · active')
+    const dialog = screen.getByRole('dialog')
+    flush()
+    const pause = screen.getAllByRole('button', { name: 'Pause' }).find(button => dialog.contains(button))!
+    expect(document.activeElement).toBe(pause)
+
+    // Enter reaches the focused button: the router neither prevents nor stops it.
+    expect(keyDown({ key: 'Enter' })).toBe(true)
+    // Tab is admitted too; the overlay's own handler moves and wraps focus.
+    const inside = [...dialog.querySelectorAll('button')]
+    keyDown({ key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(inside[inside.length - 1])
+    keyDown({ key: 'Tab' })
+    expect(document.activeElement).toBe(inside[0])
+
+    // Letters are still consumed: nothing types into the composer below.
+    expect(keyDown({ key: 'x', code: 'KeyX' })).toBe(false)
+  })
+
+  it('with two panes, only the ACTIVE pane s overlay takes focus (review A1)', async () => {
+    // The latch is app-wide, so both visible panes mount an overlay. Before
+    // the fix each pulled focus and the LATER one won: Enter then paused the
+    // other agent. Pane A is active and renders first, B renders second.
+    render(<>
+      <Harness model={workspace()} />
+      <div data-testid="pane-a"><GoalLoopPane sessionId="a" focused /></div>
+      <div data-testid="pane-b"><GoalLoopPane sessionId="b" focused={false} /></div>
+    </>)
+    screen.getByLabelText('Composer').focus()
+    act(() => { toggleGoalLoop() })
+    await waitFor(() => expect(screen.getAllByText('Goal loop · active')).toHaveLength(2))
+    flush()
+    const paneA = screen.getByTestId('pane-a')
+    const focused = document.activeElement as HTMLElement
+    expect(paneA.contains(focused)).toBe(true)
+    fireEvent.click(focused)
+    expect(api.controlGoalLoop).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'a' }))
+  })
+
+  it('returns focus to the composer when the overlay closes', async () => {
+    render(<><Harness model={workspace()} /><GoalLoopPane sessionId="a" /></>)
+    const composer = screen.getByLabelText('Composer')
+    composer.focus()
+    act(() => { toggleGoalLoop() })
+    await screen.findByText('Goal loop · active')
+    flush()
+    keyDown({ key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(composer)
+  })
+})
+
 // #1021: the owner ran "Goal Loop" and the whole app stopped taking input.
 // The focused agent had no loop, which is the NORMAL case: only an agent starts
 // a loop, through goal_loop_start. The latch was set and the router gate
@@ -135,6 +206,10 @@ describe('goal loop command with no loop on the session (#1021)', () => {
     runGoalLoopCommand()
     expect(await screen.findByText('No goal loop on this agent')).toBeTruthy()
     expect(screen.getByRole('dialog')).toBeTruthy()
+    // Plan M7: the exit is a real (shared) button carrying the ⎋ it honours.
+    const close = screen.getByRole('button', { name: 'Close' })
+    expect(close).toHaveAttribute('data-slot', 'button')
+    expect(close.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
     keyDown({ key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(useGoalLoopView.getState().latched).toBe(false)

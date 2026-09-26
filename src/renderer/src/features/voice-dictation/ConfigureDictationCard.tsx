@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 
@@ -109,32 +110,32 @@ export function ConfigureDictationCard() {
         Add a Deepgram API key to enable inline voice dictation. Deepgram gives
         every new account $200 in free credits — enough to last most users a long time.
       </span>
-      <button
+      <Button
         type="button"
         onClick={openGuide}
-        className="rounded-control border border-accent px-2 py-0.5 text-[11px] text-accent hover:bg-accent/20"
+        variant="outline" size="xs"
       >
-        Show me how
-      </button>
-      <button
+        Show Me How
+      </Button>
+      <Button
         type="button"
         onClick={() => setRunDismissed(true)}
-        className="text-muted hover:text-ink"
+        variant="ghost" size="xs" className="text-muted"
         title="Hide until next launch"
       >
         Later
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
         onClick={() => {
           persistDismissal('never')
           setDismissed('never')
         }}
-        className="text-muted hover:text-ink"
+        variant="ghost" size="xs" className="text-muted"
         title="Don't show this again"
       >
-        Don't show again
-      </button>
+        Don't Show Again
+      </Button>
     </div>
   )
 }

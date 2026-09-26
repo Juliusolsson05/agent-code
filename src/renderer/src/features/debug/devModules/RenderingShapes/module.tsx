@@ -125,7 +125,7 @@ function RenderingShapesPanel({ sessionId }: DevDebugModuleProps) {
                     <td className="pr-2"><StatusChip status={row.status} /></td>
                     <td className="pr-2">{row.provider}</td>
                     <td className="pr-2">{row.eventTypes.join(',')}</td>
-                    <td className="pr-2 font-mono">{row.structuralFingerprint}</td>
+                    <td className="pr-2 font-code">{row.structuralFingerprint}</td>
                     <td className="pr-2">{row.catalogShapeId ?? '—'}</td>
                     <td>{row.totalCount}</td>
                   </tr>

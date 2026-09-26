@@ -37,6 +37,12 @@ export function identityFields(model: AgentStatusModel): AgentStatusField[] {
     { label: 'Kind', value: model.kind },
     { label: 'Provider session', value: formatProviderSession(model) },
     { label: 'Cwd', value: model.cwd },
+    ...(model.worktree
+      ? [{
+          label: 'Worktree',
+          value: `${model.worktree.branch ?? '(detached)'} · ${model.worktree.path}${model.worktree.active ? ' · active' : ''}`,
+        }]
+      : []),
   ]
 }
 

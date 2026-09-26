@@ -4,8 +4,10 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
@@ -143,13 +145,31 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
-      <DialogContent className="flex max-h-[86vh] w-[min(760px,94vw)] flex-col overflow-hidden">
-        <div className="flex-shrink-0 border-b border-border px-4 py-3">
+      <DialogContent
+        size="lg"
+        className="flex max-h-[86vh] flex-col overflow-hidden"
+        // IN-FLIGHT EXIT INVARIANT (steering note k3): while the batch close
+        // runs, NO path may hide the dialog — not Cancel (disabled below), not
+        // Escape, not an outside click. The old footer disabled Cancel while
+        // closing; the first DialogActions migration passed only `busy`, which
+        // disables the CONFIRM, so Cancel hid a destructive batch that was
+        // still killing agents and made the result look cancelled. Same model
+        // as Bulk Provider Switch: cancelDisabled + escapeCancels + these two
+        // guards.
+        onEscapeKeyDown={event => { if (closing) event.preventDefault() }}
+        onInteractOutside={event => { if (closing) event.preventDefault() }}
+      >
+        {/* KEYBOARD (plan S14): the rows stay NATIVE checkboxes — a checkbox
+            group is already fully operable (Tab between, Space toggles, state
+            announced natively), and every row is an independent destructive
+            choice, which is the checkbox pattern rather than the one-cursor
+            listbox of K5. What changed is the chrome around them. */}
+        <DialogHeader>
           <DialogTitle>Close Completed Agents</DialogTitle>
           <DialogDescription>
             Agents whose goal is complete. Untick any you want to keep.
           </DialogDescription>
-        </div>
+        </DialogHeader>
 
         {loaded.state === 'error' && rows.length > 0 && (
           <div role="alert" className="flex-shrink-0 border-b border-border px-4 py-2 text-[11px] text-danger">
@@ -169,44 +189,31 @@ export function CloseCompletedAgentsModal({ open, workspace, onClose }: Props) {
           ))}
         </div>
 
-        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border px-4 py-3">
-          <label className="flex items-center gap-2 text-[11px] text-ink-dim">
-            <input
-              type="checkbox"
-              checked={removeLanes}
-              onChange={event => setRemoveLanes(event.target.checked)}
-              className="accent-current"
-            />
-            Also remove their lanes
-          </label>
-          <div className="flex items-center gap-2">
-            {blockedCount > 0 && (
-              <span className="text-[10px] text-muted">
-                {blockedCount} {blockedCount === 1 ? 'agent stays' : 'agents stay'} open
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={closing}
-              className="rounded-control border border-border px-3 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void closeSelected()}
-              disabled={closing || selected.length === 0 || !ready}
-              className={`rounded-control border px-3 py-1.5 text-[11px] ${
-                selected.length > 0 && ready
-                  ? 'border-danger-border bg-danger-soft text-danger hover:bg-danger-soft/80'
-                  : 'cursor-not-allowed border-border text-muted opacity-60'
-              }`}
-            >
-              {closing ? 'Closing…' : `Close ${selected.length} Agent${selected.length === 1 ? '' : 's'}`}
-            </button>
-          </div>
-        </div>
+        {/* DESTRUCTIVE and bulk (plan K1): no commit key; Cancel keeps ⎋.
+            Was a hand-built footer with raw buttons in a third size. */}
+        <DialogActions
+          tone="danger"
+          confirmKey={null}
+          busy={closing}
+          confirmDisabled={selected.length === 0 || !ready}
+          confirmLabel={`Close ${selected.length} Agent${selected.length === 1 ? '' : 's'}`}
+          onConfirm={() => void closeSelected()}
+          onCancel={onClose}
+          cancelDisabled={closing}
+          escapeCancels={!closing}
+          legend={
+            <label className="flex items-center gap-2 text-[11px] text-ink-dim">
+              <input
+                type="checkbox"
+                checked={removeLanes}
+                onChange={event => setRemoveLanes(event.target.checked)}
+              />
+              Also remove their lanes
+            </label>
+          }
+        >
+          {blockedCount > 0 ? `${blockedCount} ${blockedCount === 1 ? 'agent stays' : 'agents stay'} open` : null}
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )
@@ -224,7 +231,7 @@ function CompletedRow({ row, checked, onToggle }: { row: CompletedGoalRow; check
     <label
       role="listitem"
       data-session-id={row.sessionId}
-      className={`flex items-start gap-3 border-b border-border px-4 py-2.5 last:border-b-0 ${row.blocked ? 'text-ink-dim' : 'cursor-pointer hover:bg-surface-hi'}`}
+      className={`flex items-start gap-3 border-b border-border px-4 py-2.5 last:border-b-0 ${row.blocked ? 'text-ink-dim' : 'cursor-pointer hover:bg-row-hover-bg'}`}
     >
       <input
         type="checkbox"
@@ -236,7 +243,7 @@ function CompletedRow({ row, checked, onToggle }: { row: CompletedGoalRow; check
         disabled={row.blocked !== null}
         onChange={() => onToggle(row)}
         aria-label={`Close ${row.title}`}
-        className="mt-0.5 accent-current disabled:opacity-50"
+        className="mt-0.5 disabled:opacity-50"
       />
       <span className="min-w-0 flex-1">
         {/* Escaped like every other bulk-close row: title, goal and note all

@@ -39,16 +39,17 @@ const SessionRuntimeObserver = memo(function SessionRuntimeObserver({ sessionId,
   return null
 })
 
-export function WorkspaceRuntimeServices({ state, refs, bootstrapComplete, draftChanges, pickerCancel }: {
+export function WorkspaceRuntimeServices({ state, refs, bootstrapComplete, draftChanges, pickerCancel, onSaveHealth }: {
   state: WorkspaceState
   refs: WorkspaceRefs
   bootstrapComplete: boolean
   draftChanges: ReturnType<typeof createDraftChanges>
   pickerCancel: (sessionId: string) => void
+  onSaveHealth: (failure: string | null) => void
 }) {
   const ids = useAppStore(useShallow(store => Object.keys(store.workspaceRuntimes)))
   const draftVersion = useSyncExternalStore(draftChanges.subscribe, draftChanges.getSnapshot)
-  useAutoSave(state, draftVersion, refs, bootstrapComplete)
+  useAutoSave(state, draftVersion, refs, bootstrapComplete, onSaveHealth)
   return <>{ids.map(sessionId =>
     <SessionRuntimeObserver key={sessionId} sessionId={sessionId} pickerCancel={pickerCancel} />,
   )}</>

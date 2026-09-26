@@ -68,7 +68,7 @@ export type NewAgentInModel = {
   initialTabId: TabId | null
 }
 
-const NO_ANCHOR_REASON = 'No agent in this project to take a working directory from'
+const NO_ANCHOR_REASON = 'No agent in this project to take a working folder from'
 
 /**
  * First session of the project that has a directory to borrow.

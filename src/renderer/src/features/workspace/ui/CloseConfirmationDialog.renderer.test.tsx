@@ -87,10 +87,23 @@ it('offers exactly two answers — no narrower or wider scope than the list show
   // approving a list that is not the list that dies.
   render(<CloseConfirmationDialog />)
   act(() => { void requestCloseConfirmation(multiRequest()) })
-  const footerButtons = screen.getAllByRole('button')
-    .map(button => button.textContent?.trim())
-    .filter(label => label === 'Cancel' || label?.startsWith('Close'))
+  // By ACCESSIBLE NAME, not textContent: the buttons carry aria-hidden key
+  // chips (Cancel ⎋), which are decoration, not a different answer.
+  const footerButtons = screen.getAllByRole('button', { name: /^(Cancel|Close.*)$/ })
+    .map(button => button.getAttribute('aria-label') ?? button.textContent?.replace(/[⎋↩⌘]/g, '').trim())
   expect(footerButtons).toEqual(['Cancel', 'Close 2'])
+})
+
+it('opens with focus on Cancel, labels Cancel ⎋, and puts no Enter chip on the destructive Close', async () => {
+  // K1: Enter on open must never destroy. Focus is placed on Cancel
+  // explicitly (not by footer-order luck), and Close advertises no key
+  // because none performs it.
+  render(<CloseConfirmationDialog />)
+  act(() => { void requestCloseConfirmation(multiRequest()) })
+  const cancel = screen.getByRole('button', { name: 'Cancel' })
+  await waitFor(() => expect(document.activeElement).toBe(cancel))
+  expect(cancel.querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+  expect(screen.getByRole('button', { name: 'Close 2' }).querySelector('[data-slot="kbd"]')).toBeNull()
 })
 
 it('declines the first request when a second one supersedes it', async () => {

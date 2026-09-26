@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ColorFlagPickerModal } from '@renderer/features/workspace/ui/ColorFlagPickerModal'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import { DispatchAgentList } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
 import type {
@@ -70,6 +71,57 @@ afterEach(() => {
   appState.settings.dispatchColorFlags = {}
   appState.workspaceRuntimes = {}
   appState.setDispatchColorFlag.mockClear()
+})
+
+// Plan N2 — kept beside the other rendered-row tests because they share the
+// mocked store and fixtures: ↑/↓ walk FOCUS between session rows (Enter still
+// selects; ⌥↑↓ still moves the selection), and the lane's agent is announced.
+describe('Dispatch sessions list keyboard', () => {
+  it('moves focus between session rows with ↑/↓ and marks the lane agent aria-current', () => {
+    const focusSessionInTab = vi.fn()
+    render(
+      <DispatchAgentList
+        groups={[group()]}
+        pinnedRows={[]}
+        activeSessionId={FLAGGED_SESSION_ID}
+        focusSessionInTab={focusSessionInTab}
+        showWorktreeBadges={false}
+      />,
+    )
+    const rowsEls = [...document.querySelectorAll<HTMLElement>('[data-dispatch-session-row="true"]')]
+    expect(rowsEls).toHaveLength(2)
+    expect(rowsEls[0]).toHaveAttribute('aria-current', 'true')
+    rowsEls[0]!.focus()
+    fireEvent.keyDown(rowsEls[0]!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rowsEls[1])
+    expect(focusSessionInTab).not.toHaveBeenCalled() // focus moved, selection did not
+    fireEvent.keyDown(rowsEls[1]!, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(rowsEls[0])
+  })
+})
+
+describe('Dispatch row descriptions (K2-10)', () => {
+  it('describes the lane action and the "new" chip instead of hiding both in hover titles', () => {
+    appState.workspaceRuntimes = { [UNFLAGGED_SESSION_ID]: { ...emptyRuntime(), pooledSpawnAt: 1 } } as never
+    render(
+      <DispatchAgentList
+        groups={[group()]}
+        pinnedRows={[]}
+        activeSessionId={FLAGGED_SESSION_ID}
+        focusSessionInTab={vi.fn()}
+        targetLaneIndex={1}
+        showWorktreeBadges={false}
+      />,
+    )
+    const [, pooled] = [...document.querySelectorAll<HTMLElement>('[data-dispatch-session-row="true"]')]
+    const description = document.getElementById(pooled!.getAttribute('aria-describedby')!)
+    expect(description?.textContent).toBe(
+      "Enter shows it in lane 2, replacing that lane's view. New: spawned into the pool and not placed in a lane yet.",
+    )
+    // Outside the button, so it is not read as part of the row's NAME on
+    // every arrow press.
+    expect(pooled!.contains(description)).toBe(false)
+  })
 })
 
 describe('Dispatch color-flag layout', () => {
@@ -167,8 +219,39 @@ describe('Dispatch color-flag layout', () => {
 
     const swatches = document.querySelector<HTMLElement>('[data-color-flag-swatches="true"]')
     expect(swatches).toHaveClass('flex-wrap', 'justify-center', 'px-4')
-    expect(screen.getByRole('button', { name: 'Green' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Purple' })).toHaveAttribute('aria-pressed', 'false')
+    // Listbox semantics (plan S9, steering k9): one choice among peers, and
+    // picking COMMITS, so selection must not follow the arrows.
+    expect(screen.getByRole('option', { name: 'Green' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('option', { name: 'Purple' })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('is one Tab stop that opens on the current flag, and arrows walk the swatches without picking', () => {
+    // Before: every swatch was its own Tab stop and no arrow key moved.
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'green' })
+    const onClose = vi.fn()
+    render(<ColorFlagPickerModal open sessionId={FLAGGED_SESSION_ID} onClose={onClose} />)
+    const options = screen.getAllByRole('option')
+    const green = screen.getByRole('option', { name: 'Green' })
+    expect(document.activeElement).toBe(green)
+    expect(options.filter(option => option.getAttribute('tabindex') === '0')).toEqual([green])
+    fireEvent.keyDown(green, { key: 'ArrowRight' })
+    const next = options[options.indexOf(green) + 1] ?? options[0]!
+    expect(document.activeElement).toBe(next)
+    // The Tab stop FOLLOWS focus (k9): Tab away and back lands here, not on
+    // the flag that was set when the dialog opened.
+    expect(options.filter(option => option.getAttribute('tabindex') === '0')).toEqual([next])
+    // Moving never picked: the flag is unchanged and the dialog is open.
+    expect(green).toHaveAttribute('aria-selected', 'true')
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(next, { key: 'End' })
+    expect(document.activeElement).toBe(options[options.length - 1])
+  })
+
+  it('closes from one Close ⎋, with Clear Flag beside it', () => {
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'green' })
+    render(<ColorFlagPickerModal open sessionId={FLAGGED_SESSION_ID} onClose={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Close' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+    expect(screen.getByRole('button', { name: 'Clear Flag' })).toBeEnabled()
   })
 })
 

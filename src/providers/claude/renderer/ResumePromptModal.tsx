@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { ConditionOptionList } from '@providers/shared/renderer/conditions/ConditionOptionList'
 
 type Props = {
   prompt: {
@@ -25,7 +26,9 @@ function moveSelection(current: number, target: number): string {
 
 export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) {
   const [localSelected, setLocalSelected] = useState(0)
-  const stripRef = useRef<HTMLDivElement>(null)
+  // The option LIST is the focus owner (it carries aria-activedescendant);
+  // its key events bubble to the strip's handler below.
+  const listRef = useRef<HTMLDivElement>(null)
   const interactionActiveRef = useRef(interactionActive)
   interactionActiveRef.current = interactionActive
 
@@ -54,7 +57,7 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
     const frame = requestAnimationFrame(() => {
       // A pane switch can commit between scheduling and paint. The ref check
       // prevents an old strip from reclaiming DOM focus after ownership moved.
-      if (interactionActiveRef.current) stripRef.current?.focus()
+      if (interactionActiveRef.current) listRef.current?.focus()
     })
     return () => cancelAnimationFrame(frame)
     // Object identity is intentionally absent: the condition adapter builds a
@@ -67,8 +70,6 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
 
   return (
     <div
-      ref={stripRef}
-      tabIndex={-1}
       role="group"
       aria-label="Resume session options"
       onKeyDown={e => {
@@ -102,7 +103,6 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
       bg-surface
       px-5 py-3
       font-code text-[12px] leading-[1.65]
-      outline-none
     ">
       <div className="text-ink font-semibold mb-2">
         {/* Scraped from Claude's own screen between two anchors, so the
@@ -116,28 +116,18 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
         Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.
       </div>
 
-      <div className="flex flex-col gap-0.5 mb-2">
-        {options.map((opt, i) => (
-          <div
-            key={i}
-            className={`cursor-pointer ${i === localSelected ? 'text-ink' : 'text-ink-dim'}`}
-            onClick={() => {
-              const current = prompt.selectedIndex ?? localSelected
-              setLocalSelected(i)
-              void onSend(moveSelection(current, i))
-            }}
-          >
-            <span className={`select-none ${i === localSelected ? 'text-accent' : 'text-transparent'}`}>
-              ❯{' '}
-            </span>
-            {i + 1}. {opt}
-          </div>
-        ))}
-      </div>
-
-      <div className="text-muted text-[10px]">
-        Press enter to confirm or esc to cancel
-      </div>
+      <ConditionOptionList
+        ref={listRef}
+        label="Resume choices"
+        marker="❯"
+        options={options.map(label => ({ label }))}
+        selectedIndex={localSelected}
+        onChoose={i => {
+          const current = prompt.selectedIndex ?? localSelected
+          setLocalSelected(i)
+          void onSend(moveSelection(current, i))
+        }}
+      />
     </div>
   )
 }

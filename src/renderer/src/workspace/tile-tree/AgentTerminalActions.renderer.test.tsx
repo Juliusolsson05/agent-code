@@ -6,14 +6,14 @@ import { AgentTerminalActions } from './AgentTerminalActions'
 describe('AgentTerminalActions', () => {
   it('renders exactly one always-enabled Submit button', () => {
     render(<AgentTerminalActions onSubmit={() => {}} />)
-    const button = screen.getByRole('button', { name: 'Submit' })
+    const button = screen.getByRole('button', { name: 'Send' })
     expect(button).not.toBeDisabled()
     expect(screen.getAllByRole('button')).toHaveLength(1)
   })
 
   it('prevents default on mousedown so xterm keeps focus', () => {
     render(<AgentTerminalActions onSubmit={() => {}} />)
-    const button = screen.getByRole('button', { name: 'Submit' })
+    const button = screen.getByRole('button', { name: 'Send' })
     // Dispatch a real cancelable mousedown rather than relying on fireEvent's
     // return value: RTL's synthetic object does not reflect defaultPrevented
     // after React processes the handler in this environment.
@@ -29,14 +29,14 @@ describe('AgentTerminalActions', () => {
         <AgentTerminalActions onSubmit={() => {}} />
       </div>,
     )
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Send' }))
     expect(onMouseDown).toHaveBeenCalledTimes(1)
   })
 
   it('fires onSubmit once per click', () => {
     const onSubmit = vi.fn()
     render(<AgentTerminalActions onSubmit={onSubmit} />)
-    const button = screen.getByRole('button', { name: 'Submit' })
+    const button = screen.getByRole('button', { name: 'Send' })
     fireEvent.mouseDown(button)
     fireEvent.click(button)
     fireEvent.click(button)
@@ -44,10 +44,14 @@ describe('AgentTerminalActions', () => {
   })
 
   it('uses the composer control scaffold', () => {
+    // Parity with ComposerActions' Send. Since the UI pass (G-5) both are the
+    // shared primary Button with the ↩ chip; the old assertion pinned the
+    // hand-styled classes both used to copy.
     const { container } = render(<AgentTerminalActions onSubmit={() => {}} />)
-    const button = screen.getByRole('button', { name: 'Submit' })
-    expect(button.className).toContain('rounded-control')
-    expect(button.className).toContain('control-active-bg')
+    const button = screen.getByRole('button', { name: 'Send' })
+    expect(button.getAttribute('data-slot')).toBe('button')
+    expect(button.className).toContain('bg-accent')
+    expect(button.querySelector('[data-slot="kbd"]')?.textContent).toBe('↩')
     expect(container.firstElementChild!.className).toContain('border-t')
     expect(container.firstElementChild!.className).toContain('bg-surface')
   })

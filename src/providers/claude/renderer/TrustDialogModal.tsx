@@ -1,10 +1,11 @@
-import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 // WHY the modal takes intent callbacks instead of an onSend(bytes) writer:
@@ -27,57 +28,41 @@ export function TrustDialogModal({ state, onAccept, onDecline }: Props) {
   const accept = () => { void onAccept() }
   const decline = () => { void onDecline() }
 
+  // The app's dialog grammar (UI pass): DialogHeader, a px-4 body, and the
+  // shared DialogActions footer with Title Case labels (the ask-2 ruling) and key chips.
+  // It was a hand-laid card with an 18px "!" glyph, 14px title, pl-6 body
+  // indent and lowercase "cancel" / "trust this folder", unlike any other
+  // dialog. The focus choice is unchanged: the TRUST button, as since #705.
+  // Enter follows the focused button; the footer's dialog-level Enter is the
+  // same confirm.
   return (
     <Dialog open onOpenChange={nextOpen => {
       if (!nextOpen) decline()
     }}>
       <DialogContent
-        className="modal-pop w-[480px] max-w-[calc(100vw-64px)] p-6"
+        className="modal-pop"
         onPointerDownOutside={event => event.preventDefault()}
       >
-        <div className="flex items-start gap-3 mb-4">
-          <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
-          <DialogTitle className="text-[14px] font-semibold leading-[1.3]">
-            Trust this folder?
-          </DialogTitle>
-          <DialogDescription className="sr-only">
-            Confirm whether Claude Code may access the selected folder.
-          </DialogDescription>
-        </div>
-
-        <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">
-          <p className="mb-3">Claude Code is about to access:</p>
+        <DialogHeader>
+          <DialogTitle>Trust This Folder?</DialogTitle>
+          <DialogDescription>Claude Code will be able to read, edit, and run files in it.</DialogDescription>
+        </DialogHeader>
+        <div className="px-4 py-3 text-[12px] leading-[1.6] text-ink-dim">
           {state.workspace && (
-            <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
+            <pre className="mb-2 overflow-x-auto whitespace-nowrap rounded-slab bg-code-bg px-3 py-2 font-code text-[12px] text-accent">
               {withVisibleControls(state.workspace)}
             </pre>
           )}
-          <p className="text-[11.5px] text-muted">
-            Claude Code will be able to{' '}
-            <strong className="text-ink font-semibold">
-              read, edit, and execute files
-            </strong>{' '}
-            in this folder. Only continue if this is a project you created or
-            one you trust.
+          <p className="text-[11px] text-muted">
+            Only continue if this is a project you created or one you trust.
           </p>
         </div>
-
-        <div className="flex justify-end gap-2 mt-6 pl-6">
-          <Button
-            type="button"
-            onClick={decline}
-            variant="outline"
-          >
-            cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={accept}
-            autoFocus
-          >
-            trust this folder
-          </Button>
-        </div>
+        <DialogActions
+          onCancel={decline}
+          confirmLabel="Trust Folder"
+          onConfirm={accept}
+          initialFocus="confirm"
+        />
       </DialogContent>
     </Dialog>
   )

@@ -142,10 +142,13 @@ export function stripCodexExecWrapper(output: string): string {
   return output.slice(idx + marker.length)
 }
 
-/** True when the output is ONLY the exec wrapper with a trailing
- *  "Process exited with code …" line and nothing else — i.e. no
- *  stdout/stderr worth surfacing. Callers filter these out so the
- *  feed doesn't get cluttered with empty tool-result rows. */
+/** True for ANY exec-wrapped output ("Chunk ID: …" with a "Process exited
+ *  with code …" line), stdout or not. The rollout mapper drops these
+ *  `function_call_output` lines because the correlated `exec_command_end`
+ *  event carries the same result, with exit code and command, and renders
+ *  the card; keeping both would duplicate it. (This comment used to say
+ *  "only the wrapper and nothing else", which the code never did; #1298
+ *  review B.) */
 export function isCodexExecWrapperOutput(output: string): boolean {
   return output.startsWith('Chunk ID:') && output.includes('\nProcess exited with code ')
 }

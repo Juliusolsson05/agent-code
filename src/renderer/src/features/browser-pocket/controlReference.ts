@@ -10,7 +10,7 @@ export const controlReference = [
     "ui": "A strip or split inside the agent's lane, a side-by-side split in Spotlight (Split / Browser / Agent), a :port chip on lanes whose processes serve a page, and an address bar with back, forward, reload, pick-element, open-in-browser and a menu for device, appearance, zoom, cookies and DevTools.",
     "prerequisites": "Settings → Experimental → Browser Pocket on. Agents need the Browser Pocket MCP (Settings → Agents) and a reload to get browser_* tools. Dev-server detection is macOS only.",
     "workflow": [
-      "Press ⌘⇧B on an agent (or click its :port chip)",
+      "Run the toggle-browser-pocket command on an agent — its current chord is in keybindings.list — or click its :port chip",
       "open the lane's dev server from the empty pocket or type a port",
       "enter Spotlight to see agent and page side by side",
       "pick an element to hand it to that agent's composer, or let the agent verify its own work."

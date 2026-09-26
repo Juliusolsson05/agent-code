@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import type { RefObject } from 'react'
 
-import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { hasAppInteractionOwner, paneHasInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { SessionId } from '@renderer/workspace/types'
 import type { ImagePasteResult } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { clipboardHasImageCandidate } from '@renderer/workspace/tile-tree/TileLeaf/claudeImages'
@@ -123,6 +123,8 @@ export function usePasteToFocus({
         if (target.isContentEditable) return
       }
       if (hasAppInteractionOwner()) return
+      // Same as type-to-focus: never paste past a pane dialog (#713).
+      if (paneHasInteractionOwner(inputRef.current)) return
 
       const el = inputRef.current
       if (!el) return

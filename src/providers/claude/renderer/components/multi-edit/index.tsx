@@ -16,6 +16,7 @@ import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { FeedPagerButtons } from '@renderer/features/feed/ui/rows/primitives'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { LazyJsonDisclosure } from '@providers/shared/renderer/rows/LazyJsonDisclosure'
@@ -155,29 +156,22 @@ export const MultiEditRow = memo(function MultiEditRow({
             )
           })}
           {edits.length > MULTI_EDIT_PAGE_SIZE ? (
+            // The feed's shared pager (FeedPagerButtons, ledger G-29/G-36), as
+            // in PagedTextViewer and CodeBlock one level down: this pair was
+            // drawn bare, with a ~14px hit area on the phone where its
+            // siblings reserve 44px. Lowercase is the feed's inline-disclosure
+            // voice ("collapse", "(show all)"), not drift.
             <div className="flex items-center gap-3 text-[11px] text-muted">
               <span>
                 changes {safePageStart + 1}–{Math.min(edits.length, safePageStart + normalized.length)}
                 {' '}of {edits.length}
               </span>
-              {safePageStart > 0 ? (
-                <button
-                  type="button"
-                  className="cursor-pointer hover:text-ink"
-                  onClick={() => setPageStart(Math.max(0, safePageStart - MULTI_EDIT_PAGE_SIZE))}
-                >
-                  previous
-                </button>
-              ) : null}
-              {safePageStart + MULTI_EDIT_PAGE_SIZE < edits.length ? (
-                <button
-                  type="button"
-                  className="cursor-pointer hover:text-ink"
-                  onClick={() => setPageStart(safePageStart + MULTI_EDIT_PAGE_SIZE)}
-                >
-                  next
-                </button>
-              ) : null}
+              <FeedPagerButtons
+                hasPrevious={safePageStart > 0}
+                hasNext={safePageStart + MULTI_EDIT_PAGE_SIZE < edits.length}
+                onPrevious={() => setPageStart(Math.max(0, safePageStart - MULTI_EDIT_PAGE_SIZE))}
+                onNext={() => setPageStart(safePageStart + MULTI_EDIT_PAGE_SIZE)}
+              />
             </div>
           ) : null}
         </div>

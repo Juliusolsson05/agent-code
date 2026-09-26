@@ -35,6 +35,11 @@ vi.mock('@renderer/features/usage/hooks/useUsageHeaderSnapshot', () => ({
   useUsageHeaderSnapshot: () => ({ stale: false, snapshot: usage.snapshot }),
 }))
 
+// The stop summaries are the only report a stopped run gives, so the tests
+// read the toast itself.
+const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }))
+vi.mock('@renderer/ui/GlobalToastContext', () => ({ useGlobalToast: () => ({ showToast }) }))
+
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
 function exhaustedSnapshot(
@@ -133,6 +138,7 @@ function claudeWorkspaceFixture(): Workspace {
 
 afterEach(() => {
   usage.snapshot = null
+  showToast.mockReset()
   if (originalApiDescriptor) Object.defineProperty(window, 'api', originalApiDescriptor)
   else Reflect.deleteProperty(window, 'api')
 })
@@ -227,6 +233,7 @@ describe('BulkProviderSwitchModal policy', () => {
       ['agent'],
       'claude',
       { allowSourceTurns: true, compactOnArrival: false, sourceCompactionConfirmed: true },
+      { shouldStop: expect.any(Function) },
     )
   })
 
@@ -247,5 +254,219 @@ describe('BulkProviderSwitchModal policy', () => {
     render(<BulkProviderSwitchModal open workspace={withParkedAgent} onClose={() => {}} />)
 
     expect(screen.queryByText(/are mid-turn and will be skipped/i)).not.toBeInTheDocument()
+  })
+
+  // #1271: a running batch locks every exit (single-flight), and with
+  // compaction each agent can take five minutes. Cancel becomes the way out:
+  // it stops the batch after the agent in flight.
+  it('lets the user stop a running batch after the agent in flight', async () => {
+    usage.snapshot = healthySnapshot()
+    let seenStop: (() => boolean) | undefined
+    let finish!: () => void
+    const workspace = workspaceFixture()
+    ;(workspace.switchAgentsToProvider as ReturnType<typeof vi.fn>).mockImplementation(
+      (_ids: unknown, _target: unknown, _policy: unknown, control?: { shouldStop?: () => boolean }) => {
+        seenStop = control?.shouldStop
+        return new Promise<void>(resolve => { finish = resolve })
+      },
+    )
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /Switch 1 agent to Claude/i }))
+    const stop = await screen.findByRole('button', { name: 'Stop after this agent' })
+    expect(stop).not.toBeDisabled()
+    expect(seenStop?.()).toBe(false)
+    fireEvent.click(stop)
+    expect(seenStop?.()).toBe(true)
+    expect(screen.getByRole('button', { name: 'Stopping after this agent…' })).toBeDisabled()
+    finish()
+  })
+
+  // #1271 / steering q32: the /model fan-out holds the same lock, so it needs
+  // the same way out.
+  it('lets the user stop a /model fan-out after the agent in flight', async () => {
+    usage.snapshot = exhaustedSnapshot('claude', 'model-family')
+    let finishFirst!: (value: { ok: true }) => void
+    const deliverPrompt = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+      .mockResolvedValue({ ok: true })
+    Object.defineProperty(window, 'api', { configurable: true, value: { deliverPrompt } })
+    const base = claudeWorkspaceFixture()
+    const agent = base.state.sessions.agent!
+    const workspace = {
+      ...base,
+      state: {
+        ...base.state,
+        sessions: { agent, second: { ...agent, joinedAt: 1 } },
+        stage: { lanes: [{ selectedSessionId: 'agent' }, { selectedSessionId: 'second' }], rows: [{ length: 2 }], focusedLane: 0 },
+      },
+      runtimes: { ...base.runtimes, second: base.runtimes.agent },
+    } as unknown as Workspace
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /Switch 2 agents to another Claude model/i }))
+    await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this agent' }))
+    finishFirst({ ok: true })
+    await screen.findByRole('button', { name: 'Cancel' })
+    expect(deliverPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  // #1312 review B: the stop's other entry points and the idle Cancel.
+  function runningBatch() {
+    usage.snapshot = healthySnapshot()
+    let seenStop: (() => boolean) | undefined
+    const workspace = workspaceFixture()
+    ;(workspace.switchAgentsToProvider as ReturnType<typeof vi.fn>).mockImplementation(
+      (_ids: unknown, _target: unknown, _policy: unknown, control?: { shouldStop?: () => boolean }) => {
+        seenStop = control?.shouldStop
+        return new Promise<void>(() => {})
+      },
+    )
+    const onClose = vi.fn()
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: /Switch 1 agent to Claude/i }))
+    return { onClose, stopRequested: () => seenStop?.() }
+  }
+
+  it('Escape during a running batch asks to stop, and keeps the modal open', async () => {
+    const run = runningBatch()
+    await screen.findByRole('button', { name: 'Stop after this agent' })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(run.stopRequested()).toBe(true)
+    expect(run.onClose).not.toHaveBeenCalled()
+  })
+
+  it('the stop button does not close the modal while the agent in flight finishes', async () => {
+    const run = runningBatch()
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop after this agent' }))
+    expect(run.stopRequested()).toBe(true)
+    expect(run.onClose).not.toHaveBeenCalled()
+  })
+
+  it('Cancel closes the modal when nothing is running', () => {
+    usage.snapshot = healthySnapshot()
+    const onClose = vi.fn()
+    render(<BulkProviderSwitchModal open workspace={workspaceFixture()} onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  // #1312 round 2: the /model fan-out and Return, driven through the modal.
+  function claudeAgents(count: number): Workspace {
+    const base = claudeWorkspaceFixture()
+    const agent = base.state.sessions.agent!
+    const ids = Array.from({ length: count }, (_, i) => (i === 0 ? 'agent' : `agent-${i}`))
+    return {
+      ...base,
+      state: {
+        ...base.state,
+        sessions: Object.fromEntries(ids.map((id, i) => [id, { ...agent, joinedAt: i }])),
+        stage: { lanes: ids.map(id => ({ selectedSessionId: id })), rows: [{ length: count }], focusedLane: 0 },
+      },
+      runtimes: Object.fromEntries(ids.map(id => [id, base.runtimes.agent])),
+    } as unknown as Workspace
+  }
+
+  function startModelFanOut(count: number, deliverPrompt: ReturnType<typeof vi.fn>) {
+    usage.snapshot = exhaustedSnapshot('claude', 'model-family')
+    Object.defineProperty(window, 'api', { configurable: true, value: { deliverPrompt } })
+    render(<BulkProviderSwitchModal open workspace={claudeAgents(count)} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`Switch ${count} agents to another Claude model`, 'i') }))
+  }
+
+  // Review A: a delivery that REJECTS after Stop used to count every agent
+  // the loop never reached as failed. Only the one that rejected failed; the
+  // rest were stopped.
+  it('reports agents after a stop as not attempted even when the delivery in flight rejects', async () => {
+    let rejectFirst!: (error: Error) => void
+    const deliverPrompt = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject }))
+      .mockResolvedValue({ ok: true })
+    startModelFanOut(2, deliverPrompt)
+    await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this agent' }))
+    rejectFirst(new Error('IPC rejected'))
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalled())
+    expect(showToast).toHaveBeenLastCalledWith('Stopped: 1 agent not attempted. Sent /model sonnet to 0 agents (1 failed: IPC rejected)')
+  })
+
+  // Review B: a stop pressed during a LATER agent, its count and wording.
+  it('stops a /model fan-out before the third agent when stop is pressed during the second', async () => {
+    let finishSecond!: (value: { ok: true }) => void
+    const deliverPrompt = vi.fn()
+      .mockResolvedValueOnce({ ok: true })
+      .mockImplementationOnce(() => new Promise(resolve => { finishSecond = resolve }))
+      .mockResolvedValue({ ok: true })
+    startModelFanOut(3, deliverPrompt)
+    await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this agent' }))
+    finishSecond({ ok: true })
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalled())
+    expect(deliverPrompt).toHaveBeenCalledTimes(2)
+    expect(showToast).toHaveBeenLastCalledWith('Stopped: 1 agent not attempted. Sent /model sonnet to 2 agents')
+  })
+
+  // Review B: the /model run sets `switchingModel`, not `busy`; Escape must
+  // still reach the stop.
+  it('Escape during a /model fan-out asks to stop', async () => {
+    let finishFirst!: (value: { ok: true }) => void
+    const deliverPrompt = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+      .mockResolvedValue({ ok: true })
+    startModelFanOut(2, deliverPrompt)
+    await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    finishFirst({ ok: true })
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalled())
+    expect(deliverPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  // Review B: a stopped run must not leave the stop armed for the next one.
+  it('starts a fresh /model fan-out after a stopped one', async () => {
+    let finishFirst!: (value: { ok: true }) => void
+    const deliverPrompt = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+      .mockResolvedValue({ ok: true })
+    startModelFanOut(2, deliverPrompt)
+    await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this agent' }))
+    finishFirst({ ok: true })
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByRole('button', { name: /Switch 2 agents to another Claude model/i }))
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalledTimes(2))
+    expect(deliverPrompt).toHaveBeenCalledTimes(3)
+  })
+
+  // Review A/B: Return is started from the modal, so the modal is what must
+  // hand it the stop, and reset it for the next Return.
+  it('hands Return the stop, and a later Return starts with it cleared', async () => {
+    usage.snapshot = healthySnapshot()
+    const base = workspaceFixture()
+    const workspace = {
+      ...base,
+      state: {
+        ...base.state,
+        lastProviderSwitchBatch: {
+          id: 'batch-1', switchedAt: 0, sourceKind: 'claude', targetKind: 'codex', compactOnArrival: false,
+          agents: [{ sessionId: 'agent', cwd: '/projects/agent-code', originalKind: 'claude', switchedToKind: 'codex' }],
+        },
+      },
+    } as unknown as Workspace
+    const controls: Array<{ shouldStop?: () => boolean } | undefined> = []
+    let finish!: () => void
+    ;(workspace.returnLastProviderSwitchBatch as ReturnType<typeof vi.fn>).mockImplementation(
+      (control?: { shouldStop?: () => boolean }) => {
+        controls.push(control)
+        return new Promise<void>(resolve => { finish = resolve })
+      },
+    )
+    render(<BulkProviderSwitchModal open workspace={workspace} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Return 1' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop after this agent' }))
+    expect(controls[0]?.shouldStop?.()).toBe(true)
+    finish()
+    fireEvent.click(await screen.findByRole('button', { name: 'Return 1' }))
+    await vi.waitFor(() => expect(controls).toHaveLength(2))
+    expect(controls[1]?.shouldStop?.()).toBe(false)
+    finish()
   })
 })

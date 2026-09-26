@@ -74,7 +74,7 @@ export function DictationApiKeyRow() {
 
   if (!status) {
     return (
-      <div className="text-[11px] text-muted italic">Loading key status…</div>
+      <div role="status" className="text-[11px] text-muted">Loading key status…</div>
     )
   }
 

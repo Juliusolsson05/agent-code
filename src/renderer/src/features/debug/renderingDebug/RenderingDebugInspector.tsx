@@ -1,3 +1,4 @@
+import { Kbd } from '@renderer/components/ui/kbd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -363,7 +364,8 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
           </div>
         </div>
         <div className="px-3 py-2 border-b border-border text-[11px] text-muted">
-          Click any element in the focused pane. Its normal action is blocked. Press Esc to exit.
+          {/* The key as the shared chip (plan M9), not the word "Esc". */}
+          Click any element in the focused pane. Its normal action is blocked. <Kbd binding="Escape" aria-hidden={false} /> exits.
         </div>
         {!selection ? (
           <div className="flex-1 flex items-center justify-center text-muted text-[12px] px-8 text-center">

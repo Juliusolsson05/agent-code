@@ -108,7 +108,7 @@ describe('Agent MCP Servers picker', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Agent Management for this agent' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'TLDR for this agent' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'beeper for this agent' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & Reload Agent' }))
 
     expect(replaceSession).toHaveBeenCalledTimes(1)
     expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
@@ -125,11 +125,22 @@ describe('Agent MCP Servers picker', () => {
     expect(useAppStore.getState().agentMcpServersSessionId).toBeNull()
   })
 
+  it('never reloads the agent from a dialog-level Enter, and shows no Enter chip on the reload (plan S30)', () => {
+    // The confirm restarts the agent's process; a reflexive Enter after
+    // ticking a box must not cut a running turn off.
+    const { replaceSession } = mount('codex')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'TLDR for this agent' }))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(replaceSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Apply & Reload Agent' }).querySelector('[data-slot="kbd"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel' }).querySelector('[data-slot="kbd"]')?.textContent).toBe('⎋')
+  })
+
   it('drops a choice that matches Settings so the agent keeps following Settings', () => {
     const { replaceSession } = mount('codex', { builtInMcpOverrides: { tldr: false } })
     // TLDR is on in Settings; turning it back on removes the explicit "off".
     fireEvent.click(screen.getByRole('checkbox', { name: 'TLDR for this agent' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & Reload Agent' }))
     expect(replaceSession.mock.calls[0]![1].builtInMcpOverrides).toEqual({})
   })
 
@@ -137,7 +148,7 @@ describe('Agent MCP Servers picker', () => {
     const { replaceSession } = mount('claude')
     fireEvent.click(screen.getByRole('checkbox', { name: 'Agent Management for this agent' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Root Management for this agent' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & Reload Agent' }))
 
     expect(replaceSession).not.toHaveBeenCalled()
     expect(useAppStore.getState().rootManagementPromptSessionId).toBe('agent')
@@ -149,7 +160,7 @@ describe('Agent MCP Servers picker', () => {
     Object.assign(window, { api: { ...window.api, controlGoalLoop } })
     const { replaceSession } = mount('codex', { builtInMcpDomains: ['goal_loop'], builtInMcpOverrides: { goal_loop: true } })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Goal Loop for this agent' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & Reload Agent' }))
     await waitFor(() => expect(replaceSession).toHaveBeenCalledTimes(1))
     // Named by the session the loop is filed under, and before the reload.
     expect(controlGoalLoop).toHaveBeenCalledWith({ sessionId: 'agent', action: 'stop' })
@@ -165,7 +176,7 @@ describe('Agent MCP Servers picker', () => {
     mount('codex', { builtInMcpDomains: ['goal_loop'], builtInMcpOverrides: { goal_loop: true } })
     fireEvent.click(screen.getByRole('checkbox', { name: 'Goal Loop for this agent' }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Root Management for this agent' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & Reload Agent' }))
     expect(controlGoalLoop).not.toHaveBeenCalled()
     expect(useAppStore.getState().rootManagementPromptStopGoalLoop).toBe(true)
   })
@@ -175,7 +186,7 @@ describe('Agent MCP Servers picker', () => {
     Object.assign(window, { api: { ...window.api, controlGoalLoop } })
     mount('codex', { builtInMcpDomains: ['goal_loop', 'tldr'], builtInMcpOverrides: { goal_loop: true } })
     fireEvent.click(screen.getByRole('checkbox', { name: 'TLDR for this agent' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & reload agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply & Reload Agent' }))
     expect(controlGoalLoop).not.toHaveBeenCalled()
   })
 

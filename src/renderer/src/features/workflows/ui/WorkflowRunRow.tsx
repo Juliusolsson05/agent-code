@@ -1,3 +1,4 @@
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -119,9 +120,12 @@ export function WorkflowRunView({
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const unconfirmedProvider = message.includes('unconfirmed provider execution')
-        if (!unconfirmedProvider || !window.confirm(
-          'A previous read-only workflow agent may still be alive. Continue from the durable results anyway? This can repeat any external tool call made by that agent.',
-        )) throw error
+        if (!unconfirmedProvider || !(await requestConfirm({
+          title: 'A previous read-only workflow agent may still be alive.',
+          description: 'Continue from the durable results anyway? This can repeat any external tool call made by that agent.',
+          confirmLabel: 'Continue Anyway',
+          tone: 'danger',
+        }))) throw error
         next = await client.resume({
           ...scope,
           idempotencyKey: resumeKey.current,

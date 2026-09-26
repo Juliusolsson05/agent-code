@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
+import { PanelHeader } from '@renderer/components/ui/panel-header'
 
 import { formatWorktreeDump, labelFor, providerLabel } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { relativeTime } from '@renderer/lib/relativeTime'
@@ -230,48 +232,36 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
 
   return (
     <div className="h-full w-[340px] flex-shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden text-[11px] font-code">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border text-[10px] text-muted uppercase tracking-wider select-none flex-shrink-0">
-        <span>worktrees</span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void copyDump()}
-            className={
-              copyState === 'copied'
-                ? 'text-accent'
-                : copyState === 'failed'
-                  ? 'text-danger'
-                  : 'text-muted hover:text-ink'
-            }
-            title={
-              copyState === 'failed'
-                ? 'Clipboard copy failed — try again'
-                : 'Copy worktree status dump to clipboard'
-            }
-          >
-            {copyState === 'idle'
-              ? 'copy'
-              : copyState === 'copied'
-                ? 'copied ✓'
-                : 'failed ✗'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void refresh(true)}
-            className="text-muted hover:text-ink"
-            title="Refresh worktree activity index"
-          >
-            refresh
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-muted hover:text-ink text-[14px] leading-none"
-          >
-            ×
-          </button>
-        </div>
-      </div>
+      {/* The shared side-panel header (UI pass, G-26): Title Case ghost
+          actions instead of lowercase text links, and a named close (the ×
+          had no accessible name). */}
+      <PanelHeader
+        label="Worktrees"
+        onClose={onClose}
+        actions={
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => void copyDump()}
+              className={copyState === 'copied' ? 'text-accent' : copyState === 'failed' ? 'text-danger' : undefined}
+              title={copyState === 'failed' ? 'Clipboard copy failed — try again' : 'Copy worktree status dump to clipboard'}
+            >
+              {copyState === 'idle' ? 'Copy' : copyState === 'copied' ? 'Copied' : 'Copy Failed'}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => void refresh(true)}
+              title="Refresh worktree activity index"
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {error && (
         <div className="px-3 py-4 text-muted text-center">
@@ -280,8 +270,8 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
               this persistent muted state — not a toast — is the right
               surface because the poll would re-fire a toast forever. */}
           {dump?.gitMissing
-            ? 'git not found — Git features disabled'
-            : 'not a git repository'}
+            ? 'Git not found — Git features are disabled.'
+            : 'Not a Git repository.'}
         </div>
       )}
 
@@ -289,12 +279,12 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="px-3 py-2 border-b border-border text-muted">
             {rows.length} worktrees
-            {loading ? ' · loading' : ''}
-            {indexStatus?.refreshing ? ' · indexing' : ''}
+            {loading ? ' · Loading…' : ''}
+            {indexStatus?.refreshing ? ' · Indexing…' : ''}
           </div>
           {sections.map(section => (
             <div key={section.key}>
-              <div className="px-3 py-1 bg-surface-hi border-b border-border text-[9px] uppercase tracking-wider text-muted flex items-center justify-between sticky top-0">
+              <div className="px-3 py-1 bg-surface-hi border-b border-border text-[10px] uppercase tracking-wider text-muted flex items-center justify-between sticky top-0">
                 <span>{SECTION_LABEL[section.key]}</span>
                 <span className="text-ink-dim">{section.rows.length}</span>
               </div>
@@ -331,7 +321,7 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
   // touch.
   return (
     <div
-      className="px-3 py-2 border-b border-border hover:bg-surface-hi border-l-2"
+      className="px-3 py-2 border-b border-border hover:bg-row-hover-bg border-l-2"
       style={{ borderLeftColor: identityColor ?? 'transparent' }}
     >
       <div className="flex items-center gap-2">
@@ -343,7 +333,7 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
           {row.branch ?? '(detached)'}
         </span>
         <span
-          className="text-[9px] uppercase tracking-wider text-muted cursor-help"
+          className="text-[10px] uppercase tracking-wider text-muted cursor-help"
           title={categoryExplanation(category)}
         >
           {labelFor(category)}
@@ -369,7 +359,7 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
           {row.liveAgents.map(agent => (
             <span
               key={agent.sessionId}
-              className={`px-1.5 py-[1px] text-[9px] rounded-control border ${
+              className={`px-1.5 py-[1px] text-[10px] rounded-control border ${
                 agent.live
                   ? 'border-accent text-accent'
                   : 'border-border text-muted'

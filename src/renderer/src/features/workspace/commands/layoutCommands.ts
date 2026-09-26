@@ -137,7 +137,7 @@ export const layoutCommands: CommandDef[] = [
     // always a focused lane and the command is one thing: insert to its right.
     surface: 'app',
     title: 'New Lane',
-    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row.\n\n**Use when:** You want another live agent view without reshaping the stage or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
+    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row.\n\n**Use when:** You want another live agent view without reshaping the stage or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and run Select Next Agent to put the first agent in it, or pick one from its strip.',
     keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right', 'grid dispatch', 'stage'],
     when: ({ workspace }) => canInsertLaneInFocusedRow(workspace.state),
     run: async ({ workspace }) => {

@@ -278,6 +278,9 @@ describe('refusing to write over a file it could not read', () => {
 
     expect(store.isReadOnly()).toBe(true)
     await expect(store.saveSlice('w1', slice(['a']), NO_GEOMETRY)).rejects.toThrow(/version 99/)
+    // The renderer's banner keys off this prefix to stop promising a later
+    // save that cannot happen this session (#1263 review C).
+    await expect(store.saveSlice('w1', slice(['a']), NO_GEOMETRY)).rejects.toThrow(/^Workspace file is read-only this session: /)
     // The user's file must still be intact after a downgrade launch: nothing
     // was written at all, not even an empty document.
     expect(writeFile).not.toHaveBeenCalled()

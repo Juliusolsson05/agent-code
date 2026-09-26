@@ -2,6 +2,7 @@ import * as React from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import { DialogFooter } from '@renderer/components/ui/dialog'
+import { Kbd } from '@renderer/components/ui/kbd'
 
 // DialogActions — the confirm/cancel footer every dialog should use.
 //
@@ -43,12 +44,19 @@ import { DialogFooter } from '@renderer/components/ui/dialog'
 
 export type DialogActionsProps = {
   /** Label for the primary action. Imperative verb, e.g. "Bury", "Close 3
-   *  Agents". Not "OK" — a mouse user reads the button, not the title. */
-  confirmLabel: string
-  onConfirm: () => void
+   *  Agents". Not "OK" — a mouse user reads the button, not the title.
+   *  Omit both confirmLabel and onConfirm for a CLOSE-ONLY dialog (a
+   *  read-only viewer): the footer then renders just the cancel button,
+   *  labelled via cancelLabel="Close" — one ghost `Close ⎋` (plan H5), which
+   *  replaced the outline/secondary/"close"/"✕" variants those viewers used. */
+  confirmLabel?: string
+  onConfirm?: () => void
   /** Omit to render a confirm-only footer (an acknowledgement dialog). */
   onCancel?: () => void
   cancelLabel?: string
+  /** Disables Cancel while a surface refuses to close (an in-flight batch).
+   *  Pair with `escapeCancels={false}` so the ⎋ chip goes with it. */
+  cancelDisabled?: boolean
   /** `danger` swaps the confirm to the destructive variant. */
   tone?: 'default' | 'danger'
   /** Blocks confirm and dims it. Use for "nothing selected yet". */
@@ -57,12 +65,60 @@ export type DialogActionsProps = {
    *  is invalid. */
   busy?: boolean
   /**
-   * When false, Enter does not confirm. Set this for any dialog whose body
-   * owns Enter — a multiline textarea, or a list whose Enter means "choose the
-   * highlighted row". Defaults to true because the common case is a dialog
-   * with one obvious commit.
+   * Which key commits, shown as a chip on the confirm button.
+   *
+   * `Enter` (default) — the common single-commit dialog.
+   * `Cmd+Enter` — the dialog's body owns plain Enter (a multiline textarea),
+   *   so commit needs a modifier. ⌘↩ commits from ANYWHERE in the dialog,
+   *   including a focused textarea or button, because the modifier is the
+   *   user saying "commit", not "type a newline" or "press this button".
+   * `null` — no key commits; no chip is shown. Use it for a dialog whose
+   *   commit genuinely should be deliberate (none today) rather than
+   *   pretending with a chip that lies.
+   *
+   * WHY the chip and the listener are driven by the SAME prop: a hint that
+   * names a key which does not do the thing is worse than no hint. Keeping
+   * one source for "what commits" makes that drift impossible here.
+   */
+  confirmKey?: 'Enter' | 'Cmd+Enter' | null
+  /**
+   * When false, DialogActions does not WIRE the commit key itself — the
+   * surface's own handler does (a list whose Enter means "commit the
+   * selection", e.g. Pin Agents). The chip is still shown, because the key
+   * still commits; only the listener's owner differs. Defaults to true.
    */
   confirmOnEnter?: boolean
+  /**
+   * Whether Escape cancels. Only affects the ⎋ chip on Cancel — Escape itself
+   * belongs to Radix on DialogContent. Pass false while a surface blocks
+   * Escape (Bulk Provider Switch mid-run, a must-answer Setup), so the chip
+   * does not promise an exit the dialog is refusing.
+   */
+  escapeCancels?: boolean
+  /**
+   * Which footer button takes focus when the dialog opens, marked with
+   * `data-autofocus`, which DialogContent honours in BOTH modes: Radix
+   * dialogs and pane-scoped condition dialogs (#713).
+   * `focusDialogActionOnOpen` still works for Radix-only dialogs, but it
+   * rides on Radix's open-autofocus event, which a pane dialog does not
+   * have. Omit it to keep the default (the first tabbable control).
+   */
+  initialFocus?: 'cancel' | 'confirm'
+  /**
+   * Keys that have no button of their own (↑↓ move, Space toggle, ⌫ back),
+   * rendered as ONE compact line left of the buttons. See `KbdLegend`.
+   * WHY here and not a body row: the footer is where the eye already goes for
+   * "what can I do now", and a legend row in the body costs a line on every
+   * list dialog. Mutually compatible with `children`; legend renders first.
+   */
+  legend?: React.ReactNode
+  /**
+   * Extra buttons rendered between the legend and Cancel — a step dialog's
+   * `Back ⌫`. Rendered as given; callers use `<Button variant="ghost"
+   * size="sm">` + a `Kbd` so the row stays one visual family. Kept a slot, not
+   * a config object, because each such button owns its own key and state.
+   */
+  extraActions?: React.ReactNode
   /** Extra content rendered left of the buttons, e.g. a summary count. */
   children?: React.ReactNode
 }
@@ -96,7 +152,18 @@ export type DialogActionsProps = {
  */
 export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
-  return target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'TEXTAREA'
+  // SELECT (steering note k4): a native <select> uses Enter to open/confirm
+  // its own option list on several platforms, and the dialog-level listener
+  // saw that Enter bubble up — Merge Project Tabs opens with focus on its
+  // Keep select, so "Enter to choose the kept tab" MERGED the tabs at once.
+  // Every caller of this predicate only ever steps ASIDE when it returns
+  // true, so widening it cannot make any handler act where it did not.
+  return (
+    target.tagName === 'BUTTON' ||
+    target.tagName === 'A' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT'
+  )
 }
 
 /**
@@ -118,7 +185,38 @@ export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
  */
 export function focusedControlOwnsSpace(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
-  return target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA' || target.tagName === 'INPUT'
+  // SELECT for the same reason as Enter above: Space opens a native select.
+  return (
+    target.tagName === 'BUTTON' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'INPUT' ||
+    target.tagName === 'SELECT'
+  )
+}
+
+/**
+ * `onOpenAutoFocus` handler that lands focus on one of this dialog's
+ * DialogActions buttons (keyboard-first plan K1).
+ *
+ * WHY it exists: a DESTRUCTIVE dialog must open with focus on Cancel so that
+ * a reflexive Enter cancels. Radix's default — "the first tabbable element" —
+ * happened to be Cancel in most footers only because Cancel is rendered
+ * first; any body control (a checkbox, a list) or a footer reorder silently
+ * moved focus elsewhere. Keyed on `data-dialog-action`, not DOM order, so the
+ * choice survives layout changes. Non-destructive single-commit dialogs use
+ * 'confirm' so Enter-on-open commits.
+ *
+ * Falls back to Radix's default when the button is absent (a confirm-only
+ * footer asked for 'cancel'), so focus is never left on <body>.
+ */
+export function focusDialogActionOnOpen(which: 'cancel' | 'confirm') {
+  return (event: Event) => {
+    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+    const target = root?.querySelector<HTMLButtonElement>(`[data-dialog-action="${which}"]:not(:disabled)`)
+    if (!target) return
+    event.preventDefault()
+    target.focus()
+  }
 }
 
 export function DialogActions({
@@ -126,17 +224,23 @@ export function DialogActions({
   onConfirm,
   onCancel,
   cancelLabel = 'Cancel',
+  cancelDisabled = false,
   tone = 'default',
   confirmDisabled = false,
   busy = false,
+  confirmKey = 'Enter',
   confirmOnEnter = true,
+  escapeCancels = true,
+  initialFocus,
+  legend,
+  extraActions,
   children,
 }: DialogActionsProps) {
   const blocked = confirmDisabled || busy
   const footerRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
-    if (!confirmOnEnter) return
+    if (!onConfirm || !confirmOnEnter || confirmKey === null) return
     // Scope the listener to THIS footer's own dialog rather than the document.
     // Two mounted dialogs (or a dialog over a full-page surface) would
     // otherwise both fire on a single Enter, and the one the user is not
@@ -148,17 +252,28 @@ export function DialogActions({
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Enter') return
-      // Shift+Enter is newline everywhere in this app; a modifier means the
-      // user is composing, not committing.
-      if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
-      // A FOCUSED BUTTON OWNS ITS OWN ENTER, and a textarea owns its newline.
-      // This is the important one: calling preventDefault below suppresses the
-      // synthesized click that Enter would have sent to the focused control, so
-      // without this guard tabbing to Cancel and pressing Enter would CONFIRM —
-      // and for a destructive dialog that means Enter-on-Cancel performs the
-      // deletion. The textarea half is the reason several dialogs previously
-      // hand-rolled `!shiftKey` checks. See `focusedControlOwnsEnter`.
-      if (focusedControlOwnsEnter(event.target)) return
+      if (confirmKey === 'Cmd+Enter') {
+        // Meta OR Ctrl: the canonical grammar spells it Cmd, but the one
+        // dialog that had this binding before (debug-bundle note) accepted
+        // both, and Ctrl+Enter reaching a non-mac keyboard layout costs
+        // nothing. Shift/Alt on top means something else is being composed.
+        if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return
+        // Deliberately NO focusedControlOwnsEnter check: the modifier is an
+        // explicit "commit" from wherever focus is, textarea included — that
+        // is the entire reason a textarea dialog uses ⌘↩.
+      } else {
+        // Shift+Enter is newline everywhere in this app; a modifier means the
+        // user is composing, not committing.
+        if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+        // A FOCUSED BUTTON OWNS ITS OWN ENTER, and a textarea owns its newline.
+        // This is the important one: calling preventDefault below suppresses the
+        // synthesized click that Enter would have sent to the focused control, so
+        // without this guard tabbing to Cancel and pressing Enter would CONFIRM —
+        // and for a destructive dialog that means Enter-on-Cancel performs the
+        // deletion. The textarea half is the reason several dialogs previously
+        // hand-rolled `!shiftKey` checks. See `focusedControlOwnsEnter`.
+        if (focusedControlOwnsEnter(event.target)) return
+      }
       if (blocked) return
       event.preventDefault()
       onConfirm()
@@ -170,24 +285,45 @@ export function DialogActions({
     // ordering.
     root.addEventListener('keydown', onKeyDown)
     return () => root.removeEventListener('keydown', onKeyDown)
-  }, [blocked, confirmOnEnter, onConfirm])
+  }, [blocked, confirmKey, confirmOnEnter, onConfirm])
 
   return (
     <DialogFooter ref={footerRef}>
-      {children ? <div className="mr-auto text-[11px] text-muted">{children}</div> : null}
+      {legend || children ? (
+        // min-w-0 + truncate: the legend yields space to the buttons at narrow
+        // widths instead of wrapping the footer onto two lines.
+        <div className="mr-auto flex min-w-0 items-center gap-3 truncate text-[10px] text-muted">
+          {legend}
+          {children ? <span className="min-w-0 truncate text-[11px]">{children}</span> : null}
+        </div>
+      ) : null}
+      {extraActions}
       {onCancel ? (
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+        <Button variant="ghost" size="sm" data-dialog-action="cancel" data-autofocus={initialFocus === 'cancel' ? '' : undefined} disabled={cancelDisabled} onClick={onCancel}>
           {cancelLabel}
+          {escapeCancels ? <Kbd binding="Escape" /> : null}
         </Button>
       ) : null}
-      <Button
-        variant={tone === 'danger' ? 'destructive' : 'default'}
-        size="sm"
-        disabled={blocked}
-        onClick={onConfirm}
-      >
-        {busy ? '…' : confirmLabel}
-      </Button>
+      {onConfirm ? (
+        <Button
+          variant={tone === 'danger' ? 'destructive' : 'default'}
+          size="sm"
+          data-dialog-action="confirm"
+          data-autofocus={initialFocus === 'confirm' ? '' : undefined}
+          disabled={blocked}
+          onClick={onConfirm}
+        >
+          {/* "Working…", not a bare "…" (review C4): the verb vanished exactly
+              when the user wanted to know something was in flight. The same
+              word Bulk Provider Switch already used. */}
+          {busy ? 'Working…' : confirmLabel}
+          {confirmKey !== null && !busy ? (
+            // onAccent: both confirm variants (default, destructive) are
+            // FILLED, so the chip takes the button's foreground.
+            <Kbd binding={confirmKey} tone="onAccent" />
+          ) : null}
+        </Button>
+      ) : null}
     </DialogFooter>
   )
 }

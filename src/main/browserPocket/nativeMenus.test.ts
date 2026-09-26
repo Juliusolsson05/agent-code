@@ -13,12 +13,12 @@ describe('native browser controls', () => {
     const choose = vi.fn()
     const template = pocketMenuTemplate({ viewport: 'fill', colorScheme: 'system', zoom: 1, profile: 'lane', hasPage: false, canGoBack: false, canGoForward: false }, choose)
     expect(template.find(i => i.label === 'Forward')?.enabled).toBe(false)
-    expect(template.find(i => i.label === 'Open in default browser')?.enabled).toBe(false)
+    expect(template.find(i => i.label === 'Open in Default Browser')?.enabled).toBe(false)
     const viewport = template.find(i => i.label === 'Viewport')!.submenu as Electron.MenuItemConstructorOptions[]
     expect(viewport[0]).toMatchObject({ checked: true, type: 'radio' })
     viewport[1]!.click!({} as never, {} as never, {} as never)
     expect(choose).toHaveBeenCalledWith(expect.stringMatching(/^device:/))
-    expect(template.at(-1)!.label).toContain('private storage')
+    expect(template.at(-1)!.label).toMatch(/private storage/i)
   })
 
   it('uses native edit roles and the clicked guest history; refuses external non-web link schemes', () => {
@@ -30,7 +30,9 @@ describe('native browser controls', () => {
     const template = native.build.mock.lastCall![0] as Electron.MenuItemConstructorOptions[]
     expect(template.find(i => i.role === 'copy')).toMatchObject({ enabled: true })
     expect(template.find(i => i.role === 'cut')).toMatchObject({ enabled: false })
-    expect(template.some(i => i.label?.includes('link'))).toBe(false)
+    // Case-insensitive: the labels are Title Case ("Open Link in…"), and a
+    // case-sensitive 'link' would pass vacuously against every label.
+    expect(template.some(i => /link/i.test(i.label ?? ''))).toBe(false)
     template.find(i => i.label === 'Back')!.click!({} as never, {} as never, {} as never)
     expect(back).toHaveBeenCalledOnce()
     expect(native.external).not.toHaveBeenCalled()
