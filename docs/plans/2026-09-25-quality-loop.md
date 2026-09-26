@@ -543,6 +543,11 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (00:30) — **Batch #1318 merged** (`33fd8f83`) on the owner's explicit "yolo merge". Main CI on it is green, and it also cleared main's red run from #1221's renamed labels. All 12 members registered merged; the post-merge integration review said MERGE-READY. Issue hygiene pass: 52 recent issues labelled, status notes on #1292, #1281, #1273, #372 and #1267, duplicate #1217 closed.
+  - **Owner decision (2026-09-26):** keep the loop going; "we are in a really good state." Batch merges stay the default.
+  - **#1319** (Codex drafts, #800/#1313): the q40 fix and the review-A fix are in `e8490f29` (a text-only empty proof must hold on two polls). B and C were restarted on that head after the session restart lost them.
+  - **Next:** #1267 (main relays raw spawn exceptions over IPC; P2, security), then C1/C2 P2s (#1280, #1282).
+
 - 2026-09-25 (15:10) — **Merged: #1308** (`7f273e06`, closes #1272; body rewritten first) and **codex-headless#53** (`d7d7a5d`). The bump is **#1317** (refs #372). #1309 is remerged onto `7f273e06`, with a fresh gate running.
   - **Third reviewers (q37):**
     - MERGE-READY: #1257, #1263, #1284, #1287 and #1298, with minors only.
