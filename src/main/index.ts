@@ -884,7 +884,9 @@ async function startApp(): Promise<void> {
       onCreated: service => { workflowService = service },
     })
     assertStartupOpen()
-    workflowBridge = new WorkflowBridge(workflowService)
+    // Replaced panes' workflow runs (#1280): beside the workflow store, not
+    // inside it, so workflow-mcp's own store never sees a file it did not write.
+    workflowBridge = new WorkflowBridge(workflowService, { aliasFile: join(app.getPath('userData'), 'workflow-session-aliases.json') })
     // Recovery successors may be created during service.initialize(), before the bridge exists.
     // Await rehydration so the first renderer query sees the durable lineage owner instead of a
     // stale parent with a misleading Resume action.

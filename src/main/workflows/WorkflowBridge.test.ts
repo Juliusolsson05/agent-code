@@ -463,3 +463,68 @@ describe('WorkflowBridge', () => {
     vi.useRealTimers()
   })
 })
+
+// #1280: a run is filed under the session id that started it (in memory and
+// as its durable clientId). A replaced pane gets a new id, so its workflow
+// cards vanished, and a restart rebuilt them under the dead id for good. On
+// the owner's machine all 106 session-owned runs named a session that is no
+// longer live.
+describe('WorkflowBridge session carry (#1280)', () => {
+  const { mkdtempSync, rmSync } = require('node:fs') as typeof import('node:fs')
+  const { tmpdir } = require('node:os') as typeof import('node:os')
+  const { join } = require('node:path') as typeof import('node:path')
+  const reference = (runId: string, clientId: string) => ({
+    runId,
+    cwd: '/repo',
+    clientId,
+    status: 'running' as const,
+    cursor: 3,
+    workflow: { name: 'hunt', description: 'Find bugs' },
+    transcriptDirectory: `/state/${runId}/transcripts`,
+  })
+  function aliasFile(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'workflow-aliases-'))
+    return join(dir, 'workflow-session-aliases.json')
+  }
+  function service(references: unknown[]) {
+    return {
+      subscribe: () => () => undefined,
+      listStoredRunReferences: vi.fn(async () => references),
+      resume: vi.fn(async (_scope: unknown, input: { runId: string }) => ({ ...reference('run-resumed', 'x'), resumedFromRunId: input.runId })),
+    } as unknown as WorkflowService
+  }
+
+  it('moves a pane\'s runs to its successor', async () => {
+    const send = vi.fn()
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-old')]), { send, aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    expect(bridge.getSessionRuns({ sessionId: 'pane-new', cwd: '/repo' }).runs.map(run => run.runId)).toEqual(['run-1'])
+    expect(bridge.getSessionRuns({ sessionId: 'pane-old', cwd: '/repo' }).runs).toEqual([])
+    expect(send).toHaveBeenCalledWith({ sessionId: 'pane-new' }, 'workflows:session-runs', expect.objectContaining({ runs: [expect.objectContaining({ runId: 'run-1' })] }))
+  })
+
+  it('finds the runs under the live id after a restart, through a chain of replacements', async () => {
+    const file = aliasFile()
+    const first = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await first.start()
+    await first.carrySession('pane-a', 'pane-b')
+    await first.carrySession('pane-b', 'pane-c')
+    // A restart: the durable clientId is still the id the run started under.
+    const second = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await second.start()
+    expect(second.getSessionRuns({ sessionId: 'pane-c', cwd: '/repo' }).runs.map(run => run.runId)).toEqual(['run-1'])
+    expect(second.getSessionRuns({ sessionId: 'pane-a', cwd: '/repo' }).runs).toEqual([])
+    rmSync(file, { force: true })
+  })
+
+  it('files a resume after the carry under the successor', async () => {
+    const svc = service([reference('run-1', 'pane-old')])
+    const bridge = new WorkflowBridge(svc, { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    await bridge.resume({ cwd: '/repo', runId: 'run-1' })
+    expect(svc.resume).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'pane-new' }), expect.anything())
+    expect(bridge.getSessionRuns({ sessionId: 'pane-new', cwd: '/repo' }).runs.map(run => run.runId)).toEqual(['run-resumed'])
+  })
+})

@@ -1438,6 +1438,10 @@ export function useSessionActions(
         // it could never call goal_loop_complete (#1287 review A).
         if (!opts?.newConversation && builtInMcpDomains?.includes('goal_loop')) carryGoalLoops(idMap)
         else stopGoalLoops([oldId])
+        // Workflow runs follow the same conversation into its successor
+        // (#1280). A different conversation swapped into the pane does not
+        // inherit them: they belong to the conversation that started them.
+        if (!opts?.newConversation) carryWorkflowRuns(idMap)
         setRuntimes(prev => {
           // Replacement can await spawn and backend retirement while the user
           // keeps editing. Transfer the latest draft in the same state update
@@ -1674,6 +1678,10 @@ export function useSessionActions(
       // defaults; one that lost goal_loop keeps no loop it cannot complete
       // (#1287 review A).
       carryGoalLoops(new Map([...idMap].filter(([, newId]) => goalLoopCapable.has(newId))))
+      // Every reloaded agent continues its own conversation, so all of their
+      // workflow runs follow (#1280); unlike a goal loop, a run needs no tool
+      // in the successor.
+      carryWorkflowRuns(idMap)
       stopGoalLoops([...idMap].filter(([, newId]) => !goalLoopCapable.has(newId)).map(([oldId]) => oldId))
       for (const [newId, meta] of Object.entries(freshSessions)) {
         if (!hasDurableProviderSession(meta)) continue
@@ -1806,6 +1814,21 @@ function stopGoalLoops(oldIds: readonly string[]): void {
  *  Fire-and-forget: a failed carry leaves the loop where it was (the
  *  pre-#1279 behaviour), never blocks the swap, and main refuses to overwrite
  *  a loop the successor already has. */
+/** Tell main that each replaced pane's workflow runs now belong to its
+ *  successor (#1280), so its workflow cards and Active navigation survive the
+ *  swap and a restart. Fire-and-forget like carryGoalLoops: a failed carry
+ *  leaves the runs where they were, today's behaviour, and never blocks the
+ *  swap. */
+function carryWorkflowRuns(idMap: ReadonlyMap<string, string>): void {
+  const carry = window.api?.carryWorkflowRuns
+  if (!carry) return
+  for (const [oldId, newId] of idMap) {
+    void carry(oldId, newId).catch(error => {
+      console.warn('[workflows] carry to the replacement session failed:', error)
+    })
+  }
+}
+
 function carryGoalLoops(idMap: ReadonlyMap<string, string>): void {
   const carry = window.api?.carryGoalLoop
   if (!carry) return

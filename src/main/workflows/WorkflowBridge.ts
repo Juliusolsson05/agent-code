@@ -1,3 +1,5 @@
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type {
   StoredWorkflowEvent,
   WorkflowRunManifest,
@@ -104,6 +106,12 @@ export type WorkflowBridgeOptions = {
   batchWindowMs?: number
   maxBatchBytes?: number
   send?: WorkflowBridgeSender
+  /**
+   * Where replaced-pane aliases persist (#1280). Omitted, carries still move
+   * the runs for this process but a restart files them under the id they
+   * started with.
+   */
+  aliasFile?: string
 }
 
 /**
@@ -131,6 +139,16 @@ export class WorkflowBridge {
   private readonly maxBatchBytes: number
   private unsubscribe: (() => void) | null = null
   private flushTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Replaced pane id -> its successor (#1280). A run is filed under the
+   * session that started it, in memory and as its durable clientId, and a
+   * replaced pane gets a new id; without this its workflow cards vanished,
+   * and a restart rebuilt them under the dead id for good. The durable
+   * clientId stays what workflow-mcp recorded (it is attribution only there);
+   * this map is how the app finds the pane that owns it now.
+   */
+  private readonly aliases = new Map<string, string>()
+  private readonly aliasFile: string | null
 
   constructor(
     private readonly service: WorkflowService,
@@ -142,18 +160,86 @@ export class WorkflowBridge {
       options.maxBatchBytes ?? DEFAULT_MAX_BATCH_BYTES,
       'maxBatchBytes',
     )
+    this.aliasFile = options.aliasFile ?? null
   }
 
   async start(): Promise<void> {
     if (this.unsubscribe) return
     this.unsubscribe = this.service.subscribe(event => this.enqueue(event))
+    await this.loadAliases()
     if (typeof this.service.listStoredRunReferences === 'function') {
       const references = await this.service.listStoredRunReferences()
       for (const reference of references) {
         if (!reference.clientId) continue
         const { cwd, clientId, ...run } = reference
-        this.upsertRun(clientId, cwd, run)
+        this.upsertRun(this.resolveSession(clientId), cwd, run)
       }
+    }
+  }
+
+  /**
+   * The pane `from` was replaced by `to` (#1280): its runs now belong to `to`.
+   * Called by the renderer at the same commit points that carry a goal loop.
+   * Only a pane that owns runs is recorded, so the alias file grows with
+   * replaced panes that ran workflows, not with every replacement.
+   */
+  async carrySession(from: string, to: string): Promise<void> {
+    const source = nonEmpty(from, 'from')
+    const target = nonEmpty(to, 'to')
+    if (source === target) return
+    const moving = this.runsBySession.get(source)
+    if (!moving) return
+    const existing = this.runsBySession.get(target)
+    const session = existing && existing.cwd === moving.cwd
+      ? { cwd: moving.cwd, slots: new Map([...moving.slots, ...existing.slots]) }
+      : moving
+    this.runsBySession.delete(source)
+    this.runsBySession.set(target, session)
+    this.aliases.set(source, target)
+    await this.saveAliases()
+    this.publishSessionRuns(source, { cwd: moving.cwd, slots: new Map() })
+    this.publishSessionRuns(target, session)
+  }
+
+  /** Follow the replacement chain to the pane that owns a clientId today. */
+  private resolveSession(sessionId: string): string {
+    let current = sessionId
+    const seen = new Set<string>()
+    while (this.aliases.has(current) && !seen.has(current)) {
+      seen.add(current)
+      current = this.aliases.get(current)!
+    }
+    return current
+  }
+
+  private async loadAliases(): Promise<void> {
+    if (!this.aliasFile) return
+    try {
+      const parsed = JSON.parse(await readFile(this.aliasFile, 'utf8')) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      for (const [from, to] of Object.entries(parsed as Record<string, unknown>)) {
+        if (from && typeof to === 'string' && to) this.aliases.set(from, to)
+      }
+    } catch {
+      // Missing (no pane with runs was ever replaced) or unreadable: runs are
+      // then filed under the id they started with, today's behaviour. The
+      // runs themselves are safe in the workflow store either way.
+    }
+  }
+
+  private async saveAliases(): Promise<void> {
+    if (!this.aliasFile) return
+    // Temp file + rename: a crash mid-write must not leave half a JSON
+    // document, which loadAliases would read as no aliases at all.
+    const temporary = `${this.aliasFile}.${process.pid}.${Date.now()}.tmp`
+    try {
+      await mkdir(dirname(this.aliasFile), { recursive: true })
+      await writeFile(temporary, JSON.stringify(Object.fromEntries(this.aliases)), { mode: 0o600 })
+      await rename(temporary, this.aliasFile)
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined)
+      // The move already happened in memory; only a restart would lose it.
+      console.warn('[workflows] could not persist a replaced pane\'s workflow runs:', error)
     }
   }
 
