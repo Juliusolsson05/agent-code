@@ -151,3 +151,31 @@ describe('WorktreesBar refresh guards (#150)', () => {
     expect(loadWorktreeDump).toHaveBeenCalledTimes(2)
   })
 })
+
+// #1250 row 11: a timeout is said for what it is. A timed-out list is not
+// "not a repository", and a row whose git timed out shows that instead of
+// passing for clean (main keeps it out of cleanup categories).
+describe('WorktreesBar and a git timeout', () => {
+  it('says a timed-out list is a timeout', async () => {
+    loadWorktreeDump.mockImplementation(async () => ({ ...dumpFor('/repo'), gitUnavailable: true, gitTimedOut: true }))
+    render(<WorktreesBar cwd="/repo" workspace={workspaceTick()} onClose={() => {}} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText('Git took too long to answer here. It will try again.')).toBeTruthy()
+    expect(screen.queryByText('Not a Git repository.')).toBeNull()
+  })
+
+  it('marks a row whose git timed out as unknown, not dirty and not clean', async () => {
+    loadWorktreeDump.mockImplementation(async () => ({
+      ...dumpFor('/repo'),
+      rows: [{
+        path: '/repo-feat', branch: 'feat', head: '2222222', detached: false,
+        dirty: true, statusTimedOut: true, mergedToMain: null, ahead: null, behind: null, patchUniqueAhead: null,
+        lastCommitAt: null, lastCommitRelative: null, category: 'review', activity: null, liveAgents: [],
+      }],
+    }))
+    render(<WorktreesBar cwd="/repo" workspace={workspaceTick()} onClose={() => {}} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText('status unknown (git timed out)')).toBeTruthy()
+    expect(screen.queryByText('dirty')).toBeNull()
+  })
+})

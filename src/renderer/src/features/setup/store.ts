@@ -3,6 +3,7 @@ import { create } from 'zustand'
 
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import type { SetupCheckResult } from '@shared/types/setup'
+import { SETUP_CHECK_FAILED } from '@renderer/features/settings/setupWriteFailed'
 
 /**
  * The renderer's one copy of the setup check (#995).
@@ -74,7 +75,10 @@ export function refreshSetupCheck(): Promise<SetupCheckResult | null> {
     .then(() => window.api.setupCheck())
     .then(check => { store.setCheck(check); return check })
     .catch((err: unknown) => {
-      store.setError(err instanceof Error ? err.message : String(err))
+      // Fixed text on screen (q22, #1403 review b): the raw error can name
+      // login-shell paths. The detail stays in the console for debugging.
+      console.warn('[setup] prerequisite check failed:', err)
+      store.setError(SETUP_CHECK_FAILED)
       return null
     })
     .finally(() => { inFlight = null })

@@ -8,7 +8,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 // listing hook fixed for #718, kept here in the same shape).
 const DEBOUNCE_MS = 120
 const PAGE = 60
-export const LOAD_FAILURE_MESSAGE = "Couldn't load conversations. Check the app log and try again."
+export const LOAD_FAILURE_MESSAGE = "Could not load conversations. Check the app log and try again."
 
 export type ConversationListParams = {
   open: boolean

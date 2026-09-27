@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fsHarness = vi.hoisted(() => ({
   appendFileSync: vi.fn(),
@@ -25,8 +25,10 @@ vi.mock('electron', () => ({
     getFocusedWindow: () => null,
   },
 }))
+const retentionCalls = vi.hoisted(() => [] as string[])
 vi.mock('@main/storage/debugRetention.js', () => ({
-  scheduleDebugStoragePrune: vi.fn(),
+  scheduleDebugStoragePrune: vi.fn((reason: string) => { retentionCalls.push(`prune:${reason}`) }),
+  holdDebugStoragePruneUntilRecovered: vi.fn(() => { retentionCalls.push('hold') }),
 }))
 vi.mock('@main/incident/appRunIds.js', () => ({
   createIncidentId: () => 'incident-test',
@@ -134,5 +136,38 @@ describe('AppRunJournal completeness snapshot', () => {
     expect(fsHarness.writeFile).toHaveBeenCalledTimes(1)
     expect(journal.getCompletenessSnapshot().bytesWritten).toBeGreaterThan(0)
     warn.mockRestore()
+  })
+})
+
+// #775: the run's first prune waits until the workspace has recovered. start()
+// closes the retention boot gate BEFORE requesting that prune, so the request
+// is held rather than run during the session herd.
+describe('AppRunJournal boot prune', () => {
+  // start() points Node's fatal reports at the run directory; with only the
+  // fs mocked that path is the owner's real incident store (#1351 review a),
+  // so the process setting is put back after each start().
+  const report = process.report
+  const saved = report ? { directory: report.directory, reportOnFatalError: report.reportOnFatalError } : null
+  afterEach(() => {
+    if (report && saved) {
+      report.directory = saved.directory
+      report.reportOnFatalError = saved.reportOnFatalError
+    }
+  })
+
+  it('holds retention before requesting the run-start prune', async () => {
+    retentionCalls.length = 0
+    await makeJournal().start()
+    expect(retentionCalls).toEqual(['hold', 'prune:incident-run-start'])
+  })
+
+  // #1351 review a/b: an unwritable incident directory degrades the journal,
+  // but the other retention buckets may be writable and index.ts still asks
+  // for a startup prune. The gate must be closed anyway.
+  it('holds retention even when the incident journal cannot start', async () => {
+    retentionCalls.length = 0
+    fsHarness.mkdir.mockRejectedValueOnce(Object.assign(new Error('read-only'), { code: 'EROFS' }))
+    await makeJournal().start()
+    expect(retentionCalls).toEqual(['hold'])
   })
 })

@@ -550,7 +550,14 @@ async function readOlderTranscriptWindow(
   entries: Record<string, unknown>[]
   offsets: number[]
 }> {
-  const size = await stat(filePath).then(s => s.size).catch(() => 0)
+  // WHY an unreadable transcript THROWS here (#1413 review a): this reader
+  // serves only older-history paging, where the renderer already holds a
+  // page from this file. A failed stat/open/read used to come back as an
+  // empty page with `hasMore: false`, so the feed dropped "older history
+  // exists" for good and the user was told nothing. A rejection reaches
+  // the renderer as a failed page, which is said and can be retried. An
+  // EMPTY file (stat succeeded, size 0) is still an honest empty page.
+  const size = (await stat(filePath)).size
   const empty = {
     bytes: size,
     tailBytes: 0,
@@ -571,13 +578,7 @@ async function readOlderTranscriptWindow(
     : extractCodexHistoryMarker
   const limit = Math.max(0, params.limit)
 
-  let handle: FileHandle
-  try {
-    handle = await open(filePath, 'r')
-  } catch (error) {
-    if (params.beforeRecordHash) throw error
-    return empty
-  }
+  const handle: FileHandle = await open(filePath, 'r')
   const stats = parseStats()
   try {
     let parseErrors = 0
@@ -642,9 +643,6 @@ async function readOlderTranscriptWindow(
       return false
     })
     return finishWindow(size, tailBytes, parseErrors, parsed, found, found ? 'marker' : 'tail', kept, limit)
-  } catch (error) {
-    if (params.beforeRecordHash) throw error
-    return empty
   } finally {
     observeParse(stats)
     await handle.close().catch(() => {})
@@ -708,10 +706,17 @@ export async function loadOlderHistoryChunk(
   // + catch scaffolding in both).
   const filePath = await resolveHistoryTranscriptPath(params)
   if (!filePath) {
+    // WHY a rejection and not an empty page (#1413 verification a): an older
+    // page is only ever asked for after a page of this transcript loaded, so
+    // "no file now" means it vanished or cannot be located, not that there is
+    // nothing older. An empty `hasMore: false` made the renderer drop "older
+    // history exists" for good, with nothing said; a rejection is reported as
+    // a failed page and stays retryable.
+    const error = new Error('The transcript for this session could not be found')
     performanceService
       .span('historyLoader.loadOlderChunk', { kind: params.kind, limit: params.limit })
-      .end({ result: 'missing-file' })
-    return { entries: [], hasMore: false }
+      .fail(error, { result: 'missing-file' })
+    throw error
   }
   return loadOlderHistoryChunkFromFile(filePath, params)
 }
@@ -792,7 +797,12 @@ export async function loadInitialHistoryChunk(
       providerSource({ cwd: params.cwd, providerSessionId: params.providerSessionId, limit: params.limit }),
     )
   }
-  const span = performanceService.span('historyLoader.loadInitialChunk', {
+  // WHY its own name (#769): this span ends once the path is resolved, and
+  // loadInitialHistoryChunkFromFile opens the span that times the read. Under
+  // the same name the monitor counted every load twice, half of them timing
+  // only the path lookup, which pulled transcript.read's percentiles down.
+  // This one stays in the perf journal and is not a monitor operation.
+  const span = performanceService.span('historyLoader.resolveInitialPath', {
     kind: params.kind,
     limit: params.limit,
   })

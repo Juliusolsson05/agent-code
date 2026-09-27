@@ -231,10 +231,98 @@ export function remapSingleEntryLineage(entry: SingleClosedEntry, lineage: UndoL
   }
 }
 
+/** Every session id an entry could restore (session, project and group members). */
+function entrySessionIds(entry: ClosedEntry, into: Set<SessionId> = new Set()): Set<SessionId> {
+  if (entry.type === 'group') {
+    for (const member of entry.entries) entrySessionIds(member, into)
+  } else if (entry.type === 'session') {
+    into.add(entry.sessionId)
+  } else {
+    for (const member of entry.sessions) into.add(member.sessionId)
+  }
+  return into
+}
+
+/**
+ * Drop relationship pointers that name one of `gone` while that id is not a
+ * live session (#1387 review a). Replace and Reload Agents now KEEP a pointer
+ * to a closed parent while undo can still restore it (#1379). When the entry
+ * then leaves the stack WITHOUT being restored (expired, evicted, or consumed
+ * as stale/failed), nothing else would ever clear that pointer: the child kept
+ * naming a dead id until restart, still counted as an orchestration worker,
+ * and was invisible to every parent. Only pointers to exactly these ids are
+ * touched, so unrelated or cross-window pointers are left alone. Untouched rows
+ * keep their identity.
+ */
+export function dropPointersTo(
+  sessions: Record<SessionId, SessionMeta>,
+  gone: ReadonlySet<SessionId>,
+): Record<SessionId, SessionMeta> {
+  let changed = false
+  const out: Record<SessionId, SessionMeta> = {}
+  const dead = (id: SessionId | undefined): boolean => id !== undefined && gone.has(id) && !(id in sessions)
+  for (const [id, meta] of Object.entries(sessions) as Array<[SessionId, SessionMeta]>) {
+    if (!dead(meta.linkedParentId) && !dead(meta.orchestrationParentId) && !dead(meta.orchestrationRootId)) {
+      out[id] = meta
+      continue
+    }
+    const next = { ...meta }
+    if (dead(meta.linkedParentId)) delete next.linkedParentId
+    if (dead(meta.orchestrationParentId)) delete next.orchestrationParentId
+    if (dead(meta.orchestrationRootId)) delete next.orchestrationRootId
+    out[id] = next
+    changed = true
+  }
+  return changed ? out : sessions
+}
+
+/**
+ * The same rule as dropPointersTo, applied to a waiting entry's OWN metadata
+ * (#1387 review a, round 3). A group member pushed back for a retry must not
+ * carry pointers to a member the same group already consumed: that parent can
+ * never return, and the later restore would bring the dead pointer back.
+ */
+export function dropEntryPointersTo(entry: ClosedEntry, gone: ReadonlySet<SessionId>): ClosedEntry {
+  if (gone.size === 0) return entry
+  const clean = (meta: SessionMeta): SessionMeta => {
+    if (!(meta.linkedParentId && gone.has(meta.linkedParentId)) &&
+        !(meta.orchestrationParentId && gone.has(meta.orchestrationParentId)) &&
+        !(meta.orchestrationRootId && gone.has(meta.orchestrationRootId))) return meta
+    const next = { ...meta }
+    if (next.linkedParentId && gone.has(next.linkedParentId)) delete next.linkedParentId
+    if (next.orchestrationParentId && gone.has(next.orchestrationParentId)) delete next.orchestrationParentId
+    if (next.orchestrationRootId && gone.has(next.orchestrationRootId)) delete next.orchestrationRootId
+    return next
+  }
+  if (entry.type === 'group') return { ...entry, entries: entry.entries.map(member => dropEntryPointersTo(member, gone) as SingleClosedEntry) }
+  if (entry.type === 'session') return { ...entry, sessionMeta: clean(entry.sessionMeta) }
+  return { ...entry, sessions: entry.sessions.map(member => ({ ...member, meta: clean(member.meta) })) }
+}
+
 // ---- Stack ----
 
 export class UndoCloseStack {
   private entries: ClosedEntry[] = []
+  private droppedListener: ((ids: Set<SessionId>) => void) | null = null
+
+  /**
+   * Told the session ids of entries that left the stack WITHOUT a restore
+   * (expired or evicted), so the workspace can drop pointers to them (see
+   * dropPointersTo). Delivered on a microtask, never synchronously: prune runs
+   * inside restorableSessionIds, which is called from within a setState
+   * updater, and a listener that set state there would nest updates.
+   */
+  setDroppedListener(listener: ((ids: Set<SessionId>) => void) | null): void {
+    this.droppedListener = listener
+  }
+
+  private notifyDropped(entries: ClosedEntry[]): void {
+    const listener = this.droppedListener
+    if (!listener || entries.length === 0) return
+    const ids = new Set<SessionId>()
+    for (const entry of entries) entrySessionIds(entry, ids)
+    queueMicrotask(() => listener(ids))
+  }
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -243,6 +331,7 @@ export class UndoCloseStack {
     this.prune()
     this.entries.push(entry)
     if (this.entries.length > UNDO_CLOSE_MAX_ENTRIES) {
+      this.notifyDropped(this.entries.slice(0, this.entries.length - UNDO_CLOSE_MAX_ENTRIES))
       this.entries = this.entries.slice(-UNDO_CLOSE_MAX_ENTRIES)
     }
   }
@@ -265,6 +354,23 @@ export class UndoCloseStack {
     return this.entries.length
   }
 
+  /**
+   * Every session id a waiting entry could bring back (#1379). Pruned first,
+   * exactly as `pop()` would be, so an expired entry never counts.
+   *
+   * WHY the stack answers this: replace and Reload Agents drop any
+   * relationship pointer whose target is neither live nor in their idMap. A
+   * parent that is closed but still restorable is neither, so reloading its
+   * live child erased the child's link, and undoing the parent later had
+   * nothing to relink. The swap passes these ids as "still known".
+   */
+  restorableSessionIds(): Set<SessionId> {
+    this.prune()
+    const ids = new Set<SessionId>()
+    for (const entry of this.entries) entrySessionIds(entry, ids)
+    return ids
+  }
+
   /** Rewrite every waiting entry's anchors after a successful restore. See
    *  `UndoLineage` for why this runs on restore and never on merge. */
   remapLineage(lineage: UndoLineage): void {
@@ -274,6 +380,9 @@ export class UndoCloseStack {
 
   private prune(): void {
     const cutoff = this.now() - UNDO_CLOSE_RETENTION_MS
+    const expired = this.entries.filter(e => e.closedAt <= cutoff)
+    if (expired.length === 0) return
     this.entries = this.entries.filter(e => e.closedAt > cutoff)
+    this.notifyDropped(expired)
   }
 }

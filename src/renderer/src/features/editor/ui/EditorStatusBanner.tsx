@@ -42,7 +42,7 @@ export function EditorStatusBanner({
   return (
     <div
       role="alert"
-      className="flex flex-shrink-0 items-start gap-3 border-b border-border bg-danger/10 px-3 py-1.5 font-code text-[11px] text-danger"
+      className="flex flex-shrink-0 items-start gap-3 border-b border-border bg-danger-soft px-3 py-1.5 font-code text-[11px] text-danger"
     >
       <span className="max-h-[4.5rem] min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap leading-[1.5] [overflow-wrap:anywhere]">
         {message}

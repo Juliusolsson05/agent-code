@@ -86,7 +86,9 @@ export function parseImagesFromHtml(html: string): ClaudeDraftImage[] {
   // the HTML is never injected into the live DOM.
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const images: ClaudeDraftImage[] = []
-  for (const img of Array.from(doc.images)) {
+  // querySelectorAll, not `doc.images`: identical in a browser, and the
+  // happy-dom test DOM has no `images` collection on a parsed document.
+  for (const img of Array.from(doc.querySelectorAll('img'))) {
     const src = img.getAttribute('src')?.trim() ?? ''
     if (!src.startsWith('data:image/')) continue
     try {

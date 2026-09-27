@@ -95,6 +95,60 @@ describe('operator catalog projections', () => {
     expect(summarize(builtIn.tools).find(tool => tool.name === 'ac_probe_echo')!.description).toContain('see ac_probe_grid for layout shapes')
   })
 
+  it('keeps a nested optional object\'s required keys in both published schemas', async () => {
+    // Steering q92 / review b of #1366: under zod 4.6 the built-in projection
+    // dropped `required` from a recursive z.json() payload, and the repair only
+    // walked bare objects. A nested object that is itself optional arrives as
+    // ZodOptional, so its `required: ['payload']` still vanished from the
+    // built-in tool list while the external Server kept it. Compare the whole
+    // published input schema, not just the root, so any nesting depth counts.
+    const nested = defineCapability({ id: 'probe.nested', title: 'Nested optional payload', execution: 'window', effect: 'read',
+      description: 'Echo an optional wrapper around a JSON payload.',
+      input: z.object({
+        outer: z.object({ payload: z.json() }).strict().optional(),
+        items: z.array(z.object({ payload: z.json() }).strict()).min(1).max(2).optional(),
+        nullableOuter: z.object({ payload: z.json() }).strict().nullable().optional(),
+        defaulted: z.object({ payload: z.json() }).strict().default({ payload: null }),
+        byKey: z.record(z.string(), z.object({ payload: z.json() }).strict()).optional(),
+      }).strict(),
+      output: z.object({}), handler: () => ({}) })
+    const nestedPort: ControlOperatorPort = {
+      catalog: () => [{ descriptor: nested.descriptor, owner: windowOwner }],
+      invoke: async request => nested.execute(request.input, { owner: windowOwner, caller: { kind: 'agent' as const, id: 'session-1' }, requestId: 'one' }),
+      recordTransport: async () => {},
+    }
+    const external = await withClient(transport => createOperatorMcpServer(nestedPort).connect(transport), client => client.listTools())
+    const builtIn = await withClient(async transport => {
+      const server = new McpServer({ name: 'built-in-trial', version: '0' })
+      registerOperatorControlTools(server, nestedPort)
+      await server.connect(transport)
+    }, client => client.listTools())
+    const propertiesOf = (tools: Listed) =>
+      tools[0]!.inputSchema.properties as Record<string, { required?: string[]; items?: { required?: string[] }; minItems?: number; maxItems?: number }>
+    for (const tools of [external.tools, builtIn.tools]) {
+      expect(propertiesOf(tools).outer?.required).toEqual(['payload'])
+      expect(propertiesOf(tools).items?.items?.required).toEqual(['payload'])
+      expect(JSON.stringify(propertiesOf(tools).nullableOuter)).toContain('"required":["payload"]')
+      expect(JSON.stringify(propertiesOf(tools).defaulted)).toContain('"required":["payload"]')
+      expect(JSON.stringify(propertiesOf(tools).byKey)).toContain('"required":["payload"]')
+      // The array's own bounds survive the repair.
+      expect([propertiesOf(tools).items?.minItems, propertiesOf(tools).items?.maxItems]).toEqual([1, 2])
+    }
+    // Validation is unchanged: an outer object without its payload is refused
+    // before the handler runs, on both sides.
+    for (const connect of [
+      (transport: Parameters<Parameters<typeof withClient>[0]>[0]) => createOperatorMcpServer(nestedPort).connect(transport),
+      async (transport: Parameters<Parameters<typeof withClient>[0]>[0]) => {
+        const server = new McpServer({ name: 'built-in-trial', version: '0' })
+        registerOperatorControlTools(server, nestedPort)
+        await server.connect(transport)
+      },
+    ]) {
+      const result = await withClient(connect, client => client.callTool({ name: 'ac_probe_nested', arguments: { outer: {}, _control: { windowId: 'window-two', requestKey: 'nested-missing' } } }))
+      expect(result.isError).toBe(true)
+    }
+  })
+
   it('routes built-in calls through the same request shape as external calls, and keeps application-only capabilities uncallable', async () => {
     const externalRequests: ControlRequest[] = []
     const builtInRequests: ControlRequest[] = []

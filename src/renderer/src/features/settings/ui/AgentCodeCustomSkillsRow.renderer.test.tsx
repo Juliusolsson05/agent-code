@@ -226,3 +226,48 @@ describe('AgentCodeCustomSkillsRow', () => {
     expect(screen.getByRole('group', { name: 'Custom skill review-code' })).toBeTruthy()
   })
 })
+
+// #1250 row 14: Reveal State File dropped main's { ok: false, message }.
+describe('AgentCodeCustomSkillsRow recovery actions', () => {
+  it('says why the state file could not be revealed', async () => {
+    const recovering: AgentCodeCustomSkillsSnapshot = {
+      ...savedSnapshot(),
+      recovery: { message: 'The custom skills state file could not be read.', stateFilePath: '/state/custom.json' },
+    }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        auditAgentCodeCustomSkills: vi.fn().mockResolvedValue(recovering),
+        revealAgentCodeCustomSkillsRecoveryFile: vi.fn().mockResolvedValue({ ok: false, message: 'No managed skill recovery file exists.' }),
+      },
+    })
+    render(<AgentCodeCustomSkillsRow />)
+    await screen.findByText(/skill/)
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal State File' }))
+    expect(await screen.findByText('No managed skill recovery file exists.')).toBeTruthy()
+  })
+
+  // #1424 review c: the Custom Skills reset's rejection handler had no test.
+  it('says a rejected reset in fixed words', async () => {
+    vi.spyOn(await import('@renderer/components/ui/confirm-dialog'), 'requestConfirm').mockResolvedValue(true)
+    const recovering: AgentCodeCustomSkillsSnapshot = {
+      ...savedSnapshot(),
+      recovery: { message: 'The custom skills state file could not be read.', stateFilePath: '/state/custom.json' },
+    }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        auditAgentCodeCustomSkills: vi.fn().mockResolvedValue(recovering),
+        resetAgentCodeCustomSkillsRecovery: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'agent-code-custom-skills:reset-recovery': EACCES")),
+      },
+    })
+    render(<AgentCodeCustomSkillsRow />)
+    await screen.findByText(/skill/)
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
+    const reset = await screen.findByRole('button', { name: 'Reset State' })
+    await act(async () => { fireEvent.click(reset) })
+    expect(await screen.findByText("Couldn't reset the state. Try again.")).toBeTruthy()
+    expect(document.body.textContent).not.toContain('EACCES')
+  })
+})

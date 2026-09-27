@@ -4,6 +4,7 @@ import { Select } from '@renderer/components/ui/select'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useProviderEnablementStore } from '@renderer/features/providers/store'
+import { SETUP_WRITE_FAILED } from '@renderer/features/settings/setupWriteFailed'
 
 import { OPENCODE_USAGE_SOURCES, type OpencodeUsageSource, type ProviderEnablementEntry } from '@shared/types/providerEnablement'
 
@@ -15,14 +16,21 @@ function hintFor(entry: ProviderEnablementEntry): string {
 function EntryRow({ entry }: { entry: ProviderEnablementEntry }) {
   const capabilities = getRendererProviderCapabilities(entry.kind)
   const [pending, setPending] = useState(false)
+  // A failed write used to be an unhandled rejection with nothing on screen
+  // (#1250 row 6): the switch simply did not move, or looked moved until the
+  // next launch.
+  const [failed, setFailed] = useState(false)
 
   const toggle = async () => {
     setPending(true)
+    setFailed(false)
     try {
       // The returned snapshot also arrives via the push channel; applying it
       // here too keeps the switch snappy instead of waiting a broadcast hop.
       const snapshot = await window.api.providerEnablementSet(entry.kind, !entry.enabled)
       useProviderEnablementStore.getState().setSnapshot(snapshot)
+    } catch {
+      setFailed(true)
     } finally {
       setPending(false)
     }
@@ -30,9 +38,12 @@ function EntryRow({ entry }: { entry: ProviderEnablementEntry }) {
 
   const reset = async () => {
     setPending(true)
+    setFailed(false)
     try {
       const snapshot = await window.api.providerEnablementReset(entry.kind)
       useProviderEnablementStore.getState().setSnapshot(snapshot)
+    } catch {
+      setFailed(true)
     } finally {
       setPending(false)
     }
@@ -42,6 +53,7 @@ function EntryRow({ entry }: { entry: ProviderEnablementEntry }) {
     <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 last:border-b-0">
       <div className="min-w-0">
         <div className="text-[12px] font-semibold text-ink">{capabilities.shortLabel}</div>
+        {failed ? <div role="alert" className="mt-0.5 text-[10px] text-danger">{SETUP_WRITE_FAILED}</div> : null}
         <div className="mt-0.5 text-[10px] text-muted">
           {hintFor(entry)}
           {entry.because === 'user' ? (
@@ -99,10 +111,12 @@ function OpencodeUsageSourceRow() {
     try {
       const next = await window.api.providerEnablementSetOpencodeUsageSource(value)
       useProviderEnablementStore.getState().setSnapshot(next)
-    } catch (error) {
+    } catch {
       // An IPC failure must surface, not become an unhandled renderer
-      // rejection with a silently unchanged dropdown (final review #7).
-      setChoiceError(error instanceof Error ? error.message : 'Could not save the usage source.')
+      // rejection with a silently unchanged dropdown (final review #7). In
+      // fixed words: the raw message of a failed write can carry a
+      // filesystem path (q22; #1250).
+      setChoiceError(SETUP_WRITE_FAILED)
     } finally { setPending(false) }
   }
 

@@ -63,7 +63,10 @@ export function OptionCards<T extends string>({
             className={cn(
               'rounded-control border px-3 py-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ring',
               active
-                ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
+                // The checked card is the group's only Tab stop, so it is
+                // ALWAYS the focused one: the ring needs the offset gap to
+                // show on the accent fill (focus ring on an accent fill (Claude review of #1221, reviewer C F1)).
+                ? 'border-control-active-bg bg-control-active-bg text-control-active-fg focus-visible:ring-offset-1 focus-visible:ring-offset-surface'
                 : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink',
             )}
           >
