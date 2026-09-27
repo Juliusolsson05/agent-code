@@ -877,7 +877,7 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     const id = (await live.snapshot()).servers[0]!.id
     const oldKey = await blob(id, 'svc-API_KEY')
     const moved = { ...imported(), entry: { ...imported().entry, args: ['other-client.js'] } }
-    expect((await live.save({ id, ...moved, secrets: { 'svc-API_BASE_URL': 'https://other.example' } } as UserMcpSaveInput)).secretsCleared).toBe(true)
+    expect(await live.save({ id, ...moved, secrets: { 'svc-API_BASE_URL': 'https://other.example' } } as UserMcpSaveInput)).toMatchObject({ ok: true, secretsCleared: true })
     await writeFile(join(dir, 'mcp-secrets', id, 'svc-API_KEY.bin'), oldKey, { mode: 0o600 })
     const restarted = service()
     expect((await restarted.snapshot()).servers[0]!.secrets['svc-API_KEY']).toEqual({ set: false })
