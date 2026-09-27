@@ -98,3 +98,6 @@ The reader runs in main over files, so the tests exercise the real entry point. 
   - Every `shell_command` and `patch` read from `exec` script source now carries `executed: 'unknown'` (new optional field on both kinds in `agentTranscriptTypes.ts`). The tool description names the field.
   - Top-level `apply_patch` custom calls are not marked: they are the call Codex made.
   - Pinning test: a never-run `if (false)` command and patch appear in `timeline`, `shell_commands` and `file_changes` only with the marker. Removing the marker fails it.
+- **Final check c (major): adjacent de-duplication ignored `executed`.** A recorded direct call and a script-source copy with the same timestamp and text folded into whichever came first.
+  - `transcriptItemsEquivalent` now compares the marker.
+  - The test covers both orders, and a truncated long-path patch keeping its marker (c's unpinned boundary). Each part fails without its fix.

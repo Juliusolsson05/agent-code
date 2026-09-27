@@ -209,6 +209,29 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
     ])
   })
 
+  // #1368 final check c: the marker must survive the reader's other passes.
+  // - Adjacent de-duplication: a recorded direct call and a script-source
+  //   copy with the same timestamp and text are two facts, in either order.
+  // - Per-item truncation of a patch whose file list is cut.
+  it('keeps the executed marker distinct through de-duplication and patch truncation', async () => {
+    const at = '2026-09-27T07:30:00.000Z'
+    const direct = { type: 'response_item', timestamp: at, payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'echo never' }) } }
+    const script = { type: 'response_item', timestamp: at, payload: { type: 'custom_tool_call', call_id: 'c1', name: 'exec', input: 'if (false) tools.exec_command({cmd:"echo never"})' } }
+    for (const records of [[direct, script], [script, direct]]) {
+      const path = jsonl('codex-dedup.jsonl', records)
+      const shell = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'shell_commands' })
+      expect(shell.ok && shell.items.map(item => item.kind === 'shell_command' && (item.executed ?? 'recorded'))).toEqual(
+        records[0] === direct ? ['recorded', 'unknown'] : ['unknown', 'recorded'],
+      )
+    }
+    const longPath = `src/${'deep/'.repeat(30)}never.ts`
+    const path = jsonl('codex-long-patch.jsonl', [
+      { type: 'response_item', timestamp: at, payload: { type: 'custom_tool_call', call_id: 'c2', name: 'exec', input: `if (false) text(await tools.apply_patch("*** Begin Patch\\n*** Delete File: ${longPath}\\n*** End Patch"))` } },
+    ])
+    const changes = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'file_changes', maxCharsPerItem: 60 })
+    expect(changes.ok && changes.items).toEqual([expect.objectContaining({ kind: 'patch', files: [], executed: 'unknown' })])
+  })
+
   it('searches and inspects JSONL as before', async () => {
     const path = codexTranscript()
     const search = await searchAgentTranscriptFile({ path, query: 'tests' })

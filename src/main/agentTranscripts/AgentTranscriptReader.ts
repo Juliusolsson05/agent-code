@@ -1562,7 +1562,17 @@ function emptyStats(): AgentTranscriptStats {
 function transcriptItemsEquivalent(left: AgentTranscriptItem, right: AgentTranscriptItem): boolean {
   if (left.kind !== right.kind) return false
   if (left.timestamp !== right.timestamp) return false
+  // A command the provider recorded as run and the same text read from a
+  // script's source are different facts (steering q86). Folding them kept
+  // whichever came first: a real run could vanish behind an `executed:
+  // 'unknown'` copy, or a dead-branch copy could lose its marker (#1368 final
+  // check c).
+  if (executedMarker(left) !== executedMarker(right)) return false
   return itemSearchText(left) === itemSearchText(right)
+}
+
+function executedMarker(item: AgentTranscriptItem): string | undefined {
+  return item.kind === 'shell_command' || item.kind === 'patch' ? item.executed : undefined
 }
 
 function incrementStats(stats: AgentTranscriptStats, item: AgentTranscriptItem): void {
