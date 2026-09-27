@@ -1,8 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 
 // #1250 row 10: `shell.openPath` RESOLVES with an error string when it cannot
-// open a file (a log removed by the debug-retention prune gives "Failed to
-// open path"), and the handler used to discard it, believing the OS would
+// open a file (a log that is gone gives "Failed to open path"; nothing prunes
+// this directory automatically, so that means removed by hand or by another
+// tool), and the handler used to discard it, believing the OS would
 // show its own dialog. It does not, so View Log did nothing visible. The
 // handler now answers whether the log opened.
 //
@@ -38,11 +39,15 @@ it('opens the log main wrote for that CLI\'s failure, and answers true', async (
   expect(shell.openPath).toHaveBeenCalledWith('/state/cli-update-logs/claude-1.log')
 })
 
-it('answers false when the OS could not open it, and when openPath throws', async () => {
+it('answers false, and warns the diagnostic, when the OS could not open it or openPath throws', async () => {
+  const warn = vi.mocked(console.warn)
   shell.openPath.mockResolvedValue('Failed to open path')
   expect(await openLog('claude')).toBe(false)
-  shell.openPath.mockRejectedValue(new Error('boom'))
+  expect(warn).toHaveBeenLastCalledWith('[cli-updates] failed to open log:', 'Failed to open path')
+  const boom = new Error('boom')
+  shell.openPath.mockRejectedValue(boom)
   expect(await openLog('claude')).toBe(false)
+  expect(warn).toHaveBeenLastCalledWith('[cli-updates] failed to open log:', boom)
 })
 
 // #1423 review a: the renderer used to send a PATH, and any string reached

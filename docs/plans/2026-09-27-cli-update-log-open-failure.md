@@ -31,3 +31,13 @@ A failed CLI auto-update shows a **View Log** button. When the log cannot be ope
 - **a2 (Minor): an older, slower answer could re-show the alert after a newer successful click.** Only the latest click sets the result. Test added.
 - **a3 (Minor): the alert survived a new failed run with a new log.** The result is keyed by the action's `resultKey` (the log path). Test added.
 - **a4:** the plan and comment claimed the debug-retention prune removes these logs. It does not (`cliUpdateOrchestrator.ts` says retention is not automated for this directory); both are corrected.
+
+## Verification a, round 1 b and c
+- **a, c: the two NEW test comments repeated the false retention claim.** Corrected.
+- **c (test gaps, each pinned):**
+  - a later click clears the alert; the stale-answer test now shows the alert first, so it is no longer vacuous on main;
+  - a rejected request is said the same way;
+  - the diagnostic warn is asserted.
+  The "no clear" and "no catch" mutations now fail.
+- **b1 (pre-existing): Update Now that cannot start leaves an undismissable "Updating" row.** Split into #1425. It needs a `failed` shape without a log, which touches the shared types, the orchestrator and the banner.
+- **b2: the behaviour setting ignored a write failure.** Already fixed by #1403 (rows 6 and 13).

@@ -37,7 +37,8 @@ describe('CliUpdateBanner deferred state (#1243)', () => {
 })
 
 // #1250 row 10: View Log did nothing visible when the log could not be opened
-// (retention prunes old logs; the OS shows no dialog). The row says so now,
+// (a log removed by hand or another tool; the OS shows no dialog, and nothing
+// prunes this directory automatically). The row says so now,
 // in fixed words, and only when main answers that it did not open.
 describe('CliUpdateBanner View Log', () => {
   const failed = { kind: 'failed' as const, cli: 'claude' as const, from: '2.1.281', wantedLatest: '2.1.282', installMethod: 'npm' as const, reason: 'command-failed' as const, logPath: '/logs/claude-update.log', finishedAt: 1 }
@@ -58,8 +59,10 @@ describe('CliUpdateBanner View Log', () => {
     else expect(alert).toBeNull()
   })
 
-  // #1423 review a: an older, slower answer must not overwrite a newer one.
-  it('keeps the latest click\'s answer when an older one arrives last', async () => {
+  // #1423 review a and c: a later click clears the alert, and an older,
+  // slower answer must not overwrite a newer one. The alert is shown FIRST,
+  // so this cannot pass on a banner that never shows one.
+  it('clears on a later click, and keeps the latest click\'s answer when an older one arrives last', async () => {
     const answers: Array<(opened: boolean) => void> = []
     const openLog = vi.fn(() => new Promise<boolean>(resolve => { answers.push(resolve) }))
     Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesOpenLog: openLog } })
@@ -67,10 +70,26 @@ describe('CliUpdateBanner View Log', () => {
     render(<CliUpdateBanner />)
     const button = screen.getByRole('button', { name: 'View Log' })
     await act(async () => { fireEvent.click(button) })
-    await act(async () => { fireEvent.click(button) })
-    await act(async () => { answers[1]!(true) })
     await act(async () => { answers[0]!(false) })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    // A later click clears it at once, before its answer arrives.
+    await act(async () => { fireEvent.click(button) })
     expect(screen.queryByRole('alert')).toBeNull()
+    await act(async () => { fireEvent.click(button) })
+    await act(async () => { answers[2]!(true) })
+    await act(async () => { answers[1]!(false) })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  // #1423 review c: a REJECTED request (the IPC itself failed) is a failed
+  // open too, said the same way, never an unhandled rejection.
+  it('says a rejected request the same way', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesOpenLog: vi.fn(async () => { throw new Error('IPC unavailable') }) } })
+    useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: failed }, dismissed: new Set() })
+    render(<CliUpdateBanner />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'View Log' })) })
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't open the update log.")
+    expect(document.body.textContent).not.toContain('IPC unavailable')
   })
 
   // #1423 review a: a new failed run writes a new log; the old "couldn't
