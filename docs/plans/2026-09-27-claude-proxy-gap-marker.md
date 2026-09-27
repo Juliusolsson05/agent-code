@@ -70,7 +70,7 @@ the surviving chunks as one continuous answer.
   tests use synthetic SSE frames in the recorded shape
   (`ClaudeProxyAdapter.clientDisconnect.test.ts`), and so will these.
 
-## Decisions (5 is OWNER-APPROVED; 3 is still UNCONFIRMED; the rest are rulings)
+## Decisions (3 and 5 are OWNER-APPROVED; the rest are rulings)
 
 1. **Wording:** superseded by decision 5.
 2. **What gets sealed:** every flow the adapter is tracking at the gap
@@ -88,7 +88,8 @@ the surviving chunks as one continuous answer.
 3. **The spinner after a seal:** the phase goes idle for the remainder of
    that one response, even though Claude may still be streaming it. The
    next request (the next tool round-trip) starts a new flow and a new
-   phase. Same trade as #1040. UNCONFIRMED.
+   phase. Same trade as #1040. OWNER-APPROVED (B6 proxy, 2026-09-27):
+   option A.
 4. **Where the gap is placed:** at its true position in the line order,
    with a package change. We don't approximate it app-side.
 5. **How long the row stays: OWNER-APPROVED (B6 proxy, 2026-09-27, q119
