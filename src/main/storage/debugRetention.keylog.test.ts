@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 
-import { collectProxyRunDirs, runPrunePasses } from './debugRetention.js'
+import { collectProxyRunDirs, keyLogRetentionSince, runPrunePasses } from './debugRetention.js'
 import type { DebugStorageBucket, DebugStoragePrunePolicy } from './debugRetention.js'
 
 // #1385 (q91 follow-up of #1380): retention collected a proxy run dir only
@@ -29,26 +29,36 @@ function runDir(root: string, parts: string[], files: Record<string, string>): s
 }
 
 // Narrowed to FUTURE runs (B6 oldest-first list, owner decision q91 kept):
-// a key-log-only dir is collected only when it started on or after the
-// cutoff. The existing ones (the owner's 23, May-September 2026, shaped like
-// medlo/shell-89d43b9b below) are left untouched, and so is one whose name
-// cannot be dated.
+// a key-log-only dir is collected only when it started after this machine's
+// first retention pass with this code (the marker, below). The existing ones
+// (the owner's 23, May-September 2026, shaped like medlo/shell-89d43b9b) are
+// left untouched, and so is one whose name cannot be dated. #1388 review a:
+// a run made the SAME DAY, after the marker, is collected (a date constant
+// excluded it forever).
 it('collects a NEW key-log-only run dir, never an existing one, alongside normal run dirs', async () => {
   const root = mkdtempSync(join(tmpdir(), 'proxy-retention-'))
   roots.push(root)
   runDir(root, ['medlo', 'shell-89d43b9b', '2026-08-28T17-30-06-452Z'], { 'session-meta.json': '{}', 'sslkeylog.log': 'x'.repeat(4096) })
   runDir(root, ['medlo', 'shell-7a1b2c3d', '2026-09-29T08-15-00-000Z'], { 'session-meta.json': '{}', 'sslkeylog.log': 'x'.repeat(4096) })
   runDir(root, ['medlo', 'shell-undated', 'run-without-a-timestamp'], { 'sslkeylog.log': 'x'.repeat(128) })
+  runDir(root, ['medlo', 'shell-same-day-before', '2026-09-27T17-59-59-999Z'], { 'sslkeylog.log': 'x'.repeat(128) })
+  runDir(root, ['medlo', 'shell-same-day-after', '2026-09-27T19-00-00-000Z'], { 'sslkeylog.log': 'x'.repeat(128) })
   runDir(root, ['agent-code', 'resume-a5fb379b', '2026-09-27T01-03-52-273Z'], { 'session-meta.json': '{}', 'proxy-events.jsonl': '{}\n', 'sslkeylog.log': 'x'.repeat(1024) })
   // Shared mitmproxy state is never a run dir, whatever it holds.
   runDir(root, ['_shared-conf'], { 'mitmproxy-ca-cert.pem': 'ca' })
   // Metadata alone is not a run's evidence; leave it for its own pass.
   runDir(root, ['agent-code', 'shell-empty', '2026-09-01T00-00-00-000Z'], { 'session-meta.json': '{}' })
 
-  const artifacts = await collectProxyRunDirs(root)
+  const since = '2026-09-27T18-00-00-000Z'
+  const artifacts = await collectProxyRunDirs(root, since)
   expect(artifacts.map(artifact => relative(root, artifact.path)).sort()).toEqual([
     join('agent-code', 'resume-a5fb379b', '2026-09-27T01-03-52-273Z'),
     join('medlo', 'shell-7a1b2c3d', '2026-09-29T08-15-00-000Z'),
+    join('medlo', 'shell-same-day-after', '2026-09-27T19-00-00-000Z'),
+  ])
+  // With no established cutoff, no key-log-only dir is collected at all.
+  expect((await collectProxyRunDirs(root, null)).map(artifact => relative(root, artifact.path))).toEqual([
+    join('agent-code', 'resume-a5fb379b', '2026-09-27T01-03-52-273Z'),
   ])
   const keyLogOnly = artifacts.find(artifact => artifact.path.includes('shell-7a1b2c3d'))!
   expect(keyLogOnly).toMatchObject({ kind: 'dir', bucket: 'proxy' })
@@ -79,7 +89,7 @@ it('a run dir with a child it cannot read is protected, and is collected normall
   const caps = {} as Record<DebugStorageBucket, number>
   for (const bucket of ['proxy'] as DebugStorageBucket[]) caps[bucket] = 1_000_000_000
   const policy: DebugStoragePrunePolicy = { now, ttlMs: 48 * 3_600_000, activeGraceMs: 10 * 60_000, budgetBytes: 1_000_000_000, caps }
-  const prune = async () => runPrunePasses(await collectProxyRunDirs(root), policy, async artifact => {
+  const prune = async () => runPrunePasses(await collectProxyRunDirs(root, '2026-09-28T00-00-00-000Z'), policy, async artifact => {
     try { await rm(artifact.path, { recursive: true, force: true }); return true } catch { return false }
   })
 
@@ -101,3 +111,22 @@ it('a run dir with a child it cannot read is protected, and is collected normall
   await prune()
   expect(existsSync(dir)).toBe(false)
 })
+
+// The marker behind "future runs only" (#1388 review a). The first pass
+// records the moment this machine started collecting and later passes keep
+// it. An unreadable marker, or one in an unknown shape, yields null, which
+// collects NO key-log-only run (an unknown cutoff never widens collection).
+it('records the key-log cutoff once, keeps it, and fails closed when it cannot be read', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keylog-since-'))
+  roots.push(dir)
+  const file = join(dir, 'state', 'debug-retention-keylog-since')
+  const first = await keyLogRetentionSince(file, () => new Date('2026-09-27T18:20:27.123Z'))
+  expect(first).toBe('2026-09-27T18-20-27-123Z')
+  expect(await keyLogRetentionSince(file, () => new Date('2026-10-01T00:00:00.000Z'))).toBe(first)
+  writeFileSync(file, 'not a timestamp')
+  expect(await keyLogRetentionSince(file)).toBeNull()
+  rmSync(file)
+  mkdirSync(file)
+  expect(await keyLogRetentionSince(file)).toBeNull()
+})
+

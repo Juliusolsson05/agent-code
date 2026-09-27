@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 
 import {
@@ -456,12 +456,13 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 
 async function collectArtifacts(): Promise<Artifact[]> {
   const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
+  const keyLogOnlySince = await keyLogRetentionSince()
   const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, incidents, heapSnapshots, sessionRecordings] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
     collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
     collectLegacyDebugBundleDirs(DEBUG_BUNDLE_DIR, manualLegacyBundlePaths),
-    collectProxyRunDirs(PROXY_EVENTS_DIR),
+    collectProxyRunDirs(PROXY_EVENTS_DIR, keyLogOnlySince),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
     collectIncidentRunDirs(),
     collectFiles(HEAP_SNAPSHOT_DIR, 'heap-snapshots', name => name.endsWith('.heapsnapshot')),
@@ -668,21 +669,56 @@ const PROXY_RUN_MARKERS = new Set(['proxy-events.jsonl', 'proxy-events.1.jsonl']
 
 /**
  * Key-log-only run dirs are collected FORWARD ONLY (#1385, owner-approved
- * narrowing in B6's oldest-first list): only those whose run timestamp is at
- * or after this cutoff. Every earlier one, including the 23 dirs found on the
- * owner's machine (May-September 2026), is left exactly as it is, because
- * deleting existing TLS key logs is an owner decision (q91) that this PR does
- * not make. The cutoff is the day this narrowing was written, so every run
- * made by a build that contains it is newer.
+ * narrowing in B6's oldest-first list): only runs that started after the
+ * first retention pass of a build containing this code. Every earlier one,
+ * including the 23 dirs found on the owner's machine (May-September 2026), is
+ * left exactly as it is: deleting existing TLS key logs is an owner decision
+ * (q91) this PR does not make.
+ *
+ * WHY a marker written on first run and not a date constant (#1388 review a):
+ * a fixed cutoff can only approximate "after the upgrade". The first version
+ * used tomorrow's date, so a run this build made TODAY was excluded forever
+ * (its name never crosses the cutoff), and an earlier date would have swept
+ * key logs older than the upgrade. The marker records the actual moment this
+ * machine started collecting.
  *
  * Run dirs are named by their ISO start time with `:` and `.` replaced
- * (`2026-08-28T17-30-06-452Z`), which sorts as text. A name that is not in
- * that shape cannot be dated, so it is not collected (unknown is never "new").
+ * (`2026-08-28T17-30-06-452Z`), which sorts as text, and the marker uses the
+ * same shape. A name that is not in that shape cannot be dated, so it is not
+ * collected (unknown is never "new").
  */
-const KEY_LOG_ONLY_SINCE = '2026-09-28T00-00-00-000Z'
 const RUN_DIR_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/
+const KEY_LOG_SINCE_FILE = join(STATE_DIR, 'debug-retention-keylog-since')
 
-export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
+/**
+ * When this machine started collecting key-log-only runs, in run-dir name
+ * form, or null when that cannot be established. Null collects NO key-log-only
+ * run (fail closed: an unknown cutoff must never widen collection to old key
+ * logs). The first call writes the marker exclusively, so two passes racing
+ * agree on one value.
+ */
+export async function keyLogRetentionSince(file = KEY_LOG_SINCE_FILE, now: () => Date = () => new Date()): Promise<string | null> {
+  const readMarker = async (): Promise<string | null> => {
+    const value = (await readFile(file, 'utf8')).trim()
+    return RUN_DIR_NAME.test(value) ? value : null
+  }
+  try {
+    return await readMarker()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+  }
+  const since = now().toISOString().replace(/[:.]/g, '-')
+  try {
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, since, { flag: 'wx', mode: 0o600 })
+    return since
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return readMarker().catch(() => null)
+    return null
+  }
+}
+
+export async function collectProxyRunDirs(root: string, keyLogOnlySince: string | null = null): Promise<Artifact[]> {
   const out: Artifact[] = []
   async function walk(dir: string, depth: number): Promise<void> {
     let entries
@@ -697,7 +733,7 @@ export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
     // budgeted, never removed. Those are plaintext TLS session secrets; the
     // owner's machine had 23 such dirs (5.18 MB, May-September 2026, #1380
     // review c). A key-log-only dir is a run dir either way (never walked
-    // into), but it is COLLECTED only when it is new (KEY_LOG_ONLY_SINCE).
+    // into), but it is COLLECTED only when it started after keyLogOnlySince.
     // session-meta.json alone is NOT evidence of a run.
     const files = new Set(entries.filter(entry => entry.isFile()).map(entry => entry.name))
     // Events markers (the live file or its rotated `.1` generation, #1376)
@@ -705,7 +741,7 @@ export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
     const hasEvents = [...PROXY_RUN_MARKERS].some(marker => files.has(marker))
     if (hasEvents || files.has('sslkeylog.log')) {
       const name = basename(dir)
-      const collectable = hasEvents || (RUN_DIR_NAME.test(name) && name >= KEY_LOG_ONLY_SINCE)
+      const collectable = hasEvents || (keyLogOnlySince !== null && RUN_DIR_NAME.test(name) && name > keyLogOnlySince)
       if (collectable) {
         const artifact = await collectDirArtifact(dir, 'proxy')
         if (artifact) out.push(artifact)
