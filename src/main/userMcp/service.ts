@@ -190,26 +190,45 @@ export class UserMcpService {
       // it: exfiltration without ever reading a secret. Secrets supplied in
       // this same save are set afterwards, so an intentional move that
       // re-enters the token still works in one step.
+      // SECURITY INVARIANT (q110, #1420 review a): a destination is never
+      // observable, by a launch or by a restart at any point, paired with a
+      // token that was not saved for it. The order below is what holds it:
+      //   1. snapshot the server's current secrets (strictly: an unreadable
+      //      directory aborts here, before anything changes);
+      //   2. on a destination change, CLEAR the old secrets while the old
+      //      destination is still the published one, on disk and in memory;
+      //   3. only then publish the new document (memory, then disk);
+      //   4. write the new secrets and prune.
+      // A crash anywhere leaves at worst a server with NO secret: fail closed.
+      // The earlier order (document first, then clear) had a window, and a
+      // failed rollback made it durable, in which the NEW destination sat on
+      // disk with the OLD token, and resolveForLaunch could read it.
+      //
+      // On failure, mutate() rolls the document back first and restores this
+      // snapshot only if the old document is back on disk, or if the
+      // destination did not change (then the old secrets still match the
+      // document that is on disk). Otherwise the secrets stay cleared.
+      const previousSecrets = existing
+        ? await this.secrets.snapshotServer(server.id)
+        : new Map<string, Buffer>()
+      this.pendingSecretRestore = {
+        run: () => this.secrets.restoreServer(server.id, previousSecrets),
+        safeWithNewDocument: !destinationChanged,
+      }
+      if (destinationChanged) await this.secrets.clearServer(server.id)
       this.document = {
         version: 1,
         servers: existing
           ? this.document.servers.map(candidate => candidate.id === server.id ? server : candidate)
           : [...this.document.servers, server],
       }
-      // Document first, secret blobs after (review round 2): a failed persist
-      // rolls the document back in mutate(), and blobs cleared before it could
-      // not be rolled back, so a failed destination edit used to lose the
-      // server's token for good.
       await this.persist()
-      await this.withSecretRollback(server.id, async () => {
-        if (destinationChanged) await this.secrets.clearServer(server.id)
-        for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
-          if (server.inputs.some(candidate => candidate.id === inputId)) {
-            await this.secrets.set(server.id, inputId, value)
-          }
+      for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
+        if (server.inputs.some(candidate => candidate.id === inputId)) {
+          await this.secrets.set(server.id, inputId, value)
         }
-        await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
-      })
+      }
+      await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
       return {
         ok: true,
         id: server.id,
@@ -222,9 +241,16 @@ export class UserMcpService {
   delete(id: string): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
       if (!this.document.servers.some(server => server.id === id)) return { ok: false, error: 'That server no longer exists.' }
+      // Snapshot strictly first (q110), so a failed clear can restore exactly
+      // what was there once the document is back (see save()).
+      const previousSecrets = await this.secrets.snapshotServer(id)
+      this.pendingSecretRestore = {
+        run: () => this.secrets.restoreServer(id, previousSecrets),
+        safeWithNewDocument: false,
+      }
       this.document = { version: 1, servers: this.document.servers.filter(server => server.id !== id) }
       await this.persist()
-      await this.withSecretRollback(id, () => this.secrets.clearServer(id))
+      await this.secrets.clearServer(id)
       return { ok: true }
     })
   }
@@ -301,7 +327,23 @@ export class UserMcpService {
    *     "it's attached" while the agent has no such tools.
    * A dropped server never fails the launch.
    */
-  async resolveForLaunch(params: {
+  /**
+   * Launch reads are serialized with mutations (q110). Reading
+   * `this.document` and the secret store while a save was between its steps
+   * could see a half-applied change; now a launch runs strictly before or
+   * after each mutation, never inside one.
+   */
+  resolveForLaunch(params: {
+    provider: string
+    overrides: Readonly<Record<string, boolean>>
+    cwd: string
+  }): Promise<UserMcpLaunchResolution> {
+    const run = this.tail.then(() => this.resolveForLaunchNow(params))
+    this.tail = run.then(() => {}, () => {})
+    return run
+  }
+
+  private async resolveForLaunchNow(params: {
     provider: string
     overrides: Readonly<Record<string, boolean>>
     cwd: string
@@ -416,18 +458,10 @@ export class UserMcpService {
         this.readFailed = false
       }
       this.persistedInMutation = false
+      this.pendingSecretRestore = null
+      let outcome: Awaited<ReturnType<typeof operation>>
       try {
-        const outcome = await operation()
-        if (!outcome.ok) return outcome
-        const snapshot = await this.snapshot()
-        for (const listener of this.listeners) listener(snapshot)
-        return {
-          ok: true,
-          snapshot,
-          ...(outcome.id ? { id: outcome.id } : {}),
-          ...(outcome.secretsCleared ? { secretsCleared: true } : {}),
-          ...(outcome.pendingReview ? { pendingReview: true } : {}),
-        }
+        outcome = await operation()
       } catch (error) {
         // Review round 1: a failed persist must not leave memory ahead of
         // disk, or the snapshot shows a server that a restart will lose and a
@@ -442,45 +476,58 @@ export class UserMcpService {
         // the next mutation. Roll the FILE back too. If that write fails as
         // well, disk still holds the new document, so memory keeps it: the
         // two must agree either way.
+        let oldDocumentOnDisk: boolean
         if (this.persistedInMutation) {
           try {
             await saveUserMcpDocument(this.file, before)
             this.document = before
+            oldDocumentOnDisk = true
           } catch {
             // Disk holds the persisted document; memory already matches it.
+            oldDocumentOnDisk = false
           }
         } else {
           this.document = before
+          oldDocumentOnDisk = true
+        }
+        // q110: put the previous secrets back only where they pair with the
+        // document that is actually on disk. A restore that itself fails is
+        // not retried: the server is left without (some of) its secrets,
+        // which launch refuses to attach. That is the fail-closed direction.
+        const restore = this.pendingSecretRestore
+        if (restore && (oldDocumentOnDisk || restore.safeWithNewDocument)) {
+          await restore.run().catch(() => {})
         }
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+      if (!outcome.ok) return outcome
+      // Committed. Nothing after this line may report failure for a change
+      // that is on disk (q110, review a finding 4): a listener that threw used
+      // to land in the rollback path, which reverted the document but not
+      // the secrets it had just written. Each listener is isolated.
+      const snapshot = await this.snapshot()
+      for (const listener of this.listeners) {
+        try {
+          listener(snapshot)
+        } catch (error) {
+          console.warn('[user-mcp] change listener failed:', error)
+        }
+      }
+      return {
+        ok: true,
+        snapshot,
+        ...(outcome.id ? { id: outcome.id } : {}),
+        ...(outcome.secretsCleared ? { secretsCleared: true } : {}),
+        ...(outcome.pendingReview ? { pendingReview: true } : {}),
       }
     })
     this.tail = run.catch(() => {})
     return run
   }
 
-  /**
-   * Run a secret step so that a failure leaves the server's secrets exactly as
-   * they were (#1304, q108). mutate() rolls the DOCUMENT back when an
-   * operation throws, and without this the step could already have erased the
-   * old secrets: a destination change clears them before setting new ones, so
-   * a failed set brought the old server back without its token, and a delete
-   * whose clear failed partway kept the server but lost some blobs. The
-   * snapshot is ciphertext bytes (see UserMcpSecretStore.snapshotServer).
-   *
-   * Residual: if restoring the snapshot itself fails (the same disk that
-   * refused the step), the original error is still reported and the
-   * secrets may be partly gone; there is nowhere left to put them.
-   */
-  private async withSecretRollback(serverId: string, step: () => Promise<void>): Promise<void> {
-    const snapshot = await this.secrets.snapshotServer(serverId)
-    try {
-      await step()
-    } catch (error) {
-      await this.secrets.restoreServer(serverId, snapshot).catch(() => {})
-      throw error
-    }
-  }
+  /** The secret restore the current operation registered before touching
+   *  secrets (q110); mutate() decides whether it may run. */
+  private pendingSecretRestore: { run: () => Promise<void>; safeWithNewDocument: boolean } | null = null
 
   /** Set by persist() during the current mutate() operation (#1304). */
   private persistedInMutation = false

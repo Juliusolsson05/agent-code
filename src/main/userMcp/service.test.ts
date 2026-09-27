@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -397,5 +397,126 @@ describe('a secret step that fails midway keeps the previous secret (#1304, q108
     const restarted = service()
     expect((await restarted.snapshot()).servers.map(server => server.id)).toEqual([id])
     expect(await storeOf(restarted).get(id, 'beeper-authorization')).toBe(TOKEN)
+  })
+})
+
+// q110 (SECURITY, #1420 review a): a destination and a token must never be
+// observable as a mixed pair (the NEW destination with the OLD token), not by
+// a launch during a save, not by a restart at any point in it, and not after a
+// failed rollback. On any doubt: no secret.
+describe('destination/secret pairing never mixes (#1304, q110)', () => {
+  type Store = {
+    get: (serverId: string, inputId: string) => Promise<string | null>
+    set: (serverId: string, inputId: string, value: string) => Promise<void>
+    clearServer: (serverId: string) => Promise<void>
+  }
+  const storeOf = (svc: UserMcpService) => (svc as unknown as { secrets: Store }).secrets
+  const EVIL = 'https://evil.example/mcp'
+  const moved = (id: string, extra: Partial<UserMcpSaveInput> = {}): UserMcpSaveInput => beeper({
+    id,
+    entry: { type: 'http', url: EVIL, headers: { Authorization: 'Bearer ${input:beeper-authorization}' } },
+    secrets: {},
+    ...extra,
+  } as Partial<UserMcpSaveInput>)
+  const launch = (svc: UserMcpService) => svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+  const mixed = (resolution: Awaited<ReturnType<UserMcpService['resolveForLaunch']>>) =>
+    resolution.servers.some(server => JSON.stringify(server.entry).includes('evil.example') && Object.values(server.secrets).includes(TOKEN))
+  const deferred = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve }); return { gate, release } }
+
+  async function seeded() {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    return { live, id: (await live.snapshot()).servers[0]!.id }
+  }
+
+  it.each(['clearServer', 'set', 'prune'] as const)(
+    'a launch and a restart while the save is paused at %s never pair the new destination with the old token',
+    async method => {
+      const { live, id } = await seeded()
+      const store = storeOf(live) as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+      const real = store[method]!.bind(store)
+      const hold = deferred()
+      let reached!: () => void
+      const atStep = new Promise<void>(resolve => { reached = resolve })
+      store[method] = async (...args) => { reached(); await hold.gate; return real(...args) }
+      const saving = live.save(moved(id, method === 'set' ? { secrets: { 'beeper-authorization': 'bpr_live_new_token_1111' } } as Partial<UserMcpSaveInput> : {}))
+      await Promise.race([atStep, saving])
+      const liveLaunch = launch(live)
+      expect(mixed(await launch(service()))).toBe(false)
+      hold.release()
+      await saving
+      expect(mixed(await liveLaunch)).toBe(false)
+      expect(mixed(await launch(service()))).toBe(false)
+    },
+  )
+
+  it('a failed rollback write after a failed secret step never leaves the new destination with the old token', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    store.set = async () => {
+      await chmod(dir, 0o500)
+      throw new Error('secure storage unavailable')
+    }
+    try {
+      expect((await live.save(moved(id, { secrets: { 'beeper-authorization': 'bpr_live_new_token_2222' } } as Partial<UserMcpSaveInput>))).ok).toBe(false)
+    } finally {
+      await chmod(dir, 0o700)
+    }
+    expect(mixed(await launch(service()))).toBe(false)
+  })
+
+  // The reverse mix: a launch that read the OLD destination and then awaited
+  // its native policy lookups used to read the secret store AFTER a save had
+  // written the NEW token, pairing the old destination with a token the user
+  // meant for the new one. Launches are serialized with mutations.
+  it('a launch paused in its own lookups never pairs the old destination with the new token', async () => {
+    const { live, id } = await seeded()
+    const hold = deferred()
+    let reached!: () => void
+    const inLookup = new Promise<void>(resolve => { reached = resolve })
+    const gated = new UserMcpService({
+      stateDir: dir,
+      codec,
+      native: {
+        list: async () => native,
+        codexNames: async () => codexNames,
+        claudeManagedPolicy: async () => { reached(); await hold.gate; return false },
+      },
+    })
+    const launching = gated.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    await inLookup
+    const saving = gated.save(moved(id, { secrets: { 'beeper-authorization': 'bpr_live_new_token_4444' } } as Partial<UserMcpSaveInput>))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    hold.release()
+    const resolution = await launching
+    await saving
+    const reverseMix = resolution.servers.some(server =>
+      JSON.stringify(server.entry).includes('localhost:23373') && Object.values(server.secrets).includes('bpr_live_new_token_4444'))
+    expect(reverseMix).toBe(false)
+    void live
+  })
+
+  // Review a: snapshotServer returned an EMPTY snapshot on any readdir error,
+  // so a failed step then "restored" nothing and the server lost its token.
+  // Only a missing directory means no secrets.
+  it('a secrets directory that cannot be listed is an error, not an empty snapshot', async () => {
+    const { live, id } = await seeded()
+    const store = (live as unknown as { secrets: { snapshotServer: (id: string) => Promise<Map<string, Buffer>> } }).secrets
+    const serverDir = join(dir, 'mcp-secrets', id)
+    await chmod(serverDir, 0o000)
+    try {
+      await expect(store.snapshotServer(id)).rejects.toThrow()
+    } finally {
+      await chmod(serverDir, 0o700)
+    }
+    await expect(store.snapshotServer('never-saved')).resolves.toEqual(new Map())
+  })
+
+  it('a listener that throws after commit does not turn a committed save into a failure', async () => {
+    const { live, id } = await seeded()
+    live.onChange(() => { throw new Error('broadcast failed') })
+    const result = await live.save(beeper({ id, secrets: { 'beeper-authorization': 'bpr_live_new_token_3333' } } as Partial<UserMcpSaveInput>))
+    expect(result.ok).toBe(true)
+    expect(await storeOf(service()).get(id, 'beeper-authorization')).toBe('bpr_live_new_token_3333')
   })
 })

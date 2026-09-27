@@ -105,8 +105,12 @@ export class UserMcpSecretStore {
     let files: string[]
     try {
       files = await readdir(join(this.dir, serverId))
-    } catch {
-      return snapshot
+    } catch (error) {
+      // Only a missing directory means "no secrets" (q110, review a): an
+      // EACCES/EIO/EMFILE here returned an empty snapshot, so a failed step
+      // then "restored" nothing and the server lost its token for good.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return snapshot
+      throw error
     }
     for (const file of files) {
       if (!file.endsWith('.bin')) continue
