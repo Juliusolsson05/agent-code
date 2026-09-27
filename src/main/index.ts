@@ -1421,6 +1421,7 @@ async function startApp(): Promise<void> {
     // The first worktree entry is the main checkout, so every worktree of one
     // repository folds into it (the conversations picker's family rule).
     resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+    identityOf: sessionId => builtInMcpHost.sessionTldrIdentity(sessionId),
   })
   const projectActivity = (windows: readonly PersistedWindow[]) => {
     void readAgentNameAssignments(AGENT_NAMES_FILE)
