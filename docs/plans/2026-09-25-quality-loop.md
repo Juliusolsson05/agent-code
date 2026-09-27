@@ -543,6 +543,8 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (18:00) — **Holds and integration.** q53: cch#64, where the proxy tail loses or duplicates events on rotation. q54: W1 owns the shared proxyEventsReader, and W4's app half builds on it. q55: wfm#63, whose stale-root sweep is unsafe; it moves to a private-parent pid lease. q51/q52: #1328 is redesigned to refuse rather than evict racily. #1326 now contains #1324 (`f897700f`) and its a/c verifiers are running. The manager audit now reports cross-branch file overlap on every tick.
+
 - 2026-09-26 (17:52) — **#1324 MERGED** (`d15a9756`, Fixes #1267, closed). session:spawn launders provider exceptions before they cross IPC and journals a fixed signature. Merged alone: 3 reviewers × 2 rounds, disposition plus q42 addendum, exact-head CI green, contained main. Main moved, so #1319/#1325/#1326/#1331 are merging it in; #1326 applies the q42 Map integration first. Holds: q50 atp#37 (managed statusLine runs), q51 #1328 (live-Goal eviction race), #1330 (owner retention window). New reviews: claude-code-headless#64 (#1273).
 
 - 2026-09-26 (17:47) — **workflow-mcp#64 MERGED** (`80363d77`). It pins libexpat 2.8.5-r0 (fixes CVE-2026-93990), which repairs the image-contract check on every workflow-mcp PR. 3/3 reviewers MERGE-READY; exact-head CI 8/8 green. #1331 (Fixes #1320, stacked on #1325) is in review. q48: #1319 becomes Refs #800. q49: #1330 must retain tasks, quarantines and unknown outcomes.
