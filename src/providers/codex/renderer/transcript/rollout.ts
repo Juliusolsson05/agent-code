@@ -228,16 +228,14 @@ function codexCompactBoundaryEntry(
 // already in the feed: 17,326 of 20,343 sampled replacement messages
 // duplicated an earlier user message.
 //
-// KNOWN GAP (review a of #1386, follow-up #1393): it is NOT
-// always a duplicate. 82 local rollouts (68 sessions) are resumed files that
-// START with a `compacted` line, so its retained user prompts are the only
-// copy of that earlier conversation in the file. This line-at-a-time mapper
-// cannot tell that case apart (a paged older-history load can also start a
-// page with a `compacted` line that has predecessors in the previous page),
-// so the fix belongs where the loader knows it is mapping from file offset 0.
-// Before #1386 no `compacted` line rendered at all, so this is not a
-// regression. WHY the summary is conditional: `message` is empty in every
-// 0.15x rollout, where the summary is encrypted; only 56 of about 1,500 local
+// EXCEPT at the head of a resumed file (#1393): 82 local rollouts START with
+// a `compacted` line, so its retained user prompts are the only copy of that
+// earlier conversation in the file. This line-at-a-time function cannot tell
+// that case apart (a paged older-history load can start a page with a
+// `compacted` line that has predecessors in the previous page), so the
+// stateful transcript mapper decides, and calls mapCodexRetainedUserHistory
+// below. WHY the summary is conditional: `message` is empty in every 0.15x
+// rollout, where the summary is encrypted; only 56 of about 1,500 local
 // compactions (older CLIs) carry readable text.
 function mapCodexCompacted(
   uuid: string,
@@ -247,6 +245,33 @@ function mapCodexCompacted(
   const out: Entry[] = [codexCompactBoundaryEntry(`${uuid}:compact-boundary`, timestamp)]
   const message = typeof payload.message === 'string' ? payload.message.trim() : ''
   if (message) out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
+  return out
+}
+
+/**
+ * The retained USER prompts of a `compacted` line, as ordinary user entries
+ * (#1393). Only for a compacted line at the head of a resumed rollout, where
+ * nothing earlier in the file holds them; createCodexTranscriptEntryMapper
+ * decides that. Developer items and the encrypted `compaction` item are not
+ * conversation. Codex's bootstrap (AGENTS.md preamble, environment context)
+ * and subagent notifications are dropped by the same synthetic filter the
+ * ordinary `response_item` path uses. Each entry carries the compacted line's
+ * timestamp and a stable `:retained:<index>` uuid, and they sort before the
+ * boundary the same line produces.
+ */
+export function mapCodexRetainedUserHistory(entry: Record<string, unknown>): Entry[] {
+  if (entry.type !== 'compacted') return []
+  const payload = asRecord(entry.payload)
+  const history = Array.isArray(payload?.replacement_history) ? payload.replacement_history : []
+  const uuid = codexRolloutIdentity(entry)
+  const timestamp = typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+  const out: Entry[] = []
+  history.forEach((raw, index) => {
+    const item = asRecord(raw)
+    if (!item || item.role !== 'user') return
+    const mapped = codexConversationEntryFromMessageItem(`${uuid}:retained:${index}`, timestamp, item)
+    if (mapped) out.push(mapped)
+  })
   return out
 }
 

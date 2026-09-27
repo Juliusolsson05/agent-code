@@ -23,6 +23,7 @@ import type {
 import {
   codexHistoryMarker,
   codexTurnIdFromRollout,
+  mapCodexRetainedUserHistory,
   mapCodexRolloutToFeedEntries,
   stampCodexTurnId,
 } from './rollout'
@@ -32,6 +33,19 @@ export function createCodexTranscriptEntryMapper(
   initialTurnCursor: string | null = null,
 ): TranscriptEntryMapper {
   let turnCursor = initialTurnCursor
+  // WHY the mapper tracks the file head (#1393): a resumed rollout can START
+  // with a `compacted` line whose retained user prompts are the only copy of
+  // the earlier conversation in the file (82 local files, 58 sessions with no
+  // other rollout). Those prompts must be shown there, and only there:
+  // elsewhere they repeat prompts already in the feed (33,443 of 37,724
+  // retained user items have an earlier exact match). "At the head" is
+  // proved by a `session_meta` line with no conversation record
+  // (`response_item`/`event_msg`) since it. `session_meta` is only ever at a
+  // file's head (0 of 2,579 local rollouts have one after a conversation
+  // record), so a history page that starts mid-file, or a live burst, can
+  // never enter this state, whatever its first line is. Pages and previews
+  // that DO start at the file head get the prompts, with no loader change.
+  let atFileHead = false
   return {
     map(raw: Record<string, unknown>): MappedTranscriptEntry {
       const turnContextId = codexTurnIdFromRollout(raw)
@@ -39,7 +53,11 @@ export function createCodexTranscriptEntryMapper(
       const payloadTurnId = codexTurnIdFromEventPayload(raw)
       if (payloadTurnId !== null) turnCursor = payloadTurnId
 
-      const entries = mapCodexRolloutToFeedEntries(raw).map(entry =>
+      if (raw.type === 'session_meta') atFileHead = true
+      else if (raw.type === 'response_item' || raw.type === 'event_msg') atFileHead = false
+      const retained = atFileHead ? mapCodexRetainedUserHistory(raw) : []
+
+      const entries = [...retained, ...mapCodexRolloutToFeedEntries(raw)].map(entry =>
         stampCodexTurnId(entry, turnCursor),
       )
       const marker = codexHistoryMarker(raw)
