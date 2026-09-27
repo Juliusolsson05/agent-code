@@ -45,3 +45,14 @@ Rows 14–15 (key vault index, agent-name registry, tmux recovery) are strict by
 | **a survivor:** dropping the `approvedAt` check passed. | valid | An entry missing `approvedAt` prompts. Mutant red. |
 | **b survivor:** the row 13 loader returning an empty set passed. | valid | Row 13 moved to #1417 (manager q109: the same loader as steering q109), with a test through the real loader there. This PR no longer touches `debugRetention`. |
 | **a2, minor:** carried rows change position on rewrite. | declined | Values are all kept. Neither reader gives order any authority: incidents are sorted by `at`, and approvals are keyed by identity plus hash. Preserving the original interleaving would need positional bookkeeping for no reader. |
+
+## Review round 2 (a, b, c codex at `7204503c`): all FIX-BEFORE-MERGE (final round)
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **a / b / c, major:** a set-aside refused file was deleted by a later run's retention. Setting it aside cleared the refusal marker, so once the run's readable incidents expired it looked empty. | valid | `refusedAsideRuns`: every run holding an `incidents.refused-*` file (listed at startup, added on set-aside) is never expired; only budget pruning and `clear()` remove it. Fail-first with a day-8 later run. |
+| **a / b / c, major:** the aside name was only `Date.now()`, and `rename` replaces, so a same-millisecond second refusal overwrote the first | valid | The name adds a UUID. Fail-first with a fixed clock and two refusals: both bodies are kept. |
+| **c survivor:** removing `refusedIncidentRuns.delete` after a set-aside (a stale marker) | valid | The collision test records again after a set-aside: one aside file, and the canonical file holds both incidents. Mutant red. |
+| **b survivor:** the rename-failure guard | valid | A read-only run dir makes the set-aside fail; the refused file stays byte-for-byte and `shortened` is set. Mutant red. |
+| **a / c survivors:** the `source`, `first_user_message`, `cwd` and `git_branch` type guards | valid | The wrong-type test now BLOBs every projected string column, plus a second row whose empty title falls to a BLOB first message; all four mutants red. |
+| **c3, minor:** the picker still shows a partial Codex list as complete | residual, **filed as #1433** | Needs a per-source degraded status through `Discovery` and a curated picker line (q39); out of scope for a fail-all fix. |
