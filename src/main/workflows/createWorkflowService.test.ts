@@ -33,7 +33,7 @@ vi.mock('@main/workflows/CodexWorkflowProvider.js', () => ({
   createCodexWorkflowProvider: providerFactory,
 }))
 
-const { createWorkflowService } = await import(
+const { createWorkflowService, workflowSessionAliasFile } = await import(
   '@main/workflows/createWorkflowService.js'
 )
 
@@ -94,4 +94,10 @@ describe('createWorkflowService', () => {
     expect(onCreated).toHaveBeenCalledOnce()
   })
 
+
+  // #1325 round-2 review c4: the aliases say who owns each stored run, so
+  // they live in the workflow state root and move with the store.
+  it('keeps replaced-pane aliases inside the workflow state root, beside the store', () => {
+    expect(workflowSessionAliasFile()).toBe('/tmp/agent-code-user-data/workflows/session-aliases.json')
+  })
 })
