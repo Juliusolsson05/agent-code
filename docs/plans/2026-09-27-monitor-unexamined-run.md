@@ -13,18 +13,18 @@
 
 ## Not changed (residual)
 - The capacity budget (`pruneRuns`) may still remove an unexamined run, as it already may for `unindexedRuns`. That is the documented policy: the 128 MiB ceiling wins over unknown runs. It orders an unexamined run as oldest, since it has no indexed points.
-- Two live stores can still examine each other's run while it is empty at startup. That needs a live-run marker, which is a different design and not what #1453 reports.
+- ~~Two live stores can still examine each other's run while it is empty at startup.~~ Closed by review b's `touchedSince` (see below).
 
 ## Test (real files)
 `MonitorHistoryStore.test.ts`: run-a appears after store B indexed.
 - It survives two of B's maintenance passes. This is red before the fix (ENOENT on the first pass).
 - A restarted store examines it and keeps its in-retention incident.
-- Past retention, it is deleted as before, so the protection is not permanent.
+- Past retention, its incident file is deleted, and its (then empty, aged) folder on a later pass, so the protection is not permanent.
 
 ## Review a (round 1), fixed
 - **An unreadable or untrusted incident file:** at indexing, an `incidents.json` that exists but cannot be read, parsed or trusted now makes the run UNKNOWN (`unindexedRuns`). It used to read as `[]`, so an examined run was deleted.
 - **`examinedRuns` is forgotten when the run is deleted** (retention or capacity), so a name another store recreates with fresh data is unexamined again and kept.
-- **Tests:** real files. An incident file at mode 000 during indexing survives maintenance once readable; a run recreated after its retention deletion survives. Both were red before, and both mutations fail.
+- **Tests:** real files. An incident file at mode 000 during indexing survives maintenance once readable; a run recreated after its retention deletion survives. Both were red before. (Their mutation gates were shadowed by review b's `touchedSince` until review c's real-clock rewrite; see below.)
 
 ## Review b (round 1), fixed
 - **A tier `stat` failure other than ENOENT** now marks the run unknown instead of skipping the tier as absent.
@@ -34,3 +34,10 @@
 
 ## Review a round 2: residual (manager decision)
 A second store's write can land between retention's final `touchedSince()` check and its recursive `rm()`: a check-then-act race between two uncoordinated processes. It needs two app processes sharing one data folder (possible only under `--packaging-smoke`, which skips the single-instance lock) and a write inside that sub-millisecond window. Closing it needs a cross-process lock on the monitor folder. A rename-to-tombstone-then-recheck scheme narrows it but brings restore-collision cases of its own. That is left out under the PR freeze; B6 decides whether to accept this residual or require the lock.
+
+## Review c (round 1), fixed (tests and docs)
+- **The problem:** every new test used a 1970-scale fake clock, so `touchedSince` saw every fixture as freshly touched and shadowed the other guards. Removing the `examinedRuns` guard itself (#1453's fix), the unknown-incidents guard, or the forget-on-delete survived the suite.
+- **The fix:** the tests run on the real clock, and each fixture's files and folder are aged past retention with `utimes`, so only the guard a test names can keep the run. A cleanup-direction assertion is added: an examined run whose data expired loses its folder on a later pass.
+- **Mutations, each killed on its own:** the `examinedRuns` guard dropped (2 red); `examinedRuns` never populated (2 red); examined kept after delete; unknown incidents unprotected; unparsed lines ignored; no touched check (2 red). Only the ELOOP case has two guards (indexing and `touchedSince`), as noted in its test.
+- **Docs:** residual 2 is closed; "deleted as before" is corrected (the incident file goes first, the emptied folder on a later pass).
+
