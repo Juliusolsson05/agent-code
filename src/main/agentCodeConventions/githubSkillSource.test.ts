@@ -673,4 +673,39 @@ describe('bounded GitHub transport', () => {
     expect(thrown).toBeInstanceOf(GitHubSkillSourceError)
     expect((thrown as Error).message).toMatch(/^SKILL\.md contains invalid YAML frontmatter( near line \d+)?\.$/)
   })
+
+  // Review of #1456 (b): a classified git failure replaced git's error with a
+  // fixed sentence and dropped the raw one from the log.
+  it('logs the raw git error behind a classified message', async () => {
+    const failure = Object.assign(new Error('Command failed: git ls-remote'), { code: 128, cmd: 'git ls-remote', stderr: 'fatal: repository does not exist' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rejected = await new GitHubSkillSource({
+        runGit: vi.fn(async () => { throw failure }),
+        fetchBytes: vi.fn(async () => Buffer.alloc(0)),
+      }).discover(request('https://github.com/example/skills')).then(() => null, (caught: unknown) => caught)
+      expect((rejected as Error).message).toBe('The public GitHub repository or ref was not found.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), failure)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // Review of #1456 (b), a surviving mutation: Node's own fetch rejection
+  // (`TypeError('fetch failed', { cause })`) reached the UI as `fetch failed`.
+  it('answers a fetch that cannot connect with a fixed sentence and logs the cause', async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND api.github.com'), { code: 'ENOTFOUND', syscall: 'getaddrinfo' })
+    const rejection = new TypeError('fetch failed', { cause })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw rejection }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rejected = await fetchBoundedGitHubBytes('https://api.github.com/repos/example/skills', 1024).then(() => null, (caught: unknown) => caught)
+      expect(rejected).toBeInstanceOf(GitHubSkillSourceError)
+      expect((rejected as Error).message).toBe('Could not download that skill from GitHub.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), rejection)
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
 })

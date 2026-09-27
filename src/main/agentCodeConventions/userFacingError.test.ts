@@ -17,7 +17,7 @@ describe('userFacingSkillError', () => {
     try {
       const error = await rmdir(join(root, 'missing')).then(() => null, (caught: unknown) => caught)
       const message = userFacingSkillError(error)
-      expect(message).toBe('A skill file or folder is missing.')
+      expect(message).toBe('A file or folder Agent Code needs is missing.')
       expect(message).not.toContain(root)
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(message), error)
     } finally {
@@ -86,5 +86,30 @@ describe('userFacingSkillError', () => {
   it('treats a network system error as a network failure', () => {
     const offline = Object.assign(new Error('getaddrinfo ENOTFOUND api.github.com'), { code: 'ENOTFOUND', syscall: 'getaddrinfo' })
     expect(userFacingSkillError(offline)).toBe('Agent Code could not reach the network.')
+  })
+
+  // Review of #1456 (b), a surviving mutation: swapping ENOTDIR's sentence for
+  // ENOENT's passed. Each code is pinned to its exact, location-neutral words.
+  it.each([
+    ['EACCES', 'Agent Code does not have permission to use this location.'],
+    ['EPERM', 'Agent Code does not have permission to use this location.'],
+    ['EROFS', 'This location is on a read-only volume.'],
+    ['ENOSPC', 'There is no space left on the disk.'],
+    ['ENOENT', 'A file or folder Agent Code needs is missing.'],
+    ['ENOTDIR', 'A file is in the way where a folder should be.'],
+    ['EISDIR', 'A folder is in the way where a file should be.'],
+    ['EEXIST', 'Something already exists where Agent Code needs to write.'],
+    ['EBUSY', 'The file is busy. Try again in a moment.'],
+    ['EMFILE', 'The system is out of open files. Try again in a moment.'],
+    ['ENOTFOUND', 'Agent Code could not reach the network.'],
+  ])('%s has its own sentence', (code, sentence) => {
+    const error = Object.assign(new Error(`${code}: something, open '/x/y'`), { code, syscall: 'open' })
+    expect(userFacingSkillError(error)).toBe(sentence)
+  })
+
+  it('shows a curated reason without its path, and logs the path', () => {
+    const error = Object.assign(new Error('A folder on the skill path is a symbolic link, which Agent Code does not follow.'), { path: '/tmp' })
+    expect(userFacingSkillError(error)).toBe(error.message)
+    expect(warn).toHaveBeenCalledWith(expect.any(String), error)
   })
 })

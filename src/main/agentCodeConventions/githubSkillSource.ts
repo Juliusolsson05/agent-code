@@ -1133,6 +1133,10 @@ function summarizeValues(prefix: string, values: string[]): string {
 
 function classifyGitHubSkillSourceError(error: unknown): GitHubSkillSourceError {
   if (error instanceof GitHubSkillSourceError) return error
+  // Every branch below replaces git's own error with a fixed sentence, so the
+  // raw one (exit code, stderr) is logged here, once, for all of them (review
+  // of #1456, b: the classified branches used to drop it).
+  console.warn('[github-skill-source] git failed:', error)
   const nodeError = error as NodeJS.ErrnoException & { stderr?: string | Buffer }
   if (nodeError.code === 'ENOENT') {
     return new GitHubSkillSourceError('git-unavailable', 'Git is required to inspect GitHub skills.')
@@ -1151,8 +1155,7 @@ function classifyGitHubSkillSourceError(error: unknown): GitHubSkillSourceError 
   }
   // An unclassified git failure is raw process output (`Command failed: git
   // …` plus stderr, sometimes the clone's temporary path): a fixed sentence,
-  // the raw error in the main log (#1427; review of #1456, a).
-  console.warn('[github-skill-source] git failed:', error)
+  // the raw error already logged above (#1427; review of #1456, a).
   return new GitHubSkillSourceError('io-error', 'Could not inspect the GitHub skill source.')
 }
 

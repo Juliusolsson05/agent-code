@@ -24,18 +24,21 @@
  * log whenever the text is rewritten, because the fixed sentence is useless
  * for diagnosis.
  */
+// Location-neutral on purpose (review of #1456, b): the same mapper covers
+// skill folders, Agent Code's own state file and GitHub downloads, so a
+// sentence must be true for all of them. The row it appears in says where.
 const SENTENCES: Record<string, string> = {
-  EACCES: 'Agent Code does not have permission to read or write these skill files.',
-  EPERM: 'Agent Code does not have permission to read or write these skill files.',
-  EROFS: 'These skill files are on a read-only volume.',
-  ENOSPC: 'There is no space left on the disk for these skill files.',
-  EDQUOT: 'There is no space left on the disk for these skill files.',
-  ENOENT: 'A skill file or folder is missing.',
-  ENOTDIR: 'A file is in the way where a skill folder should be.',
-  EISDIR: 'A folder is in the way where a skill file should be.',
+  EACCES: 'Agent Code does not have permission to use this location.',
+  EPERM: 'Agent Code does not have permission to use this location.',
+  EROFS: 'This location is on a read-only volume.',
+  ENOSPC: 'There is no space left on the disk.',
+  EDQUOT: 'There is no space left on the disk.',
+  ENOENT: 'A file or folder Agent Code needs is missing.',
+  ENOTDIR: 'A file is in the way where a folder should be.',
+  EISDIR: 'A folder is in the way where a file should be.',
   EEXIST: 'Something already exists where Agent Code needs to write.',
   ENOTEMPTY: 'Something already exists where Agent Code needs to write.',
-  EBUSY: 'The skill files are busy. Try again in a moment.',
+  EBUSY: 'The file is busy. Try again in a moment.',
   EMFILE: 'The system is out of open files. Try again in a moment.',
   ENFILE: 'The system is out of open files. Try again in a moment.',
   ENOTFOUND: 'Agent Code could not reach the network.',
@@ -44,7 +47,7 @@ const SENTENCES: Record<string, string> = {
   ECONNRESET: 'Agent Code could not reach the network.',
   ETIMEDOUT: 'Agent Code could not reach the network.',
 }
-export const GENERIC_SKILL_ERROR = 'Agent Code could not access these skill files.'
+export const GENERIC_SKILL_ERROR = 'Agent Code could not read or write the files it needs.'
 const MAX_KEPT_MESSAGE = 300
 // Anything that starts like a path: `/x`, `~/`, `./`, `../`, a UNC `\\host`,
 // or a drive letter, at the start or after a space, quote, paren, `=` or `:`.
@@ -74,7 +77,12 @@ function isOwnCuratedText(error: unknown): error is Error {
 
 export function userFacingSkillError(error: unknown, context = 'agent-code-conventions'): string {
   const code = systemCode(error)
-  if (code === null && isOwnCuratedText(error)) return error.message
+  if (code === null && isOwnCuratedText(error)) {
+    // A curated reason that carries its offending path on the side (see
+    // skillPathSafety's pathComponentError): shown without it, logged with it.
+    if (typeof (error as { path?: unknown }).path === 'string') console.warn(`[${context}] ${error.message}`, error)
+    return error.message
+  }
   const sentence = code === null ? GENERIC_SKILL_ERROR : SENTENCES[code] ?? GENERIC_SKILL_ERROR
   console.warn(`[${context}] ${sentence}`, error)
   return sentence

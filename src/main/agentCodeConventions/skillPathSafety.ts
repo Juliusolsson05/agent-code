@@ -223,8 +223,8 @@ export class SkillPathSafety {
         throw error
       })
       if (!stat) return
-      if (stat.isSymbolicLink()) throw new Error(`Symbolic-link path component is not supported: ${cursor}`)
-      if (!stat.isDirectory()) throw new Error(`Path component is not a directory: ${cursor}`)
+      if (stat.isSymbolicLink()) throw pathComponentError(SYMLINK_COMPONENT, cursor)
+      if (!stat.isDirectory()) throw pathComponentError(FILE_COMPONENT, cursor)
     }
   }
 
@@ -310,9 +310,9 @@ export class SkillPathSafety {
         stat = await lstat(cursor)
       }
       if (stat.isSymbolicLink()) {
-        throw new Error(`Symbolic-link path component is not supported: ${cursor}`)
+        throw pathComponentError(SYMLINK_COMPONENT, cursor)
       }
-      if (!stat.isDirectory()) throw new Error(`Path component is not a directory: ${cursor}`)
+      if (!stat.isDirectory()) throw pathComponentError(FILE_COMPONENT, cursor)
     }
   }
 
@@ -340,3 +340,14 @@ function sha256Bytes(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+// The reason is curated and shown; the offending path rides on `path` for the
+// main log only (#1427; review of #1456, b). The first versions put the path
+// in the message, which was then either shown (a root-level `/tmp`) or thrown
+// away with the reason (the generic sentence). userFacingSkillError keeps
+// this message and logs the error, path included.
+const SYMLINK_COMPONENT = 'A folder on the skill path is a symbolic link, which Agent Code does not follow.'
+const FILE_COMPONENT = 'A file is in the way where a folder on the skill path should be.'
+
+function pathComponentError(message: string, path: string): Error {
+  return Object.assign(new Error(message), { path })
+}

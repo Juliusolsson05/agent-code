@@ -42,3 +42,12 @@ The raw error always goes to the main log whenever the text is rewritten (q22).
 | **a survivors:** the git fallback, and logging only system errors | valid | **Pinned:** a real child-process failure drives the fallback, and every generic rewrite asserts its log. Both mutants red, as are "keep any Error" and "no child-process rule". |
 
 **Why not an allowlist class for every throw:** marking all 67 plain `throw new Error` sites is a large diff the freeze rules out. The constructor rule has the same effect for library errors, and those throws are this package's own fixed text.
+
+## Review round 1, b (codex at `c8463b71`, the pre-fix head): FIX-BEFORE-MERGE
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **b1 + b3, major:** skillPathSafety's symlink and not-a-directory errors put the path in the message. A root-level `/tmp` was shown as is; a longer path lost the reason to the generic sentence. | valid | The messages are path-free and specific ("A folder on the skill path is a symbolic link, which Agent Code does not follow." / "A file is in the way where a folder on the skill path should be."). The path rides on `error.path`, which the mapper logs. Real-filesystem symlink test; red at `5d5e8c8d`. |
+| **b2, major:** fetch's `TypeError('fetch failed')` was kept raw, with no log | valid (already fixed in `5d5e8c8d`) | Pinned: a Node-shaped fetch rejection gets the fixed sentence and its cause is logged. The raw-message mutant is red. |
+| **b4, minor:** errno sentences named "skill" locations for state-file failures | valid | Every sentence is location-neutral (the row says where), and the generic one too. Each code is pinned to its exact words; b's ENOTDIR→ENOENT mutant is red. |
+| **b5, minor:** classified git failures dropped the raw error from the log | valid | `classifyGitHubSkillSourceError` logs the raw error once for every branch. Test red at `5d5e8c8d`. |
