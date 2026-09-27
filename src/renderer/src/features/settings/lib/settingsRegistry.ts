@@ -896,7 +896,7 @@ export function getSettingsRegistry(
       category: 'experimental',
       title: 'Persistent Aggressive Debug Logs',
       description:
-        'Periodically save full debug bundles for active agent panes, plus a best-effort final bundle on close. Expensive, intended for Agent Code development.',
+        'Periodically save full debug bundles for active agent panes, plus a best-effort final bundle on close, and keep each session\'s feed-debug log on disk. Expensive, intended for Agent Code development.',
       keywords: ['debug', 'logs', 'persistent', 'aggressive', 'autosave', 'render', 'trace'],
       // Writes continuously to disk. 'developer' is the honest maturity label for
       // a setting whose real cost is storage the user never sees.

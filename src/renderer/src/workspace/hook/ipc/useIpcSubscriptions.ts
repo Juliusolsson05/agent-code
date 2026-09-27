@@ -2321,8 +2321,8 @@ export function useIpcSubscriptions(
             : current.limitHit
 
         // Ghost reconciliation — when authoritative entries land,
-        // supersede any live ghost whose `(turnId, blockIndex)`
-        // they replace. Runs per appended entry so ghost→real
+        // supersede any live ghost they replace (Claude: message id;
+        // Codex: provider item id, #1231; either: tool_use id). Runs per appended entry so ghost→real
         // handoff is synchronous with the entry becoming visible;
         // the ghost drops out of the merged view in the same
         // render as the real entry appears.

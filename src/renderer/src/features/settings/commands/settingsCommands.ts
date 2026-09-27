@@ -63,7 +63,7 @@ export const settingsCommands: CommandDef[] = [
     pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Persistent Aggressive Debug Logs',
-    description: '**What it does:** Periodically saves **debug bundles** for active agents.\n\n**Use when:** You are chasing crashes or disappearing state.\n\n**Notes:** Can create many or large debug files.',
+    description: '**What it does:** Periodically saves **debug bundles** for active agents and keeps each session\'s **feed-debug log** on disk.\n\n**Use when:** You are chasing crashes or disappearing state.\n\n**Notes:** Can create many or large debug files.',
     keywords: [
       'debug',
       'logs',

@@ -44,9 +44,10 @@ type CodexMessageBlock =
 //
 // Ordering with `stampCodexTurnId`: Codex rollout doesn't put
 // `turn_id` on per-item entries — only on `task_started` /
-// `turn_started` and `turn_context`. Without tracking it here the
-// ghost reconciler has nothing to match Codex assistant-text ghosts
-// against (they don't carry `message.id`, don't carry `tool_use_id`).
+// `turn_started` and `turn_context`. The feed's committed-text keys
+// (renderUnits.ts) use it. Ghost reconciliation does NOT: a ghost is keyed
+// by the proxy response id, which is not this turn UUID. Ghosts match on
+// the item id instead (`stampCodexItemId`, #1231).
 
 // Codex injects two synthetic user messages on the first turn of
 // every conversation, both meant for the model and not the human:
@@ -228,17 +229,17 @@ function codexCompactSummaryEntry(
 }
 
 /**
- * Extract the Codex rollout's per-turn response id from a
- * `turn_context` side-channel entry. Returns null for any other
+ * Extract the Codex rollout's per-turn id (a UUID, NOT the proxy response
+ * id) from a `turn_context` side-channel entry. Returns null for any other
  * entry type. Call sites that iterate a rollout stream use this to
  * keep a rolling "current turn id" that subsequent `response_item`
  * entries get stamped with via `stampCodexTurnId`.
  *
  * WHY: Codex rollout doesn't put `turn_id` on per-item entries —
- * only on `task_started`/`turn_started` and `turn_context`. Without
- * tracking it here the ghost reconciler in `reconcileUpstream` has
- * nothing to match Codex assistant-text ghosts against (they don't
- * carry `message.id`, don't carry `tool_use_id`).
+ * only on `task_started`/`turn_started` and `turn_context`. The feed's
+ * committed-text keys use it. It is NOT the id a Codex ghost is keyed by
+ * (that is the proxy response id), so `reconcileUpstream` matches ghosts
+ * by item id instead (#1231).
  */
 export function codexTurnIdFromRollout(entry: Record<string, unknown>): string | null {
   if (entry.type !== 'turn_context') return null
@@ -246,18 +247,46 @@ export function codexTurnIdFromRollout(entry: Record<string, unknown>): string |
 }
 
 /**
- * Stamp a mapped Codex feed entry with the rollout turn id so the
- * ghost reconciler can supersede by turn id. The field is added as
- * an Agent Code-local extension to the shared `Entry` type via cast —
- * consumers that don't care about it ignore it, and
- * `reconcileUpstream` reads it defensively.
+ * Stamp a mapped Codex feed entry with the rollout turn id. Its consumer is
+ * the feed's committed-text ownership keys (features/feed/ui/semantic/
+ * renderUnits.ts). The ghost reconciler does NOT use it: a ghost is keyed by
+ * the proxy response id, never this turn UUID, so ghosts match on
+ * `codexItemId` instead (`stampCodexItemId`, #1231). The field is an Agent
+ * Code-local extension to the shared `Entry` type via cast; consumers that
+ * don't care about it ignore it.
  */
 export function stampCodexTurnId(entry: Entry, turnId: string | null): Entry {
   if (turnId === null) return entry
   return { ...entry, codexTurnId: turnId } as Entry
 }
 
+/**
+ * Stamp mapped Codex feed entries with the provider ITEM id (`msg_…`, `rs_…`,
+ * `fc_…`, `ctc_…`) of the rollout `response_item` they came from.
+ *
+ * WHY (#1231): this is the one id the live stream and the rollout share. A
+ * Codex ghost is keyed by the proxy response id (`resp_…`), while the rollout
+ * knows each item's id and its turn UUID, never the response id. So no
+ * committed entry could supersede a Codex text ghost, and every one orphaned.
+ * The proxy adapter already carries the same item id on the live block
+ * (`SemanticLiveBlock.itemId`); `reconcileUpstream` matches on it. It was
+ * verified on six real 0.157.1 sessions: every `msg_…` id on the proxy stream
+ * appears verbatim in the rollout. An Agent Code-local field like
+ * `codexTurnId`; consumers that don't care ignore it.
+ */
+export function stampCodexItemId(entry: Entry, itemId: string | null): Entry {
+  if (itemId === null) return entry
+  return { ...entry, codexItemId: itemId } as Entry
+}
+
 export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
+  const mapped = mapCodexRolloutToFeedEntriesUnstamped(entry)
+  if (entry.type !== 'response_item' || mapped.length === 0) return mapped
+  const itemId = stringField(asRecord(entry.payload), 'id')
+  return itemId === null ? mapped : mapped.map(mappedEntry => stampCodexItemId(mappedEntry, itemId))
+}
+
+function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): Entry[] {
   const payload = asRecord(entry.payload)
   // Shared with the marker below and main's history loader (#1288): the old
   // `ts:id|call_id|type` rule collided for a call and its output, and for

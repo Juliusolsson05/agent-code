@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
@@ -22,6 +23,13 @@ if (!root) throw new Error('An isolated extension test root is required')
 // test process and hides the actual stack until the outer watchdog kills it.
 process.on('uncaughtException', error => { console.error(error); app.exit(1) })
 process.on('unhandledRejection', error => { console.error(error); app.exit(1) })
+
+// WHY a fresh directory per run, removed on exit (#1296): the harness's secrets store uses a
+// PLAINTEXT codec (a journey must never touch the real keychain), and the fixed
+// agent-code-harness-secrets-<pid> directory was never removed, leaving plaintext test secrets in
+// the shared temp dir after every journey. 'exit' also covers the app.exit(1) failure paths above.
+const harnessSecretsDirectory = mkdtempSync(join(tmpdir(), 'agent-code-harness-secrets-'))
+process.on('exit', () => rmSync(harnessSecretsDirectory, { recursive: true, force: true }))
 app.setPath('userData', join(root, 'electron-data'))
 registerExtensionScheme()
 // This fixture intentionally has zero application windows between generations.
@@ -71,7 +79,7 @@ void (async () => {
     services: new ExtensionServiceHost({ readyTimeoutMs: 3000, invokeTimeoutMs: 1500 }),
     // Harness-only codec: a journey must never touch the developer's real OS
     // keychain. Production wires createSafeStorageCodec (src/main/index.ts).
-    secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, join(tmpdir(), `agent-code-harness-secrets-${process.pid}`)),
+    secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, harnessSecretsDirectory),
   })
   const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, startupTimeoutMs: 3000, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
 
@@ -352,5 +360,6 @@ void (async () => {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   }
   await writeFile(join(root!, 'completed'), 'ok')
+  rmSync(harnessSecretsDirectory, { recursive: true, force: true })
   app.quit()
 })().catch(error => { console.error(error); app.exit(1) })
