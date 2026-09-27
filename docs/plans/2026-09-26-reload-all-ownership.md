@@ -42,3 +42,9 @@ Tests (on the same fixture): C2 is asserted with the later spawn still held, clo
 - **Relationship and pin remap survivors (C).** The early-successor test now asserts, while the later spawn is still held, that a child's `linkedParentId`/`orchestrationParentId` and the pin already follow the successor. Removing either remap fails it.
 
 Tests: 3 new cases (red on `f897700f`) plus the interval assertions above. Workspace suites: 1354/1354.
+
+## Second verification (A, C)
+- **Rows unowned mid-reload (A, Minor).** A project removed while an earlier spawn was in flight left its rows after the up-front prune. The per-successor commit prunes again. Both prunes are pinned: the all-failed test and the new mid-reload test.
+- **An orphan's early runtime entry (A, C; Minor).** A confirmed orphan kill now also drops the renderer's bookkeeping for that id. `forgetSessionLocally`, extracted from `killSession`, is shared by both.
+
+Tests: 2 new cases (red on `b6440143`).

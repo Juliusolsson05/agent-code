@@ -1114,13 +1114,13 @@ export function useSessionActions(
     ],
   )
 
-  const killSession = useCallback(
-    async (
-      sessionId: SessionId,
-      caller: KillCaller,
-      capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
-    ) => {
-      await killSessionBackendIfOwned(refs, sessionId, caller, capturedOwner)
+  // Everything the renderer holds for a session, dropped once its backend is
+  // gone. Shared by killSession and reload's orphan kill (#1326 second
+  // verification A/C): an orphan's startup feed can create a runtime entry
+  // before its spawn resolves, and a kill that skipped this left that entry
+  // behind as unreachable `started` state.
+  const forgetSessionLocally = useCallback(
+    (sessionId: SessionId) => {
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[sessionId]
@@ -1149,6 +1149,18 @@ export function useSessionActions(
       }
     },
     [refs.bootstrapTimersRef, refs.seenUuidsRef, setRuntimes, setState],
+  )
+
+  const killSession = useCallback(
+    async (
+      sessionId: SessionId,
+      caller: KillCaller,
+      capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
+    ) => {
+      await killSessionBackendIfOwned(refs, sessionId, caller, capturedOwner)
+      forgetSessionLocally(sessionId)
+    },
+    [forgetSessionLocally, refs],
   )
 
   // Kills the current session in the focused leaf and spawns a new
@@ -1512,6 +1524,7 @@ export function useSessionActions(
       try {
         if (await killSessionBackendIfOwned(refs, orphan.newId, 'reload.orphaned-successor', orphan.owner)) {
           unstoppedReloadSuccessorsRef.current.delete(orphan.newId)
+          forgetSessionLocally(orphan.newId)
           return
         }
         // Refused (or already gone): not retried at once, a refusal will not
@@ -1524,7 +1537,7 @@ export function useSessionActions(
     unstoppedReloadSuccessorsRef.current.set(orphan.newId, orphan)
     // eslint-disable-next-line no-console
     console.warn('[workspace] could not confirm a reload successor of a closed agent stopped; retrying on the next reload:', orphan.newId)
-  }, [refs])
+  }, [forgetSessionLocally, refs])
 
   const reloadAgentSessionsNow = useCallback(
     async (dangerousMode: boolean) => {
@@ -1776,9 +1789,11 @@ export function useSessionActions(
           return next
         })
         setState(prev => {
-          // Unowned rows were already dropped once, up front (#1326
-          // verification A); this commit only swaps the one pair.
-          const sessions = { ...prev.sessions }
+          // Unowned rows are dropped up front (so an all-failed reload drops
+          // them too) AND here: a project removed while an earlier spawn was
+          // in flight leaves rows that became unowned after that first prune
+          // (#1326 second verification A). Both are pinned by tests.
+          const sessions = pickOwnedSessions(prev.sessions, collectOwnedSessionIds(prev))
           delete sessions[oldId]
           // The successor carries its predecessor's LIVE pool membership (the
           // `...liveRest` above), so it keeps its project and its place, even

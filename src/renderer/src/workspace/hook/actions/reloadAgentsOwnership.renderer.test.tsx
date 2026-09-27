@@ -494,3 +494,42 @@ it('drops unowned rows even when every respawn fails', async () => {
   expect(h.writer.getState().sessions.ghost).toBeUndefined()
   expect(h.refs.latestRuntimesRef.current[h.claudeLane]).toMatchObject({ processStatus: 'failed' })
 })
+
+// #1326 second verification A: a project removed while an earlier spawn is in
+// flight leaves rows that become unowned AFTER the up-front prune; the
+// successor's commit must drop them too.
+it('drops rows that became unowned while the reload ran', async () => {
+  const h = harness('claude')
+  const lanes = new Set([h.claudeLane, h.codexLane])
+  const state = h.writer.getState()
+  const laneProjects = new Set([...lanes].map(id => state.sessions[id]!.projectId))
+  const doomed = state.tabs.find(tab => !laneProjects.has(tab.id))!.id
+  const doomedRows = Object.entries(state.sessions).filter(([, meta]) => meta.projectId === doomed).map(([id]) => id)
+  expect(doomedRows.length).toBeGreaterThan(0)
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  // The project closes (its tab goes) while Claude's spawn is held.
+  h.writer.setState(prev => ({ ...prev, tabs: prev.tabs.filter(tab => tab.id !== doomed) }))
+  await act(async () => { h.release(); await reload })
+  for (const id of doomedRows) expect(h.writer.getState().sessions[id]).toBeUndefined()
+})
+
+// #1326 second verification A/C: an orphan's startup feed can create its
+// runtime entry before spawn resolves; a confirmed kill must drop it, or it
+// stays behind as unreachable `started` state.
+it('drops an orphan successor’s early runtime entry once its kill is confirmed', async () => {
+  const h = harness('claude')
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.refs.latestRuntimesRef.current = { ...h.refs.latestRuntimesRef.current, 'claude-restarted': { ...emptyRuntime(), processStatus: 'started' } }
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  await act(async () => { h.release(); await reload })
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
+  expect(h.refs.latestRuntimesRef.current['claude-restarted']).toBeUndefined()
+})
