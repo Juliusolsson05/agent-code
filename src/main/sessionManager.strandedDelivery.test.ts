@@ -192,6 +192,29 @@ it('does not mark an image delivery that stranded', async () => {
   expect(manager.hasStrandedDelivery('s1')).toBe(false)
 })
 
+// #1358 verification a (blocker): a delivery that WROTE supersedes whatever
+// mark stood. Sequence: text strands and paints; an image delivery reclaims it
+// (Ctrl+U), writes its image, and strands too. The old text mark must not
+// survive that, or the third delivery Ctrl+Us a composer holding image pills.
+it('retires the text mark once an image delivery has written over it', async () => {
+  const { manager, session, writes } = claudeLike()
+  await strand(manager)
+  session.paintLate()
+  vi.useFakeTimers()
+  const image = manager.deliverPromptToAgent('s1', '', ['/tmp/screenshot.png'])
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect(await image).toMatchObject({ ok: false, promptWritten: true, enterWritten: false })
+  vi.useRealTimers()
+  expect(writes.filter(data => data === '\x15')).toHaveLength(1)
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
+
+  // The image's leftovers paint; the next delivery must refuse, not reclaim.
+  session.paintLate()
+  const next = await manager.deliverPromptToAgent('s1', 'the next task')
+  expect(next).toMatchObject({ ok: false, code: 'not-ready', promptWritten: false })
+  expect(writes.filter(data => data === '\x15')).toHaveLength(1)
+})
+
 // #1358 review a (surviving mutant): a write that throws after bytes may have
 // crossed is stranded too; review c (surviving mutant): process exit clears it.
 it('marks a delivery whose write threw, and forgets it when the process exits', async () => {

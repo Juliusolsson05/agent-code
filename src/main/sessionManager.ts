@@ -4116,7 +4116,20 @@ export class SessionManager extends EventEmitter {
     }
     // A failure that wrote nothing (refused before write) changes nothing:
     // whatever the composer held before still holds, ours or not.
-    if (!delivery.promptWritten || delivery.enterWritten) return
+    if (!delivery.promptWritten) return
+    // WHY a delivery that wrote retires the standing mark before deciding
+    // whether to set its own (#1358 verification a, blocker): the old mark
+    // described bytes this delivery has already reclaimed or written over.
+    // Keeping it let an image delivery that consumed a text mark and then
+    // stranded hand that stale mark to the next delivery, which Ctrl+U'd a
+    // composer holding image pills. From here the composer holds what THIS
+    // delivery left, so only this delivery's outcome may mark it. Deleting is
+    // the safe direction: no mark means the gate treats the composer as a
+    // human draft and refuses, as it did before #1350.
+    this.strandedDeliveries.delete(sessionId)
+    // Enter went out: the composer was submitted (or its fate is unknown), so
+    // it no longer provably holds only our unsubmitted text.
+    if (delivery.enterWritten) return
     // WHY an image delivery is never marked (#1358 reviews a and c): its
     // leftovers include image pills, and whether Ctrl+U removes a pill has
     // not been observed on a real composer (promptDelivery.ts says the same
