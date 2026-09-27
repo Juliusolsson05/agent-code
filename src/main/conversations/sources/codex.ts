@@ -72,6 +72,39 @@ type RolloutHead = {
   lastUserAt: number | null
 }
 
+/**
+ * One `threads` row, typed by value rather than trusted by column (review of
+ * #1411, b). SQLite stores any value in any column whatever its declared type,
+ * so a BLOB title made `(row.title ?? '').trim()` throw, and that one row
+ * rejected the whole Codex discovery. A field of the wrong type becomes its
+ * empty value (a title then falls back to the next label); only a row with no
+ * string id is dropped, because nothing can address it.
+ */
+function normalizeIndexRow(raw: Record<string, unknown>): IndexRow | null {
+  const text = (value: unknown): string | null => typeof value === 'string' ? value : null
+  const num = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null
+  const id = text(raw.id)
+  if (!id) return null
+  return {
+    id,
+    rollout_path: text(raw.rollout_path) ?? '',
+    cwd: text(raw.cwd) ?? '',
+    title: text(raw.title),
+    first_user_message: text(raw.first_user_message),
+    preview: text(raw.preview),
+    name: text(raw.name),
+    source: text(raw.source) ?? '',
+    thread_source: text(raw.thread_source),
+    agent_role: text(raw.agent_role),
+    git_branch: text(raw.git_branch),
+    created_at_ms: num(raw.created_at_ms),
+    updated_at_ms: num(raw.updated_at_ms),
+    recency_at_ms: num(raw.recency_at_ms),
+    archived: num(raw.archived) ?? 0,
+    originator: text(raw.originator),
+  }
+}
+
 function isSubagentSource(row: IndexRow): boolean {
   if (row.thread_source === 'subagent') return true
   if (row.agent_role) return true
@@ -118,6 +151,12 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
 export class CodexConversationSource implements ConversationSource {
   readonly provider = 'codex' as const
   private downgradeReason: string | null = null
+  // What one discovery skipped (review of #1411, c): a skipped rollout or index
+  // row used to leave the result looking complete. The counts reach the
+  // discovery span, lastDowngradeReason and one console warning (counts only,
+  // never paths). The picker itself has no degraded indicator for any source
+  // yet, including the existing no-index downgrade; that is a residual.
+  private skipped = { rollouts: 0, indexRows: 0 }
   private walk: { at: number; files: Map<string, { mtime: number | null; id: string }> } | null = null
   private readonly heads = new Map<string, { mtime: number; head: RolloutHead }>()
   // Rollout paths learnt at discovery, so a search that reads prompts for a
@@ -183,6 +222,7 @@ export class CodexConversationSource implements ConversationSource {
       try {
         head = await readRolloutHead(file)
       } catch {
+        this.skipped.rollouts++
         return null
       }
     }
@@ -211,16 +251,25 @@ export class CodexConversationSource implements ConversationSource {
     }
   }
 
+  private withSkipped(reason: string | null): string | null {
+    const { rollouts, indexRows } = this.skipped
+    if (!rollouts && !indexRows) return reason
+    const note = `skipped ${rollouts} unreadable rollout(s) and ${indexRows} malformed index row(s)`
+    console.warn(`[conversations.codex] ${note}`)
+    return reason ? `${reason}; ${note}` : note
+  }
+
   async discover(scope: SourceScope): Promise<SourceConversation[]> {
     const span = performanceService.span('conversations.codex.discover', { scope: scope.scope })
+    this.skipped = { rollouts: 0, indexRows: 0 }
     const dbPath = newestCodexStateDb(this.deps.codexHome)
     const opened = dbPath
       ? openReadOnlySqlite(dbPath, CODEX_INDEX_COLUMNS)
       : { ok: false as const, reason: `no state_N.sqlite under ${this.deps.codexHome}` }
     if (!opened.ok) {
-      this.downgradeReason = opened.reason
       const rows = await this.scanEverything(scope)
-      span.end({ mode: 'scan', rows: rows.length })
+      this.downgradeReason = this.withSkipped(opened.reason)
+      span.end({ mode: 'scan', rows: rows.length, ...this.skipped })
       return rows
     }
     this.downgradeReason = null
@@ -263,7 +312,12 @@ export class CodexConversationSource implements ConversationSource {
       }
       const where = predicates.length > 0 ? `where archived = 0 and (${predicates.join(' or ')})` : 'where archived = 0'
       const columns = CODEX_INDEX_COLUMNS.threads.map(c => `"${c}"`).join(', ')
-      for (const row of opened.db.prepare(`select ${columns} from threads ${where}`).all(...args) as unknown as IndexRow[]) {
+      for (const raw of opened.db.prepare(`select ${columns} from threads ${where}`).all(...args) as Array<Record<string, unknown>>) {
+        const row = normalizeIndexRow(raw)
+        if (!row) {
+          this.skipped.indexRows++
+          continue
+        }
         this.rolloutPaths.set(row.id, row.rollout_path)
         const title = (row.title ?? '').trim() || (row.first_user_message ?? '').trim() || (row.preview ?? '').trim()
         const name = (row.name ?? '').trim()
@@ -302,7 +356,8 @@ export class CodexConversationSource implements ConversationSource {
       const row = await this.fromHead(file, meta.mtime, meta.id, scope)
       if (row) rows.push(row)
     }
-    span.end({ mode: 'index', rows: rows.length, unindexed: rows.filter(r => r.origin === 'scan').length })
+    this.downgradeReason = this.withSkipped(null)
+    span.end({ mode: 'index', rows: rows.length, unindexed: rows.filter(r => r.origin === 'scan').length, ...this.skipped })
     return rows
   }
 

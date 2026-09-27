@@ -109,6 +109,9 @@ describe('Codex conversation source', () => {
     const indexed = await source.discover({ scope: 'everywhere', family })
     expect(indexed.filter(r => r.origin === 'index').length).toBeGreaterThanOrEqual(counts.codex.inFamily)
     expect(indexed.filter(r => r.origin === 'scan')).toHaveLength(0)
+    // Review of #1411 (c): the skip must not look like a complete result.
+    expect(counts.codex.unindexedSampled).toBeGreaterThan(0)
+    expect(source.lastDowngradeReason()).toMatch(/skipped \d+ unreadable rollout/)
 
     // Fallback path: one readable rollout still lists beside unreadable ones.
     await chmod(rollouts[0]!, 0o600)
@@ -116,6 +119,23 @@ describe('Codex conversation source', () => {
     const fresh = new CodexConversationSource({ codexHome: corpus.codexHome })
     const scanned = await fresh.discover({ scope: 'everywhere', family })
     expect(scanned.map(r => r.file)).toEqual([rollouts[0]])
+    expect(fresh.lastDowngradeReason()).toMatch(/no state_N\.sqlite.*; skipped \d+ unreadable rollout/)
+  })
+
+  // Review of #1411 (b): SQLite keeps any value in any column, so one thread
+  // whose title is a BLOB made `.trim()` throw and rejected the whole index.
+  it('lists every indexed thread when one row holds a value of the wrong type (#1251 row 8)', async () => {
+    const { corpus, source, listWorktrees } = await setup()
+    const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
+    const before = await source.discover({ scope: 'everywhere', family })
+    const db = new DatabaseSync(join(corpus.codexHome, 'state_5.sqlite'))
+    const victim = (db.prepare('select id from threads where archived = 0 limit 1').get() as { id: string }).id
+    db.prepare("update threads set title = x'00', first_user_message = 'fallback label' where id = ?").run(victim)
+    db.close()
+
+    const after = await new CodexConversationSource({ codexHome: corpus.codexHome }).discover({ scope: 'everywhere', family })
+    expect(after).toHaveLength(before.length)
+    expect(after.find(r => r.nativeId === victim)?.userTexts).toEqual(['fallback label'])
   })
 
   it('falls back to the rollout scan when the index is missing and reports why', async () => {
