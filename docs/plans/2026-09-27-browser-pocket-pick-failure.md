@@ -41,3 +41,12 @@ Pressing Pick in a lane's browser pocket either picks an element, is cancelled b
 - **a2: the DevTools precheck left an earlier armed pick pending for its 60 s.** The precheck now settles it first, with `devtools-open`.
 - **a3: a pick cancelled in the queue kept its abort handle.** The early return now sits inside the `try`, so the `finally` clears it.
 - Each is pinned by a test that fails on the previous head.
+
+## Review round 1, reviewers b and c (FIX-BEFORE-MERGE)
+- **b: an abort during node resolution was ignored.** After the node is chosen, the picker resolves it through more CDP calls with no abort hook, so a cancel then still inserted a chip, and a switch-off answered `picked` (or `error` if the call rejected). The abort now wins over whatever the pick produced, on both the resolve and the reject path.
+- **c1: a guest destroyed mid-pick left it armed for 60 s** (no cancel could reach it once the pocket left the map), then a silent cancel. `forget` now settles it as `unavailable`. The a1 addendum claimed this case; it is now implemented and pinned.
+- **c2–c5 (test gaps):**
+  - a completed pick answers `picked`, driven through the real picker with Chromium-shaped CDP answers;
+  - a pick REJECTED while DevTools opened says `devtools-open`;
+  - the first abort's reason wins over a later cancel;
+  - the main-side warn is asserted.

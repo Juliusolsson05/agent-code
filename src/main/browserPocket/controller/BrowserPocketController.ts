@@ -524,17 +524,22 @@ export class BrowserPocketController {
       }
     })
     p.queue = job.catch(() => undefined)
+    // An abort WINS over whatever the pick then produced (#1431 review b):
+    // after the node is chosen, the picker resolves it through further CDP
+    // calls with no abort hook, so a cancel, a switch-off or DevTools landing
+    // then used to be ignored (a chip inserted after the user cancelled) or
+    // said as a generic error. Only a reasonless abort is the user's cancel.
+    const aborted_ = (): PocketPickOutcome | null => (aborted
+      ? abortFailure ? { kind: 'failed', reason: abortFailure } : { kind: 'cancelled' }
+      : null)
     return job.then(
-      (result): PocketPickOutcome => (result
-        ? { kind: 'picked', result }
-        // A lifecycle end answers null too; only the user's own end is a cancel.
-        : abortFailure ? { kind: 'failed', reason: abortFailure } : { kind: 'cancelled' }),
+      (result): PocketPickOutcome => aborted_() ?? (result ? { kind: 'picked', result } : { kind: 'cancelled' }),
       (error: unknown): PocketPickOutcome => {
         // The raw CDP error stays here (it can name the page URL); the
         // renderer gets a reason and says it in its own words (q22).
         console.warn('[browser-pocket] pick failed:', error)
         // DevTools can open while the pick waits in the queue.
-        return { kind: 'failed', reason: p.guest.isDevToolsOpened() ? 'devtools-open' : 'error' }
+        return aborted_() ?? { kind: 'failed', reason: p.guest.isDevToolsOpened() ? 'devtools-open' : 'error' }
       },
     )
   }
@@ -622,6 +627,10 @@ export class BrowserPocketController {
   }
 
   private forget(p: Pocket): void {
+    // The guest is gone (destroyed, or unregistered): an armed pick can never
+    // finish, and once the pocket leaves the map no cancel can reach it. Settle
+    // it now as a failure (#1431 review c) instead of a silent 60 s cancel.
+    p.pickAbort?.('unavailable')
     if (p.resumeTimer) clearTimeout(p.resumeTimer)
     this.pockets.delete(p.pocketId)
     this.snapshotCursor.delete(p.sessionId)
