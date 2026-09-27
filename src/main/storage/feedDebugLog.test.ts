@@ -155,3 +155,22 @@ describe('#770 — a reload does not re-open a capped log', () => {
     }
   })
 })
+
+// #1207 (the #1111 reviewer's probe, real queue ordering): an append queued
+// BEFORE forgetFeedDebugSession, and not started yet, used to run afterwards
+// and write the per-session maps back. Nothing removed them again: a few
+// numbers per closed session, forever.
+describe('forget racing a queued append (#1207)', () => {
+  it('leaves no per-session state behind for 100 sessions forgotten right after an append', async () => {
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    const before = feedDebugSessionStateSizesForTest()
+    const writes: Array<Promise<void>> = []
+    for (let i = 0; i < 100; i++) {
+      const sessionId = `forget-race-${i}`
+      writes.push(queueFeedDebugAppend(sessionId, [entry(1)], 1_789_000_000_000).catch(() => undefined))
+      forgetFeedDebugSession(sessionId)
+    }
+    await Promise.all(writes)
+    expect(feedDebugSessionStateSizesForTest()).toEqual(before)
+  })
+})

@@ -122,6 +122,34 @@ const lastWrittenFeedDebugId = new Map<string, number>()
  */
 const lastWrittenFeedDebugEpoch = new Map<string, number>()
 
+/**
+ * One token per live session, captured by each append when it is QUEUED
+ * (#1207). forgetFeedDebugSession deletes it.
+ *
+ * WHY: an append queued before the forget, and not started yet, used to run
+ * afterwards and write the three maps above back; queue settlement only reaps
+ * `feedDebugWriteQueues`, so they stayed for the life of the process (a few
+ * numbers per closed session, unbounded). An append that finds its token gone
+ * once it has run belongs to a forgotten session and deletes that state again.
+ * The token map is cleared by the same forget, so it stays bounded too.
+ */
+const feedDebugSessionTokens = new Map<string, object>()
+
+function feedDebugSessionToken(sessionId: string): object {
+  let token = feedDebugSessionTokens.get(sessionId)
+  if (!token) {
+    token = {}
+    feedDebugSessionTokens.set(sessionId, token)
+  }
+  return token
+}
+
+function dropFeedDebugSessionState(sessionId: string): void {
+  lastWrittenFeedDebugId.delete(sessionId)
+  lastWrittenFeedDebugEpoch.delete(sessionId)
+  feedDebugCapState.delete(sessionId)
+}
+
 // One shape for both the first tombstone and the doubling refreshes so
 // readers grep for a single `__feedDebugCapped` marker. `fileBytesAtCap` is
 // the counter value at emit time — on a refresh row it reflects the file
@@ -163,9 +191,19 @@ export function queueFeedDebugAppend(
   epochMs?: number,
 ): Promise<void> {
   const previous = feedDebugWriteQueues.get(sessionId) ?? Promise.resolve()
+  const token = feedDebugSessionToken(sessionId)
   const next = previous
     .catch(() => {})
     .then(async () => {
+      try {
+        await writeQueuedFeedDebugAppend()
+      } finally {
+        // Forgotten while this append waited or ran: the state it wrote
+        // belongs to a closed session (#1207, see feedDebugSessionTokens).
+        if (feedDebugSessionTokens.get(sessionId) !== token) dropFeedDebugSessionState(sessionId)
+      }
+    })
+  async function writeQueuedFeedDebugAppend(): Promise<void> {
       if (entries.length === 0) return
       if (epochMs !== undefined) {
         const knownEpoch = lastWrittenFeedDebugEpoch.get(sessionId)
@@ -362,7 +400,7 @@ export function queueFeedDebugAppend(
         `tombstone ${capState.tombstoneWritten ? 'written' : 'write FAILED (will retry)'}, ` +
         'dropping further appends this run',
       )
-    })
+  }
   feedDebugWriteQueues.set(sessionId, next)
 
   // Reap the queue entry once it settles — but only if no NEWER
@@ -383,6 +421,11 @@ export function queueFeedDebugAppend(
   return next
 }
 
+/** Sizes of the per-session maps, for the #1207 leak test only. */
+export function feedDebugSessionStateSizesForTest(): { ids: number; epochs: number; caps: number; tokens: number } {
+  return { ids: lastWrittenFeedDebugId.size, epochs: lastWrittenFeedDebugEpoch.size, caps: feedDebugCapState.size, tokens: feedDebugSessionTokens.size }
+}
+
 /** Drop in-memory bookkeeping for a session that has ended. The
  *  on-disk JSONL is intentionally LEFT IN PLACE — debug bundles for
  *  long-since-closed panes still benefit from reading the trail. The
@@ -393,6 +436,10 @@ export function forgetFeedDebugSession(sessionId: string): void {
   // there might be an in-flight write that still owns the chain.
   // The settle-time reaper in queueFeedDebugAppend handles the queue
   // entry; what we own here is the cursor.
+  //
+  // Retiring the token tells any append queued before this call (and still
+  // pending) to delete what it writes (#1207).
+  feedDebugSessionTokens.delete(sessionId)
   lastWrittenFeedDebugId.delete(sessionId)
   lastWrittenFeedDebugEpoch.delete(sessionId)
   // Drop the cap-state entry too. If the same sessionId is re-registered later
