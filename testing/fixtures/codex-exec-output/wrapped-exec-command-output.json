@@ -1,0 +1,83 @@
+{
+  "evidence": "Three real Codex 0.132.0 rollout pairs (exec_command function_call + its function_call_output), one per result class: exit 0 with output, exit 1 with output, exit 0 with no output. Keys, types, call ids, timestamps, ordinals and the whole wrapper header (Chunk ID, Wall time, Process exited with code N, Original token count, Output:) are verbatim. The command, workdir and output body are replaced by the same number of x characters (newlines kept). Corpus census for #1321 (2,541 local rollouts): 85,355 wrapped function_call_output lines carry a \"Process exited with code\" header and 0 files contain an exec_command_end event; codex-rs rollout/src/policy.rs lists EventMsg::ExecCommandEnd under transient, never-persisted events.",
+  "cases": {
+    "ok": {
+      "cliVersion": "0.132.0",
+      "records": [
+        {
+          "timestamp": "2026-07-09T21:40:39.633Z",
+          "ordinal": 9,
+          "type": "response_item",
+          "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"workdir\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"yield_time_ms\":1000,\"max_output_tokens\":6000}",
+            "call_id": "call_3ovvxxP4PmRN2neyj08yspZS"
+          }
+        },
+        {
+          "timestamp": "2026-07-09T21:40:40.079Z",
+          "ordinal": 10,
+          "type": "response_item",
+          "payload": {
+            "type": "function_call_output",
+            "call_id": "call_3ovvxxP4PmRN2neyj08yspZS",
+            "output": "Chunk ID: c9e6a2\nWall time: 0.2793 seconds\nProcess exited with code 0\nOriginal token count: 31\nOutput:\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+          }
+        }
+      ]
+    },
+    "fail": {
+      "cliVersion": "0.132.0",
+      "records": [
+        {
+          "timestamp": "2026-07-09T21:40:57.469Z",
+          "ordinal": 64,
+          "type": "response_item",
+          "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"workdir\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"yield_time_ms\":1000,\"max_output_tokens\":12000}",
+            "call_id": "call_QdUm1WS8k6b7rVq4ifm4hqzI"
+          }
+        },
+        {
+          "timestamp": "2026-07-09T21:40:58.271Z",
+          "ordinal": 66,
+          "type": "response_item",
+          "payload": {
+            "type": "function_call_output",
+            "call_id": "call_QdUm1WS8k6b7rVq4ifm4hqzI",
+            "output": "Chunk ID: 3039c0\nWall time: 0.6442 seconds\nProcess exited with code 1\nOriginal token count: 136\nOutput:\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+          }
+        }
+      ]
+    },
+    "empty": {
+      "cliVersion": "0.132.0",
+      "records": [
+        {
+          "timestamp": "2026-07-09T20:39:14.481Z",
+          "ordinal": 30,
+          "type": "response_item",
+          "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"workdir\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"yield_time_ms\":1000,\"max_output_tokens\":12000}",
+            "call_id": "call_DSkiWNmdsFlz6ohXiLrovEiZ"
+          }
+        },
+        {
+          "timestamp": "2026-07-09T20:39:14.723Z",
+          "ordinal": 33,
+          "type": "response_item",
+          "payload": {
+            "type": "function_call_output",
+            "call_id": "call_DSkiWNmdsFlz6ohXiLrovEiZ",
+            "output": "Chunk ID: fc3db1\nWall time: 0.0670 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n"
+          }
+        }
+      ]
+    }
+  }
+}

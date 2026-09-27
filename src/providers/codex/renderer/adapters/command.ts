@@ -575,13 +575,24 @@ function commandResultEvidence(
       output: materialized,
       exitCode: nativeExit,
       failed,
-      // Native exec_command_end results always carry exit-derived evidence:
-      // rollout.ts computes is_error from `exit_code !== 0 || status ===
-      // 'failed'` and stamps codex.exitCode. is_error === false is therefore a
-      // proven success on THIS transport — unlike code-mode
-      // custom_tool_call_output, whose is_error never reflects the inner
-      // command.
-      exitProven: true,
+      // Native exec_command_end results carry exit-derived evidence:
+      // rollout.ts computes is_error from the exit code on both terminal
+      // carriers (the exec_command_end event, and the wrapped
+      // function_call_output with a "Process exited with code N" header) and
+      // stamps codex.exitCode. is_error === false is therefore a proven
+      // success on THIS transport — unlike code-mode custom_tool_call_output,
+      // whose is_error never reflects the inner command.
+      //
+      // EXCEPT a still-running chunk (#1395 review a, P1). A wrapper whose
+      // header says "Process running with session ID N" is partial: the
+      // command goes on in that session, and its exit arrives on a later
+      // write_stdin result with a different call_id, which this card cannot
+      // see. rollout.ts marks it `exec_command_running`. Claiming success for
+      // it painted long-running and later-failing commands green (9,896 such
+      // chunks in the local corpus); its honest state is "unknown". The same
+      // holds for a wrapper whose header could not be parsed
+      // (`exec_command_unparsed`, #1395 review b).
+      exitProven: codex?.kind === 'exec_command_running' || codex?.kind === 'exec_command_unparsed' ? failed : true,
       running: false,
       owned: true,
     }
