@@ -139,6 +139,22 @@ describe('WorktreeActivityIndex refresh persistence (#767)', () => {
     expect(JSON.stringify(after.summaries)).not.toContain('"one"')
   })
 
+  // Review of #1349: a discovered transcript that never parses (vanished between discovery and
+  // parse, unreadable) is not index content; counting it forced a full rewrite on every refresh.
+  it('does not rewrite the index for a transcript that keeps failing to parse', async () => {
+    await addRollout('one', '/fixture/project')
+    candidates.push({ provider: 'codex', providerSessionId: 'ghost', file: join(sources, 'ghost.jsonl'), cwd: '', mtimeMs: 1, size: 1 })
+    const index = new WorktreeActivityIndex()
+    await index.getSummary({ worktrees, refresh: true })
+    const written = await readFile(indexFile, 'utf8')
+    const past = new Date(Date.now() - 60_000)
+    await utimes(indexFile, past, past)
+    const { status } = await index.getSummary({ worktrees, refresh: true })
+    expect(status.skippedFiles).toBe(1)
+    expect(await readFile(indexFile, 'utf8')).toBe(written)
+    expect(Math.abs((await stat(indexFile)).mtimeMs - past.getTime())).toBeLessThan(1)
+  })
+
   it('re-parses a transcript whose provider session changed at the same path, mtime and size', async () => {
     await addRollout('one', '/fixture/project')
     const index = new WorktreeActivityIndex()
