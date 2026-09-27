@@ -20,23 +20,37 @@ vi.mock('@main/setup/setupState.js', () => ({ setCliUpdateBehavior: vi.fn() }))
 
 import { registerCliUpdatesIpc } from './cliUpdates'
 
+const failed = { kind: 'failed', cli: 'claude', from: '2.1.281', wantedLatest: '2.1.282', installMethod: 'npm', reason: 'command-failed', logPath: '/state/cli-update-logs/claude-1.log', finishedAt: 1 }
+const snapshot = { claude: failed as Record<string, unknown>, codex: { kind: 'idle' } as Record<string, unknown> }
+
 beforeEach(() => {
   handlers.clear()
   shell.openPath.mockReset()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
-  registerCliUpdatesIpc({ on: vi.fn(), getSnapshot: vi.fn(), refresh: vi.fn(), setBehavior: vi.fn(), updateNow: vi.fn() } as never)
+  registerCliUpdatesIpc({ on: vi.fn(), getSnapshot: () => snapshot, refresh: vi.fn(), setBehavior: vi.fn(), updateNow: vi.fn() } as never)
 })
 
-const openLog = (path: string) => handlers.get('cli-updates:open-log')!({}, path)
+const openLog = (cli: unknown) => handlers.get('cli-updates:open-log')!({}, cli)
 
-it('answers true when the log opened', async () => {
+it('opens the log main wrote for that CLI\'s failure, and answers true', async () => {
   shell.openPath.mockResolvedValue('')
-  expect(await openLog('/logs/claude-update.log')).toBe(true)
+  expect(await openLog('claude')).toBe(true)
+  expect(shell.openPath).toHaveBeenCalledWith('/state/cli-update-logs/claude-1.log')
 })
 
 it('answers false when the OS could not open it, and when openPath throws', async () => {
   shell.openPath.mockResolvedValue('Failed to open path')
-  expect(await openLog('/logs/pruned.log')).toBe(false)
+  expect(await openLog('claude')).toBe(false)
   shell.openPath.mockRejectedValue(new Error('boom'))
-  expect(await openLog('/logs/pruned.log')).toBe(false)
+  expect(await openLog('claude')).toBe(false)
+})
+
+// #1423 review a: the renderer used to send a PATH, and any string reached
+// shell.openPath, which opens applications too. Nothing but the failed
+// state's own log is ever opened now.
+it('opens nothing for a path, an unknown CLI, or a CLI whose state is not failed', async () => {
+  shell.openPath.mockResolvedValue('')
+  expect(await openLog('/Applications/Calculator.app')).toBe(false)
+  expect(await openLog('codex')).toBe(false)
+  expect(shell.openPath).not.toHaveBeenCalled()
 })

@@ -66,16 +66,24 @@ export function registerCliUpdatesIpc(orchestrator: CliUpdateOrchestrator): void
     return orchestrator.getSnapshot()
   })
 
-  ipcMain.handle('cli-updates:open-log', async (_evt, logPath: string): Promise<boolean> => {
+  ipcMain.handle('cli-updates:open-log', async (_evt, cli: CliUpdateKind): Promise<boolean> => {
+    // WHY the renderer names the CLI and not a path (#1423 review a): the
+    // renderer used to send the path, and this handler handed any string to
+    // shell.openPath, which opens files AND applications. Main already holds
+    // the one path it wrote: the current failed state's log. Anything else
+    // (an unknown CLI, a state that is not `failed`) opens nothing.
+    const state = cli === 'claude' || cli === 'codex' ? orchestrator.getSnapshot()[cli] : undefined
+    if (state?.kind !== 'failed') return false
     // shell.openPath RESOLVES with '' on success and an error string on
     // failure. WHY the answer is returned (#1250 row 10): this used to discard
     // the string on the belief that "the OS shell surfaces its own error
-    // dialog". It does not: a log removed by the debug-retention prune gives
-    // back "Failed to open path" and nothing appears, so View Log looked
-    // broken. Only a boolean crosses to the renderer, which shows its own
-    // fixed words; the OS text stays in this diagnostic log (q22).
+    // dialog". It does not: a log that is gone (removed by hand; nothing
+    // prunes this directory automatically) gives back "Failed to open path"
+    // and nothing appears, so View Log looked broken. Only a boolean crosses
+    // to the renderer, which shows its own fixed words; the OS text stays in
+    // this diagnostic log (q22).
     try {
-      const error = await shell.openPath(logPath)
+      const error = await shell.openPath(state.logPath)
       if (error === '') return true
       console.warn('[cli-updates] failed to open log:', error)
       return false

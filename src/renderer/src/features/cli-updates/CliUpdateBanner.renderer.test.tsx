@@ -51,9 +51,37 @@ describe('CliUpdateBanner View Log', () => {
     useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: failed }, dismissed: new Set() })
     render(<CliUpdateBanner />)
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'View Log' })) })
-    expect(openLog).toHaveBeenCalledWith('/logs/claude-update.log')
+    // The CLI, never a path: main picks the log it wrote (#1423 review a).
+    expect(openLog).toHaveBeenCalledWith('claude')
     const alert = screen.queryByRole('alert')
     if (shown) expect(alert).toHaveTextContent("Couldn't open the update log. It may have been cleaned up; the next failed update writes a new one.")
     else expect(alert).toBeNull()
+  })
+
+  // #1423 review a: an older, slower answer must not overwrite a newer one.
+  it('keeps the latest click\'s answer when an older one arrives last', async () => {
+    const answers: Array<(opened: boolean) => void> = []
+    const openLog = vi.fn(() => new Promise<boolean>(resolve => { answers.push(resolve) }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesOpenLog: openLog } })
+    useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: failed }, dismissed: new Set() })
+    render(<CliUpdateBanner />)
+    const button = screen.getByRole('button', { name: 'View Log' })
+    await act(async () => { fireEvent.click(button) })
+    await act(async () => { fireEvent.click(button) })
+    await act(async () => { answers[1]!(true) })
+    await act(async () => { answers[0]!(false) })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  // #1423 review a: a new failed run writes a new log; the old "couldn't
+  // open" says nothing about it.
+  it('clears the alert when a new failure brings a new log', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesOpenLog: vi.fn(async () => false) } })
+    useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: failed }, dismissed: new Set() })
+    render(<CliUpdateBanner />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'View Log' })) })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    act(() => { useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: { ...failed, logPath: '/logs/claude-update-2.log', finishedAt: 2 } } }) })
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import type { CliUpdateKind, CliUpdateState } from '@shared/types/cliUpdate.js'
 import { dismissKey, useCliUpdateStore } from '@renderer/features/cli-updates/store'
@@ -34,7 +34,7 @@ type BannerEntry = {
   text: string
   /** `onClick` may answer whether it worked; a `false` shows `failureText`
    *  on the row (#1250 row 10: View Log failed with nothing on screen). */
-  action?: { label: string; onClick: () => void | Promise<boolean | void>; failureText?: string }
+  action?: { label: string; onClick: () => void | Promise<boolean | void>; failureText?: string; resultKey?: string }
   // Rendered next to the action as a tiny info button. When present,
   // the banner shows an expandable diagnostic hint. Only failed states
   // set this today; other states don't need the extra context.
@@ -106,8 +106,11 @@ export function describeState(cli: CliUpdateKind, state: CliUpdateState): Banner
         text: `${label} auto-update failed${methodHint} — ${reasonHint}. Wanted ${state.wantedLatest}, still at ${state.from}.`,
         action: {
           label: 'View Log',
-          onClick: () => window.api.cliUpdatesOpenLog(state.logPath),
+          onClick: () => window.api.cliUpdatesOpenLog(cli),
           failureText: CLI_UPDATE_LOG_NOT_OPENED,
+          // A new failed run writes a new log: an earlier "couldn't open"
+          // says nothing about it (#1423 review a).
+          resultKey: state.logPath,
         },
         hint,
       }
@@ -194,13 +197,21 @@ function BannerRow({
   onDismiss: (key: string) => void
 }) {
   const [hintOpen, setHintOpen] = useState(false)
-  const [actionFailed, setActionFailed] = useState(false)
+  // The failure belongs to one action target; a new target clears it.
+  const [failedFor, setFailedFor] = useState<string | null>(null)
+  const resultKey = entry.action?.resultKey ?? ''
+  const actionFailed = failedFor === resultKey
+  // Only the LATEST click may set the result (#1423 review a): an older,
+  // slower answer must not overwrite a newer one.
+  const latestRun = useRef(0)
   const runAction = async () => {
     const action = entry.action
     if (!action) return
-    setActionFailed(false)
+    const run = ++latestRun.current
+    setFailedFor(null)
     const worked = await Promise.resolve(action.onClick()).catch(() => false as const)
-    if (worked === false && action.failureText) setActionFailed(true)
+    if (run !== latestRun.current) return
+    if (worked === false && action.failureText) setFailedFor(action.resultKey ?? '')
   }
   const toneClasses =
     // Uses the semantic tokens from #520 (warning-*, info-*, success-*)
