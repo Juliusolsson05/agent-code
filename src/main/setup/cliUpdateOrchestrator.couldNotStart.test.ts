@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 // thing replaced: mkdir of the log folder rejects the way macOS does for a
 // folder the user cannot write (EACCES). The update command runner is a spy
 // that must never be reached — an update without a log is not attempted.
-const fsState = vi.hoisted(() => ({ mkdirError: null as NodeJS.ErrnoException | null }))
+const fsState = vi.hoisted(() => ({ mkdirError: null as NodeJS.ErrnoException | null, writeError: null as NodeJS.ErrnoException | null }))
 vi.mock('fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('fs/promises')>()
   return {
@@ -17,6 +17,10 @@ vi.mock('fs/promises', async importOriginal => {
     mkdir: async (...args: Parameters<typeof actual.mkdir>) => {
       if (fsState.mkdirError) throw fsState.mkdirError
       return actual.mkdir(...args)
+    },
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      if (fsState.writeError) throw fsState.writeError
+      return actual.writeFile(...args)
     },
   }
 })
@@ -55,6 +59,48 @@ describe('an update that cannot start (#1425)', () => {
       // The OS text stays in main's log (q22), never in the state.
       expect(JSON.stringify(snapshot.claude)).not.toContain('EACCES')
       expect(warn).toHaveBeenCalled()
+    } finally {
+      fsState.mkdirError = null
+      warn.mockRestore()
+    }
+  })
+})
+
+// #1447 review a: the folder was the only thing checked. A folder that already
+// exists but will not take a new file (EACCES on the folder, ENOSPC) let the
+// update run with no log, and View Log then pointed at a file that never was.
+describe('an update whose log file cannot be created (#1447 review a)', () => {
+  it('fails as could-not-start and never runs the command', async () => {
+    fsState.writeError = Object.assign(new Error("ENOSPC: no space left on device, open '/state/cli-update-logs/claude-x.log'"), { code: 'ENOSPC' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    runShellCommand.mockClear()
+    try {
+      const orchestrator = new CliUpdateOrchestrator({ list: () => [], getSessionKind: () => 'claude' } as never, { acquireUpdateLease: () => () => undefined })
+      const snapshot = await orchestrator.updateOnce('claude')
+      expect(snapshot.claude).toMatchObject({ kind: 'failed', reason: 'could-not-start', logPath: null })
+      expect(runShellCommand).not.toHaveBeenCalled()
+    } finally {
+      fsState.writeError = null
+      warn.mockRestore()
+    }
+  })
+})
+
+// #1447 review a: publishing a state is synchronous (emit -> the IPC broadcast
+// -> webContents.send). A listener that throws on `updating` (a window torn
+// down mid-send) aborted runUpdate before any later state, leaving the
+// snapshot `updating` for good. Publication failures must not steer the
+// update's own state machine.
+describe('a state listener that throws (#1447 review a)', () => {
+  it('does not strand updating', async () => {
+    fsState.mkdirError = Object.assign(new Error('EACCES'), { code: 'EACCES' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const orchestrator = new CliUpdateOrchestrator({ list: () => [], getSessionKind: () => 'claude' } as never, { acquireUpdateLease: () => () => undefined })
+      orchestrator.on('state', snapshot => { if (snapshot.claude.kind === 'updating') throw new Error('Object has been destroyed') })
+      const snapshot = await orchestrator.updateOnce('claude')
+      expect(snapshot.claude.kind).toBe('failed')
+      expect(orchestrator.getSnapshot().claude.kind).not.toBe('updating')
     } finally {
       fsState.mkdirError = null
       warn.mockRestore()

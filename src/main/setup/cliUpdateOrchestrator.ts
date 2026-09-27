@@ -581,7 +581,19 @@ export class CliUpdateOrchestrator extends EventEmitter {
 
   private updateSnapshot(cli: CliUpdateKind, state: CliUpdateState): void {
     this.snapshot = { ...this.snapshot, [cli]: state }
-    this.emit('state', this.snapshot)
+    // WHY publication is contained (#1447 review a): emit is synchronous and
+    // its listener broadcasts to every window through webContents.send, which
+    // throws for a window torn down mid-send. That exception used to escape
+    // into runUpdate right after `updating` was published and abort it before
+    // any later state — leaving the snapshot (the source of truth, already
+    // committed above) and the other windows on an undismissable "Updating…".
+    // The state machine decides the state; a failed publication is logged and
+    // the next publication (or the renderer's snapshot fetch) catches up.
+    try {
+      this.emit('state', this.snapshot)
+    } catch (error) {
+      console.warn('[cli-update] publishing the update state failed:', error)
+    }
   }
 
   private async openLog(cli: CliUpdateKind): Promise<string> {
@@ -590,7 +602,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
     // file per attempt so a re-run doesn't overwrite the last failure's
     // log while a user is trying to inspect it.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    return join(CLI_UPDATE_LOG_DIR, `${cli}-${stamp}.log`)
+    const logPath = join(CLI_UPDATE_LOG_DIR, `${cli}-${stamp}.log`)
+    // WHY the file is CREATED here, not just named (#1447 review a): a folder
+    // that already exists but will not take a new file (EACCES on it, ENOSPC)
+    // passed mkdir, the update ran, every appendLog was swallowed, and View
+    // Log pointed at a file that was never written. Creating it up front is
+    // the real "can we keep a log" check; it throws into runUpdate's
+    // could-not-start path before the command runs. `wx` never truncates an
+    // earlier attempt's log that happens to share the name.
+    await writeFile(logPath, `[Agent Code] ${cli} update log, ${new Date().toISOString()}\n`, { flag: 'wx' })
+    return logPath
   }
 }
 
