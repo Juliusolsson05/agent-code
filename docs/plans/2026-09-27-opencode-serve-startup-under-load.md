@@ -23,3 +23,8 @@ A hung server (alive, never listening) has not been observed. The existing exit 
 ## Tests
 - **`opencodeSession`:** the spawned headless gets the load-tolerant `startupTimeoutMs`. A test double stands in for `opencode-headless`'s constructor, the true edge here. The package's `SpawnedServer.test.ts` already covers the option's behaviour.
 - **Real mechanism:** an OpenCode session started against a stub `opencode` binary that reports its URL after 11 s (past the old deadline) reaches the server instead of rejecting.
+
+## Round 1 review decisions (#1367)
+- **a (major): orchestration still loses a start slower than 30 s.** The bridge rejects `create-agent` at 30 s with an unknown outcome. The late-adopted child never gets its bootstrap prompt. This is the orchestration bridge's own deadline, pre-existing and shared by every provider, so it is filed as #1370 and not changed here. Changing it means choosing between late bootstrap delivery and MCP-client timeouts. With this PR, starts that finish between 10 and 30 s now succeed through orchestration too; two of the three recorded contended starts took 16.7 and 18.3 s. So this PR is `Refs #1355`, and #1355 stays open until #1370 lands.
+- **a (minor): the package's forwarding was untested.** A system test now goes through `OpencodeHeadless` (`resolveServerUrl` → `SpawnedServer`) with the app's option, and dropping the forwarding fails it.
+- **a (surviving mutant): 44 s passed the margin check.** The test now requires at least twice the worst healthy start measured.

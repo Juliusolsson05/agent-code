@@ -70,6 +70,9 @@ describe('OpencodeSession composer readiness', () => {
     headlessControl.options.length = 0
     await new OpencodeSession({ cwd: '/tmp/project' }).start()
     expect(headlessControl.options.at(-1)).toMatchObject({ startupTimeoutMs: OPENCODE_SERVE_STARTUP_TIMEOUT_MS })
-    expect(OPENCODE_SERVE_STARTUP_TIMEOUT_MS).toBeGreaterThan(43_100)
+    // At least twice the worst healthy start measured (43.1 s), the margin the
+    // constant's comment claims; merely above it (#1367 review a: 44 s passed)
+    // would fail the next slightly slower machine.
+    expect(OPENCODE_SERVE_STARTUP_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * 43_100)
   })
 })

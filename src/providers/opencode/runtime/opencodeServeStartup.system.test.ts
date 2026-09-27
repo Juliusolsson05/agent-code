@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, expect, it } from 'vitest'
-import { SpawnedServer } from 'opencode-headless'
+import { OpencodeHeadless, SpawnedServer } from 'opencode-headless'
 
 import { OPENCODE_SERVE_STARTUP_TIMEOUT_MS } from './opencodeSession.js'
 
@@ -38,4 +38,20 @@ it('waits out a slow but healthy serve start', async () => {
 it('is what the package default killed', async () => {
   const server = new SpawnedServer({ binary: slowServe(11_000), cwd: tmpdir() })
   await expect(server.start()).rejects.toThrow('to report its URL')
+}, 30_000)
+
+// #1367 review a (surviving mutation): the app hands the wait to
+// OpencodeHeadless, not to SpawnedServer, so the package's forwarding is part
+// of the fix. Dropping it put structured panes back on the 10 s default while
+// both tests above stayed green. This goes through the same package method a
+// structured start uses (resolveServerUrl -> SpawnedServer) with the app's
+// option, and stops before the SDK connects (the stub serves no API).
+it('forwards the wait through OpencodeHeadless to the spawned serve', async () => {
+  const headless = new OpencodeHeadless({ binary: slowServe(11_000), cwd: tmpdir(), startupTimeoutMs: OPENCODE_SERVE_STARTUP_TIMEOUT_MS })
+  try {
+    const url = await (headless as unknown as { resolveServerUrl(): Promise<string> }).resolveServerUrl()
+    expect(url).toBe('http://127.0.0.1:4096')
+  } finally {
+    await headless.stop()
+  }
 }, 30_000)
