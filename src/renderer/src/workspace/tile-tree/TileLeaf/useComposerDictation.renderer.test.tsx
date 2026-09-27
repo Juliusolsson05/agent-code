@@ -421,7 +421,7 @@ describe('dictation outcome codes (#243)', () => {
     // timer under load and ended the recording as too-short instead.
     const start = api.startDictationStream
     streamStarts = vi.fn((...args: unknown[]) => start(...args))
-    api.startDictationStream = streamStarts
+    api.startDictationStream = streamStarts as unknown as (...args: unknown[]) => unknown
   })
   /** Emit one chunk and wait until the hook has asked main to start the stream. */
   const speak = async () => {
