@@ -464,6 +464,40 @@ describe('review round 2 (review A)', () => {
     expect(await picking).toEqual(expected)
   })
 
+  // #1431 verification a, b: the FIRST abort decides, in both orders; and the
+  // abort also wins when node resolution then REJECTS.
+  it('keeps a user cancel silent when a switch-off follows it', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.cancelPick('p1')
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    hold.release()
+    expect(await picking).toEqual({ kind: 'cancelled' })
+  })
+
+  it('lets a switch-off during node resolution win when resolution then rejects', async () => {
+    const { c } = controller()
+    let fail!: () => void
+    const g = completingGuest({ method: 'Page.getFrameTree', promise: new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('Target closed')) }) })
+    c.register('p1', 's1', g.guest)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const picking = c.pick('p1')
+      await armed(g)
+      g.emit('Overlay.inspectNodeRequested', { backendNodeId: 42 })
+      await vi.waitFor(() => expect(g.sent.some(s => s.method === 'Page.getFrameTree')).toBe(true))
+      c.setFlags({ enabled: false, allowEvaluate: false })
+      fail()
+      expect(await picking).toEqual({ kind: 'failed', reason: 'unavailable' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   // #1431 review c: a guest destroyed mid-pick used to leave the pick armed
   // for its 60 s, with no way to cancel it, then a silent cancel.
   it('settles an armed pick as unavailable when its guest is destroyed', async () => {

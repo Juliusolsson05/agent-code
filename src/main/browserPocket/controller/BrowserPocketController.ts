@@ -504,7 +504,14 @@ export class BrowserPocketController {
     let aborted = false
     let abortFailure: PickFailureReason | undefined
     let armedAbort: (() => void) | null = null
-    const abort = (failure?: PickFailureReason) => { aborted = true; abortFailure ??= failure; armedAbort?.() }
+    // The FIRST abort decides the outcome, whatever it is (#1431 verification
+    // a, b): a user's cancel followed by a switch-off stays a silent cancel,
+    // and a switch-off followed by a cancel stays `unavailable`.
+    const abort = (failure?: PickFailureReason) => {
+      if (!aborted) abortFailure = failure
+      aborted = true
+      armedAbort?.()
+    }
     p.pickAbort = abort
     const { pickElement } = await import('./picker.js')
     // Through the queue, so an agent's CDP click can never land while the

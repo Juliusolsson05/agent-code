@@ -50,3 +50,7 @@ Pressing Pick in a lane's browser pocket either picks an element, is cancelled b
   - a pick REJECTED while DevTools opened says `devtools-open`;
   - the first abort's reason wins over a later cancel;
   - the main-side warn is asserted.
+
+## Verification (a, b: FIX-BEFORE-MERGE, minor)
+- **a1 / b1: a later lifecycle abort overwrote an earlier user cancel.** A cancel followed by a switch-off showed an "unavailable" toast for a cancelled pick. The FIRST abort now latches the outcome in either order. Test red on the previous head.
+- **a2: the abort-wins rule was untested when node resolution REJECTS.** Pinned: a switch-off during resolution, then a rejected CDP call, answers `unavailable`. Removing `aborted_()` from the rejection mapper now fails it.
