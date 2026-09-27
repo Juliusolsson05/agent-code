@@ -50,3 +50,4 @@ After this change, a timeout is recorded and said, and it never makes a worktree
   - the `gitTimedOut` producer path is covered by the control test through the real `loadWorktreeDump`;
   - the defensive `!timedOut` in the list cache rule is commented as such.
   - The no-cache-on-timeout load cost is the intended trade.
+- **Verification a (queue attribution unpinned):** a test now holds the runner's eight process slots, queues a ninth request whose branch probe times out, and releases the slots. The ninth still answers `timedOut`, and the eight busy ones report no timeout. Reading the trace at drain time instead of queue time fails it.

@@ -15,7 +15,9 @@ vi.mock('electron', () => ({
 }))
 vi.mock('@main/setup/toolchain.js', () => ({ getToolPath: () => 'git' }))
 
-type Answer = string | 'TIMEOUT' | 'EXIT128'
+type Answer = string | 'TIMEOUT' | 'EXIT128' | 'HOLD'
+// Held commands, released by the test: they occupy the runner's process slots.
+const held = vi.hoisted(() => ({ release: [] as Array<() => void> }))
 const git = vi.hoisted(() => ({ answer: (_cwd: string, _args: string[]): string => '', calls: [] as string[][] }))
 vi.mock('child_process', () => ({
   execFile: (_file: string, args: string[], options: { cwd: string }, callback: (error: unknown, value?: { stdout: string; stderr: string }) => void) => {
@@ -23,6 +25,8 @@ vi.mock('child_process', () => ({
     const answer = git.answer(options.cwd, args) as Answer
     if (answer === 'TIMEOUT') {
       setTimeout(() => callback(Object.assign(new Error('Command failed: git (timed out)'), { killed: true, signal: 'SIGTERM', code: null })), 0)
+    } else if (answer === 'HOLD') {
+      held.release.push(() => callback(null, { stdout: 'main\n', stderr: '' }))
     } else if (answer === 'EXIT128') {
       // An ordinary git failure, as Node reports it: a non-zero exit, not killed.
       setTimeout(() => callback(Object.assign(new Error('fatal: not a git repository'), { killed: false, signal: null, code: 128 })), 0)
@@ -110,6 +114,25 @@ describe('an ordinary git failure is not a timeout', () => {
     repo((cwd, args) => (cwd === '/repo' && args[0] === 'status' ? 'TIMEOUT' : undefined))
     const result = await invoke('git:worktree-status', '/repo')
     expect(row(result, '/repo')).toMatchObject({ statusTimedOut: true, category: 'main' })
+  })
+})
+
+// #1429 verification a: the trace is captured when a command is QUEUED, not
+// when the runner drains it. A request that waits behind eight busy git
+// processes runs its command from another request's drain, outside its own
+// async context; reading the store at drain time would lose its timeout.
+describe('a queued request keeps its own timeout', () => {
+  it('reports the timeout of a request that waited behind eight busy commands', async () => {
+    repo((cwd, args) => (args[0] === 'rev-parse' && cwd.startsWith('/busy') ? 'HOLD' : cwd === '/slow' && args[0] === 'rev-parse' ? 'TIMEOUT' : undefined))
+    held.release = []
+    const busy = Array.from({ length: 8 }, (_, i) => invoke('git:status', `/busy-${i}`))
+    await vi.waitFor(() => expect(held.release).toHaveLength(8))
+    const queued = invoke('git:status', '/slow')
+    // Free one slot at a time; the queued request's command runs from a drain.
+    for (const release of held.release.splice(0)) release()
+    expect(await queued).toEqual({ ok: false, gitMissing: false, timedOut: true })
+    // The eight busy requests finish normally and report no timeout.
+    for (const result of await Promise.all(busy)) expect(result.incomplete).toBeUndefined()
   })
 })
 
