@@ -45,3 +45,7 @@ Unit and system tests with fake PTYs and the real package. The app is not launch
 - **Stale doc:** the `deliverPromptText` doc claimed a PTY paste. It now says HTTP, held until the durable reader positions.
 - **Unbounded hold:** already bounded (q97).
 - **A6 (latch set after the flush):** left alone, as a says; the flush is synchronous.
+
+## Pointer bump to opencode-terminal-headless#11's merge (3935a3bb)
+- The pointer moves from 7a009541 to 3935a3bb, the merge of #11, which contains 7a009541. That brings in round 1's blocker fix: the late database-path recovery is reported from `onPositioned`, so the app's one heal waits for the reader.
+- The package's `package.json` and `package-lock.json` are unchanged between the two commits, so no lockfile resync is needed.
