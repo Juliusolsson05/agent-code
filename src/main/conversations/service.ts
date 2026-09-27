@@ -197,7 +197,12 @@ export class ConversationService {
   async prompts(request: ConversationPromptsRequest): Promise<ConversationPrompt[]> {
     const source = this.source(request.provider)
     if (!source) return []
-    const raw = await source.prompts(request.nativeId, request.cwd, { need: 'all' })
+    const raw = await source.prompts(request.nativeId, request.cwd, { need: 'all' }).catch((error: unknown) => {
+      // #1306: the cause (a path, an OS code) stays in the main log; the
+      // renderer gets the typed error and says it in fixed words.
+      console.warn(`[conversations] ${request.provider} prompts unreadable:`, (error as { cause?: unknown }).cause ?? error)
+      throw error
+    })
     // The folder reports wrappers verbatim; the prompt list shows what the
     // user typed, so unwrap here and drop injected messages.
     return raw.flatMap(p => {

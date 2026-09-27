@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { journalTemporaryPath, SkillPathSafety } from './skillPathSafety.js'
 import { sha256Text } from './renderSkill.js'
@@ -95,5 +95,40 @@ describe('SkillPathSafety', () => {
     )).resolves.toBe('restored')
     await expect(readFile(target.skillFile, 'utf8')).resolves.toBe('external replacement')
     await expect(stat(quarantine)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  // Review of #1456 (b): a symlinked folder on the skill path threw a message
+  // that named the path, which was then shown (a root-level `/tmp`) or
+  // replaced by the generic sentence, losing the reason. The reason is shown,
+  // the path only logged.
+  it('names a symlinked folder on the skill path without showing the path', async () => {
+    const { root, target, safety } = await fixture()
+    const real = join(root, 'real-agents')
+    await mkdir(real)
+    await symlink(real, join(root, '.agents'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const inspected = await safety.inspectTarget(target) as { message?: string }
+      expect(inspected.message).toBe('A folder on the skill path is a symbolic link, which Agent Code does not follow.')
+      expect(inspected.message).not.toContain(root)
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ path: join(root, '.agents') }))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // Review of #1456, round 2 (c): the file-in-the-way reason had no test, so a
+  // path slipping back into its message survived.
+  it('names a file in the way of a skill folder without showing the path', async () => {
+    const { root, target, safety } = await fixture()
+    await writeFile(join(root, '.agents'), 'a file where a folder should be')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const inspected = await safety.inspectTarget(target) as { message?: string }
+      expect(inspected.message).toBe('A file is in the way where a folder on the skill path should be.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ path: join(root, '.agents') }))
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

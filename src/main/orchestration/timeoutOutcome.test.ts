@@ -33,7 +33,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 
 const { OrchestrationBridge, OrchestrationOutcomeUnknownError } = await import('./OrchestrationBridge.js')
 
-type Incident = { kind: string; context?: Record<string, unknown> }
+type Incident = { kind: string; reason?: string; context?: Record<string, unknown> }
 let incidents: Incident[]
 let bridge: InstanceType<typeof OrchestrationBridge>
 
@@ -173,7 +173,120 @@ describe('a late answer is reconciled, never dropped', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     await settled
 
-    bridge.resolve({ requestId: request.requestId, ok: false, message: 'no window' } as never)
+    // A real failed answer carries its type (review of #1375, b: without it the fixture never
+    // reached the `!response.ok` guard, and removing that guard survived).
+    bridge.resolve({ requestId: request.requestId, ok: false, type: 'create-agent', message: 'no window' } as never)
     expect(incidents.map(incident => incident.kind)).not.toContain('orchestration.late_response_adopted')
+  })
+})
+
+// #1370: a healthy provider can take longer than the 30 s deadline to start. The timed-out create
+// told the caller "do not repeat", and the late child was adopted idle, without the brief the
+// create promised. The create's own bootstrap delivery now runs when the late answer is adopted.
+describe('a late-created child still gets its bootstrap prompt (#1370)', () => {
+  it('runs the create\'s late continuation once, with the adopted child, and says so up front', async () => {
+    const late = vi.fn(async (_agent: { sessionId: string }) => {})
+    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const settled = create.catch((error: unknown) => error)
+    const request = lastSent('create-agent') as { requestId: string; onLateCreate?: unknown }
+    // The continuation is main-side only; the renderer never sees it.
+    expect(request).not.toHaveProperty('onLateCreate')
+    await vi.advanceTimersByTimeAsync(30_000)
+    const error = await settled
+    expect(error).toBeInstanceOf(OrchestrationOutcomeUnknownError)
+    // Otherwise the parent's next move — sending the brief once list_agents shows the child —
+    // would deliver it twice.
+    expect(String(error)).toMatch(/If the renderer later confirms the child, Agent Code tries to deliver its bootstrap prompt/)
+    expect(String(error)).toMatch(/check orchestration_list_agents and orchestration_read_agent \(promptSubmitted\) before sending the brief yourself/)
+    expect(late).not.toHaveBeenCalled()
+
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(late).toHaveBeenCalledTimes(1)
+    expect(late.mock.calls[0]![0]).toMatchObject({ sessionId: 'child-late' })
+    const adopted = incidents.find(incident => incident.kind === 'orchestration.late_response_adopted')
+    expect(adopted?.context).toMatchObject({ bootstrapFollows: true })
+  })
+
+  it('runs nothing for a FAILED late answer', async () => {
+    const late = vi.fn(async () => {})
+    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const settled = create.catch((error: unknown) => error)
+    const request = lastSent('create-agent') as { requestId: string }
+    await vi.advanceTimersByTimeAsync(30_000)
+    await settled
+    // A real failed answer carries its type (review of #1375, b: without it the fixture never
+    // reached the `!response.ok` guard, and removing that guard survived).
+    bridge.resolve({ requestId: request.requestId, ok: false, type: 'create-agent', message: 'no window' } as never)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(late).not.toHaveBeenCalled()
+  })
+
+  it('never runs it for a create that answered in time', async () => {
+    const late = vi.fn(async () => {})
+    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const request = lastSent('create-agent') as { requestId: string }
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-fast') } as never)
+    await expect(create).resolves.toMatchObject({ sessionId: 'child-fast' })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(late).not.toHaveBeenCalled()
+  })
+
+  // Review of #1375 (a): the parent closed while the renderer was spawning.
+  // Its brief must not start an ownerless agent.
+  it('runs nothing when the parent is gone by the time the child arrives', async () => {
+    const late = vi.fn(async () => {})
+    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const settled = create.catch((error: unknown) => error)
+    const request = lastSent('create-agent') as { requestId: string }
+    await vi.advanceTimersByTimeAsync(30_000)
+    await settled
+    windowOwner.mockImplementation(sessionId => (sessionId === 'parent-1' ? null : 'window-1'))
+    try {
+      bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(late).not.toHaveBeenCalled()
+      const skipped = incidents.find(incident => incident.reason === 'create_agent_late_bootstrap_parent_gone')
+      expect(skipped?.context).toMatchObject({ sessionId: 'child-late', parentSessionId: 'parent-1' })
+    } finally {
+      windowOwner.mockImplementation(() => 'window-1')
+    }
+  })
+
+  it('reports a late delivery that throws as an incident instead of losing it', async () => {
+    const create = bridge.createAgent({
+      parentSessionId: 'parent-1', kind: 'claude', onLateCreate: async () => { throw new Error('composer gone') },
+    })
+    const settled = create.catch((error: unknown) => error)
+    const request = lastSent('create-agent') as { requestId: string }
+    await vi.advanceTimersByTimeAsync(30_000)
+    await settled
+    bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
+    await vi.advanceTimersByTimeAsync(0)
+    const failed = incidents.find(incident => incident.kind === 'orchestration.prompt_delivery_failed')
+    expect(failed?.context).toMatchObject({ sessionId: 'child-late', message: 'composer gone' })
+  })
+
+  // Review of #1375 (b), a surviving mutation: removing every `lateCreates.delete` passed. The
+  // bridge is long-lived, and each create's continuation captures its brief and handler, so the
+  // map must empty however the create ends.
+  it('forgets every create continuation once the create is settled, in time or late', async () => {
+    const lateCreates = (bridge as unknown as { lateCreates: Map<string, unknown> }).lateCreates
+    const late = vi.fn(async () => {})
+    const fast = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const fastRequest = lastSent('create-agent') as { requestId: string }
+    bridge.resolve({ requestId: fastRequest.requestId, ok: true, type: 'create-agent', agent: child('child-fast') } as never)
+    await fast
+    expect(lateCreates.size).toBe(0)
+
+    const slow = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const settled = slow.catch((error: unknown) => error)
+    const slowRequest = lastSent('create-agent') as { requestId: string }
+    await vi.advanceTimersByTimeAsync(30_000)
+    await settled
+    expect(lateCreates.size).toBe(1)
+    bridge.resolve({ requestId: slowRequest.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lateCreates.size).toBe(0)
   })
 })

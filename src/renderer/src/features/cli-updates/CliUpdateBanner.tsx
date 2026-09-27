@@ -48,6 +48,24 @@ type BannerEntry = {
 
 // Fixed words (q22): the OS failure text stays in main's diagnostic log.
 export const CLI_UPDATE_LOG_NOT_OPENED = "Couldn't open the update log. It may have been cleaned up; the next failed update writes a new one."
+// #1425: an Update now click whose request itself failed (main rejected
+// before any state could say so) used to be dropped by `void`.
+export const CLI_UPDATE_NOT_STARTED = "Couldn't start the update. Try again."
+
+/** Every Update now action (#1425). Awaited so a rejected request is said
+ *  (resolves false → the row's failureText) instead of dropped. The snapshot
+ *  main answers with arrives over the state event as well, so success needs
+ *  nothing more here. */
+function updateNowAction(cli: CliUpdateKind, resultKey: string): NonNullable<BannerEntry['action']> {
+  return {
+    label: 'Update now',
+    // One-shot update: bypasses the automatic/notify/off preference for this
+    // click only, leaving the persisted behavior untouched.
+    onClick: () => window.api.cliUpdatesUpdateNow(cli).then(() => true, () => false),
+    failureText: CLI_UPDATE_NOT_STARTED,
+    resultKey,
+  }
+}
 
 export function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry | null {
   const label = cli === 'claude' ? 'Claude Code' : 'Codex'
@@ -72,6 +90,17 @@ export function describeState(cli: CliUpdateKind, state: CliUpdateState): Banner
         text: `${label} updated to ${state.to}.`,
       }
     case 'failed': {
+      if (state.reason === 'could-not-start') {
+        // #1425: the attempt stopped before running anything, so there is no
+        // log to view; the row offers the retry instead. Dismissable, unlike
+        // the `updating` row this used to leave standing forever.
+        return {
+          tone: 'warning',
+          text: `Couldn't start the ${label} update: Agent Code couldn't create its update log. Still at ${state.from}.`,
+          hint: 'Check that the disk has free space and that the Agent Code data folder is writable, then choose Update now.',
+          action: updateNowAction(cli, `could-not-start:${state.finishedAt}`),
+        }
+      }
       const reasonHint =
         state.reason === 'timeout'
           ? 'timed out'
@@ -110,7 +139,7 @@ export function describeState(cli: CliUpdateKind, state: CliUpdateState): Banner
           failureText: CLI_UPDATE_LOG_NOT_OPENED,
           // A new failed run writes a new log: an earlier "couldn't open"
           // says nothing about it (#1423 review a).
-          resultKey: state.logPath,
+          resultKey: state.logPath ?? undefined,
         },
         hint,
       }
@@ -119,15 +148,7 @@ export function describeState(cli: CliUpdateKind, state: CliUpdateState): Banner
       return {
         tone: 'info',
         text: `${label} ${state.installed} → ${state.latest} available.`,
-        action: {
-          label: 'Update Now',
-          onClick: () => {
-            // One-shot update: bypasses the automatic/notify/off
-            // preference for this click only, leaving the persisted
-            // behavior untouched.
-            void window.api.cliUpdatesUpdateNow(cli)
-          },
-        },
+        action: { ...updateNowAction(cli, `notify:${state.latest}`), label: 'Update Now' },
       }
     case 'deferred':
       // Automatic deferrals stay silent ("we'll do it later" needs no
@@ -141,12 +162,7 @@ export function describeState(cli: CliUpdateKind, state: CliUpdateState): Banner
       return {
         tone: 'info',
         text: `${label} ${state.wantedLatest} is ready, but ${label} agents are running. Close them, then choose Update now (now ${state.from}).`,
-        action: {
-          label: 'Update now',
-          onClick: () => {
-            void window.api.cliUpdatesUpdateNow(cli)
-          },
-        },
+        action: updateNowAction(cli, `deferred:${state.checkedAt}`),
       }
     case 'idle':
     case 'up-to-date':

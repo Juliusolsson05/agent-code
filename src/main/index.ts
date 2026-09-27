@@ -315,6 +315,9 @@ let disposeExternalControl: (() => Promise<void>) | null = null
 // actually buys is catching a future `disposeControl: () => { dispose() }`
 // that drops the promise on the floor at the CALL SITE.
 let disposeControlHost: (() => Promise<void>) | null = null
+// Published by startup once the service exists (#1372). Null means startup
+// never got that far, so there is nothing to drain.
+let disposeGoalLoop: (() => Promise<void>) | null = null
 let shutdownWorkspaceStore: WorkspaceFileStore | null = null
 
 class StartupInterruptedByQuit extends Error {}
@@ -1243,6 +1246,7 @@ async function startApp(): Promise<void> {
   const goalLoopStore = new GoalLoopStore(join(STATE_DIR, 'goal-loop.json'))
   const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
   await goalLoopService.start()
+  disposeGoalLoop = () => goalLoopService.dispose()
   registerGoalLoopIpc(goalLoopService)
   // Lane browser pocket (#1142). One controller for the app: it owns live CDP
   // sessions and per-pocket queues that must outlive the per-request MCP
@@ -1737,6 +1741,7 @@ const sessionShutdownGate = installApplicationShutdown({
     disposeControl: () => disposeControlHost?.(),
     disposeWorkflowBridge: () => workflowBridge?.dispose(),
     disposeCaffeinate: () => caffeinateController.dispose(),
+    disposeGoalLoop: () => disposeGoalLoop?.(),
     stopHeapWatchdog: stopMainHeapWatchdog,
     stopDetachedTmuxSweep: () => { detachedTmuxSweep?.stop(); detachedTmuxSweep = null },
     drainWorkspace: () => shutdownWorkspaceStore?.drainAdmittedWrites(),

@@ -59,3 +59,15 @@ it('opens nothing for a path, an unknown CLI, or a CLI whose state is not failed
   expect(await openLog('codex')).toBe(false)
   expect(shell.openPath).not.toHaveBeenCalled()
 })
+
+// #1425: an update that could not start has no log; there is nothing to open.
+it('opens nothing for a could-not-start failure, which has no log', async () => {
+  shell.openPath.mockResolvedValue('')
+  snapshot.claude = { ...failed, reason: 'could-not-start', logPath: null }
+  try {
+    expect(await openLog('claude')).toBe(false)
+    expect(shell.openPath).not.toHaveBeenCalled()
+  } finally {
+    snapshot.claude = failed
+  }
+})

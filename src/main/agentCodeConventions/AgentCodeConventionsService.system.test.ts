@@ -728,3 +728,71 @@ describe('recovery reset that cannot remove the state file', () => {
     }
   })
 })
+
+// #1427: every user-visible message on the Skills surfaces is curated (q22,
+// q39). safeErrorMessage passed Node's own text through, so an EACCES or
+// ENOTDIR reached the UI as `EACCES: permission denied, mkdir '/Users/…'`.
+// Real filesystem only; the raw error stays in the main log.
+describe('user-visible errors name the problem, never the path or the OS text (#1427)', () => {
+  it('a read-only skills folder', async () => {
+    const { root, service } = await harness()
+    const skills = join(root, '.claude')
+    await mkdir(skills, { recursive: true })
+    await chmod(skills, 0o500)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
+      const failed = (await service.getSnapshot()).targets.filter(target => target.state === 'error')
+      expect(failed.length).toBeGreaterThan(0)
+      for (const target of failed) {
+        expect(target.message).not.toContain(root)
+        expect(target.message).not.toMatch(/EACCES|EPERM|permission denied,/)
+        expect(target.message).toMatch(/permission/i)
+      }
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      await chmod(skills, 0o700)
+      warn.mockRestore()
+    }
+  })
+
+  it('a state file whose parent is a file', async () => {
+    const root = await temporaryDirectory()
+    await writeFileWithParents(join(root, 'blocker'), 'a file where a folder should be')
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'blocker', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [], unsupportedProviders: [] }),
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await service.initialize()
+      const saved = await service.save({ expectedRevision: 0, enabled: false, markdown: '# Rules' })
+      // Only the MESSAGE fields: `recovery.stateFilePath` and each target's
+      // `displayPath` carry a path on purpose (the reveal action, the target
+      // list); prose must not.
+      const messages: string[] = []
+      const collect = (value: unknown): void => {
+        if (Array.isArray(value)) value.forEach(collect)
+        else if (value && typeof value === 'object') {
+          for (const [key, inner] of Object.entries(value)) {
+            if (key === 'message' && typeof inner === 'string') messages.push(inner)
+            else collect(inner)
+          }
+        }
+      }
+      collect(saved)
+      collect(await service.getSnapshot())
+      expect(messages.length).toBeGreaterThan(0)
+      for (const message of messages) {
+        expect(message).not.toContain(root)
+        expect(message).not.toMatch(/ENOTDIR|not a directory,/)
+      }
+      // The raw error goes to the log (review of #1456, c: suppressing only
+      // the ENOTDIR log passed every test).
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ code: 'ENOTDIR' }))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
