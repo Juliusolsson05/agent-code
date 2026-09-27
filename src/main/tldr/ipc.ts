@@ -27,7 +27,15 @@ function assertApplicationWindow(event: Electron.IpcMainInvokeEvent): void {
 // element cap only bounds what zod copies; the predicate's own limit is 128.
 const identityList = z.array(z.string().max(256)).max(10_000)
   .transform(identities => identities.filter(validTldrIdentity))
-const singleIdentity = z.string().refine(validTldrIdentity)
+const singleIdentity = z.string().max(256)
+// History answers an invalid identity the way the batch reads do (review of
+// #1411, b): it cannot have a record, so its history is empty, not an error
+// that puts the history modal into its failure state. A non-string or
+// oversized payload is still refused by the parse.
+const historyFor = (store: TldrStore, raw: unknown) => {
+  const identity = singleIdentity.parse(raw)
+  return validTldrIdentity(identity) ? store.history(identity) : Promise.resolve([])
+}
 
 /**
  * Record an unobservable hold ONCE per app run.
@@ -151,14 +159,13 @@ export function registerTldrIpc(
     if (hold && hold.token === token) hold.cancel()
   })
   const identities = identityList
-  const identity = singleIdentity
   ipcMain.handle('tldr:read', (event, raw: unknown) => {
     assertApplicationWindow(event)
     return store.read(identities.parse(raw))
   })
   ipcMain.handle('tldr:history', (event, raw: unknown) => {
     assertApplicationWindow(event)
-    return store.history(identity.parse(raw))
+    return historyFor(store, raw)
   })
   // Read-only, like every renderer TLDR API: whether this identity's provider
   // hooks have reached main. The renderer uses it to say when enforcement is not
@@ -184,7 +191,7 @@ export function registerGoalIpc(store: TldrStore): void {
   })
   ipcMain.handle('goal:history', (event, raw: unknown) => {
     assertApplicationWindow(event)
-    return store.history(singleIdentity.parse(raw))
+    return historyFor(store, raw)
   })
   store.on('changed', (update: TldrUpdate) => broadcastToWindows('goal:changed', update))
 }

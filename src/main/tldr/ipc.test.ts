@@ -28,9 +28,10 @@ const { registerGoalIpc, registerTldrIpc } = await import('./ipc.js')
 function fakes() {
   const read = vi.fn(async (identities: string[]) => Object.fromEntries(identities.map(id => [id, { text: `tldr of ${id}` }])))
   const status = vi.fn((identities: string[]) => Object.fromEntries(identities.map(id => [id, 'active'])))
-  const store = { read, on: () => {} } as unknown as TldrStore
+  const history = vi.fn(async (identity: string) => [{ identity }])
+  const store = { read, history, on: () => {} } as unknown as TldrStore
   const enforcement = { status } as unknown as Pick<TldrEnforcement, 'status'>
-  return { store, enforcement, read, status }
+  return { store, enforcement, read, status, history }
 }
 
 const sender = { mainFrame: {} }
@@ -67,5 +68,17 @@ describe('TLDR read IPC batches (#1251 row 12)', () => {
     expect(() => handlers.get('tldr:read')!(event, [42])).toThrow()
     expect(() => handlers.get('tldr:read')!(event, Array.from({ length: 10_001 }, (_, i) => `s${i}`))).toThrow()
     expect(() => handlers.get('tldr:read')!(event, ['x'.repeat(100_000)])).toThrow()
+  })
+
+  it('answers history for an invalid identity with an empty list, as the batch reads do', async () => {
+    const { store, enforcement, history } = fakes()
+    registerTldrIpc(store, enforcement)
+    registerGoalIpc(store)
+    for (const channel of ['tldr:history', 'goal:history']) {
+      await expect(handlers.get(channel)!(event, 'not a/valid identity')).resolves.toEqual([])
+      await expect(handlers.get(channel)!(event, 'session-1')).resolves.toEqual([{ identity: 'session-1' }])
+      expect(() => handlers.get(channel)!(event, 42)).toThrow()
+    }
+    expect(history).toHaveBeenCalledTimes(2)
   })
 })
