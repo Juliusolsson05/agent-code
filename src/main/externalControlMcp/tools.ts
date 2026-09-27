@@ -155,17 +155,31 @@ export function createOperatorMcpServer(port: ControlOperatorPort): Server {
 // `$ref` is only z.json()'s recursive value, which declares no `required`.
 function withDeclaredRequiredKeys(schema: z.ZodType, jsonSchema: unknown): z.ZodType {
   if (!isJsonObjectSchema(jsonSchema)) return schema
-  // WHY walk through wrappers (steering q92, review b of #1366): an optional or
-  // nullable nested object arrives as ZodOptional / ZodNullable, and an array
-  // of objects as ZodArray, so a walk that stopped at non-objects left their
-  // `required` lists dropped from the built-in tools/list, while the external
-  // Server kept them. `clone` with the repaired inner schema keeps each
-  // wrapper's own checks (an array's min/max, for example); rebuilding it with
-  // `.optional()` / `z.array()` would silently lose them.
-  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+  // WHY walk through wrappers (steering q92, review b of #1366): z.fromJSONSchema
+  // turns an optional nested object into ZodOptional, a defaulted one into
+  // ZodDefault, a nullable one into ZodUnion[object, null], and an array of
+  // objects into ZodArray (all verified on zod 4.6.5). A walk that stopped at
+  // non-objects left their nested `required` lists dropped from the built-in
+  // tools/list, while the external Server kept them. `clone` with the repaired
+  // inner schema keeps each wrapper's own checks (an array's min/max, for
+  // example); rebuilding with `.optional()` / `z.array()` would lose them.
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodDefault) {
     const inner = schema.unwrap() as z.ZodType
     const repaired = withDeclaredRequiredKeys(inner, jsonSchema)
     return repaired === inner ? schema : schema.clone({ ...schema._zod.def, innerType: repaired } as never) as z.ZodType
+  }
+  // A nullable object comes back from z.fromJSONSchema as
+  // ZodUnion[ZodObject, ZodNull], paired index-for-index with the JSON
+  // Schema's `anyOf` (verified on zod 4.6.5), so each option is repaired
+  // against its own branch.
+  if (schema instanceof z.ZodUnion && Array.isArray(jsonSchema.anyOf)) {
+    const branches = jsonSchema.anyOf as unknown[]
+    const options = schema.options as readonly z.ZodType[]
+    if (options.length !== branches.length) return schema
+    const repaired = options.map((option, index) => withDeclaredRequiredKeys(option, branches[index]))
+    return repaired.every((option, index) => option === options[index])
+      ? schema
+      : schema.clone({ ...schema._zod.def, options: repaired } as never) as z.ZodType
   }
   if (schema instanceof z.ZodArray) {
     const element = schema.element as z.ZodType

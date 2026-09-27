@@ -107,6 +107,8 @@ describe('operator catalog projections', () => {
       input: z.object({
         outer: z.object({ payload: z.json() }).strict().optional(),
         items: z.array(z.object({ payload: z.json() }).strict()).min(1).max(2).optional(),
+        nullableOuter: z.object({ payload: z.json() }).strict().nullable().optional(),
+        defaulted: z.object({ payload: z.json() }).strict().default({ payload: null }),
       }).strict(),
       output: z.object({}), handler: () => ({}) })
     const nestedPort: ControlOperatorPort = {
@@ -125,6 +127,8 @@ describe('operator catalog projections', () => {
     for (const tools of [external.tools, builtIn.tools]) {
       expect(propertiesOf(tools).outer?.required).toEqual(['payload'])
       expect(propertiesOf(tools).items?.items?.required).toEqual(['payload'])
+      expect(JSON.stringify(propertiesOf(tools).nullableOuter)).toContain('"required":["payload"]')
+      expect(JSON.stringify(propertiesOf(tools).defaulted)).toContain('"required":["payload"]')
       // The array's own bounds survive the repair.
       expect([propertiesOf(tools).items?.minItems, propertiesOf(tools).items?.maxItems]).toEqual([1, 2])
     }
