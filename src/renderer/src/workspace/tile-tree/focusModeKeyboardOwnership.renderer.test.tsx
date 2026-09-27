@@ -290,6 +290,27 @@ describe('focus-mode keyboard ownership', () => {
     view.unmount()
   })
 
+  it('leaves both chords to a dialog stacked above the extension modal', () => {
+    // #1394 review a: the lookup is scoped to the TARGET's own owner element.
+    // A confirmation or the palette portals a separate owner next to the
+    // extension modal. A document-wide lookup would open the palette over it,
+    // or close the covered extension, from a key aimed at the upper dialog.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const extension = mountOwnedDialog(true)
+    const upper = mountOwnedDialog(false)
+    const closed = vi.fn()
+    extension.frame!.addEventListener('agent-code-extension-close', closed)
+
+    fireEvent.keyDown(upper.content, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+    upper.content.dispatchEvent(new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true }))
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(closed).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('⌘ digits fill the focused lane by row label, and a second held digit reaches rows 10–99', () => {
     // The two-digit grammar had no behavioural test (#1013 review B, finding
     // 14). ⌘1 places row 1 and remembers the 1; ⌘2 inside the window makes

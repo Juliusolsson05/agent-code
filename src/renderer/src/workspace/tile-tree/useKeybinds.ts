@@ -330,10 +330,12 @@ function buildBindingIndex(
  *
  * WHY not only "the target is the iframe" (#1307): that holds once the
  * extension's document has focus, because main then captures the chord and
- * re-dispatches it with the <iframe> as its target. Before that, Radix has
- * focused the modal's DialogContent (while the iframe loads, or until the user
- * clicks into it). The focused frame is then the HOST frame, so main forwards
- * nothing, and the key targets the host shell around the iframe. The shell is
+ * re-dispatches it with the <iframe> as its target. Before that, focus is in
+ * the HOST shell: Radix autofocuses the first tabbable element, which is the
+ * shell's close button while viewBridge keeps the iframe hidden until ready,
+ * and focus stays in the shell until the user clicks into the extension. The
+ * focused frame is then the host frame, so main forwards nothing, and the key
+ * targets an element inside the owner-marked DialogContent. The shell is
  * the extension's own chrome, so the palette and ⌘W must behave there exactly
  * as they do inside the frame.
  *

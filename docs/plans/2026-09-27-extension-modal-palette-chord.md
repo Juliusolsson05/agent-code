@@ -1,7 +1,7 @@
 # The palette chord works in an extension modal before its iframe has focus (#1307)
 
 ## Evidence (origin/main, found by #1300 review A)
-- **Where focus sits.** When an extension modal opens, Radix focuses its `DialogContent` (the host shell) while the iframe loads, and it stays there until the user clicks into the extension.
+- **Where focus sits.** When an extension modal opens, focus goes into the host shell, not the extension. Radix autofocuses the first tabbable element, which is the shell's close button while `viewBridge` keeps the iframe hidden until ready, and focus stays in the shell until the user clicks into the extension. (Review a corrected the first draft, which said `DialogContent` itself.)
 - **Main forwards nothing.** `nativeInput.ts` forwards chords only when `contents.focusedFrame` is the extension's frame, and here the focused frame is the host.
 - **The renderer drops the chord.** In `useKeybinds.ts`, the key targets the shell, not the iframe, so `extensionModal` is false. The app-ownership gate (the `DialogContent` carries the owner marker) then drops `open-command-palette`.
 - **Same path for ⌘W.** It falls through to "prevent default and do nothing" instead of closing the modal.
@@ -16,6 +16,7 @@ All three use AppHostSurface's DOM shape: an owner-marked content element holdin
 1. ⌘⇧P on the shell opens the palette. Red on main.
 2. ⌘W on the shell fires `agent-code-extension-close` on the iframe, and invokes no command. Red on main.
 3. Control: ⌘⇧P in an owned dialog without an extension frame stays dropped.
+4. Review a: a dialog stacked above the extension modal keeps both chords. ⌘⇧P opens nothing, and ⌘W closes nothing. It kills the document-wide-lookup mutation that the first three survived.
 
 ## Not changed
 - Focusing the iframe on load was the other direction in the issue. It would take focus from Radix's focus trap before the extension is ready, and it would not cover a user who has clicked the shell's chrome.
