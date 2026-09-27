@@ -260,12 +260,14 @@ it('restores each agent of a project with its own derived TLDR identity', async 
   const meta = { cwd: '/projects/agent-code', kind: 'claude' as const, projectId: 'closed-tab', joinedAt: 1, builtInMcpDomains: ['goal'] as never }
   refs.undoStackRef.current.push({
     type: 'tab', closedAt: Date.now(), tab: { id: 'closed-tab', title: 'agent-code' }, tabIndex: 0,
-    sessions: [{ sessionId: 'derived-member', meta }, { sessionId: 'explicit-member', meta: { ...meta, tldrIdentity: 'tldr-explicit-member' } }],
+    // Two DERIVED members (#1356 verification c): with only one, passing the
+    // first member's closed id for every member went unnoticed.
+    sessions: [{ sessionId: 'derived-member', meta }, { sessionId: 'second-derived-member', meta }, { sessionId: 'explicit-member', meta: { ...meta, tldrIdentity: 'tldr-explicit-member' } }],
   })
-  const spawn = vi.fn().mockResolvedValueOnce('restored-one').mockResolvedValueOnce('restored-two')
+  const spawn = vi.fn().mockResolvedValueOnce('restored-one').mockResolvedValueOnce('restored-two').mockResolvedValueOnce('restored-three')
   const harness = mount(state, refs, writer, spawn)
   await act(async () => { await harness.undo() })
-  expect(spawn.mock.calls.map(([, opts]) => (opts as { tldrIdentity?: string }).tldrIdentity)).toEqual(['derived-member', 'tldr-explicit-member'])
+  expect(spawn.mock.calls.map(([, opts]) => (opts as { tldrIdentity?: string }).tldrIdentity)).toEqual(['derived-member', 'second-derived-member', 'tldr-explicit-member'])
   harness.unmount()
 })
 
