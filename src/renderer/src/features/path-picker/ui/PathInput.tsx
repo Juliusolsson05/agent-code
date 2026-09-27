@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react'
 import type { CSSProperties } from 'react'
 import { containsInvisibleControls, withVisibleControls } from '@shared/text/visibleControls'
+import { LAYERS } from '@renderer/ui/layers'
 
 // PathInput — the path picker's path-with-completion input.
 //
@@ -284,7 +285,7 @@ export function PathInput({
           id={listboxId}
           role="listbox"
           className={`
-            absolute left-0 right-0 top-full mt-1 z-50
+            absolute left-0 right-0 top-full mt-1 ${LAYERS.inSurfacePopover}
             bg-popover-bg border border-popover-border rounded-float
             max-h-[280px] overflow-auto
             shadow-[0_8px_24px_var(--theme-shadow-color)]

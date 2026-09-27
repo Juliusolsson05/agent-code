@@ -14,6 +14,11 @@ vi.mock('electron', () => ({
   },
 }))
 
+const retention = vi.hoisted(() => ({ recovered: 0 }))
+vi.mock('@main/storage/debugRetention.js', () => ({
+  noteWorkspaceRecovered: () => { retention.recovered += 1 },
+}))
+
 type Recorded = {
   area: string
   name: string
@@ -51,6 +56,17 @@ describe('registerLifecycleIpc', () => {
   })
 
   const lifecycle = (): Recorded[] => records.filter(r => r.area === SESSION_LIFECYCLE_AREA)
+
+  // #775: a window's recovered workspace is what lets the boot prune run.
+  // Before the rate limiter, so a storm of lifecycle reports cannot hold it.
+  it('tells retention when a workspace has recovered, even when the bucket is empty', () => {
+    retention.recovered = 0
+    send({ name: 'wake.request', sessionId: 'pane-1' })
+    expect(retention.recovered).toBe(0)
+    exhaustLifecycleBucket()
+    send({ name: 'rehydrate.complete' })
+    expect(retention.recovered).toBe(1)
+  })
 
   const exhaustLifecycleBucket = (): void => {
     for (let i = 0; i < 300; i += 1) {

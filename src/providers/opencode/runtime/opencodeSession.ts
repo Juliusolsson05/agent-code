@@ -114,6 +114,26 @@ export interface OpencodeSession {
   ): boolean
 }
 
+/**
+ * How long a spawned `opencode serve` may take to report its URL (#1355).
+ *
+ * WHY the app sets it rather than taking the package's 10 s default: that
+ * default was sized for an idle machine. Measured on the bundled binary
+ * (OpenCode 1.18.31), the server reports its URL in 0.6-0.9 s idle, but
+ * 16.7 s, 18.3 s and 43.1 s under CPU contention like a worker fleet's
+ * (plan: docs/plans/2026-09-27-opencode-serve-startup-under-load.md), and
+ * every one of those starts was healthy. The fixed deadline killed healthy
+ * servers, so orchestration's OpenCode reviewers failed to spawn under load.
+ *
+ * 120 s is about 3x the worst healthy start measured. The ceiling only has to
+ * bound a server that stays alive but never listens, a hang no recording has
+ * shown. A server that DIES still fails at once through the package's exit
+ * path, so a real crash is not slowed down. A CPU-progress watchdog would tell
+ * a hang from starvation sooner; it needs a per-platform child CPU probe, and
+ * is only worth it if a real hang is ever recorded.
+ */
+export const OPENCODE_SERVE_STARTUP_TIMEOUT_MS = 120_000
+
 export class OpencodeSession extends EventEmitter implements AgentSession {
   private headless: OpencodeHeadless | null = null
   private exited = false
@@ -172,6 +192,8 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       cwd: this.cwd,
       binary: this.binary,
       env,
+      // See OPENCODE_SERVE_STARTUP_TIMEOUT_MS (#1355).
+      startupTimeoutMs: OPENCODE_SERVE_STARTUP_TIMEOUT_MS,
       // Resume replays that session's committed history inside start()
       // (publishSessionMessages), which is why every listener below is
       // attached BEFORE start() is awaited — otherwise the replayed

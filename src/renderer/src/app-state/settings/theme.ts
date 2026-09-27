@@ -167,6 +167,48 @@ export function applyTheme(settings: Settings, extensions: readonly ExtensionLis
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: settings }))
 }
 
+/**
+ * The settings applyTheme reads (#784), and so the only ones whose change
+ * needs a theme application or a mirror to the phone.
+ *
+ * WHY this list and not "any settings change": theme work used to run on
+ * EVERY settings identity change (the root effect selected the whole
+ * object, and the slice re-applied inside unrelated toggles), so a usage
+ * header toggle or a dispatch colour flag rewrote ~90 inline CSS properties,
+ * fired THEME_CHANGED_EVENT (every xterm and Monaco re-reads its theme) and
+ * sent the full settings object over IPC.
+ *
+ * Source of truth: applyTheme and resolveThemePayload above. mode selects the
+ * palette (built-in, saved theme, legacy custom, or extension); contrast,
+ * accent, fontFamily and cornerStyle are written directly; savedThemes and
+ * customAppearanceJson are where the saved/legacy palettes live. Installed
+ * extensions are the other input, tracked separately by the caller. A new
+ * field read by applyTheme MUST be added here, or editing it will stop
+ * updating the theme until something else changes.
+ */
+export const THEME_SETTING_KEYS = [
+  'mode',
+  'contrast',
+  'accent',
+  'fontFamily',
+  'cornerStyle',
+  'savedThemes',
+  'customAppearanceJson',
+] as const satisfies readonly (keyof Settings)[]
+
+export type ThemeSettings = Pick<Settings, (typeof THEME_SETTING_KEYS)[number]>
+
+export function pickThemeSettings(settings: Settings): ThemeSettings {
+  const out = {} as Record<string, unknown>
+  for (const key of THEME_SETTING_KEYS) out[key] = settings[key]
+  return out as ThemeSettings
+}
+
+/** True when a settings patch can change what applyTheme renders. */
+export function patchTouchesTheme(patch: Partial<Settings>): boolean {
+  return THEME_SETTING_KEYS.some(key => key in patch)
+}
+
 export function themeSettingsForRemote(settings: Settings, extensions: readonly ExtensionListEntry[]): Settings {
   if (!isExtensionThemeMode(settings.mode)) return settings
   const colors = resolveThemePayload(settings, extensions)

@@ -5,7 +5,7 @@ export function historyCapabilities(history: ControlHistory) {
   return [
     defineCapability({
       id: 'history.read', title: 'Inspect one control call', execution: 'main', effect: 'read',
-      description: 'Return every durable event and payload reference for a call, including retries and unresolved outcomes. Retrieve each payload with history.payloadRead.',
+      description: 'Return every durable event and payload reference for a call, including retries and unresolved outcomes. A settled call without a request key that finished more than 90 days ago (not a task origin, not an unknown or pending outcome) reads as not_found. Retrieve each payload with history.payloadRead.',
       input: z.object({ callId: z.string().min(1).describe('operation.callId from a tool result, or callId from history.list.') }).strict(),
       output: z.object({ callId: z.string(), events: z.array(historyEventSchema),
         relatedCalls: z.array(z.string()), state: z.enum(['recorded', 'outcome_unknown', 'not_found']) }),
@@ -18,9 +18,12 @@ export function historyCapabilities(history: ControlHistory) {
     }),
     defineCapability({
       id: 'history.list', title: 'List control history', execution: 'main', effect: 'read',
-      description: 'Read durable invocation events. Carry snapshot through paging so reading history does not chase its own new records.',
+      // The retention window is part of what this tool promises (#1274): a page
+      // is never clipped, but calls outside the window are gone from the
+      // journal, and an agent reading an empty result must know why.
+      description: 'Read durable invocation events. Kept indefinitely: calls with a request key, calls without a result or whose outcome is unknown or still pending, lifecycle task origins, calls a kept retry reuses, and calls named by unaccepted recovery evidence. Other finished calls are kept for 90 days. Carry snapshot through paging so reading history does not chase its own new records.',
       input: z.object({ after: z.number().int().nonnegative().default(0).describe('Exclusive event sequence boundary; use nextAfter from the previous page.'), snapshot: z.number().int().nonnegative().optional().describe('Keep the first page’s snapshot unchanged to finish a finite history read while new calls are recorded.'),
-        limit: z.number().int().min(1).max(200).default(50).describe('Maximum events per page; call history is never silently truncated.'), callId: z.string().optional().describe('Optional exact call ID to filter events.') }).strict(),
+        limit: z.number().int().min(1).max(200).default(50).describe('Maximum events per page; a page is never silently truncated.'), callId: z.string().optional().describe('Optional exact call ID to filter events.') }).strict(),
       output: z.object({ events: z.array(historyEventSchema), snapshot: z.number().int(), nextAfter: z.number().int().nullable(), complete: z.boolean() }),
       handler: async ({ after, snapshot, limit, callId }, context) => {
         const events = await history.events()

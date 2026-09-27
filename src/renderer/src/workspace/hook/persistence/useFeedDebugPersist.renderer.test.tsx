@@ -5,15 +5,23 @@ import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
+
 import { useFeedDebugPersist } from './useFeedDebugPersist'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 const append = vi.fn<(input: Parameters<Window['api']['appendFeedDebugLog']>[0]) => Promise<void>>()
+const forget = vi.fn<(input: Parameters<Window['api']['forgetFeedDebugLog']>[0]) => Promise<void>>()
 
 beforeEach(() => {
+  // The cadence tests below are about HOW persistence works once it is on
+  // (#767 made it opt-in; the gate has its own describe at the end).
+  useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false })
   vi.useFakeTimers()
   append.mockReset().mockResolvedValue(undefined)
-  Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append } })
+  forget.mockReset().mockResolvedValue(undefined)
+  Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append, forgetFeedDebugLog: forget } })
 })
 
 afterEach(() => {
@@ -270,5 +278,191 @@ describe('feed debug persistence cadence and durability', () => {
     expect(refs.inFlightFeedDebugIdRef.current.a).toBe(2)
     await advance(3000)
     expect(append).toHaveBeenCalledTimes(2)
+  })
+})
+
+// #1392: main forgets a session's feed-debug state at PROCESS exit, but the
+// pane outlives the process and its later appends re-create that state. Only
+// the renderer knows when a session can never append again: its runtime is
+// gone. Then, and only then, it releases the id to main.
+describe('releasing a session whose runtime is gone (#1392)', () => {
+  it('forgets a removed session once, after its last flush, and keeps live ones', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row'), b: add(emptyRuntime(), 'b row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(2)
+    expect(forget).not.toHaveBeenCalled()
+
+    // Pane `a` closes: its runtime is removed.
+    refs.latestRuntimesRef.current = { b: refs.latestRuntimesRef.current.b! }
+    await advance(1_000)
+    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a', persistUnmarkedDrops: true })
+    expect(refs.persistedFeedDebugIdRef.current).not.toHaveProperty('a')
+    expect(refs.persistedFeedDebugIdRef.current.b).toBe(1)
+
+    await advance(3_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a release main did not acknowledge', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    forget.mockRejectedValueOnce(new Error('ipc down'))
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    await advance(1_000)
+    expect(forget).toHaveBeenCalledTimes(2)
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops the in-flight reservation, so a re-added id can flush again', async () => {
+    const pending = deferred()
+    append.mockReturnValueOnce(pending.promise)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'first') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(refs.inFlightFeedDebugIdRef.current.a).toBe(1)
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    expect(refs.inFlightFeedDebugIdRef.current).not.toHaveProperty('a')
+    refs.latestRuntimesRef.current = { a: add(emptyRuntime(), 'new generation') }
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(2)
+    pending.resolve()
+  })
+
+  it('sends one release while its acknowledgement is pending', async () => {
+    const ack = deferred()
+    forget.mockReturnValueOnce(ack.promise)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    refs.latestRuntimesRef.current = {}
+    await advance(4_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+    ack.resolve()
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let a late acknowledgement retire a later lifetime of the same id', async () => {
+    const ack = deferred()
+    forget.mockReturnValueOnce(ack.promise)
+    const first = add(emptyRuntime(), 'first lifetime')
+    const refs = makeRefs({ a: first })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+    // The id comes back and appends (main re-creates its state), then goes
+    // away again, all before the first release is acknowledged.
+    refs.latestRuntimesRef.current = { a: add(emptyRuntime(), 'second lifetime') }
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(2)
+    refs.latestRuntimesRef.current = {}
+    ack.resolve()
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not throw from the interval when the API lacks the release method', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append } })
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    refs.latestRuntimesRef.current = {}
+    await expect(advance(3_000)).resolves.toBeUndefined()
+  })
+
+  // Review c: switching persistence off destroyed the release bookkeeping, so
+  // a pane closed across the toggle was never released, one leaked entry per
+  // such session for the life of main.
+  it('releases a session that closed while persistence was off', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'persisted row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    act(() => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }) })
+    refs.latestRuntimesRef.current = {}
+    await advance(2_000)
+    // Review c, round 2: an off-state release must not make main write the
+    // final drop marker.
+    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a', persistUnmarkedDrops: false })
+    expect(append).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases it after persistence is switched back on too', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'persisted row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    forget.mockRejectedValue(new Error('ipc down'))
+    act(() => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }) })
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    forget.mockResolvedValue(undefined)
+    act(() => { useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false }) })
+    await advance(2_000)
+    expect(forget.mock.calls.at(-1)).toEqual([{ sessionId: 'a', persistUnmarkedDrops: true }])
+  })
+
+  it('does not forget a session that never had a runtime while mounted', async () => {
+    const refs = makeRefs({})
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(2_000)
+    expect(forget).not.toHaveBeenCalled()
+  })
+})
+
+// #767 item 1: disk persistence is opt-in. The ring keeps recording either way —
+// debug bundles read the ring, not the file.
+describe('feed debug persistence gate', () => {
+  function setAggressive(value: boolean): void {
+    useAppStore.setState(state => ({ settings: { ...state.settings, aggressiveDebugPersistence: value } }))
+  }
+
+  it('makes no append IPC when neither dev-debug nor aggressive persistence is on, while the ring still records', async () => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(false)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(5_000)
+    expect(append).not.toHaveBeenCalled()
+    expect(refs.latestRuntimesRef.current.a!.feedDebugLog).toHaveLength(1)
+  })
+
+  // Review of #1349: turning persistence off used to write one last batch from the
+  // effect cleanup.
+  it('writes nothing after persistence is switched off', async () => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(true)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'first') })
+    const { rerender } = renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    refs.latestRuntimesRef.current = { a: add(refs.latestRuntimesRef.current.a!, 'after the flush') }
+    act(() => { setAggressive(false) })
+    rerender()
+    await advance(5_000)
+    expect(append).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['dev-debug', () => { useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false }); setAggressive(false) }],
+    ['aggressive debug persistence', () => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }); setAggressive(true) }],
+  ])('persists when %s is on, including the tail recorded before it was switched on', async (_label, enable) => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(false)
+    const refs = makeRefs({ a: add(add(emptyRuntime(), 'before'), 'also before') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(2_000)
+    expect(append).not.toHaveBeenCalled()
+    act(() => { enable() })
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    expect(append.mock.calls[0]![0].entries.map(entry => entry.summary)).toEqual(['before', 'also before'])
+    setAggressive(false)
   })
 })

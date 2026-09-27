@@ -26,12 +26,12 @@ export const gitApi = {
   // repository".
   gitWorktrees: (cwd: string): Promise<
     | { ok: true; worktrees: WorktreeIdentity[] }
-    | { ok: false; gitMissing: boolean }
+    | { ok: false; gitMissing: boolean; timedOut?: boolean }
   > => ipcRenderer.invoke('git:worktrees', cwd),
 
   gitWorktreeStatus: (cwd: string): Promise<
     | { ok: true; worktrees: GitWorktreeStatus[] }
-    | { ok: false; gitMissing: boolean }
+    | { ok: false; gitMissing: boolean; timedOut?: boolean }
   > => ipcRenderer.invoke('git:worktree-status', cwd),
 
   worktreeActivitySummary: (

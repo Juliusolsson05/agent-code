@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
@@ -8,7 +9,7 @@ import { installExtensionFromPath } from '../install.js'
 import { removeExtension } from '../ledger.js'
 import { registerExtensionScheme } from '../scheme.js'
 import { extensionStorageGet } from '../storage.js'
-import { ExtensionRuntimeService } from '../runtimeService.js'
+import { EXTENSION_RUNTIME_STARTUP_TIMEOUT_MS, ExtensionRuntimeService } from '../runtimeService.js'
 import { ExtensionRuntimeViews } from '../runtimeViews.js'
 import { ExtensionCapabilityService, MAX_EXTENSION_TEXT_FILE_BYTES } from '../capabilityService.js'
 import { ExtensionServiceHost } from '../serviceHost.js'
@@ -22,6 +23,13 @@ if (!root) throw new Error('An isolated extension test root is required')
 // test process and hides the actual stack until the outer watchdog kills it.
 process.on('uncaughtException', error => { console.error(error); app.exit(1) })
 process.on('unhandledRejection', error => { console.error(error); app.exit(1) })
+
+// WHY a fresh directory per run, removed on exit (#1296): the harness's secrets store uses a
+// PLAINTEXT codec (a journey must never touch the real keychain), and the fixed
+// agent-code-harness-secrets-<pid> directory was never removed, leaving plaintext test secrets in
+// the shared temp dir after every journey. 'exit' also covers the app.exit(1) failure paths above.
+const harnessSecretsDirectory = mkdtempSync(join(tmpdir(), 'agent-code-harness-secrets-'))
+process.on('exit', () => rmSync(harnessSecretsDirectory, { recursive: true, force: true }))
 app.setPath('userData', join(root, 'electron-data'))
 registerExtensionScheme()
 // This fixture intentionally has zero application windows between generations.
@@ -33,8 +41,16 @@ function object(value: ExtensionJson | undefined): Record<string, ExtensionJson>
   return value
 }
 
-async function until(predicate: () => Promise<boolean>, label: string): Promise<void> {
-  const deadline = performance.now() + 3000
+// WHY two budgets (#1436 review a): an ordinary poll gets 3 s, but a wait
+// that includes a COLD activation (a reinstall, or reactivation after the
+// stalled engine was destroyed) cannot be given less time than the product
+// gives activation itself: under 24-way load "updated startup runtime" timed
+// out at 3 s in 2 of 24 runs while the product's deadline would have let it
+// finish. Those waits pass ACTIVATION_WAIT_MS, the product's own value.
+const ACTIVATION_WAIT_MS = EXTENSION_RUNTIME_STARTUP_TIMEOUT_MS
+
+async function until(predicate: () => Promise<boolean>, label: string, budgetMs = 3000): Promise<void> {
+  const deadline = performance.now() + budgetMs
   while (performance.now() < deadline) {
     if (await predicate()) return
     await new Promise(resolve => setTimeout(resolve, 20))
@@ -44,12 +60,43 @@ async function until(predicate: () => Promise<boolean>, label: string): Promise<
 
 void (async () => {
   await app.whenReady()
+  // Every request that reaches this server is runtime egress EXCEPT one exact
+  // shape: `GET /` (#1187). When the suite runs inside an Agent Code agent
+  // lane, the host app's browser-pocket LanePortWatcher finds this listener in
+  // the lane's process tree and probes it once with `GET /`
+  // (src/main/browserPocket/lanePortsIo.ts, Node fetch). Under load that probe
+  // landed before the assertion below and failed the run with `['/']`, which
+  // the issue read as a runtime-API race; request logging showed it in every
+  // local run, about 1.6 s after startup, and CI has no watching app.
+  //
+  // WHY ignore exactly `GET /` and not "anything but the probed path" (review
+  // b): a regression that leaked to any other path (`/leak`, an encoded or
+  // query variant) must still fail. Only the watcher's shape is excused, and
+  // the positive control below proves a non-probe path is counted. Residual: a
+  // runtime escape that requests exactly `GET /` would be excused too; the
+  // renderer probes all target EGRESS_PATH, so that would need a new probe.
+  const EGRESS_PATH = '/private-state'
   const hits: string[] = []
-  const server = createServer((request, response) => { hits.push(request.url ?? ''); response.end('unexpected egress') })
+  const ignoredWatcherProbes: string[] = []
+  const server = createServer((request, response) => {
+    const url = request.url ?? ''
+    if (request.method === 'GET' && url === '/') ignoredWatcherProbes.push(`${request.headers['user-agent'] ?? ''}`)
+    else hits.push(url)
+    response.end('unexpected egress')
+  })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
-  const endpoint = `http://127.0.0.1:${address.port}/private-state`
+  const endpoint = `http://127.0.0.1:${address.port}${EGRESS_PATH}`
+  // Positive control: a non-probe path IS counted (review b's surviving
+  // mutation replaced the classifier and the journey stayed green).
+  // Both the path every renderer probe uses and an arbitrary one (review c:
+  // a regression that excused EGRESS_PATH itself kept an /egress-control-only
+  // control green while blinding the real check).
+  await fetch(endpoint).then(response => response.text())
+  await fetch(`http://127.0.0.1:${address.port}/egress-control`).then(response => response.text())
+  assert.deepEqual(hits, [EGRESS_PATH, '/egress-control'], 'the egress server must count the probed path and any other non-watcher path')
+  hits.length = 0
   const statuses: RuntimeStatus[] = []
   const lifecycle: string[] = []
   const projectRoot = join(root!, 'project')
@@ -71,9 +118,19 @@ void (async () => {
     services: new ExtensionServiceHost({ readyTimeoutMs: 3000, invokeTimeoutMs: 1500 }),
     // Harness-only codec: a journey must never touch the developer's real OS
     // keychain. Production wires createSafeStorageCodec (src/main/index.ts).
-    secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, join(tmpdir(), `agent-code-harness-secrets-${process.pid}`)),
+    secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, harnessSecretsDirectory),
   })
-  const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, startupTimeoutMs: 3000, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
+  // WHY no startupTimeoutMs override (#1334): the harness used to set 3000 ms,
+  // a test-local tightening of the product's 10 s default. Under load a COLD
+  // Electron activation takes longer than 3 s: in 12 parallel runs of this
+  // harness, 6 retired the runtime with "did not finish starting before the
+  // deadline", so all 40 cold commands were rejected and the bounded-cold
+  // assertion read 0 of 32. The startup deadline IS tested below (the
+  // `hung-engine` case never finishes activating and must be retired), now at
+  // the product's own 10 s value, which costs that case about 7 s more.
+  // invocationTimeoutMs stays short on purpose: the stalled-engine case needs
+  // an invocation deadline to fire quickly, and nothing cold races it.
+  const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
 
   const viewEvents: Array<{ owner: number; event: RuntimeViewEvent }> = []
   const views = new ExtensionRuntimeViews(service, (owner, event) => viewEvents.push({ owner, event }))
@@ -88,7 +145,7 @@ void (async () => {
       id, name: id, description: 'Managed runtime integration fixture', version: String(generation), apiVersion: activationMode ? 2 : 1, entry: 'index.js',
       ...(activationMode ? { activationEvents: activationMode === 'startup' ? ['onStartupFinished'] : [`onCommand:${id}.increment`, `onCommand:${id}.read`, `onCommand:${id}.write`, `onView:${id}.main`] } : {}),
       ...(permissions.length ? { permissions } : {}),
-      contributes: { commands: ['increment', 'snapshot', 'fail', 'hang', 'arm', 'disarm', 'sandbox', 'navigate', 'read', 'write'].map(name => ({ id: `${id}.${name}`, title: name })),
+      contributes: { commands: ['increment', 'snapshot', 'fail', 'hang', 'arm', 'disarm', 'sandbox', 'navigate', 'read', 'write', 'releaseSlow'].map(name => ({ id: `${id}.${name}`, title: name })),
         views: [{ id: `${id}.main`, title: id, mount: 'panel', ...(activationMode ? { entry: 'view.js' } : {}) }] },
     }))
     if (activationMode) await writeFile(join(source, 'view.js'), 'export function mount() {}')
@@ -128,8 +185,13 @@ void (async () => {
         await ctx.api.storage.set('entered', ${generation});
         await new Promise(() => {});
       });
+      // Released by the harness only after it has detached the view (see the
+      // in-flight request case); engine memory, since main-side storage writes
+      // are not visible to a running extension's storage reads.
+      let slowReleased = false;
       ctx.registerRequest('identity', (_input, view) => view);
-      ctx.registerRequest('slowIdentity', async (_input, view) => { await ctx.api.storage.set('viewCalls', (await ctx.api.storage.get('viewCalls') || 0) + 1); await new Promise(resolve => setTimeout(resolve, 80)); return view; });
+      ctx.registerRequest('slowIdentity', async (_input, view) => { await ctx.api.storage.set('viewCalls', (await ctx.api.storage.get('viewCalls') || 0) + 1); while (!slowReleased) await new Promise(resolve => setTimeout(resolve, 10)); return view; });
+      ctx.registerCommand('${id}.releaseSlow', () => { slowReleased = true; });
       ctx.registerRequest('increment', async (amount, view) => {
         const next = count += amount;
         await publish();
@@ -193,7 +255,17 @@ void (async () => {
     await views.attach(22, 'view', 'engine', revision, 'engine.main')
     const running = views.request(22, 'view', 'slowIdentity', null)
     await until(async () => await extensionStorageGet('engine', 'viewCalls') === 1, 'view request entered')
+    // WHY a gate and not a sleep (#1436 review a): `slowIdentity` used to sleep
+    // 80 ms after entering. Under load that sleep could end before this
+    // continuation detached the view, so the request FULFILLED and the
+    // rejection below was missing (1 of 24 parallel runs). The handler now
+    // waits for an explicit release that is sent only AFTER the detach. The
+    // rejection is delivered when the handler's result comes back to a closed
+    // connection, so the release must come before awaiting it: detach, then
+    // release, then the rejection. The ordering the case checks is forced,
+    // not raced.
     views.detachOwner(22)
+    await command('releaseSlow')
     await assert.rejects(running, /connection is closed/)
     assert.equal(await extensionStorageGet('engine', 'viewCalls'), 1, 'an already dispatched request is never replayed')
     const abandoned = views.attach(44, 'race', 'engine', revision, 'engine.main')
@@ -220,7 +292,7 @@ void (async () => {
     await command('navigate')
     await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(object(await command('snapshot')).activations, 1, 'renderer navigation must be refused')
-    assert.deepEqual(hits, [])
+    assert.deepEqual(hits, [], `runtime egress reached the server (ignored watcher probes: ${ignoredWatcherProbes.length})`)
     console.log('PASS runtime: command errors, host/preload isolation, forged namespaces and direct network/navigation denial')
 
     await views.attach(66, 'update-view', 'engine', revision, 'engine.main')
@@ -246,7 +318,7 @@ void (async () => {
     console.log('PASS runtime: invocation deadline destroys the stalled engine and never replays the action')
 
     const removed = command('hang').then(() => 'unexpected success', error => String(error))
-    await until(async () => await extensionStorageGet('engine', 'runs') === 3, 'last command entered')
+    await until(async () => await extensionStorageGet('engine', 'runs') === 3, 'last command entered', ACTIVATION_WAIT_MS)
     await removeExtension('engine')
     assert.match(await removed, /updated or removed/)
     await assert.rejects(service.start('engine', revision), /no longer active/)
@@ -271,7 +343,7 @@ void (async () => {
     await service.activateStartupExtensions()
     assert.equal(await extensionStorageGet('startup-engine', 'activations'), 1, 'startup reconciliation must not activate a live engine twice')
     await install(2, 'startup-engine', undefined, '', 'startup')
-    await until(async () => await extensionStorageGet('startup-engine', 'activations') === 2, 'updated startup runtime')
+    await until(async () => await extensionStorageGet('startup-engine', 'activations') === 2, 'updated startup runtime', ACTIVATION_WAIT_MS)
     await assert.rejects(service.start('startup-engine', extensionRevision(startup)), /no longer active/)
     await removeExtension('startup-engine')
     await removeExtension('lazy-engine')
@@ -352,5 +424,6 @@ void (async () => {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   }
   await writeFile(join(root!, 'completed'), 'ok')
+  rmSync(harnessSecretsDirectory, { recursive: true, force: true })
   app.quit()
 })().catch(error => { console.error(error); app.exit(1) })

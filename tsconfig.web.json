@@ -57,6 +57,7 @@
     // tests read the real pasted-prompt row rather than an invented one.
     "testing/fixtures/prompt-acceptance/*.json",
     "testing/fixtures/transcript-disconnect/*.json",
+    "testing/fixtures/codex-exec-output/*.json",
     "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived
@@ -64,6 +65,7 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
+    "testing/setup/storage.ts",
     // These fixture exporters import canonical renderer/shared boundaries on
     // purpose: recorded corpora must be minimized by the same privacy and
     // identity rules the app uses. Keep them in the web project so callback
@@ -98,6 +100,9 @@
     // the authoritative typecheck validate those evidence contracts instead
     // of forcing tests to duplicate captured structures inline.
     "testing/fixtures/rendering-shapes/**/*.json",
+    // Recorded Codex ghost-identity pairs (#1231): proxy SSE frames and the
+    // rollout record for the same provider item, imported by the ghost tests.
+    "testing/fixtures/ghosts/**/*.json",
     // The phone client is browser code type-checked here (react-jsx, DOM
     // lib) even though it builds through its own plain-Vite config — the
     // tsc gate must cover it or client drift ships silently.

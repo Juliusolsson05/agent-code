@@ -36,6 +36,17 @@ export type PocketPickResult = {
   image: string | null
 }
 
+/**
+ * What a Pick came to (#1305). A failure used to be `null` like a cancel, so
+ * the renderer said nothing: DevTools open on the pocket (the debugger cannot
+ * attach), a CDP error, or the feature disabled all read as "the user changed
+ * their mind". A cancel stays silent; a failure is said, in fixed words.
+ */
+export type PocketPickOutcome =
+  | { kind: 'picked'; result: PocketPickResult }
+  | { kind: 'cancelled' }
+  | { kind: 'failed'; reason: 'devtools-open' | 'unavailable' | 'error' }
+
 export type PortWatchSession = {
   sessionId: string
   /** tmux session names of terminals attributed to this lane. Their panes

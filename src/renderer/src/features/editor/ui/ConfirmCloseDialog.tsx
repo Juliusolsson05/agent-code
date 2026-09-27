@@ -53,7 +53,7 @@ export function ConfirmCloseDialog({
         onInteractOutside={event => { if (saving) event.preventDefault() }}
       >
         <DialogHeader>
-          <DialogTitle>{deleted ? 'File deleted on disk' : 'Unsaved changes'}</DialogTitle>
+          <DialogTitle>{deleted ? 'File Deleted on Disk' : 'Unsaved Changes'}</DialogTitle>
           <DialogDescription>
             {/* Which file is saved, discarded or recreated is the whole
                 decision, and an invisible character makes two names identical

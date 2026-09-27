@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import {
@@ -150,7 +151,8 @@ export function usePickerActions(
         await navigator.clipboard.writeText(text)
         showPaneToast(sessionId, 'Copied assistant message')
       } catch {
-        showPaneToast(sessionId, 'Clipboard write failed')
+        // The shared sentence (#1421 review c), with its advice.
+        showPaneToast(sessionId, CLIPBOARD_WRITE_FAILED)
       }
     },
     [refs.latestRuntimesRef, setRuntimes, showPaneToast],

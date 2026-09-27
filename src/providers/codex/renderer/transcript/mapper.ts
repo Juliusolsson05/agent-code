@@ -29,6 +29,11 @@ import {
 } from './rollout'
 import { codexEventType, codexTurnIdFromEventPayload } from './eventCursor'
 
+// How many exec terminal results a mapper remembers for de-duplication. A
+// duplicate carrier sits next to its twin (same turn), so a small window is
+// enough, and it keeps a live session's mapper from growing without bound.
+const EXEC_TERMINAL_MEMORY = 512
+
 export function createCodexTranscriptEntryMapper(
   initialTurnCursor: string | null = null,
 ): TranscriptEntryMapper {
@@ -46,6 +51,41 @@ export function createCodexTranscriptEntryMapper(
   // never enter this state, whatever its first line is. Pages and previews
   // that DO start at the file head get the prompts, with no loader change.
   let atFileHead = false
+
+  // WHY (#1395 reviews a and b): one exec_command can have TWO terminal
+  // carriers. The wrapped function_call_output is always durable. The
+  // exec_command_end event is transient in current Codex, but the
+  // extended-history policy persisted it through rust-v0.136.0 (0.137.0 is
+  // transient again). Both carry the same call_id and both map to an
+  // `exec_command_end` result.
+  //
+  // The WRAPPER wins, because it is the fuller one: the persisted event's
+  // aggregated_output is sanitized to 10,000 bytes (rollout policy.rs), while
+  // the wrapper keeps the whole model-visible output. The feed's result index
+  // is later-wins (buildToolResultIndex), and Codex emits the end event BEFORE
+  // the function result (core tools/events.rs ToolEventEmitter::finish), so:
+  //  - event first, wrapper later: both are kept, and the wrapper wins the
+  //    index (the command card owns and absorbs both result rows);
+  //  - wrapper first, event later: the event is dropped here, so a late,
+  //    truncated event cannot replace the wrapper.
+  // A first version kept whichever came FIRST, which kept the truncated event
+  // (review b). The memory is per mapper, and history pages, previews and
+  // live bursts each build their own; across such a boundary both results
+  // are kept and later-wins decides, which again favours the wrapper in
+  // Codex's own emit order. No local rollout (0 of 2,555) has both carriers.
+  const wrapperResolvedCalls = new Set<string>()
+  const keepExecTerminal = (raw: Record<string, unknown>) => (entry: ReturnType<typeof mapCodexRolloutToFeedEntries>[number]): boolean => {
+    const callId = execTerminalCallId(entry)
+    if (callId === null) return true
+    if (raw.type === 'response_item') {
+      wrapperResolvedCalls.add(callId)
+      if (wrapperResolvedCalls.size > EXEC_TERMINAL_MEMORY) {
+        wrapperResolvedCalls.delete(wrapperResolvedCalls.values().next().value as string)
+      }
+      return true
+    }
+    return !wrapperResolvedCalls.has(callId)
+  }
   return {
     map(raw: Record<string, unknown>): MappedTranscriptEntry {
       const turnContextId = codexTurnIdFromRollout(raw)
@@ -57,7 +97,9 @@ export function createCodexTranscriptEntryMapper(
       else if (raw.type === 'response_item' || raw.type === 'event_msg') atFileHead = false
       const retained = atFileHead ? mapCodexRetainedUserHistory(raw) : []
 
-      const entries = [...retained, ...mapCodexRolloutToFeedEntries(raw)].map(entry =>
+      // Retained prompts are user messages, never exec terminal carriers, so
+      // only the record's own entries go through the exec de-duplication.
+      const entries = [...retained, ...mapCodexRolloutToFeedEntries(raw).filter(keepExecTerminal(raw))].map(entry =>
         stampCodexTurnId(entry, turnCursor),
       )
       const marker = codexHistoryMarker(raw)
@@ -101,4 +143,13 @@ export { extractCodexProviderSessionId } from './entries'
  */
 export function isCodexTypedUserPrompt(_entry: unknown, text: string): boolean {
   return !text.startsWith('<')
+}
+
+/** The call id of an exec terminal result (either carrier), or null. */
+function execTerminalCallId(entry: ReturnType<typeof mapCodexRolloutToFeedEntries>[number]): string | null {
+  const content = (entry as { message?: { content?: unknown } }).message?.content
+  if (!Array.isArray(content) || content.length !== 1) return null
+  const block = content[0] as { type?: unknown; tool_use_id?: unknown; codex?: { kind?: unknown } }
+  if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') return null
+  return block.codex?.kind === 'exec_command_end' ? block.tool_use_id : null
 }
