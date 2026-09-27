@@ -809,7 +809,8 @@ export class SessionManager extends EventEmitter {
   // chunk and retained sliced-string parents (#726).
   private readonly terminalBuffers = new Map<string, TerminalReplayBuffer>()
   // How many renderer views of each shell are attached. A count, not a flag,
-  // because two lanes (or two windows) can show one shell and one closing must
+  // because two views in the receiving renderer (a lane and a retained
+  // Spotlight copy) can show one shell and one closing must
   // not cut the other off; and it describes the VIEWS, not the process, so
   // process cleanup leaves it alone (#1281, see cleanupSessionState).
   // detachTerminal is the only release, and the IPC layer releases a

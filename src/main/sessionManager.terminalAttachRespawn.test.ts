@@ -27,8 +27,12 @@ vi.mock('@main/performance/PerformanceService.js', () => ({
 }))
 vi.mock('@main/storage/feedDebugLog.js', () => ({ forgetFeedDebugSession: vi.fn() }))
 
+// Imported once at module scope (#1333 review a): a cold import of the
+// manager's graph took ~4 s inside the first test and hit the default 5 s
+// timeout on a contended machine. Collection time is not test time.
+const { SessionManager } = await import('./sessionManager')
+
 async function managerWithShell() {
-  const { SessionManager } = await import('./sessionManager')
   // No tmux: a direct PTY terminal, the case every machine without tmux runs.
   const manager = new SessionManager({ isAvailable: () => false, getBinary: () => null } as never)
   const forwarded: string[] = []
@@ -68,8 +72,10 @@ it('forgets the view when the pane detaches while its shell is down', async () =
   await manager.kill(sessionId)
 })
 
-// Two views of one shell (a lane and a second window's lane): one closing
-// must not cut the other off.
+// Two views of one shell in the same renderer (a lane and a retained
+// Spotlight copy): one closing must not cut the other off. Two WINDOWS cannot
+// both receive a shell's bytes: the window router gives a session one owner
+// (#1333 review c), so this is about views within the receiving renderer.
 it('keeps forwarding while any view of the shell is still attached', async () => {
   const { manager, forwarded, sessionId } = await managerWithShell()
   manager.attachTerminal(sessionId)
@@ -77,5 +83,20 @@ it('keeps forwarding while any view of the shell is still attached', async () =>
   manager.detachTerminal(sessionId)
   terminals.created.at(-1)!.emit('data', 'still watched')
   expect(forwarded).toEqual(['still watched'])
+  await manager.kill(sessionId)
+})
+
+// #1333 review (a, b, c; surviving mutant): a leaf can attach while its shell
+// is down (it exited between the leaf's wake and its attach reaching main).
+// That attach must still take a reference, or the same-id respawn buffers its
+// bytes and the leaf stays frozen: the bug this file is about, one step
+// earlier.
+it('forwards a respawned shell to a view that attached while the shell was down', async () => {
+  const { manager, forwarded, sessionId } = await managerWithShell()
+  terminals.created.at(-1)!.emit('exit', { exitCode: 0 })
+  expect(manager.attachTerminal(sessionId)).toBe('')
+  await manager.recover({ sessionId, kind: 'terminal', cwd: '/tmp/project' })
+  terminals.created.at(-1)!.emit('data', 'after absent attach')
+  expect(forwarded).toEqual(['after absent attach'])
   await manager.kill(sessionId)
 })
