@@ -124,3 +124,80 @@ it('invalidates the successor\'s status cache when a child of the replaced paren
   void bridge.listAgents({ parentSessionId: 'parent-b' })
   await vi.waitFor(() => expect(sent.some(request => request.type === 'list-agents' && request.parentSessionId === 'parent-b')).toBe(true))
 })
+
+// #1369 review a: a create requested under A and answered after A became B.
+// B polls meanwhile and caches what it saw; when the create finally answers,
+// the child's hint must name B and B's cache must be dropped, or wait_agents
+// on B keeps reporting the cached list (done) while the child runs. The
+// bridge serves one renderer request at a time, so B's poll is answered
+// before the create is dispatched; fake timers freeze the 250 ms cache so
+// only an invalidation, never expiry, can send the next poll to the renderer.
+it('files a child whose create is answered after the parent was replaced under the successor', async () => {
+  sent.length = 0
+  vi.useFakeTimers()
+  try {
+    const bridge = new OrchestrationBridge()
+    bridge.carryParent('parent-a', 'parent-b')
+    const listing = bridge.listAgents({ parentSessionId: 'parent-b' })
+    await vi.advanceTimersByTimeAsync(0)
+    const list = sent.splice(sent.findIndex(request => request.type === 'list-agents'), 1)[0]!
+    bridge.resolve({ requestId: list.requestId, ok: true, type: 'list-agents', agents: [] } as never)
+    expect(await listing).toEqual([])
+
+    // A's in-flight create_agent call, answered after the swap.
+    const created = bridge.createAgent({ parentSessionId: 'parent-a', kind: 'claude' })
+    await vi.advanceTimersByTimeAsync(0)
+    const create = sent.splice(sent.findIndex(request => request.type === 'create-agent'), 1)[0]!
+    bridge.resolve({ requestId: create.requestId, ok: true, type: 'create-agent', agent: agent('child-1', 'parent-a') } as never)
+    await created
+    expect((bridge as unknown as { parentSessionByChildSession: Map<string, string> }).parentSessionByChildSession.get('child-1')).toBe('parent-b')
+
+    void bridge.listAgents({ parentSessionId: 'parent-b' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sent.some(request => request.type === 'list-agents' && request.parentSessionId === 'parent-b')).toBe(true)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+// The same, for a create that timed out and is adopted when the renderer
+// finally answers (adoptLateResponse).
+it('files a late-adopted child under the parent\'s successor', async () => {
+  sent.length = 0
+  vi.useFakeTimers()
+  try {
+    const bridge = new OrchestrationBridge()
+    const created = bridge.createAgent({ parentSessionId: 'parent-a', kind: 'claude' }).catch(error => error)
+    await vi.advanceTimersByTimeAsync(0)
+    const create = sent.find(request => request.type === 'create-agent')!
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await created).toBeInstanceOf(Error)
+    bridge.carryParent('parent-a', 'parent-b')
+    bridge.resolve({ requestId: create.requestId, ok: true, type: 'create-agent', agent: agent('child-1', 'parent-a') } as never)
+    expect((bridge as unknown as { parentSessionByChildSession: Map<string, string> }).parentSessionByChildSession.get('child-1')).toBe('parent-b')
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+// #1369 reviews a and b (surviving mutants): the alias map is bounded like the
+// tombstones it serves, by the same 24 h TTL and 500-entry cap.
+it('forgets aliases after the tombstone TTL and keeps at most 500', async () => {
+  vi.useFakeTimers()
+  try {
+    const bridge = new OrchestrationBridge()
+    const aliases = (bridge as unknown as { replacedParents: Map<string, unknown> }).replacedParents
+    bridge.carryParent('parent-old', 'parent-new')
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000 + 1)
+    bridge.carryParent('parent-x', 'parent-y')
+    expect(aliases.has('parent-old')).toBe(false)
+    expect(aliases.has('parent-x')).toBe(true)
+
+    for (let i = 0; i < 510; i++) bridge.carryParent(`pane-${i}`, `pane-${i}-next`)
+    expect(aliases.size).toBe(500)
+    expect(aliases.has('pane-509')).toBe(true)
+    expect(aliases.has('pane-0')).toBe(false)
+  } finally {
+    vi.useRealTimers()
+  }
+})

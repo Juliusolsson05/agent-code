@@ -314,9 +314,7 @@ export class OrchestrationBridge {
       createdAt: Date.now(),
       promptSubmissionCount: 0,
     })
-    this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
-    this.closedAgents.delete(response.agent.sessionId)
-    this.invalidateStatusCache(params.parentSessionId)
+    this.noteCreatedChild(response.agent.sessionId, params.parentSessionId)
     return this.enrichAgent(response.agent)
   }
 
@@ -605,9 +603,7 @@ export class OrchestrationBridge {
       createdAt: Date.now(),
       promptSubmissionCount: 0,
     })
-    this.parentSessionByChildSession.set(response.agent.sessionId, parentSessionId)
-    this.closedAgents.delete(response.agent.sessionId)
-    this.invalidateStatusCache(parentSessionId)
+    this.noteCreatedChild(response.agent.sessionId, parentSessionId)
     this.journal?.recordIncident({
       kind: 'orchestration.late_response_adopted',
       severity: 'warn',
@@ -1004,6 +1000,26 @@ export class OrchestrationBridge {
     this.invalidateStatusCache(from)
     this.invalidateStatusCache(to)
     this.pruneCoordinationMetadata()
+  }
+
+  /**
+   * Record a child that a create answered for, under its parent's LIVE id.
+   *
+   * WHY resolve here (#1369 review a): a create is requested under parent A
+   * and can be answered after A was replaced by B (the spawn can take tens of
+   * seconds; a timed-out create is adopted even later). carryParent only
+   * rewrites hints that already exist, so storing A made the child's prompt
+   * boundaries invalidate A's status cache while B kept serving the empty
+   * list it cached during the spawn, and `wait_agents` on B could report done
+   * with an active child. Both A's and B's caches are invalidated: A's may
+   * still hold a list computed before the swap.
+   */
+  private noteCreatedChild(childSessionId: string, requestedParentId: string): void {
+    const parentSessionId = this.currentParentId(requestedParentId)
+    this.parentSessionByChildSession.set(childSessionId, parentSessionId)
+    this.closedAgents.delete(childSessionId)
+    this.invalidateStatusCache(requestedParentId)
+    if (parentSessionId !== requestedParentId) this.invalidateStatusCache(parentSessionId)
   }
 
   /** The live successor of a possibly replaced parent id (see replacedParents). */

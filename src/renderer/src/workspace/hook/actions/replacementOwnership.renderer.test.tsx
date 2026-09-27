@@ -142,11 +142,14 @@ it('Reload Agents carries only to successors that keep Goal Loop tools', async (
 // same conversation continuing in a successor takes them along, with or
 // without Goal Loop tools; a different conversation swapped in does not.
 it('hands the pane\'s workflow runs to the successor of the same conversation', async () => {
-  const { mounted, carryWorkflowRuns } = replaceHarness([])
+  const { mounted, carryWorkflowRuns, carryOrchestrationParent } = replaceHarness([])
   await act(async () => {
     await mounted.result.current.replaceSession('/recorded/project', { targetSessionId: 'source', kind: 'claude', resumeSessionId: 'native-source' })
   })
   expect(carryWorkflowRuns).toHaveBeenCalledWith('source', 'successor')
+  // #1369 review b: the same conversation carries its closed orchestration
+  // children too (the newConversation case is pinned below).
+  expect(carryOrchestrationParent).toHaveBeenCalledWith('source', 'successor')
 })
 
 it('does not hand workflow runs to a different conversation swapped into the pane', async () => {
