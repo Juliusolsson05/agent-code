@@ -56,9 +56,11 @@ export function registerDebugIpc(
   // Any append it queued earlier is already in the per-session queue (IPC
   // order is preserved and the append handler queues synchronously), and its
   // token makes it drop what it writes.
-  ipcMain.handle('debug:forget-feed-log', (_evt, params: { sessionId?: unknown }) => {
+  ipcMain.handle('debug:forget-feed-log', (_evt, params: { sessionId?: unknown; persistUnmarkedDrops?: unknown }) => {
     if (typeof params?.sessionId !== 'string' || params.sessionId.length === 0) return
-    forgetFeedDebugSession(params.sessionId)
+    // Only an explicit false skips the final marker; an older renderer that
+    // sends no flag keeps the previous (persisting) behaviour.
+    forgetFeedDebugSession(params.sessionId, { persistUnmarkedDrops: params.persistUnmarkedDrops !== false })
   })
 
   ipcMain.handle(

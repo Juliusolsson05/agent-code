@@ -31,7 +31,7 @@ export const debugApi = {
 
   /** Release main's per-session feed-debug state for a pane that is gone
    *  (#1392). Sent once, after the renderer's last possible append. */
-  forgetFeedDebugLog: (params: { sessionId: string }): Promise<void> =>
+  forgetFeedDebugLog: (params: { sessionId: string; persistUnmarkedDrops: boolean }): Promise<void> =>
     ipcRenderer.invoke('debug:forget-feed-log', params),
 
   saveDebugBundle: (params: SaveDebugBundleParams): Promise<SaveDebugBundleResult> =>

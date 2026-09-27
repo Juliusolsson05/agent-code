@@ -328,6 +328,19 @@ describe('a rebuilt cap state keeps the file\'s drop count', () => {
     expect(await lastMarkerDrops('rows-after-marker')).toBeGreaterThanOrEqual(1_001)
   })
 
+  // #1392 review c, round 2: a release sent while persistence is OFF must not
+  // write the final drop marker either. Persistence off means no disk writes.
+  it('a forget told not to persist drops writes nothing', async () => {
+    await cappedFileWithMarker('no-write-forget', 1_000)
+    await queueFeedDebugAppend('no-write-forget', [entry(1)], 1_000)
+    await queueFeedDebugAppend('no-write-forget', [entry(2)], 1_000)
+    const before = await lastMarkerDrops('no-write-forget')
+    ;(forgetFeedDebugSession as (id: string, options?: { persistUnmarkedDrops?: boolean }) => void)('no-write-forget', { persistUnmarkedDrops: false })
+    await queueFeedDebugAppend('no-write-forget', [], 1_000)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(await lastMarkerDrops('no-write-forget')).toBe(before)
+  })
+
   it('after a forget during the first size check', async () => {
     await cappedFileWithMarker('capped-during-stat', 1_000)
     let release!: () => void

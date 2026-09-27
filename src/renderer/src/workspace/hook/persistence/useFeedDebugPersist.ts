@@ -188,10 +188,11 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
     // the ACK then leaves the id in `known`, and the next absence sends a new
     // release.
     //
-    // Releasing keeps running while persistence is OFF (#767): it writes
-    // nothing to disk, it only tells main to forget, and a session that
+    // Releasing keeps running while persistence is OFF (#767): a session that
     // appended while persistence was on still has state in main after the
-    // user switches persistence off (#1392 review c).
+    // user switches persistence off (#1392 review c). The release then tells
+    // main not to persist unmarked drops, so it causes no disk write either
+    // (review c, round 2).
     //
     // Known residual: a release that fails during the hook's own teardown
     // (workspace unmount) has no later tick to retry it. Main keeps that one
@@ -209,7 +210,9 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
         // the method) becomes a rejection, retried like any failed release,
         // instead of escaping the interval with `releasing` held.
         void Promise.resolve()
-          .then(() => window.api.forgetFeedDebugLog({ sessionId }))
+          // Off means no disk writes, including main's final drop marker
+          // (#1392 review c, round 2); read at send time, not effect time.
+          .then(() => window.api.forgetFeedDebugLog({ sessionId, persistUnmarkedDrops: enabledRef.current }))
           .then(() => { if (!seenSinceRelease.has(sessionId)) known.delete(sessionId) }, () => {})
           .finally(() => releasing.delete(sessionId))
       }

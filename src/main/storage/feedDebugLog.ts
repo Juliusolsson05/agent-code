@@ -564,7 +564,15 @@ function flushUnmarkedDrops(sessionId: string, capState: FeedDebugCapState | und
   })
 }
 
-export function forgetFeedDebugSession(sessionId: string): void {
+export function forgetFeedDebugSession(
+  sessionId: string,
+  /** `persistUnmarkedDrops: false` when the caller's user has persistence
+   *  switched OFF (#1392 review c, round 2): the final drop marker is a disk
+   *  write, and "off" means none. Those unmarked drop counts are then lost,
+   *  which is what switching persistence off asks for. Defaults to true, the
+   *  process-exit forget's behaviour. */
+  options: { persistUnmarkedDrops?: boolean } = {},
+): void {
   // We never delete `feedDebugWriteQueues` synchronously here —
   // there might be an in-flight write that still owns the chain.
   // The settle-time reaper in queueFeedDebugAppend handles the queue
@@ -579,6 +587,6 @@ export function forgetFeedDebugSession(sessionId: string): void {
   // in this process, we'll re-stat the on-disk file and prime a fresh counter;
   // never carrying stale cap state across "session forgotten" boundaries keeps
   // the map from growing unbounded across long-lived main processes.
-  flushUnmarkedDrops(sessionId, feedDebugCapState.get(sessionId))
+  if (options.persistUnmarkedDrops !== false) flushUnmarkedDrops(sessionId, feedDebugCapState.get(sessionId))
   feedDebugCapState.delete(sessionId)
 }

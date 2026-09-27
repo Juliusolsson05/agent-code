@@ -296,7 +296,7 @@ describe('releasing a session whose runtime is gone (#1392)', () => {
     // Pane `a` closes: its runtime is removed.
     refs.latestRuntimesRef.current = { b: refs.latestRuntimesRef.current.b! }
     await advance(1_000)
-    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a' })
+    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a', persistUnmarkedDrops: true })
     expect(refs.persistedFeedDebugIdRef.current).not.toHaveProperty('a')
     expect(refs.persistedFeedDebugIdRef.current.b).toBe(1)
 
@@ -388,7 +388,9 @@ describe('releasing a session whose runtime is gone (#1392)', () => {
     act(() => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }) })
     refs.latestRuntimesRef.current = {}
     await advance(2_000)
-    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a' })
+    // Review c, round 2: an off-state release must not make main write the
+    // final drop marker.
+    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a', persistUnmarkedDrops: false })
     expect(append).toHaveBeenCalledTimes(1)
   })
 
@@ -403,7 +405,7 @@ describe('releasing a session whose runtime is gone (#1392)', () => {
     forget.mockResolvedValue(undefined)
     act(() => { useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false }) })
     await advance(2_000)
-    expect(forget.mock.calls.at(-1)).toEqual([{ sessionId: 'a' }])
+    expect(forget.mock.calls.at(-1)).toEqual([{ sessionId: 'a', persistUnmarkedDrops: true }])
   })
 
   it('does not forget a session that never had a runtime while mounted', async () => {

@@ -4,7 +4,7 @@ const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   order: [] as string[],
   queueFeedDebugAppend: vi.fn<(sessionId: string, entries: unknown[], epochMs?: number) => Promise<void>>(async () => {}),
-  forgetFeedDebugSession: vi.fn<(sessionId: string) => void>(),
+  forgetFeedDebugSession: vi.fn<(sessionId: string, options?: { persistUnmarkedDrops?: boolean }) => void>(),
   saveDebugBundle: vi.fn(async () => {
     harness.order.push('save')
     return { bundlePath: '/tmp/test-bundle' }
@@ -184,10 +184,16 @@ describe('debug:forget-feed-log', () => {
     return handler
   }
 
-  it('forgets the named session in main', () => {
+  it('forgets the named session in main, persisting unmarked drops by default', () => {
     harness.forgetFeedDebugSession.mockClear()
     forgetHandler()({}, { sessionId: 'closed-pane' })
-    expect(harness.forgetFeedDebugSession).toHaveBeenCalledExactlyOnceWith('closed-pane')
+    expect(harness.forgetFeedDebugSession).toHaveBeenCalledExactlyOnceWith('closed-pane', { persistUnmarkedDrops: true })
+  })
+
+  it('passes persistUnmarkedDrops: false through (persistence off)', () => {
+    harness.forgetFeedDebugSession.mockClear()
+    forgetHandler()({}, { sessionId: 'closed-pane', persistUnmarkedDrops: false })
+    expect(harness.forgetFeedDebugSession).toHaveBeenCalledExactlyOnceWith('closed-pane', { persistUnmarkedDrops: false })
   })
 
   it.each([undefined, null, {}, { sessionId: '' }, { sessionId: 7 }, { sessionId: ['a'] }])(
