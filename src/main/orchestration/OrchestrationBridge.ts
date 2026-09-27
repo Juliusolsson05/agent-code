@@ -549,7 +549,8 @@ export class OrchestrationBridge {
     if (response.type !== 'mark-bootstrap-prompt-delivered') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
     }
-    this.invalidateStatusCache(parentSessionId)
+    // Re-resolved: the parent may have been replaced while the mark waited.
+    this.invalidateStatusCache(this.currentParentId(parentSessionId))
     return this.enrichAgent(response.agent)
   }
 
@@ -857,8 +858,19 @@ export class OrchestrationBridge {
   }
 
   private async dispatchRendererRequest(
-    request: OrchestrationRendererRequest,
+    queued: OrchestrationRendererRequest,
   ): Promise<OrchestrationRendererResponse> {
+    // WHY a bootstrap mark resolves its parent HERE, at dispatch (#1369
+    // verification a, round 3): the bridge serves one renderer request at a
+    // time, so a mark can sit in the queue while another request runs. A
+    // replacement landing in that wait makes the parent it was queued with a
+    // retired id: no window to route to, no ownership of the child. Resolving
+    // when it was queued (markBootstrapPromptDelivered) is too early. Only the
+    // mark is rewritten: every other request is a question or an action BY
+    // that parent, and answering it for a different session would be wrong.
+    const request = queued.type === 'mark-bootstrap-prompt-delivered'
+      ? { ...queued, parentSessionId: this.currentParentId(queued.parentSessionId) }
+      : queued
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const TIMEOUT_MS = 30_000
       const timer = setTimeout(() => {

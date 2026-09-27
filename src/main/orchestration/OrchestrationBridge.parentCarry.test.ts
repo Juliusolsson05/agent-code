@@ -241,3 +241,22 @@ it('addresses a bootstrap mark from a replaced parent to its successor', async (
   bridge.resolve({ requestId: mark.requestId, ok: true, type: 'mark-bootstrap-prompt-delivered', agent: agent('child-1', 'parent-b') } as never)
   expect(await marking).toMatchObject({ sessionId: 'child-1', orchestrationParentId: 'parent-b' })
 })
+
+// #1369 verification a, round 3: the bridge serves ONE renderer request at a
+// time, so a mark can wait in the queue while another request runs. A swap
+// landing in that wait must still redirect it: resolution happens when the
+// request is dispatched, not when it was queued.
+it('redirects a bootstrap mark queued before the parent was replaced', async () => {
+  sent.length = 0
+  const bridge = new OrchestrationBridge()
+  const listing = bridge.listAgents({ parentSessionId: 'parent-a' })
+  const list = await next('list-agents')
+  const marking = bridge.markBootstrapPromptDelivered({ parentSessionId: 'parent-a', sessionId: 'child-1' })
+  bridge.carryParent('parent-a', 'parent-b')
+  bridge.resolve({ requestId: list.requestId, ok: true, type: 'list-agents', agents: [] } as never)
+  await listing
+  const mark = await next('mark-bootstrap-prompt-delivered')
+  expect(mark.parentSessionId).toBe('parent-b')
+  bridge.resolve({ requestId: mark.requestId, ok: true, type: 'mark-bootstrap-prompt-delivered', agent: agent('child-1', 'parent-b') } as never)
+  await marking
+})
