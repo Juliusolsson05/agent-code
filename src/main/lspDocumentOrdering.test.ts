@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 
 // Three ordering defects found by the #918 planning audit (#922, #923, #924),
 // none of which had been reproduced when they were filed. Each test below
@@ -20,6 +23,18 @@ vi.mock('electron', () => ({
 
 const { LspManager } = await import('./lspManager.js')
 const { registerLspIpc } = await import('./ipc/lsp.js')
+
+// The workspace root every test opens under. It must be a REAL, canonical
+// directory: since #1268 the IPC open path re-checks, right before `didOpen`,
+// that the authorized root still resolves to itself (`lspPhysicalTargetAssertion`
+// in ipc/lsp.ts). A made-up REPO does not exist, so that check refused every
+// IPC open here and the ordering these tests pin was never reached. Production
+// stays strict on purpose: an authorized root that no longer resolves to itself
+// is refused. `realpath` matters on macOS, where tmpdir() is /var/... but the
+// canonical path is /private/var/...; the roots registry hands out canonical
+// paths, so the test must too. Nothing is written inside it.
+const REPO = await realpath(await mkdtemp(join(tmpdir(), 'ac-lsp-ordering-')))
+afterAll(() => rm(REPO, { recursive: true, force: true }))
 
 type Manager = InstanceType<typeof LspManager>
 
@@ -73,7 +88,7 @@ function managerWithServer(options?: {
 
 const OPEN = {
   language: 'typescript',
-  workspaceRoot: '/repo',
+  workspaceRoot: REPO,
   filePath: 'shared.ts',
 } as const
 
@@ -680,7 +695,7 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       // window exactly, without a sleep.
       authorize: async () => {
         await authorizationPaused
-        return '/repo'
+        return REPO
       },
     }
     registerLspIpc(manager, roots as never, {} as never)
@@ -692,7 +707,7 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       clientUri: 'inmemory://a',
       content: 'first',
       language: 'typescript',
-      workspaceRoot: '/repo',
+      workspaceRoot: REPO,
       // null: a virtual document, so authorization is root validation alone and
       // the test does not depend on a file existing on disk. The ordering
       // defect is in the queue, not in what is being authorized.
@@ -732,7 +747,7 @@ describe('#922 — text accepted during authorization must not vanish', () => {
     // document the renderer is editing has disappeared underneath it.
     ipcHandlers.clear()
     const { manager, server } = managerWithServer()
-    registerLspIpc(manager, { authorize: async () => '/repo' } as never, {} as never)
+    registerLspIpc(manager, { authorize: async () => REPO } as never, {} as never)
 
     const sender = { id: 1, once: () => {}, on: () => {}, isDestroyed: () => false }
     const evt = { sender }
@@ -740,7 +755,7 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       clientUri: 'inmemory://a',
       content: 'first',
       language: 'typescript',
-      workspaceRoot: '/repo',
+      workspaceRoot: REPO,
       filePath: null,
       authorization: { kind: 'editor-root' },
     })
@@ -766,7 +781,7 @@ describe('#922 — text accepted during authorization must not vanish', () => {
     // No server for this language: `getOrCreateServer` answers null, which is
     // what a missing binary produces.
     ;(manager as unknown as { getOrCreateServer: () => Promise<null> }).getOrCreateServer = async () => null
-    registerLspIpc(manager, { authorize: async () => '/repo' } as never, {} as never)
+    registerLspIpc(manager, { authorize: async () => REPO } as never, {} as never)
 
     const sender = { id: 1, once: () => {}, on: () => {}, isDestroyed: () => false }
     const evt = { sender }
@@ -774,7 +789,7 @@ describe('#922 — text accepted during authorization must not vanish', () => {
       clientUri: 'inmemory://none',
       content: 'first',
       language: 'typescript',
-      workspaceRoot: '/repo',
+      workspaceRoot: REPO,
       filePath: null,
       authorization: { kind: 'editor-root' },
     })
@@ -799,10 +814,10 @@ describe('#1208 — reopening a document after its server was lost', () => {
     internal.servers.set(replacement.key, replacement)
     internal.getOrCreateServer = async () => replacement
   }
-  const VIRTUAL = { language: 'typescript', workspaceRoot: '/repo', filePath: null, authorization: { kind: 'editor-root' } } as const
+  const VIRTUAL = { language: 'typescript', workspaceRoot: REPO, filePath: null, authorization: { kind: 'editor-root' } } as const
 
   function setup(
-    authorize: (sender: unknown, root: string) => Promise<string> = async () => '/repo',
+    authorize: (sender: unknown, root: string) => Promise<string> = async () => REPO,
     aiWorkspaces: unknown = {},
   ) {
     ipcHandlers.clear()
@@ -834,7 +849,7 @@ describe('#1208 — reopening a document after its server was lost', () => {
           entered()
           await new Promise<void>(resolve => { release = resolve })
         }
-        return '/repo'
+        return REPO
       },
       pauseNext: () => { paused = true },
       inside,
@@ -878,7 +893,7 @@ describe('#1208 — reopening a document after its server was lost', () => {
     let allowed = true
     const { manager, server, evt } = setup(async () => {
       if (!allowed) throw new Error('root is no longer authorized')
-      return '/repo'
+      return REPO
     })
     await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
     discard(manager, server)
@@ -922,7 +937,7 @@ describe('#1208 — reopening a document after its server was lost', () => {
         entered()
         await new Promise<void>(resolve => { release = resolve })
       }
-      return '/repo'
+      return REPO
     })
     await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
     discard(manager, server)
@@ -1065,7 +1080,7 @@ describe('#1208 — reopening a document after its server was lost', () => {
     const aiWorkspaces = {
       authorizeLspEntry: async () => {
         if (!entryAlive) throw new Error('AI Workspace entry is gone')
-        return { workspaceRoot: '/repo', filePath: null }
+        return { workspaceRoot: REPO, filePath: null }
       },
     }
     const { manager, server, evt } = setup(async () => { throw new Error('editor roots are not used here') }, aiWorkspaces)
@@ -1082,7 +1097,7 @@ describe('#1208 — reopening a document after its server was lost', () => {
   // #1266 review C6: the same size guard as lsp:open-document, so a reopen
   // cannot push oversized text past authorization into the manager.
   it('refuses oversized text before authorizing anything', async () => {
-    const authorize = vi.fn(async () => '/repo')
+    const authorize = vi.fn(async () => REPO)
     const { manager, server, evt } = setup(authorize)
     await ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'one' })
     discard(manager, server)
@@ -1107,7 +1122,7 @@ describe('#1208 — reopening a document after its server was lost', () => {
         await new Promise<void>(resolve => { release = resolve })
         throw new Error('old root revoked')
       }
-      return '/repo'
+      return REPO
     })
     const stale = ipcHandlers.get('lsp:open-document')!(evt, { ...VIRTUAL, clientUri: 'inmemory://a', content: 'old' })
     await inside
