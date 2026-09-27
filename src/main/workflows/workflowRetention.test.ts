@@ -91,9 +91,10 @@ describe('workflow run retention (#1275)', () => {
   it('prunes an old, fully terminal lineage and keeps fresh and live runs', async () => {
     const { store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
-    // An old lineage whose latest run completed (interrupted -> completed): nothing is resumable.
+    // An old lineage in which every run completed: nothing is resumable. (An interrupted first run
+    // would keep it: the package can still resume that run; see resumable() in the source.)
     vi.setSystemTime(T0)
-    await terminalRun(store, 'run_old_first', 'run.interrupted')
+    await terminalRun(store, 'run_old_first', 'run.completed')
     await terminalRun(store, 'run_old_second', 'run.completed', { resumedFromRunId: 'run_old_first', lineageId: 'run_old_first' })
     // Old but never finished: not terminal, so never a candidate, however stale.
     await store.createRun({ runId: 'run_old_unfinished', cwd: tmpdir(), workflow: workflow() })
@@ -147,22 +148,24 @@ describe('workflow run retention (#1275)', () => {
     expect(pruned.runsDeleted).toBe(1)
   })
 
-  // Owner decision 2026-09-27, and why it is judged on the lineage's LEAVES: a resumed chain always
-  // has resumable predecessors, so a lineage whose latest run completed is finished and ages out,
-  // while one whose latest run failed or was cancelled still offers Resume and is kept forever.
-  it('keeps a lineage whose latest run is resumable, and prunes one whose latest run completed', async () => {
+  // Owner decision 2026-09-27 ("resumable runs are never deleted"), judged on EVERY member (review
+  // of workflow-mcp#65, round 6 C): the package still resumes a cancelled or interrupted parent
+  // whose resumed child completed, so such a lineage is kept. Only an all-completed lineage ages out.
+  it('keeps a lineage with any resumable member, even when its latest run completed', async () => {
     const { store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(T0)
-    await terminalRun(store, 'run_done_first', 'run.interrupted')
-    await terminalRun(store, 'run_done_last', 'run.completed', { resumedFromRunId: 'run_done_first', lineageId: 'run_done_first' })
+    await terminalRun(store, 'run_cancelled_parent', 'run.cancelled')
+    await terminalRun(store, 'run_completed_child', 'run.completed', { resumedFromRunId: 'run_cancelled_parent', lineageId: 'run_cancelled_parent' })
     await terminalRun(store, 'run_open_first', 'run.completed')
     await terminalRun(store, 'run_open_last', 'run.cancelled', { resumedFromRunId: 'run_open_first', lineageId: 'run_open_first' })
+    await terminalRun(store, 'run_all_done_first', 'run.completed')
+    await terminalRun(store, 'run_all_done_last', 'run.completed', { resumedFromRunId: 'run_all_done_first', lineageId: 'run_all_done_first' })
 
     const pruned = await pruneWorkflowHistory({ store, codexHome, now: T0 + 3650 * DAY, ttlMs: 7 * DAY })
 
     expect(pruned.runsDeleted).toBe(2)
-    expect(await ids(store)).toEqual(['run_open_first', 'run_open_last'])
+    expect(await ids(store)).toEqual(['run_cancelled_parent', 'run_completed_child', 'run_open_first', 'run_open_last'])
   })
 
   // Review of workflow-mcp#65: createdAt is wall-clock; a clock step backwards must not make the
@@ -170,8 +173,10 @@ describe('workflow run retention (#1275)', () => {
   it('deletes predecessors before successors even when the clock stepped backwards', async () => {
     const { store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
+    // All-completed, because only such a lineage is pruned now (any resumable member keeps it). The
+    // order still matters as defence in depth: it is the same edge startup's recovery reads.
     vi.setSystemTime(T0 - 40 * DAY)
-    await terminalRun(store, 'run_parent', 'run.interrupted')
+    await terminalRun(store, 'run_parent', 'run.completed')
     vi.setSystemTime(T0 - 40 * DAY - 60_000)
     await terminalRun(store, 'run_child', 'run.completed', { resumedFromRunId: 'run_parent', lineageId: 'run_parent' })
     const order: string[] = []

@@ -137,16 +137,23 @@ export async function pruneWorkflowHistory(input: {
 }
 
 /**
- * Can the user still Resume this lineage?
+ * Can the user still Resume any run in this lineage?
  *
- * WHY the leaves and not every member: Resume continues a run nothing has continued yet. A resumed
- * chain always has failed or interrupted predecessors, so "any resumable member" would keep every
- * lineage that was ever resumed forever, even one whose latest run completed. Only a leaf — a run no
- * other member resumed from — still offers Resume; if any leaf is resumable, the lineage is kept.
+ * WHY every member and not only the leaves (review of workflow-mcp#65, round 6 C): the first
+ * version kept a lineage only when a LEAF was resumable, on the reasoning that Resume continues a
+ * run nothing has continued yet. The package does not work that way. `WorkflowService.resume`
+ * refuses a parent only while an ACTIVE successor exists; a cancelled parent whose resumed child
+ * COMPLETED can still be resumed (it gets a new sibling), through MCP or anyone holding its run id.
+ * The leaf rule would delete that parent after 90 days and turn a valid Resume into
+ * `run-not-found`. The owner's decision is literal ("resumable runs are never deleted", and "do not
+ * delete stuff often"), so any member in a resumable status keeps the whole lineage.
+ *
+ * What that costs, stated so a later change is deliberate: a lineage that ever failed, was
+ * cancelled or was interrupted is kept forever, even after a resumed run completed it. Tightening
+ * that needs the package to stop accepting such resumes first, not a smarter rule here.
  */
 function resumable(members: WorkflowRunSummary[]): boolean {
-  const continued = new Set(members.map(run => run.resumedFromRunId).filter(id => id !== undefined))
-  return members.some(run => !continued.has(run.runId) && RESUMABLE.has(run.status))
+  return members.some(run => RESUMABLE.has(run.status))
 }
 
 /**
