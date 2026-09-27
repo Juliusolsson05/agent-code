@@ -6,7 +6,7 @@
 ## Evidence (owner's store, 2026-09-27)
 - 129 MB on disk after 22 days: `events.jsonl` has 6,089 rows over 1,894 calls; `payloads/` holds 3,499 files for 3,457 referenced digests (42 orphans from failed appends).
 - 105 MB of the payloads are `transcripts.page` results, which are read-only and unkeyed. `mcp.tools/list` adds 7 MB, `mcp.tools/call` 2.8 MB, and `agents.read` 1.5 MB.
-- Keyed calls, the executor's dedupe ledger (#1240), are small: 815 rows, 290 `received`. Their keys come from `dispatch.configure`, `commands.run`, `operations.start/finish`, `agents.prompt`, and others.
+- Keyed calls, the executor's dedupe ledger (#1240), are small: 815 rows, 220 `received` (221 calls carry a key; corrected in review C3). Their keys come from `dispatch.configure`, `commands.run`, `operations.start/finish`, `agents.prompt`, and others.
 - Every call in the journal has a `result` row (0 in flight).
 - Simulated retention for unkeyed finished calls: 7 days keeps 507 calls (1,910 rows) and 17 MB of payloads; 14 days keeps 881 calls and 48 MB; 30 days keeps everything.
 
@@ -33,3 +33,18 @@ A fixture of real journal rows, recorded from the owner's store: ids, timestamps
 - A call without a `result` row is kept however old it is.
 - A payload shared by a pruned and a kept row survives.
 - A load that ran recovery does not prune.
+
+## Review round 1 (#1330) and steering q47/q49
+All three reviewers returned FIX-BEFORE-MERGE. Whatever window the owner picks, retention must never delete evidence someone can still ask for. A finished, unkeyed, unreused, old call is now also KEPT when:
+- **It is a lifecycle task origin** (a `task.*` step) (A1, C1). `operations.read`/`finish` look a task up by its original call id, and the tool contract says task results persist across restarts. The owner has 12 such calls.
+- **Its result is not proven settled** (A3). Settled means: an ok result with status `completed`/`ui_opened`, a `not_started` refusal, or an MCP transport echo. `outcome_unknown` (26 on the owner's machine) and `pending` (157, accepted `agents.prompt` operations) are kept, and so is a missing or unreadable payload (q40).
+- **An unaccepted recovery quarantine names it** (A2). Its call ids, and every payload digest the quarantine names, stay until the operator accepts that digest in `recovery-accepted.json`.
+
+Payloads are read only for calls that are otherwise expired, so after the first launch each launch reads about a day's worth.
+
+Other changes:
+- **Rewrite failure (B1).** A failed rewrite no longer fails the load, and payload GC never runs after one. Sequences are renumbered on copies, so the rows served still match the unchanged file.
+- **Survivors pinned.** Reuse-only target (A, B2), unknown-age row (A, B3), non-digest temp file (B4), and the window at its boundary, 7 days ± 1 minute (C).
+- **Fixture metadata (B5).** The shared digest is on the `dispatched` rows.
+
+**Owner question (unchanged, still open):** the window length (default 7 days). With the retained roots above, what a window deletes is only settled, unkeyed, non-task calls: exact request/result copies of reads and completed mutations, which `history.read`/`list` then no longer find. On the owner's store today: 7 days keeps ~520 calls and ~20 MB of payloads; 14 days keeps ~884 calls and ~52 MB.

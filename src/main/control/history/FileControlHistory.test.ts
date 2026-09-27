@@ -1,12 +1,13 @@
 import { mkdtemp, readFile, readdir, appendFile, writeFile, rm, stat, chmod, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { createControlExecutor, createControlRegistry } from '../../../control-sdk/host'
 import { defineCapability, type ControlHistory, type ControlResult } from '@control-sdk'
-import { FileControlHistory } from './FileControlHistory'
+import { CONTROL_HISTORY_RETENTION_MS, FileControlHistory } from './FileControlHistory'
+import { taskHistoryCapabilities } from './tasks'
 import { historyCapabilities } from './control'
 
 // The recorded rows in real-rows-2026-09.json were written on 2026-09-05. The
@@ -478,23 +479,50 @@ const RETENTION_NOW = new Date('2026-09-27T12:00:00.000Z')
 const OLD_UNKEYED = ['95caa49c-eb60-44e2-9b62-938ce2243d11', '5ea10842-a1c8-463c-aee9-5d0e238c56e1', '37763f2f-c479-49b7-8d79-4c990bc0784c']
 const KEPT = ['95c97fce-bca0-4bc7-9901-90b45d988d1c', '13e43d53-5120-41ae-88d7-820dc9088728', 'a346f752-9eec-4b37-b7df-145dfaf1aaf5',
   'e8a21d19-b139-4012-8e09-6139b5643bb5', '2ebe82c0-c877-4bb6-9877-56ded38d4739']
-// The old unkeyed externalControl.status call's `received` digest is also the
-// keyed app.windowFocus call's; pruning the first must not take it away.
+// The old unkeyed externalControl.status and transcripts.page calls'
+// `dispatched` rows name the same digest as the keyed app.windowFocus call's
+// `dispatched` row (#1330 review B5 corrected which rows); pruning the first
+// two must not take it away from the third.
 const SHARED_DIGEST = 'e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1'
 const ORPHAN_DIGEST = 'f'.repeat(64)
 
 describe('control history retention (#1274)', () => {
-  async function seededJournal(rows = retentionRows.rows) {
-    const { directory } = await setup()
-    await writeFile(join(directory, 'events.jsonl'), rows.map((row, index) => `${JSON.stringify({ ...row, sequence: index + 1 })}\n`).join(''), { mode: 0o600 })
-    // Payload CONTENTS are not recorded (they hold prompts and results);
-    // retention decides by the digest in the row, so a placeholder body is
-    // enough. An orphan, as a failed append leaves, sits beside them.
+  // Payload CONTENTS are not recorded (they hold prompts and results), and
+  // retention now READS result and step payloads (#1330 review: an unknown
+  // outcome or a task origin must be kept), through the same digest check
+  // every reader uses. So each recorded digest is replaced, here and not in
+  // the fixture, by the digest of a body of the right shape for the row
+  // that first names it: a settled `completed` result, an ordinary owner
+  // step, or an opaque input. One recorded digest maps to one body, so rows
+  // that shared a payload still share one. Everything else is the recording.
+  const bodies = new Map<string, string>()
+  for (const row of retentionRows.rows) {
+    if (!row.payload || bodies.has(row.payload)) continue
+    bodies.set(row.payload, JSON.stringify(row.kind === 'result'
+      ? { ok: true, value: { recorded: row.payload }, operation: { callId: row.callId, instanceId: 'recorded', status: 'completed' } }
+      : row.kind === 'step' ? { step: 'resolve-owner', recorded: row.payload } : { recorded: row.payload }))
+  }
+  const digestOf = (body: string) => createHash('sha256').update(body).digest('hex')
+  const remap = new Map([...bodies].map(([recorded, body]) => [recorded, digestOf(body)]))
+  const rowsWithBodies = retentionRows.rows.map(row => row.payload ? { ...row, payload: remap.get(row.payload)! } : row)
+  const SHARED = remap.get(SHARED_DIGEST)!
+  async function writePayload(directory: string, body: string): Promise<string> {
     const { mkdir } = await import('node:fs/promises')
     await mkdir(join(directory, 'payloads'), { recursive: true })
-    for (const digest of new Set([...rows.map(row => row.payload!).filter(Boolean), ORPHAN_DIGEST])) {
-      await writeFile(join(directory, 'payloads', `${digest}.json`), '{}')
-    }
+    const digest = digestOf(body)
+    await writeFile(join(directory, 'payloads', `${digest}.json`), body)
+    return digest
+  }
+  async function seededJournal(rows: Array<Record<string, unknown> & { callId: string; kind: string; payload?: string }> = rowsWithBodies) {
+    const { directory } = await setup()
+    await writeFile(join(directory, 'events.jsonl'), rows.map((row, index) => `${JSON.stringify({ ...row, sequence: index + 1 })}\n`).join(''), { mode: 0o600 })
+    for (const body of bodies.values()) await writePayload(directory, body)
+    // An orphan, as a failed append leaves, and a temp file of a write that
+    // never renamed: GC takes the first and must never touch the second.
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'payloads'), { recursive: true })
+    await writeFile(join(directory, 'payloads', `${ORPHAN_DIGEST}.json`), '{}')
+    await writeFile(join(directory, 'payloads', `${ORPHAN_DIGEST}.json.tmp`), '{}')
     return directory
   }
   const open = (directory: string, onRecovered?: () => void) =>
@@ -505,13 +533,13 @@ describe('control history retention (#1274)', () => {
     const events = await open(directory).events()
     expect([...new Set(events.map(event => event.callId))].sort()).toEqual([...KEPT].sort())
     // Kept rows are the recorded rows, in order, with only sequences renumbered.
-    const expected = retentionRows.rows.filter(row => KEPT.includes(row.callId))
+    const expected = rowsWithBodies.filter(row => KEPT.includes(row.callId))
     expect(events.map(({ sequence: _s, ...rest }) => rest)).toEqual(expected.map(({ sequence: _s, ...rest }) => rest))
     expect(events.map(event => event.sequence)).toEqual(expected.map((_, index) => index + 1))
     const payloads = new Set(await readdir(join(directory, 'payloads')))
     const keptDigests = new Set(expected.map(row => row.payload!).filter(Boolean))
-    expect(payloads).toEqual(new Set([...keptDigests].map(digest => `${digest}.json`)))
-    expect(payloads.has(`${SHARED_DIGEST}.json`)).toBe(true)
+    expect(payloads).toEqual(new Set([...[...keptDigests].map(digest => `${digest}.json`), `${ORPHAN_DIGEST}.json.tmp`]))
+    expect(payloads.has(`${SHARED}.json`)).toBe(true)
     expect(payloads.has(`${ORPHAN_DIGEST}.json`)).toBe(false)
     // The rewrite is durable and clean: a second launch prunes nothing and
     // reports no recovery.
@@ -521,7 +549,7 @@ describe('control history retention (#1274)', () => {
   })
 
   it('keeps a call with no result row however old it is', async () => {
-    const rows = retentionRows.rows.filter(row => !(row.callId === OLD_UNKEYED[2] && row.kind === 'result'))
+    const rows = rowsWithBodies.filter(row => !(row.callId === OLD_UNKEYED[2] && row.kind === 'result'))
     const directory = await seededJournal(rows)
     const events = await open(directory).events()
     expect(events.some(event => event.callId === OLD_UNKEYED[2])).toBe(true)
@@ -562,5 +590,126 @@ describe('control history retention (#1274)', () => {
     expect(effects).toBe(2)
     const kept = await new FileControlHistory(directory, { now: () => RETENTION_NOW }).events()
     expect(kept.every(event => event.requestKey === request.requestKey)).toBe(true)
+  })
+
+  // Rows shaped exactly like the executor's and the task writer's, for one
+  // unkeyed call ending at `at`, each with a real hashed payload.
+  type Built = { callId: string; rows: Array<Record<string, unknown> & { callId: string; kind: string; payload?: string }> }
+  async function call(directory: string, options: { at: string; result?: unknown; steps?: unknown[]; reusedCallId?: string; callId?: string }): Promise<Built> {
+    const callId = options.callId ?? randomUUID()
+    const base = { at: options.at, instanceId: 'recorded', callId, capabilityId: 'agents.resume', caller: 'external:agent-code-control' }
+    const rows: Built['rows'] = [
+      { ...base, kind: 'received', payload: await writePayload(directory, JSON.stringify({ input: { callId } })) },
+      { ...base, kind: 'dispatched', payload: await writePayload(directory, JSON.stringify({ owner: { kind: 'main', generation: 'g' } })) },
+    ]
+    for (const step of options.steps ?? []) rows.push({ ...base, kind: 'step', payload: await writePayload(directory, JSON.stringify(step)) })
+    if (options.result !== undefined) rows.push({ ...base, kind: 'result', payload: await writePayload(directory, JSON.stringify(options.result)), ...(options.reusedCallId ? { reusedCallId: options.reusedCallId } : {}) })
+    return { callId, rows }
+  }
+  async function journal(directory: string, calls: Built[]) {
+    await writeFile(join(directory, 'events.jsonl'), calls.flatMap(built => built.rows).map((row, index) => `${JSON.stringify({ ...row, sequence: index + 1 })}\n`).join(''), { mode: 0o600 })
+  }
+  const OLD = '2026-09-01T00:00:00.000Z'
+  const settled = (status = 'completed') => ({ ok: true, value: {}, operation: { callId: 'x', instanceId: 'recorded', status } })
+  const kept = async (directory: string, ids: string[]) => {
+    const present = new Set((await open(directory).events()).map(event => event.callId))
+    return ids.map(id => present.has(id))
+  }
+
+  // #1330 review A1/C1, q49: an unkeyed task's original call is the task
+  // store's lookup key. Pruning it turned operations.read into not_found and
+  // made operations.finish unable to find its origin.
+  it('keeps an unkeyed task origin, so operations.read still answers after the window', async () => {
+    const { directory } = await setup()
+    const owner = { kind: 'main' as const, generation: 'g' }
+    const task = await call(directory, { at: OLD, result: settled('pending'), steps: [
+      { step: 'task.started', owner },
+      { step: 'task.finished', result: { ok: true, value: { newSessionId: 'new' } } },
+    ] })
+    const plain = await call(directory, { at: OLD, result: settled() })
+    await journal(directory, [task, plain])
+    const history = open(directory)
+    const read = taskHistoryCapabilities(history, () => false).find(item => item.descriptor.id === 'operations.read')!
+    const context = { requestId: 'read', owner, caller: { kind: 'external' as const, id: 'operator' } }
+    expect(await read.execute({ callId: task.callId }, context)).toMatchObject({ ok: true, value: { status: 'completed', result: { ok: true, value: { newSessionId: 'new' } } } })
+    expect(await kept(directory, [task.callId, plain.callId])).toEqual([true, false])
+  })
+
+  // #1330 review A3, q49: an unknown outcome is the evidence that the effect
+  // may have run; `pending` is still open. Only a proven-settled result goes.
+  it('keeps results that are not proven settled, and prunes settled ones', async () => {
+    const { directory } = await setup()
+    const unknown = await call(directory, { at: OLD, result: { ok: false, error: { code: 'unavailable', message: 'lost', outcome: 'unknown' }, operation: { callId: 'x', instanceId: 'recorded', status: 'outcome_unknown' } } })
+    const pending = await call(directory, { at: OLD, result: settled('pending') })
+    const refused = await call(directory, { at: OLD, result: { ok: false, error: { code: 'unavailable', message: 'no', outcome: 'not_started' }, operation: { callId: 'x', instanceId: 'recorded', status: 'blocked' } } })
+    const done = await call(directory, { at: OLD, result: settled() })
+    const opened = await call(directory, { at: OLD, result: settled('ui_opened') })
+    const transport = await call(directory, { at: OLD, result: { direction: 'outbound', payload: { jsonrpc: '2.0' } } })
+    await journal(directory, [unknown, pending, refused, done, opened, transport])
+    expect(await kept(directory, [unknown, pending, refused, done, opened, transport].map(built => built.callId)))
+      .toEqual([true, true, false, false, false, false])
+    // The unknown outcome's payload is still readable for reconciliation.
+    const history = open(directory)
+    const row = (await history.events()).find(event => event.callId === unknown.callId && event.kind === 'result')!
+    expect(await history.payload(row.payload!)).toMatchObject({ error: { outcome: 'unknown' } })
+  })
+
+  // #1330 review A2, q49: an unaccepted recovery's quarantine names rows and
+  // payloads the operator must still be able to read. The first launch
+  // recovers (no prune); the second must not prune what the quarantine
+  // names; once the operator accepts the digest, it may go.
+  it('keeps what an unaccepted recovery quarantine names, until it is accepted', async () => {
+    const { directory } = await setup()
+    const old = await call(directory, { at: OLD, result: settled() })
+    await journal(directory, [old])
+    await appendFile(join(directory, 'events.jsonl'), 'not json\n')
+    const reports: Array<{ sha256: string }> = []
+    await new FileControlHistory(directory, { now: () => RETENTION_NOW, onRecovered: report => reports.push(report) }).events()
+    expect(reports).toHaveLength(1)
+    const second = open(directory)
+    const events = await second.events()
+    const result = events.find(event => event.callId === old.callId && event.kind === 'result')
+    expect(result).toBeDefined()
+    expect(await second.payload(result!.payload!)).toMatchObject({ ok: true })
+    await writeFile(join(directory, 'recovery-accepted.json'), JSON.stringify({ accepted: [reports[0]!.sha256] }))
+    expect(await kept(directory, [old.callId])).toEqual([false])
+  })
+
+  // #1330 review B1: payload GC must only follow a durable rewrite. A
+  // rewrite that fails (here: the directory refuses the temp file) leaves the
+  // old journal naming every payload, and the load itself still works.
+  it('leaves every payload and serves the unpruned rows when the rewrite fails', async () => {
+    const directory = await seededJournal()
+    const before = new Set(await readdir(join(directory, 'payloads')))
+    await chmod(directory, 0o500)
+    try {
+      const events = await open(directory).events()
+      expect(new Set(events.map(event => event.callId))).toEqual(new Set(retentionRows.rows.map(row => row.callId)))
+      expect(new Set(await readdir(join(directory, 'payloads')))).toEqual(before)
+    } finally { await chmod(directory, 0o700) }
+    // Writable again, the next launch prunes as usual.
+    expect(await kept(directory, OLD_UNKEYED)).toEqual([false, false, false])
+  })
+
+  // #1330 review A/B survivors: each rule on its own.
+  it('keeps an old unkeyed call a kept duplicate reuses, and a call of unknown age', async () => {
+    const { directory } = await setup()
+    const target = await call(directory, { at: OLD, result: settled() })
+    const reuser = await call(directory, { at: RETENTION_NOW.toISOString(), result: settled(), reusedCallId: target.callId })
+    const unknownAge = await call(directory, { at: 'not a time', result: settled() })
+    await journal(directory, [target, reuser, unknownAge])
+    expect(await kept(directory, [target.callId, reuser.callId, unknownAge.callId])).toEqual([true, true, true])
+  })
+
+  // #1330 review C: the window is pinned at its boundary, not only by rows
+  // three weeks apart.
+  it('prunes a call exactly past the window and keeps one just inside it', async () => {
+    const { directory } = await setup()
+    const minute = 60_000
+    const inside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS + minute).toISOString(), result: settled() })
+    const outside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS - minute).toISOString(), result: settled() })
+    await journal(directory, [inside, outside])
+    expect(await kept(directory, [inside.callId, outside.callId])).toEqual([true, false])
+    expect(CONTROL_HISTORY_RETENTION_MS).toBe(7 * 24 * 60 * 60 * 1000)
   })
 })

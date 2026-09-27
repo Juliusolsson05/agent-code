@@ -143,7 +143,17 @@ export class FileControlHistory implements ControlHistory {
     // to reconcile a damaged ledger against what it showed at recovery time,
     // and a second rewrite in the same launch would change it under them.
     // The next clean launch prunes.
-    if (!recovered) events = await this.prune(events)
+    if (!recovered) {
+      // WHY a failed prune does not fail the load (#1330 review B1): retention
+      // is housekeeping, and the journal is the dedupe ledger every control
+      // call needs. A read-only or full disk must leave control working on the
+      // unpruned rows, and a failed rewrite throws before any payload is
+      // deleted, so the old journal never names a missing payload.
+      events = await this.prune(events).catch(error => {
+        console.warn('[control-history] retention skipped this launch:', (error as NodeJS.ErrnoException).code ?? 'error')
+        return events
+      })
+    }
     return events
   }
 
@@ -163,33 +173,46 @@ export class FileControlHistory implements ControlHistory {
   // pruned ledger reloads as clean instead of being quarantined.
   private async prune(events: HistoryEvent[]): Promise<HistoryEvent[]> {
     const cutoff = (this.options.now?.() ?? new Date()).getTime() - (this.options.retentionMs ?? CONTROL_HISTORY_RETENTION_MS)
-    const calls = new Map<string, { keyed: boolean; finished: boolean; newest: number }>()
+    const calls = new Map<string, { keyed: boolean; finished: boolean; newest: number; rows: HistoryEvent[] }>()
     const reused = new Set<string>()
     for (const event of events) {
-      const call = calls.get(event.callId) ?? { keyed: false, finished: false, newest: 0 }
+      const call = calls.get(event.callId) ?? { keyed: false, finished: false, newest: 0, rows: [] }
       if (event.requestKey !== undefined) call.keyed = true
       if (event.kind === 'result') call.finished = true
       // An unparseable time counts as NEW: unknown age is never a reason to
       // delete evidence.
       const at = Date.parse(event.at)
       call.newest = Math.max(call.newest, Number.isFinite(at) ? at : Number.POSITIVE_INFINITY)
+      call.rows.push(event)
       calls.set(event.callId, call)
       if (event.reusedCallId) reused.add(event.reusedCallId)
     }
-    const expired = new Set([...calls].filter(([id, call]) =>
-      !call.keyed && call.finished && !reused.has(id) && call.newest < cutoff).map(([id]) => id))
-    const kept = expired.size > 0 ? events.filter(event => !expired.has(event.callId)) : events
-    if (expired.size > 0) {
-      // Same renumbering as recovery: sequences are process-local cursors.
-      kept.forEach((event, index) => { event.sequence = index + 1 })
-      await this.writeAtomic(join(this.directory, JOURNAL), kept.map(event => `${JSON.stringify(event)}\n`).join(''))
+    // What unaccepted recovery evidence names stays until the operator
+    // accepts it (#1330 review A2, q49): the quarantine copy holds the rows,
+    // but only this directory holds their payloads, and reconciling a damaged
+    // ledger means reading exactly those.
+    const evidence = await this.quarantineEvidence()
+    const expired = new Set<string>()
+    for (const [id, call] of calls) {
+      if (call.keyed || !call.finished || reused.has(id) || call.newest >= cutoff || evidence.callIds.has(id)) continue
+      if (await this.mustOutliveRetention(call.rows)) continue
+      expired.add(id)
     }
-    // Payload GC runs only AFTER the rewrite is durable: a crash in between
-    // leaves unreferenced files (collected next launch), never a kept row
-    // pointing at a deleted payload. It also collects orphans from appends
-    // that stored a payload and then failed. A digest shared with a kept row
-    // is referenced, so it stays.
-    const referenced = new Set(kept.flatMap(event => event.payload ? [`${event.payload}.json`] : []))
+    if (expired.size === 0 && !(await this.hasUnreferencedPayloads(events, evidence.digests))) return events
+    const kept = events.filter(event => !expired.has(event.callId))
+    // Renumbered COPIES: if the rewrite fails, the caller keeps serving the
+    // original rows with the sequences the unchanged file still has.
+    const renumbered = kept.map((event, index) => ({ ...event, sequence: index + 1 }))
+    if (expired.size > 0) {
+      await this.writeAtomic(join(this.directory, JOURNAL), renumbered.map(event => `${JSON.stringify(event)}\n`).join(''))
+    }
+    // Payload GC runs only AFTER the rewrite is durable (a failed rewrite
+    // throws above, so GC never runs; see open()): a crash in between leaves
+    // unreferenced files, collected next launch, never a kept row pointing
+    // at a deleted payload. It also collects orphans from appends that stored
+    // a payload and then failed. A digest any kept row or unaccepted
+    // quarantine names stays.
+    const referenced = new Set([...kept.flatMap(event => event.payload ? [event.payload] : []), ...evidence.digests].map(digest => `${digest}.json`))
     for (const name of await readdir(join(this.directory, 'payloads'))) {
       // Only finished payload files: a `.tmp` belongs to a write that has not
       // renamed yet (none can be in flight here, but that is the writer's
@@ -197,7 +220,82 @@ export class FileControlHistory implements ControlHistory {
       if (!/^[a-f0-9]{64}\.json$/.test(name) || referenced.has(name)) continue
       await rm(join(this.directory, 'payloads', name), { force: true })
     }
-    return kept
+    return expired.size > 0 ? renumbered : events
+  }
+
+  // Whether an old, unkeyed, finished call must be kept anyway: its evidence
+  // is still the only answer to a question someone can ask (#1330 review
+  // A1/A3/C1, steering q49).
+  // - A TASK ORIGIN: operations.read/finish look the task up by the original
+  //   call's id and read its `task.*` step payloads. Its tool contract says
+  //   task results persist across restarts, and nothing expires a task, so
+  //   these are kept (12 of 1,894 calls on the owner's machine).
+  // - A result that is not PROVEN settled: `outcome_unknown` means the
+  //   effect may have run and must not be blindly retried; `pending` is an
+  //   accepted operation whose outcome is still open. Only a completed or
+  //   ui_opened success, a not_started refusal, or an MCP transport echo
+  //   (which reports no operation) is settled. A missing or unreadable
+  //   payload is unknown, and unknown is kept (q40).
+  // Payloads are read only for calls that are otherwise expired, so steady
+  // state reads about a day's worth per launch.
+  private async mustOutliveRetention(rows: HistoryEvent[]): Promise<boolean> {
+    for (const row of rows) {
+      if (row.kind === 'step' && row.payload) {
+        const head = await this.payloadHead(row.payload, 32)
+        if (head === null || head.startsWith('{"step":"task.')) return true
+      }
+      if (row.kind === 'result') {
+        if (!row.payload) return true
+        const result = await this.payload(row.payload).catch(() => undefined) as {
+          ok?: unknown; error?: { outcome?: unknown }; operation?: { status?: unknown }; direction?: unknown
+        } | undefined
+        if (!result || typeof result !== 'object') return true
+        const settled = result.ok === true
+          ? result.operation?.status === 'completed' || result.operation?.status === 'ui_opened'
+          : result.ok === false
+            ? result.error?.outcome === 'not_started'
+            : 'direction' in result && !('operation' in result)
+        if (!settled) return true
+      }
+    }
+    return false
+  }
+
+  private async payloadHead(id: string, bytes: number): Promise<string | null> {
+    try {
+      const file = await open(this.path(id), 'r')
+      try {
+        const buffer = Buffer.alloc(bytes)
+        const { bytesRead } = await file.read(buffer, 0, bytes, 0)
+        return buffer.subarray(0, bytesRead).toString('utf8')
+      } finally { await file.close() }
+    } catch { return null }
+  }
+
+  // Call ids and payload digests named by quarantine files whose recovery is
+  // not yet accepted (this.guards is already filtered by acceptance). Rows in
+  // a quarantine may be damaged, so each line is parsed on its own and a
+  // line that does not parse still yields every digest-shaped token in it.
+  private async quarantineEvidence(): Promise<{ callIds: Set<string>; digests: Set<string> }> {
+    const callIds = new Set<string>()
+    const digests = new Set<string>()
+    for (const guard of this.guards) {
+      if (!QUARANTINE.test(guard.file)) continue
+      const text = await readFile(join(this.directory, guard.file), 'utf8').catch(() => '')
+      for (const line of text.split('\n')) {
+        for (const digest of line.match(/[a-f0-9]{64}/g) ?? []) digests.add(digest)
+        try {
+          const row = JSON.parse(line) as { callId?: unknown }
+          if (typeof row.callId === 'string') callIds.add(row.callId)
+        } catch { /* a damaged line: its digests were collected above */ }
+      }
+    }
+    return { callIds, digests }
+  }
+
+  private async hasUnreferencedPayloads(events: HistoryEvent[], protectedDigests: Set<string>): Promise<boolean> {
+    const referenced = new Set([...events.flatMap(event => event.payload ? [event.payload] : []), ...protectedDigests].map(digest => `${digest}.json`))
+    return (await readdir(join(this.directory, 'payloads'))).some(name => /^[a-f0-9]{64}\.json$/.test(name) && !referenced.has(name))
   }
 
   private async recover(bytes: Buffer, analysis: Analysis): Promise<void> {
