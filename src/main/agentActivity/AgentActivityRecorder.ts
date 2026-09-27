@@ -55,6 +55,8 @@ export class AgentActivityRecorder {
   private agentNames: Readonly<Record<string, string>> = {}
   private touchTimer: ReturnType<typeof setInterval> | null = null
   private readonly pendingWrites = new Set<Promise<void>>()
+  /** Alias edges already handed to the store this run (updateWorkspace). */
+  private readonly aliasesSent = new Map<string, string>()
 
   constructor(private readonly deps: AgentActivityRecorderDeps) {}
 
@@ -105,6 +107,21 @@ export class AgentActivityRecorder {
   updateWorkspace(windows: readonly PersistedWindow[], agentNames: Readonly<Record<string, string>>): void {
     this.projection = projectWorkspace(windows)
     this.agentNames = agentNames
+    // Join provisional keys to the identity the projection now shows (#1302,
+    // see AgentActivityStore.appendAliases): the session id, for intervals a
+    // successor closed before its row was saved and for rows written before
+    // tldrIdentity was part of the key; and the tldrIdentity, for an agent
+    // that gets a name later. Only edges not sent before are queued, since
+    // this runs on every autosave.
+    const edges: Array<[string, string]> = []
+    for (const [sessionId, placement] of this.projection.sessions) {
+      const identity = placement.agentNameId ?? placement.tldrIdentity
+      if (identity && identity !== sessionId) edges.push([sessionId, identity])
+      if (placement.agentNameId && placement.tldrIdentity) edges.push([placement.tldrIdentity, placement.agentNameId])
+    }
+    const fresh = edges.filter(([from, to]) => this.aliasesSent.get(from) !== to)
+    for (const [from, to] of fresh) this.aliasesSent.set(from, to)
+    if (fresh.length > 0) this.track(this.deps.store.appendAliases(fresh))
   }
 
   noteSuspension(suspension: SystemSuspension): void {

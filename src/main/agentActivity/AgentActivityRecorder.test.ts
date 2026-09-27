@@ -145,6 +145,93 @@ describe('AgentActivityRecorder', () => {
     expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
   })
 
+  // #1342 review b: the renderer saves the successor's row only after its
+  // debounced autosave, so a successor can finish a turn while main still has
+  // no placement for it. That interval is written under the bare session id;
+  // the alias recorded when the row arrives joins it to the agent.
+  it('joins a successor\'s turn that closed before its row was saved', async () => {
+    const { manager, recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    manager.emit('started', { sessionId: 'child-2', kind: 'codex' })
+    manager.emit('removed', { sessionId: 'child' })
+    phase('child-2', 'responding')
+    vi.setSystemTime(T0 + 2 * HOUR)
+    phase('child-2', 'idle')
+    await recorder.flush()
+    // Only now does the successor's row reach main.
+    window.workspace.sessions['child-2'] = window.workspace.sessions.child
+    delete window.workspace.sessions.child
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agentMs).toBe(2 * HOUR)
+    expect(summary.totals.agents.user + summary.totals.agents.orchestration).toBe(1)
+  })
+
+  // #1342 review c: rows written before tldrIdentity was part of the key are
+  // keyed by the session id. A still-live session's next interval must join
+  // them instead of starting a second row at upgrade.
+  it('joins rows recorded under a live session id before the identity was known', async () => {
+    const store = new AgentActivityStore(dir)
+    await store.appendInterval({
+      context: { agentKey: 'child', label: 'Reviewer', role: 'orchestration', provider: 'codex', tabId: 'tab-1', tabTitle: 'agent-code', repoRoot: '/dev/agent-code', cwd: '/dev/agent-code/.worktrees/fix' },
+      startedAt: T0 - 2 * HOUR,
+      endedAt: T0 - HOUR,
+    })
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    phase('child', 'idle')
+
+    const summary = await recorder.summary('24h')
+    expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
+  })
+
+  // An agent that gets a name later: its tldrIdentity rows join the name.
+  it('joins an agent\'s earlier rows when it gets a name', async () => {
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    phase('child', 'idle')
+    await recorder.flush()
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, agentNameId: 'name-2' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada', 'name-2': 'Bo' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + 2 * HOUR)
+    phase('child', 'idle')
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agents.orchestration).toBe(1)
+    expect(summary.totals.agentMs).toBe(2 * HOUR)
+  })
+
+  // #1342 review c (surviving mutant): with neither a name nor an identity,
+  // the session id is still the key, so two such agents stay two.
+  it('keeps two agents with neither a name nor an identity apart', async () => {
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.lead = { kind: 'claude', cwd: '/dev/agent-code' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], {})
+    phase('lead', 'thinking')
+    phase('child', 'thinking')
+    vi.setSystemTime(T0 + HOUR)
+    phase('lead', 'idle')
+    phase('child', 'idle')
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agents).toEqual({ user: 1, orchestration: 1 })
+  })
+
   // Rows already written for a named agent are keyed by its name; an agent
   // that has both keeps that key, so turning #1302's fallback on does not
   // split a named agent's history in two.

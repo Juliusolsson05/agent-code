@@ -15,3 +15,12 @@
 
 ## Tests
 `AgentActivityRecorder.test.ts`: an agent replaced by a successor with the same `tldrIdentity` is one agent in the summary, with both sessions' time summed. Red on main.
+
+## Round 1 review decisions (#1342)
+- **b1: a successor's turn can close before its row is saved.** The projection reaches main only through the debounced autosave, so that interval is keyed by the bare session id, and the append-only log can't rewrite it. **c1: every live agent splits once at upgrade**, because its earlier rows are keyed by its session id. Same root cause: a session-id key is provisional. Fix: `aliases.jsonl` beside the log.
+  - Whenever the projection ties a session id to an identity, the recorder appends `sessionId → identity`, plus `tldrIdentity → agentNameId` when both exist, so an agent that gets a name later joins too.
+  - `readIntervals` resolves every key through the alias chain.
+  - Rows are never rewritten. Tests cover the reviewer's probe, a pre-upgrade row of a live session, and a later name; all are red on the round-1 head.
+- **c: nothing tested the session-id fallback** (an `'anonymous'` fallback survived). Test added: two agents with neither a name nor an identity stay two.
+- **b2: an agent with both TLDR and Goal disabled has no `tldrIdentity`, so it still splits.** Declined here: the identity is minted by the renderer only for reporting domains (`hasReportingDomain`). Giving every agent an identity is a separate decision about what that id means. The defaults enable both domains.
+- **c: `Fixes #1302` overstated.** Now `Refs #1302`. The residuals, recorded on the issue, are b2 and history: rows of predecessors that are no longer live can't be joined, because nothing links their session ids to an identity.

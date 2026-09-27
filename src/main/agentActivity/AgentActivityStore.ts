@@ -15,6 +15,8 @@ import type { SystemSuspension } from '@shared/types/systemSuspension.js'
 //   <dir>/suspensions.jsonl  machine suspensions, subtracted at summary time.
 //   <dir>/open.json       intervals still open, rewritten on change and touched
 //                         periodically, so a crash loses at most one touch period.
+//   <dir>/aliases.jsonl   `{f, t}` lines: agent key `f` is the same agent as `t`
+//                         (#1302). Resolved at read time; see appendAliases.
 //
 // WHY intervals are stored as observed and suspensions separately: the summary
 // subtracts sleep with the same rule as the in-feed counter (workingSeconds.ts).
@@ -29,7 +31,9 @@ import type { SystemSuspension } from '@shared/types/systemSuspension.js'
 // sees on screen, paths and timestamps.
 
 export type ActivityContext = {
-  /** agentNameId when names are on, else the session id. */
+  /** agentNameId, else tldrIdentity, else the session id, as known when the
+   *  interval closed. A session-id key is provisional: aliases.jsonl can later
+   *  join it to the identity (see appendAliases). */
   agentKey: string
   label: string
   role: 'user' | 'orchestration'
@@ -105,6 +109,8 @@ function parseJsonLines(text: string): Record<string, unknown>[] {
 
 export class AgentActivityStore {
   private tail: Promise<void> = Promise.resolve()
+  /** aliases.jsonl in memory, loaded on first use. */
+  private aliases: Map<string, string> | null = null
   /** Context ids already written to each month file this process has touched. */
   private readonly monthContexts = new Map<string, Map<string, number>>()
 
@@ -156,6 +162,65 @@ export class AgentActivityStore {
       lines.push(JSON.stringify(intervalLine))
       await appendFile(join(this.dir, `${month}.jsonl`), `${lines.join('\n')}\n`)
     })
+  }
+
+  private async loadAliases(): Promise<Map<string, string>> {
+    if (this.aliases) return this.aliases
+    const aliases = new Map<string, string>()
+    try {
+      for (const line of parseJsonLines(await readFile(join(this.dir, 'aliases.jsonl'), 'utf8'))) {
+        if (typeof line.f === 'string' && typeof line.t === 'string' && line.f && line.t && line.f !== line.t) {
+          aliases.set(line.f, line.t)
+        }
+      }
+    } catch {
+      // No aliases yet.
+    }
+    this.aliases = aliases
+    return aliases
+  }
+
+  /**
+   * Record that agent key `from` is the same agent as `to` (#1302).
+   *
+   * WHY an alias rather than choosing the right key up front: an interval's
+   * context is resolved at CLOSE time from the workspace projection, and the
+   * projection reaches main only through the renderer's debounced autosave. A
+   * replacement's successor can finish a turn (or the app can crash) before
+   * its row is saved, so that interval is keyed by its bare session id, and
+   * the log is append-only. Rows written before this key existed are keyed by
+   * session id too. Once the projection shows which identity a session id
+   * belongs to, this edge joins every interval ever written under it, at read
+   * time. Rewriting the month files instead would put history at risk for a
+   * summary concern.
+   *
+   * Idempotent and small: an edge is written once per (from, to), and there
+   * is at most one per session id that ever had an identity.
+   */
+  appendAliases(edges: ReadonlyArray<readonly [string, string]>): Promise<void> {
+    if (edges.length === 0) return Promise.resolve()
+    return this.enqueue(async () => {
+      const aliases = await this.loadAliases()
+      const fresh = edges.filter(([from, to]) => from && to && from !== to && aliases.get(from) !== to)
+      if (fresh.length === 0) return
+      await mkdir(this.dir, { recursive: true })
+      for (const [from, to] of fresh) aliases.set(from, to)
+      await appendFile(
+        join(this.dir, 'aliases.jsonl'),
+        `${fresh.map(([from, to]) => JSON.stringify({ f: from, t: to })).join('\n')}\n`,
+      )
+    })
+  }
+
+  /** The key an agent key finally resolves to through the alias chain. */
+  private resolveKey(aliases: ReadonlyMap<string, string>, key: string): string {
+    const seen = new Set<string>()
+    let current = key
+    while (aliases.has(current) && !seen.has(current)) {
+      seen.add(current)
+      current = aliases.get(current)!
+    }
+    return current
   }
 
   appendSuspension(suspension: SystemSuspension): Promise<void> {
@@ -223,6 +288,7 @@ export class AgentActivityStore {
     const firstMonth = monthKey(Date.UTC(new Date(from).getUTCFullYear(), new Date(from).getUTCMonth() - 1, 1))
     const lastMonth = monthKey(to)
     const out: RecordedInterval[] = []
+    const aliases = await this.loadAliases()
     for (const name of await this.monthFiles()) {
       const month = name.slice(0, 7)
       if (month < firstMonth || month > lastMonth) continue
@@ -230,7 +296,7 @@ export class AgentActivityStore {
       for (const line of parseJsonLines(await readFile(join(this.dir, name), 'utf8'))) {
         if (line.t === 'c' && isNumber(line.c)) {
           const context = parseContext(line)
-          if (context) contexts.set(line.c, context)
+          if (context) contexts.set(line.c, { ...context, agentKey: this.resolveKey(aliases, context.agentKey) })
         } else if (line.t === 'i' && isNumber(line.c) && isNumber(line.s) && isNumber(line.e)) {
           const context = contexts.get(line.c)
           if (context && line.e > from && line.s < to) out.push({ context, startedAt: line.s, endedAt: line.e })
