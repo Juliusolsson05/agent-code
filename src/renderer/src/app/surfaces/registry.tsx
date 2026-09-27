@@ -61,25 +61,21 @@ import { AgentMcpServersSurface } from '@renderer/features/mcp/surfaces/AgentMcp
 export const modalSurfaces: SurfaceEntry[] = [
   { id: 'command-palette', Component: CommandPaletteSurface },
   { id: 'path-picker', Component: PathPickerSurface },
-  // ⚠ Two non-modal surfaces interleaved into the modal stack ON PURPOSE.
-  // Pre-refactor App.tsx rendered them exactly here — after the palette
-  // and path picker, before the tile-tabs..usage modals — and that DOM
-  // position was load-bearing when these were fixed z-50 siblings. Today
-  // both are Dialogs in LAYERS.dialog, so the count prompt paints above the
-  // palette because it OPENS after it (tiled dispatch fires from an open
-  // palette); this position only still decides a same-commit tie. The
-  // caffeinate entry now forwards to the app toast, which has its own layer:
-  //   - tiled-dispatch-count must paint ABOVE the command palette. Tiled
-  //     dispatch can fire while the palette is open (native menu; the
-  //     palette deliberately stays open for keepPaletteOpen-style flows),
-  //     and the count prompt is the thing awaiting input — burying it
-  //     behind the palette soft-locks the flow.
-  //   - both must stay BELOW the later modals (a modal opened over the
-  //     toast dims it, as before).
-  // The first cut of this registry put these two in overlaySurfaces
-  // (rendered before the modals group), which silently reversed the
-  // palette/count-prompt stacking — codex review of PR #505 caught it.
-  // Grouping by semantic kind is NOT safe here; group by paint order.
+  // The next three entries were interleaved here ON PURPOSE when they were
+  // fixed z-50 siblings of the palette, and pre-refactor App.tsx rendered
+  // them exactly here. Today:
+  //   - tiled-dispatch-count and dispatch-row-project are Dialogs in
+  //     LAYERS.dialog. The count prompt paints above the command palette
+  //     because it OPENS after it (tiled dispatch fires from an open
+  //     palette, and the prompt is what awaits input; burying it would
+  //     soft-lock the flow). Any dialog opened after either of them paints
+  //     over it, whatever the array says.
+  //   - caffeinate-toast renders nothing and forwards to the app toast
+  //     (LAYERS.toast).
+  // Their position here only decides a same-commit tie. History: the first
+  // cut of this registry moved the two prompts into overlaySurfaces, which
+  // reversed the palette/count-prompt stacking while they were z-50 siblings
+  // (codex review of PR #505).
   { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
   { id: 'dispatch-row-project', Component: DispatchRowProjectSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
@@ -139,7 +135,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   // Built-in apps host. An app is always user-initiated and is the thing
   // awaiting input while open, so it should cover what is already on screen,
   // and it does: it opens after them (open order, see the stacking note above).
-  // Its last-in-array position only decides a same-commit tie. A dialog opened
+  // Its position here only decides a same-commit tie. A dialog opened
   // AFTER an app paints over it; no app has a reason to sit under another
   // modal, and if one ever does, that is a signal it should not be an app.
   { id: 'app-host', Component: AppHostSurface },
@@ -147,8 +143,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   // D8). A confirm is always a question ABOUT the surface underneath it (the
   // Conventions editor asking "discard changes?", Key Vault asking "delete
   // key?"), so it must paint above whichever surface asked. It does, because
-  // it opens after that surface (open order); being last here only decides a
-  // same-commit tie. It renders nothing until requestConfirm queues a request.
+  // it opens after that surface (open order); its position here only decides
+  // a same-commit tie. It renders nothing until requestConfirm queues a request.
   { id: 'confirm-dialog', Component: ConfirmHost },
   // #512: RemotePanel renders a centred Radix Dialog, but was registered as a
   // side panel, so it mounted inside the main row and only painted as a modal
@@ -162,9 +158,9 @@ export const modalSurfaces: SurfaceEntry[] = [
  * everything in this array paints UNDER the modal stack when z-indexes
  * tie. Voice dictation's chip is in LAYERS.toast, above every dialog on
  * purpose (dictating into a dialog must stay visible), so its position here
- * no longer decides its stacking. A surface that needs a specific position
- * relative to the modals goes into modalSurfaces at an explicit index
- * instead — see the interleaved entries there for why.
+ * no longer decides its stacking. A surface that must sit at a fixed height
+ * relative to the dialogs needs its own named layer in ui/layers.ts; a
+ * position in either array only breaks same-commit ties.
  */
 export const overlaySurfaces: SurfaceEntry[] = [
   { id: 'voice-dictation', Component: VoiceDictationSurface },
