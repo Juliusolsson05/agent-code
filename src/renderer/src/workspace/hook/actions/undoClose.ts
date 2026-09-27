@@ -4,7 +4,7 @@ import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { MISSING_WORKSPACE_FOLDER_PREFIX, SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import type {
   SessionId,
@@ -14,6 +14,7 @@ import type {
 } from '@renderer/workspace/types'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
+  dropPointersTo,
   remapMetaLineage,
   remapSingleEntryLineage,
 } from '@renderer/lib/undoClose'
@@ -480,6 +481,22 @@ export function useUndoCloseAction(
   //     they are finished history in the store, not live state to stop.
   // `publish` is the source of truth for "came back": each restore calls it
   // after its commit and only then, with exactly the old -> new pairs.
+  // Pointers kept for a restorable parent (#1379) must go once nothing can
+  // restore it. See dropPointersTo.
+  const dropGhostPointers = useCallback((gone: Set<SessionId>) => {
+    if (gone.size === 0) return
+    setState(prev => {
+      const sessions = dropPointersTo(prev.sessions, gone)
+      return sessions === prev.sessions ? prev : { ...prev, sessions }
+    })
+  }, [setState])
+  // Entries that expire or are evicted leave the stack without a restore.
+  useEffect(() => {
+    const stack = refs.undoStackRef.current
+    stack.setDroppedListener(dropGhostPointers)
+    return () => stack.setDroppedListener(null)
+  }, [dropGhostPointers, refs.undoStackRef])
+
   const restoreSingleEntry = useCallback(
     async (entry: SingleClosedEntry, publish: PublishLineage): Promise<RestoreResult> => {
       const successors = new Map<string, string>()
@@ -496,10 +513,14 @@ export function useUndoCloseAction(
       const closedIds = entry.type === 'session'
         ? [entry.sessionId]
         : entry.sessions.map(member => member.sessionId)
-      stopGoalLoops(closedIds.filter(id => !successors.has(id)))
+      const notBack = closedIds.filter(id => !successors.has(id))
+      stopGoalLoops(notBack)
+      // A consumed entry whose members did not come back can never be
+      // restored now: drop live pointers to them (#1387 review a).
+      dropGhostPointers(new Set(notBack))
       return result
     },
-    [hasGoalLoopTools, restoreSessionEntry, restoreTabEntry],
+    [dropGhostPointers, hasGoalLoopTools, restoreSessionEntry, restoreTabEntry],
   )
 
   // Replay one close OPERATION's units last-first (see ClosedGroup).
