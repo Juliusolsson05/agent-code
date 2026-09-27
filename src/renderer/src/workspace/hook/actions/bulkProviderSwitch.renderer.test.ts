@@ -6,6 +6,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import type { ProviderSwitchBatch } from '@renderer/workspace/types'
 import { useBulkProviderSwitchActions } from '@renderer/workspace/hook/actions/bulkProviderSwitch'
+import { DEMOTING_SWITCH_FIDELITY } from '@renderer/workspace/hook/actions/testing/recordedProjectionFidelity'
 
 const { switchAgentProvider } = vi.hoisted(() => ({ switchAgentProvider: vi.fn() }))
 // WHY the constant is restated here instead of pulled through `importOriginal`:
@@ -260,6 +261,19 @@ describe('bulk switch reporting', () => {
     expect(toastDurations[0]).toBe(10_000)
   })
 
+  // #927: a return whose fit shrank nothing can still be a lossy projection.
+  // The recorded Claude -> Codex summary demotes 19 entries with a null
+  // shrinkSummary; before #927 the batch toasted it as clean.
+  it('surfaces projection loss even when nothing was shrunk', async () => {
+    switchAgentProvider.mockResolvedValue({ status: 'switched', shrinkSummary: null, projectionFidelity: DEMOTING_SWITCH_FIDELITY })
+    const { result, toasts, toastDurations } = harness(batchOf('a'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toasts[0]).toContain('history: 19 demoted')
+    expect(toastDurations[0]).toBe(10_000)
+  })
+
   it('keeps the default duration when nothing was lost', async () => {
     switchAgentProvider.mockResolvedValue({ status: 'switched', shrinkSummary: null })
     const { result, toastDurations } = harness(batchOf('a'))
@@ -273,6 +287,23 @@ describe('bulk switch reporting', () => {
 // #1271: a batch holds the app (the modal locks input) for up to five minutes
 // per agent. A stop requested during the batch ends it after the agent in
 // flight, and the summary says what was not attempted.
+// #1384 review b/c: the FORWARD batch has no per-pane toast, so its summary
+// note is that flow's only disclosure of projection loss.
+describe('switchAgentsToProvider projection loss', () => {
+  it('names the loss a native (unshrunk) switch reported', async () => {
+    const { result, state, toasts, toastDurations } = harness(null)
+    ;(state.sessions as Record<string, unknown>).a = { cwd: '/recorded', kind: 'claude', title: 'a' }
+    switchAgentProvider.mockResolvedValue({
+      status: 'switched', strategy: 'native', shrinkSummary: null, newSessionId: 'a-new', projectionFidelity: DEMOTING_SWITCH_FIDELITY,
+    })
+    await result.current.switchAgentsToProvider(['a'] as never, 'codex', {
+      allowSourceTurns: false, compactOnArrival: false, sourceCompactionConfirmed: false,
+    })
+    expect(toasts.at(-1)).toContain('history: 19 demoted')
+    expect(toastDurations.at(-1)).toBe(10_000)
+  })
+})
+
 describe('switchAgentsToProvider stop', () => {
   it('stops before the next agent and reports the rest as not attempted', async () => {
     const { result, state, toasts } = harness(null)

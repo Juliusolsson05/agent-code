@@ -4,6 +4,7 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import { DEMOTING_SWITCH_FIDELITY } from '@renderer/workspace/hook/actions/testing/recordedProjectionFidelity'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -197,6 +198,8 @@ describe('switchAgentProvider', () => {
       // translated at all (#821).
       strategy: 'native',
       shrinkSummary: null,
+      // Nothing was projected, so there is no report to carry (#927).
+      projectionFidelity: null,
     })
 
     expect(switchProvider).toHaveBeenCalledWith(expect.objectContaining({
@@ -365,6 +368,7 @@ describe('switchAgentProvider', () => {
       truncatedBeforeSwitch: false,
       strategy: 'raw',
       shrinkSummary: null,
+      projectionFidelity: DEMOTING_SWITCH_FIDELITY,
     })
     const replaceSession = vi.fn().mockResolvedValue('target-pane')
     const compactAfterSwitch = vi.fn().mockResolvedValue({ ok: false, message: 'Claude did not accept /compact: composer unavailable' })
@@ -422,7 +426,9 @@ describe('switchAgentProvider', () => {
     })
 
     // The switch itself succeeded and says nothing about the follow-up.
-    expect(result).toMatchObject({ status: 'switched', newSessionId: 'target-pane' })
+    // #1384 review b/c: the populated report main returned reaches every
+    // renderer consumer through this relay (an `undefined` relay survived).
+    expect(result).toMatchObject({ status: 'switched', newSessionId: 'target-pane', projectionFidelity: DEMOTING_SWITCH_FIDELITY })
     // Addressed to the NEW pane, with the target transcript the switch wrote.
     expect(compactAfterSwitch).toHaveBeenCalledWith({
       sessionId: 'target-pane',

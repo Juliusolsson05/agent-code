@@ -30,6 +30,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 
 import { listRewindPrompts, rewindSession } from './rewindSession.js'
 import { projectGrokNativeResume } from 'agent-transcript-parser'
+import { losslessProjection } from './testing/losslessProjection.js'
 
 const sourceConversation = {
   schemaVersion: 1 as const,
@@ -70,7 +71,7 @@ describe('rewindSession neutral integration', () => {
       promptImages: [],
       promptAttachments: [],
     })
-    mocks.project.mockResolvedValue({ values: [{ type: 'session_meta' }] })
+    mocks.project.mockResolvedValue(losslessProjection([{ type: 'session_meta' }]))
     mocks.sessionId.mockReturnValue('new-session')
     mocks.write.mockResolvedValue('/target/rollout.jsonl')
   })
