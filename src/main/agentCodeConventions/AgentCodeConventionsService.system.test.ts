@@ -788,6 +788,9 @@ describe('user-visible errors name the problem, never the path or the OS text (#
         expect(message).not.toContain(root)
         expect(message).not.toMatch(/ENOTDIR|not a directory,/)
       }
+      // The raw error goes to the log (review of #1456, c: suppressing only
+      // the ENOTDIR log passed every test).
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ code: 'ENOTDIR' }))
     } finally {
       warn.mockRestore()
     }

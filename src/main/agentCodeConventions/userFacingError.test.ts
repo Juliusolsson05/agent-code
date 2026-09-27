@@ -43,6 +43,12 @@ describe('userFacingSkillError', () => {
       'Failed at \\\\server\\share',
       'C:/Users/Ann',
       'file:///tmp/x',
+      // Review of #1456 (c): any non-word character before the slash starts a path.
+      'Provider failed [/Users/Alice/secret]',
+      'failed {/tmp}',
+      'failed </tmp>',
+      'failed a,/tmp',
+      'failed x;/tmp',
       'first line\nsecond line',
       'x'.repeat(301),
     ]) {
@@ -52,6 +58,12 @@ describe('userFacingSkillError', () => {
       // Review of #1456 (a), a surviving mutation: logging only for system
       // errors left these rewrites with no diagnostic trail.
       expect(warn).toHaveBeenCalledWith(expect.any(String), raw)
+    }
+  })
+
+  it('keeps prose that only looks like a path, and relative package paths', () => {
+    for (const text of ['Choose one and/or the other.', 'Check the file/folder.', 'The package contains a symbolic link: scripts/a.sh']) {
+      expect(userFacingSkillError(new Error(text))).toBe(text)
     }
   })
 
@@ -67,7 +79,11 @@ describe('userFacingSkillError', () => {
     // failed: git ls-remote`); only the child-process rule refuses it.
     const quiet = Object.assign(new Error('Command failed: git ls-remote'), { cmd: 'git ls-remote', code: 128, stderr: '' })
     expect(userFacingSkillError(quiet)).toBe(GENERIC_SKILL_ERROR)
-    expect(userFacingSkillError(new TypeError('fetch failed'))).toBe(GENERIC_SKILL_ERROR)
+    const fetchFailed = new TypeError('fetch failed')
+    expect(userFacingSkillError(fetchFailed)).toBe(GENERIC_SKILL_ERROR)
+    // Review of #1456 (c), a surviving mutation: suppressing the log for a
+    // TypeError passed. Every rewrite must leave its raw error in the log.
+    expect(warn).toHaveBeenCalledWith(expect.any(String), fetchFailed)
     expect(userFacingSkillError(new SyntaxError('Unexpected token } in JSON at position 5'))).toBe(GENERIC_SKILL_ERROR)
   })
 
@@ -95,16 +111,25 @@ describe('userFacingSkillError', () => {
     ['EPERM', 'Agent Code does not have permission to use this location.'],
     ['EROFS', 'This location is on a read-only volume.'],
     ['ENOSPC', 'There is no space left on the disk.'],
+    ['EDQUOT', 'There is no space left on the disk.'],
     ['ENOENT', 'A file or folder Agent Code needs is missing.'],
     ['ENOTDIR', 'A file is in the way where a folder should be.'],
     ['EISDIR', 'A folder is in the way where a file should be.'],
     ['EEXIST', 'Something already exists where Agent Code needs to write.'],
+    ['ENOTEMPTY', 'Something already exists where Agent Code needs to write.'],
     ['EBUSY', 'The file is busy. Try again in a moment.'],
     ['EMFILE', 'The system is out of open files. Try again in a moment.'],
+    ['ENFILE', 'The system is out of open files. Try again in a moment.'],
     ['ENOTFOUND', 'Agent Code could not reach the network.'],
+    ['EAI_AGAIN', 'Agent Code could not reach the network.'],
+    ['ECONNREFUSED', 'Agent Code could not reach the network.'],
+    ['ECONNRESET', 'Agent Code could not reach the network.'],
+    ['ETIMEDOUT', 'Agent Code could not reach the network.'],
   ])('%s has its own sentence', (code, sentence) => {
     const error = Object.assign(new Error(`${code}: something, open '/x/y'`), { code, syscall: 'open' })
     expect(userFacingSkillError(error)).toBe(sentence)
+    // Review of #1456 (c): every code's raw error reaches the log.
+    expect(warn).toHaveBeenCalledWith(expect.any(String), error)
   })
 
   it('shows a curated reason without its path, and logs the path', () => {

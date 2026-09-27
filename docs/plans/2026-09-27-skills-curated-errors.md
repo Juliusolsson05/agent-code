@@ -51,3 +51,13 @@ The raw error always goes to the main log whenever the text is rewritten (q22).
 | **b2, major:** fetch's `TypeError('fetch failed')` was kept raw, with no log | valid (already fixed in `5d5e8c8d`) | Pinned: a Node-shaped fetch rejection gets the fixed sentence and its cause is logged. The raw-message mutant is red. |
 | **b4, minor:** errno sentences named "skill" locations for state-file failures | valid | Every sentence is location-neutral (the row says where), and the generic one too. Each code is pinned to its exact words; b's ENOTDIR→ENOENT mutant is red. |
 | **b5, minor:** classified git failures dropped the raw error from the log | valid | `classifyGitHubSkillSourceError` logs the raw error once for every branch. Test red at `5d5e8c8d`. |
+
+## Review round 1, c (codex at `356c14b8`): FIX-BEFORE-MERGE
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **c1, major:** a bracketed path (`Provider failed [/Users/…]`) was kept, because `[` was not a listed delimiter | valid | `PATH_LIKE` treats ANY non-word character before the slash as a path start (bracket, brace, angle, comma and semicolon forms pinned). Prose with a letter before the slash (`and/or`, `file/folder`) and relative package paths are pinned as kept. The old-regex mutant is red. |
+| **c2, minor:** the logging of some rewrites was unpinned (suppressing it for ENOTDIR, or for TypeError, passed) | valid | Every errno code in the table and the TypeError case assert the raw error is logged, and the ENOTDIR system test asserts its log. Both mutants red. |
+| **c3, minor:** the per-code table was only partly pinned (EDQUOT → the network sentence passed) | valid | All 18 codes are pinned to their exact sentences; the mutant is red. |
+
+c also confirmed both #1427 system tests fail on origin/main for the stated reason.

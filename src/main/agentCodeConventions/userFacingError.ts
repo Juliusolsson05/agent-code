@@ -49,9 +49,13 @@ const SENTENCES: Record<string, string> = {
 }
 export const GENERIC_SKILL_ERROR = 'Agent Code could not read or write the files it needs.'
 const MAX_KEPT_MESSAGE = 300
-// Anything that starts like a path: `/x`, `~/`, `./`, `../`, a UNC `\\host`,
-// or a drive letter, at the start or after a space, quote, paren, `=` or `:`.
-const PATH_LIKE = /(^|[\s'"`(=:])(?:\/[^\s'"`]|~[\/\\]|\.{1,2}[\/\\]|\\\\|[A-Za-z]:[\/\\])|file:\/\//
+// Anything that starts like a path: `/x`, `~/`, `./`, `../`, a UNC `\\\\host`,
+// a drive letter or `file://`, at the start or after ANY character that is not
+// part of a word (letters, digits, `_`, `.`, `-`). The first version listed the
+// allowed delimiters and missed `[`, so `Provider failed [/Users/…]` was kept
+// (review of #1456, c). Prose like `and/or` or `file/folder` has a letter
+// before the slash and is not a path.
+const PATH_LIKE = /(^|[^\w.\-])(?:\/[^\s'"`\])}>,;]|~[\/\\]|\.{1,2}[\/\\]|\\\\|[A-Za-z]:[\/\\])|file:\/\//
 const OWN_ERROR_NAMES = new Set(['Error', 'GitHubSkillSourceError', 'GitHubSkillDiscoveryLimitError'])
 
 function systemCode(error: unknown): string | null {
