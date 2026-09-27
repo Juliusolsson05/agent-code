@@ -191,12 +191,34 @@ export class WorkflowBridge {
       const references = (await this.service.listStoredRunReferences())
         .filter((reference): reference is typeof reference & { clientId: string } => Boolean(reference.clientId))
       const clientIds = new Set(references.map(reference => reference.clientId))
-      // Storage order does not matter: upsertRun's home rule keeps an
-      // aliased run from displacing, or being displaced by, a pane's own runs
-      // in another cwd, whichever is filed first.
+      // A run's home is its lineage root's clientId, not its own (#1325
+      // round-4 review B): a Resume registers under the pane that SHOWS the
+      // parent, which is the alias target when the parent came through an
+      // alias, so the child's stored clientId names the target while it
+      // belongs with its parent. The live path inherits the parent's home in
+      // registerRun; this is the same answer rebuilt from storage, and it has
+      // to be computed from the whole inventory first because storage lists
+      // parents and children in no particular order. A lineage that loops or
+      // whose parent is not stored stops at the last run found.
+      const byRunId = new Map(references.map(reference => [reference.runId, reference]))
+      const homeOf = (reference: (typeof references)[number]): string => {
+        const seen = new Set<string>()
+        let current = reference
+        while (current.resumedFromRunId && !seen.has(current.runId)) {
+          seen.add(current.runId)
+          const parent = byRunId.get(current.resumedFromRunId)
+          if (!parent) break
+          current = parent
+        }
+        return current.clientId
+      }
+      // With every home known up front, storage order does not matter:
+      // upsertRun's home rule keeps an aliased run from displacing, or being
+      // displaced by, a pane's own runs in another cwd, whichever is filed
+      // first.
       for (const reference of references) {
         const { cwd, clientId, ...run } = reference
-        this.upsertRun(this.resolveSession(clientId), cwd, run, clientId)
+        this.upsertRun(this.resolveSession(clientId), cwd, run, homeOf(reference))
       }
       await this.pruneAliases(loaded, clientIds)
     }
