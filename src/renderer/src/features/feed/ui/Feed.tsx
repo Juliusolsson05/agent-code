@@ -258,10 +258,9 @@ export type FeedProps = Props
 //
 // That duplicate class is now prevented at its source. The ghost
 // reducer (`reconcileUpstream` in src/renderer/src/session-runtime/ghosts.ts)
-// supersedes Codex text ghosts by rollout response id once the
-// rollout mapper stamps `codexTurnId` on committed entries
-// (src/renderer/src/workspace/workspaceStore.ts::codexTurnIdFromRollout
-// + stampCodexTurnId). The live view and the merged feed are split
+// supersedes Codex text ghosts by provider item id, which the rollout
+// mapper stamps on committed entries as `codexItemId` (#1231; the earlier
+// turn-id match could never succeed). The live view and the merged feed are split
 // by turn ownership (src/renderer/src/session-runtime/mergedEntries.ts), so
 // there is no longer any path by which the same assistant text can
 // reach both surfaces at once.

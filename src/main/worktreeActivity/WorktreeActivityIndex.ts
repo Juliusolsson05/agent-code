@@ -62,6 +62,7 @@ class LruMap<K, V> {
       this.map.delete(oldestKey)
     }
   }
+  delete(key: K): void { this.map.delete(key) }
   keys(): IterableIterator<K> { return this.map.keys() }
   values(): IterableIterator<V> { return this.map.values() }
   get size(): number { return this.map.size }
@@ -94,6 +95,13 @@ export class WorktreeActivityIndex {
     IN_MEMORY_MAX_ENTRIES,
   )
   private totalOnDisk = 0
+  /**
+   * The transcript paths the on-disk index holds, as bare strings (a few thousand paths, not the
+   * entries). WHY (review of #1349): the LRU only ever aged entries out, so a transcript that left
+   * the index could return from it as a cache hit (a same-count swap was then never persisted) and
+   * light-user summaries kept serving it. The LRU is now trimmed to these keys on every save.
+   */
+  private onDiskKeys = new Set<string>()
   private summaryCache:
     | {
         key: string
@@ -148,6 +156,7 @@ export class WorktreeActivityIndex {
       // — the parsed object is already in scope from the load above
       // and will go out of scope after this function returns.
       this.totalOnDisk = Object.keys(file.transcripts).length
+      this.onDiskKeys = new Set(Object.keys(file.transcripts))
       const sortedByRecency = Object.entries(file.transcripts).sort(
         // Higher indexedAt = more recent. Insert oldest first so the
         // newest end up at the LRU's most-recently-used end.
@@ -289,15 +298,46 @@ export class WorktreeActivityIndex {
         }
       }
 
-      const updatedAt = Date.now()
-      const indexFile: WorktreeActivityIndexFile = {
-        version: WORKTREE_ACTIVITY_INDEX_VERSION,
-        updatedAt,
-        transcripts: nextTranscripts,
+      const checkedAt = Date.now()
+      // WHY a refresh that found nothing new writes nothing (#767 item 3): the
+      // background refresh runs at least every 60 s, and it used to stamp a
+      // new `updatedAt`, stringify the whole index (30 MB+ for heavy users)
+      // and replace the file even when every candidate was a cache hit. The
+      // new `updatedAt` also keyed `collectSummaries`' cache, so it threw
+      // away the very cache that stops a 10 s UI poll from re-reading the
+      // index. Content changed only if something was (re)parsed or the SET of
+      // transcript paths moved (a deleted, added, swapped or newly unparsable
+      // transcript). Otherwise this was a re-check: record WHEN we checked
+      // (`lastIndexedAt`, shown as "Activity index updated") and keep the
+      // content generation (`updatedAt`) as it was.
+      const nextKeys = Object.keys(nextTranscripts)
+      const nextCount = nextKeys.length
+      // No `skippedFiles` term (review of #1349): a previously indexed transcript that now fails to
+      // parse drops out of the key set, which the set comparison sees; one that never parsed changes
+      // nothing, and counting it forced a full rewrite on every refresh while it stayed unreadable.
+      // A key new to the index is always a cache miss (the LRU below holds only on-disk keys), so it
+      // is parsed; a key that left changes the count. Together these cover every change to the set.
+      const contentChanged =
+        this.status.parsedFiles > 0 ||
+        nextCount !== this.onDiskKeys.size
+      if (contentChanged) {
+        const indexFile: WorktreeActivityIndexFile = {
+          version: WORKTREE_ACTIVITY_INDEX_VERSION,
+          updatedAt: checkedAt,
+          transcripts: nextTranscripts,
+        }
+        await saveWorktreeActivityIndex(indexFile)
+        this.updatedAt = checkedAt
+        this.onDiskKeys = new Set(nextKeys)
+        // A transcript that left the index must leave the hot cache too (review of #1349):
+        // collectSummaries iterates the LRU for light users (<= IN_MEMORY_MAX_ENTRIES), and the
+        // LRU only ever aged entries out, so a deleted session kept appearing in the Worktrees
+        // summary until something else evicted it or the app restarted.
+        for (const key of [...this.transcripts.keys()]) {
+          if (!this.onDiskKeys.has(key)) this.transcripts.delete(key)
+        }
       }
-      await saveWorktreeActivityIndex(indexFile)
-      this.updatedAt = updatedAt
-      this.totalOnDisk = Object.keys(nextTranscripts).length
+      this.totalOnDisk = nextCount
       // Repopulate the LRU from the just-saved set. We don't clear
       // first: set() re-inserts existing keys at the MRU end and
       // evicts oldest once size exceeds the cap, so iterating the
@@ -311,7 +351,7 @@ export class WorktreeActivityIndex {
       for (const key of Object.keys(nextTranscripts)) {
         this.transcripts.set(key, nextTranscripts[key])
       }
-      this.status.lastIndexedAt = updatedAt
+      this.status.lastIndexedAt = checkedAt
       this.status.stale = false
       span.end({
         candidates: candidates.length,

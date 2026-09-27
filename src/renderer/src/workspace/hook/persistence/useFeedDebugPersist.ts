@@ -1,11 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 
-// Ship runtime feed-debug entries on a fixed cadence. The main-side queue writes them to
+// Ship runtime feed-debug entries on a fixed cadence, when persistence is enabled (see
+// useFeedDebugPersistenceEnabled). The main-side queue writes them to
 // STATE_DIR/feed-debug/<sessionId>.jsonl.
 //
 // `persistedFeedDebugIdRef` tracks the largest feed-debug entry id
@@ -67,8 +70,33 @@ function isSameGeneration(refs: WorkspaceRefs, sessionId: SessionId, epochMs: nu
   return (refs.latestRuntimesRef.current[sessionId]?.feedDebugEpochMs ?? null) === epochMs
 }
 
+/**
+ * Whether the feed-debug ring is also written to disk (#767 item 1).
+ *
+ * WHY off unless diagnostics were asked for: this ran for every session in every build, one IPC
+ * and one append per second, up to 128 MiB per session file and 22 % of the debug budget, with no
+ * switch at all. The ring itself keeps recording regardless — Save Debug Logs and the Feed Debug
+ * panel read the in-memory ring (saveDebugBundle `runtime.feedDebugLog`), not this file — so what
+ * the default loses is only the after-crash copy. Either existing switch turns it on:
+ * AGENT_CODE_DEV_DEBUG=1 (the developer diagnostics switch) or the "aggressive debug persistence"
+ * setting ("keep more debug data on disk"). Turning it on mid-session persists the ring's retained
+ * tail on the next tick, since the cursors start at zero.
+ */
+export function useFeedDebugPersistenceEnabled(): boolean {
+  const devDebug = useDevDebugConfig(state => state.enabled)
+  const aggressive = useAppStore(state => state.settings.aggressiveDebugPersistence)
+  return devDebug || aggressive === true
+}
+
 export function useFeedDebugPersist(refs: WorkspaceRefs): void {
+  const enabled = useFeedDebugPersistenceEnabled()
+  // The CURRENT switch, read by the cleanup below. The cleanup runs both on unmount and when
+  // `enabled` flips to false; only the first may flush (review of #1349: turning persistence off
+  // still wrote one last batch to disk).
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
   useEffect(() => {
+    if (!enabled) return
     const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
       if (runtime.feedDebugLog.length === 0) return
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
@@ -152,9 +180,12 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
     // the ACK then leaves the id in `known`, and the next absence sends a new
     // release.
     //
-    // Known residual: a release that fails during the hook's own teardown
-    // (workspace unmount) has no later tick to retry it. Main keeps that one
-    // session's few numbers until it exits.
+    // Known residuals: a release that fails during the hook's own teardown
+    // (workspace unmount) has no later tick to retry it; and this effect only
+    // runs while persistence is on (#767), so a session removed while
+    // persistence is off is not released. Either way main keeps that one
+    // session's few numbers until it exits (main only has state for sessions
+    // that appended while persistence was on).
     const known = new Set<SessionId>()
     const releasing = new Set<SessionId>()
     const seenSinceRelease = new Set<SessionId>()
@@ -197,9 +228,12 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       window.clearInterval(timer)
       // Best effort for ordinary workspace teardown. Existing in-flight writes
       // retain their cursor reservation; never race them with a final batch.
-      flush()
+      // Not when persistence was just switched off: the user asked for no
+      // more disk writes.
+      if (enabledRef.current) flush()
     }
   }, [
+    enabled,
     refs.inFlightFeedDebugIdRef,
     refs.latestRuntimesRef,
     refs.persistedFeedDebugIdRef,
