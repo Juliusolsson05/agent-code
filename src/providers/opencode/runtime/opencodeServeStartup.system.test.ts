@@ -1,0 +1,41 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, expect, it } from 'vitest'
+import { SpawnedServer } from 'opencode-headless'
+
+import { OPENCODE_SERVE_STARTUP_TIMEOUT_MS } from './opencodeSession.js'
+
+// #1355, on the real readiness mechanism: SpawnedServer spawns a real child
+// and waits for its listen line. The stub stands in for a CPU-starved but
+// healthy `opencode serve` (the real binary took 16.7-43.1 s under load,
+// 0.6-0.9 s idle): it prints the same listen line OpenCode prints, 11 s late.
+// Under the package's 10 s default that start was killed; under the app's
+// wait it succeeds.
+const dirs: string[] = []
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+function slowServe(delayMs: number): string {
+  const dir = mkdtempSync(join(tmpdir(), 'opencode-slow-serve-'))
+  dirs.push(dir)
+  const bin = join(dir, 'opencode')
+  writeFileSync(bin, `#!/usr/bin/env node
+setTimeout(() => { console.log('opencode server listening on http://127.0.0.1:4096') }, ${delayMs})
+setInterval(() => {}, 1000)
+`)
+  chmodSync(bin, 0o755)
+  return bin
+}
+
+it('waits out a slow but healthy serve start', async () => {
+  const server = new SpawnedServer({ binary: slowServe(11_000), cwd: tmpdir(), startupTimeoutMs: OPENCODE_SERVE_STARTUP_TIMEOUT_MS })
+  const info = await server.start()
+  expect(info.url).toBe('http://127.0.0.1:4096')
+  await server.stop()
+}, 30_000)
+
+it('is what the package default killed', async () => {
+  const server = new SpawnedServer({ binary: slowServe(11_000), cwd: tmpdir() })
+  await expect(server.start()).rejects.toThrow('to report its URL')
+}, 30_000)

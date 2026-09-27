@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const headlessControl = vi.hoisted(() => ({
   exitDuringStart: false,
   stop: vi.fn(async (): Promise<void> => {}),
+  options: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('opencode-headless', async () => {
   const { EventEmitter } = await import('node:events')
   return {
     OpencodeHeadless: class FakeOpencodeHeadless extends EventEmitter {
+      constructor(options: Record<string, unknown>) {
+        super()
+        headlessControl.options.push(options)
+      }
       readonly screen = new EventEmitter()
       readonly committed = new EventEmitter()
       readonly semantic = new EventEmitter()
@@ -22,7 +27,7 @@ vi.mock('opencode-headless', async () => {
   }
 })
 
-import { OpencodeSession } from './opencodeSession.js'
+import { OPENCODE_SERVE_STARTUP_TIMEOUT_MS, OpencodeSession } from './opencodeSession.js'
 
 describe('OpencodeSession composer readiness', () => {
   beforeEach(() => {
@@ -56,5 +61,15 @@ describe('OpencodeSession composer readiness', () => {
     expect(exited).toHaveBeenCalledWith({ exitCode: 17 })
     expect(started).not.toHaveBeenCalled()
     expect(headlessControl.stop).toHaveBeenCalledTimes(1)
+  })
+
+  // #1355: the package's serve readiness default (10 s) was sized for an idle
+  // machine; under load a healthy server took 16.7-43.1 s to report its URL
+  // (plan evidence). The app owns the process and passes its own wait.
+  it('gives the spawned server the load-tolerant startup wait', async () => {
+    headlessControl.options.length = 0
+    await new OpencodeSession({ cwd: '/tmp/project' }).start()
+    expect(headlessControl.options.at(-1)).toMatchObject({ startupTimeoutMs: OPENCODE_SERVE_STARTUP_TIMEOUT_MS })
+    expect(OPENCODE_SERVE_STARTUP_TIMEOUT_MS).toBeGreaterThan(43_100)
   })
 })
