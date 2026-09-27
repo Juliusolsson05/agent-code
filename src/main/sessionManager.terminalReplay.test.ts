@@ -40,8 +40,9 @@ it('a remounted shell terminal gets the alternate screen and mouse mode its evic
   for (let written = 0; written < 300 * 1024; written += frame.length) shell.emit('data', frame)
 
   const replay = manager.attachTerminal(sessionId)
+  expect(replay).not.toBeNull()
   const terminal = new Terminal({ cols: 120, rows: 36, allowProposedApi: true })
-  await new Promise<void>(done => terminal.write(replay, done))
+  await new Promise<void>(done => terminal.write(replay!, done))
   expect(terminal.buffer.active.type).toBe('alternate')
   expect(terminal.modes.mouseTrackingMode).toBe('vt200')
   await manager.kill(sessionId)

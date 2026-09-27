@@ -1,4 +1,5 @@
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
+import { carryWorkflowRuns } from '@renderer/workspace/hook/actions/workflowCarry'
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
@@ -304,6 +305,9 @@ export function useUndoCloseAction(
       // it — a linked child closed earlier names it as `linkedParentId` — so
       // publish old -> new; see UndoLineage.
       publish({ sessions: new Map([[entry.sessionId, newSessionId]]) })
+      // The same conversation is back (--resume), so its workflow runs come
+      // back with it (#1325 review A3); they are filed under the closed id.
+      carryWorkflowRuns(new Map([[entry.sessionId, newSessionId]]))
       return 'restored'
     },
     [refs.stateRef, respawn, sessionActions, setState, showToast],
@@ -414,6 +418,8 @@ export function useUndoCloseAction(
         sessions: idMap,
         tabs: new Map([[entry.tab.id, restoredTab.id]]),
       })
+      // Every restored agent resumed its conversation; its runs follow it.
+      carryWorkflowRuns(idMap)
       return 'restored'
     },
     [respawn, setState, showToast],
