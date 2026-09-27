@@ -28,3 +28,8 @@ The fixture `testing/fixtures/conversations/codex-0157/typed-prompt-head.json` i
 - **De-duplication collapsed a prompt repeated in a later turn.** A cross-carrier pair is now matched only within 4 records, since Codex writes the two carriers of one prompt back to back. No local file has both carriers, so there was no recorded distance to calibrate against.
 - **Fixture label.** The fixture's `session_meta.cli_version` is 0.157.0; the label is corrected.
 - **Tests (red on the previous commit):** a prompt followed by 4 MiB of output; a prompt whose line straddles the last chunk boundary, laid out deterministically; a prompt repeated in a later turn. Dropping the carried partial line fails the straddle test.
+
+## Verification a (round 3)
+- **The exact reported repeat (two records on, 48 h later) still paired.** The pair window is now records AND time: at most 4 records apart and at most 5 s apart. One prompt's two carriers share its instant.
+- **A user line longer than two read chunks was lost.** A window with no newline is all one line, so all of it is carried to the next, earlier chunk, and nothing is parsed or dropped.
+- **One of 452 files has its newest prompt 55.8 MB from the end, past the 32 MiB bound. Kept by design.** This is the degraded no-index path, rollouts reach gigabytes, and an unbounded scan per discovery is exactly the store-sized cost the head limit prevents. The WHY comment says so.

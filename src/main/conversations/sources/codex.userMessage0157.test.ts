@@ -130,3 +130,25 @@ it('keeps a prompt the user really repeated in a later turn', async () => {
   ])
   expect(row.userTexts.slice(1)).toEqual(['repeat', 'different', 'repeat'])
 })
+
+it('keeps a later repeat even when it is only two records on', async () => {
+  // #1407 verification a, round 2: the exact reported sequence, with no
+  // records between. The pair window is records AND time.
+  const row = await discoverRow([
+    ...records,
+    legacyMessage(at(1000), 'repeat'),
+    legacyMessage(at(2000), 'different'),
+    userMessage(at(48 * 3600 * 1000), [text('repeat')]),
+  ])
+  expect(row.userTexts.slice(1)).toEqual(['repeat', 'different', 'repeat'])
+})
+
+it('finds a newest prompt whose single line is longer than two read chunks', async () => {
+  // #1407 verification a, round 2: a window with no newline is all one line.
+  const later = at(46.6 * 3600 * 1000)
+  const bulk = 'y'.repeat(64 * 1024)
+  const head = [...records, ...Array.from({ length: 250 }, (_, i) => ({ timestamp: at(10 + i), type: 'response_item', payload: { type: 'reasoning', summary: [], content: bulk } }))]
+  const huge = userMessage(later, [text('z'.repeat(1_200_000))])
+  const row = await discoverRow([...head, huge])
+  expect(row.lastUserActivityAt).toBe(Date.parse(later))
+})

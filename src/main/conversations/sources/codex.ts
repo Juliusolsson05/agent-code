@@ -109,18 +109,25 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
   // matching identical text anywhere in the head collapsed a prompt the user
   // really repeated in a later turn. Codex writes the two carriers of ONE
   // prompt back to back, so the other carrier's record must be close.
+  // Both a record window AND a time window (#1407 verification a, round 2):
+  // records alone let the same text typed two days later, two records on,
+  // pass for the other carrier. One prompt's carriers share its instant.
   const PAIR_WINDOW_RECORDS = 4
-  const pending = { legacy: [] as Array<{ text: string; at: number }>, item: [] as Array<{ text: string; at: number }> }
+  const PAIR_WINDOW_MS = 5_000
+  const pending = { legacy: [] as Array<{ text: string; at: number; ts: number }>, item: [] as Array<{ text: string; at: number; ts: number }> }
   const noteUser = (carrier: 'legacy' | 'item', text: string, timestamp: unknown, recordIndex: number) => {
+    const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
     const other = carrier === 'legacy' ? pending.item : pending.legacy
-    const match = other.findIndex(candidate => candidate.text === text && recordIndex - candidate.at <= PAIR_WINDOW_RECORDS)
+    const match = other.findIndex(candidate =>
+      candidate.text === text &&
+      recordIndex - candidate.at <= PAIR_WINDOW_RECORDS &&
+      Number.isFinite(ts) && Number.isFinite(candidate.ts) && Math.abs(ts - candidate.ts) <= PAIR_WINDOW_MS)
     if (match >= 0) {
       other.splice(match, 1)
     } else {
-      pending[carrier].push({ text, at: recordIndex })
+      pending[carrier].push({ text, at: recordIndex, ts })
       if (out.userTexts.length < 6) out.userTexts.push(text)
     }
-    const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
     if (Number.isFinite(ts)) out.lastUserAt = Math.max(out.lastUserAt ?? ts, ts)
   }
   let records = 0
@@ -172,7 +179,11 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
 // it is. The scan is bounded: a file with no user record in its last
 // TAIL_ACTIVITY_MAX_BYTES keeps the head's time, which is at worst the old
 // behaviour. It runs only for heads that hit their record bound, and the
-// result is cached by mtime with the head.
+// result is cached by mtime with the head. WHY a bound at all, knowing it
+// misses (1 of 452 local 0.157 files had its newest prompt 55.8 MB from the
+// end, #1407 verification a): this is the degraded no-index path, rollouts
+// reach gigabytes, and an unbounded scan per discovery is the store-sized
+// cost the head limit above exists to prevent.
 const TAIL_ACTIVITY_CHUNK_BYTES = 512 * 1024
 const TAIL_ACTIVITY_MAX_BYTES = 32 * 1024 * 1024
 
@@ -189,12 +200,18 @@ async function newestUserTimestampInTail(file: string): Promise<number | null> {
       const chunk = Buffer.alloc(end - start)
       await handle.read(chunk, 0, chunk.length, start)
       const window = Buffer.concat([chunk, carry])
-      const text = window.toString('utf8')
       // Unless this chunk starts the file, its first line is incomplete: keep
-      // its bytes for the next (earlier) chunk rather than dropping it.
-      const firstBreak = start > 0 ? window.indexOf(0x0a) : -1
-      const complete = firstBreak >= 0 ? window.subarray(firstBreak + 1).toString('utf8') : text
-      carry = firstBreak >= 0 ? window.subarray(0, firstBreak) : Buffer.alloc(0)
+      // its bytes for the next (earlier) chunk rather than dropping it. A
+      // window with NO newline is all one line longer than a chunk: carry the
+      // whole of it (#1407 verification a, round 2), never parse or drop it.
+      const firstBreak = window.indexOf(0x0a)
+      if (start > 0 && firstBreak < 0) {
+        carry = window
+        end = start
+        continue
+      }
+      const complete = start > 0 ? window.subarray(firstBreak + 1).toString('utf8') : window.toString('utf8')
+      carry = start > 0 ? window.subarray(0, firstBreak) : Buffer.alloc(0)
       const newest = newestUserTimestampIn(complete.split('\n'))
       if (newest !== null) return newest
       if (start === 0) break
