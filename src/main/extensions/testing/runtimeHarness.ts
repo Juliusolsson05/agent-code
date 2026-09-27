@@ -112,7 +112,17 @@ void (async () => {
     // keychain. Production wires createSafeStorageCodec (src/main/index.ts).
     secrets: createExtensionSecretStore({ isEncryptionAvailable: () => true, encrypt: value => Buffer.from(value, 'utf8'), decrypt: cipher => cipher.toString('utf8') }, harnessSecretsDirectory),
   })
-  const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, startupTimeoutMs: 3000, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
+  // WHY no startupTimeoutMs override (#1334): the harness used to set 3000 ms,
+  // a test-local tightening of the product's 10 s default that no assertion
+  // exercises (nothing here checks a startup-deadline retirement). Under load a
+  // COLD Electron activation takes longer than 3 s: in 12 parallel runs of
+  // this harness, 6 retired the runtime with "did not finish starting before
+  // the deadline", so all 40 cold commands were rejected and the bounded-cold
+  // assertion read 0 of 32. The startup deadline itself is product behaviour
+  // (runtimeService.ts), so the harness now uses the product's value instead
+  // of racing it. invocationTimeoutMs stays short on purpose: the stalled-engine
+  // case below needs an invocation deadline to fire quickly.
+  const service = new ExtensionRuntimeService({ preload: process.env.AGENT_CODE_EXTENSION_RUNTIME_PRELOAD ?? join(root!, 'preload.cjs'), capabilities, invocationTimeoutMs: 1500, onStatus: status => statuses.push(status) })
 
   const viewEvents: Array<{ owner: number; event: RuntimeViewEvent }> = []
   const views = new ExtensionRuntimeViews(service, (owner, event) => viewEvents.push({ owner, event }))
