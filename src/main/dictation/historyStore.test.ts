@@ -71,6 +71,21 @@ describe('dictation history store', () => {
     expect(after.stats.lifetimeSessions).toBe(1)
   })
 
+  // The renderer's "saved / absent" verdict (steering q71) rests on this: main
+  // does not await its append, so a History read issued right after it must
+  // queue behind the append rather than read the file first.
+  it('serialises a read issued before an un-awaited append settles behind it', async () => {
+    void appendEntry({ ...input('one two'), id: 'row-pending' })
+    const snapshot = await readHistory()
+    expect(snapshot.entries.map(entry => entry.id)).toContain('row-pending')
+  })
+
+  // Steering q71: main stamps the id so the renderer can find THIS row.
+  it('stores a caller-supplied id verbatim', async () => {
+    const snapshot = await appendEntry({ ...input('one two'), id: 'row-from-main' })
+    expect(snapshot.entries[0]!.id).toBe('row-from-main')
+  })
+
   it('keeps lifetime totals when the list is cleared, and drops them only on reset', async () => {
     await appendEntry(input('one two'))
     const cleared = await clearEntries()

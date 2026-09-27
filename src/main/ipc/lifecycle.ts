@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 
+import { noteWorkspaceRecovered } from '@main/storage/debugRetention.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
@@ -170,6 +171,11 @@ export function registerLifecycleIpc(
     // closed on purpose (see @shared/lifecycle/events) and a renderer from a
     // different build must not be able to widen it at runtime.
     if (!isSessionLifecycleEventName(r.name)) return
+    // The boot prune waits for the first recovered workspace (#775). Before
+    // the rate limiter on purpose: a dropped report must not delay it. A
+    // renderer that lies here can only open the gate early, which is the
+    // pre-#775 behavior, so trusting it costs nothing.
+    if (r.name === 'rehydrate.complete') noteWorkspaceRecovered()
     const isTranscriptObservationName = isCodexTranscriptObservationEventName(r.name)
     // Stage 0 contains facts from four authorities. IPC is only the renderer's
     // authority boundary: accepting a provider/main name here would let a
