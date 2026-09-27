@@ -40,6 +40,8 @@ type SessionEntry = {
   state: WorkingState
   kind: string | null
   openedAt: number | null
+  /** The session's tldrIdentity as main registered it at spawn. */
+  identity?: string
 }
 
 export type AgentActivityRecorderDeps = {
@@ -47,6 +49,16 @@ export type AgentActivityRecorderDeps = {
   store: AgentActivityStore
   /** Main checkout of the repository holding `cwd`, or `cwd` itself. */
   resolveRepoRoot: (cwd: string) => Promise<string>
+  /**
+   * The tldrIdentity main registered for a session at spawn (the built-in MCP
+   * host's scope). WHY (#1342 review b): the workspace projection reaches main
+   * only through the renderer's debounced autosave, so a replacement that
+   * finishes a turn and then crashes before that save never gets a placement
+   * and its interval would stay keyed by its bare session id forever. The
+   * renderer hands the identity to main in the spawn request, so main knows
+   * it before any turn can close.
+   */
+  identityOf?: (sessionId: string) => string | undefined
 }
 
 export class AgentActivityRecorder {
@@ -82,6 +94,9 @@ export class AgentActivityRecorder {
       if (kind === 'terminal') return
       const entry = this.entry(sessionId)
       entry.kind = kind
+      // Read at start, while the registration certainly exists: it can be
+      // revoked with the process before this recorder handles 'removed'.
+      entry.identity = this.deps.identityOf?.(sessionId) ?? entry.identity
     })
     manager.on('semantic-event', ({ sessionId, event }) => {
       this.signal(sessionId, { type: 'semantic', event })
@@ -218,7 +233,7 @@ export class AgentActivityRecorder {
       // or unrelated resume, which is the line between "same agent" and "new
       // agent". The name stays first so rows already keyed by it keep their
       // key; the session id is the last resort for an agent with neither.
-      agentKey: placement?.agentNameId ?? placement?.tldrIdentity ?? sessionId,
+      agentKey: placement?.agentNameId ?? placement?.tldrIdentity ?? entry.identity ?? sessionId,
       // What the user sees on the pane, then the agent's spoken name, then the folder.
       label: placement?.title ?? agentName ?? (cwd ? basename(cwd) : sessionId),
       role: placement?.orchestration ? 'orchestration' : 'user',

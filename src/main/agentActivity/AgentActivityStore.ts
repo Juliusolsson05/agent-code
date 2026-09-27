@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { SystemSuspension } from '@shared/types/systemSuspension.js'
@@ -111,6 +111,8 @@ export class AgentActivityStore {
   private tail: Promise<void> = Promise.resolve()
   /** aliases.jsonl in memory, loaded on first use. */
   private aliases: Map<string, string> | null = null
+  /** Files whose tail this process has checked or written (appendLines). */
+  private readonly cleanTails = new Set<string>()
   /** Context ids already written to each month file this process has touched. */
   private readonly monthContexts = new Map<string, Map<string, number>>()
 
@@ -160,7 +162,7 @@ export class AgentActivityStore {
       }
       const intervalLine: IntervalLine = { t: 'i', c: id, s: interval.startedAt, e: interval.endedAt }
       lines.push(JSON.stringify(intervalLine))
-      await appendFile(join(this.dir, `${month}.jsonl`), `${lines.join('\n')}\n`)
+      await this.appendLines(join(this.dir, `${month}.jsonl`), lines)
     })
   }
 
@@ -204,10 +206,7 @@ export class AgentActivityStore {
       const fresh = edges.filter(([from, to]) => from && to && from !== to && aliases.get(from) !== to)
       if (fresh.length === 0) return
       await mkdir(this.dir, { recursive: true })
-      await appendFile(
-        join(this.dir, 'aliases.jsonl'),
-        `${fresh.map(([from, to]) => JSON.stringify({ f: from, t: to })).join('\n')}\n`,
-      )
+      await this.appendLines(join(this.dir, 'aliases.jsonl'), fresh.map(([from, to]) => JSON.stringify({ f: from, t: to })))
       // Only after the append: the in-memory map is what later calls dedupe
       // against, so an edge set before a failed write would never be retried
       // (steering q63).
@@ -215,15 +214,76 @@ export class AgentActivityStore {
     })
   }
 
-  /** The key an agent key finally resolves to through the alias chain. */
-  private resolveKey(aliases: ReadonlyMap<string, string>, key: string): string {
-    const seen = new Set<string>()
-    let current = key
-    while (aliases.has(current) && !seen.has(current)) {
-      seen.add(current)
-      current = aliases.get(current)!
+  /**
+   * Append whole lines, first ending a torn last line if a crash left one.
+   *
+   * WHY (#1342 review b and c): the readers skip a torn final line, but the
+   * next append used to continue it, so the torn bytes and the first new
+   * record parsed as one bad line and BOTH were lost. For aliases.jsonl that
+   * silently un-joined an agent; the month files had the same flaw. Only the
+   * first write to each file in a process can meet a torn tail, so the check
+   * runs once per file.
+   */
+  private async appendLines(path: string, lines: readonly string[]): Promise<void> {
+    let text = `${lines.join('\n')}\n`
+    if (!this.cleanTails.has(path)) {
+      try {
+        const handle = await open(path, 'r')
+        try {
+          const { size } = await handle.stat()
+          if (size > 0) {
+            const last = Buffer.alloc(1)
+            await handle.read(last, 0, 1, size - 1)
+            if (last[0] !== 0x0a) text = `\n${text}`
+          }
+        } finally {
+          await handle.close()
+        }
+      } catch {
+        // No file yet: nothing to repair.
+      }
     }
-    return current
+    await appendFile(path, text)
+    this.cleanTails.add(path)
+  }
+
+  /**
+   * One representative key per group of keys the aliases join.
+   *
+   * WHY groups rather than following each edge's direction (#1342 review b
+   * and c): edges come from separate projections and can point both ways. A
+   * session that got a name after the fact is the common case: `child ->
+   * tldr-x` while names were off, then `tldr-x -> child` once the name
+   * reconciler gave the pane its own session id as its name. Following
+   * directions stopped at that cycle with a different answer per starting
+   * key, splitting one agent in two. Every edge states "the same agent", so
+   * the keys it connects form one group whatever the direction; the smallest
+   * key represents the group, which only needs to be stable and shared.
+   */
+  private groupKeys(aliases: ReadonlyMap<string, string>): Map<string, string> {
+    const parent = new Map<string, string>()
+    const find = (key: string): string => {
+      let root = key
+      while (parent.has(root) && parent.get(root) !== root) root = parent.get(root)!
+      // Path compression keeps repeated lookups flat.
+      let current = key
+      while (current !== root) {
+        const next = parent.get(current)!
+        parent.set(current, root)
+        current = next
+      }
+      return root
+    }
+    for (const [from, to] of aliases) {
+      if (!parent.has(from)) parent.set(from, from)
+      if (!parent.has(to)) parent.set(to, to)
+      const a = find(from)
+      const b = find(to)
+      if (a !== b) parent.set(a < b ? b : a, a < b ? a : b)
+    }
+    const representative = new Map<string, string>()
+    for (const key of parent.keys()) representative.set(key, find(key))
+    return representative
   }
 
   appendSuspension(suspension: SystemSuspension): Promise<void> {
@@ -291,7 +351,7 @@ export class AgentActivityStore {
     const firstMonth = monthKey(Date.UTC(new Date(from).getUTCFullYear(), new Date(from).getUTCMonth() - 1, 1))
     const lastMonth = monthKey(to)
     const out: RecordedInterval[] = []
-    const aliases = await this.loadAliases()
+    const groups = this.groupKeys(await this.loadAliases())
     for (const name of await this.monthFiles()) {
       const month = name.slice(0, 7)
       if (month < firstMonth || month > lastMonth) continue
@@ -299,7 +359,7 @@ export class AgentActivityStore {
       for (const line of parseJsonLines(await readFile(join(this.dir, name), 'utf8'))) {
         if (line.t === 'c' && isNumber(line.c)) {
           const context = parseContext(line)
-          if (context) contexts.set(line.c, { ...context, agentKey: this.resolveKey(aliases, context.agentKey) })
+          if (context) contexts.set(line.c, { ...context, agentKey: groups.get(context.agentKey) ?? context.agentKey })
         } else if (line.t === 'i' && isNumber(line.c) && isNumber(line.s) && isNumber(line.e)) {
           const context = contexts.get(line.c)
           if (context && line.e > from && line.s < to) out.push({ context, startedAt: line.s, endedAt: line.e })

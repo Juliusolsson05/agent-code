@@ -46,12 +46,13 @@ function windows(): PersistedWindow[] {
 let dir: string
 const recorders: AgentActivityRecorder[] = []
 
-async function mount() {
+async function mount(identities: Record<string, string> = {}) {
   const manager = new EventEmitter()
   const recorder = new AgentActivityRecorder({
     manager: manager as unknown as Pick<SessionManager, 'on'>,
     store: new AgentActivityStore(dir),
     resolveRepoRoot: async cwd => cwd.split('/.worktrees/')[0],
+    identityOf: sessionId => identities[sessionId],
   })
   recorders.push(recorder)
   await recorder.start()
@@ -232,6 +233,58 @@ describe('AgentActivityRecorder', () => {
     expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
   })
 
+  // #1342 verification b: the successor finishes a turn and the app dies
+  // before its row is ever saved, so no projection can alias it. Main got
+  // the identity with the spawn, so the interval carries it from the start.
+  it('keys a successor by the identity main got at spawn when its row never reaches main', async () => {
+    const { manager, recorder, phase } = await mount({ 'child-2': 'tldr-reviewer' })
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    manager.emit('removed', { sessionId: 'child' })
+    manager.emit('started', { sessionId: 'child-2', kind: 'codex' })
+    phase('child-2', 'responding')
+    vi.setSystemTime(T0 + 2 * HOUR)
+    phase('child-2', 'idle')
+    await recorder.flush()
+
+    // A restart from the workspace as last saved: the successor is not in it.
+    const restarted = new AgentActivityRecorder({
+      manager: new EventEmitter() as unknown as Pick<SessionManager, 'on'>,
+      store: new AgentActivityStore(dir),
+      resolveRepoRoot: async cwd => cwd.split('/.worktrees/')[0],
+    })
+    recorders.push(restarted)
+    const summary = await restarted.summary('24h')
+    expect(summary.totals.agentMs).toBe(2 * HOUR)
+    expect(summary.totals.agents.user + summary.totals.agents.orchestration).toBe(1)
+  })
+
+  // #1342 verification b and c: turning names on after a session already had
+  // an identity gives the pane its own session id as its name, so the edges
+  // point both ways (child -> tldr, then tldr -> child). One agent either way.
+  it('keeps one agent when names are turned on after its identity was recorded', async () => {
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    phase('child', 'idle')
+    await recorder.flush()
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, agentNameId: 'child' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada', child: 'Bo' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + 2 * HOUR)
+    phase('child', 'idle')
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agents.orchestration).toBe(1)
+    expect(summary.totals.agentMs).toBe(2 * HOUR)
+  })
+
   // An agent that gets a name later: its tldrIdentity rows join the name.
   it('joins an agent\'s earlier rows when it gets a name', async () => {
     const { recorder, phase } = await mount()
@@ -270,10 +323,12 @@ describe('AgentActivityRecorder', () => {
     expect(summary.totals.agents).toEqual({ user: 1, orchestration: 1 })
   })
 
-  // Rows already written for a named agent are keyed by its name; an agent
-  // that has both keeps that key, so turning #1302's fallback on does not
-  // split a named agent's history in two.
-  it('keeps a named agent keyed by its name when it also has a tldrIdentity', async () => {
+  // Rows already written for a named agent are keyed by its name. An agent
+  // that also has a tldrIdentity must stay ONE agent with that history: the
+  // name is its key, and the alias groups it with its tldrIdentity and session
+  // id, so which of them represents the group does not matter (the key is
+  // only a grouping and React key).
+  it('counts a named agent with a tldrIdentity as the agent its name already keys', async () => {
     const { recorder, phase } = await mount()
     const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
     window.workspace.sessions.lead = { ...window.workspace.sessions.lead, tldrIdentity: 'tldr-lead' }
@@ -282,7 +337,8 @@ describe('AgentActivityRecorder', () => {
     vi.setSystemTime(T0 + HOUR)
     phase('lead', 'idle')
     const summary = await recorder.summary('24h')
-    expect(summary.projects[0].topAgents.map(agent => agent.agentKey)).toEqual(['name-1'])
+    expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Ada', HOUR]])
+    expect(summary.totals.agents.user).toBe(1)
   })
 
   it('closes an agent removed mid-turn at removal, and counts one still working up to now', async () => {
