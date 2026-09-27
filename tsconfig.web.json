@@ -64,6 +64,7 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
+    "testing/setup/storage.ts",
     // These fixture exporters import canonical renderer/shared boundaries on
     // purpose: recorded corpora must be minimized by the same privacy and
     // identity rules the app uses. Keep them in the web project so callback
