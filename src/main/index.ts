@@ -1307,8 +1307,13 @@ async function startApp(): Promise<void> {
   builtInMcpHost.setDependencies({
     browserPockets,
     // #1339: the `usage` domain reads through the same cached, sanitized
-    // reader as root management's usage.read, never with `force`.
-    readUsageSnapshot: () => readUsageSnapshotForTools(),
+    // reader as root management's usage.read, never with `force`. Passed as
+    // the function itself, not a wrapper: usage_read calls it with no
+    // argument (pinned in usageTools.test.ts) and the reader's no-force
+    // default is pinned in usageSnapshotForTools.test.ts, so there is no
+    // unpinned lambda here where a `{ force: true }` could slip in (#1451
+    // review c).
+    readUsageSnapshot: readUsageSnapshotForTools,
     tldrStore,
     goalStore,
     tldrEnforcement,

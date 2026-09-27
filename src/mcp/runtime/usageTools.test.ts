@@ -16,7 +16,7 @@ import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'
 // kept as errors.
 const recorded = JSON.parse(readFileSync(join(import.meta.dirname,
   '../../../testing/fixtures/usage/snapshot-2026-09-27.json'), 'utf8')) as {
-  snapshot: { providers: Array<{ id?: string; source?: string; error?: unknown }> }
+  snapshot: { providers: Array<{ provider: string; status: string; message?: string; rows?: unknown }> }
 }
 
 async function connect(domains: BuiltInMcpDomain[], readUsageSnapshot?: () => Promise<unknown>) {
@@ -35,6 +35,10 @@ describe('usage MCP domain (#1339)', () => {
     const tools = (await client.listTools()).tools.map(tool => tool.name)
     expect(tools).toEqual(['usage_read'])
     expect(tools.some(name => name.startsWith('ac_'))).toBe(false)
+    // The instructions carry what agents need to read the answer right (the
+    // ~30 s cache, error rows are not zeros); they ship WITH the domain
+    // (#1451 review c: dropping them left every test green).
+    expect(client.getInstructions() ?? '').toContain('usage_read')
     const result = await client.callTool({ name: 'usage_read', arguments: {} })
     expect(result.isError).not.toBe(true)
     const value = JSON.parse((result.content as Array<{ text: string }>)[0]!.text) as { ok: boolean; snapshot: typeof recorded.snapshot }
@@ -44,7 +48,7 @@ describe('usage MCP domain (#1339)', () => {
     expect(value.snapshot.providers.length).toBe(recorded.snapshot.providers.length)
     // The recorded Grok source had an expired login: it reaches the agent as an
     // error row, not as a provider with zero usage.
-    const grok = value.snapshot.providers.find(p => (p as { provider?: string }).provider === 'grok') as { status?: string; rows?: unknown } | undefined
+    const grok = value.snapshot.providers.find(p => p.provider === 'grok')
     expect(grok?.status).toBe('error')
     expect(grok?.rows).toBeUndefined()
     expect(read).toHaveBeenCalledTimes(1)
