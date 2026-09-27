@@ -46,6 +46,7 @@ import { readdir, readFile, writeFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
+import { createHash } from 'node:crypto'
 
 import {
   assertHomesBelongTo,
@@ -61,6 +62,9 @@ const BUNDLE_ROOTS = [
   join(homedir(), '.config/agent-code/debug-bundles/autosave'),
 ]
 const OUT = join(process.cwd(), 'testing/fixtures/agent-activity/runtime-states.json')
+
+/** sha256 of `git show 15e43abe^:testing/fixtures/agent-activity/runtime-states.json` (blob d2653405). */
+const RECORDED_CORPUS_SHA256 = '39d3fac8b937604410ca5f0728351ba5d684ac2ecfea31c35c790b3d1853f867'
 
 /** The four screen mirrors. Recorded as lengths, then removed — see the header. */
 const SCREEN_FIELDS = ['screen', 'screenMarkdown', 'recentScreen', 'recentScreenMarkdown'] as const
@@ -234,8 +238,8 @@ async function main(): Promise<void> {
 }
 
 /**
- * `--redact-from <pre-redaction.json> --home-user <recorder>` (both required): re-run ONLY the privacy pass over an
- * already-extracted, unredacted fixture and write the result to OUT.
+ * `--redact-from <pre-redaction.json> --home-user <recorder>` (both required): re-run ONLY the privacy pass over the
+ * ONE recorded pre-redaction fixture (checked by sha256, see redactFrom) and write the result to OUT.
  *
  * WHY (review of #1353, steering q70/q72): the debug bundles the corpus came from are gone from
  * most machines, but the pre-redaction fixture is in git history (`15e43abe^`). This mode is how the
@@ -251,6 +255,16 @@ async function main(): Promise<void> {
 async function redactFrom(source: string, homeUser: string): Promise<void> {
   const text = await readFile(source, 'utf8')
   assertHomesBelongTo(text, homeUser)
+  // WHY only the one recorded corpus (manager, steering q78: "the last hardening round"): four
+  // review rounds each found another input shape a pattern-based pass lets through (a private
+  // project outside Development/, a hyphenated or placeholder-shaped foreign home, …). This mode
+  // exists to REPRODUCE the committed file, not to redact arbitrary corpora, so it accepts exactly
+  // the pre-redaction fixture it was audited against: `15e43abe^`, git blob d2653405. Its output was
+  // audited key by key. A new corpus comes from the live extraction (main), and needs its own audit.
+  const digest = createHash('sha256').update(text).digest('hex')
+  if (digest !== RECORDED_CORPUS_SHA256) {
+    throw new Error('--redact-from only accepts the recorded pre-redaction corpus (15e43abe^); refusing any other source')
+  }
   const fixture = JSON.parse(text) as Record<string, unknown>
   fixture.provenance = RUNTIME_STATES_PROVENANCE
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
@@ -278,7 +292,13 @@ if (argv.includes('--redact-from')) {
     console.error((error as Error).message)
     process.exit(2)
   }
-  await redactFrom(redactSource, homeUser)
+  try {
+    await redactFrom(redactSource, homeUser)
+  } catch (error) {
+    // Only the curated message: every refusal above names counts, never a path or user.
+    console.error((error as Error).message)
+    process.exit(2)
+  }
 } else if (argv.length > 0) {
   // An unknown flag is a typo of the mode above, never a request for a live extraction.
   console.error(`unknown arguments: ${argv.length}; only --redact-from <file> --home-user <recorder> is accepted`)

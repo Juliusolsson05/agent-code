@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -15,6 +15,24 @@ const REPO = resolve(__dirname, '../../..')
 const SCRIPT = join(REPO, 'scripts/extract-agent-activity-runtimes.mts')
 const TSX = join(REPO, 'node_modules/.bin/tsx')
 const SENTINEL = '{"sentinel":true}\n'
+// `git rev-parse 15e43abe^:testing/fixtures/agent-activity/runtime-states.json`
+const RECORDED_CORPUS_BLOB = 'd2653405a1aaf3869060d0124cba80fd0fbcf939'
+
+function hasRecordedCorpus(): boolean {
+  try {
+    execFileSync('git', ['cat-file', '-e', RECORDED_CORPUS_BLOB], { cwd: REPO, stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+// The recorder is read from the corpus itself, so this file never spells the name out.
+function recorderOf(corpus: string): string {
+  const match = /\/Users\/([^/"]+)\//.exec(corpus)
+  if (!match) throw new Error('recorded corpus has no home path')
+  return match[1]!
+}
 
 // A pre-redaction record in the shape the corpus has: the recorder's home in a path and in
 // Claude's dash-encoded projects dir.
@@ -123,11 +141,26 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes -
     expect(await readFile(output, 'utf8')).toBe(SENTINEL)
   }, 60_000)
 
-  it('writes the redacted file with the right --home-user', async () => {
+  // Manager, steering q78: --redact-from reproduces the ONE recorded corpus; any other source is
+  // refused even when every home in it is the named recorder (the pattern-based pass cannot
+  // promise to recognise every private identifier in an arbitrary corpus).
+  it('refuses a source other than the recorded corpus, even with the right --home-user', async () => {
     const { input, output } = await stage()
-    expect((await extract(['--redact-from', input, '--home-user', 'recorder'])).code).toBe(0)
-    const written = await readFile(output, 'utf8')
-    expect(written).not.toContain('recorder')
-    expect(written).toContain('/Users/fixture-/Desktop/Development/agent-code')
+    const result = await extract(['--redact-from', input, '--home-user', 'recorder'])
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toMatch(/only accepts the recorded pre-redaction corpus/)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
   }, 60_000)
+
+  // The positive path: the recorded corpus, re-redacted, is byte-identical to the committed file.
+  // It needs the pre-redaction blob from git history, which a shallow CI checkout does not have;
+  // there it is skipped, and the byte-identity is also stated (with its command) in the PR.
+  it.skipIf(!hasRecordedCorpus())('reproduces the committed fixture from the recorded corpus', async () => {
+    const { output } = await stage()
+    const input = join(cwd!, 'recorded.json')
+    await writeFile(input, execFileSync('git', ['cat-file', 'blob', RECORDED_CORPUS_BLOB], { cwd: REPO }))
+    const recorder = recorderOf(await readFile(input, 'utf8'))
+    expect((await extract(['--redact-from', input, '--home-user', recorder])).code).toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(await readFile(join(REPO, 'testing/fixtures/agent-activity/runtime-states.json'), 'utf8'))
+  }, 120_000)
 })

@@ -88,9 +88,17 @@ that leak developer data. Each item below is taken from the issue, with its curr
        canonically; anything else refuses as ambiguous.
      - A bare `--redact-from` or an unknown flag exits before any read or write, instead of falling
        through to the live extraction.
-     - **Stated limit:** an identifier with no path around it, in a field the policy doesn't treat as
-       text, can't be recognised by any pattern. This corpus has none, and a regeneration from a
-       different corpus needs its own per-key audit.
+     - **Final restriction (manager, q78's "last hardening round"):** `--redact-from` accepts only
+       the ONE recorded pre-redaction corpus (`15e43abe^`, blob `d2653405`, checked by sha256). Every
+       review round found another shape a pattern-based pass lets through (the latest: a private
+       project outside `Development/`). This mode exists to reproduce the audited, committed file,
+       not to redact arbitrary corpora.
+       - A process test reproduces the committed file byte for byte from the blob. It is skipped on a
+         shallow checkout.
+     - **Stated residual:** the LIVE extraction still uses the pattern-based pass. It can't recognise
+       every identifier: one with no path around it in a non-text field, or a project outside
+       `Development/`. A new live corpus therefore needs its own per-key audit before it is
+       committed, as this one had.
    - The fleet fixtures:
      - `startup` in live-fleet and `bringdown` in both are same-length placeholders.
      - Their `provenance` now says so.
