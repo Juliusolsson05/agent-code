@@ -21,6 +21,7 @@ import { defaultOpencodeDataDir, OpencodeConversationSource } from './sources/op
 import { GrokConversationSource } from './sources/grok.js'
 import { PiConversationSource } from './sources/pi.js'
 import type { ConversationSource, SourceConversation } from './sources/types.js'
+import { LruMap } from '@shared/lib/lruMap.js'
 
 // The single consumer of the catalog and the single owner of caches.
 //
@@ -51,6 +52,7 @@ const DISCOVERY_FRESH_MS = 3_000
 // half the bytes keeps the first search near the budget, and everything the
 // tail window misses is still searchable by label, first prompt and title.
 const SEARCH_PROMPT_ROWS = 150
+const SEARCH_PROMPT_CACHE_MAX_ENTRIES = 1024
 const SEARCH_PROMPTS_PER_ROW = 40
 const SEARCH_BYTES_PER_ROW = 128 * 1024
 
@@ -62,7 +64,12 @@ export class ConversationService {
   private discovery: Discovery | null = null
   private inflight: { key: string; promise: Promise<Discovery> } | null = null
   private discoveries = 0
-  private readonly promptCache = new Map<string, { at: number; texts: string[] }>()
+  // Search prompts per row, LRU-bounded (#1278): every row ever searched stayed
+  // here for the life of the process. Same bound and eviction as the prompt
+  // folder's cache (prompts/promptFolder.ts), and for the same reason it is
+  // far above SEARCH_PROMPT_ROWS: every row one search folds must still be
+  // cached when the next keystroke arrives, or search thrashes and re-reads.
+  private readonly promptCache = new LruMap<string, { at: number; texts: string[] }>(SEARCH_PROMPT_CACHE_MAX_ENTRIES)
 
   constructor(private readonly deps: {
     sources: ConversationSource[]

@@ -155,6 +155,13 @@ export class CodexConversationSource implements ConversationSource {
       }
     }
     await visit(join(this.deps.codexHome, 'sessions'), 0)
+    // Forget heads of rollouts that are gone (#1278). `heads` is keyed by
+    // file and was never pruned, so every rollout Codex ever wrote and later
+    // deleted or archived kept its parsed head for the life of the process.
+    // The walk covers the whole sessions tree whatever the scope, so it is
+    // the exact set of files a head can still belong to. No count cap: a cap
+    // below the store's size would make every full discovery re-read it.
+    for (const file of this.heads.keys()) if (!files.has(file)) this.heads.delete(file)
     this.walk = { at: Date.now(), files }
     return files
   }

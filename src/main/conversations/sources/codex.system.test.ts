@@ -1,4 +1,4 @@
-import { rename } from 'node:fs/promises'
+import { rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -88,6 +88,25 @@ describe('Codex conversation source', () => {
     }
     const everywhere = await source.discover({ scope: 'everywhere', family: await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees }) })
     expect(everywhere.filter(r => r.origin === 'scan')).toHaveLength(counts.codex.unindexedSampled)
+  })
+
+  it('forgets the parsed head of a rollout that is gone (#1278)', async () => {
+    // `heads` is keyed by file and was never pruned: every rollout Codex ever
+    // wrote and then deleted or archived kept its head for the process's life.
+    const { corpus, listWorktrees } = await setup()
+    await rename(join(corpus.codexHome, 'state_5.sqlite'), join(corpus.codexHome, 'state_5.sqlite.away'))
+    const source = new CodexConversationSource({ codexHome: corpus.codexHome, walkTtlMs: 0 })
+    const heads = (source as unknown as { heads: Map<string, unknown> }).heads
+    const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
+    const first = await source.discover({ scope: 'everywhere', family })
+    const gone = first[0]!.file!
+    expect(heads.has(gone)).toBe(true)
+
+    await rm(gone)
+    const second = await source.discover({ scope: 'everywhere', family })
+    expect(second.map(r => r.file)).not.toContain(gone)
+    expect(heads.has(gone)).toBe(false)
+    expect(heads.size).toBe(second.length)
   })
 
   it('falls back to the rollout scan when the index is missing and reports why', async () => {
