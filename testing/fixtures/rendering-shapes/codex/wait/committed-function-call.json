@@ -69,6 +69,66 @@
         "content": "Script completed\nWall time 0.0 seconds\nOutput:\n\n{\"chunk_id\":\"f49289\",\"wall_time_seconds\":30.026283333,\"session_id\":73581,\"original_token_count\":0,\"output\":\"\"}",
         "is_error": false
       }
+    },
+    {
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_cN84OXhpi28XV48aQKP136bq",
+        "name": "wait",
+        "input": {
+          "cell_id": "11",
+          "yield_time_ms": 1000,
+          "max_tokens": 6000
+        }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "call_cN84OXhpi28XV48aQKP136bq",
+        "content": "Script running with cell ID 11\nWall time 1.0 seconds\nOutput:\n",
+        "is_error": false
+      }
+    }
+  ],
+  "emptyAcknowledgementEvidence": "A second real codex-cli 0.157.1 plain `wait` pair (2026-09-27, verbatim; ids and timings only): the cell was still running, so the output is only the transport envelope ('Script running with cell ID 11 / Wall time / Output:' with nothing after). The rollout mapper KEEPS it (it is not empty text), and the dispatcher absorbs it as an empty continuation acknowledgement. 587 of the corpus's 3,257 plain wait results have this shape (review c of #1361).",
+  "emptyAcknowledgementRecords": [
+    {
+      "timestamp": "2026-09-27T05:45:38.099Z",
+      "ordinal": 109,
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "id": "fc_0934773a9028e34b016ab8ad818e2487d0ab20cf61cd444765",
+        "name": "wait",
+        "arguments": "{\"cell_id\":\"11\",\"yield_time_ms\":1000,\"max_tokens\":6000}",
+        "call_id": "call_cN84OXhpi28XV48aQKP136bq",
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "01a0e163-78a5-7993-a2e8-b5af5b0e179b",
+          "create_time": 1790487937.027585
+        }
+      },
+      "metadata": {
+        "client_authored": false,
+        "user_input_order": 5
+      }
+    },
+    {
+      "timestamp": "2026-09-27T05:45:39.154Z",
+      "ordinal": 111,
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "id": "fco_01a0e165-c852-7410-8d1d-036fa2ce6f4b",
+        "call_id": "call_cN84OXhpi28XV48aQKP136bq",
+        "output": "Script running with cell ID 11\nWall time 1.0 seconds\nOutput:\n",
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "01a0e163-78a5-7993-a2e8-b5af5b0e179b",
+          "create_time": 1790487939.154632
+        }
+      },
+      "metadata": {
+        "client_authored": false,
+        "fallback_token_limit_override": 12000
+      }
     }
   ]
 }
