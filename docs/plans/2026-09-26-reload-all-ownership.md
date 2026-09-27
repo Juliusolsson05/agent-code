@@ -34,3 +34,11 @@ Round 1's synchronous batch commit left two intervals open, and round 2 (reviewe
 Not adopted: routing reload through `replaceSession`. That function spawns successor-first with the ambient dangerous-mode setting and a Codex same-rollout handoff; reload kills first and passes an explicit mode. Merging them changes behavior beyond this fix.
 
 Tests (on the same fixture): C2 is asserted with the later spawn still held, closing through the real `killSession` action. C1 closes while the reload's kill is held. C3 counts the retry and the next reload's retry. A1 covers both directions: a reported durable id is kept, and a provisional id is not carried. 4 of these are red on the round-2 head; the `providerRuntime` and provisional-id cases pin existing guards, and a mutation removing either one fails them.
+
+## Verification pass (#1326, reviewers A and C) and steering q56
+- **A remembered orphan was never retried once no live agents remained (A, C; Major).** The retry loop ran after the no-live-agents return. It now runs first.
+- **A refused kill cleared the retry record (C; Major).** `session:kill-owned` answers `false` for both "gone" and "not yours, still running". Only `true` now clears the record. A backend that was already gone costs one IPC call per later reload.
+- **An all-failed reload no longer pruned unowned rows (A; Minor).** They are pruned once, up front. The per-commit prune is removed: with the up-front prune it was a second mechanism nothing pinned (A's surviving mutation).
+- **Relationship and pin remap survivors (C).** The early-successor test now asserts, while the later spawn is still held, that a child's `linkedParentId`/`orchestrationParentId` and the pin already follow the successor. Removing either remap fails it.
+
+Tests: 3 new cases (red on `f897700f`) plus the interval assertions above. Workspace suites: 1354/1354.

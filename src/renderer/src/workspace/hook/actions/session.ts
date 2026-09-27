@@ -1499,20 +1499,32 @@ export function useSessionActions(
   // killAll), so it is never ownerless. It does not throw: the other agents
   // of this reload must still be restarted and filed (#1326 review A4).
   // The log line is curated: IPC error text can carry env values (q22).
+  //
+  // WHY a `false` answer is NOT treated as stopped (#1326 verification C):
+  // `session:kill-owned` answers false both for "nothing left to stop" and
+  // for "you do not own that backend" (a refused ownership proof or window
+  // lease), and in the second case the process is still running. The renderer
+  // cannot tell them apart, so only `true` clears the record. A backend that
+  // was already gone then costs one IPC call per later reload, which is the
+  // price of never forgetting one that is still alive.
   const killOrphan = useCallback(async (orphan: ReloadOrphan): Promise<void> => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await killSession(orphan.newId, 'reload.orphaned-successor', orphan.owner)
-        unstoppedReloadSuccessorsRef.current.delete(orphan.newId)
-        return
+        if (await killSessionBackendIfOwned(refs, orphan.newId, 'reload.orphaned-successor', orphan.owner)) {
+          unstoppedReloadSuccessorsRef.current.delete(orphan.newId)
+          return
+        }
+        // Refused (or already gone): not retried at once, a refusal will not
+        // change within this reload.
+        break
       } catch {
         // Retried once below, then remembered.
       }
     }
     unstoppedReloadSuccessorsRef.current.set(orphan.newId, orphan)
     // eslint-disable-next-line no-console
-    console.warn('[workspace] could not stop a reload successor of a closed agent; retrying on the next reload:', orphan.newId)
-  }, [killSession])
+    console.warn('[workspace] could not confirm a reload successor of a closed agent stopped; retrying on the next reload:', orphan.newId)
+  }, [refs])
 
   const reloadAgentSessionsNow = useCallback(
     async (dangerousMode: boolean) => {
@@ -1555,6 +1567,18 @@ export function useSessionActions(
         const kind = meta.kind ?? DEFAULT_PROVIDER
         return isAgentProviderKind(kind)
       })
+      // Successors an earlier reload spawned for an agent closed meanwhile
+      // and then could not confirm stopped (see killOrphan). Retried FIRST,
+      // before the no-live-agents return below (#1326 verification A/C): the
+      // user who closed every agent is exactly the one whose hidden
+      // successor would otherwise run until quit.
+      for (const orphan of [...unstoppedReloadSuccessorsRef.current.values()]) await killOrphan(orphan)
+
+      // Pruned up front, not only inside each successor's commit
+      // (#1326 verification A): a reload whose every respawn failed commits
+      // nothing, and it still announced above that it drops these rows.
+      if (staleIds.length > 0) setState(prev => ({ ...prev, sessions: pickOwnedSessions(prev.sessions, collectOwnedSessionIds(prev)) }))
+
       if (agentEntries.length === 0) return
 
       // Is `oldId` still the agent this loop set out to reload? (#1282) The
@@ -1581,11 +1605,6 @@ export function useSessionActions(
         })
         return live
       }
-
-      // Successors an earlier reload spawned for an agent closed meanwhile
-      // and then could not stop (see killOrphan). Retried first, so a
-      // transient IPC failure does not leave them running until quit.
-      for (const orphan of [...unstoppedReloadSuccessorsRef.current.values()]) await killOrphan(orphan)
 
       // WHY each agent is committed as soon as ITS spawn returns, and not in
       // one batch at the end (#1326 round-2 review C): while an early
@@ -1757,9 +1776,9 @@ export function useSessionActions(
           return next
         })
         setState(prev => {
-          // The unowned rows reported at the top are dropped by every commit
-          // (idempotent), so none survives the reload/autosave cycle.
-          const sessions = pickOwnedSessions(prev.sessions, collectOwnedSessionIds(prev))
+          // Unowned rows were already dropped once, up front (#1326
+          // verification A); this commit only swaps the one pair.
+          const sessions = { ...prev.sessions }
           delete sessions[oldId]
           // The successor carries its predecessor's LIVE pool membership (the
           // `...liveRest` above), so it keeps its project and its place, even

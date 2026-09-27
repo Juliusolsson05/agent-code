@@ -158,11 +158,21 @@ it('files an early successor before a later spawn returns, so closing it stops i
   const secondKind = probe.writer.getState().sessions[second]!.kind as 'claude' | 'codex'
   const firstKind = probe.writer.getState().sessions[first]!.kind as string
   const h = harness(secondKind)
+  // A child row that names the first agent as its parent, and a pin on it.
+  h.writer.setState(prev => ({
+    ...prev,
+    pinnedSessionIds: [first],
+    sessions: { ...prev.sessions, 'child-of-first': { ...prev.sessions[second]!, kind: 'terminal', linkedParentId: first, orchestrationParentId: first } },
+  }))
   let reload!: Promise<void>
   await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
   await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: secondKind })))
-  // The later spawn is still pending; the early successor is already the pane.
+  // The later spawn is still pending; the early successor is already the pane,
+  // and everything that pointed at the old id points at it (#1326
+  // verification C survivors: the relationship and pin remaps).
   expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeDefined()
+  expect(h.writer.getState().sessions['child-of-first']).toMatchObject({ linkedParentId: `${firstKind}-restarted`, orchestrationParentId: `${firstKind}-restarted` })
+  expect(h.writer.getState().pinnedSessionIds).toEqual([`${firstKind}-restarted`])
   expect(h.writer.getState().sessions[first]).toBeUndefined()
   expect(h.writer.getState().stage.lanes.map(lane => lane.selectedSessionId)).toContain(`${firstKind}-restarted`)
   // The user closes it through the real close action: its backend is killed.
@@ -415,4 +425,72 @@ it('shows the curated sentence on a failed respawn while a closed agent stays cl
   expect(after.sessions['claude-restarted']).toBeUndefined()
   expect(after.sessions[h.claudeLane]).toBeUndefined()
   expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
+})
+
+// #1326 verification A/C: a successor whose kill failed is remembered, and
+// the next reload must retry it EVEN WHEN no live agent is left to reload
+// (the user closed them all, which is exactly when it would run unseen).
+it('retries a remembered orphan when no live agent is left', async () => {
+  const h = harness('claude')
+  h.killHolds.set('claude-restarted', Promise.reject(new Error('kill IPC failed')))
+  h.killHolds.get('claude-restarted')!.catch(() => undefined)
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  await act(async () => { h.release(); await reload })
+  // The Codex successor is the last live agent; the user closes it too.
+  await act(async () => { await h.hook.result.current.killSession('codex-restarted', 'close.focused') })
+  const orphanKills = () => h.killOwnedSession.mock.calls.filter(([req]) => (req as { sessionId: string }).sessionId === 'claude-restarted').length
+  expect(orphanKills()).toBe(2)
+  h.killHolds.delete('claude-restarted')
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(orphanKills()).toBe(3)
+})
+
+// #1326 verification C: `session:kill-owned` answers false both for "gone"
+// and for "not yours" (the backend still runs). Only `true` may clear the
+// retry record.
+it('keeps retrying an orphan whose kill main refused', async () => {
+  const h = harness('claude')
+  h.killHolds.set('claude-restarted', Promise.resolve(false))
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  await act(async () => { h.release(); await reload })
+  const orphanKills = () => h.killOwnedSession.mock.calls.filter(([req]) => (req as { sessionId: string }).sessionId === 'claude-restarted').length
+  expect(orphanKills()).toBe(1)
+  // Next reload: still refused, still remembered.
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(orphanKills()).toBe(2)
+  // Main now stops it: the record clears and later reloads leave it alone.
+  h.killHolds.delete('claude-restarted')
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(orphanKills()).toBe(3)
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(orphanKills()).toBe(3)
+})
+
+// #1326 verification A: an unowned row (its project gone) is announced as
+// dropped by every reload, including one where every respawn fails and so
+// nothing is committed.
+it('drops unowned rows even when every respawn fails', async () => {
+  const h = harness('claude', { heldSpawnRejects: true })
+  h.spawnSession.mockImplementation(async () => { throw new Error('spawn failed') })
+  h.writer.setState(prev => ({
+    ...prev,
+    sessions: { ...prev.sessions, ghost: { ...prev.sessions[h.claudeLane]!, projectId: 'deleted-project' } },
+  }))
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(h.writer.getState().sessions.ghost).toBeUndefined()
+  expect(h.refs.latestRuntimesRef.current[h.claudeLane]).toMatchObject({ processStatus: 'failed' })
 })
