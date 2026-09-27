@@ -505,12 +505,15 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       // in the local corpus, against its custom-output form), so its result
       // lands in THIS envelope, not only in fp2-8571cc95. The dispatcher
       // deliberately shows a wait result with visible output as a "Command
-      // continuation" row and absorbs an empty one into the wait row; these
-      // two routes were catalogued for the custom-output sibling only, so every
-      // plain wait result was reported known-misrouted (45 sightings,
-      // 2026-08-26). Pinned by wait.plainResult.evidence.renderer.test.tsx.
+      // continuation" row; that route was catalogued for the custom-output
+      // sibling only, so every plain wait result was reported known-misrouted
+      // (45 sightings, 2026-08-26). Its empty-acknowledgement absorb route is
+      // deliberately NOT listed here: the rollout mapper drops empty plain
+      // outputs, so it has no real source (review of #1361). Known residual:
+      // this envelope carries no tool name, so a future dispatcher bug that
+      // tags a non-wait plain result `command.continuation` would also be
+      // accepted. Pinned by wait.plainResult.evidence.renderer.test.tsx.
       { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
-      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'command.continuation', reason: 'An empty successful wait acknowledgement is represented by its continuation invocation row.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
