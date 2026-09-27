@@ -1,5 +1,7 @@
 import { ipcMain } from 'electron'
 
+import { commitDurableOwnership } from '@main/ipc/workspace.js'
+import type { SessionManager } from '@main/sessionManager.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import {
   createAppWindow,
@@ -69,7 +71,10 @@ export function abandonPendingBequest(closedWindowId: string): void {
   for (const lease of pending.leases) releaseSession(lease)
 }
 
-export function registerWindowIpc(store: WorkspaceFileStore): void {
+export function registerWindowIpc(
+  store: WorkspaceFileStore,
+  manager: Pick<SessionManager, 'acknowledgePersistedSessionOwnership'>,
+): void {
   ipcMain.handle('window:new', () => {
     // A brand-new window gets a fresh id and therefore no persisted slice, so
     // its renderer takes the same `workspace:load → null` path as a fresh
@@ -95,6 +100,10 @@ export function registerWindowIpc(store: WorkspaceFileStore): void {
     // closed slice can finally be dropped. Any earlier and there would be an
     // interval in which neither the file nor any renderer held those sessions.
     await store.removeWindow(windowId)
+    // Dropping the slice changes the durable ownership set just as a save
+    // does: a Codex handoff whose predecessor only this slice still listed
+    // can commit now (#1338 review a). See commitDurableOwnership.
+    commitDurableOwnership(manager, store)
   })
 
   ipcMain.handle('window:adoption-refused', (evt, windowId: string) => {

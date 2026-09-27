@@ -183,7 +183,7 @@ describe('session routing through its real lifecycle callers', () => {
     const left = registry.createAppWindow()
     const right = registry.createAppWindow()
     const removeWindow = vi.fn(async () => {})
-    registerWindowIpc({ removeWindow } as never)
+    registerWindowIpc({ removeWindow } as never, { acknowledgePersistedSessionOwnership: () => [] })
     recordPendingBequest(left, right, [])
     harness.built[1]!.hooks.onRendererUnavailable()
     harness.built[1]!.hooks.onRendererReady()
@@ -324,6 +324,33 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     await harness.handlers.get('workspace:save')!({ sender: harness.built[1]!.webContents }, '{"workspace":{}}')
     expect(registry.windowForSession('predecessor')).toBeNull()
     expect(registry.windowForSession('bystander')).not.toBeNull()
+  })
+
+  // #1338 review a: the durable set also changes when a closed window's slice
+  // is dropped after its survivor confirms adoption. While that slice still
+  // listed the predecessor the survivor's save committed nothing; the drop
+  // must ask again, or the handoff and its lease stay pending until some
+  // unrelated later save.
+  it('ends a retired predecessor\'s claim when the adoption that dropped its last slice completes', async () => {
+    const left = registry.createAppWindow()
+    const right = registry.createAppWindow()
+    registry.claimSessionForWindow('predecessor', left)
+    registry.transferSessions(['predecessor'], right)
+    recordPendingBequest(left, right, ['predecessor'])
+    const slices = new Set([left, right])
+    const store = {
+      removeWindow: vi.fn(async (windowId: string) => { slices.delete(windowId) }),
+      // The closed window's slice lists the predecessor until it is removed.
+      sessionIds: () => new Set(slices.has(left) ? ['predecessor', 'successor'] : ['successor']),
+    }
+    const committing = {
+      acknowledgePersistedSessionOwnership: (ids: ReadonlySet<string>) =>
+        (ids.has('successor') && !ids.has('predecessor') ? ['predecessor'] : []),
+    }
+    registerWindowIpc(store as never, committing)
+    await harness.handlers.get('window:adoption-complete')!({ sender: harness.built[1]!.webContents }, left)
+    expect(store.removeWindow).toHaveBeenCalledWith(left)
+    expect(registry.windowForSession('predecessor')).toBeNull()
   })
 
   it('keeps the claim while a Codex replacement reservation still owns the session (#935 Codex review)', async () => {

@@ -27,6 +27,40 @@ import { captureSessionWindowLease, releaseSession, windowIdFor } from '@main/wi
 // The durability machinery (unique temp + rename, one admission-ordered queue
 // for reads and writes) moved to WorkspaceFileStore with its reasoning intact.
 
+/**
+ * Tell the manager which local ids are now durably owned, and end the window
+ * lease of every Codex handoff predecessor that commit retires.
+ *
+ * WHY a shared helper: the durable ownership set changes in TWO places, a
+ * window's save and the removal of a closed window's slice once a survivor
+ * confirmed adopting it (window:adoption-complete). Acknowledging only after
+ * saves missed the second (#1338 review a): while a closed window's slice
+ * still listed a predecessor, the survivor's save correctly committed
+ * nothing, and when the slice was then removed nobody asked again, so the
+ * handoff and its lease stayed pending until some unrelated later save.
+ * Callers run this only after the change is on disk.
+ */
+export function commitDurableOwnership(
+  manager: Pick<SessionManager, 'acknowledgePersistedSessionOwnership'>,
+  store: Pick<WorkspaceFileStore, 'sessionIds'>,
+): void {
+  const retired = manager.acknowledgePersistedSessionOwnership(store.sessionIds())
+  // A committed Codex same-rollout handoff retired these predecessors
+  // (#1283 item 2). The renderer never calls killOwnedSession for them,
+  // because main already stopped their process, so this is the only place
+  // their window lease can be released. Before this commit the lease had to
+  // stay (a failed successor start restores the predecessor); after it,
+  // nothing displays the old id. Left alone, it kept an entry in the
+  // router's owner map for the whole app run: revisited (and a gap recorded
+  // for it) on every renderer reload, bequeathed to the surviving window on
+  // a window close, refusing another window's claim, and, until the owning
+  // window's first reload, still routing late events and P-scoped requests
+  // to it (#1338 review c). The release is process-wide, whichever window's
+  // save committed the handoff. A stale renderer that later recovers the id
+  // claims a fresh lease through session:recover like any recovery.
+  for (const sessionId of retired) releaseSession(captureSessionWindowLease(sessionId))
+}
+
 export function registerWorkspaceIpc(
   manager: SessionManager,
   store: WorkspaceFileStore,
@@ -58,21 +92,7 @@ export function registerWorkspaceIpc(
     // manager is asking a process-wide question — "which local ids has SOME
     // renderer committed" — and answering it with one window's set would tell
     // the manager that another window's live, persisted sessions are unclaimed.
-    const retired = manager.acknowledgePersistedSessionOwnership(store.sessionIds())
-    // A committed Codex same-rollout handoff retired these predecessors
-    // (#1283 item 2). The renderer never calls killOwnedSession for them,
-    // because main already stopped their process, so this is the only place
-    // their window lease can be released. Before this commit the lease had to
-    // stay (a failed successor start restores the predecessor); after it,
-    // nothing displays the old id. Left alone, it kept an entry in the
-    // router's owner map for the whole app run: revisited (and a gap recorded
-    // for it) on every renderer reload, bequeathed to the surviving window on
-    // a window close, refusing another window's claim, and, until the owning
-    // window's first reload, still routing late events and P-scoped requests
-    // to it (#1338 review c). The release is process-wide, whichever window's
-    // save committed the handoff. A stale renderer that later recovers the id
-    // claims a fresh lease through session:recover like any recovery.
-    for (const sessionId of retired) releaseSession(captureSessionWindowLease(sessionId))
+    commitDurableOwnership(manager, store)
   })
 
   // Renderer calls this on first launch when there's no saved state
