@@ -108,6 +108,31 @@ describe('bounded local performance history', () => {
     })
   })
 
+  it('keeps readable incidents and never erases a row it does not recognise (#1251 row 9)', async () => {
+    // A preview build can write an incident rule this build does not know, and
+    // the owner moves between the Preview and stable channels. One such row
+    // used to hide the run's whole incident list AND, on a helper restart in
+    // that run, persistIncidents replaced the file with only the new engine's
+    // rows, erasing the evidence it could not read.
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const foreign = { ...incident, id: 9, at: 10_500, rule: 'rule-from-a-newer-build' }
+    await mkdir(join(root, 'runs', 'run-mixed'), { recursive: true })
+    await writeFile(join(root, 'runs', 'run-mixed', 'incidents.json'), JSON.stringify([incident, foreign]))
+
+    const restarted = new MonitorHistoryStore(root, 'run-mixed')
+    await restarted.settled()
+    restarted.record(snapshot(11_000), null, [{ ...incident, id: 2, at: 11_000 }], 0, 1)
+    await restarted.settled()
+
+    expect(await restarted.readIncident(10_000, 1)).toMatchObject({ rule: 'renderer-stall' })
+    expect(await restarted.readIncident(11_000, 2)).toMatchObject({ rule: 'renderer-stall' })
+    expect(restarted.status().state).toBe('degraded')
+    const onDisk = JSON.parse(await readFile(join(root, 'runs', 'run-mixed', 'incidents.json'), 'utf8')) as Array<{ id: number; rule: string }>
+    expect(onDisk.map(row => row.id).sort()).toEqual([1, 2, 9])
+    expect(onDisk.find(row => row.id === 9)).toEqual(foreign)
+  })
+
   it('repairs a torn append and keeps coarse tiers peak-preserving', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
     roots.push(root)

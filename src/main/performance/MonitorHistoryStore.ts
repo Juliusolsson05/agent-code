@@ -64,6 +64,19 @@ export class MonitorHistoryStore {
   private exporting = false
   private index = new Map<string, FileStat>()
   private incidentRuns = new Map<string, MonitorIncident[]>()
+  // Rows of a run's incidents.json that this build cannot parse, kept
+  // verbatim per run (#1251 row 9). WHY they are carried instead of dropped:
+  // the owner moves between the Preview and stable channels, so a newer build
+  // can leave an incident rule this one does not know. Hiding the run's whole
+  // list for one such row lost the readable evidence, and every rewrite of the
+  // file (a helper restart's persistIncidents, capture repair, expiry,
+  // eviction) then replaced it with only the rows this build understood,
+  // deleting the rest. Invariant: every write of a run's incident file goes
+  // through incidentFileBody, which re-appends these rows. They never enter
+  // incidentRuns, so queries, exports and the 50-incident eviction only ever
+  // see rows this build can vouch for; the rows leave disk only with the run
+  // directory itself (budget pruning, retention, clear).
+  private foreignIncidents = new Map<string, unknown[]>()
   private repairedTails = new Set<string>()
   // False until startup indexing completes. Retention deletes any run the
   // index does not know about, so a partial index (EPERM, ENOSPC or an I/O
@@ -296,7 +309,7 @@ export class MonitorHistoryStore {
     try {
       await rm(join(this.root, RUNS_DIR), { recursive: true, force: true })
       await mkdir(this.runDir, { recursive: true })
-      this.index.clear(); this.incidentRuns.clear(); this.repairedTails.clear(); this.indexed = true
+      this.index.clear(); this.incidentRuns.clear(); this.foreignIncidents.clear(); this.repairedTails.clear(); this.indexed = true
       this.bytes = 0; this.shortened = false; this.degraded = false
       this.operationFingerprint = ''; this.unindexedRuns.clear()
       this.lastMaintenanceAt = -Infinity
@@ -374,13 +387,13 @@ export class MonitorHistoryStore {
           }
         }
         const file = join(this.root, RUNS_DIR, run, 'incidents.json')
-        const stored = await this.readIncidentFile(file)
+        const stored = await this.readIncidentFile(file, run)
         // Every retained run is repaired, not only the current one. A crash or
         // force-quit in ANY earlier run left its last capture as "capturing"
         // forever, and only a helper restart within the same run fixed it.
         const repaired = stored.map(incident => incident.state === 'capturing' ? { ...incident, state: 'interrupted' as const } : incident)
         if (repaired.some((incident, position) => incident !== stored[position])) {
-          await this.replaceBounded(file, JSON.stringify(repaired), INCIDENT_BUDGET).catch(() => { this.degraded = true })
+          await this.replaceBounded(file, this.incidentFileBody(run, repaired), INCIDENT_BUDGET).catch(() => { this.degraded = true })
         }
         if (repaired.length) this.incidentRuns.set(run, repaired)
       }
@@ -405,10 +418,13 @@ export class MonitorHistoryStore {
     const existing = this.incidentRuns.get(this.runId) ?? []
     const merged = new Map(existing.map(incident => [`${incident.at}:${incident.id}`, incident]))
     for (const incident of current) merged.set(`${incident.at}:${incident.id}`, incident)
-    const rows = [...merged.values()].sort((a, b) => a.at - b.at).slice(-INCIDENT_LIMIT)
+    // Room is left for this run's carried foreign rows, or the rewritten file
+    // would exceed INCIDENT_LIMIT and the next launch would reject all of it.
+    const room = Math.max(0, INCIDENT_LIMIT - (this.foreignIncidents.get(this.runId)?.length ?? 0))
+    const rows = room ? [...merged.values()].sort((a, b) => a.at - b.at).slice(-room) : []
     // Memory mirrors disk: a capacity-shortened write keeps the previous rows,
     // which is what status, queries and the next launch will actually find.
-    if (!(await this.replaceBounded(join(this.runDir, 'incidents.json'), JSON.stringify(rows), INCIDENT_BUDGET))) return
+    if (!(await this.replaceBounded(join(this.runDir, 'incidents.json'), this.incidentFileBody(this.runId, rows), INCIDENT_BUDGET))) return
     this.incidentRuns.set(this.runId, rows)
     await this.enforceIncidentLimit()
   }
@@ -545,7 +561,7 @@ export class MonitorHistoryStore {
     // with no remaining points or incidents holds only an unattributable
     // operations snapshot, so it is retention-expired, not capacity-pruned.
     if (this.indexed) for (const run of await this.runNames()) {
-      if (run === this.runId || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
+      if (run === this.runId || this.incidentRuns.has(run) || this.foreignIncidents.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
     }
     this.bytes = await this.diskBytes()
@@ -580,11 +596,12 @@ export class MonitorHistoryStore {
 
   private async writeRunIncidents(run: string, rows: MonitorIncident[]): Promise<void> {
     const file = join(this.root, RUNS_DIR, run, 'incidents.json')
-    if (rows.length) {
-      if (await this.replaceBounded(file, JSON.stringify(rows), INCIDENT_BUDGET)) this.incidentRuns.set(run, rows)
-    } else {
+    if (!rows.length && !this.foreignIncidents.has(run)) {
       await rm(file, { force: true })
       this.incidentRuns.delete(run)
+    } else if (await this.replaceBounded(file, this.incidentFileBody(run, rows), INCIDENT_BUDGET)) {
+      if (rows.length) this.incidentRuns.set(run, rows)
+      else this.incidentRuns.delete(run)
     }
   }
 
@@ -691,14 +708,27 @@ export class MonitorHistoryStore {
     } catch { return null }
   }
 
-  private async readIncidentFile(file: string): Promise<MonitorIncident[]> {
+  private incidentFileBody(run: string, rows: MonitorIncident[]): string {
+    return JSON.stringify([...rows, ...(this.foreignIncidents.get(run) ?? [])])
+  }
+
+  private async readIncidentFile(file: string, run: string): Promise<MonitorIncident[]> {
     try {
+      // Whole-file refusals stay whole-file: an oversized or non-array file is
+      // not "one row this build does not know" but a file it cannot trust at
+      // all, and nothing here rewrites it (the run has no incidentRuns entry).
       if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; return [] }
       const value: unknown = JSON.parse(await readFile(file, 'utf8'))
       if (!Array.isArray(value) || value.length > INCIDENT_LIMIT) { this.degraded = true; return [] }
-      const parsed = value.map(parseMonitorIncident)
-      if (parsed.some(incident => incident === null)) { this.degraded = true; return [] }
-      return parsed as MonitorIncident[]
+      const rows: MonitorIncident[] = []
+      const foreign: unknown[] = []
+      for (const row of value) {
+        const incident = parseMonitorIncident(row)
+        if (incident) rows.push(incident)
+        else foreign.push(row)
+      }
+      if (foreign.length) { this.degraded = true; this.foreignIncidents.set(run, foreign) }
+      return rows
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.degraded = true
       return []
@@ -753,6 +783,7 @@ export class MonitorHistoryStore {
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
       for (const [file, entry] of [...this.index]) if (entry.run === run) { this.index.delete(file); this.repairedTails.delete(file) }
       this.incidentRuns.delete(run)
+      this.foreignIncidents.delete(run)
       this.unindexedRuns.delete(run)
       total = Math.max(0, total - size); this.shortened = true
     }
