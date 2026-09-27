@@ -42,6 +42,11 @@ describe('usage MCP domain (#1339)', () => {
     // Every recorded source reaches the agent; a source that errored stays an
     // error (the snapshot's contract), never a zero.
     expect(value.snapshot.providers.length).toBe(recorded.snapshot.providers.length)
+    // The recorded Grok source had an expired login: it reaches the agent as an
+    // error row, not as a provider with zero usage.
+    const grok = value.snapshot.providers.find(p => (p as { provider?: string }).provider === 'grok') as { status?: string; rows?: unknown } | undefined
+    expect(grok?.status).toBe('error')
+    expect(grok?.rows).toBeUndefined()
     expect(read).toHaveBeenCalledTimes(1)
     expect(read).toHaveBeenCalledWith()
     await client.close()
