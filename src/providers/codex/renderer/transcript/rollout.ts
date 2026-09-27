@@ -10,6 +10,7 @@ import {
   codexToolUseEntry,
   codexOutputText,
   codexExecWrapperExitCode,
+  isCodexExecWrapperRunning,
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
@@ -325,12 +326,13 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       // result after it has updated the command card, so retaining terminal
       // evidence does not reintroduce a blank standalone row.
       //
-      // WHERE this event comes from (#1321): not from rollouts. codex-rs
-      // persists `ExecCommandEnd` as a transient event, and 0 of 2,541 local
-      // rollouts contain one. The durable carrier of an exec_command result is
-      // the wrapped `function_call_output` below, which is stamped with this
-      // same metadata. This branch stays for any stream that does carry the
-      // event; the existing mapper tests feed it directly.
+      // WHERE this event comes from (#1321): almost never a rollout. Current
+      // codex-rs treats `ExecCommandEnd` as transient, and 0 of 2,541 local
+      // rollouts contain one. rust-v0.107.0 through v0.131.0 persisted it in
+      // extended-history mode (app-server `persist_extended_history`), next to
+      // the always-durable wrapped `function_call_output` below, which is
+      // stamped with this same metadata. createCodexTranscriptEntryMapper
+      // keeps the first of the two for a call_id (#1395 review a).
       return [
         codexToolResultEntry(
           uuid,
@@ -461,6 +463,12 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
           exitCode,
         }),
       ]
+    }
+    if (isCodexExecWrapperRunning(structured)) {
+      // A partial chunk of a command still running (#1395 review a, P1). Its
+      // bytes are real output; its outcome is not known yet, so it is marked
+      // for the command adapter, which then shows "unknown" instead of success.
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, output, false, { kind: 'exec_command_running' })]
     }
     if (!output.trim()) return []
     return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]

@@ -156,18 +156,38 @@ export function stripCodexExecWrapper(output: string): string {
  *
  *  WHY this replaced `isCodexExecWrapperOutput` (#1321): that predicate made the
  *  rollout mapper DROP every wrapped result, on the belief that a correlated
- *  `exec_command_end` event carried the same result. Codex never persists that
- *  event: codex-rs `rollout/src/policy.rs` lists `EventMsg::ExecCommandEnd`
- *  under transient events, and a census of 2,541 local rollouts found 0 of
- *  them against 85,355 wrapped outputs with an exit line. The drop therefore
+ *  `exec_command_end` event carried the same result. Current Codex never
+ *  persists that event (codex-rs `rollout/src/policy.rs` lists
+ *  `EventMsg::ExecCommandEnd` as transient), and a census of 2,541 local
+ *  rollouts found 0 of them against 85,355 wrapped outputs with an exit line.
+ *  (rust-v0.107.0 through v0.131.0 did persist it in extended-history mode;
+ *  the transcript mapper keeps the first of the two carriers.) The drop therefore
  *  removed the ONLY copy of every `exec_command` result (Codex through 0.144)
  *  from resumed history, and the card showed no output or exit status. */
 export function codexExecWrapperExitCode(output: string): number | null {
   if (!output.startsWith('Chunk ID:')) return null
+  // WHY the marker is required (#1395 review a, P3): without it there is no
+  // header/body boundary, so the "header" would be the whole string and the
+  // unstripped wrapper would render as a finished result's output. Every one
+  // of 85,355 finished local wrappers has the LF marker; anything else is not
+  // a shape we have seen, and it falls back to a plain result with no exit
+  // claim (the adapter then shows an unproven outcome, not a success).
   const outputMarker = output.indexOf('\nOutput:\n')
-  const header = outputMarker === -1 ? output : output.slice(0, outputMarker)
+  if (outputMarker === -1) return null
+  const header = output.slice(0, outputMarker)
   const match = /\nProcess exited with code (-?\d+)(?:\n|$)/.exec(header)
   return match ? Number(match[1]) : null
+}
+
+/** True for a wrapped exec output whose header says the process is still
+ *  running ("Process running with session ID N"): a partial chunk whose exit
+ *  arrives later, on a write_stdin result with another call_id. Header only,
+ *  for the same reason as codexExecWrapperExitCode. */
+export function isCodexExecWrapperRunning(output: string): boolean {
+  if (!output.startsWith('Chunk ID:')) return false
+  const outputMarker = output.indexOf('\nOutput:\n')
+  if (outputMarker === -1) return false
+  return /\nProcess running with session ID \S+(?:\n|$)/.test(output.slice(0, outputMarker))
 }
 
 /** Build a Claude-shaped assistant Entry containing a single

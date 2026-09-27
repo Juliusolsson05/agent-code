@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import fixture from '../../../../../testing/fixtures/codex-exec-output/wrapped-exec-command-output.json'
 
 import { fromCodexCommandOperation } from '@providers/codex/renderer/adapters/command'
+import { createCodexTranscriptEntryMapper } from '@providers/codex/renderer/transcript/mapper'
 import { mapCodexRolloutToFeedEntries } from '@providers/codex/renderer/transcript/rollout'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
@@ -35,6 +36,11 @@ describe('wrapped exec_command results in resumed history (#1321)', () => {
     expect(result!.is_error).toBe(false)
     expect(String(result!.content)).not.toContain('Chunk ID:')
     expect(String(result!.content)).toMatch(/^x+\nx+/)
+    // The exact metadata the event carrier stamps (#1395 review a: kind,
+    // parsedCmd, command and cwd were unpinned; `kind` drives row absorption).
+    expect((result as unknown as { codex: unknown }).codex).toEqual({
+      kind: 'exec_command_end', parsedCmd: [], command: [], cwd: null, exitCode: 0,
+    })
 
     const operation = fromCodexCommandOperation({ toolUse, result })
     expect(operation?.model.exitCode).toBe(0)
@@ -77,7 +83,72 @@ describe('wrapped exec_command results in resumed history (#1321)', () => {
     }
     const [entry] = mapCodexRolloutToFeedEntries(running)
     const block = ((entry as { message: { content: Array<Record<string, unknown>> } }).message.content)[0]!
-    expect(block.codex).toBeUndefined()
+    // Marked running, with no exit claimed from the body's words.
+    expect(block.codex).toEqual({ kind: 'exec_command_running' })
     expect(block.content).toBe('x\nProcess exited with code 0\n')
+  })
+
+  // A still-running chunk, as the fixture's real header shape with the
+  // "running" line Codex writes in its place (9,896 in the local corpus).
+  // Paired with the fixture's real exec_command call, so the adapter sees a
+  // genuine invocation.
+  const okCall = cases.ok.records[0]!
+  const runningPair = () => [
+    okCall,
+    {
+      type: 'response_item',
+      timestamp: '2026-07-09T21:40:40.079Z',
+      payload: {
+        type: 'function_call_output',
+        call_id: (okCall.payload as { call_id: string }).call_id,
+        output: 'Chunk ID: aaaaaa\nWall time: 1.0000 seconds\nProcess running with session ID 42\nOriginal token count: 1\nOutput:\nworking\n',
+      },
+    },
+  ]
+
+  it('does not paint a still-running command as a success (#1395 review a, P1)', () => {
+    const entries = runningPair().flatMap(record => mapCodexRolloutToFeedEntries(record))
+    const blocks = entries.flatMap(entry => (entry as { message: { content: Array<Record<string, unknown>> } }).message.content)
+    const toolUse = blocks.find(block => block.type === 'tool_use') as unknown as ToolUseBlock
+    const result = blocks.find(block => block.type === 'tool_result') as unknown as ToolResultBlock
+
+    const operation = fromCodexCommandOperation({ toolUse, result })
+    // Its exit arrives on a later write_stdin result this card cannot see.
+    expect(operation?.model.status).toBe('unknown')
+    expect(operation?.model.exitCode).toBeNull()
+  })
+
+  it('keeps one result when a rollout persisted both carriers for a call (#1395 review a, P2)', () => {
+    // rust-v0.107.0..v0.131.0 persisted exec_command_end in extended-history
+    // mode, next to the always-durable wrapped output, with the same call_id.
+    const [call, output] = cases.ok.records
+    const callId = (call!.payload as { call_id: string }).call_id
+    const event = {
+      type: 'event_msg',
+      timestamp: '2026-07-09T21:40:40.000Z',
+      payload: { type: 'exec_command_end', call_id: callId, exit_code: 0, aggregated_output: 'ok\n' },
+    }
+    const mapper = createCodexTranscriptEntryMapper()
+    const results = [call!, event, output!]
+      .flatMap(record => mapper.map(record).entries)
+      .flatMap(entry => (entry as { message: { content: Array<Record<string, unknown>> } }).message.content)
+      .filter(block => block.type === 'tool_result')
+    expect(results).toHaveLength(1)
+    expect(results[0]!.content).toBe('ok\n')
+  })
+
+  it('makes no exit claim for a wrapper without its Output marker (#1395 review a, P3)', () => {
+    const headerOnly = {
+      type: 'response_item',
+      timestamp: '2026-07-09T21:40:40.079Z',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call-header-only',
+        output: 'Chunk ID: aaaaaa\nWall time: 0.1000 seconds\nProcess exited with code 1\nOriginal token count: 0',
+      },
+    }
+    const [entry] = mapCodexRolloutToFeedEntries(headerOnly)
+    const block = (entry as { message: { content: Array<Record<string, unknown>> } }).message.content[0]!
+    expect(block.codex).toBeUndefined()
   })
 })
