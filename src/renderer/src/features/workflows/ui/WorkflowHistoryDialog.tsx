@@ -11,6 +11,7 @@ import { Button } from '@renderer/components/ui/button'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
+import { missingRunCopy } from '../model/missingRun'
 import {
   workflowRunActivity,
   workflowRunStatusLabel,
@@ -22,6 +23,8 @@ type WorkflowHistoryDetails = {
   updatedAt?: string
   loading: boolean
   error?: boolean
+  /** Main reported the run not found (#1348, model/missingRun.ts). */
+  missing?: boolean
 }
 
 const HISTORY_PAGE_SIZE = 50
@@ -64,6 +67,9 @@ async function readHistoryDetails(
 
   try {
     const snapshot = await client.getSnapshot({ cwd: effectiveCwd, runId: reference.runId })
+    // Main answers null only for run-not-found (#1348): the run is missing,
+    // not unknown. Keep the launch-time status out of it, as below.
+    if (snapshot === null) return { loading: false, missing: true }
     const manifest = snapshot?.manifest
     // WHY a successful null clears launch-time status: transcript references are durable discovery
     // records, not durable status authority. If the corresponding manifest has been pruned, a
@@ -189,13 +195,16 @@ export function WorkflowHistoryDialog({
                 status: reference.status,
                 loading: false,
               }
-              const activity = workflowRunActivity(details.status)
+              const missing = details.missing ? missingRunCopy(reference) : null
+              // A run whose data is gone is certainly not running, whatever
+              // its reference said at launch (#1348).
+              const activity = missing ? 'inactive' : workflowRunActivity(details.status)
               const activityLabel = activity === 'active'
                 ? 'Active'
                 : activity === 'inactive'
                   ? 'Inactive'
                   : 'Unknown'
-              const statusLabel = workflowRunStatusLabel(details.status)
+              const statusLabel = missing ? missing.label : workflowRunStatusLabel(details.status)
               return (
                 <article
                   key={reference.runId}
@@ -242,6 +251,8 @@ export function WorkflowHistoryDialog({
                           Retry
                         </button>
                       </span>
+                    ) : missing ? (
+                      <span>{missing.detail}</span>
                     ) : details.createdAt ? (
                       <>
                         <Timestamp label="Started" value={details.createdAt} />

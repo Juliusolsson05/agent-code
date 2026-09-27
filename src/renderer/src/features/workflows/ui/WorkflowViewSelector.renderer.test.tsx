@@ -197,10 +197,12 @@ describe('WorkflowViewSelector', () => {
     const historyReferences: WorkflowRunReference[] = [
       { runId: 'run-missing', cwd: '/repo', status: 'queued', workflow: { name: 'missing' } },
       { runId: 'run-error', cwd: '/repo', status: 'running', workflow: { name: 'error' } },
+      // No cwd of its own: looked up in the session's project (#1348).
+      { runId: 'run-elsewhere', status: 'failed', workflow: { name: 'elsewhere' } },
     ]
     let errorAttempts = 0
     const getSnapshot = vi.fn<WorkflowClient['getSnapshot']>(async ({ cwd, runId }) => {
-      if (runId === 'run-missing') return null
+      if (runId === 'run-missing' || runId === 'run-elsewhere') return null
       errorAttempts += 1
       if (errorAttempts === 1) throw new Error('IPC unavailable')
       return {
@@ -245,8 +247,15 @@ describe('WorkflowViewSelector', () => {
       .closest('[role="listitem"]') as HTMLElement
     const errorRow = within(historyList).getByText('error')
       .closest('[role="listitem"]') as HTMLElement
-    expect(within(missingRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
-    expect(within(missingRow).getByText('Timestamp unavailable')).toBeInTheDocument()
+    // #1348: a run retention removed is expired and inactive, not a fault,
+    // whatever its launch-time `queued` said. Only a reference with its own
+    // cwd proves that; one without is only unavailable in this project.
+    expect(within(missingRow).getByText('Inactive · Expired')).toBeInTheDocument()
+    expect(within(missingRow).getByText(/stored data is gone/)).toBeInTheDocument()
+    const elsewhereRow = within(historyList).getByText('elsewhere')
+      .closest('[role="listitem"]') as HTMLElement
+    expect(within(elsewhereRow).getByText('Inactive · Unavailable')).toBeInTheDocument()
+    expect(within(elsewhereRow).getByText(/not found in this project/)).toBeInTheDocument()
     expect(within(errorRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
     expect(within(errorRow).getByRole('alert')).toHaveTextContent('Could not load details.')
 
