@@ -34,6 +34,25 @@ describe('codexExecScriptCalls', () => {
       .toEqual([{ tool: 'apply_patch', argument: 'foo' }])
   })
 
+  // #1368 verification 2 (b and c): calls a parse finds that a lexer skips.
+  // Inside a template interpolation, and nested in another tool's argument,
+  // in source order.
+  it('finds calls inside template interpolations and inside other calls\' arguments', () => {
+    expect(codexExecScriptCalls('const v = `${(await tools.exec_command({cmd:"echo template"})).output}`;').map(call => call.argument))
+      .toEqual(['{cmd:"echo template"}'])
+    expect(codexExecScriptCalls('await tools.mcp__wrapper(await tools.exec_command({cmd:"echo inner"}));').map(call => call.tool))
+      .toEqual(['mcp__wrapper', 'exec_command'])
+  })
+
+  // The contract's known limit (#1368 verification 2 c): a static reading
+  // lists every call WRITTEN, including one in a branch that never runs. The
+  // tool description says so; this pins that it is a stated behaviour, not an
+  // accident a later change could silently flip either way.
+  it('lists a call in a branch that never runs, as the tool description states', () => {
+    expect(codexExecScriptCalls('if (false) tools.exec_command({cmd:"echo never"}); text("done")').map(call => call.tool))
+      .toEqual(['exec_command'])
+  })
+
   // Recorded 2026-07-23 (Codex 0.144 rollout 019f8ed7…): the bracket form of
   // a tool call. The lexical scan never saw these five recorded calls.
   it('reads a recorded tools["name"](…) call', () => {

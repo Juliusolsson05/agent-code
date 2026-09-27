@@ -85,3 +85,12 @@ The reader runs in main over files, so the tests exercise the real entry point. 
   - **Ruling:** find calls with a real parse. `acorn` is already a runtime dependency; the renderer's embedded-operation adapter parses these same scripts. The lexer stays only as the fallback for scripts that do not parse; those never ran as written.
   - Corpus (99,256 scripts): 98 do not parse. The parser and the lexer disagree on 5, all recorded `tools["name"](…)` bracket calls the lexer never saw. Parsing everything took 4.2 s in total, 36 ms at worst.
   - Unit tests (`src/shared/codex/execScript.test.ts`): b's two reproductions and the recorded bracket form fail with the lexer alone. The division case and the parse fallback pass either way.
+- **Verification 2.** b: MERGE-READY. c: FIX-BEFORE-MERGE, on residuals it named itself.
+  - **c's "major": a static reading lists calls in branches that never ran** (`if (false) tools.exec_command(…)`). This is inherent. Codex's `exec` output is one combined text, so nothing in the transcript says which calls executed.
+  - **Ruling:** state the contract where callers read it, the `agent_transcript_read_file` description: the calls a script contains, read without running it; a dead-branch call is still listed; a computed script is one command. A unit test pins the dead-branch listing. Cost if wrong: an agent reading a Codex child can over-count commands written in dead branches; none of the recorded scripts reviewers checked has one.
+  - **Other residuals:**
+    - nested calls are listed in source order, not execution order;
+    - the fallback for unparseable scripts can list a regex-quoted pseudo-call; those scripts never ran;
+    - the fail-closed branches of `${path}` resolution have no recording;
+    - a re-assigned `let` binding resolves to its first value.
+  - **Test gaps b and c flagged, now pinned:** calls inside template interpolations, and calls nested in another tool's argument.
