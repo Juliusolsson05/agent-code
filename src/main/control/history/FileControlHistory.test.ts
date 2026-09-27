@@ -475,7 +475,11 @@ const retentionRows = JSON.parse(await readFile(join(import.meta.dirname,
   '../../../../testing/fixtures/control-history/retention-rows-2026-09-27.json'), 'utf8')) as {
   rows: Array<{ sequence: number; callId: string; kind: string; payload?: string; requestKey?: string }>
 }
-const RETENTION_NOW = new Date('2026-09-27T12:00:00.000Z')
+// "Now" for retention cases. It was 2026-09-27 against a 7-day window; the
+// owner's 90-day window (2026-09-27) is 83 days longer, so "now" moves 83 days
+// later. Every recorded call then sits exactly where it did relative to the
+// window's edge, and the same rows are pruned and kept.
+const RETENTION_NOW = new Date('2026-12-19T12:00:00.000Z')
 const OLD_UNKEYED = ['95caa49c-eb60-44e2-9b62-938ce2243d11', '5ea10842-a1c8-463c-aee9-5d0e238c56e1', '37763f2f-c479-49b7-8d79-4c990bc0784c']
 const KEPT = ['95c97fce-bca0-4bc7-9901-90b45d988d1c', '13e43d53-5120-41ae-88d7-820dc9088728', 'a346f752-9eec-4b37-b7df-145dfaf1aaf5',
   'e8a21d19-b139-4012-8e09-6139b5643bb5', '2ebe82c0-c877-4bb6-9877-56ded38d4739']
@@ -710,7 +714,8 @@ describe('control history retention (#1274)', () => {
     const outside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS - minute).toISOString(), result: settled() })
     await journal(directory, [inside, outside])
     expect(await kept(directory, [inside.callId, outside.callId])).toEqual([true, false])
-    expect(CONTROL_HISTORY_RETENTION_MS).toBe(7 * 24 * 60 * 60 * 1000)
+    // The owner's 90-day window (2026-09-27); pinned by value, not only through the constant.
+    expect(CONTROL_HISTORY_RETENTION_MS).toBe(90 * 24 * 60 * 60 * 1000)
   })
 
   // #1330 round 2 (a, b, c; Blocker): once the rewrite has landed, a failed

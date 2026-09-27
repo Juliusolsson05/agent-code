@@ -56,3 +56,10 @@ Other changes:
 - **First-launch cost (b, c; Minor): accepted as a residual.** Classifying the backlog reads each old result payload once. On a clone of the owner's store the first load took 3.2–6.9 s, and later loads take about 35 ms. It runs on the first control-history use after the upgrade, not at app start. A byte-sniffing shortcut was rejected: that is exactly the kind of guess the task-prefix bug was.
 
 Tests: 3 new cases (red on `65175615`). They also kill round 2's surviving mutations: the task guard is now exercised with a settled result, and quarantine-only digests with a torn tail.
+
+## Owner decision (2026-09-27)
+**The window is 90 days** (`temp/manager/owner-decisions-2026-09-27.md`: "#1330, control history: 90 days", with the standing preference "infrequent deletion"). This replaces the UNCONFIRMED 7-day default.
+- `CONTROL_HISTORY_RETENTION_MS = 90 days`, pinned by value in the boundary test.
+- Both `history.read` / `history.list` descriptions now say 90 days.
+- **Tests:** the recorded-store retention cases move "now" 83 days later, the amount the window grew. Every recorded call keeps its position relative to the edge, so the same rows are pruned and kept.
+- **Cost:** on the owner's store today, 30 days already kept everything, so the 90-day window deletes nothing yet. At ~5 MB of payloads a day, steady state is up to ~450 MB. What stays bounded is long-run growth of a journal held whole in memory.

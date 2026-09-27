@@ -57,11 +57,16 @@ const EXECUTOR_KINDS = new Set<string>(['received', 'dispatched', 'result', 'dup
 // the marker: its block cannot be read, so it stays a global block of its own.
 const INVALID_MARKER = /^recovery\.invalid-.+\.json$/
 // How long a call that can never be looked up for dedupe stays readable
-// (#1274). UNCONFIRMED product default: history.read/list serve an agent or
-// operator inspecting recent work, which is hours, not weeks. On the owner's
-// rate (~5 MB of payloads a day, nearly all transcripts.page reads) a week is
-// about 20-35 MB instead of an unbounded journal held whole in memory.
-export const CONTROL_HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+// (#1274). OWNER DECISION (2026-09-27, temp/manager/owner-decisions-2026-09-27.md):
+// 90 days, with the standing preference "infrequent deletion": default to
+// longer retention. The PR first proposed 7 days (an agent inspecting its
+// own work looks back hours, not weeks). The owner chose the longer window.
+// Cost, on the owner's rate (~5 MB of payloads a day, nearly all
+// transcripts.page reads): up to ~450 MB at steady state. Today's store is
+// under 30 days old, so this window deletes nothing yet. What it bounds is
+// the long run: the journal, which is held whole in memory, no longer grows
+// without limit.
+export const CONTROL_HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 const recoveryFileSchema = z.object({
   quarantines: z.array(z.object({
     file: z.string().refine(name => QUARANTINE.test(name) || INVALID_MARKER.test(name)),
