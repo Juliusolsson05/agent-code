@@ -16,6 +16,12 @@ import { OPENCODE_SERVE_STARTUP_TIMEOUT_MS } from './opencodeSession.js'
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
+// WHY the positive cases' test budget follows the product deadline (#1367
+// review b): they assert "the app keeps waiting", so the test must never give
+// up before the app would. A fixed 30 s let a loaded runner fail them while
+// SpawnedServer would still have waited; this only fails when the app would.
+const WAITS_LIKE_THE_APP = OPENCODE_SERVE_STARTUP_TIMEOUT_MS + 10_000
+
 function slowServe(delayMs: number): string {
   const dir = mkdtempSync(join(tmpdir(), 'opencode-slow-serve-'))
   dirs.push(dir)
@@ -33,7 +39,7 @@ it('waits out a slow but healthy serve start', async () => {
   const info = await server.start()
   expect(info.url).toBe('http://127.0.0.1:4096')
   await server.stop()
-}, 30_000)
+}, WAITS_LIKE_THE_APP)
 
 it('is what the package default killed', async () => {
   const server = new SpawnedServer({ binary: slowServe(11_000), cwd: tmpdir() })
@@ -54,4 +60,4 @@ it('forwards the wait through OpencodeHeadless to the spawned serve', async () =
   } finally {
     await headless.stop()
   }
-}, 30_000)
+}, WAITS_LIKE_THE_APP)
