@@ -3046,13 +3046,28 @@ export class SessionManager extends EventEmitter {
         if (!this.builtInMcpHost) {
           throw new Error('Built-in MCP host is not available')
         }
-        builtInMcpServers = this.builtInMcpHost.registerSession({
+        const mcpScope = {
           sessionId,
           cwd: options.cwd,
           providerKind: kind,
           domains: options.builtInMcpDomains,
           tldrIdentity: options.tldrIdentity,
-        })
+        }
+        // Pinned in the TLDR/Goal stores' write queues BEFORE the session
+        // becomes live, so a store at its cap can never be mid-way through
+        // evicting this identity's record once it is (#1328 q52).
+        const releasePin = await this.builtInMcpHost.pinReportingIdentity(mcpScope)
+        try {
+          this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+          // The registration owns the pin from here: it releases it on revoke,
+          // or at once if policy leaves no domain to register.
+          builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope, releasePin)
+        } catch (error) {
+          // Not registered, so revokeSession will never release this pin;
+          // left, it would protect the identity forever (#1328 q56).
+          releasePin()
+          throw error
+        }
         mcpRegistered = true
       }
       const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
