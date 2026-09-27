@@ -237,9 +237,10 @@ function parseWorktreePorcelain(out: string): WorktreeIdentity[] {
   return worktrees
 }
 
-export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity[]> {
-  return (await listWorktreesForCwdDetailed(cwd)).worktrees
-}
+// No plain `listWorktreesForCwd` any more (#1430, review c): it answered `[]`
+// for a timeout as well as for "not a repository", and every consumer that
+// read it that way was moved to the detailed answer below. A new caller that
+// only needs the list must still decide what a timeout means to it.
 
 /** The list plus whether `git worktree list` timed out, which an empty list
  *  alone cannot tell apart from "not a git repository" (#1250 row 11). */
@@ -564,7 +565,7 @@ async function inspectSubmodule(
 
 export function registerGitIpc(): void {
   // WHY both worktree handlers carry `gitMissing` exactly like git:status
-  // (#508 review): a machine without a working git makes listWorktreesForCwd
+  // (#508 review): a machine without a working git makes the worktree lister
   // return [] (the '' swallow), which these handlers collapse into a bare
   // { ok:false } — and the Worktrees panel then renders "not a git
   // repository", the same lie A5 fixed on GitBar. The flag is read AFTER

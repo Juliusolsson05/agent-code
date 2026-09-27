@@ -122,3 +122,12 @@ says it or stays unknown, and none caches or records the wrong family.
   rows. It now shows only in Repository scope. Pinned.
 - **a (surviving mutation): the repository-unknown warning.** It is now
   asserted.
+- **c (MERGE-READY), minors:**
+  - The older-history loader's hand-off and its null guard are pinned by a
+    `loadOlderHistory` test with git timing out. Both of c's mutations are
+    now red.
+  - The dead `listWorktreesForCwd` export is removed.
+  - The body's counts are corrected.
+  - Residual, accepted: the production publish of `worktreeReconcilerRef`
+    in `useIpcSubscriptions` is unasserted, because mounting that hook is
+    heavy. Every loader and reconciler test injects the ref.
