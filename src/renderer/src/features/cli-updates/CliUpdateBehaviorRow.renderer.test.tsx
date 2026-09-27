@@ -24,4 +24,19 @@ describe('CliUpdateBehaviorRow', () => {
     fireEvent.keyDown(checked, { key: 'ArrowRight' })
     expect(setBehavior).toHaveBeenCalledTimes(1)
   })
+
+  // #1250 row 13: the write had no rejection handler at all.
+  it('says a failed write did not save, and keeps showing main\'s value', async () => {
+    const setBehavior = vi.fn(async () => { throw new Error("EACCES: permission denied, open '/Users/someone/setup.json'") })
+    Object.assign(window, { api: { ...window.api, cliUpdatesSetBehavior: setBehavior } })
+    act(() => { useCliUpdateStore.setState({ snapshot: { ...useCliUpdateStore.getState().snapshot, behavior: 'notify' } }) })
+    render(<CliUpdateBehaviorRow />)
+    const group = screen.getByRole('radiogroup', { name: 'CLI Update Behavior' })
+    const off = within(group).getAllByRole('radio').find(radio => radio.textContent?.includes('Off'))!
+    fireEvent.click(off)
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save this change. Nothing was changed.")
+    expect(document.body.textContent).not.toContain('EACCES')
+    const checked = within(group).getAllByRole('radio').find(radio => radio.getAttribute('aria-checked') === 'true')!
+    expect(checked.textContent).toContain('Notify Only')
+  })
 })

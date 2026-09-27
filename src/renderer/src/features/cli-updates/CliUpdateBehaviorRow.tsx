@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import type { CliUpdateBehavior } from '@shared/types/cliUpdate.js'
 import { OptionCards } from '@renderer/components/ui/option-cards'
 import { setCliUpdateBehavior, useCliUpdateStore } from '@renderer/features/cli-updates/store'
+import { SETUP_WRITE_FAILED } from '@renderer/features/settings/setupWriteFailed'
 
 // Settings row for CLI auto-update behavior.
 //
@@ -44,9 +46,20 @@ export function CliUpdateBehaviorRow() {
   // Subscribe to just the behavior slice — the banner state churn (updating
   // → updated etc.) should not re-render this row.
   const behavior = useCliUpdateStore(state => state.snapshot.behavior)
+  // #1250 row 13: a failed write is said here, in the same fixed words as the
+  // provider rows (setup.json is the same file). The cards keep showing
+  // main's value, which main restored when the write failed.
+  const [failed, setFailed] = useState(false)
+  const choose = (next: CliUpdateBehavior) => {
+    setFailed(false)
+    void setCliUpdateBehavior(next).catch(() => setFailed(true))
+  }
   return (
-    // The shared radio cards (UI pass, G-17): this row announced NO state
-    // (plain buttons), was square, and had no focus ring.
-    <OptionCards label="CLI Update Behavior" value={behavior} options={OPTIONS} columns={3} onChange={setCliUpdateBehavior} />
+    <div className="flex flex-col gap-1.5">
+      {/* The shared radio cards (UI pass, G-17): this row announced NO state
+          (plain buttons), was square, and had no focus ring. */}
+      <OptionCards label="CLI Update Behavior" value={behavior} options={OPTIONS} columns={3} onChange={choose} />
+      {failed ? <div role="alert" className="text-[10px] text-danger">{SETUP_WRITE_FAILED}</div> : null}
+    </div>
   )
 }

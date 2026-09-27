@@ -121,12 +121,15 @@ export function useCliUpdateSync(): void {
   }, [])
 }
 
-/** Change the CLI-update behavior. Fire-and-forget; the returned snapshot
- *  from main flows back through the state channel. Exposed as a plain
- *  function (not a hook) so the settings-row callback can call it
- *  without threading a hook through several component layers. */
-export function setCliUpdateBehavior(behavior: CliUpdateBehavior): void {
-  void window.api.cliUpdatesSetBehavior(behavior).then((snapshot) => {
-    useCliUpdateStore.getState().setSnapshot(snapshot)
-  })
+/** Change the CLI-update behavior. The returned snapshot from main also
+ *  flows back through the state channel. Exposed as a plain function (not a
+ *  hook) so the settings-row callback can call it without threading a hook
+ *  through several component layers.
+ *
+ *  Returns the promise (#1250 row 13): it used to be fire-and-forget with no
+ *  rejection handler, so a failed write was an unhandled rejection and the
+ *  row showed nothing. The caller reports it. */
+export async function setCliUpdateBehavior(behavior: CliUpdateBehavior): Promise<void> {
+  const snapshot = await window.api.cliUpdatesSetBehavior(behavior)
+  useCliUpdateStore.getState().setSnapshot(snapshot)
 }

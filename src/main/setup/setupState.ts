@@ -137,6 +137,13 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
 export async function saveSetupState(
   next: PersistedSetupState,
 ): Promise<PersistedSetupState> {
+  // WHY the previous value is kept (#1250 rows 6 and 13): the cache is
+  // assigned before the write so readers see the change at once, and a failed
+  // write used to leave it there. Everything that loads setup state then acted
+  // on a value that was never saved (provider enablement re-resolved from it,
+  // the next save persisted it) until a restart silently reverted it. The
+  // caller is told about the failure, so the state must match what it hears.
+  const previous = cache
   cache = { ...next, version: 1, updatedAt: Date.now() }
   const snapshot = cache
   writeQueue = writeQueue
@@ -163,7 +170,17 @@ export async function saveSetupState(
         throw err
       }
     })
-  await writeQueue
+  try {
+    await writeQueue
+  } catch (error) {
+    // Only if no newer save has replaced it since. A newer save built from
+    // this failed state carries its value forward, and restoring under that
+    // save would discard a write that succeeded. In that narrow race the
+    // change reported as failed lands with the next save; the user asked for
+    // it, so that is the lesser surprise.
+    if (cache === snapshot) cache = previous
+    throw error
+  }
   return cache
 }
 
