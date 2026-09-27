@@ -155,3 +155,36 @@ it('captures the key-log baseline once, reuses it, and fails closed when capture
     chmodSync(readOnlyState, 0o700)
   }
 })
+
+// #1388 review a round 3 (1): a proxy root that is missing at capture is
+// UNKNOWN, not empty. Saving [] would let every old key log that reappears
+// be collected, so no baseline is saved and none is returned.
+it('saves no baseline when the proxy root is missing at capture', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keylog-baseline-'))
+  roots.push(dir)
+  const file = join(dir, 'state', 'baseline.json')
+  expect(await keyLogBaseline(file, join(dir, 'proxy-renamed-away'))).toBeNull()
+  expect(existsSync(file)).toBe(false)
+})
+
+// #1388 review a round 3 (2): capture is asynchronous, so a run created
+// while it scans must not become a permanent baseline member. Only dirs that
+// existed when capture STARTED (by filesystem birthtime) join it.
+it.skipIf(process.platform !== 'darwin')('keeps a run created during capture out of the baseline', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keylog-baseline-'))
+  roots.push(dir)
+  const root = join(dir, 'proxy')
+  const file = join(dir, 'state', 'baseline.json')
+  runDir(root, ['p', 's', 'old-run'], { 'sslkeylog.log': 'k' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const capturing = keyLogBaseline(file, root)
+  // Synchronously, before the capture's first await resumes: the run exists
+  // when the scan reaches it. A short spin puts its birthtime clearly after
+  // the moment capture started.
+  const spinUntil = Date.now() + 3
+  while (Date.now() < spinUntil) { /* spin */ }
+  runDir(root, ['p', 's', 'new-run'], { 'sslkeylog.log': 'k' })
+  const baseline = await capturing
+  expect(baseline && [...baseline]).toEqual([join('p', 's', 'old-run')])
+})
+
