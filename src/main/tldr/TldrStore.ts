@@ -3,9 +3,13 @@ import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:
 import { dirname, join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { normalizeTldrText, TLDR_HISTORY_LIMIT, validTldrIdentity } from '@shared/types/tldr.js'
+import { withReportingPublicationLock } from '@main/storage/reportingPublicationLock.js'
 import type { TldrHistoryEntry, TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
 
-const MAX_RECORDS = 10_000
+// The cap is a bound on the file, not on how many agents may ever report: past
+// it the least recently written record is evicted (#1277). Exported so the
+// test grows a store to exactly this size instead of copying the number.
+export const TLDR_MAX_RECORDS = 10_000
 const MAX_FILE_BYTES = 24 * 1024 * 1024
 // Every agent that ever reported keeps a history file, and closed agents are
 // never told to the store. Bounding the file count keeps the directory from
@@ -20,10 +24,13 @@ const MAX_HISTORY_FILE_BYTES = 512 * 1024
  * preserve a conversation; it is deliberately independent of PTY routing IDs. */
 export class TldrStore extends EventEmitter {
   private records: Record<string, TldrRecord> | null = null
-  /** The last revision of each record set aside at load (#1247 review A):
-   *  every reader keeps the HIGHER revision when a read and a change event
-   *  race, so an identity that reports again after its record was set aside
-   *  must continue above it, not restart at 1 and be discarded as stale. */
+  /** The last revision of each record set aside at load (#1247 review A), or
+   *  evicted at the cap (#1277): every reader keeps the HIGHER revision when a
+   *  read and a change event race, so an identity that reports again after
+   *  its record went away must continue above it, not restart at 1 and be
+   *  discarded as stale. In memory only: readers' caches do not survive a
+   *  restart either. It grows by one per eviction, i.e. per NEW identity past
+   *  the cap in one run, which is tens a day. */
   private readonly setAsideRevisions = new Map<string, number>()
   /** The loaded file's bytes while set-aside records are not yet preserved.
    *  The next write drops them from the file, so it must not run until a
@@ -42,6 +49,13 @@ export class TldrStore extends EventEmitter {
 
   private readonly label: string
 
+  private readonly inUse: () => ReadonlySet<string> | null
+
+  /** Identities of live sessions, counted: a replacement registers its
+   *  successor before revoking its predecessor under the same identity, so
+   *  the predecessor's unpin must not release the successor. */
+  private readonly pins = new Map<string, number>()
+
   /**
    * The Goal capability (#936) is a second instance rather than a second store
    * class: goals need exactly these guarantees — one serialized atomic writer,
@@ -53,12 +67,21 @@ export class TldrStore extends EventEmitter {
   constructor(
     private readonly file: string,
     private readonly now = () => new Date(),
-    options: { maxHistoryFiles?: number; historyDirectoryName?: string; label?: string } = {},
+    options: {
+      maxHistoryFiles?: number
+      historyDirectoryName?: string
+      label?: string
+      /** Identities the persisted workspace names, never evicted at the cap;
+       *  null = unknown, which evicts nothing. Live sessions are protected by
+       *  pin() instead. Omitted = none (tests of unrelated behavior). */
+      inUse?: () => ReadonlySet<string> | null
+    } = {},
   ) {
     super()
     this.historyDirectory = join(dirname(file), options.historyDirectoryName ?? 'tldr-history')
     this.maxHistoryFiles = options.maxHistoryFiles ?? MAX_HISTORY_FILES
     this.label = options.label ?? 'TLDR'
+    this.inUse = options.inUse ?? (() => new Set())
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -80,7 +103,7 @@ export class TldrStore extends EventEmitter {
     }
     const document = JSON.parse(source)
     if (document?.version !== 1 || !document.records || typeof document.records !== 'object'
-      || Array.isArray(document.records) || Object.keys(document.records).length > MAX_RECORDS) {
+      || Array.isArray(document.records) || Object.keys(document.records).length > TLDR_MAX_RECORDS) {
       throw new Error('TLDR storage is invalid; the original file has been preserved.')
     }
     const records = Object.create(null) as Record<string, TldrRecord>
@@ -146,9 +169,28 @@ export class TldrStore extends EventEmitter {
     console.warn(`[${this.label.toLowerCase()}] set aside ${setAside} invalid record(s); original preserved at ${copy}`)
   }
 
+  /** Mark an identity live before its session is registered (#1328 q52).
+   *  Runs in the write queue: an eviction already in flight finishes first,
+   *  and every eviction chosen after this skips the identity. */
+  pin(identity: string): Promise<void> {
+    return this.serialize(async () => {
+      this.pins.set(identity, (this.pins.get(identity) ?? 0) + 1)
+    })
+  }
+
+  /** The session holding a pin was revoked. Queued like pin(), so a revoke
+   *  and a re-registration keep their order. */
+  unpin(identity: string): Promise<void> {
+    return this.serialize(async () => {
+      const count = (this.pins.get(identity) ?? 0) - 1
+      if (count > 0) this.pins.set(identity, count)
+      else this.pins.delete(identity)
+    })
+  }
+
   read(identities: string[]): Promise<Record<string, TldrRecord>> {
     return this.serialize(async () => {
-      if (identities.length > MAX_RECORDS || !identities.every(validTldrIdentity)) throw new Error('Invalid TLDR identities.')
+      if (identities.length > TLDR_MAX_RECORDS || !identities.every(validTldrIdentity)) throw new Error('Invalid TLDR identities.')
       const records = await this.load()
       return Object.fromEntries(identities.filter(id => records[id]).map(id => [id, { ...records[id]! }]))
     })
@@ -295,13 +337,59 @@ export class TldrStore extends EventEmitter {
       const text = normalizeTldrText(value, this.label)
       const records = await this.load()
       if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
-      if (!records[identity] && Object.keys(records).length >= MAX_RECORDS) throw new Error('TLDR storage is full.')
+      // WHY evict rather than refuse (#1277): nothing ever deletes a record
+      // (the store is never told an agent closed), so a refusal here was
+      // permanent. Once the file held TLDR_MAX_RECORDS identities every NEW
+      // agent's tldr_update and goal_set failed forever, while old agents
+      // kept working. At the owner's ~27 new identities a day that is about
+      // a year out, and it is certain.
+      //
+      // WHY age alone does not choose (#1328 review, all three reviewers):
+      // a goal is set once per task, so the OLDEST goal can belong to an
+      // agent that is still running. Evicting it made that agent's
+      // goal_complete fail, and a view that had already read it kept showing
+      // it (no removal event exists), including as a tickable row in Close
+      // Completed Agents. So an identity still named by any workspace or a
+      // live session is never a candidate. Every view reads identities of
+      // workspace sessions only, so an evicted record is one no view shows.
+      // When no candidate exists, or in-use is unknown, the store refuses as
+      // before: ambiguity fails closed (steering q40).
+      //
+      // WHY live sessions protect themselves through `pin()` and this queue
+      // (#1328, steering q51/q52): the first design asked main for its live
+      // registrations while choosing, then wrote. A session registering
+      // during the awaited rename was still evicted, and every repair that
+      // tried to give its record back afterwards found a new way to lose it
+      // (no second victim, a crash between two renames). Now the choice and
+      // the write are ONE queued operation, and a session pins its identity
+      // through the same queue before it becomes live: a pin queued first
+      // protects it, a pin queued behind an eviction waits for its outcome.
+      // A record is therefore never deleted while its identity is live, and
+      // nothing is ever deleted and then compensated.
+      const needed = records[identity] ? 0 : Object.keys(records).length + 1 - TLDR_MAX_RECORDS
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
       // (#1182). The agent sets a new goal exactly when it is given new work.
       const previousRevision = records[identity]?.revision ?? this.setAsideRevisions.get(identity) ?? 0
       const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: previousRevision + 1 }
-      await this.commit(identity, records, record, authorized)
+      // An evicting write reads who the workspace names, chooses, writes and
+      // renames while holding the lock workspace saves also hold (#1328 q56):
+      // a save naming the chosen record cannot land in the middle. Every
+      // other write (an existing identity, or room left) takes no lock.
+      const evictedRecords = new Map<string, TldrRecord>()
+      const write = async () => {
+        const workspace = needed > 0 ? this.inUse() : null
+        const protectedIds = workspace === null ? null : new Set([...workspace, ...this.pins.keys()])
+        const evicted = needed > 0 ? leastRecentlyWritten(records, needed, protectedIds) : []
+        if (evicted.length < needed) throw new Error(`${this.label} storage is full.`)
+        for (const id of evicted) evictedRecords.set(id, records[id]!)
+        // Same atomic write as the new record: a crash between two writes
+        // must not leave the file over the cap, which load() refuses as damage.
+        await this.commit(identity, records, record, authorized, evicted)
+      }
+      await (needed > 0 ? withReportingPublicationLock(write) : write())
+      // Only once the eviction is durable: a refused write evicted nothing.
+      for (const [id, evictedRecord] of evictedRecords) this.setAsideRevisions.set(id, evictedRecord.revision)
       // The current record is already durable and acknowledged. History is the
       // secondary view of it, so a history failure (a full disk, a corrupt file)
       // must not turn a successful report into a failed tool call that the
@@ -359,6 +447,11 @@ export class TldrStore extends EventEmitter {
     records: Record<string, TldrRecord>,
     record: TldrRecord,
     authorized: () => boolean,
+    // Identities dropped in this same write (#1277). History files are left:
+    // they have their own cap, and an old agent's timeline stays readable.
+    // No change event either: TldrUpdate has no removal shape, and only
+    // identities no workspace names are evicted, so no view holds one.
+    evict: readonly string[] = [],
   ): Promise<void> {
     // Writing now would drop set-aside records whose bytes are not yet
     // preserved anywhere; the copy is retried, and the write refused if it
@@ -368,6 +461,13 @@ export class TldrStore extends EventEmitter {
     // Otherwise a valid opaque key such as "constructor" can read inherited
     // object properties and persist an invalid revision instead of entry 1.
     const next = Object.assign(Object.create(null) as Record<string, TldrRecord>, records, { [identity]: record })
+    for (const id of evict) delete next[id]
+    await this.write(next, authorized)
+  }
+
+  /** Temp file, revocation re-checked after the I/O, atomic rename, then the
+   *  in-memory swap. Must run inside `serialize`. */
+  private async write(next: Record<string, TldrRecord>, authorized: () => boolean): Promise<void> {
     const temporary = `${this.file}.${randomUUID()}.tmp`
     await mkdir(dirname(this.file), { recursive: true })
     try {
@@ -381,6 +481,23 @@ export class TldrStore extends EventEmitter {
     }
     this.records = next
   }
+}
+
+/** Up to `count` identities, written longest ago, that nothing is using.
+ *  `inUse === null` (unknown) yields none, so the caller refuses. The
+ *  "written" time is the later of the set time and the completion time
+ *  (#1277): completing a goal is a write, and
+ *  a just-completed goal is exactly what the close menu lists, so a goal set
+ *  long ago but completed a minute ago must not be the first to go. Both times
+ *  are validated ISO strings by the time a record is in memory. */
+function leastRecentlyWritten(records: Record<string, TldrRecord>, count: number, inUse: ReadonlySet<string> | null): string[] {
+  if (count <= 0 || inUse === null) return []
+  const writtenAt = (record: TldrRecord) =>
+    Math.max(Date.parse(record.updatedAt), record.completedAt ? Date.parse(record.completedAt) : 0)
+  return Object.keys(records)
+    .filter(id => !inUse.has(id))
+    .sort((a, b) => writtenAt(records[a]!) - writtenAt(records[b]!))
+    .slice(0, count)
 }
 
 /** Completion is all-or-nothing: a time without a note (or the reverse) is not
