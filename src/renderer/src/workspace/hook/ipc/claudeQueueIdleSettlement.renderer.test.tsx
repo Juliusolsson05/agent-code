@@ -178,3 +178,55 @@ it('leaves the queue alone at bootstrap-complete while the process is live', () 
   act(() => { vi.advanceTimersByTime(1_000) })
   expect(visible(runtime())).toEqual([NOTIFICATION])
 })
+
+// #1396 review a: idleness is not proof the queue drained. Between turns the
+// spinner can read idle while Claude still holds N2, and a resumed pane's
+// first replay-quiet tick starts from idle defaults. With no open debt to
+// account for N2, neither site may touch it.
+const FIRST = 'first queued prompt'
+const SECOND = 'second queued prompt'
+function deliverFirstKeepSecond(fake: ReturnType<typeof createFakeSessionFeed>, sessionId: SessionId) {
+  act(() => {
+    fake.emitJsonlEntries({ sessionId, entries: [
+      op('k1', 'enqueue', FIRST, 1),
+      op('k2', 'enqueue', SECOND, 2),
+      op('k3', 'dequeue', undefined, 3),
+      { file: '/s/claude.jsonl', entry: { type: 'user', uuid: 'k-user', message: { role: 'user', content: FIRST }, timestamp: '2026-09-27T00:00:04.000Z' } as never },
+    ] })
+  })
+}
+
+it('leaves a genuinely queued item live when the process goes idle between turns', () => {
+  const { fake, sessionId, runtime } = mount()
+  act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
+  deliverFirstKeepSecond(fake, sessionId)
+  expect(visible(runtime())).toEqual([SECOND])
+  act(() => { fake.emitProcessState({ sessionId, active: false }) })
+  expect(visible(runtime())).toEqual([SECOND])
+})
+
+it('leaves a genuinely queued item live at bootstrap-complete', () => {
+  const { fake, sessionId, runtime } = mount({ bootstrapping: true })
+  deliverFirstKeepSecond(fake, sessionId)
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(runtime().bootstrapping).toBe(false)
+  expect(visible(runtime())).toEqual([SECOND])
+})
+
+// The stream-phase half of each guard: a spinner that reads inactive while
+// the semantic stream is still responding is not idle, even with the debt
+// covering everything.
+it('does not settle on a process-idle flip while the stream is still responding', () => {
+  const { fake, sessionId, runtime } = mount({ streamPhase: 'responding' })
+  act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
+  strandDebt(fake, sessionId)
+  act(() => { fake.emitProcessState({ sessionId, active: false }) })
+  expect(visible(runtime())).toEqual([NOTIFICATION])
+})
+
+it('does not settle at bootstrap-complete while the stream is still responding', () => {
+  const { fake, sessionId, runtime } = mount({ bootstrapping: true, streamPhase: 'responding' })
+  strandDebt(fake, sessionId)
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(visible(runtime())).toEqual([NOTIFICATION])
+})

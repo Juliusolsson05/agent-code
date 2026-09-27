@@ -193,8 +193,9 @@ const claudeQueueBySession = new Map<SessionId, ClaudeQueueState>()
  * replay ends with debt open (production bootstrap gets no replayed semantic
  * events), nothing settled and the chip stayed until the next turn, or
  * forever for a session with no next turn. Every transition INTO idle now
- * asks the same question: the semantic event, the process-state flip, and
- * bootstrap-complete.
+ * asks: the semantic event, the process-state flip, and bootstrap-complete.
+ * The two new sites also require `debt-covers-pending` (see
+ * debtCoversPending): idleness alone is not proof the queue drained.
  *
  * WHY not settle inline in the carriers instead: that inline settlement was
  * the bug those carriers were fixed for. It consumed the very item the
@@ -208,13 +209,38 @@ function settleClaudeQueueIfIdle(
   sessionId: SessionId,
   sessionKind: SessionKind | undefined,
   idle: boolean,
+  proof: 'idle' | 'debt-covers-pending',
 ): ClaudeQueueState | null {
   if (sessionKind !== 'claude' || !idle) return null
   const existing = claudeQueueBySession.get(sessionId)
   if (existing === undefined) return null
+  if (proof === 'debt-covers-pending' && !debtCoversPending(existing)) return null
   const marked = markStaleWhenIdle(existing, true)
   // markStaleWhenIdle is reference-stable, so identity is the change test.
   return marked === existing ? null : marked
+}
+
+/**
+ * True when the open departure debt accounts for EVERY live pending item
+ * (#1396 review a). Each unit of debt is a departure Claude logged (a
+ * `dequeue`, or a content-free `remove`) whose item was not identified. When
+ * those departures number at least the live pending items, every one of them
+ * has provably left, so settling retires them and leaves nothing to mark
+ * stale.
+ *
+ * WHY the process-idle flip and bootstrap-complete need this proof and the
+ * semantic site does not get it added: an inactive spinner, or the quiet
+ * replay timer, is not proof that Claude's queue is empty. Between two turns
+ * (N1 delivered, N2 still queued) the spinner can read idle, and a resumed
+ * pane's first 150 ms after replay starts from emptyRuntime's idle values.
+ * Settling there without the proof marked the genuinely queued N2
+ * `stale-unattributed`, and nothing un-stales it. The semantic site keeps its
+ * existing guard and behaviour; this PR does not widen it.
+ */
+function debtCoversPending(state: ClaudeQueueState): boolean {
+  const live = state.pending.filter(item => !item.stale).length
+  const debt = (state.debt?.count ?? 0) + (state.removeDebt?.count ?? 0)
+  return debt >= live
 }
 
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
@@ -1169,6 +1195,7 @@ export function useIpcSubscriptions(
             sessionId,
             sessionKind,
             !active && current.streamPhase === 'idle',
+            'debt-covers-pending',
           )
           pendingIdleQueue = idleQueue
           const shouldClearIdleQueue = shouldClearIdleQueuedMessages({
@@ -1467,6 +1494,7 @@ export function useIpcSubscriptions(
           sessionId,
           sessionKind,
           !current.processActive && streamPhase === 'idle' && !nextAwaitingAssistant,
+          'idle',
         )
         const staleChanged = markedQueue !== null
         pendingStaleQueue = markedQueue
@@ -2783,7 +2811,7 @@ export function useIpcSubscriptions(
           // (case 1 above), so requiring it false would never settle. Runs
           // before the awaitingAssistant clear so a queue that settlement
           // empties lets that clear follow.
-          const idleQueue = settleClaudeQueueIfIdle(sessionId, sessionKind, !hasLiveSignal)
+          const idleQueue = settleClaudeQueueIfIdle(sessionId, sessionKind, !hasLiveSignal, 'debt-covers-pending')
           pendingIdleQueue = idleQueue
           if (idleQueue !== null) {
             next = { ...next, queuedMessages: idleQueue.pending }
