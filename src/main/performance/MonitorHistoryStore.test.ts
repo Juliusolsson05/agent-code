@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -224,6 +224,58 @@ describe('a run this store never examined', () => {
     await mkdir(foreign, { recursive: true })
     await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now }]))
     now += 2 * 60_000
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+  })
+
+  // #1455 review b (1): a tier file whose stat fails with anything but ENOENT
+  // was skipped as absent, so the run looked empty and was deleted. A
+  // self-referencing link makes stat fail (ELOOP) on a real filesystem.
+  // Two guards hold here: indexing marks the run unknown, and retention's
+  // touched-since check counts an unstat-able file as touched. Removing one
+  // alone survives; removing both fails this test.
+  it('keeps a run whose tier file cannot be stat-ed at indexing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    const now = 20_000
+    const foreign = join(root, 'runs', 'run-a')
+    await mkdir(foreign, { recursive: true })
+    await symlink(join(foreign, '1m.jsonl'), join(foreign, '1m.jsonl'))
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect((await lstat(join(foreign, '1m.jsonl'))).isSymbolicLink()).toBe(true)
+  })
+
+  // #1455 review b (2): a tier file whose lines cannot be parsed indexed as a
+  // file with no points, and retention deleted it as fully expired, then the
+  // run. Content the store cannot read is unknown, not expired.
+  it('keeps a run whose tier file holds content it cannot parse', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    const now = 20_000
+    const foreign = join(root, 'runs', 'run-a')
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, '1m.jsonl'), '{"private":"unparseable-point"}\n')
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(await readFile(join(foreign, '1m.jsonl'), 'utf8')).toContain('unparseable-point')
+  })
+
+  // #1455 review b (3): a run examined while EMPTY can be filled later by the
+  // other store. Retention keeps any run with a file touched within the
+  // retention window.
+  it('keeps a run that was empty when examined and filled afterwards', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    const now = Date.now()
+    const foreign = join(root, 'runs', 'run-a')
+    await mkdir(foreign, { recursive: true })
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    await store.settled()
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now }]))
     store.record(snapshot(now), null, [], 0, 0)
     await store.settled()
     expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)

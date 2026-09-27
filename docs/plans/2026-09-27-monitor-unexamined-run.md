@@ -25,3 +25,9 @@
 - **An unreadable or untrusted incident file:** at indexing, an `incidents.json` that exists but cannot be read, parsed or trusted now makes the run UNKNOWN (`unindexedRuns`). It used to read as `[]`, so an examined run was deleted.
 - **`examinedRuns` is forgotten when the run is deleted** (retention or capacity), so a name another store recreates with fresh data is unexamined again and kept.
 - **Tests:** real files. An incident file at mode 000 during indexing survives maintenance once readable; a run recreated after its retention deletion survives. Both were red before, and both mutations fail.
+
+## Review b (round 1), fixed
+- **A tier `stat` failure other than ENOENT** now marks the run unknown instead of skipping the tier as absent.
+- **A tier file with unparseable lines** marks the run unknown. It was indexed with no points, deleted as fully expired, and then its run was deleted.
+- **Retention keeps any run with a file touched within the retention window** (`touchedSince`; any list or stat failure counts as touched). A run examined while empty can be filled later by the other store, which is residual 2 above, now closed. One side effect: once an expired run's last file is removed, its fresh folder mtime keeps the empty folder for one more window.
+- **Tests:** real files, one per finding (ELOOP tier link, unparseable tier line, filled after examination). Each was red before. Mutations: "unparsed ignored" and "no touched check" fail on their own; the stat and touched guards back each other up on the ELOOP case (removing both fails).

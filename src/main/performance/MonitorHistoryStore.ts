@@ -365,15 +365,26 @@ export class MonitorHistoryStore {
             // Repair before indexing: a torn final append from a crashed helper
             // is expected crash residue, not corruption worth a degraded state.
             await this.repairTail(file)
-            const size = await stat(file).then(value => value.size, () => null)
+            // Only a missing tier is absent (#1455 review b): any other stat
+            // failure throws into the catch below, which marks the run unknown.
+            const size = await stat(file).then(value => value.size, (error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') return null
+              throw error
+            })
             if (size === null) continue
             const entry: FileStat = { run, resolution, points: 0, bytes: size, oldestAt: null, newestAt: null }
             const failure = { failed: false }
+            let unparsed = false
             for await (const line of this.lines(file, failure)) {
               const point = this.parseLine(line)
               if (point) this.notePoint(entry, point)
+              else unparsed = true
             }
             if (failure.failed) throw new Error('index-read-failed')
+            // Content it cannot parse is UNKNOWN, not expired (#1455 review b):
+            // indexed as a file with no points, retention deleted it as fully
+            // expired and then the run. Unindexed, retention leaves both alone.
+            if (unparsed) throw new Error('index-unparseable')
             this.index.set(file, entry)
           } catch {
             this.degraded = true
@@ -557,6 +568,10 @@ export class MonitorHistoryStore {
     // operations snapshot, so it is retention-expired, not capacity-pruned.
     if (this.indexed) for (const run of await this.runNames()) {
       if (run === this.runId || !this.examinedRuns.has(run) || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
+      // Examined while empty is not "still empty" (#1455 review b): another
+      // store sharing the folder can fill the run after this one indexed it.
+      // Keep any run with a file touched within the retention window.
+      if (await this.touchedSince(run, now - RETENTION['1m'])) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
       // Examined means THIS contents (#1455 review a): once deleted, the name
       // may come back with fresh data from another store, unexamined.
@@ -745,6 +760,20 @@ export class MonitorHistoryStore {
       for (const file of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
         if (file.isFile() && file.name.endsWith('.tmp')) await rm(join(dir, file.name), { force: true }).catch(() => {})
       }
+    }
+  }
+
+  /** Whether any file in the run changed at or after `since`. Unknown (any
+   *  failure to list or stat) counts as touched, so retention keeps the run. */
+  private async touchedSince(run: string, since: number): Promise<boolean> {
+    const dir = join(this.root, RUNS_DIR, run)
+    try {
+      for (const file of await readdir(dir, { withFileTypes: true })) {
+        if ((await stat(join(dir, file.name))).mtimeMs >= since) return true
+      }
+      return (await stat(dir)).mtimeMs >= since
+    } catch {
+      return true
     }
   }
 
