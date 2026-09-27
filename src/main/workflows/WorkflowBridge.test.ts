@@ -756,6 +756,36 @@ describe('WorkflowBridge session carry (#1280)', () => {
     expect(runIds(bridge, 'source', '/first')).toEqual(['source-run'])
   })
 
+  // Round-3 review B: the live order the other way round. The late run lands
+  // first, in a successor with no slot yet; the successor's own run in
+  // another cwd then arrives. It used to replace the slot and drop the late
+  // run; it now sends it back to the id that started it.
+  it('sends a late aliased run home when the successor\'s own run arrives in another cwd', async () => {
+    const bridge = new WorkflowBridge(service([]), { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('source', 'target')
+    bridge.registerRun('source', '/first', run('source-run'))
+    bridge.registerRun('target', '/second', run('target-run'))
+    expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
+    expect(runIds(bridge, 'source', '/first')).toEqual(['source-run'])
+  })
+
+  // A Resume of that late run registers under the pane that shows it (the
+  // alias target), but it belongs with its parent: sent home together.
+  it('sends a resumed aliased run home with its parent', async () => {
+    const svc = service([])
+    ;(svc.resume as ReturnType<typeof vi.fn>).mockResolvedValueOnce(run('child-run', { resumedFromRunId: 'source-run', lineageId: 'source-run' }))
+    const bridge = new WorkflowBridge(svc, { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('source', 'target')
+    bridge.registerRun('source', '/first', run('source-run'))
+    await bridge.resume({ cwd: '/first', runId: 'source-run' })
+    expect(runIds(bridge, 'target', '/first')).toEqual(['child-run'])
+    bridge.registerRun('target', '/second', run('target-run'))
+    expect(runIds(bridge, 'source', '/first')).toEqual(['child-run'])
+    expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
+  })
+
   // The same rule at restart, in the storage order that would otherwise lose
   // it: the aliased run is listed before the successor's own run.
   it('keeps both runs apart at restart whatever order storage lists them in', async () => {
