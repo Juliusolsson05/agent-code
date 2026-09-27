@@ -441,13 +441,22 @@ describe('dictation outcome codes (#243)', () => {
   // start() discarded it and wrote nothing; 13 recorded sessions ended so.
   it('records a tap released while the microphone opens as cancelled.short-press', async () => {
     const releasedAt = at('tap-while-starting', 'stop:called').tMs
-    const micMs = at('tap-while-starting', 'start:get-user-media:done').data!.ms as number
     mount()
     await act(async () => {})
-    slowMicrophone(micMs)
+    // The recorded timing, made exact: only Date is faked, so the hook
+    // measures the held time as precisely the recorded 49 ms however busy
+    // the machine is, and the microphone opens only when the test says so.
+    let openMic!: () => void
+    const micOpen = new Promise<void>(resolve => { openMic = resolve })
+    const real = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation()!
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => { await micOpen; return real(constraints) })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-20T10:00:00.000Z'))
     await act(async () => { beginDictationHold('keyboard') })
-    await act(async () => { await wait(releasedAt); endDictationHold() })
-    await act(async () => { await wait(micMs + 50) })
+    vi.setSystemTime(new Date(Date.parse('2026-09-20T10:00:00.000Z') + releasedAt))
+    await act(async () => { endDictationHold() })
+    await act(async () => { openMic(); await Promise.resolve() })
+    await act(async () => { await vi.waitFor(() => expect(outcomes()).toHaveLength(1)) })
     expect(outcomes()).toEqual([expect.objectContaining({ event: 'cancel', data: expect.objectContaining({ code: 'cancelled.short-press' }) })])
     expect(onMessage).not.toHaveBeenCalled()
   })
@@ -457,17 +466,29 @@ describe('dictation outcome codes (#243)', () => {
   // detected". The speech happened before the microphone was open.
   it('says the microphone opened late instead of "No speech detected"', async () => {
     const micMs = at('mic-opened-late', 'start:get-user-media:done').data!.ms as number
+    const releasedAt = at('mic-opened-late', 'stop:called').tMs
     mount()
     await act(async () => {})
-    slowMicrophone(micMs)
+    // Recorded timing made exact (only Date is faked): pressed at t0,
+    // released at 1,095 ms while the microphone was still opening, the
+    // microphone opened at 3,280 ms.
+    let openMic!: () => void
+    const micOpen = new Promise<void>(resolve => { openMic = resolve })
+    const real = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation()!
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => { await micOpen; return real(constraints) })
+    const t0 = Date.parse('2026-09-20T10:00:00.000Z')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(t0)
     await act(async () => { beginDictationHold('keyboard') })
-    // Released while the microphone was still opening, as recorded.
-    await act(async () => { await wait(at('mic-opened-late', 'stop:called').tMs); endDictationHold() })
-    await act(async () => { await wait(micMs) })
+    vi.setSystemTime(t0 + releasedAt)
+    await act(async () => { endDictationHold() })
+    vi.setSystemTime(t0 + micMs)
+    await act(async () => { openMic(); await Promise.resolve() })
+    await act(async () => { await vi.waitFor(() => expect(outcomes()).toHaveLength(1)) })
     expect(outcomes()).toEqual([expect.objectContaining({ event: 'error', data: expect.objectContaining({ code: 'mic.opened-late' }) })])
     expect(onMessage).toHaveBeenCalledWith(expect.stringContaining(`the microphone took ${(micMs / 1000).toFixed(1)} s to open`))
     expect(onMessage).not.toHaveBeenCalledWith('No speech detected')
-  }, 10_000)
+  })
 
   // Recorded: the selected EarPods were unplugged (OverconstrainedError).
   it('records an unavailable microphone as mic.unavailable', async () => {
@@ -578,7 +599,9 @@ describe('dictation outcome codes (#243)', () => {
     await act(async () => { controller?.toggle() })
     await speak()
     await act(async () => { controller?.toggle(); await wait(10) })
-    await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
+    // Async advance (#1340 round 2 A): the deadline's rejection and the
+    // stop()'s resumption must interleave as they would for real.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); await wait(10) })
     expect(onMessage.mock.calls.map(call => call[0])).toEqual(['Dictation could not start in time. Try again.'])
     expect(outcomes()).toHaveLength(1)
   })
@@ -629,7 +652,7 @@ describe('dictation outcome codes (#243)', () => {
     await speak()
     await act(async () => { controller?.toggle(); await wait(30) })
     expect(journal.some(row => row.layer === 'TRANSCRIPT' && row.event === 'committed')).toBe(false)
-    expect(journal).toContainEqual(expect.objectContaining({ layer: 'TRANSCRIPT', event: 'delivery:failed', data: { code: 'delivery.failed' } }))
+    expect(journal).toContainEqual(expect.objectContaining({ layer: 'TRANSCRIPT', event: 'delivery:failed', data: expect.objectContaining({ code: 'delivery.failed' }) }))
     expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('could not be sent to the terminal'))
   })
 
@@ -692,6 +715,8 @@ describe('dictation outcome codes (#243)', () => {
   it('names a late terminal-delivery failure as the previous transcript', async () => {
     ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
       async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
+    ;(window as unknown as { api: { listDictationHistory: unknown } }).api.listDictationHistory =
+      async () => ({ stats: {}, entries: [{ text: 'hello' }] })
     const feed = createFakeSessionFeed()
     feed.sendInput = () => new Promise(() => {})
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
@@ -707,5 +732,25 @@ describe('dictation outcome codes (#243)', () => {
     await act(async () => { vi.advanceTimersByTime(5_000); await wait(10) })
     expect(onMessage).toHaveBeenCalledWith('The previous transcript could not be sent to the terminal. It is in Settings → Dictation → History.')
     expect(controller?.status).toBe('recording')
+  })
+
+  // Steering q67: "it is in History" is said only when History really holds
+  // this transcript; main's history write is not awaited and can fail.
+  it.each([
+    ['holds the transcript', [{ text: 'hello' }], 'The transcript could not be sent to the terminal. It is in Settings → Dictation → History.'],
+    ['does not hold it (the write failed)', [{ text: 'an older dictation' }], 'The transcript could not be sent to the terminal, and it could not be saved to History either.'],
+  ])('after a failed terminal paste, promises History only when it %s', async (_label, entries, sentence) => {
+    const api = (window as unknown as { api: { stopDictationStream: unknown; listDictationHistory: unknown } }).api
+    api.stopDictationStream = async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
+    api.listDictationHistory = async () => ({ stats: {}, entries })
+    const feed = createFakeSessionFeed()
+    feed.nextSendInputResult = false
+    render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { controller?.toggle(); await wait(30) })
+    expect(onMessage).toHaveBeenCalledWith(sentence)
+    expect(journal).toContainEqual(expect.objectContaining({ event: 'delivery:failed', data: expect.objectContaining({ savedInHistory: entries[0]!.text === 'hello' }) }))
   })
 })

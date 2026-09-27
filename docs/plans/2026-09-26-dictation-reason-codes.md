@@ -102,3 +102,9 @@ Tests: 10 new cases.
 - **Survivor (terminal success untested):** a test asserts the bracketed-paste write and `committed` once it answers true. Replacing the write with `Promise.resolve(false)` fails it.
 
 Tests: 4 new. 3 are red on `deafa064`; the success-path pin kills its mutant.
+
+## Steering q67: the History promise
+`delivery.failed` said "It is in Settings → Dictation → History." But main writes History without awaiting it, and a failed write only reaches the debug journal. With both the paste and the History write failed, the user was told the transcript was saved when it was gone.
+- **Fix:** on a failed terminal paste, the renderer reads History, which is queued behind in-flight appends. It promises History only if this transcript's row is among the newest entries. Otherwise the sentence says it could not be saved either. The `delivery:failed` row records `savedInHistory`. No filesystem or IPC text is shown.
+- Tests: saved, and not saved (a write that failed), both red on `b07ca169`. Two older timing-based tests (the recorded tap, and the late mic) now fake `Date`, so the recorded 49 ms and 3,280 ms are measured exactly under any load.
+- **Round-2 A's remaining findings** (the hung-drain cancel, and the late paste taking over the global overlay) were fixed in `b07ca169`. Its test caveat, that the connect-timeout-during-stop test advanced timers synchronously, is fixed: the test now uses `advanceTimersByTimeAsync`, and removing the guard fails it.

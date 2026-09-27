@@ -368,7 +368,7 @@ export function useComposerDictation({
   // What the user reads comes from the code, never from provider or IPC text
   // (q22/q39). `null` means say nothing (a tap the user abandoned, a pane
   // that is gone).
-  const showReason = useCallback((reason: DictationOutcomeReason, detail?: { micOpenMs?: number; previous?: boolean }): string | null => {
+  const showReason = useCallback((reason: DictationOutcomeReason, detail?: { micOpenMs?: number; previous?: boolean; saved?: boolean }): string | null => {
     const message = dictationReasonMessage(reason, detail)
     if (message) reportMessage(message)
     return message
@@ -425,7 +425,7 @@ export function useComposerDictation({
     setHasTranscriptPreview(true)
   }, [writeInput])
 
-  const commitTranscript = useCallback((recording: ActiveRecording, text: string) => {
+  const commitTranscript = useCallback((recording: ActiveRecording, text: string, raw: string = text) => {
     // The pane went away mid-finalise. There is nothing left to write to, and
     // writing anyway reaches a global store (#1079 review, 5).
     if (abandonedStopRef.current) {
@@ -493,22 +493,37 @@ export function useComposerDictation({
     // dropped, `committed` was logged at once, and a failed paste lost the
     // transcript with a recorded success and no message.
     const debugSessionId = recording.debugSessionId
-    const failed = () => {
+    const failed = async () => {
+      // WHY History is ASKED rather than assumed (steering q67): main records
+      // the dictation in History without awaiting the write (a disk write
+      // must not delay the transcript), and a failed write only reaches the
+      // debug journal. Telling the user "it is in History" after a failed
+      // paste was therefore a promise nobody had checked, and with both
+      // sinks failed the transcript was simply gone. History reads are
+      // queued behind in-flight appends, so this read sees this dictation's
+      // row if it was written at all; only then is it promised.
+      let saved = false
+      try {
+        const history = await window.api.listDictationHistory()
+        saved = history.entries.slice(0, 5).some(entry => entry.text === raw)
+      } catch {
+        // Unreadable history: not promised.
+      }
       window.api.recordDictationDebugEvent(debugSessionId, {
         layer: 'TRANSCRIPT',
         event: 'delivery:failed',
-        data: { code: 'delivery.failed' satisfies DictationOutcomeReason },
+        data: { code: 'delivery.failed' satisfies DictationOutcomeReason, savedInHistory: saved },
       })
       // A newer dictation may already be recording by the time this one's
       // paste fails (#1340 round 2 C). Its failure is still reported, but
       // named as the previous one, and it does not take over the overlay
       // the new recording is using.
       const previous = activeRef.current !== null
-      const message = showReason('delivery.failed', { previous })
+      const message = showReason('delivery.failed', { previous, saved })
       if (message && !previous) setDictationOverlayState({ errorMessage: message })
     }
     void withinDeadline(Promise.resolve(delivered), DICTATION_DEADLINES_MS.terminalInsertion, 'delivery.failed')
-      .then(ok => { if (ok) committed(); else failed() }, failed)
+      .then(ok => { if (ok) committed(); else void failed() }, () => { void failed() })
   }, [debug, showReason, writeInput])
 
   const restoreBaseInput = useCallback((recording: ActiveRecording) => {
@@ -860,7 +875,7 @@ export function useComposerDictation({
       activeRef.current = null
 
       if (result.kind === 'success') {
-        commitTranscript(recording, result.text)
+        commitTranscript(recording, result.text, result.raw)
         setLifecycleStatus('idle')
         return
       }
