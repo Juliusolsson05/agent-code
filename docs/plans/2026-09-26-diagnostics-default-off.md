@@ -62,7 +62,12 @@
    (`MonitorCoordinator`, `ElectronWorkflowWorkerLauncher`, extension `serviceHost`). It deserves its
    own plan and PR, and it is far smaller once item 1 stops the feed-debug sink running by default.
    This PR therefore uses `Refs #767`, not `Fixes`.
-4. **Item 7: a short "Diagnostics flags" section in the root README.** It lists each flag and setting
+4. **Item 7: a short "Diagnostics flags" section in the root README.**
+   - **`useProxyStreaming` is documented, not recommended off** (the issue's original daily profile
+     listed it). It is the live Claude streaming transport, not a diagnostic: turning it off blanks
+     live output. Its disk growth is bounded by #1273's rotation instead.
+   - The "Persistent Aggressive Debug Logs" setting description now says it also keeps the feed-debug
+     log on disk. It lists each flag and setting
    with its default and cost, and the recommended daily profile (everything off; `DEV_DEBUG=1` only to
    record on demand).
 
