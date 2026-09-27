@@ -28,3 +28,7 @@ Renderer tests drive the real hook and the real TileLeaf. The app is not launche
 ## Out of scope
 - #1250's other rows.
 - A persistent inline "retry" affordance in the feed header (a design call; the toast plus the existing scroll retry is enough to end the silence).
+
+## Steering q106
+- The dispatch layout re-renders the SAME TileLeaf with another agent's `sessionId` when a lane switches. One timestamp per mounted leaf therefore let agent A's toast silence agent B's first failure for 5 s.
+- The cooldown is now keyed by `sessionId`. Test: same-leaf rerender, A fails and toasts, the lane switches to B, B fails and toasts, and B's repeat still coalesces. It fails with the per-leaf timestamp.

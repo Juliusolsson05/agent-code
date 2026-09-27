@@ -550,7 +550,14 @@ async function readOlderTranscriptWindow(
   entries: Record<string, unknown>[]
   offsets: number[]
 }> {
-  const size = await stat(filePath).then(s => s.size).catch(() => 0)
+  // WHY an unreadable transcript THROWS here (#1413 review a): this reader
+  // serves only older-history paging, where the renderer already holds a
+  // page from this file. A failed stat/open/read used to come back as an
+  // empty page with `hasMore: false`, so the feed dropped "older history
+  // exists" for good and the user was told nothing. A rejection reaches
+  // the renderer as a failed page, which is said and can be retried. An
+  // EMPTY file (stat succeeded, size 0) is still an honest empty page.
+  const size = (await stat(filePath)).size
   const empty = {
     bytes: size,
     tailBytes: 0,
@@ -571,13 +578,7 @@ async function readOlderTranscriptWindow(
     : extractCodexHistoryMarker
   const limit = Math.max(0, params.limit)
 
-  let handle: FileHandle
-  try {
-    handle = await open(filePath, 'r')
-  } catch (error) {
-    if (params.beforeRecordHash) throw error
-    return empty
-  }
+  const handle: FileHandle = await open(filePath, 'r')
   const stats = parseStats()
   try {
     let parseErrors = 0
@@ -642,9 +643,6 @@ async function readOlderTranscriptWindow(
       return false
     })
     return finishWindow(size, tailBytes, parseErrors, parsed, found, found ? 'marker' : 'tail', kept, limit)
-  } catch (error) {
-    if (params.beforeRecordHash) throw error
-    return empty
   } finally {
     observeParse(stats)
     await handle.close().catch(() => {})

@@ -517,13 +517,19 @@ export function TileLeaf({
   // nothing older. Fixed words (q22): the error can name a transcript path.
   // Coalesced, because while the scroller sits near the top every scroll
   // tick retries, and each failure must not stack another toast.
-  const lastOlderHistoryToastAtRef = useRef(0)
+  //
+  // Keyed by session, not per mounted leaf (steering q106): the dispatch
+  // layout re-renders the SAME TileLeaf with another agent's sessionId when
+  // a lane switches, so one timestamp let agent A's toast silence agent B's
+  // first failure for the rest of the window.
+  const lastOlderHistoryToastAtRef = useRef(new Map<SessionId, number>())
   const loadOlderHistory = useCallback(async () => {
     const result = await workspace.loadOlderHistory(sessionId)
     if (result !== 'failed') return
     const now = Date.now()
-    if (now - lastOlderHistoryToastAtRef.current < OLDER_HISTORY_TOAST_COALESCE_MS) return
-    lastOlderHistoryToastAtRef.current = now
+    const last = lastOlderHistoryToastAtRef.current.get(sessionId) ?? 0
+    if (now - last < OLDER_HISTORY_TOAST_COALESCE_MS) return
+    lastOlderHistoryToastAtRef.current.set(sessionId, now)
     workspace.showPaneToast(sessionId, OLDER_HISTORY_FAILED)
   }, [sessionId, workspace.loadOlderHistory, workspace.showPaneToast])
 

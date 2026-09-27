@@ -43,21 +43,23 @@ afterEach(() => { cleanup(); vi.useRealTimers(); useAppStore.setState(original, 
 
 function mount(answers: OlderHistoryLoadResult[]) {
   const paneToasts: string[] = []
+  const toastSessions: string[] = []
   const workspace = {
-    state: { sessions: { agent: { kind: 'claude', cwd: '/trial' } } },
+    state: { sessions: { agent: { kind: 'claude', cwd: '/trial' }, other: { kind: 'claude', cwd: '/trial' } } },
     acknowledgeSession: vi.fn(),
     setDraftInput: vi.fn(),
     loadOlderHistory: vi.fn(async () => answers.shift() ?? 'skipped'),
-    showPaneToast: (_sessionId: string, message: string) => { paneToasts.push(message) },
+    showPaneToast: (sessionId: string, message: string) => { paneToasts.push(message); toastSessions.push(sessionId) },
   } as unknown as Workspace
-  render(
+  const leaf = (sessionId: string) => (
     <AgentTerminalOwnerVisibilityProvider visible>
-      <TileLeaf sessionId="agent" runtime={{ ...emptyRuntime(), hasOlderHistory: true }} workspace={workspace} focused onFocusRequest={vi.fn()} />
-    </AgentTerminalOwnerVisibilityProvider>,
+      <TileLeaf sessionId={sessionId} runtime={{ ...emptyRuntime(), hasOlderHistory: true }} workspace={workspace} focused onFocusRequest={vi.fn()} />
+    </AgentTerminalOwnerVisibilityProvider>
   )
+  const view = render(leaf('agent'))
   // A prop TileLeaf never passed would make every assertion below vacuous.
   expect(loadOlder).toBeTypeOf('function')
-  return { paneToasts, workspace }
+  return { paneToasts, toastSessions, workspace, switchTo: (sessionId: string) => view.rerender(leaf(sessionId)) }
 }
 
 it('says a failed page in fixed words, once per burst of retries', async () => {
@@ -79,4 +81,18 @@ it('says nothing for a page that loaded or a request that was skipped', async ()
   await act(async () => { await loadOlder!() })
   await act(async () => { await loadOlder!() })
   expect(paneToasts).toEqual([])
+})
+
+// Steering q106: the dispatch layout re-renders the SAME leaf with another
+// agent when a lane switches. Agent A's toast must not silence agent B's
+// first failure; repeated failures of one agent still coalesce.
+it('does not let one agent\'s toast silence another agent in the same leaf', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const { paneToasts, toastSessions, switchTo } = mount(['failed', 'failed', 'failed'])
+  await act(async () => { await loadOlder!() })
+  switchTo('other')
+  await act(async () => { await loadOlder!() })
+  expect(toastSessions).toEqual(['agent', 'other'])
+  await act(async () => { await loadOlder!() })
+  expect(paneToasts).toEqual([OLDER_HISTORY_FAILED, OLDER_HISTORY_FAILED])
 })
