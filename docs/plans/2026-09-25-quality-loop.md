@@ -543,6 +543,8 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (17:40) — **codex-headless#55 MERGED** (`6334d5ac`). A settled-screen API: no parse pending, no open DEC 2026 synchronized update, and the provider has painted since the last resize. 3 reviewers; A/B verified MERGE-READY in round 2; exact-head CI green. W1 now bumps #1319 to it. Also: q44 holds atp#37 (env allowlist); q47 holds #1330 for the owner's retention decision; #1326 is back to W3 (q47 point 2). Reviewers are running for #1330 and wfm#64.
+
 - 2026-09-26 (17:35) — **Switched to manager plus four Claude workers** (owner decision). The goal loop is replaced by a 5-minute manager tick.
   - **Setup:** the plan, worker rules, claim formula (`next-issue.sh`, atomic `mkdir` claims) and transcript audit (`audit.py`) are in `temp/manager/`. B32 is restarted as the watcher (`temp/steering-loop/BRIEF-v2.md`).
   - **In flight:**
