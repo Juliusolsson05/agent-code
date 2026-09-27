@@ -98,6 +98,31 @@ export async function deliverClaudePrompt(
     })
   }
 
+  // The LAST word before any prompt byte (#1294). The gate above derives from
+  // the package's per-frame composer cache, which is recomputed only on its
+  // throttled screen event. That event can stall behind pendingWrites, so a
+  // stale 'empty' outlives a human who started typing. The cache also counts
+  // only plain cells as typed, so a one-character draft (under the inverse
+  // cursor) or an [Image #1] chip (all inverse) read as empty. Either way the
+  // agent's prompt would be typed into the human's draft and submitted with
+  // it. So read the composer from the LIVE buffer, text and attributes at the
+  // same instant, with the fail-closed classifier the rollback uses (#1309):
+  // only a dim-only placeholder reads empty. Covers the image path too.
+  if (typeof io.session.readComposer === 'function' && typeof io.session.snapshotScreen === 'function') {
+    const composer = classifyClaudeComposerLive(io.session.readComposer(), io.session.snapshotScreen())
+    if (composer !== 'empty') {
+      io.record?.('live-composer-refused', { composer })
+      return failure({
+        stage: 'before-write', code: 'not-ready', retrySafe: true,
+        disposition: composer === 'drafted' ? 'retry-after-resolve' : 'retry-same-session',
+        promptWritten: false, enterWritten: false,
+        message: composer === 'drafted'
+          ? `Claude session ${io.sessionId} prompt input is occupied by a human draft`
+          : `Claude session ${io.sessionId} prompt input is not painted yet`,
+      })
+    }
+  }
+
   if (io.imagePaths && io.imagePaths.length > 0) {
     return deliverClaudeImagePrompt(io, deliveryDeadlineAt)
   }
@@ -453,7 +478,7 @@ async function rollbackWrittenPrompt(
   io: PromptDeliveryIo,
 ): Promise<'cleared' | 'restored' | 'unrecoverable'> {
   const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
-    classifyRollbackComposer(io.session.readComposer?.() ?? null, io.session.snapshotScreen?.() ?? '')
+    classifyClaudeComposerLive(io.session.readComposer?.() ?? null, io.session.snapshotScreen?.() ?? '')
 
   // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
   //
@@ -543,7 +568,9 @@ function describeReadiness(
  *
  * Exported so a test can drive it with a real ClaudeCodeHeadless frame.
  */
-export function classifyRollbackComposer(
+// Named for both callers since #1294: the pre-write guard in
+// deliverClaudePrompt and the rollback's post-kill check.
+export function classifyClaudeComposerLive(
   live: { screen: string; attributes: { dim: number; inverse: number; plain: number } | null } | null,
   fallbackScreen: string,
 ): 'empty' | 'drafted' | 'unpainted' {

@@ -18,6 +18,8 @@ const composer = (row: string) => [RULE, row, RULE].join('\n')
 type Attributes = { dim: number; inverse: number; plain: number }
 type Frame = { screen: string; attributes: Attributes | null }
 
+// An empty composer: the prompt marker and nothing else.
+const EMPTY: Frame = { screen: composer('❯'), attributes: { dim: 0, inverse: 0, plain: 0 } }
 // Our bytes, as typed (plain cells).
 const TYPED: Frame = { screen: composer('❯ yes fix all 9'), attributes: { dim: 0, inverse: 1, plain: 12 } }
 
@@ -39,7 +41,10 @@ async function rollback(afterKill: Frame, before: Frame = TYPED) {
       // The same frame is visible before our write too, so absorption never
       // sees a transition and the delivery reaches the rollback (#1230).
       snapshotScreen: () => (killed ? afterKill : before).screen,
-      readComposer: () => (killed ? afterKill : before),
+      // Before our first byte the composer is really empty: the pre-write
+      // live guard (#1294) refuses to type over anything else. The SCREEN
+      // above stays unchanged so absorption still sees no transition.
+      readComposer: () => (killed ? afterKill : writes.length === 0 ? EMPTY : before),
       armPromptAcceptance: () => ({ promise: new Promise(() => {}), cancel: vi.fn() }),
     },
   } as unknown as PromptDeliveryIo
@@ -78,7 +83,7 @@ it('trusts a bare prompt marker even when attributes are unavailable', async () 
 it('classifies real painted frames: a dim suggestion is empty, typed text is not', async () => {
   vi.useRealTimers()
   const { ClaudeCodeHeadless } = await import('claude-code-headless')
-  const { classifyRollbackComposer } = await import('./promptDelivery.js')
+  const { classifyClaudeComposerLive } = await import('./promptDelivery.js')
   const pty = {
     pid: 1, process: 'claude', cols: 120, rows: 40, handleFlowControl: false,
     write: vi.fn(), resize: vi.fn(), clear: vi.fn(), pause: vi.fn(), resume: vi.fn(), kill: vi.fn(),
@@ -88,7 +93,7 @@ it('classifies real painted frames: a dim suggestion is empty, typed text is not
   const terminal = (headless as unknown as { terminal: { writeForTest(data: string): Promise<void> } }).terminal
   const paint = async (row: string) => {
     await terminal.writeForTest('\x1b[2J\x1b[H' + ['─'.repeat(60), row, '─'.repeat(60)].join('\r\n'))
-    return classifyRollbackComposer({ screen: headless.getScreen(), attributes: headless.getComposerAttributes() }, '')
+    return classifyClaudeComposerLive({ screen: headless.getScreen(), attributes: headless.getComposerAttributes() }, '')
   }
   expect(await paint('❯ \x1b[2myes fix all 9\x1b[22m')).toBe('empty')
   expect(await paint('❯ yes fix all 9')).toBe('drafted')
@@ -111,7 +116,7 @@ it('does not call typed text that matches a known hint empty', async () => {
 // #1309 round 2 B mutation: the attributes sample only the MARKER row, so a
 // dim marker row says nothing about typed text on a continuation row.
 it('does not call a dim marker row empty while a continuation row holds text', async () => {
-  const { classifyRollbackComposer } = await import('./promptDelivery.js')
+  const { classifyClaudeComposerLive } = await import('./promptDelivery.js')
   const screen = [RULE, '❯ yes fix all 9', '  and the rest of a draft', RULE].join('\n')
-  expect(classifyRollbackComposer({ screen, attributes: { dim: 12, inverse: 1, plain: 0 } }, '')).toBe('drafted')
+  expect(classifyClaudeComposerLive({ screen, attributes: { dim: 12, inverse: 1, plain: 0 } }, '')).toBe('drafted')
 })
