@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,20 @@ import { MonitorHistoryStore } from './MonitorHistoryStore.js'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
+
+// Retention keeps any run with a file touched within the window (touchedSince,
+// #1455 review b), measured against the maintenance time, which is the
+// snapshot's sampledAt. A retention test that wants ONE named guard to be the
+// only thing keeping a run must therefore run on the real clock and age that
+// run's files AND folder past the window; with a 1970-scale snapshot every
+// fixture looks freshly touched and the named guard is shadowed (#1455
+// review c, B6 check 2110).
+const DAY = 24 * 60 * 60_000
+const aged = async (dir: string, now: number): Promise<void> => {
+  const old = new Date(now - 30 * DAY)
+  for (const name of await readdir(dir)) await utimes(join(dir, name), old, old)
+  await utimes(dir, old, old)
+}
 
 const snapshot = (at: number): MonitorWorkerSnapshot => ({
   schemaVersion: 1, sampledAt: at,
@@ -195,14 +209,17 @@ describe('bounded local performance history', () => {
     const refused = JSON.stringify({ version: 2, incidents: [incident] })
     await mkdir(runA, { recursive: true })
     await writeFile(join(runA, 'incidents.json'), refused)
+    const now = Date.now()
     const first = new MonitorHistoryStore(root, 'run-a')
     await first.settled()
-    first.record(snapshot(11_000), null, [{ ...incident, id: 2, at: 11_000 }], 0, 1)
+    first.record(snapshot(now), null, [{ ...incident, id: 2, at: now }], 0, 1)
     await first.settled()
+    // Aged, so only refusedAsideRuns can keep run-a (see `aged`).
+    await aged(runA, now)
 
     const later = new MonitorHistoryStore(root, 'run-b')
     await later.settled()
-    later.record(snapshot(11_000 + 8 * 24 * 60 * 60_000), null, [], 0, 0)
+    later.record(snapshot(now + 8 * DAY), null, [], 0, 0)
     await later.settled()
 
     const aside = (await readdir(runA)).filter(name => name.startsWith('incidents.refused-'))
@@ -285,14 +302,42 @@ describe('bounded local performance history', () => {
     await mkdir(refused, { recursive: true })
     await writeFile(join(foreignOnly, 'incidents.json'), JSON.stringify([{ ...incident, rule: 'rule-from-a-newer-build' }]))
     await writeFile(join(refused, 'incidents.json'), JSON.stringify({ version: 2 }))
+    // Aged, so only foreignIncidents / refusedIncidentRuns can keep each run.
+    const now = Date.now()
+    await aged(foreignOnly, now)
+    await aged(refused, now)
 
     const store = new MonitorHistoryStore(root, 'run-now')
     await store.settled()
-    store.record(snapshot(90_000), null, [], 0, 0)
+    store.record(snapshot(now), null, [], 0, 0)
     await store.settled()
 
     await expect(stat(foreignOnly)).resolves.toBeTruthy()
     await expect(stat(refused)).resolves.toBeTruthy()
+  })
+
+  // B6 check 2110: the carried-rows path across two stores. Another run's
+  // file mixes a readable row that has expired with a row from a newer build.
+  // Retention rewrites the file (it is unchanged since indexing, so
+  // foreignChanged lets it) and must carry the unrecognised row, and the run
+  // must survive, although it is aged past the window.
+  it('carries an unrecognised row through retention of an aged, unchanged foreign file, and keeps its run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const runA = join(root, 'runs', 'run-a')
+    await mkdir(runA, { recursive: true })
+    const now = Date.now()
+    const carried = { ...incident, id: 7, at: now - 20 * DAY, rule: 'rule-from-a-newer-build' }
+    await writeFile(join(runA, 'incidents.json'), JSON.stringify([{ ...incident, id: 1, at: now - 20 * DAY }, carried]))
+    await aged(runA, now)
+
+    const store = new MonitorHistoryStore(root, 'run-b')
+    await store.settled()
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+
+    expect(JSON.parse(await readFile(join(runA, 'incidents.json'), 'utf8'))).toEqual([carried])
+    await expect(stat(runA)).resolves.toBeTruthy()
   })
 
   // Review of #1411 (a): with the run's file full of carried rows, a new
@@ -344,3 +389,238 @@ describe('bounded local performance history', () => {
     expect((await store.query(10 * 60_000, 16 * 60_000, undefined, 7)).resolution).toBe('1s')
   })
 })
+
+// #1453 (q115 "unknown is never empty"): retention deleted any run folder
+// its in-memory index did not know. A run created AFTER this store indexed,
+// by a second store sharing the folder (`--packaging-smoke` skips the
+// single-instance lock), was never examined, so it looked empty and was
+// deleted on the next maintenance pass.
+//
+// WHY the real clock and aged fixtures (#1455 review c): retention also keeps
+// any run touched within the retention window (touchedSince, review b). With a
+// 1970-scale fake clock every fixture looked freshly touched, so that guard
+// shadowed every other one and their mutations survived. Here each fixture's
+// files AND folder are aged past retention, so only the guard a test names
+// can keep the run.
+describe('a run this store never examined', () => {
+  const setup = async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    const foreign = join(root, 'runs', 'run-a')
+    return { root, foreign }
+  }
+
+  it('is kept by retention until a later start examines it, and its folder is removed once expired', async () => {
+    const { root, foreign } = await setup()
+    let now = Date.now()
+    const first = new MonitorHistoryStore(root, 'run-b', () => now)
+    await first.settled()
+    // What the other store writes once it starts, with old mtimes (a copied
+    // or restored folder): only the examinedRuns guard can keep it.
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now }]))
+    await writeFile(join(foreign, 'operations.json'), '[]')
+    await aged(foreign, now)
+    first.record(snapshot(now), null, [], 0, 0)
+    await first.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+
+    // A later start examines run-a; its incident is still within retention.
+    const restarted = new MonitorHistoryStore(root, 'run-c', () => now)
+    restarted.record(snapshot(now), null, [], 0, 0)
+    await restarted.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+
+    // Past retention, the examined run's incident goes, and then its folder:
+    // the protection is not permanent (review c pins this direction).
+    now += 8 * DAY
+    restarted.record(snapshot(now), null, [], 0, 0)
+    await restarted.settled()
+    await expect(readFile(join(foreign, 'incidents.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    now += 2 * 60_000
+    restarted.record(snapshot(now), null, [], 0, 0)
+    await restarted.settled()
+    await expect(readdir(foreign)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  // #1455 review a (1): an incident file that cannot be read at indexing is
+  // UNKNOWN; the run was examined but its contents are not known.
+  it('keeps a run whose incidents could not be read at indexing', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now - 30 * DAY }]))
+    await aged(foreign, now)
+    await chmod(join(foreign, 'incidents.json'), 0o000)
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    try {
+      await store.settled()
+    } finally {
+      await chmod(join(foreign, 'incidents.json'), 0o600)
+    }
+    await aged(foreign, now)
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+  })
+
+  // #1455 review a (2): `examinedRuns` names a run, not what this store saw.
+  // Recreated by another store after its deletion, the run is unexamined.
+  it('does not treat a run recreated after its deletion as examined', async () => {
+    const { root, foreign } = await setup()
+    let now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now - 30 * DAY }]))
+    await aged(foreign, now)
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    // The expired incident file went; the emptied folder's fresh mtime keeps
+    // it one more pass, so age it and let retention remove it.
+    await aged(foreign, now)
+    now += 2 * 60_000
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    await expect(readdir(foreign)).rejects.toMatchObject({ code: 'ENOENT' })
+    // The other store recreates run-a (old mtimes: only the forgotten
+    // examination can keep it).
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now }]))
+    await aged(foreign, now)
+    now += 2 * 60_000
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+  })
+
+  // #1455 review b (1): a tier file whose stat fails with anything but ENOENT
+  // (ELOOP from a self-referencing link) makes the run unknown. Two guards hold
+  // here: indexing marks the run unknown, and touchedSince counts an
+  // unstat-able file as touched; removing one alone survives.
+  it('keeps a run whose tier file cannot be stat-ed at indexing', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    await symlink(join(foreign, '1m.jsonl'), join(foreign, '1m.jsonl'))
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect((await lstat(join(foreign, '1m.jsonl'))).isSymbolicLink()).toBe(true)
+  })
+
+  // #1455 review b (2): content the store cannot parse is unknown, not
+  // expired. Aged, so only the "unparsed" guard can keep it.
+  it('keeps a run whose tier file holds content it cannot parse', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, '1m.jsonl'), '{"private":"unparseable-point"}\n')
+    await aged(foreign, now)
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(await readFile(join(foreign, '1m.jsonl'), 'utf8')).toContain('unparseable-point')
+  })
+
+  // #1455 review b (3): a run examined while EMPTY can be filled later by the
+  // other store; its fresh files keep it (touchedSince).
+  it('keeps a run that was empty when examined and filled afterwards', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    await aged(foreign, now)
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    await store.settled()
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now }]))
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+  })
+
+  // #1455 review b round 2 (1): two LIVE stores. B indexed A's tier file when
+  // it held only an old point; A then appended a current point. B's retention
+  // expired the file from its stale index and deleted A's fresh data. A
+  // foreign file that changed since indexing now makes the run unknown.
+  it('never expires another live store\'s tier file from a stale index', async () => {
+    const { root } = await setup()
+    const now = Date.now()
+    let aNow = now - 2 * 60 * 60_000
+    const a = new MonitorHistoryStore(root, 'run-a', () => aNow)
+    a.record(snapshot(aNow), null, [], 0, 0)
+    await a.flush()
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    aNow = now
+    a.record(snapshot(aNow), null, [], 0, 0)
+    await a.flush()
+    const tier = join(root, 'runs', 'run-a', '1s.jsonl')
+    const before = await readFile(tier, 'utf8')
+    b.record(snapshot(now), null, [], 0, 0)
+    await b.settled()
+    expect(await readFile(tier, 'utf8')).toBe(before)
+  })
+
+  // #1455 review b round 2 (2): content appended to a foreign tier after
+  // indexing (here, a record B cannot parse) must not be discarded by B's
+  // compaction of its stale view of that file.
+  it('never compacts away content appended to a foreign tier after indexing', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    // A real point line from the store's own writer, re-dated: one expired and
+    // one current, so B's view of the file is due for compaction.
+    const source = new MonitorHistoryStore(join(root, 'source'), 'run-src', () => now)
+    source.record(snapshot(now), null, [], 0, 0)
+    await source.flush()
+    const line = (await readFile(join(root, 'source', 'runs', 'run-src', '1s.jsonl'), 'utf8')).trim().split('\n')[0]!
+    const at = (value: number) => JSON.stringify({ ...JSON.parse(line), at: value })
+    await mkdir(foreign, { recursive: true })
+    const tier = join(foreign, '1s.jsonl')
+    await writeFile(tier, `${at(now - 20 * 60_000)}\n${at(now)}\n`)
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    await appendFile(tier, '{"private":"appended-after-indexing"}\n')
+    b.record(snapshot(now), null, [], 0, 0)
+    await b.settled()
+    expect(await readFile(tier, 'utf8')).toContain('appended-after-indexing')
+  })
+
+  // #1455 review b round 2 (1, incidents): B cached run-a's only incident,
+  // which is expiring; the other store then added a fresh one. B's retention
+  // rewrote the file from its cache and removed the fresh incident.
+  it('never rewrites another live store\'s incidents from a stale index', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    const file = join(foreign, 'incidents.json')
+    const expiring = { ...incident, at: now - 8 * DAY }
+    await writeFile(file, JSON.stringify([expiring]))
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    await writeFile(file, JSON.stringify([expiring, { ...incident, id: 2, at: now }]))
+    b.record(snapshot(now), null, [], 0, 0)
+    await b.settled()
+    expect(JSON.parse(await readFile(file, 'utf8'))).toHaveLength(2)
+  })
+
+  // #1455 review b round 3: the GLOBAL incident limit (fifty across runs)
+  // evicted from B's cached copy of A's incidents and rewrote A's file,
+  // removing the incident A had just added.
+  it('never enforces the incident limit on another live store\'s changed file', async () => {
+    const { root } = await setup()
+    const now = Date.now()
+    const many = (ids: number[]) => ids.map(id => ({ ...incident, id, at: now - (100 - id) * 1000 }))
+    const a = new MonitorHistoryStore(root, 'run-a', () => now)
+    a.record(snapshot(now), null, many(Array.from({ length: 50 }, (_, i) => i + 1)), 0, 0)
+    await a.flush()
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    a.record(snapshot(now), null, many(Array.from({ length: 50 }, (_, i) => i + 2)), 0, 1)
+    await a.flush()
+    const file = join(root, 'runs', 'run-a', 'incidents.json')
+    expect((JSON.parse(await readFile(file, 'utf8')) as Array<{ id: number }>).map(row => row.id)).toContain(51)
+    b.record(snapshot(now), null, [{ ...incident, id: 900, at: now }], 0, 1)
+    await b.settled()
+    expect((JSON.parse(await readFile(file, 'utf8')) as Array<{ id: number }>).map(row => row.id)).toContain(51)
+  })
+})
+

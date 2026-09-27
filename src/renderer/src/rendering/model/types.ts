@@ -1,4 +1,5 @@
 import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
+import type { TransportGapRecord } from '@shared/types/session'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,11 @@ export type RenderSourcePlane =
 
 export type RenderContentKind =
   | 'provider-notice'
+  /** A span of live output the proxy transport lost (#1381). Owner
+   *  `provider-notice`, not a new owner: like a request failure it is a status
+   *  fact that follows equal-time conversation and never owns or suppresses
+   *  content. Carries its record in `transportGap`. */
+  | 'transport-gap'
   | 'user-text'
   | 'assistant-text'
   | 'tool-use'
@@ -96,6 +102,8 @@ export type RenderCandidate = {
   /** Validated status model only. Carrying the selected model prevents the
    * view from reclassifying raw errors or fabricating a turn to locate one. */
   usageLimitNotice?: UsageLimitNotice
+  /** The record a `transport-gap` row paints (#1381). */
+  transportGap?: TransportGapRecord
   sessionRunId?: string
   id: string
   owner: RenderOwner

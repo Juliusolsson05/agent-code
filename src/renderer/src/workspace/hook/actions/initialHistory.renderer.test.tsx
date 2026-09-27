@@ -98,6 +98,31 @@ describe('the initial-history loader under failure and repetition', () => {
   })
 })
 
+// #1381, option B (OWNER-APPROVED by B6): the durable "not captured" rows ride the initial
+// history chunk — main holds them per conversation — because every feed rebuild (a window reload,
+// an agent reload, a resume elsewhere) starts from this load with an empty runtime.
+describe('the initial-history loader and transport gaps (#1381)', () => {
+  const GAP = { id: 'gap-7', since: 1_700_000_010_000, until: 1_700_000_040_000, lostGenerations: 1 }
+
+  it('restores the conversation\'s gaps into a rebuilt runtime, once even if the live event already delivered one', async () => {
+    const { history } = emptySession()
+    const pane = rehydratedPane()
+    scope.extendApi({
+      loadInitialHistory: async (request: { cwd: string; providerSessionId: string; limit: number }) =>
+        ({ ...(await history.loadInitialHistory(request)), transportGaps: [GAP] }),
+    })
+    // The live event got here first (a gap seen while the load was in flight).
+    pane.setRuntimes(prev => ({ ...prev, [SESSION_ID]: { ...prev[SESSION_ID]!, transportGaps: [GAP] } }))
+    await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
+    expect(pane.runtime().transportGaps).toEqual([GAP])
+
+    const fresh = rehydratedPane()
+    expect(fresh.runtime().transportGaps).toEqual([])
+    await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: fresh.meta, refs: fresh.refs, setRuntimes: fresh.setRuntimes })
+    expect(fresh.runtime().transportGaps).toEqual([GAP])
+  })
+})
+
 // #1430 review a/b: when `git worktree list` times out during the initial
 // load, the chunk is not attributed against an empty family — and it is not
 // dropped either: the loader hands its records to the live reconciler, whose

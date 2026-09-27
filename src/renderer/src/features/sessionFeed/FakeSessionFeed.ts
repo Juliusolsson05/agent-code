@@ -7,6 +7,7 @@ import type {
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionTranscriptDiagnosticEvent,
+  SessionTransportGapEvent,
   SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
@@ -52,6 +53,7 @@ export interface FakeSessionFeed extends SessionFeed {
   emitJsonlEntries(e: SessionJsonlEntriesEvent): void
   emitJsonlError(e: SessionJsonlErrorEvent): void
   emitTranscriptDiagnostic(e: SessionTranscriptDiagnosticEvent): void
+  emitTransportGap(e: SessionTransportGapEvent): void
   emitHistoryBoundary(e: SessionHistoryBoundaryEvent): void
   emitProviderSessionChanged(e: SessionProviderSessionChangedEvent): void
   emitSemantic(e: SessionSemanticEvent): void
@@ -73,6 +75,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     jsonlEntries: new Set<(e: SessionJsonlEntriesEvent) => void>(),
     jsonlError: new Set<(e: SessionJsonlErrorEvent) => void>(),
     transcriptDiagnostic: new Set<(e: SessionTranscriptDiagnosticEvent) => void>(),
+    transportGap: new Set<(e: SessionTransportGapEvent) => void>(),
     historyBoundary: new Set<(e: SessionHistoryBoundaryEvent) => void>(),
     providerSessionChanged: new Set<(e: SessionProviderSessionChangedEvent) => void>(),
     semantic: new Set<(e: SessionSemanticEvent) => void>(),
@@ -109,6 +112,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     onSessionJsonlEntries: cb => subscribe(listeners.jsonlEntries, cb),
     onSessionJsonlError: cb => subscribe(listeners.jsonlError, cb),
     onSessionTranscriptDiagnostic: cb => subscribe(listeners.transcriptDiagnostic, cb),
+    onSessionTransportGap: cb => subscribe(listeners.transportGap, cb),
     onSessionHistoryBoundary: cb => subscribe(listeners.historyBoundary, cb),
     onSessionProviderSessionChanged: cb => subscribe(listeners.providerSessionChanged, cb),
     onSessionSemanticEvent: cb => subscribe(listeners.semantic, cb),
@@ -142,6 +146,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     emitJsonlEntries: e => emit(listeners.jsonlEntries, e),
     emitJsonlError: e => emit(listeners.jsonlError, e),
     emitTranscriptDiagnostic: e => emit(listeners.transcriptDiagnostic, e),
+    emitTransportGap: e => emit(listeners.transportGap, e),
     emitHistoryBoundary: e => emit(listeners.historyBoundary, e),
     emitProviderSessionChanged: e => emit(listeners.providerSessionChanged, e),
     emitSemantic: e => emit(listeners.semantic, e),

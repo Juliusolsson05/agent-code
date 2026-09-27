@@ -677,4 +677,66 @@ describe('LspManager document ownership', () => {
       }),
     ])
   })
+
+  // #1268: the caller's physical re-check runs AFTER server startup and
+  // immediately before didOpen; a refusal fails open (no LSP) and names
+  // nothing to the server.
+  it('re-checks the physical target after server startup and sends no didOpen when it fails', async () => {
+    const manager = new LspManager()
+    const internal = manager as unknown as LspManagerInternals
+    let startServer!: () => void
+    const started = new Promise<void>(resolve => { startServer = resolve })
+    const order: string[] = []
+    const server = { key: 'server', initialized: started.then(() => { order.push('initialized'); return {} }), closed: false, abandonedRequests: 0 }
+    internal.servers.set('server', server)
+    internal.getOrCreateServer = async () => server
+    const notifications: string[] = []
+    internal.sendNotificationIfOpen = async (_server, method) => { notifications.push(method) }
+    const opening = manager.openDocument({
+      clientUri: 'cc-file://root/src/a.ts', content: 'text', language: 'typescript',
+      workspaceRoot: '/repo', filePath: 'src/a.ts',
+      assertPhysicalTarget: async () => { order.push('re-check'); throw new Error('escaped') },
+    })
+    startServer()
+    await expect(opening).resolves.toBe(false)
+    expect(order).toEqual(['initialized', 're-check'])
+    expect(notifications).toEqual([])
+  })
+
+  it('opens normally when the physical re-check passes', async () => {
+    const manager = new LspManager()
+    const internal = manager as unknown as LspManagerInternals
+    const server = { key: 'server', initialized: Promise.resolve({}), closed: false, abandonedRequests: 0 }
+    internal.servers.set('server', server)
+    internal.getOrCreateServer = async () => server
+    const notifications: string[] = []
+    internal.sendNotificationIfOpen = async (_server, method) => { notifications.push(method) }
+    const check = vi.fn(async () => {})
+    await expect(manager.openDocument({
+      clientUri: 'cc-file://root/src/a.ts', content: 'text', language: 'typescript',
+      workspaceRoot: '/repo', filePath: 'src/a.ts', assertPhysicalTarget: check,
+    })).resolves.toBe(true)
+    expect(check).toHaveBeenCalledTimes(1)
+    expect(notifications).toEqual(['textDocument/didOpen'])
+  })
+
+  // Review a of #1412: an open that JOINS an existing shared document (another
+  // alias of the same file) must run the re-check too, or a swap between its
+  // authorization and use sends didChange for the escaped URI.
+  it('runs the physical re-check when joining an existing shared document', async () => {
+    const manager = new LspManager()
+    const internal = manager as unknown as LspManagerInternals
+    const server = { key: 'server', initialized: Promise.resolve({}), closed: false, abandonedRequests: 0 }
+    internal.servers.set('server', server)
+    internal.getOrCreateServer = async () => server
+    const notifications: string[] = []
+    internal.sendNotificationIfOpen = async (_server, method) => { notifications.push(method) }
+    const common = { content: 'text', language: 'typescript', workspaceRoot: '/repo', filePath: 'src/a.ts' }
+    await expect(manager.openDocument({ ...common, clientUri: 'cc-file://first/src/a.ts', assertPhysicalTarget: async () => {} })).resolves.toBe(true)
+    await expect(manager.openDocument({
+      ...common, clientUri: 'cc-file://second/src/a.ts',
+      assertPhysicalTarget: async () => { throw new Error('escaped') },
+    })).resolves.toBe(false)
+    expect(notifications).toEqual(['textDocument/didOpen'])
+  })
 })
