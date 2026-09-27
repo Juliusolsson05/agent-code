@@ -111,6 +111,12 @@ that leak developer data. Each item below is taken from the issue, with its curr
          - three foreign-home bundles refuse without staging anything.
        - Mutations killed: staging at the old fixed path, arguments not refused, and the source check
          removed.
+       - **q81:** `os.tmpdir()` follows `$TMPDIR`, so a TMPDIR inside a repository, or a symlink into
+         one, staged the unaudited file inside a working tree. Before any bundle is read, the temp
+         root is realpath'd and refused when git says it is inside a worktree (and refused when git
+         can't answer). A process test with a symlinked TMPDIR into a repo and a private bundle
+         refuses, and leaves no private bytes in the repo; it is red on `0d9a02a5` and with the guard
+         removed.
      - **Stated residual:** the pattern-based pass itself can't recognise every identifier a new live
        corpus might hold, which is why the staged file needs a person's audit before any copy.
    - The fleet fixtures:

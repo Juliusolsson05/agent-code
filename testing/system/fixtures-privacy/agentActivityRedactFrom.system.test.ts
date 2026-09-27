@@ -120,6 +120,30 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (
     expect(await readFile(staged[0]!, 'utf8')).not.toContain(me)
   }, 60_000)
 
+  // Steering q81: os.tmpdir() follows TMPDIR, so a TMPDIR pointing into a repository (here through
+  // a symlink, which also keeps tsx's socket path short) staged the unaudited file inside the working
+  // tree. The run must refuse before reading a bundle, leaving no private bytes in the repo.
+  it('refuses a TMPDIR inside a git worktree, even through a symlink, and leaves nothing there', async () => {
+    const { output } = await stage()
+    execFileSync('git', ['init', '-q'], { cwd: cwd! })
+    const me = cwd!.split('/').pop()!
+    await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Projects/secretproject/private-task` }, `/Users/${me}/Projects/secretproject/private-task`)
+    stagingParent = await mkdtemp(join(tmpdir(), 'aas-'))
+    const intoRepo = join(stagingParent, 'r')
+    await symlink(cwd!, intoRepo)
+    const result = await extract([], { TMPDIR: intoRepo })
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toMatch(/inside a git worktree/)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+    expect((await readdir(cwd!)).filter(name => name.startsWith('agent-activity-staging-'))).toEqual([])
+    // No file in the repository holds the private bytes, except the planted bundle itself.
+    const files = (await readdir(cwd!, { recursive: true, withFileTypes: true }))
+      .filter(entry => entry.isFile())
+      .map(entry => join(entry.parentPath, entry.name))
+      .filter(path => !path.includes('/.config/') && !path.includes('/.git/'))
+    for (const path of files) expect(await readFile(path, 'utf8'), path).not.toContain('secretproject')
+  }, 60_000)
+
   it('refuses --out (or any argument) instead of writing anywhere', async () => {
     const { output } = await stage()
     const result = await live(['--out', 'testing/fixtures/agent-activity/runtime-states.json'])

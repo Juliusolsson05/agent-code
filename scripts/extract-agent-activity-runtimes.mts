@@ -48,7 +48,9 @@
 //   Promotion of a staged live file into testing/fixtures/agent-activity/runtime-states.json is a
 //   MANUAL copy after a key-by-key privacy audit, never a script step.
 
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, writeFile, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -79,9 +81,29 @@ const OUT = join(process.cwd(), 'testing/fixtures/agent-activity/runtime-states.
  * checking. The tracked `runtime-states.json` changes ONLY through `--redact-from` (the one
  * recorded corpus) or a person copying a staged file in after a key-by-key privacy audit.
  */
-async function stagingFile(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'agent-activity-staging-'))
+async function stagingFile(root: string): Promise<string> {
+  const dir = await mkdtemp(join(root, 'agent-activity-staging-'))
   return join(dir, 'runtime-states.json')
+}
+
+/**
+ * The real temp root, refused when it lies inside a git worktree.
+ *
+ * WHY (steering q81): `os.tmpdir()` follows `$TMPDIR`, so a hostile or careless TMPDIR (the repo
+ * itself, or a symlink into it) put the staged, UNAUDITED file inside the working tree, where an
+ * ordinary `git add -A` would commit it. The root is realpath'd first (so a symlink into a repo is
+ * judged by where it lands), then git is asked whether that directory is in any worktree. Checked
+ * before a single bundle is read, so a refusal leaves no bytes anywhere. If git cannot answer
+ * (not installed), the run refuses: ambiguity fails closed.
+ */
+function stagingRoot(): string {
+  const root = realpathSync(tmpdir())
+  const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' })
+  if (probe.error !== undefined) throw new Error('cannot run git to check the temp directory; refusing to stage')
+  if (probe.status === 0) {
+    throw new Error('the temp directory (TMPDIR) is inside a git worktree; point TMPDIR outside any repository')
+  }
+  return root
 }
 
 /** sha256 of `git show 15e43abe^:testing/fixtures/agent-activity/runtime-states.json` (blob d2653405). */
@@ -172,6 +194,8 @@ async function readJson(path: string): Promise<Record<string, unknown> | null> {
 }
 
 async function main(): Promise<void> {
+  // Before any bundle is read (steering q81): a refused root leaves nothing behind.
+  const root = stagingRoot()
   const records: unknown[] = []
   const seen = new Set<string>()
 
@@ -253,7 +277,7 @@ async function main(): Promise<void> {
   assertHomesBelongTo(JSON.stringify(fixture), homeUser)
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
   assertNoForeignHome(redacted, homeUser)
-  const out = await stagingFile()
+  const out = await stagingFile(root)
   // 'wx': the file is new in a directory made a moment ago; anything already there is refused.
   await writeFile(out, redacted, { encoding: 'utf8', flag: 'wx' })
   console.log(`staged ${records.length} runtime states in ${out}: audit every key and string before copying it over ${OUT}`)
