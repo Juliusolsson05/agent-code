@@ -19,6 +19,20 @@ vi.mock('@main/setup/prerequisites.js', () => probe)
 const zai = vi.hoisted(() => ({ probeZaiCredential: vi.fn(async () => false) }))
 vi.mock('@main/usage/zaiUsage.js', () => zai)
 vi.mock('@main/usage/usageService.js', () => ({ invalidateUsageSnapshotCache: () => {} }))
+// The real rename, with an optional hook per call (in order): a test can hold
+// one write open and then fail it.
+const renames = vi.hoisted(() => ({ hooks: [] as Array<(() => Promise<void>) | null> }))
+vi.mock('fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs/promises')>()
+  return {
+    ...actual,
+    rename: async (from: string, to: string) => {
+      const hook = renames.hooks.shift()
+      if (hook) await hook()
+      return await actual.rename(from, to)
+    },
+  }
+})
 
 let dir: string
 beforeEach(async () => {
@@ -28,6 +42,7 @@ beforeEach(async () => {
   probe.checkPrerequisites.mockResolvedValue({ usableProviders: ['claude', 'codex'] })
   zai.probeZaiCredential.mockReset()
   zai.probeZaiCredential.mockResolvedValue(false)
+  renames.hooks = []
   vi.resetModules()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -110,4 +125,50 @@ it('never lets an older refresh overwrite a newer one', async () => {
   expect(enablement.getCachedProviderEnablement()!.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(false)
   // The last broadcast is what subscribers keep.
   expect(broadcasts.at(-1)).toBe(false)
+})
+
+// #1403 recheck b: two toggles in flight. The first saves and refreshes while
+// the second's write is still open; that write then fails. The refresh read
+// the optimistic state, which already held the second toggle, so it broadcast
+// Claude as off while the second row said "Nothing was changed" and the disk
+// never had it. Published snapshots come from what is on disk.
+it('never publishes a toggle whose own write then fails', async () => {
+  const enablement = await import('./providerEnablement.js')
+  await enablement.getProviderEnablementSnapshot()
+  let failSecond!: () => void
+  const secondHeld = new Promise<void>((_resolve, reject) => {
+    failSecond = () => reject(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }))
+  })
+  // Handled here too: it may reject before the held rename awaits it.
+  secondHeld.catch(() => {})
+  renames.hooks = [null, () => secondHeld]
+  const first = enablement.setProviderEnabled('codex', false)
+  const second = enablement.setProviderEnabled('claude', false)
+  const snapshot = await first
+  failSecond()
+  await expect(second).rejects.toThrow('ENOSPC')
+  expect(await overridesOnDisk()).toEqual({ codex: false })
+  expect(snapshot.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(true)
+  expect(enablement.getCachedProviderEnablement()!.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(true)
+})
+
+// #1403 recheck a: the same leak through an overlapping READ. A `get` (or a
+// usage refresh) while a toggle's write is pending must not publish that
+// toggle; the write then fails and the disk never had it.
+it('never publishes a pending toggle through an overlapping read', async () => {
+  const enablement = await import('./providerEnablement.js')
+  await enablement.getProviderEnablementSnapshot()
+  let failWrite!: () => void
+  const held = new Promise<void>((_resolve, reject) => {
+    failWrite = () => reject(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }))
+  })
+  held.catch(() => {})
+  renames.hooks = [() => held]
+  const toggle = enablement.setProviderEnabled('claude', false)
+  const read = enablement.getProviderEnablementSnapshot()
+  const snapshot = await read
+  failWrite()
+  await expect(toggle).rejects.toThrow('ENOSPC')
+  expect(snapshot.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(true)
+  expect(enablement.getCachedProviderEnablement()!.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(true)
 })

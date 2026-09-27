@@ -165,19 +165,22 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
   // provider, a manual path, a provider reset) before running it. When this
   // write failed (a full disk, a read-only state dir), the whole check
   // rejected, and the renderer then said the answer was not saved although it
-  // was on disk. The result below is the probe's own answer either way. The
-  // cost of a failed write-back: the toolchain keeps the paths it last
-  // persisted until a later check's write-back lands.
+  // was on disk. The result below is the probe's own answer either way, and
+  // the toolchain applies the probed paths in memory when they could not be
+  // persisted (#1403 recheck a), so "found at X" is also what a launch uses.
+  // The cost: the next launch starts from the last persisted paths until a
+  // check's write-back lands.
+  const probed = Object.fromEntries(
+    entries.map(([tool, status]) => [tool, status.path]),
+  ) as Partial<Record<SetupToolId, string | null>>
+  let unsaved: typeof probed | undefined
   try {
-    await updateToolPaths(
-      Object.fromEntries(
-        entries.map(([tool, status]) => [tool, status.path]),
-      ) as Partial<Record<SetupToolId, string | null>>,
-    )
+    await updateToolPaths(probed)
   } catch (error) {
     console.warn('[setup] could not persist probed tool paths:', (error as NodeJS.ErrnoException).code ?? 'error')
+    unsaved = probed
   }
-  await refreshToolchainFromState()
+  await refreshToolchainFromState(unsaved)
 
   // No `ready`/`blocking` any more (#995): nothing blocks launch. The policy
   // that replaced them is in readiness.ts, and it runs here so every

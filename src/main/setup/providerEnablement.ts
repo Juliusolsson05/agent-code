@@ -13,7 +13,7 @@ import {
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
 import { invalidateUsageSnapshotCache } from '@main/usage/usageService.js'
 import {
-  loadSetupState,
+  loadDurableSetupState,
   setOpencodeUsageSource as persistOpencodeUsageSource,
   setProviderEnablementOverride,
 } from '@main/setup/setupState.js'
@@ -69,7 +69,13 @@ async function resolveAndCache(
   detection: () => Promise<ReadonlySet<AgentProviderKind>> = detectInstalledKinds,
 ): Promise<ProviderEnablementSnapshot> {
   const refresh = ++refreshesStarted
-  const state = await loadSetupState()
+  // DURABLE state, not the optimistic cache (#1403 recheck b): two toggles in
+  // flight, the first saves and refreshes while the second is still pending,
+  // and the cache already holds the second. The second then failed to write,
+  // and its row said "Nothing was changed" while this refresh had broadcast
+  // it. Every refresh here runs after its own write landed, so the durable
+  // state already includes everything it needs to show.
+  const state = await loadDurableSetupState()
   const detected = await detection()
   const next: ProviderEnablementSnapshot = {
     entries: resolveProviderEnablement(state.providerEnablementOverrides, detected),

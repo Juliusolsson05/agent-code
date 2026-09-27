@@ -76,3 +76,11 @@ Tests, each red on `6707e7cf` (verified by swapping in that file):
   - the shared first read: a held first read that finishes after a save no longer resets the durable baseline;
   - the fallback uses the last good detection, not "all installed".
 - **c (MERGE-READY):** its two survivors are the two pinned above. Its suspicion, an update that throws staying pending forever, is closed: the update leaves `pending` on every path. Test added.
+
+## Recheck (a, b: FIX-BEFORE-MERGE)
+- **b and a2 (Major): a provider snapshot published a toggle whose write then failed.** A refresh read the optimistic cache, which already held another toggle still in flight (from a second toggle's refresh, or from an overlapping `get`).
+  - **Ruling:** published provider snapshots are built from the DURABLE state (`loadDurableSetupState`). Every refresh runs after its own write has landed, so nothing optimistic is needed there.
+  - Two tests: a successful toggle during a failing one, and an overlapping read. Both fail with the optimistic read.
+- **a1 (Major): a failed write-back left the toolchain on the last persisted, possibly dead, path while the check said "found at X".** `refreshToolchainFromState(unsaved)` applies the probed paths in memory when they could not be persisted, so the check and a launch agree in this process.
+  - Test: new `prerequisites.test.ts`, with the real check, toolchain and setup state. It fails without the overlay.
+  - It also kills a's survivor (the refresh removed).

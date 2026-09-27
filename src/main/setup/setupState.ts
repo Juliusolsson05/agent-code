@@ -174,6 +174,15 @@ async function readDurable(): Promise<void> {
   recomputeCache()
 }
 
+/** The state as last written to disk: no pending update included. For a
+ *  reader that PUBLISHES state (#1403 recheck b): provider enablement is
+ *  broadcast to every picker, and a snapshot folded from another save still
+ *  in flight would publish that save even if its write then failed. */
+export async function loadDurableSetupState(): Promise<PersistedSetupState> {
+  await loadSetupState()
+  return durable ?? DEFAULT_SETUP_STATE
+}
+
 /** Apply `update` and persist the result. Rejects when the write fails, and
  *  then the update is gone: neither the cache nor any later write carries it. */
 export async function updateSetupState(update: SetupStateUpdate): Promise<PersistedSetupState> {
