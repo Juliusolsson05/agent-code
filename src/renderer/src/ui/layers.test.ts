@@ -19,3 +19,20 @@ it('orders the pane layers, then the app layers, lowest first', () => {
   expect(order).toEqual([...order].sort((a, b) => a - b))
   expect(new Set(order).size).toBe(order.length)
 })
+
+// Review a (#1398): the migration promised the SAME classes at every site;
+// order alone would let a band drift (z-[1100] -> z-[1101]) unnoticed.
+it('keeps the exact classes the sites used before the migration', () => {
+  expect(LAYERS).toEqual({
+    paneOverlay: 'z-40',
+    paneTakeover: 'z-50',
+    paneDialogScrim: 'z-[60]',
+    paneDialogContent: 'z-[61]',
+    paneDialogFeedback: 'z-[62]',
+    inSurfacePopover: 'z-50',
+    dialog: 'z-[1100]',
+    menu: 'z-[1150]',
+    toast: 'z-[1200]',
+    debugOverlay: 'z-[10000]',
+  })
+})

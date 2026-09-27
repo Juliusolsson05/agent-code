@@ -44,16 +44,18 @@ import { AgentMcpServersSurface } from '@renderer/features/mcp/surfaces/AgentMcp
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
 // entry here. App.tsx is never edited.
 //
-// ORDER MATTERS within each array, AND the mount order of the groups in
-// App.tsx (overlays → modals) is part of the same contract: together they
-// define the render order at the app root, which IS the paint order
-// whenever layers tie. The layers themselves are named in ui/layers.ts
-// (#512): every modal here is the shared Radix Dialog at LAYERS.dialog,
-// portaled into <body>, so within that one band the dialog mounted LATER
-// paints on top, and surfaces that mount in the same commit mount in the
-// order of these arrays. The order below is the exact order App.tsx
-// rendered these surfaces before the extraction — keep new entries at the
-// END unless you have a stacking reason and write it down.
+// HOW STACKING ACTUALLY WORKS (#512, corrected in review): the layers are
+// named in ui/layers.ts. Almost every entry here renders the shared Radix
+// Dialog (LAYERS.dialog; the caffeinate entry renders nothing and forwards to
+// the app toast). A Dialog's content portals into <body> when it OPENS, so
+// between two open dialogs the one OPENED LATER paints on top, whatever their
+// order in this array. Array order only decides between dialogs that open in
+// the same React commit. A surface that must always sit above another needs
+// an explicit mechanism (its own layer in ui/layers.ts), not an array index.
+//
+// The order below is still the exact order App.tsx rendered these surfaces
+// before the extraction; keep new entries at the END so same-commit ties do
+// not move.
 
 /** Rendered at the app root, after the overlays. */
 export const modalSurfaces: SurfaceEntry[] = [
@@ -62,10 +64,11 @@ export const modalSurfaces: SurfaceEntry[] = [
   // ⚠ Two non-modal surfaces interleaved into the modal stack ON PURPOSE.
   // Pre-refactor App.tsx rendered them exactly here — after the palette
   // and path picker, before the tile-tabs..usage modals — and that DOM
-  // position is load-bearing because palette and dispatch-count are both
-  // dialogs in the same layer (LAYERS.dialog), so order is the only
-  // tiebreaker (the caffeinate entry now forwards to the app toast, which
-  // has its own higher layer):
+  // position was load-bearing when these were fixed z-50 siblings. Today
+  // both are Dialogs in LAYERS.dialog, so the count prompt paints above the
+  // palette because it OPENS after it (tiled dispatch fires from an open
+  // palette); this position only still decides a same-commit tie. The
+  // caffeinate entry now forwards to the app toast, which has its own layer:
   //   - tiled-dispatch-count must paint ABOVE the command palette. Tiled
   //     dispatch can fire while the palette is open (native menu; the
   //     palette deliberately stays open for keepPaletteOpen-style flows),
@@ -97,9 +100,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
   { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
-  // New modals append so their order within the dialog layer cannot
-  // accidentally move an established surface below one it used to cover; see
-  // the registry contract.
+  // New modals append so a same-commit tie cannot move an established
+  // surface; see the stacking note above.
   { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
   { id: 'key-vault', Component: KeyVaultModalSurface },
   // Appended per the contract above. It is only opened from a command, which

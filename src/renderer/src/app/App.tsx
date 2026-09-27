@@ -146,19 +146,18 @@ export default function App() {
             it overlays, below every pane overlay and app layer
             (ui/layers.ts). */}
         <BrowserPocketHost workspace={workspace} />
-        {/* Mount order here IS the tie-break contract: the modals share one
-            named layer (LAYERS.dialog, ui/layers.ts), so mount order decides
-            which of them paints on top. Overlays render first
-            (paint under); anything that must sit at a specific height
-            within the modal stack lives in modalSurfaces at an explicit
-            index — see app/surfaces/registry.tsx. Do not swap these. */}
+        {/* Stacking is by named layer (ui/layers.ts), and within the dialog
+            layer by OPEN order: each Radix Dialog portals into <body> when it
+            opens, so the one opened last paints on top. Render order here only
+            breaks same-commit ties; see the note in app/surfaces/registry.tsx.
+            Keep overlays before modals so those ties stay as they were. */}
         <GlobalOverlays />
         <GlobalModals />
         {/* Voice-dictation guide modal, opened by the "Configure Voice
-            Dictation" nudge and by a future command-palette entry. Sits
-            after GlobalModals in DOM order so it paints on top of the
-            other overlay stacks without competing with the modalSurfaces
-            registry — the guide is entirely local, no z-index tricks. */}
+            Dictation" nudge and by a future command-palette entry. It is a
+            dialog like the registry's, so it paints above them when opened
+            after them (open order, see above); its position here only breaks
+            a same-commit tie. */}
         <DictationGuideModal />
       </div>
     </WorkspaceProvider>
