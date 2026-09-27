@@ -74,8 +74,12 @@ void (async () => {
   const endpoint = `http://127.0.0.1:${address.port}${EGRESS_PATH}`
   // Positive control: a non-probe path IS counted (review b's surviving
   // mutation replaced the classifier and the journey stayed green).
+  // Both the path every renderer probe uses and an arbitrary one (review c:
+  // a regression that excused EGRESS_PATH itself kept an /egress-control-only
+  // control green while blinding the real check).
+  await fetch(endpoint).then(response => response.text())
   await fetch(`http://127.0.0.1:${address.port}/egress-control`).then(response => response.text())
-  assert.deepEqual(hits, ['/egress-control'], 'the egress server must count a request to any non-probe path')
+  assert.deepEqual(hits, [EGRESS_PATH, '/egress-control'], 'the egress server must count the probed path and any other non-watcher path')
   hits.length = 0
   const statuses: RuntimeStatus[] = []
   const lifecycle: string[] = []

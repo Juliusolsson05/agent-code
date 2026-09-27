@@ -7,8 +7,18 @@
 - **The other two log lines are not the bug.** The `ZodError ... "extensionId"` is the harness's deliberate forgery probe (`runtimeHarness.ts`, the `sandbox` command expects `spoofDenied: true`). `No handler registered for 'extensions:runtime-api'` also appears twice in every passing run during disposal.
 
 ## Change
-Every renderer egress probe (fetch, window.open, navigation) targets `/private-state`. The harness now counts only requests for that path as egress. Anything else is recorded as foreign, ignored, and named in the assertion message.
+Every request that reaches the harness's egress server counts as runtime egress EXCEPT the watcher's exact shape, `GET /`, which is recorded and ignored.
+
+**Superseded first version:** it counted only `/private-state` and ignored every other path. Review b showed that this would miss a leak to any other path (`/leak`, encoded or query variants).
+
+**Positive control:** right after binding, main fetches both `/private-state` and `/egress-control`, and both must be counted before the journey starts (review c).
 
 ## Verification
-- 0 of 10 runs fail under the same load.
-- A mutant that removes `will-navigate`, `will-frame-navigate` and the `webRequest` block still fails the egress assertion (foreign list empty), so the filter did not blind the check.
+- **Under load:** 0 of 10 runs fail with the fix; 2 of 10 failed before it.
+- **Mutations, each failing the run:**
+  - an "ignore everything" classifier fails the control;
+  - excusing `/private-state` fails the control;
+  - a main-side `GET /leak` after the control fails the egress assertion;
+  - removing `will-navigate`, `will-frame-navigate` and the `webRequest` block fails the egress assertion.
+
+**Residual:** a runtime escape that requests exactly `GET /` is excused. The renderer probes all target `/private-state`.
