@@ -53,6 +53,21 @@ type OpenDocumentParams = {
   language: string
   workspaceRoot: string
   filePath?: string | null
+  /**
+   * Re-check, at the moment of use, that `filePath` still resolves physically
+   * inside `workspaceRoot` (#1268). Throws when it no longer does.
+   *
+   * WHY a callback from the caller and not a check here: the IPC layer owns
+   * authorization (editor roots, AI Workspace entries) and ran the physical
+   * check once, BEFORE this open awaited server startup. A cold server spawn
+   * can take seconds, and in that window a directory under the root can be
+   * swapped for a symlink to an outside directory, so the lexical URI built
+   * after startup would name an escaped file. Calling the same authority
+   * again inside the per-document queue, immediately before didOpen, closes
+   * that window to the one await this check itself takes. Keeping the
+   * filesystem out of the manager also keeps its unit tests on fake roots.
+   */
+  assertPhysicalTarget?: () => Promise<void>
 }
 
 type OpenDocumentRecord = {
@@ -556,6 +571,18 @@ export class LspManager extends EventEmitter {
 
       const shared = this.serverDocuments.get(key)
       if (!shared) {
+        // Only a NEW server document names the path to the server; joining an
+        // existing shared one sends text changes for a URI already validated.
+        // A refused re-check fails open like every other LSP failure here: the
+        // editor keeps working, without LSP for this document (#1268).
+        if (params.assertPhysicalTarget) {
+          try {
+            await params.assertPhysicalTarget()
+          } catch {
+            return false
+          }
+          if (server.closed) return false
+        }
         await this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
           textDocument: {
             uri: serverUri,

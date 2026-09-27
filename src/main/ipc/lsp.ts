@@ -12,6 +12,24 @@ import type {
   LspPosition,
 } from '@shared/types/lsp.js'
 
+/**
+ * The manager re-runs the physical check that authorizeContext ran, at the
+ * moment of use, after server startup (#1268). Same rule, same root: the
+ * relative path must still resolve, without symlinks, to a regular file
+ * inside the root, at the same relative location. Undefined for a virtual
+ * (pathless) document, which names no file to the server.
+ */
+export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null }): (() => Promise<void>) | undefined {
+  const { workspaceRoot, filePath } = context
+  if (filePath === null) return undefined
+  return async () => {
+    const requested = resolveInsideRoot(workspaceRoot, filePath)
+    const physical = await validateExistingTarget(workspaceRoot, requested)
+    if (!(await lstat(physical)).isFile()) throw new Error('LSP document is not a file')
+    if (relative(workspaceRoot, physical) !== filePath) throw new Error('LSP document moved after authorization')
+  }
+}
+
 // LSP-backed code intelligence for Monaco surfaces.
 //
 // The renderer's CodeBlock component opens a document per visible
@@ -287,6 +305,7 @@ export function registerLspIpc(
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
+              assertPhysicalTarget: lspPhysicalTargetAssertion(context),
             })
             // A page that left meanwhile does not get the marker back: clear()
             // dropped it, and the close clear() queued behind this entry will
@@ -402,6 +421,7 @@ export function registerLspIpc(
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
+              assertPhysicalTarget: lspPhysicalTargetAssertion(context),
             })
             if (!ok) break
           }
