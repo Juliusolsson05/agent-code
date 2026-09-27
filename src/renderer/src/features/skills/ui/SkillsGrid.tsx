@@ -246,7 +246,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
           disabled={busy || (installed?.skills.length ?? 0) === 0}
           onClick={() => void checkAllSkillsForUpdates()}
         >
-          Check updates{updatesAvailable > 0 ? ` (${updatesAvailable})` : ''}
+          Check Updates{updatesAvailable > 0 ? ` (${updatesAvailable})` : ''}
         </Button>
         <Button size="xs" onClick={() => openAddSkill()}>+ Add Skill…</Button>
       </div>

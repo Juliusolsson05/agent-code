@@ -560,6 +560,21 @@ export function useKeybinds(
           ) return
           e.preventDefault()
           e.stopPropagation()
+          // Tab brings a stranded keyboard user back into the overlay (Claude
+          // review of #1221, reviewer A F4). A focused control can unmount
+          // without a phase change (Raise Cap at the ceiling hides itself),
+          // which drops focus to <body>. From there this gate consumed Tab,
+          // Enter and Space, and the overlay's mousedown preventDefault meant
+          // a click could not put focus back either, so only Escape or the
+          // chord got out. Only from <body>, only the active pane's overlay:
+          // a key aimed at the dimmed composer is still swallowed.
+          if (
+            e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey
+            && (document.activeElement === null || document.activeElement === document.body)
+          ) {
+            document.querySelector<HTMLElement>('[data-goal-loop-overlay][data-goal-loop-active] button:not([disabled])')?.focus()
+            return
+          }
           // The toggle chord comes from the binding index rather than a
           // hardcoded chord literal. Otherwise rebinding goal-loop-preview
           // (#1007 moved it off ⌘⇧Y, which macOS reserves for the New Sticky

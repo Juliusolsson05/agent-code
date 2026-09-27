@@ -231,7 +231,7 @@ function PaneBody({
         : state.status === 'empty'
           ? 'No conversation recorded'
           : state.status === 'error'
-            ? `Couldn't load preview — ${state.message}`
+            ? `Could not load preview — ${state.message}`
             : ''
   return (
     <div className="h-full flex items-center justify-center px-6 py-12">

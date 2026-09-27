@@ -978,14 +978,17 @@ export function TileLeaf({
         // clicking an option that the agent had already replaced did nothing
         // at all — no toast, no log, no state change.
         //
-        // WHY the GLOBAL toast and not the pane toast (#1099 review): every
-        // condition that can refuse a custom action is a Radix modal, and a
-        // refusal does not clear it — so the modal is ALWAYS up when this
-        // fires. The pane toast is an in-flow sibling with no z-index, sitting
-        // under a 1100-z, 85%-opaque scrim and inside the subtree Radix marks
-        // `aria-hidden`. `GlobalToast`'s own header records this exact trap
-        // and is why it is z-[1200]. The first version of this fix put the one
-        // message it produced where nobody could read it.
+        // WHY the GLOBAL toast and not the pane toast. A refusal does not
+        // clear the condition, so its prompt is ALWAYS up when this fires.
+        // The original reason (#1099 review) was that the prompt was a Radix
+        // modal whose scrim and aria-hidden buried the pane toast. #713 made
+        // these prompts pane-scoped, and the pane toast now sits on the
+        // feedback layer above the pane scrim, where it stays live (PaneToast,
+        // pane-dialog's inert controller). The global toast is still the
+        // right choice, for a different reason: the refusing prompt can be
+        // in a pane the user is not looking at, and the global toast is seen
+        // wherever they are. (The old reason was corrected after the Claude
+        // review of #1221, reviewer B F4.)
         //
         // The duration is long because the message asks the user to re-read a
         // question; the default is two seconds.
