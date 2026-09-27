@@ -585,7 +585,9 @@ async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
   return manual
 }
 
-async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
+const PROXY_RUN_EVIDENCE = new Set(['proxy-events.jsonl', 'sslkeylog.log'])
+
+export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
   const out: Artifact[] = []
   async function walk(dir: string, depth: number): Promise<void> {
     let entries
@@ -594,7 +596,14 @@ async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
     } catch {
       return
     }
-    if (entries.some(entry => entry.isFile() && entry.name === 'proxy-events.jsonl')) {
+    // A run dir is recognised by its EVIDENCE files, either of them (#1385).
+    // Keying on proxy-events.jsonl alone missed run dirs that held only
+    // session-meta.json + sslkeylog.log: walked into, never collected, never
+    // budgeted, never removed. Those are plaintext TLS session secrets; the
+    // owner's machine had 23 such dirs (5.18 MB, May-September 2026, #1380
+    // review c). Match the key log itself rather than assume it sits beside an
+    // events file. session-meta.json alone is NOT evidence of a run.
+    if (entries.some(entry => entry.isFile() && PROXY_RUN_EVIDENCE.has(entry.name))) {
       const artifact = await collectDirArtifact(dir, 'proxy')
       if (artifact) out.push(artifact)
       return
