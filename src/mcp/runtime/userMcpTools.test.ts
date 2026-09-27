@@ -126,6 +126,30 @@ describe('mcp_servers built-in domain', () => {
     await close()
   })
 
+  // #1420 q127: the agent tool is the AGENT path, never the user path. A
+  // value it sets turns the server off for review and withholds the sibling
+  // secret; if the tool ever passed the user actor, the sibling would be
+  // rebound and keep launching.
+  it('set_secret from an agent turns a reviewed server off and withholds its other secret', async () => {
+    const saved = await service.save({
+      name: 'svc',
+      enabled: true,
+      providers: { claude: true, codex: true },
+      entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:base}', API_KEY: '${input:key}' } },
+      inputs: [{ id: 'base', description: 'base' }, { id: 'key', description: 'key' }],
+      secrets: { base: 'https://trusted.example', key: TOKEN },
+    })
+    expect(saved.ok).toBe(true)
+    const id = (await service.snapshot()).servers[0]!.id
+    const { call, close } = await connect(['mcp_servers'])
+    await call('mcp_servers_set_secret', { id, inputId: 'key', value: 'agent-chosen-value-9999' })
+    const [server] = (await service.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets.base).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+    await close()
+  })
+
   it('cannot turn a server on (review round 2)', async () => {
     const { call, close } = await connect(['mcp_servers'])
     await call('mcp_servers_add', { config: '{"url":"https://x.dev/mcp"}', name: 'x' })

@@ -117,8 +117,8 @@ export type UserMcpSupport = { ok: true } | { ok: false; reason: string }
 /**
  * `unconfirmed`: a stored secret that is kept but withheld until the user
  * confirms it (#1420): `legacy` = saved by an earlier version (q114);
- * `inputs-changed` = another value this server uses to decide where requests
- * go (a base URL, a host) changed since it was saved (B6 R3).
+ * `inputs-changed` = an agent or an import changed another input of this
+ * server since it was saved (B6 R3, q127). A user's own edit rebinds instead.
  */
 export type UserMcpSecretState = { set: boolean; hint?: string; unconfirmed?: 'legacy' | 'inputs-changed' }
 

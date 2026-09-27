@@ -775,9 +775,12 @@ describe('a reference change is a destination change (#1420, q118)', () => {
 // inputs that decide where a request goes. Imported env values all become
 // inputs, so `API_BASE_URL=${input:svc-API_BASE_URL}` is a host an agent can
 // re-set with mcp_servers_set_secret, and the next launch sent API_KEY=T there.
-// Each secret is now bound to its destination PLUS the values of the entry's
-// non-credential inputs; changing one withholds the others (kept, never
-// deleted) until the user confirms, and an agent setting one needs review.
+// Each secret is now bound to its destination PLUS the values of EVERY other
+// input the entry references (q127: no credential/steering classifier; a
+// stdio program may read API_KEY as an endpoint). An agent or import changing
+// any input value turns the server off for review and withholds the siblings
+// (kept, never deleted) until the user confirms. A user change in Settings is
+// itself the confirmation: it rebinds the siblings that were valid.
 describe('input values that steer a request are part of the binding (#1420, B6 R3)', () => {
   const EVIL = 'https://evil.example'
   const imported = () => ({
@@ -823,33 +826,62 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     expect(await launched(restarted)).not.toContain(TOKEN)
   })
 
-  it('a USER changing the host still withholds the token until the user confirms it for the new host', async () => {
+  it('a USER changing the host in Settings is the confirmation: the key still launches, to the new host, with no review', async () => {
     const live = service()
     await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
     const id = (await live.snapshot()).servers[0]!.id
     expect((await live.setSecret(id, 'svc-API_BASE_URL', 'https://moved.example')).ok).toBe(true)
-    expect((await service().snapshot()).servers[0]!.pendingReview).toBeUndefined()
-    expect(await launched(service())).not.toContain(TOKEN)
-    const problems = (await service().snapshot()).servers[0]!.problems.map(problem => problem.message).join('\n')
-    expect(problems).toMatch(/svc-API_KEY/)
-    expect((await service().confirmSecret(id, 'svc-API_KEY')).ok).toBe(true)
-    const after = await launched(service())
-    expect(after).toContain(TOKEN)
-    expect(after).toContain('https://moved.example')
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBeUndefined()
+    const out = await launched(restarted)
+    expect(out).toContain(TOKEN)
+    expect(out).toContain('https://moved.example')
   })
 
-  it('rotating the token itself needs no confirmation, and an agent may set a credential without review', async () => {
+  // q127 item 4: the key NAME proves nothing about the role, so an agent
+  // changing API_KEY is treated like any other input change.
+  it('an agent changing an API_KEY-named input withholds the bound sibling and needs review, across a restart', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const baseBytes = await blob(id, 'svc-API_BASE_URL')
+    expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_agent_chosen_7777', 'agent')).ok).toBe(true)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets['svc-API_BASE_URL']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+    expect(await blob(id, 'svc-API_BASE_URL')).toEqual(baseBytes)
+    // Even once the user turns it back on, the sibling waits for its own confirmation.
+    expect((await restarted.setEnabled(id, true)).ok).toBe(true)
+    expect(await launched(service())).not.toContain('https://trusted.example')
+    expect((await service().confirmSecret(id, 'svc-API_BASE_URL')).ok).toBe(true)
+    expect(await launched(service())).toContain('https://trusted.example')
+  })
+
+  // A user edit rebinds only siblings that were VALID before it. A sibling an
+  // agent's change already withheld stays withheld: an unrelated Settings
+  // edit must not bless the agent's change.
+  it('a user edit does not confirm a sibling that an earlier agent change withheld', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    await live.setEnabled(id, true)
+    expect((await live.setSecret(id, 'trusted-host', 'evil.example')).ok).toBe(true)
+    expect(await launched(service())).not.toContain(TOKEN)
+    expect((await service().snapshot()).servers[0]!.secrets.tok).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+  })
+
+  it('a user rotating one token keeps the other secrets launching, with no confirmation', async () => {
     const live = service()
     await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
     const id = (await live.snapshot()).servers[0]!.id
     expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_rotated_1111')).ok).toBe(true)
-    expect(await launched(service())).toContain('bpr_live_rotated_1111')
-    expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_rotated_2222', 'agent')).ok).toBe(true)
-    const restarted = service()
-    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBeUndefined()
-    const out = await launched(restarted)
-    expect(out).toContain('bpr_live_rotated_2222')
+    const out = await launched(service())
+    expect(out).toContain('bpr_live_rotated_1111')
     expect(out).toContain('https://trusted.example')
+    expect((await service().snapshot()).servers[0]!.pendingReview).toBeUndefined()
   })
 
   // Gap 2 (B6): both guards had no committed test.

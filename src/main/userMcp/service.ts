@@ -32,7 +32,6 @@ import {
   userMcpDestination,
   providerSupportForEntry,
   referencedInputIds,
-  steeringInputIds,
   summarizeEntry,
   transportOf,
   validateServer,
@@ -166,12 +165,12 @@ export class UserMcpService {
       // prompt-injected agent could install a command that every future agent
       // runs. A user save of an existing server clears the flag only by
       // turning it on (setEnabled); saving it off keeps the flag visible.
-      // An agent supplying the VALUE of a steering input (a base URL, a host)
-      // moves where every other secret goes without touching the entry, so it
-      // needs review exactly like an entry change (B6 R3).
-      const steering = new Set(steeringInputIds(entry))
-      const agentSetsSteering = Object.entries(input.secrets ?? {}).some(([inputId, value]) => value !== '' && steering.has(inputId))
-      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || agentSetsSteering || existing.pendingReview === true)
+      // An agent (or an agent's import) supplying ANY input value can move
+      // where the other secrets go without touching the entry, so it needs
+      // review exactly like an entry change (B6 R3, q127: no classifier, the
+      // key name proves nothing about how a program uses the value).
+      const agentSetsValue = Object.keys(input.secrets ?? {}).length > 0
+      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || agentSetsValue || existing.pendingReview === true)
       const enabled = actor === 'agent'
         ? (agentNeedsReview ? false : existing!.enabled && input.enabled)
         : input.enabled
@@ -231,15 +230,9 @@ export class UserMcpService {
           : [...this.document.servers, server],
       }
       await this.persist()
-      // Bindings from the values AFTER this save: a secret entered together
-      // with its base URL is bound to that URL. Secrets not supplied keep their
-      // old binding, so a changed base URL withholds them until confirmed.
       const supplied = Object.fromEntries(Object.entries(input.secrets ?? {})
         .filter(([inputId]) => server.inputs.some(candidate => candidate.id === inputId)))
-      const bindings = await this.bindingsFor(server, supplied)
-      for (const [inputId, value] of Object.entries(supplied)) {
-        await this.secrets.set(server.id, inputId, value, bindings[inputId]!)
-      }
+      await this.writeValues(server, supplied, actor)
       await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
       return {
         ok: true,
@@ -301,11 +294,11 @@ export class UserMcpService {
   }
 
   /**
-   * Store one secret. An AGENT setting a steering input (one that is not a
-   * pure credential: a base URL, a host inside an endpoint) turns the server
-   * off and flags it for review first (B6 R3). Its value moves where the other
-   * secrets go, and those are withheld anyway by their bindings; the review
-   * makes the change visible instead of a server that silently lost its token.
+   * Store one secret. An AGENT setting ANY input turns the server off and
+   * flags it for review first (B6 R3, q127): the value may move where the
+   * other secrets go, and those are withheld by their bindings until the user
+   * confirms. The user path (Settings IPC) is itself the confirmation; see
+   * writeValues.
    */
   setSecret(id: string, inputId: string, value: string, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
@@ -314,7 +307,8 @@ export class UserMcpService {
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
-      const needsReview = actor === 'agent' && value !== '' && steeringInputIds(server.entry).includes(inputId)
+      // q127: ANY input an agent changes, clearing included.
+      const needsReview = actor === 'agent'
       if (needsReview) {
         // Published BEFORE the value is written: a crash between the two
         // leaves a reviewed-off server with the old value, never an enabled
@@ -323,40 +317,76 @@ export class UserMcpService {
         this.document = { version: 1, servers: this.document.servers.map(candidate => candidate.id === id ? flagged : candidate) }
         await this.persist()
       }
-      const bindings = await this.bindingsFor(server, { [inputId]: value })
-      await this.secrets.set(id, inputId, value, bindings[inputId]!)
+      await this.writeValues(server, { [inputId]: value }, actor)
       return { ok: true, ...(needsReview ? { pendingReview: true } : {}) }
     })
   }
 
   /**
-   * What each of the server's secrets is bound to (#1420, B6 R3): its
-   * destination identity plus a digest of the values of the entry's STEERING
-   * inputs other than itself. `pending` overlays values about to be written,
-   * so a record is bound to the values it will be launched with.
+   * What each of the server's secrets is bound to (#1420, B6 R3, q127): its
+   * destination identity plus a digest of the values of EVERY other input the
+   * entry references. `pending` overlays values about to be written, so a
+   * record is bound to the values it will be launched with.
    *
-   * WHY only steering inputs in the digest (B6 asked for every other input):
-   * with every input, rotating a token would change the host input's digest
-   * and withhold the HOST until confirmed, unless every credential write also
-   * rebound its siblings. That rebind is safe exactly when the changed value
-   * is a credential, because a credential changes what is sent, never where.
-   * Leaving credential-only inputs out of the digest is that same behaviour
-   * with no rebind step to get wrong. The values are read raw (storedValue):
-   * the digest must see what a launch would substitute, bound or not.
+   * WHY every other input and no credential/steering classifier (q127): a
+   * key's NAME and a value's shape do not prove its role; a stdio program can
+   * read API_KEY as an endpoint. A record's own value is left out, so the
+   * record for a rotated token is still bound to what it was saved for.
+   * Values are read raw (storedValue): the digest must see what a launch would
+   * substitute, bound or not.
    */
   private async bindingsFor(server: UserMcpServer, pending: Readonly<Record<string, string>> = {}): Promise<Record<string, SecretBinding>> {
     const destination = userMcpDestination(server.entry)
-    const steering = steeringInputIds(server.entry).sort()
+    const referenced = referencedInputIds(server.entry).sort()
     const values = new Map<string, string | null>()
-    for (const inputId of steering) {
+    for (const inputId of referenced) {
       values.set(inputId, inputId in pending ? (pending[inputId] || null) : await this.secrets.storedValue(server.id, inputId))
     }
     const bindings: Record<string, SecretBinding> = {}
     for (const input of server.inputs) {
-      const others = steering.filter(inputId => inputId !== input.id).map(inputId => [inputId, values.get(inputId) ?? null])
+      const others = referenced.filter(inputId => inputId !== input.id).map(inputId => [inputId, values.get(inputId) ?? null])
       bindings[input.id] = { destination, inputs: createHash('sha256').update(JSON.stringify(others)).digest('hex') }
     }
     return bindings
+  }
+
+  /**
+   * Write input values, bound to the values they will launch with.
+   *
+   * USER (Settings IPC; q127): the user's own edit is the confirmation, so
+   * every sibling that was VALID just before the edit is rebound to the new
+   * digest. Rotating one token therefore never locks out the others. A sibling
+   * that was already withheld (an earlier agent change) stays withheld: an
+   * unrelated Settings edit must not bless that change; only an explicit
+   * confirm or a re-entry does.
+   *
+   * AGENT (MCP tools, imports): no sibling is rebound, so every sibling whose
+   * digest included the changed value is withheld until the user confirms it.
+   * The agent tools can only reach this with actor 'agent'
+   * (userMcpTools.ts); the user actor is only ever passed by the Settings IPC.
+   *
+   * Written value first, siblings after: a crash between them leaves a
+   * sibling withheld (fail closed), never a sibling bound to values it was not
+   * confirmed for.
+   */
+  private async writeValues(server: UserMcpServer, supplied: Readonly<Record<string, string>>, actor: UserMcpActor): Promise<void> {
+    if (Object.keys(supplied).length === 0) return
+    const valid: Array<[string, string]> = []
+    if (actor === 'user') {
+      const before = await this.bindingsFor(server)
+      for (const input of server.inputs) {
+        if (input.id in supplied) continue
+        const value = await this.secrets.get(server.id, input.id, before[input.id]!)
+        if (value !== null) valid.push([input.id, value])
+      }
+    }
+    const after = await this.bindingsFor(server, supplied)
+    for (const [inputId, value] of Object.entries(supplied)) {
+      await this.secrets.set(server.id, inputId, value, after[inputId]!)
+    }
+    for (const [inputId, value] of valid) {
+      await this.secrets.set(server.id, inputId, value, after[inputId]!)
+    }
   }
 
   /**
@@ -467,7 +497,7 @@ export class UserMcpService {
       const bindings = await this.bindingsFor(server)
       for (const inputId of referencedInputIds(server.entry)) {
         // Bound read (q113, B6 R3): only a secret saved for this destination
-        // AND for the current values of its steering inputs.
+        // AND for the current values of the server's other inputs.
         const value = bindings[inputId] ? await this.secrets.get(server.id, inputId, bindings[inputId]!) : null
         if (value === null) {
           missing = inputId
@@ -643,7 +673,7 @@ export class UserMcpService {
           message: secrets[inputId]!.unconfirmed === 'legacy'
             ? `Secret "${inputId}" was saved by an earlier version. Confirm it is for ${summarizeEntry(server.entry)}, or re-enter it`
             : secrets[inputId]!.unconfirmed === 'inputs-changed'
-              ? `Secret "${inputId}" is withheld because another value this server uses to decide where it connects changed. Confirm it may go to ${summarizeEntry(server.entry)} with the new values, or re-enter it`
+              ? `Secret "${inputId}" is withheld because an agent changed another value this server uses. Confirm it may be sent to ${summarizeEntry(server.entry)} with the new values, or re-enter it`
               : `Secret "${inputId}" is not set`,
         })
       }

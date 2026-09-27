@@ -61,9 +61,11 @@ const BOUND_PREFIX = 'agent-code/user-mcp-secret/v1:'
  * moves the request (`API_BASE_URL=${input:svc-API_BASE_URL}`, or the host in
  * `https://${input:host}/mcp?key=${input:tok}`), and an agent can set such a
  * value with mcp_servers_set_secret. So a record also carries `inputs`, a
- * digest of the values of the entry's STEERING inputs other than itself
- * (service.ts bindingFor). A record's own value is never in its digest, so a
- * rotated token stays bound.
+ * digest of the values of EVERY other input the entry references (q127: no
+ * classifier; a key's name does not prove its role). See service.ts
+ * bindingsFor. A record's own value is never in its digest, so the record for
+ * a rotated token stays bound; the user's edit rebinds its siblings
+ * (service.ts writeValues).
  */
 export type SecretBinding = { destination: string; inputs: string }
 
@@ -130,8 +132,8 @@ export class UserMcpSecretStore {
    * (q114, B6 R3). Two cases only:
    *   - an unbound record from an earlier version: it carries no proof of its
    *     destination, and the user's confirmation is that proof;
-   *   - a record for the SAME destination whose steering inputs changed (a new
-   *     base URL): the user confirms the token may go there.
+   *   - a record for the SAME destination whose other input values changed
+   *     (an agent set a new base URL): the user confirms it may go there.
    * A record bound to a DIFFERENT destination is never confirmable: that is
    * the q113 crash window (a token next to a document it was not saved for),
    * and only re-entering it may bind it. Returns false when there is nothing
@@ -243,7 +245,8 @@ export class UserMcpSecretStore {
    * Presence and a last-4 hint only; the renderer never receives a value.
    * `unconfirmed` marks a record that is kept but withheld and that the user
    * can confirm (see confirm): `legacy` from an earlier version, or
-   * `inputs-changed` when a steering input's value moved since it was bound.
+   * `inputs-changed` when another input's value changed (by an agent or an
+   * import) since it was bound.
    * A record bound to another destination shows as plainly not set, because
    * only re-entering it may bind it.
    */

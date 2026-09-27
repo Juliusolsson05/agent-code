@@ -554,7 +554,7 @@ function SecretFields({
         const placeholder = edited === ''
           ? 'cleared on save'
           : state?.unconfirmed
-          ? `${state.unconfirmed === 'legacy' ? 'saved by an earlier version' : 'withheld: where this server connects changed'}${state.hint ? ` (…${state.hint})` : ''}: confirm or re-enter`
+          ? `${state.unconfirmed === 'legacy' ? 'saved by an earlier version' : 'withheld: an agent changed another value'}${state.hint ? ` (…${state.hint})` : ''}: confirm or re-enter`
           : state?.set
           ? `set${state.hint ? ` (…${state.hint})` : ''} — type to replace`
           : 'not set'
