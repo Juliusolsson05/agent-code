@@ -21,3 +21,9 @@ All three use AppHostSurface's DOM shape: an owner-marked content element holdin
 ## Not changed
 - Focusing the iframe on load was the other direction in the issue. It would take focus from Radix's focus trap before the extension is ready, and it would not cover a user who has clicked the shell's chrome.
 - The Electron journey test (#1300) waits for frame focus, so it still covers the forwarded path. This PR covers the host path.
+
+## Review b (round 1)
+Closing the command palette over the extension modal leaves focus on `<body>`: the palette is a controlled Radix Dialog with no trigger to return focus to. A body-targeted key has no owner ancestor, so both chords went dead until the user clicked back in.
+- **Fix.** When the target is outside every owner, the helper resolves against the topmost owned surface, the last in DOM order, because Radix portals append to `<body>` as they open.
+- **Stacked dialogs.** A confirmation stacked over the extension is topmost, holds no extension iframe, and keeps the gate.
+- **Tests.** Body-targeted ⌘⇧P and ⌘W reach the extension after the palette is removed. With a stacked dialog still open, they do not. The "no fallback" and "first owner instead of topmost" mutations each fail one of them.

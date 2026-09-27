@@ -347,8 +347,22 @@ function buildBindingIndex(
 function extensionModalFrameForTarget(target: EventTarget | null): HTMLIFrameElement | null {
   if (target instanceof HTMLIFrameElement) return target.dataset.extensionShell === 'modal' ? target : null
   if (!(target instanceof Element)) return null
-  const owner = target.closest(APP_INTERACTION_OWNER_SELECTOR)
+  // WHY the topmost owner when the target is outside every owner (#1394
+  // review b): closing the command palette over an extension modal leaves
+  // focus on <body>, because the palette is a controlled Radix Dialog with no
+  // trigger to return focus to. The modal is still open and owns the screen,
+  // but a key aimed at <body> has no owner ancestor, so both chords went dead
+  // until the user clicked back in. The topmost owned surface is the last one
+  // in DOM order: Radix portals append to <body> as they open. If that surface
+  // is a confirmation stacked over the extension, it contains no extension
+  // iframe and the gate holds, exactly as for a key aimed inside it.
+  const owner = target.closest(APP_INTERACTION_OWNER_SELECTOR) ?? topmostAppInteractionOwner()
   return owner?.querySelector<HTMLIFrameElement>('iframe[data-extension-shell="modal"]') ?? null
+}
+
+function topmostAppInteractionOwner(): Element | null {
+  const owners = document.querySelectorAll(APP_INTERACTION_OWNER_SELECTOR)
+  return owners.length > 0 ? owners[owners.length - 1]! : null
 }
 
 const MONACO_TARGET_SELECTOR = '[data-global-editor-input-owner], .monaco-editor'

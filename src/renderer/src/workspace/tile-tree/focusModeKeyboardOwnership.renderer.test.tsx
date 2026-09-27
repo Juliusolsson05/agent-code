@@ -311,6 +311,44 @@ describe('focus-mode keyboard ownership', () => {
     view.unmount()
   })
 
+  // #1394 review b: closing the palette (a controlled Radix Dialog with no
+  // trigger) over the extension modal leaves focus on <body>. The chords must
+  // still reach the modal that owns the screen.
+  it('routes both chords to the extension modal when focus fell to the body', () => {
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const extension = mountOwnedDialog(true)
+    const palette = mountOwnedDialog(false)
+    palette.remove()
+    const closed = vi.fn()
+    extension.frame!.addEventListener('agent-code-extension-close', closed)
+
+    fireEvent.keyDown(document.body, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true }))
+
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('open-command-palette', 'keybinding')
+    expect(closed).toHaveBeenCalledTimes(1)
+    view.unmount()
+  })
+
+  it('keeps a body-targeted chord from reaching an extension covered by a stacked dialog', () => {
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const extension = mountOwnedDialog(true)
+    mountOwnedDialog(false)
+    const closed = vi.fn()
+    extension.frame!.addEventListener('agent-code-extension-close', closed)
+
+    fireEvent.keyDown(document.body, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true }))
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    expect(closed).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('⌘ digits fill the focused lane by row label, and a second held digit reaches rows 10–99', () => {
     // The two-digit grammar had no behavioural test (#1013 review B, finding
     // 14). ⌘1 places row 1 and remembers the 1; ⌘2 inside the window makes
