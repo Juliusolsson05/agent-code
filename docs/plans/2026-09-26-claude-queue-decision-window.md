@@ -39,3 +39,16 @@ long session pays O(n) per departure and O(n²) overall.
   `origin/main` (1 000 retained).
 - The corpus conservation assertion is restated with `droppedDecisions`.
 - Existing decision-content assertions are unchanged.
+
+## Review of #1364 (round 1: a, b and c, all FIX-BEFORE-MERGE)
+- **The conservation claim was false (a, b, c).** `nextSeq` counts enqueues, while a pending item has no decision yet and a `stale-unattributed` mark is an extra decision.
+  - `droppedDecisions` is restated as "evicted decision RECORDS": kept + evicted is every decision ever recorded.
+  - The tests assert `== nextSeq` only for sessions that drained every item exactly once and never went stale, and say so.
+- **A stranded episode lost all its evidence (c).** Replaying `divergence-stranded-background-commands` and adding 200 churn cycles kept 0 of the 164 decisions around the two still-stranded rows.
+  - While any item is pending, the log may grow to `QUEUE_DECISION_CEILING = 2 000`.
+  - Once the queue is empty it trims to `QUEUE_DECISION_WINDOW`, raised to 500: the corpus already has a 175-decision session, and 200 left 25 slots of margin.
+  - **Stated residual:** a row stranded through more than 2 000 later decisions loses its oldest evidence.
+- **Batch trim and the `popAll` path were unpinned (a, b):** both now have boundary tests.
+- `markStaleWhenIdle`'s "has anything departed" guard now counts evicted decisions too.
+- Mutations killed: a batch counted as one, `popAll` bypassing the bound, no pending ceiling.
+

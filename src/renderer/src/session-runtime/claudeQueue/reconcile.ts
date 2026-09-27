@@ -75,25 +75,43 @@ export function createClaudeQueueState(): ClaudeQueueState {
 }
 
 /**
- * How many of the most recent decisions a session keeps (#676).
+ * How many of the most recent decisions a session keeps once its queue is empty (#676).
  *
  * WHY a window and not the whole session: the log was append-only for a session's lifetime, and
  * every departure copied the whole array, so a long-lived session paid memory and O(n) per
  * departure for history nothing reads (no UI, no debug bundle — the state lives in a renderer map).
- * P4 ("the diagnosis IS this record") is about explaining what the queue is doing NOW; the recent
- * decisions do that. Evicted ones are counted, so decisions.length + droppedDecisions === nextSeq
- * stays exact.
+ * P4 ("the diagnosis IS this record") is about explaining what the queue is doing NOW.
+ *
+ * WHY 500 (review of #1364, c): the recorded corpus already has a session with 175 decisions, so 200
+ * left 25 slots of margin. 500 keeps every recorded session whole with room to spare.
  */
-export const QUEUE_DECISION_WINDOW = 200
+export const QUEUE_DECISION_WINDOW = 500
 
-/** The one place decisions are appended: append, trim to the window, count what was dropped. */
+/**
+ * The bound while any queue item is still pending (review of #1364, c).
+ *
+ * WHY: a window of recent decisions alone could evict every decision that explains a row still
+ * stranded in the queue — the replay of `divergence-stranded-background-commands` plus 200 ordinary
+ * cycles kept the two stranded rows and none of the 164 decisions around them. While something is
+ * pending, its episode is not over, so the log may grow past the window to this ceiling. It is
+ * still a ceiling: a row stranded forever cannot bring back the unbounded growth #676 fixed (the
+ * oldest evidence of an episode longer than this is the stated residual).
+ */
+export const QUEUE_DECISION_CEILING = 2_000
+
+/**
+ * The one place decisions are appended: append, trim, count what was dropped.
+ * `pendingAfter` is the queue as it stands once this change lands; it picks the bound.
+ */
 function withDecisions(
   state: ClaudeQueueState,
   added: readonly QueueDecision[],
+  pendingAfter: readonly PendingItem[],
 ): Pick<ClaudeQueueState, 'decisions' | 'droppedDecisions'> {
   if (added.length === 0) return { decisions: state.decisions, droppedDecisions: state.droppedDecisions }
+  const limit = pendingAfter.length > 0 ? QUEUE_DECISION_CEILING : QUEUE_DECISION_WINDOW
   const combined = state.decisions.length + added.length
-  const drop = Math.max(0, combined - QUEUE_DECISION_WINDOW)
+  const drop = Math.max(0, combined - limit)
   const decisions = drop === 0
     ? [...state.decisions, ...added]
     : [...state.decisions, ...added].slice(drop)
@@ -339,7 +357,7 @@ function settleDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
     pending: without(state.pending, removed),
     ...withDecisions(state, [
       ...removed.map(i => decide(i, 'delivered-inferred', [], debt.at)),
-    ]),
+    ], without(state.pending, removed)),
     debt: null,
   }
 }
@@ -381,7 +399,7 @@ function settleRemoveDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
   return {
     ...state,
     pending,
-    ...withDecisions(state, decisions),
+    ...withDecisions(state, decisions, pending),
     removeDebt: null,
   }
 }
@@ -466,7 +484,7 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
       pending: without(state.pending, [victim]),
       ...withDecisions(state, [
         decide(victim, 'consumed-observed', ['queue-operation content'], op.timestamp ?? null),
-      ]),
+      ], without(state.pending, [victim])),
     }
   }
 
@@ -545,7 +563,7 @@ function applyPopAll(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
     pending: without(state.pending, [target]),
     ...withDecisions(state, [
       decide(target, 'popped-to-composer', ['popAll content'], op.timestamp ?? null),
-    ]),
+    ], without(state.pending, [target])),
   }
 }
 
@@ -608,7 +626,7 @@ export function applyQueuedCommandObservation(
         [observation.uuid ?? 'queued-command attachment'],
         debt.at,
       ),
-    ]),
+    ], without(state.pending, [claimed])),
     removeDebt: remaining > 0 ? { ...debt, count: remaining } : null,
   }
 }
@@ -631,7 +649,7 @@ export function applyCommittedUserEntry(
       pending: without(state.pending, [claimed]),
       ...withDecisions(state, [
         decide(claimed, 'delivered-observed', [entry.uuid ?? 'committed-entry'], state.debt.at),
-      ]),
+      ], without(state.pending, [claimed])),
       debt: remaining > 0 ? { ...state.debt, count: remaining, entriesSeen: 0 } : null,
     }
   }
@@ -661,13 +679,14 @@ export function markStaleWhenIdle(state: ClaudeQueueState, idle: boolean): Claud
   const settled = settleRemoveDebtByCohort(settleDebtByCohort(state))
   // Only items that have already survived at least one departure are suspect.
   // A queue that has simply never been drained is not stale, it is waiting.
-  if (settled.decisions.length === 0) return settled
+  // Counted with the dropped ones: an evicted departure still happened (#676).
+  if (settled.decisions.length + settled.droppedDecisions === 0) return settled
   if (settled.pending.every(i => i.stale)) return settled
   return {
     ...settled,
     pending: settled.pending.map(i => (i.stale ? i : { ...i, stale: true })),
     ...withDecisions(settled, [
       ...settled.pending.filter(i => !i.stale).map(i => decide(i, 'stale-unattributed', [], null)),
-    ]),
+    ], settled.pending),
   }
 }

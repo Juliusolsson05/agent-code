@@ -8,6 +8,7 @@ import {
   applyQueueOperation,
   createClaudeQueueState,
   markStaleWhenIdle,
+  QUEUE_DECISION_CEILING,
   QUEUE_DECISION_WINDOW,
 } from './reconcile'
 import { derivePriority } from './priority'
@@ -251,8 +252,10 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     expect(settled.pending).toEqual([])
     expect(settled.decisions.filter(d => d.reason === 'consumed-observed')).toHaveLength(13)
     expect(settled.decisions.filter(d => d.reason === 'delivered-inferred')).toHaveLength(3)
-    // Conservation (#676): every departure is either in the recent window or counted as evicted.
-    // This corpus is far below the window, so nothing was evicted and every decision is present.
+    // Conservation: this recorded session drained every item exactly once and never went stale, so
+    // its decisions (kept + evicted) equal its enqueues. That is a property of THIS corpus, not of
+    // the reducer: a pending item has no decision yet and a stale mark is an extra one (review of
+    // #1364). The corpus is far below the window, so nothing was evicted.
     expect(settled.droppedDecisions).toBe(0)
     expect(settled.decisions.length + settled.droppedDecisions).toBe(settled.nextSeq)
   })
@@ -794,8 +797,8 @@ describe('recorded corpus replay', () => {
 })
 
 // #676: the decision log was append-only for a session's lifetime (and every departure copied the
-// whole array). A long-lived session that queues and consumes prompts now keeps a bounded window of
-// the most recent decisions and counts the rest, so conservation stays exact.
+// whole array). A long-lived session now keeps a bounded log of the most recent decisions and
+// counts the evicted records.
 describe('decision window', () => {
   it('keeps the newest QUEUE_DECISION_WINDOW decisions of a long session and counts the rest', () => {
     let state = createClaudeQueueState()
@@ -807,9 +810,72 @@ describe('decision window', () => {
     expect(state.pending).toEqual([])
     expect(state.decisions).toHaveLength(QUEUE_DECISION_WINDOW)
     expect(state.droppedDecisions).toBe(cycles - QUEUE_DECISION_WINDOW)
+    // Drained, never stale: here (and only in such a session) kept + evicted equals enqueues.
     expect(state.decisions.length + state.droppedDecisions).toBe(state.nextSeq)
     // The window holds the most recent departures, in order.
     expect(state.decisions.at(-1)?.preview).toBe(`prompt ${cycles - 1}`)
     expect(state.decisions[0]?.preview).toBe(`prompt ${cycles - QUEUE_DECISION_WINDOW}`)
+  })
+
+  // Review of #1364 (c): a recent-only window evicted every decision around rows still stranded in
+  // the queue, while they were still stranded. While anything is pending the log may grow to the
+  // ceiling, so the episode's evidence outlives ordinary churn.
+  it('keeps a stranded episode\'s decisions while its rows are still pending', () => {
+    const stranded = replay(loadFixture('divergence-stranded-background-commands').events)
+    expect(stranded.pending.length).toBeGreaterThan(0)
+    const episode = stranded.decisions.length
+    let state = stranded
+    for (let index = 0; index < QUEUE_DECISION_WINDOW + 100; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `churn ${index}`, timestamp: `t${index}` })
+      state = applyQueueOperation(state, { operation: 'remove', content: `churn ${index}`, timestamp: `t${index}.5` })
+    }
+    expect(state.pending.map(item => item.seq)).toEqual(stranded.pending.map(item => item.seq))
+    expect(state.droppedDecisions).toBe(0)
+    expect(state.decisions.slice(0, episode)).toEqual(stranded.decisions)
+  })
+
+  it('still bounds the log at the ceiling when rows stay pending forever', () => {
+    let state = applyQueueOperation(createClaudeQueueState(), { operation: 'enqueue', content: 'stranded', timestamp: '0' })
+    for (let index = 0; index < QUEUE_DECISION_CEILING + 50; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `churn ${index}`, timestamp: `t${index}` })
+      state = applyQueueOperation(state, { operation: 'remove', content: `churn ${index}`, timestamp: `t${index}.5` })
+    }
+    expect(state.pending).toHaveLength(1)
+    expect(state.decisions).toHaveLength(QUEUE_DECISION_CEILING)
+    expect(state.droppedDecisions).toBe(50)
+  })
+
+  // Review of #1364 (a): one settlement can append many decisions at once; the trim must cover the
+  // whole batch, not one entry.
+  it('trims a single large batch to the window', () => {
+    let state = createClaudeQueueState()
+    const size = QUEUE_DECISION_WINDOW + 100
+    for (let index = 0; index < size; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `batch ${index}`, timestamp: `t${index}` })
+    }
+    // Content-free removes accumulate one debt that idle settles in ONE batch append.
+    for (let index = 0; index < size; index += 1) {
+      state = applyQueueOperation(state, { operation: 'remove', timestamp: `r${index}` })
+    }
+    expect(state.removeDebt?.count).toBe(size)
+    state = markStaleWhenIdle(state, true)
+    expect(state.pending).toEqual([])
+    expect(state.decisions).toHaveLength(QUEUE_DECISION_WINDOW)
+    expect(state.droppedDecisions).toBe(100)
+  })
+
+  // Review of #1364 (b): every append path goes through the same bound; popAll is pinned here.
+  it('bounds a popAll departure like any other', () => {
+    let state = createClaudeQueueState()
+    for (let index = 0; index < QUEUE_DECISION_WINDOW; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `p${index}`, timestamp: `t${index}` })
+      state = applyQueueOperation(state, { operation: 'remove', content: `p${index}`, timestamp: `t${index}.5` })
+    }
+    state = applyQueueOperation(state, { operation: 'enqueue', content: 'last', timestamp: 'x' })
+    state = applyQueueOperation(state, { operation: 'popAll', content: 'last', timestamp: 'y' })
+    expect(state.decisions).toHaveLength(QUEUE_DECISION_WINDOW)
+    expect(state.droppedDecisions).toBe(1)
+    expect(state.decisions[0]?.preview).toBe('p1')
+    expect(state.decisions.at(-1)?.reason).toBe('popped-to-composer')
   })
 })
