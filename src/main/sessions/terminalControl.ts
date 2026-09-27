@@ -6,7 +6,7 @@ import type { SessionManager } from '@main/sessionManager'
 const ownership = { cwd: z.string(), provider: z.string() }
 type FrozenReplay = { sessionId: string; sessionRunId: string; range: string; raw: string; capChars: number; revision: string; expires: number }
 
-export function terminalBackendCapabilities(manager: Pick<SessionManager, 'getBackendSnapshot' | 'getRawOutputSnapshot' | 'write'>) {
+export function terminalBackendCapabilities(manager: Pick<SessionManager, 'getBackendSnapshot' | 'getRawOutputSnapshot' | 'write'> & Partial<Pick<SessionManager, 'hasStrandedDelivery'>>) {
   const snapshots = new Map<string, FrozenReplay>()
   let timer: ReturnType<typeof setTimeout> | undefined
   const prune = () => {
@@ -26,11 +26,12 @@ export function terminalBackendCapabilities(manager: Pick<SessionManager, 'getBa
       handler: input => {
         const backend = manager.getBackendSnapshot(input.sessionId)
         if (backend && (backend.cwd !== input.cwd || backend.kind !== input.provider)) throw new ControlError('unavailable', 'Backend identity changed')
+        const stranded = Boolean(backend) && manager.hasStrandedDelivery?.(input.sessionId) === true
         return { sessionId: input.sessionId, sessionRunId: backend?.sessionRunId ?? null, backendPresent: Boolean(backend), inputReady: backend?.input.ready ?? null, readinessReason: backend?.input.reason ?? null,
           // composer-occupied is provider-owned input-readiness evidence,
           // not text guessed from a terminal accessibility field. Ready alone
           // still does not prove complete native draft emptiness.
-          nativeDraft: { state: backend?.input.reason === 'composer-occupied' ? 'occupied' as const : 'unknown' as const, text: null, reason: backend?.input.reason === 'composer-occupied' ? 'The provider reports an occupied composer. Resolve it through its UI; complete draft text is not exposed.' : 'The provider port does not expose a complete native composer snapshot. Readiness and the terminal accessibility input value do not prove an empty draft. agents.draftGet reads only the separate Agent Code draft.' } }
+          nativeDraft: { state: backend?.input.reason === 'composer-occupied' ? 'occupied' as const : 'unknown' as const, text: null, strandedDelivery: stranded, reason: backend?.input.reason === 'composer-occupied' ? (stranded ? 'The composer holds an earlier Agent Code prompt that could not be submitted; the next delivery clears it.' : 'The provider reports an occupied composer. Resolve it through its UI; complete draft text is not exposed.') : 'The provider port does not expose a complete native composer snapshot. Readiness and the terminal accessibility input value do not prove an empty draft. agents.draftGet reads only the separate Agent Code draft.' } }
       },
     }),
     defineCapability({

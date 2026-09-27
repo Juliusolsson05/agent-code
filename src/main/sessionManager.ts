@@ -594,6 +594,36 @@ export class SessionManager extends EventEmitter {
   // paste B and turn a slow operation into duplicate queue entries.
   private readonly promptDeliveriesInFlight = new Set<string>()
   /**
+   * Sessions whose native composer can hold only this app's own stranded
+   * write (#1350). Set when a delivery wrote prompt bytes it could not submit
+   * (promptWritten && !enterWritten, not ok): the bytes are, or may soon be,
+   * in the composer. Claude in particular can paint them seconds after the
+   * delivery's rollback stopped watching, and its gate then reads them as a
+   * human draft forever, so no later delivery could reach the session.
+   *
+   * WHY this proves ownership: every PTY writer goes through recordInputWrite,
+   * and any write that is not a delivery's clears the mark (raw terminal
+   * typing, remote input, a condition answer). While the mark stands, nothing
+   * but deliveries has written since, and each later delivery refused before
+   * writing. So the composer holds our bytes and nothing else, and the next
+   * delivery may clear it under its reservation (PromptDeliveryIo
+   * .strandedComposer). A text comparison could not prove this: the screen is
+   * clipped and wrap-lossy, and pastes collapse to `[Pasted text #N]`.
+   */
+  //
+  // WHY keyed to the PROCESS (the registry entry), not just the session id
+  // (steering q75, #1358 review a): a session id outlives its process. A
+  // delivery can write to process A, A can exit and B take the same id, and
+  // A's delivery can fail only afterwards. Recording that failure against the
+  // id would hand B a mark for bytes B never received, and the next delivery
+  // would clear B's composer, which may be a human's draft. The mark
+  // therefore names the entry the delivery captured, is only set while that
+  // entry still owns the id, and is only honoured for that same entry.
+  //
+  // `at` is when the strand was recorded; the next delivery waits a bounded
+  // window from it for the late paint (see PromptDeliveryIo.strandedComposer).
+  private readonly strandedDeliveries = new Map<string, { entry: RegistryEntry; at: number }>()
+  /**
    * Prompts waiting for a session that is not ready for one YET (#854).
    *
    * One per session, cancellable, cleared when the session goes. See
@@ -1096,6 +1126,8 @@ export class SessionManager extends EventEmitter {
     this.codexCandidateObservationEdges.delete(sessionId)
     this.codexAttachmentObservationState.delete(sessionId)
     this.lastInputReadiness.delete(sessionId)
+    // A new process has a new, empty composer (#1350).
+    this.strandedDeliveries.delete(sessionId)
     this.lastGateEvaluation.delete(sessionId)
     this.spawnInfo.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
@@ -3960,6 +3992,10 @@ export class SessionManager extends EventEmitter {
     data: string,
     origin: InputWriteOrigin,
   ): void {
+    // Before the journal check: the stranded-delivery proof must hold whether
+    // or not a lifecycle journal is attached. Any writer that is not a
+    // delivery may have put its own text in the composer (#1350).
+    if (origin !== 'delivery') this.strandedDeliveries.delete(sessionId)
     if (!this.lifecycle) return
     const now = Date.now()
     const pending = this.inputWriteCoalesce.get(sessionId)
@@ -4101,6 +4137,66 @@ export class SessionManager extends EventEmitter {
     this.recordInputWrite(sessionId, data, 'delivery')
     expectedEntry.session.write(data)
     return true
+  }
+
+  /** See strandedDeliveries (#1350). */
+  private noteStrandedDelivery(
+    sessionId: string,
+    entry: RegistryEntry,
+    delivery: { ok: boolean; promptWritten?: boolean; enterWritten?: boolean },
+    hadImages: boolean,
+  ): void {
+    // The process this delivery wrote to is gone (exited, replaced under the
+    // same id): nothing it did says anything about the current composer.
+    // WHY check here AND on read (hasStrandedDelivery, the strandedComposer
+    // handoff): the read side alone already keeps a stale mark from reaching
+    // a replacement, but a stored stale mark would (a) keep the dead
+    // RegistryEntry and its PTY wrapper reachable until the next write, and
+    // (b) let A's late ok/failure delete or overwrite a mark that B's own
+    // delivery set. The read side is still needed because a replacement can
+    // be registered before A's exit cleanup runs, and that cleanup is
+    // generation-owned, so it leaves A's mark in place.
+    if (this.sessions.get(sessionId) !== entry) return
+    if (delivery.ok) {
+      this.strandedDeliveries.delete(sessionId)
+      return
+    }
+    // A failure that wrote nothing (refused before write) changes nothing:
+    // whatever the composer held before still holds, ours or not.
+    if (!delivery.promptWritten) return
+    // WHY a delivery that wrote retires the standing mark before deciding
+    // whether to set its own (#1358 verification a, blocker): the old mark
+    // described bytes this delivery has already reclaimed or written over.
+    // Keeping it let an image delivery that consumed a text mark and then
+    // stranded hand that stale mark to the next delivery, which Ctrl+U'd a
+    // composer holding image pills. From here the composer holds what THIS
+    // delivery left, so only this delivery's outcome may mark it. Deleting is
+    // the safe direction: no mark means the gate treats the composer as a
+    // human draft and refuses, as it did before #1350.
+    this.strandedDeliveries.delete(sessionId)
+    // Enter went out: the composer was submitted (or its fate is unknown), so
+    // it no longer provably holds only our unsubmitted text.
+    if (delivery.enterWritten) return
+    // WHY an image delivery is never marked (#1358 reviews a and c): its
+    // leftovers include image pills, and whether Ctrl+U removes a pill has
+    // not been observed on a real composer (promptDelivery.ts says the same
+    // for its own rollback). A reclaim could strip the text and leave pills,
+    // or read a pill-only composer wrongly. Such a session stays as before:
+    // occupied until someone clears it.
+    if (hadImages) return
+    // Only a provider whose delivery reclaims a stranded composer (#1358
+    // review b). Today that is Claude's (promptDelivery.ts); marking another
+    // provider would make inputInspect promise "the next delivery clears it"
+    // when no delivery will. A provider that adds a reclaim joins here.
+    if (entry.kind !== 'claude') return
+    this.strandedDeliveries.set(sessionId, { entry, at: Date.now() })
+  }
+
+  /** Whether the session's composer can only hold our own stranded write
+   *  (#1350); reported by sessions.inputInspect. */
+  hasStrandedDelivery(sessionId: string): boolean {
+    const mark = this.strandedDeliveries.get(sessionId)
+    return Boolean(mark && this.sessions.get(sessionId) === mark.entry)
   }
 
   getSessionKind(sessionId: string): SessionKind | null {
@@ -4999,7 +5095,13 @@ export class SessionManager extends EventEmitter {
         imagePaths,
         record,
         ...(options?.requireEmptyNativeComposer ? { requireEmptyNativeComposer: true } : {}),
+        ...(() => {
+          // Only for the process the strand happened in (see strandedDeliveries).
+          const mark = this.strandedDeliveries.get(sessionId)
+          return mark && mark.entry === entry ? { strandedComposer: { strandedAt: mark.at } } : {}
+        })(),
       })
+      this.noteStrandedDelivery(sessionId, entry, delivery, Boolean(imagePaths?.length))
       finishDelivery(delivery.ok ? 'success' : 'error')
       // Instrumentation must never change a delivery outcome. `acceptance` is
       // read defensively because a provider result without it made
@@ -5014,6 +5116,7 @@ export class SessionManager extends EventEmitter {
       finishDelivery('error')
       this.monitorResponses.cancel(sessionId)
       record?.('uncertain', { reason: 'provider-threw' })
+      this.noteStrandedDelivery(sessionId, entry, { ok: false, promptWritten, enterWritten }, Boolean(imagePaths?.length))
       return {
         ok: false,
         stage: enterWritten ? 'after-enter' : promptWritten ? 'absorption' : 'before-write',

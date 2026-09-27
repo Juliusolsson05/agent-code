@@ -67,11 +67,12 @@ function harness(heldKind: 'claude' | 'codex' = 'claude', opts: { heldSpawnRejec
   const killHolds = new Map<string, Promise<boolean>>()
   const killOwnedSession = vi.fn(async (req: { sessionId: string }) => killHolds.get(req.sessionId) ?? true)
   const carryWorkflowRuns = vi.fn(async (_from: string, _to: string) => undefined)
-  window.api = { ...originalApi, spawnSession, killOwnedSession, controlGoalLoop: vi.fn(async () => null), carryGoalLoop: vi.fn(async () => null), carryWorkflowRuns }
+  const carryOrchestrationParent = vi.fn(async (_from: string, _to: string) => undefined)
+  window.api = { ...originalApi, spawnSession, killOwnedSession, controlGoalLoop: vi.fn(async () => null), carryGoalLoop: vi.fn(async () => null), carryWorkflowRuns, carryOrchestrationParent }
   const hook = renderHook(() => useSessionActions(state, writer.setState, setRuntimes, refs))
   // The Claude agent is first in the snapshot, so it is the one in flight.
   const order = Object.keys(recorded.sessions).filter(id => id === claudeLane || id === codexLane)
-  return { hook, writer, refs, spawnSession, killOwnedSession, killHolds, release, claudeLane, codexLane, order, carryWorkflowRuns }
+  return { hook, writer, refs, spawnSession, killOwnedSession, killHolds, release, claudeLane, codexLane, order, carryWorkflowRuns, carryOrchestrationParent }
 }
 
 it('does not bring back an agent closed while its respawn was in flight', async () => {
@@ -111,6 +112,8 @@ it('carries workflow runs only to committed successors, never to an orphan', asy
   await act(async () => { h.release(); await reload })
   expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
   expect(h.carryWorkflowRuns.mock.calls).toEqual([[h.codexLane, 'codex-restarted']])
+  // #1283 item 1: the closed children of the committed one only.
+  expect(h.carryOrchestrationParent.mock.calls).toEqual([[h.codexLane, 'codex-restarted']])
 })
 
 it('does not double an agent replaced while its respawn was in flight', async () => {
