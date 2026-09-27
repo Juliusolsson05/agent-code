@@ -94,46 +94,19 @@ function strandDebt(fake: ReturnType<typeof createFakeSessionFeed>, sessionId: S
 const visible = (runtime: SessionRuntime) =>
   runtime.queuedMessages.filter(item => !(item as { stale?: boolean }).stale).map(item => item.content)
 
-it('settles open queue debt when the process goes idle after the last semantic event', () => {
+// Manager decision (option B, #1396 round 2): the process-idle flip does NOT
+// settle. A redelivered `dequeue` can make the debt cover a genuinely queued
+// prompt, and at a live flip that would hide a real queued user prompt. This
+// pins the removed site: with the issue's exact sequence, the chip stays until
+// a semantic idle event or bootstrap-complete settles it.
+it('does not settle at a process-idle flip (removed site)', () => {
   const { fake, sessionId, runtime } = mount()
   act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
   strandDebt(fake, sessionId)
-  // Step 4: the turn's final semantic event arrives while the process is
-  // still active, so the semantic idle guard does not fire.
   act(() => { fake.emitSemantic({ sessionId, event: { type: 'turn_completed', ts: Date.now() } as never }) })
   act(() => { vi.advanceTimersByTime(50) })
+  act(() => { fake.emitProcessState({ sessionId, active: false }) })
   expect(visible(runtime())).toEqual([NOTIFICATION])
-
-  // Step 5: process idle. The remaining debt must settle.
-  act(() => { fake.emitProcessState({ sessionId, active: false }) })
-  expect(visible(runtime())).toEqual([])
-
-})
-
-// The settlement must be committed to the reconciler's own state, not only
-// painted. A committed `user` entry re-projects the queue from that state
-// while dequeue debt is open, so an uncommitted settlement would bring the
-// departed notification back on the very next transcript line.
-it('commits the process-idle settlement to the reconciler state', () => {
-  const { fake, sessionId, runtime } = mount()
-  act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
-  act(() => {
-    fake.emitJsonlEntries({ sessionId, entries: [
-      op('d1', 'enqueue', NOTIFICATION, 1),
-      op('d2', 'enqueue', PROMPT, 2),
-      op('d3', 'dequeue', undefined, 3),
-      op('d4', 'remove', PROMPT, 4),
-    ] })
-  })
-  act(() => { fake.emitProcessState({ sessionId, active: false }) })
-  expect(visible(runtime())).toEqual([])
-  act(() => {
-    fake.emitJsonlEntries({ sessionId, entries: [{
-      file: '/s/claude.jsonl',
-      entry: { type: 'user', uuid: 'u-later', message: { role: 'user', content: 'an unrelated later prompt' }, timestamp: '2026-09-27T00:00:09.000Z' } as never,
-    }] })
-  })
-  expect(visible(runtime())).toEqual([])
 })
 
 it('does not settle while the process is still active', () => {
@@ -182,7 +155,8 @@ it('leaves the queue alone at bootstrap-complete while the process is live', () 
 // #1396 review a: idleness is not proof the queue drained. Between turns the
 // spinner can read idle while Claude still holds N2, and a resumed pane's
 // first replay-quiet tick starts from idle defaults. With no open debt to
-// account for N2, neither site may touch it.
+// account for N2, neither the process-idle flip (which no longer settles) nor
+// bootstrap-complete may touch it.
 const FIRST = 'first queued prompt'
 const SECOND = 'second queued prompt'
 function deliverFirstKeepSecond(fake: ReturnType<typeof createFakeSessionFeed>, sessionId: SessionId) {
@@ -213,17 +187,9 @@ it('leaves a genuinely queued item live at bootstrap-complete', () => {
   expect(visible(runtime())).toEqual([SECOND])
 })
 
-// The stream-phase half of each guard: a spinner that reads inactive while
-// the semantic stream is still responding is not idle, even with the debt
+// The stream-phase half of the bootstrap guard: a quiet replay while the
+// semantic stream is still responding is not idle, even with the debt
 // covering everything.
-it('does not settle on a process-idle flip while the stream is still responding', () => {
-  const { fake, sessionId, runtime } = mount({ streamPhase: 'responding' })
-  act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
-  strandDebt(fake, sessionId)
-  act(() => { fake.emitProcessState({ sessionId, active: false }) })
-  expect(visible(runtime())).toEqual([NOTIFICATION])
-})
-
 it('does not settle at bootstrap-complete while the stream is still responding', () => {
   const { fake, sessionId, runtime } = mount({ bootstrapping: true, streamPhase: 'responding' })
   strandDebt(fake, sessionId)
@@ -237,7 +203,7 @@ it('does not settle at bootstrap-complete while the stream is still responding',
 // N stays queued. Counting only non-stale items saw debt 1 >= live 1 and
 // settled, which consumed S by cohort and stale-marked the live N.
 it('counts stale items when deciding whether the debt covers the queue', () => {
-  const { fake, sessionId, runtime } = mount()
+  const { fake, sessionId, runtime } = mount({ bootstrapping: true })
   act(() => {
     fake.emitJsonlEntries({ sessionId, entries: [
       op('s1', 'enqueue', 'A', 1),
@@ -250,10 +216,10 @@ it('counts stale items when deciding whether the debt covers the queue', () => {
   act(() => { fake.emitSemantic({ sessionId, event: { type: 'turn_completed', ts: Date.now() } as never }) })
   act(() => { vi.advanceTimersByTime(50) })
   expect(runtime().queuedMessages.map(item => [item.content, Boolean((item as { stale?: boolean }).stale)])).toEqual([['S', true]])
-  act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
   act(() => {
     fake.emitJsonlEntries({ sessionId, entries: [op('s4', 'enqueue', 'N', 5), op('s5', 'dequeue', undefined, 6)] })
   })
-  act(() => { fake.emitProcessState({ sessionId, active: false }) })
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(runtime().bootstrapping).toBe(false)
   expect(visible(runtime())).toContain('N')
 })

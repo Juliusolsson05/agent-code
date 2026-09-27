@@ -39,3 +39,9 @@ Each site commits the result to `claudeQueueBySession` after `setRuntimes` retur
 - no bootstrap commit;
 - bootstrap ignores the live signal;
 - process path ignores `active`.
+
+## Narrowed (manager decision, option B, after review round 2)
+- **Process-state flip:** does NOT settle. A redelivered `dequeue` (queue-operation records carry no uuid) can make `debt >= pending` cover a genuinely queued prompt, and at a live flip that would hide a real queued user prompt.
+- **Bootstrap-complete:** settles only when the open debt covers EVERY pending item, stale ones included (`debtCoversPending`). The recorded fixture proves this case.
+- **Semantic site:** unchanged.
+- **Scope:** the live-idle half of #677 waits on the redelivery follow-up issue, so this PR says `Refs #677`, not `Fixes`.

@@ -192,10 +192,17 @@ const claudeQueueBySession = new Map<SessionId, ClaudeQueueState>()
  * process is still active and the process then goes idle, or a bootstrap
  * replay ends with debt open (production bootstrap gets no replayed semantic
  * events), nothing settled and the chip stayed until the next turn, or
- * forever for a session with no next turn. Every transition INTO idle now
- * asks: the semantic event, the process-state flip, and bootstrap-complete.
- * The two new sites also require `debt-covers-pending` (see
- * debtCoversPending): idleness alone is not proof the queue drained.
+ * forever for a session with no next turn. The semantic event (existing
+ * guard) and bootstrap-complete now ask this; bootstrap also requires
+ * `debt-covers-pending` (see debtCoversPending), because a quiet replay alone
+ * is not proof the queue drained.
+ *
+ * WHY NOT the process-state flip (manager decision, option B, on #1396's
+ * round-2 review): a REDELIVERED `dequeue` makes `debt >= pending` cover a
+ * genuinely queued prompt, and at a live process-idle flip that would hide a
+ * real queued user prompt. We do not trade a hidden user prompt for tidier
+ * state. Bootstrap is kept because the recorded fixture proves that case.
+ * The live-idle half of #677 waits on the redelivery follow-up.
  *
  * WHY not settle inline in the carriers instead: that inline settlement was
  * the bug those carriers were fixed for. It consumed the very item the
@@ -236,13 +243,11 @@ function settleClaudeQueueIfIdle(
  * (operation, timestamp) guard would wrongly drop. Redelivery already
  * over-counts debt for every reducer path; this site inherits it.
  *
- * WHY the process-idle flip and bootstrap-complete need this proof and the
- * semantic site does not get it added: an inactive spinner, or the quiet
- * replay timer, is not proof that Claude's queue is empty. Between two turns
- * (N1 delivered, N2 still queued) the spinner can read idle, and a resumed
- * pane's first 150 ms after replay starts from emptyRuntime's idle values.
- * Settling there without the proof marked the genuinely queued N2
- * `stale-unattributed`, and nothing un-stales it. The semantic site keeps its
+ * WHY bootstrap-complete needs this proof and the semantic site does not get
+ * it added: the quiet replay timer is not proof that Claude's queue is empty.
+ * A resumed pane's first 150 ms after replay starts from emptyRuntime's idle
+ * values, and settling there without the proof marked a genuinely queued N2
+ * `stale-unattributed`, which nothing un-stales. The semantic site keeps its
  * existing guard and behaviour; this PR does not widen it.
  */
 function debtCoversPending(state: ClaudeQueueState): boolean {
@@ -1194,22 +1199,9 @@ export function useIpcSubscriptions(
       ({ sessionId, active, status }) => {
         if (quarantinesSessionFeed(sessionId)) return
         flushSemanticEventQueue()
-        // Captured by the updater, committed after setRuntimes returns.
-        let pendingIdleQueue: ClaudeQueueState | null = null
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
-          // #677: this flip is often the LAST transition into idle, because
-          // the turn's final semantic event landed while the process was
-          // still active. awaitingAssistant is cleared just below, so idle
-          // here is the process and the stream phase.
-          const idleQueue = settleClaudeQueueIfIdle(
-            sessionId,
-            sessionKind,
-            !active && current.streamPhase === 'idle',
-            'debt-covers-pending',
-          )
-          pendingIdleQueue = idleQueue
           const shouldClearIdleQueue = shouldClearIdleQueuedMessages({
             awaitingAssistant: false,
             processActive: active,
@@ -1235,9 +1227,7 @@ export function useIpcSubscriptions(
                 awaitingAssistant: false,
                 queuedMessages: shouldClearIdleQueue
                   ? []
-                  : idleQueue
-                    ? idleQueue.pending
-                    : current.queuedMessages,
+                  : current.queuedMessages,
               },
               {
                 layer: 'STATE',
@@ -1253,14 +1243,12 @@ export function useIpcSubscriptions(
                   clearedQueuedMessages: shouldClearIdleQueue
                     ? current.queuedMessages.length
                     : 0,
-                  settledClaudeQueue: idleQueue !== null,
                 },
               },
             ),
           )
           return { ...prev, [sessionId]: next }
         })
-        if (pendingIdleQueue !== null) claudeQueueBySession.set(sessionId, pendingIdleQueue)
       },
     )
 
