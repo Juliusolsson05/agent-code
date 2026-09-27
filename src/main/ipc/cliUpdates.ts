@@ -73,7 +73,9 @@ export function registerCliUpdatesIpc(orchestrator: CliUpdateOrchestrator): void
     // the one path it wrote: the current failed state's log. Anything else
     // (an unknown CLI, a state that is not `failed`) opens nothing.
     const state = cli === 'claude' || cli === 'codex' ? orchestrator.getSnapshot()[cli] : undefined
-    if (state?.kind !== 'failed') return false
+    // #1425: a `could-not-start` failure has no log (the attempt stopped
+    // before creating one); there is nothing to open.
+    if (state?.kind !== 'failed' || state.logPath === null) return false
     // shell.openPath RESOLVES with '' on success and an error string on
     // failure. WHY the answer is returned (#1250 row 10): this used to discard
     // the string on the belief that "the OS shell surfaces its own error

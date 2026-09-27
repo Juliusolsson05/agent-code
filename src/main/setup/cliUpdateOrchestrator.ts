@@ -432,7 +432,32 @@ export class CliUpdateOrchestrator extends EventEmitter {
       startedAt: Date.now(),
     })
 
-    const logPath = await this.openLog(cli)
+    // #1425: `updating` is already published, and it is undismissable in the
+    // banner — so a failure here must END in another state, never leave this
+    // one standing. openLog's mkdir is the one await in this method that can
+    // throw (every later step catches or returns a result; see appendLog,
+    // appendDiagnostics, readInstalledVersion). A folder we cannot create
+    // (EACCES on the data folder, ENOSPC) means we do not run the update at
+    // all: a package install into a full or unwritable disk is likely to
+    // fail too, and a failure with no log would leave the user nothing to
+    // look at. The OS text stays here; the state carries a fixed reason.
+    let logPath: string
+    try {
+      logPath = await this.openLog(cli)
+    } catch (err) {
+      console.warn('[cli-update] could not create the update log; the update was not started:', err)
+      this.updateSnapshot(cli, {
+        kind: 'failed',
+        cli,
+        from: ctx.from,
+        wantedLatest: ctx.to,
+        installMethod: ctx.installMethod,
+        reason: 'could-not-start',
+        logPath: null,
+        finishedAt: Date.now(),
+      })
+      return
+    }
     const command = updateCommandFor(cli, ctx.installMethod)
     let commandFailed = false
     let timedOut = false
