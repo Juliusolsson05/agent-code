@@ -47,7 +47,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 
-import { createAgentActivityRedactor, RUNTIME_STATES_PROVENANCE } from './agent-activity-redaction-policy.js'
+import {
+  assertNoForeignHome,
+  createAgentActivityRedactor,
+  requireHomeUser,
+  RUNTIME_STATES_PROVENANCE,
+} from './agent-activity-redaction-policy.js'
 
 const BUNDLE_ROOTS = [
   join(homedir(), '.config/agent-code/debug-bundles'),
@@ -218,13 +223,16 @@ async function main(): Promise<void> {
     records,
   }
 
-  await writeFile(OUT, `${JSON.stringify(createAgentActivityRedactor(homedir().split('/').pop() ?? '')(fixture), null, 2)}\n`, 'utf8')
+  const homeUser = homedir().split('/').pop() ?? ''
+  const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
+  assertNoForeignHome(redacted, homeUser)
+  await writeFile(OUT, redacted, 'utf8')
   console.log(`wrote ${records.length} runtime states to ${OUT}`)
   console.log(fixture.totals)
 }
 
 /**
- * `--redact-from <pre-redaction.json> [--home-user <name>]`: re-run ONLY the privacy pass over an
+ * `--redact-from <pre-redaction.json> --home-user <recorder>` (both required): re-run ONLY the privacy pass over an
  * already-extracted, unredacted fixture and write the result to OUT.
  *
  * WHY (review of #1353, steering q70/q72): the debug bundles the corpus came from are gone from
@@ -234,20 +242,31 @@ async function main(): Promise<void> {
  *   git show 15e43abe^:testing/fixtures/agent-activity/runtime-states.json > /tmp/rs.json
  *   npx tsx scripts/extract-agent-activity-runtimes.mts --redact-from /tmp/rs.json --home-user <recorder>
  *   git diff --exit-code testing/fixtures/agent-activity/runtime-states.json
- * The recorder's home user has to be named because it is not this machine's user in general.
+ * The recorder's home user has to be named because it is not this machine's user in general: the
+ * mode refuses to run without it (steering q74), and refuses to write output that still names any
+ * home directory other than the placeholder.
  */
 async function redactFrom(source: string, homeUser: string): Promise<void> {
   const fixture = JSON.parse(await readFile(source, 'utf8')) as Record<string, unknown>
   fixture.provenance = RUNTIME_STATES_PROVENANCE
-  await writeFile(OUT, `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`, 'utf8')
+  const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
+  assertNoForeignHome(redacted, homeUser)
+  await writeFile(OUT, redacted, 'utf8')
   console.log(`re-redacted ${source} into ${OUT}`)
 }
 
 const argv = process.argv.slice(2)
 const redactSource = argv.includes('--redact-from') ? argv[argv.indexOf('--redact-from') + 1] : undefined
 if (redactSource !== undefined) {
-  const homeUser = argv.includes('--home-user') ? argv[argv.indexOf('--home-user') + 1] : homedir().split('/').pop()
-  await redactFrom(redactSource, homeUser ?? '')
+  // Validated before anything is read or written (steering q74); see requireHomeUser.
+  let homeUser: string
+  try {
+    homeUser = requireHomeUser(argv)
+  } catch (error) {
+    console.error((error as Error).message)
+    process.exit(2)
+  }
+  await redactFrom(redactSource, homeUser)
 } else {
   await main()
 }

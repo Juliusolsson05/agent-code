@@ -65,11 +65,26 @@ that leak developer data. Each item below is taken from the issue, with its curr
        branches, the refusal of too-short names, and that the committed file is a fixed point of the
        policy.
      - Every surviving string field was audited by key.
+   - **Steering q74:**
+     - `--redact-from` now **requires** an explicit `--home-user`, checked before anything is read or
+       written. Both modes also refuse to write output that still names a home directory other than
+       the placeholder.
+     - The public-name exemption is the exact `agent-code` segment, not `startsWith`, so sibling
+       `agent-code-<task>` checkouts are redacted too.
+     - Regenerating after that exposed a data-loss bug: an x-filled tail made same-length paths
+       under one project the same object key, and entries merged. Each tail segment now gets its own
+       placeholder, and the redactor refuses outright on any key collision.
+     - Tests: `testing/unit/agentActivityRedactionPolicy.test.ts`, plus the process-level
+       `testing/system/fixtures-privacy/agentActivityRedactFrom.system.test.ts`. Both fail on
+       `2f930233`.
    - The fleet fixtures:
      - `startup` in live-fleet and `bringdown` in both are same-length placeholders.
      - Their `provenance` now says so.
-     - Their titles stay verbatim, per the fixtures' own stated decision ("they are the finding").
-       Some are the owner's prompt fragments; that is flagged for the owner, not changed here.
+     - **Titles are an OWNER CHOICE (steering q73), not redacted here.** Six titles are the owner's
+       own prompt fragments: five in owner-fleet, one in live-fleet.
+       - A = keep them verbatim, the fixtures' stated decision.
+       - B = synthetic stand-ins of the same shape. B is prepared as a separate, unpushed commit.
+     - This PR does not claim full personal-text redaction across all three fixtures.
    - The row model reads none of that text: the 32 agent-activity tests pass unchanged.
    - **Owner decision (not done here):** the original content remains in `main`'s git history.
      Removing it means rewriting `main`.
