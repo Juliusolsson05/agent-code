@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
 
-import type { SessionManager } from '@main/sessionManager.js'
+import { ProviderCliNotFoundError, type SessionManager } from '@main/sessionManager.js'
+import { MissingWorkspaceDirectoryError } from '@main/workspaceDirectory.js'
+import { CLAUDE_PROXY_STARTUP_FAILED_MESSAGE, isClaudeProxyStartupFailure, SESSION_START_FAILED_MESSAGE } from '@shared/types/session.js'
 import { mainOperations } from '@main/performance/operations.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -35,6 +37,8 @@ import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 import { screenInterest, screenTailHistory } from '@main/sessions/screenInterest.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { ScreenTailSample } from '@shared/debug/screenTail.js'
+
+const WINDOW_CANNOT_OWN_SESSION = 'The requesting window can no longer own this session'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -88,14 +92,14 @@ export function registerSessionIpc(
       try {
         return await manager.spawn(options, sessionId => {
           lease = claimSessionForWindow(sessionId, owner)
-          if (!lease) throw new Error('The requesting window can no longer own this session')
+          if (!lease) throw new Error(WINDOW_CANNOT_OWN_SESSION)
         })
       } catch (error) {
         // A failed spawn never returns its minted id to the renderer, so no
         // pane-disposal request can clean this claim later. Release only this
         // admission; a successor recovery may already have claimed the id.
         releaseSession(lease)
-        throw error
+        throw launderSpawnError(error, options, appRunJournal)
       }
     },
   )
@@ -217,15 +221,6 @@ export function registerSessionIpc(
     return manager.getSessionKind(sessionId)
   })
 
-  // Terminal attach/replay. Called once by TerminalLeaf on mount.
-  // Returns the full buffered output of the session so far AND flips
-  // the manager's "attached" flag so subsequent PTY data events
-  // broadcast live. See SessionManager.terminalBuffers for the race
-  // being fixed.
-  ipcMain.handle('session:terminal-attach', (_evt, sessionId: string) => {
-    return manager.attachTerminal(sessionId)
-  })
-
   // Snapshot for a renderer that restored after the last change event. The
   // monitor emits on change only, so without this a reload would show every
   // busy shell idle until its foreground moved again. Filtered to the caller's
@@ -239,29 +234,56 @@ export function registerSessionIpc(
     )
   })
 
-  // Agent PTY attach/replay. DebugPanel uses this for Claude
-  // and Codex panes when the user asks to see the raw underlying TUI
-  // as an xterm terminal. Kept separate from terminal-attach because
-  // plain terminal panes and agent panes have different primary
-  // renderers and different live IPC channels.
+  // Raw views (agent PTY xterms and plain-terminal leaves) are OWNED by the
+  // calling renderer page (#1311 review for agents, #1283 item 3 for
+  // terminals), the same lifecycle as the screen leases below. Main's attach
+  // counts outlive the process (a same-id wake keeps a mounted view live,
+  // #1281), so a renderer that reloads or crashes without running its leaf
+  // cleanup would otherwise pin a count forever: bytes forwarded to nobody,
+  // and for agents a restore size applied to some later process. Each
+  // renderer's outstanding attaches are released when it is destroyed or
+  // loads a new document.
   //
-  // Attaches are OWNED by the calling renderer page (#1311 review), the same
-  // lifecycle as the screen leases below. The attach count now outlives the
-  // provider process (a same-id wake keeps a mounted view live), so a
-  // renderer that reloads or crashes without running its leaf cleanup would
-  // otherwise pin a count forever: raw PTY bytes forwarded to nobody, and a
-  // restore size applied to some later process. Each renderer's outstanding
-  // attaches are released when it is destroyed or loads a new document.
-  const agentPtyAttaches = new Map<number, Map<string, number>>()
-  // Each renderer's current page document, so only a real reload releases.
-  const agentPtyDocuments = new Map<number, string>()
-  const releaseAgentPtyAttaches = (owner: number): void => {
-    const owned = agentPtyAttaches.get(owner)
-    if (!owned) return
-    agentPtyAttaches.delete(owner)
-    for (const [sessionId, count] of owned) {
-      for (let i = 0; i < count; i += 1) manager.detachAgentPty(sessionId)
+  // WHY one table per view type from one factory, rather than the agent-only
+  // table this used to be plus a copy for terminals: the terminal half of
+  // #1281 needs exactly the same take / give-back-only-what-you-hold /
+  // release-on-reload rules, and two hand-written copies are how one of them
+  // drifts. `detach` is the manager call one reference is worth.
+  const rawViewOwnership = (detach: (sessionId: string) => void) => {
+    const byOwner = new Map<number, Map<string, number>>()
+    return {
+      take(owner: number, sessionId: string): void {
+        const owned = byOwner.get(owner) ?? new Map<string, number>()
+        owned.set(sessionId, (owned.get(sessionId) ?? 0) + 1)
+        byOwner.set(owner, owned)
+      },
+      /** Give back one reference this owner holds; one it does not hold is ignored. */
+      give(owner: number, sessionId: string): void {
+        const owned = byOwner.get(owner)
+        const count = owned?.get(sessionId) ?? 0
+        if (count === 0) return
+        if (count === 1) owned!.delete(sessionId)
+        else owned!.set(sessionId, count - 1)
+        if (owned!.size === 0) byOwner.delete(owner)
+        detach(sessionId)
+      },
+      releaseOwner(owner: number): void {
+        const owned = byOwner.get(owner)
+        if (!owned) return
+        byOwner.delete(owner)
+        for (const [sessionId, count] of owned) {
+          for (let i = 0; i < count; i += 1) detach(sessionId)
+        }
+      },
     }
+  }
+  const agentPtyViews = rawViewOwnership(sessionId => manager.detachAgentPty(sessionId))
+  const terminalViews = rawViewOwnership(sessionId => manager.detachTerminal(sessionId))
+  // Each renderer's current page document, so only a real reload releases.
+  const rawViewDocuments = new Map<number, string>()
+  const releaseRawViews = (owner: number): void => {
+    agentPtyViews.releaseOwner(owner)
+    terminalViews.releaseOwner(owner)
   }
   // Is this call from the renderer's CURRENT page? #1311 round 2 (review A):
   // a reload can keep the webContents id, so the sender alone cannot tell
@@ -271,39 +293,61 @@ export function registerSessionIpc(
   // once per load, the same token the screen leases carry). A renderer that
   // has not announced yet adopts the caller's document, which its own
   // announcement then confirms.
-  const isCurrentAgentPtyDocument = (owner: number, document: string): boolean => {
-    const current = agentPtyDocuments.get(owner)
+  const isCurrentRawViewDocument = (owner: number, document: string): boolean => {
+    const current = rawViewDocuments.get(owner)
     if (current === undefined) {
-      agentPtyDocuments.set(owner, document)
+      rawViewDocuments.set(owner, document)
       return true
     }
     return current === document
   }
+
+  // Agent PTY attach/replay. DebugPanel uses this for Claude
+  // and Codex panes when the user asks to see the raw underlying TUI
+  // as an xterm terminal. Kept separate from terminal-attach because
+  // plain terminal panes and agent panes have different primary
+  // renderers and different live IPC channels.
   ipcMain.handle('session:agent-pty-attach', (evt, sessionId: string, document: string) => {
     const owner = watchLeaseOwner(evt.sender)
     // A dead page's attach must take no reference: nothing would release it,
     // because that page's release already ran.
-    if (!isCurrentAgentPtyDocument(owner, document)) return null
+    if (!isCurrentRawViewDocument(owner, document)) return null
     const buffer = manager.attachAgentPty(sessionId)
     // null = no backend, and main took no reference; nothing to own.
     if (buffer === null) return buffer
-    const owned = agentPtyAttaches.get(owner) ?? new Map<string, number>()
-    owned.set(sessionId, (owned.get(sessionId) ?? 0) + 1)
-    agentPtyAttaches.set(owner, owned)
+    agentPtyViews.take(owner, sessionId)
     return buffer
   })
 
   ipcMain.handle('session:agent-pty-detach', (evt, sessionId: string, document: string) => {
     // Only a reference the CURRENT page holds. After a reload released the
     // old page's references, its late detach must not take the new page's.
-    if (agentPtyDocuments.get(evt.sender.id) !== document) return
-    const owned = agentPtyAttaches.get(evt.sender.id)
-    const count = owned?.get(sessionId) ?? 0
-    if (count === 0) return
-    if (count === 1) owned!.delete(sessionId)
-    else owned!.set(sessionId, count - 1)
-    if (owned!.size === 0) agentPtyAttaches.delete(evt.sender.id)
-    manager.detachAgentPty(sessionId)
+    if (rawViewDocuments.get(evt.sender.id) !== document) return
+    agentPtyViews.give(evt.sender.id, sessionId)
+  })
+
+  // Terminal attach/replay. Called once by TerminalLeaf per session id.
+  // Returns the full buffered output of the session so far AND takes a view
+  // reference so subsequent PTY data events broadcast live. See
+  // SessionManager.terminalBuffers for the race being fixed. Same page
+  // ownership as the agent PTY above (#1283 item 3): the reference used to be
+  // a manager flag no renderer could release, cleared only by the shell's
+  // exit, which is what froze a mounted leaf across a same-id respawn (#1281).
+  ipcMain.handle('session:terminal-attach', (evt, sessionId: string, document: string) => {
+    const owner = watchLeaseOwner(evt.sender)
+    // A dead page gets the replay for nothing: no reference, since nothing
+    // would release it. '' keeps the renderer contract a plain string.
+    if (!isCurrentRawViewDocument(owner, document)) return ''
+    const buffer = manager.attachTerminal(sessionId)
+    // null = not a terminal: main took no reference, so there is none to own.
+    if (buffer === null) return ''
+    terminalViews.take(owner, sessionId)
+    return buffer
+  })
+
+  ipcMain.handle('session:terminal-detach', (evt, sessionId: string, document: string) => {
+    if (rawViewDocuments.get(evt.sender.id) !== document) return
+    terminalViews.give(evt.sender.id, sessionId)
   })
 
   // #762. Live `session:screen` frames are forwarded only while a renderer
@@ -323,8 +367,8 @@ export function registerSessionIpc(
       leaseOwnersWatched.add(owner)
       sender.once('destroyed', () => {
         screenInterest.dropOwner(owner)
-        releaseAgentPtyAttaches(owner)
-        agentPtyDocuments.delete(owner)
+        releaseRawViews(owner)
+        rawViewDocuments.delete(owner)
         leaseOwnersWatched.delete(owner)
       })
     }
@@ -335,11 +379,12 @@ export function registerSessionIpc(
   ipcMain.handle('session:screen-document', (evt, document: string): void => {
     const owner = watchLeaseOwner(evt.sender)
     screenInterest.enterDocument(owner, document)
-    // A NEW document is a page load: the previous page's raw PTY attaches
-    // died with it. A re-announce of the live document changes nothing.
-    const previous = agentPtyDocuments.get(owner)
-    agentPtyDocuments.set(owner, document)
-    if (previous !== undefined && previous !== document) releaseAgentPtyAttaches(owner)
+    // A NEW document is a page load: the previous page's raw views (agent
+    // PTY and terminal attaches) died with it. A re-announce of the live
+    // document changes nothing.
+    const previous = rawViewDocuments.get(owner)
+    rawViewDocuments.set(owner, document)
+    if (previous !== undefined && previous !== document) releaseRawViews(owner)
   })
   ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
     screenInterest.acquire(watchLeaseOwner(evt.sender), sessionId, document)
@@ -560,4 +605,88 @@ export function registerSessionIpc(
       return await resolveTranscriptPaths(requests)
     },
   )
+}
+
+/**
+ * What a failed session:spawn tells the renderer (#1267, steering q22 at the
+ * source). IPC relays only an error's message, and a provider launch
+ * exception can carry environment values, proxy URLs or scoped MCP tokens;
+ * every renderer surface used to have to remember not to show it. recover()
+ * already flattens its failures this way (sessionManager recoverSession).
+ * Only failures whose text our own code builds from a fixed template cross
+ * as themselves: a missing workspace folder (a path the user chose and the
+ * pane header already shows; #1324 review A noted it is not secret-free in
+ * general, but it reveals nothing the UI does not), a
+ * missing provider CLI (names File › Setup…), and this window losing the
+ * session. A Claude proxy that would not start becomes its fixed guidance.
+ * Everything else is the one safe sentence. Main logs and journals only a
+ * fixed signature (classifySpawnFailure), never the text.
+ */
+function launderSpawnError(
+  error: unknown,
+  options: Pick<SessionSpawnOptions, 'kind' | 'useProxy'> | undefined,
+  journal: AppRunJournal | undefined,
+): Error {
+  // WHY every read of the thrown value happens exactly once, inside a try,
+  // and every return is a FRESH Error built from that one read (#1324 review
+  // round 2 A/B): the thrown value is provider-controlled. Converting a
+  // non-Error to text runs its toString; an Error's `message` can be a getter
+  // that throws, or that answers the fixed window sentence on the first read
+  // and a token on the next. Returning the original object let IPC read it
+  // again. So nothing of the original crosses except text we compared.
+  let failure: SpawnFailure
+  try {
+    failure = classifySpawnFailure(error, proxyGuidanceApplies(options))
+  } catch {
+    failure = { signature: 'unreadable-throw', message: SESSION_START_FAILED_MESSAGE }
+  }
+  // WHY a signature and not the message (#1324 review C): the laundered
+  // rejection is all the renderer, the incident journal and a debug bundle
+  // ever see, so the one fact that identified the recorded node-pty trap
+  // ("posix_spawnp failed") was lost to every artifact this repo debugs
+  // from. A fixed code carries that fact and nothing else.
+  journal?.record({ area: 'session.spawn', name: 'session.spawn.failed', severity: 'warn', data: { kind: options?.kind ?? null, signature: failure.signature } })
+  console.warn('[session:spawn] provider start failed:', failure.signature)
+  return new Error(failure.message)
+}
+
+/**
+ * Only a Claude spawn that runs the proxy gets the proxy guidance (#1324
+ * review A/B, round 2 A/B). `useProxy` must be exactly true: that is the
+ * test sessionManager uses to start mitmproxy at all, so an omitted value is
+ * a launch without a proxy and must not be told to disable one. A Codex
+ * spawn whose error mentions mitmdump is not a Claude proxy failure either.
+ */
+function proxyGuidanceApplies(options: Pick<SessionSpawnOptions, 'kind' | 'useProxy'> | undefined): boolean {
+  return options?.kind === 'claude' && options.useProxy === true
+}
+
+type SpawnFailure = { signature: string; message: string }
+
+/**
+ * Which known failure a spawn rejection is (a fixed code, safe to journal)
+ * and the one sentence the renderer may see for it. New signatures go here as
+ * they are identified from recorded incidents. Reads `error.message` once;
+ * the caller catches a throwing read.
+ */
+export function classifySpawnFailure(error: unknown, proxyApplies: boolean): SpawnFailure {
+  const generic = (signature: string): SpawnFailure => ({ signature, message: SESSION_START_FAILED_MESSAGE })
+  if (!(error instanceof Error)) return generic('non-error-throw')
+  const raw: unknown = error.message
+  if (typeof raw !== 'string') return generic('unreadable-throw')
+  // Our own fixed templates cross as themselves: a missing workspace folder
+  // (a path the user chose and the pane header already shows; review A noted
+  // it is not secret-free in general, but it reveals nothing the UI does not)
+  // and a missing provider CLI (names File › Setup…).
+  if (error instanceof MissingWorkspaceDirectoryError) return { signature: 'missing-workspace', message: raw }
+  if (error instanceof ProviderCliNotFoundError) return { signature: 'cli-not-found', message: raw }
+  if (raw === WINDOW_CANNOT_OWN_SESSION) return { signature: 'window-refused', message: WINDOW_CANNOT_OWN_SESSION }
+  if (raw.includes('posix_spawnp failed')) return generic('posix-spawnp')
+  // The proxy code only where the guidance applies (round 2 B3): a Codex
+  // `spawn /repo/mitmdump: ENOENT` is an ENOENT, and signing it claude-proxy
+  // would send the next debugger after the wrong subsystem.
+  if (proxyApplies && isClaudeProxyStartupFailure(raw)) return { signature: 'claude-proxy', message: CLAUDE_PROXY_STARTUP_FAILED_MESSAGE }
+  if (/\bENOENT\b/.test(raw)) return generic('enoent')
+  if (/\bEACCES\b/.test(raw)) return generic('eacces')
+  return generic('unclassified')
 }

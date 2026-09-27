@@ -1,5 +1,11 @@
 import type { SessionKind } from '@renderer/workspace/types'
-import { MISSING_WORKSPACE_FOLDER_PREFIX, PROVIDER_CLI_NOT_FOUND_SUFFIX, SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
+import {
+  CLAUDE_PROXY_STARTUP_FAILED_MESSAGE as PROXY_STARTUP_FAILED_MESSAGE,
+  isClaudeProxyStartupFailure,
+  MISSING_WORKSPACE_FOLDER_PREFIX,
+  PROVIDER_CLI_NOT_FOUND_SUFFIX,
+  SESSION_START_FAILED_MESSAGE,
+} from '@shared/types/session'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 
 // Normalize spawn errors so the user-facing toast/showToast has a
@@ -20,7 +26,6 @@ import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 // usually a transient mitmproxy startup race that goes away on
 // relaunch; disabling is the durable fallback for environments
 // where the proxy can't run at all.
-const PROXY_STARTUP_FAILED_MESSAGE = 'Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment.'
 
 /**
  * The spawn failures whose text is safe to show AND tells the user what to
@@ -61,15 +66,7 @@ export function sessionSpawnErrorMessage(
     err instanceof Error && err.message.length > 0
       ? err.message
       : String(err || `Could not start ${kind}.`)
-  if (
-    kind === 'claude' &&
-    useProxy &&
-    (
-      raw.includes('Timed out waiting for mitmproxy') ||
-      raw.includes('Unable to locate mitm') ||
-      raw.includes('mitmdump')
-    )
-  ) {
+  if (kind === 'claude' && useProxy && isClaudeProxyStartupFailure(raw)) {
     return PROXY_STARTUP_FAILED_MESSAGE
   }
   // Main's curated, actionable start failures (missing folder, missing CLI).
