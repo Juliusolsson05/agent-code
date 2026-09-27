@@ -241,3 +241,97 @@ describe('#1409: short-lived listeners are never contacted', () => {
     expect(h.timers.at(-1)!.ms).toBe(SCAN_FLOOR_MS)
   })
 })
+
+// #1452 review A: what "listening for PROBE_SETTLE_MS" is measured from. These
+// use a clock that only moves when a test moves it (the shared harness ticks
+// 5 ms on every `now()` read, which blurs exact boundaries). Each scenario is
+// one the reviewer reproduced against the first version of the window.
+function preciseHarness(agent: number) {
+  const clock = { t: 0 }
+  const timers: number[] = []
+  const probe = vi.fn(async (port: number) => probes.get(port) ?? { status: null, contentType: null })
+  const broadcast = vi.fn()
+  const owned = async (pids: number[]) => listeners.filter(l => pids.includes(l.pid))
+  const listListeners = vi.fn(owned)
+  const listProcesses = vi.fn(async () => parentOf)
+  const watcher = new LanePortWatcher({
+    listProcesses, listListeners, listTmuxPanes: async () => [], probe, broadcast,
+    agentPid: () => agent, terminalPid: () => null,
+    now: () => clock.t, setTimer: (_fn, ms) => { timers.push(ms); return () => {} },
+  })
+  const plan = [{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }]
+  return { clock, timers, probe, broadcast, listListeners, listProcesses, owned, watcher, plan }
+}
+
+describe('#1452: the settle window counts observed time only', () => {
+  it('a slow lsof does not shorten the window: age starts when the listener was observed', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    h.watcher.setSessions(h.plan)
+    // lsof answers 4.9 s into the scan; that is when 4173 was first seen.
+    h.listListeners.mockImplementationOnce(async pids => { h.clock.t += 4900; return h.owned(pids) })
+    await h.watcher.scan()
+    h.clock.t += SCAN_FLOOR_MS
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+  })
+
+  it('a scan that straddles a plan change does not age what it finds', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    h.listProcesses.mockImplementationOnce(async () => { await gate; return parentOf })
+    h.watcher.setSessions(h.plan)
+    const first = h.watcher.scan()
+    h.clock.t = 5100
+    h.watcher.setSessions([...h.plan])
+    release()
+    await first
+    // The generation-fenced immediate rescan, still at t = 5100.
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+  })
+
+  it('an empty plan forgets ages: time spent unwatched is not settled time', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    h.watcher.setSessions([])
+    h.clock.t = PROBE_SETTLE_MS
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+  })
+
+  it('probes at exactly PROBE_SETTLE_MS of observed life, not a millisecond before', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    h.clock.t = PROBE_SETTLE_MS - 1
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+    h.clock.t = PROBE_SETTLE_MS
+    await h.watcher.scan()
+    expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173])
+  })
+
+  it('a failed lsof keeps a settled chip on screen and does not restart its window', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    h.clock.t = PROBE_SETTLE_MS
+    await h.watcher.scan()
+    const settled = h.broadcast.mock.calls.at(-1)![0]
+    expect(settled.a.map((p: { port: number }) => p.port)).toEqual([4173])
+    const broadcasts = h.broadcast.mock.calls.length
+    h.listListeners.mockRejectedValueOnce(Object.assign(new Error('lsof timed out'), { killed: true, signal: 'SIGTERM', code: null }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await h.watcher.scan()
+    warn.mockRestore()
+    expect(h.broadcast.mock.calls.length).toBe(broadcasts)
+    h.clock.t += SCAN_FLOOR_MS
+    await h.watcher.scan()
+    // Still listed, from the probe cache: no resettle, no second probe.
+    expect(h.broadcast.mock.calls.length).toBe(broadcasts)
+    expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173])
+  })
+})

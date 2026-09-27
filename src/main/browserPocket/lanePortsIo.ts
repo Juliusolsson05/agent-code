@@ -28,10 +28,23 @@ export async function listListeners(pids: number[]): Promise<Listener[]> {
     const { stdout } = await run('/usr/sbin/lsof', ['-nP', '-a', '-iTCP', '-sTCP:LISTEN', '-F', 'pcn', '-p', pids.join(',')], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 })
     return parseLsofListen(stdout)
   } catch (error) {
-    // Exit status 1 with empty output is lsof's "nothing matched" (recorded),
-    // not a failure.
-    return parseLsofListen((error as { stdout?: string }).stdout ?? '')
+    return listenersFromLsofError(error)
   }
+}
+
+/**
+ * Exit status 1 is lsof's "nothing matched" (recorded), not a failure, and
+ * its stdout is still the answer. Anything else is a failed observation: a
+ * timeout (execFile kills the child, so `killed`/`signal` is set and `code`
+ * is null), a signal, or a missing binary (`code: 'ENOENT'`). Those throw.
+ * Before #1452 they became `[]`, which LanePortWatcher read as "every server
+ * stopped". That pruned a settled dev server, and with the settle window its
+ * chip then stayed hidden for another 5 s after lsof recovered (review A).
+ */
+export function listenersFromLsofError(error: unknown): Listener[] {
+  const e = error as { code?: unknown; killed?: boolean; signal?: unknown; stdout?: string }
+  if (e.code === 1 && !e.killed && !e.signal) return parseLsofListen(e.stdout ?? '')
+  throw error
 }
 
 /**

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import { LANE_PORT_PROBE_USER_AGENT, probe } from './lanePortsIo'
+import { LANE_PORT_PROBE_USER_AGENT, listenersFromLsofError, probe } from './lanePortsIo'
 
 // #1409: the probe names itself, so a developer who finds it in a server log
 // can tell what sent it, and a long-lived test that counts requests can
@@ -25,4 +25,20 @@ it('sends GET / with the lane port probe User-Agent', async () => {
   expect(await probe(port)).toEqual({ status: 200, contentType: 'text/html' })
   expect(seen).toEqual([{ method: 'GET', url: '/', ua: LANE_PORT_PROBE_USER_AGENT }])
   expect(LANE_PORT_PROBE_USER_AGENT).toMatch(/^AgentCode-LanePortProbe\//)
+})
+
+// #1452 review A: only lsof's "nothing matched" (exit 1) is an answer. A
+// timeout or missing binary must not read as "every server stopped".
+describe('listenersFromLsofError', () => {
+  it('exit status 1 is an answer: its stdout is parsed', () => {
+    expect(listenersFromLsofError({ code: 1, killed: false, signal: null, stdout: '' })).toEqual([])
+  })
+  it.each([
+    ['a timeout (execFile kills the child)', { code: null, killed: true, signal: 'SIGTERM', stdout: '' }],
+    ['a signal', { code: null, killed: false, signal: 'SIGKILL', stdout: '' }],
+    ['a missing binary', { code: 'ENOENT', stdout: undefined }],
+    ['any other exit status', { code: 2, killed: false, signal: null, stdout: '' }],
+  ])('%s throws', (_label, error) => {
+    expect(() => listenersFromLsofError(error)).toThrow()
+  })
 })
