@@ -1242,6 +1242,35 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(manager.list()).toEqual([first.sessionId])
   })
 
+  // #1283 item 2: the predecessor's window lease was only ever released by
+  // the renderer's killOwnedSession, which a same-rollout handoff skips. The
+  // workspace IPC releases it at the durable commit, so the commit must say
+  // which predecessors it retired, once each, and none before the successor
+  // is on disk (compensation may still restore the predecessor then).
+  it('reports each predecessor its durable commit retires, once', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession('predecessor', order, predecessorStopped, false)
+    const successor = new LeaseAwareCodexSession('successor', order, predecessorStopped, true)
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({ kind: 'codex', cwd: '/recorded/worktree', resumeSessionId: 'provider-a' })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    // The renderer has not saved the successor yet: nothing is retired.
+    expect(manager.acknowledgePersistedSessionOwnership(new Set([first.sessionId]))).toEqual([])
+    expect(manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))).toEqual([first.sessionId])
+    // Every later save acknowledges the same set; the commit is not repeated.
+    expect(manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))).toEqual([])
+  })
+
   it('keeps a stale-renderer redirect after durable successor acknowledgement', async () => {
     const successorStopGate = deferred<void>()
     const order: string[] = []

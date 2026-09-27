@@ -5,7 +5,7 @@ import { ipcMain } from 'electron'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { captureWindowGeometry } from '@main/window/windowGeometry.js'
-import { windowIdFor } from '@main/window/windowRegistry.js'
+import { captureSessionWindowLease, releaseSession, windowIdFor } from '@main/window/windowRegistry.js'
 
 // Workspace state persistence.
 //
@@ -58,7 +58,18 @@ export function registerWorkspaceIpc(
     // manager is asking a process-wide question — "which local ids has SOME
     // renderer committed" — and answering it with one window's set would tell
     // the manager that another window's live, persisted sessions are unclaimed.
-    manager.acknowledgePersistedSessionOwnership(store.sessionIds())
+    const retired = manager.acknowledgePersistedSessionOwnership(store.sessionIds())
+    // A committed Codex same-rollout handoff retired these predecessors
+    // (#1283 item 2). The renderer never calls killOwnedSession for them,
+    // because main already stopped their process, so this is the only place
+    // their window lease can be released. Before this commit the lease had to
+    // stay (a failed successor start restores the predecessor); after it,
+    // nothing displays the old id. Left alone, it kept a routing claim for the
+    // whole app run: routing gaps recorded on every reload, a window close
+    // bequeathing the dead id, and late events for it delivered instead of
+    // quarantined. A stale renderer that later recovers the id claims a fresh
+    // lease through session:recover like any recovery.
+    for (const sessionId of retired) releaseSession(captureSessionWindowLease(sessionId))
   })
 
   // Renderer calls this on first launch when there's no saved state
