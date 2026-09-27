@@ -33,10 +33,10 @@
    "sessionId": "e6e19a29",
    "displayLabel": "A1",
    "title": "",
-   "displayedTitle": "bringdown",
+   "displayedTitle": "project-c",
    "provider": "opencode",
    "providerRuntime": "terminal",
-   "project": "bringdown",
+   "project": "project-c",
    "placements": [
     {
      "kind": "project",
