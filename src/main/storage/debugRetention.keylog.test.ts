@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 
-import { collectProxyRunDirs } from './debugRetention.js'
+import { collectLegacyDebugBundleDirs, collectProxyRunDirs, loadManualLegacyBundlePaths, runPrunePasses } from './debugRetention.js'
+import type { DebugStorageBucket, DebugStoragePrunePolicy } from './debugRetention.js'
 
 // #1385 (q91 follow-up of #1380): retention collected a proxy run dir only
 // once it held `proxy-events.jsonl`. A run dir holding just
@@ -13,7 +15,11 @@ import { collectProxyRunDirs } from './debugRetention.js'
 // sizes recounted by #1380 review c, contents never read). Shapes below are
 // those real layouts: proxy/<project>/<session-key>/<ISO timestamp>/.
 const roots: string[] = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+const locked: string[] = []
+afterEach(() => {
+  for (const dir of locked.splice(0)) chmodSync(dir, 0o700)
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 function runDir(root: string, parts: string[], files: Record<string, string>): string {
   const dir = join(root, ...parts)
@@ -41,3 +47,92 @@ it('collects a key-log-only run dir as a proxy artifact, alongside normal run di
   expect(keyLogOnly).toMatchObject({ kind: 'dir', bucket: 'proxy' })
   expect(keyLogOnly.bytes).toBeGreaterThanOrEqual(4096)
 })
+
+// Worker rule "unknown is never empty" (q109, q115). dirStats swallowed EVERY
+// child error as "best effort", so a child it could not read simply did not
+// count: the run dir's age came from what WAS readable. A run whose fresh
+// data sits in a child the pass cannot read (EACCES, EIO, EMFILE) looked as
+// old as its oldest file, and the TTL pass removed it. An unreadable child is
+// UNKNOWN, and unknown must protect the whole dir. Only ENOENT (a concurrent
+// remover won the race) means "not there". Real filesystem throughout: fail
+// once, recover, maintain, and the bytes survive; then a truly old dir still
+// goes, so the protection is not permanent.
+it('a run dir with a child it cannot read is protected, and is collected normally once readable again', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'proxy-retention-'))
+  roots.push(root)
+  const now = Date.now()
+  const old = new Date(now - 30 * 24 * 3_600_000)
+  const dir = runDir(root, ['agent-code', 'shell-1', '2026-09-27T00-00-00-000Z'], { 'sslkeylog.log': 'k'.repeat(512) })
+  utimesSync(join(dir, 'sslkeylog.log'), old, old)
+  const streams = join(dir, 'streams')
+  mkdirSync(streams)
+  writeFileSync(join(streams, 'fresh.bin'), 'f'.repeat(256))
+  utimesSync(dir, old, old)
+
+  const caps = {} as Record<DebugStorageBucket, number>
+  for (const bucket of ['proxy'] as DebugStorageBucket[]) caps[bucket] = 1_000_000_000
+  const policy: DebugStoragePrunePolicy = { now, ttlMs: 48 * 3_600_000, activeGraceMs: 10 * 60_000, budgetBytes: 1_000_000_000, caps }
+  const prune = async () => runPrunePasses(await collectProxyRunDirs(root), policy, async artifact => {
+    try { await rm(artifact.path, { recursive: true, force: true }); return true } catch { return false }
+  })
+
+  chmodSync(streams, 0o000)
+  locked.push(streams)
+  await prune()
+  expect(existsSync(join(dir, 'sslkeylog.log'))).toBe(true)
+
+  chmodSync(streams, 0o700)
+  locked.splice(0)
+  await prune()
+  await prune()
+  expect(existsSync(join(dir, 'sslkeylog.log'))).toBe(true)
+  expect(existsSync(join(streams, 'fresh.bin'))).toBe(true)
+
+  utimesSync(join(streams, 'fresh.bin'), old, old)
+  utimesSync(streams, old, old)
+  utimesSync(dir, old, old)
+  await prune()
+  expect(existsSync(dir)).toBe(false)
+})
+
+// Same rule, the PROTECT side. Legacy root-level bundles are classified manual
+// (protected forever) or autosave (prunable) from the saved-bundles ledger. A
+// failed ledger read returned an EMPTY manual set, so every manual legacy
+// bundle was bucketed as autosave and aged out. Unknown must protect: a ledger
+// that exists but cannot be read leaves legacy bundles uncollected that pass.
+// Only a ledger that is not there (ENOENT) means "no manual bundles".
+it('an unreadable bundle ledger protects legacy bundles, and they are classified normally once readable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'legacy-bundles-'))
+  roots.push(root)
+  const now = Date.now()
+  const old = new Date(now - 30 * 24 * 3_600_000)
+  const bundle = runDir(root, ['2026-05-01T10-00-00-000-manual-report'], { 'manifest.json': '{}' })
+  utimesSync(join(bundle, 'manifest.json'), old, old)
+  utimesSync(bundle, old, old)
+  const ledger = join(root, 'saved-debug-bundles.jsonl')
+  writeFileSync(ledger, JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: bundle }) + '\n')
+
+  const caps = {} as Record<DebugStorageBucket, number>
+  for (const bucket of ['debug-bundles-legacy', 'debug-bundles-manual'] as DebugStorageBucket[]) caps[bucket] = 1_000_000_000
+  const policy: DebugStoragePrunePolicy = { now, ttlMs: 48 * 3_600_000, activeGraceMs: 10 * 60_000, budgetBytes: 1_000_000_000, caps }
+  const prune = async () => runPrunePasses(
+    await collectLegacyDebugBundleDirs(root, await loadManualLegacyBundlePaths(ledger)), policy,
+    async artifact => { try { await rm(artifact.path, { recursive: true, force: true }); return true } catch { return false } })
+
+  chmodSync(ledger, 0o000)
+  locked.push(ledger)
+  await prune()
+  expect(existsSync(join(bundle, 'manifest.json'))).toBe(true)
+
+  chmodSync(ledger, 0o600)
+  locked.splice(0)
+  await prune()
+  await prune()
+  expect(existsSync(join(bundle, 'manifest.json'))).toBe(true)
+
+  // A ledger that is not there really means "no manual bundles".
+  rmSync(ledger)
+  await prune()
+  expect(existsSync(bundle)).toBe(false)
+})
+

@@ -500,10 +500,13 @@ async function collectIncidentRunDirs(): Promise<Artifact[]> {
   }))
 }
 
-async function collectLegacyDebugBundleDirs(
+export async function collectLegacyDebugBundleDirs(
   dir: string,
-  manualLegacyBundlePaths: Set<string>,
+  manualLegacyBundlePaths: Set<string> | null,
 ): Promise<Artifact[]> {
+  // Unknown classification: collect nothing this pass rather than guess a
+  // bundle is autosave (see loadManualLegacyBundlePaths).
+  if (manualLegacyBundlePaths === null) return []
   try {
     const entries = await readdir(dir, { withFileTypes: true })
     // WHY legacy root folders are still collected: old versions wrote both
@@ -554,13 +557,24 @@ function isProtectedFromDebugPrune(artifact: Artifact): boolean {
     artifact.bucket === 'debug-bundles-manual'
 }
 
-async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
+/**
+ * The manual (protected) legacy bundles, or null when that is UNKNOWN.
+ *
+ * WHY null and not an empty set (q109, q115, "unknown is never empty"): this
+ * set is what PROTECTS a manual legacy bundle. An empty set on a failed read
+ * (EACCES, EIO, EMFILE) bucketed every manual legacy bundle as prunable
+ * autosave, and the TTL pass deleted user-saved incidents. Only ENOENT, a
+ * ledger that is not there, means "no manual bundles". `file` is a parameter
+ * so the real-fs test can point it at a temp ledger.
+ */
+export async function loadManualLegacyBundlePaths(file = DEBUG_BUNDLE_LOG_FILE): Promise<Set<string> | null> {
   const manual = new Set<string>()
   let raw: string
   try {
-    raw = await readFile(DEBUG_BUNDLE_LOG_FILE, 'utf8')
-  } catch {
-    return manual
+    raw = await readFile(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return manual
+    return null
   }
 
   for (const line of raw.split('\n')) {
@@ -648,8 +662,15 @@ async function dirStats(path: string): Promise<{ bytes: number; mtimeMs: number 
         bytes += childStats.size
         mtimeMs = Math.max(mtimeMs, childStats.mtimeMs)
       }
-    } catch {
-      // Best-effort accounting; a concurrent writer/remover can race us.
+    } catch (error) {
+      // Only ENOENT is "not there": a concurrent remover won the race, and the
+      // child's bytes are gone either way. Anything else (EACCES, EIO,
+      // EMFILE) is UNKNOWN, and unknown is never empty (q109, q115): skipping
+      // the child dated the dir by what WAS readable, so a run whose newest
+      // data sat in an unreadable child looked old and the TTL pass removed
+      // it. Rethrowing makes collectDirArtifact return null, which leaves the
+      // whole dir uncollected (protected) until a later pass can read it.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
   }
   return { bytes, mtimeMs }
