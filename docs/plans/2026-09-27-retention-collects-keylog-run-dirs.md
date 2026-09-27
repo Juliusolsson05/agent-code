@@ -12,7 +12,7 @@
   - a first-prune marker was written minutes after start (the boot gate delays the first prune), so runs made in between were excluded forever;
   - any timestamp comparison admits a pre-upgrade run whose name sorts later after a clock step back.
   Membership in "what already existed" needs no clock.
-- Every earlier key-log-only dir, including the owner's 23, is left untouched and never walked into. So is one whose name cannot be dated.
+- Every key-log-only dir in the baseline, including the owner's 23, is left untouched and never walked into, whatever its name. Names play no part: a NEW key-log-only dir is collected even if its name is not a timestamp. The decision on the existing ones is tracked in #1460 (q91).
 - `session-meta.json` alone stays uncollected, and `_shared-conf` is still skipped.
 
 ## Owner decision kept (q91)
@@ -25,7 +25,7 @@
 ## Tests
 `debugRetention.keylog.test.ts`, on the real directory shapes (`proxy/<project>/<session-key>/<ISO timestamp>/`):
 - a NEW key-log-only dir is collected beside a normal run dir;
-- an existing-dated one, an undated one, `_shared-conf` and a metadata-only dir are not;
+- baseline members (including one whose name sorts after a new run), `_shared-conf` and a metadata-only dir are not;
 - the unreadable-child test: fail once, recover, maintain, and the bytes survive.
 - Mutations killed: removing the cutoff, and removing the name check.
 
