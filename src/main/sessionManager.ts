@@ -4101,6 +4101,14 @@ export class SessionManager extends EventEmitter {
   ): void {
     // The process this delivery wrote to is gone (exited, replaced under the
     // same id): nothing it did says anything about the current composer.
+    // WHY check here AND on read (hasStrandedDelivery, the strandedComposer
+    // handoff): the read side alone already keeps a stale mark from reaching
+    // a replacement, but a stored stale mark would (a) keep the dead
+    // RegistryEntry and its PTY wrapper reachable until the next write, and
+    // (b) let A's late ok/failure delete or overwrite a mark that B's own
+    // delivery set. The read side is still needed because a replacement can
+    // be registered before A's exit cleanup runs, and that cleanup is
+    // generation-owned, so it leaves A's mark in place.
     if (this.sessions.get(sessionId) !== entry) return
     if (delivery.ok) {
       this.strandedDeliveries.delete(sessionId)

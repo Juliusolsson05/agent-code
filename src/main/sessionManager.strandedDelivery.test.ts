@@ -127,7 +127,37 @@ it('never lets a late failure of a replaced process clear the new process\'s hum
   await first
   vi.useRealTimers()
   expect(manager.hasStrandedDelivery('s1')).toBe(false)
+  // The write side: A's late result must not even be stored. The read side
+  // would ignore it, but a stored mark keeps A's dead RegistryEntry (and its
+  // PTY wrapper) reachable until someone writes to B.
+  expect((manager as unknown as { strandedDeliveries: Map<string, unknown> }).strandedDeliveries.has('s1')).toBe(false)
 
+  const next = await manager.deliverPromptToAgent('s1', 'the next task')
+  expect(next).toMatchObject({ ok: false, code: 'not-ready', promptWritten: false })
+  expect(bWrites).toEqual([])
+})
+
+// The read side of the binding. Stable ids are reused after a failed provider
+// start, and the replacement can be registered BEFORE the old wrapper's exit
+// fires; that late exit's cleanup is generation-owned and deliberately leaves
+// the new row (and so the old mark) alone. The mark still names A's entry, so
+// neither inspection nor B's next delivery may treat it as B's. Without the
+// entry comparison at the strandedComposer handoff, B's human draft gets Ctrl+U.
+it('never hands a mark to a replacement registered before the old process was cleaned up', async () => {
+  const { manager } = claudeLike()
+  await strand(manager)
+  expect(manager.hasStrandedDelivery('s1')).toBe(true)
+  const bWrites: string[] = []
+  const humanDraft = { screen: composer('❯ a human typed this'), attributes: { dim: 0, inverse: 1, plain: 18 } }
+  ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { kind: 'claude', session: {
+    isExited: () => false,
+    write: (data: string) => { bWrites.push(data) },
+    snapshotScreen: () => humanDraft.screen,
+    readComposer: () => humanDraft,
+    awaitReadyForPrompt: async () => ({ kind: 'occupied' as const, reason: 'human-draft' as const, waitedMs: 0 }),
+    armPromptAcceptance: () => ({ promise: new Promise(() => {}), cancel: vi.fn() }),
+  } })
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
   const next = await manager.deliverPromptToAgent('s1', 'the next task')
   expect(next).toMatchObject({ ok: false, code: 'not-ready', promptWritten: false })
   expect(bWrites).toEqual([])
@@ -173,6 +203,10 @@ it('marks a delivery whose write threw, and forgets it when the process exits', 
   expect(manager.hasStrandedDelivery('s1')).toBe(true)
   ;(manager as unknown as { cleanupSessionState(id: string, kind: string): void }).cleanupSessionState('s1', 'claude')
   expect(manager.hasStrandedDelivery('s1')).toBe(false)
+  // Checked on the map itself: once the row is gone the read-side entry check
+  // already hides the mark, so only this shows the exit clear still runs (a
+  // kept mark would pin the dead process's RegistryEntry).
+  expect((manager as unknown as { strandedDeliveries: Map<string, unknown> }).strandedDeliveries.has('s1')).toBe(false)
 })
 
 // #1358 review b (surviving mutant): a delivery refused before writing leaves
