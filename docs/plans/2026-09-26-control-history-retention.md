@@ -48,3 +48,11 @@ Other changes:
 - **Fixture metadata (B5).** The shared digest is on the `dispatched` rows.
 
 **Owner question (unchanged, still open):** the window length (default 7 days). With the retained roots above, what a window deletes is only settled, unkeyed, non-task calls: exact request/result copies of reads and completed mutations, which `history.read`/`list` then no longer find. On the owner's store today: 7 days keeps ~520 calls and ~20 MB of payloads; 14 days keeps ~884 calls and ~52 MB.
+
+## Review round 2 (#1330)
+- **A GC failure after a successful rewrite (a, b, c; Blocker).** The whole prune rejected, and `open()` served the pre-rewrite rows. The next append numbered itself from that longer list, and the gap got the journal quarantined with keyed calls blocked. Once the rewrite lands, the rewritten rows are always what is served. Each payload deletion fails on its own (warned, retried next launch).
+- **A torn-tail quarantine (a, b, c; Major).** It has no guard (it blocks no keyed call), so it was never scanned, and the payload only its torn line names (an outcome fsynced before the append tore) was deleted on the next launch. Evidence is now read from **every** quarantine file whose digest is not accepted. A damaged line still yields its digests, and its call id when visible. An unreadable quarantine file skips retention for that launch.
+- **Task detection by byte prefix (a, b, c).** It missed a valid step with another key order and treated a corrupted step as ordinary. It now parses the step through the integrity-checked `payload()`, as the task store does. Unreadable or not an object means kept.
+- **First-launch cost (b, c; Minor): accepted as a residual.** Classifying the backlog reads each old result payload once. On a clone of the owner's store the first load took 3.2–6.9 s, and later loads take about 35 ms. It runs on the first control-history use after the upgrade, not at app start. A byte-sniffing shortcut was rejected: that is exactly the kind of guess the task-prefix bug was.
+
+Tests: 3 new cases (red on `65175615`). They also kill round 2's surviving mutations: the task guard is now exercised with a settled result, and quarantine-only digests with a torn tail.

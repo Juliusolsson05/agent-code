@@ -712,4 +712,70 @@ describe('control history retention (#1274)', () => {
     expect(await kept(directory, [inside.callId, outside.callId])).toEqual([true, false])
     expect(CONTROL_HISTORY_RETENTION_MS).toBe(7 * 24 * 60 * 60 * 1000)
   })
+
+  // #1330 round 2 (a, b, c; Blocker): once the rewrite has landed, a failed
+  // payload deletion must not put the pre-rewrite rows back in memory. Those
+  // made the next append number itself past the end of the shorter file, and
+  // the gap got the journal quarantined with every keyed call blocked.
+  it('serves the rewritten rows when a payload deletion fails after the rewrite', async () => {
+    const { directory } = await setup()
+    const old = await call(directory, { at: OLD, result: settled() })
+    const recent = await call(directory, { at: RETENTION_NOW.toISOString(), result: settled() })
+    await journal(directory, [old, recent])
+    // A digest-named DIRECTORY in payloads/: rm() without `recursive` fails.
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'payloads', `${'e'.repeat(64)}.json`))
+    const history = open(directory)
+    const events = await history.events()
+    expect(new Set(events.map(event => event.callId))).toEqual(new Set([recent.callId]))
+    expect(events.map(event => event.sequence)).toEqual(recent.rows.map((_, index) => index + 1))
+    // The next append continues the file it is really appending to.
+    const appended = await history.append({ callId: 'next', instanceId: 'recorded', capabilityId: 'agents.read', caller: 'external:agent-code-control', kind: 'received', at: RETENTION_NOW.toISOString() })
+    expect(appended.sequence).toBe(recent.rows.length + 1)
+    const reports: unknown[] = []
+    await open(directory, () => reports.push(1)).events()
+    expect(reports).toEqual([])
+  })
+
+  // #1330 round 2 (a, b, c): a torn tail blocks no keyed call, so it has no
+  // guard, but its torn line can be the only row naming a result payload
+  // fsynced before the append tore. Kept until the operator accepts it.
+  it('keeps a payload that only an unaccepted torn-tail quarantine names', async () => {
+    const { directory } = await setup()
+    const torn = await call(directory, { at: OLD })
+    const unknownResult = await writePayload(directory, JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'lost', outcome: 'unknown' }, operation: { callId: torn.callId, instanceId: 'recorded', status: 'outcome_unknown' } }))
+    await journal(directory, [torn])
+    await appendFile(join(directory, 'events.jsonl'), JSON.stringify({ sequence: 3, at: OLD, instanceId: 'recorded', callId: torn.callId, kind: 'result', capabilityId: 'agents.resume', caller: 'external:agent-code-control', payload: unknownResult }).slice(0, -2))
+    const reports: Array<{ sha256: string; kind: string }> = []
+    await new FileControlHistory(directory, { now: () => RETENTION_NOW, onRecovered: report => reports.push(report as never) }).events()
+    expect(reports).toEqual([expect.objectContaining({ kind: 'torn-tail' })])
+    await open(directory).events()
+    expect(await open(directory).payload(unknownResult)).toMatchObject({ error: { outcome: 'unknown' } })
+    // Accepted, it is ordinary garbage (no kept row names it).
+    await writeFile(join(directory, 'recovery-accepted.json'), JSON.stringify({ accepted: [reports[0]!.sha256] }))
+    await open(directory).events()
+    await expect(open(directory).payload(unknownResult)).rejects.toThrow()
+  })
+
+  // #1330 round 2 (a, b, c): a task origin is recognised by what its step
+  // payload SAYS (the task store parses it), not by its first bytes, and a
+  // step that cannot be read is unknown, so kept. Settled results here, so
+  // only the task rule can keep these calls.
+  it('keeps a settled task origin whose step has another key order, or cannot be read', async () => {
+    const { directory } = await setup()
+    const owner = { kind: 'main' as const, generation: 'g' }
+    const reordered = await call(directory, { at: OLD, result: settled(), steps: [
+      { owner, step: 'task.started' },
+      { result: { ok: true, value: { newSessionId: 'new' } }, step: 'task.finished' },
+    ] })
+    const corrupted = await call(directory, { at: OLD, result: settled(), steps: [{ step: 'task.started', owner }] })
+    await journal(directory, [reordered, corrupted])
+    const stepDigest = corrupted.rows.find(row => row.kind === 'step')!.payload!
+    await writeFile(join(directory, 'payloads', `${stepDigest}.json`), '{ "tampered": true }')
+    const history = open(directory)
+    const read = taskHistoryCapabilities(history, () => false).find(item => item.descriptor.id === 'operations.read')!
+    expect(await read.execute({ callId: reordered.callId }, { requestId: 'read', owner, caller: { kind: 'external', id: 'operator' } }))
+      .toMatchObject({ ok: true, value: { status: 'completed' } })
+    expect(await kept(directory, [reordered.callId, corrupted.callId])).toEqual([true, true])
+  })
 })

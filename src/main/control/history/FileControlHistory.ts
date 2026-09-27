@@ -212,15 +212,27 @@ export class FileControlHistory implements ControlHistory {
     // at a deleted payload. It also collects orphans from appends that stored
     // a payload and then failed. A digest any kept row or unaccepted
     // quarantine names stays.
+    //
+    // WHY GC can no longer fail the prune (#1330 round 2, all three; Blocker):
+    // once the rewrite has landed, the rows on disk ARE `renumbered`, so they
+    // are what must be served whatever happens next. A failed `rm` used to
+    // reject the whole prune, open() then served the pre-rewrite rows, the
+    // next append numbered itself from that longer list, and the gap got the
+    // journal quarantined with every keyed call blocked. Each deletion now
+    // fails on its own, and a leftover file is collected next launch.
+    const served = expired.size > 0 ? renumbered : events
     const referenced = new Set([...kept.flatMap(event => event.payload ? [event.payload] : []), ...evidence.digests].map(digest => `${digest}.json`))
-    for (const name of await readdir(join(this.directory, 'payloads'))) {
+    const names = await readdir(join(this.directory, 'payloads')).catch(() => [] as string[])
+    for (const name of names) {
       // Only finished payload files: a `.tmp` belongs to a write that has not
       // renamed yet (none can be in flight here, but that is the writer's
       // business, not GC's).
       if (!/^[a-f0-9]{64}\.json$/.test(name) || referenced.has(name)) continue
-      await rm(join(this.directory, 'payloads', name), { force: true })
+      await rm(join(this.directory, 'payloads', name), { force: true }).catch(error => {
+        console.warn('[control-history] could not remove an unreferenced payload; retrying next launch:', (error as NodeJS.ErrnoException).code ?? 'error')
+      })
     }
-    return expired.size > 0 ? renumbered : events
+    return served
   }
 
   // Whether an old, unkeyed, finished call must be kept anyway: its evidence
@@ -241,8 +253,12 @@ export class FileControlHistory implements ControlHistory {
   private async mustOutliveRetention(rows: HistoryEvent[]): Promise<boolean> {
     for (const row of rows) {
       if (row.kind === 'step' && row.payload) {
-        const head = await this.payloadHead(row.payload, 32)
-        if (head === null || head.startsWith('{"step":"task.')) return true
+        // Parsed through the same integrity-checked read the task store uses
+        // (#1330 round 2): a byte-prefix test missed a valid step written
+        // with another key order, and treated a corrupted step as an ordinary
+        // one. Unreadable or not an object: unknown, so kept.
+        const step = await this.payload(row.payload).catch(() => undefined) as { step?: unknown } | undefined
+        if (!step || typeof step !== 'object' || (typeof step.step === 'string' && step.step.startsWith('task.'))) return true
       }
       if (row.kind === 'result') {
         if (!row.payload) return true
@@ -261,33 +277,37 @@ export class FileControlHistory implements ControlHistory {
     return false
   }
 
-  private async payloadHead(id: string, bytes: number): Promise<string | null> {
-    try {
-      const file = await open(this.path(id), 'r')
-      try {
-        const buffer = Buffer.alloc(bytes)
-        const { bytesRead } = await file.read(buffer, 0, bytes, 0)
-        return buffer.subarray(0, bytesRead).toString('utf8')
-      } finally { await file.close() }
-    } catch { return null }
-  }
-
-  // Call ids and payload digests named by quarantine files whose recovery is
-  // not yet accepted (this.guards is already filtered by acceptance). Rows in
-  // a quarantine may be damaged, so each line is parsed on its own and a
-  // line that does not parse still yields every digest-shaped token in it.
+  // Call ids and payload digests named by every quarantine file whose digest
+  // is not accepted. WHY every file and not `this.guards` (#1330 round 2, all
+  // three): guards drop a torn-tail quarantine because it blocks no keyed
+  // call, but its torn last line can be the ONLY row naming a result payload
+  // that was fsynced before the append tore, and that payload is the outcome
+  // the operator reconciles against. Evidence retention asks "has the
+  // operator accepted this file", not "does it block anything". Rows in a
+  // quarantine may be damaged, so each line is parsed on its own and a line
+  // that does not parse still yields every digest-shaped token in it.
   private async quarantineEvidence(): Promise<{ callIds: Set<string>; digests: Set<string> }> {
     const callIds = new Set<string>()
     const digests = new Set<string>()
-    for (const guard of this.guards) {
-      if (!QUARANTINE.test(guard.file)) continue
-      const text = await readFile(join(this.directory, guard.file), 'utf8').catch(() => '')
-      for (const line of text.split('\n')) {
+    const accepted = await this.acceptedDigests()
+    for (const name of await readdir(this.directory)) {
+      if (!QUARANTINE.test(name)) continue
+      const bytes = await readFile(join(this.directory, name)).catch(() => null)
+      // Unreadable evidence cannot be scanned, and unknown must not delete:
+      // skip retention for this launch entirely.
+      if (bytes === null) throw new Error('quarantine evidence unreadable')
+      if (accepted.has(createHash('sha256').update(bytes).digest('hex'))) continue
+      for (const line of bytes.toString('utf8').split('\n')) {
         for (const digest of line.match(/[a-f0-9]{64}/g) ?? []) digests.add(digest)
         try {
           const row = JSON.parse(line) as { callId?: unknown }
           if (typeof row.callId === 'string') callIds.add(row.callId)
-        } catch { /* a damaged line: its digests were collected above */ }
+        } catch {
+          // A damaged line: its digests were collected above, and a call id
+          // is recovered from its text when one is visible.
+          const callId = /"callId":"([^"]+)"/.exec(line)?.[1]
+          if (callId) callIds.add(callId)
+        }
       }
     }
     return { callIds, digests }
@@ -376,12 +396,16 @@ export class FileControlHistory implements ControlHistory {
     // that analysis lifted a block nobody accepted (#1254 review A). The
     // record's own digest is what accepts it.
     guards.push(...records)
-    let accepted = new Set<string>()
+    const accepted = await this.acceptedDigests()
+    return guards.filter(guard => (guard.keyedCallsBlocked || guard.blockedPairs.length > 0) && !accepted.has(guard.sha256))
+  }
+
+  private async acceptedDigests(): Promise<Set<string>> {
     try {
       const parsed = JSON.parse(await readFile(join(this.directory, ACCEPTED), 'utf8')) as { accepted?: unknown }
-      if (Array.isArray(parsed.accepted)) accepted = new Set(parsed.accepted.filter((id): id is string => typeof id === 'string'))
+      if (Array.isArray(parsed.accepted)) return new Set(parsed.accepted.filter((id): id is string => typeof id === 'string'))
     } catch { /* absent or unreadable: nothing accepted, the conservative reading */ }
-    return guards.filter(guard => (guard.keyedCallsBlocked || guard.blockedPairs.length > 0) && !accepted.has(guard.sha256))
+    return new Set()
   }
 
   private refusal(write: HistoryWrite): string | null {
