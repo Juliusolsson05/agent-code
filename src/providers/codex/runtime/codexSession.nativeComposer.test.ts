@@ -79,11 +79,12 @@ describe('Codex native composer (0.157 recording)', () => {
     expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 
-  // Steering q40: a draft longer than the package's 12-row composer bound
-  // reads `unknown`, while the legacy screen check still sees `›` over a
-  // status row. `unknown` must not be ready: the paste would land in the
-  // human's draft.
-  const longDraft = ['\x1b[2J\x1b[H› ', ...Array.from({ length: 12 }, () => '  real draft'), '', '  GPT-6-Sol high fast · ~/p'].join('\r\n')
+  // Steering q40: a draft the package cannot read (`unknown`) while the
+  // legacy screen check still sees `›` over a status row must not be ready:
+  // the paste would land in the human's draft. Since #1327 an UNBROKEN draft
+  // past 12 rows reads `drafted` (see the tall-draft recording below), so the
+  // unreadable shape is one with a blank line more than 12 rows up.
+  const longDraft = ['\x1b[2J\x1b[H› ', '', ...Array.from({ length: 12 }, () => '  real draft'), '', '  GPT-6-Sol high fast · ~/p'].join('\r\n')
 
   it('does not write into a draft the composer reading cannot classify', async () => {
     const { session, headless } = await sessionWith([longDraft])
@@ -190,6 +191,28 @@ describe('Codex native composer (0.157 recording)', () => {
     const write = vi.fn(() => true)
     const result = await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Restart the server', write, requireEmptyNativeComposer: true } as never)
     expect(result).toMatchObject({ ok: false, promptWritten: false })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  // #1327, on a raw recording of codex-cli 0.157.1 typing a 20-line draft
+  // (codex-headless testing/fixtures/composer-0157/tall-draft-ctrlc.json).
+  // It read `unknown` and published provider-not-ready, so the pane's own
+  // Enter appended to it. It is a draft: occupied, and nothing is written.
+  it('publishes a recorded 20-row draft as composer-occupied and refuses to write into it (#1327)', async () => {
+    const tall = JSON.parse(readFileSync(join(import.meta.dirname,
+      '../../../../packages/codex-headless/testing/fixtures/composer-0157/tall-draft-ctrlc.json'), 'utf8')) as Recording
+    const typed = tall.events.find(event => event.label === 'draft-typed')!.t + 800
+    const { session, headless } = await sessionWith(tall.events.filter(event => event.dir === 'out' && event.t < typed).map(event => event.data!))
+    expect(headless.getScreen()).toContain('  long draft line 20 with a few words')
+    expect(headless.getComposerState()).toBe('drafted')
+    const readiness: Array<{ ready: boolean; reason?: string }> = []
+    session.on('input-readiness', state => readiness.push(state))
+    ;(session as unknown as { composerReady: boolean }).composerReady = true
+    ;(session as unknown as { publishNativeComposer(): void }).publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: false, reason: 'composer-occupied' })
+    const write = vi.fn(() => true)
+    expect(await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Status?', write } as never))
+      .toMatchObject({ ok: false, stage: 'before-write', disposition: 'retry-after-resolve', promptWritten: false })
     expect(write).not.toHaveBeenCalled()
   })
 })
