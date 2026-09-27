@@ -241,6 +241,52 @@ describe('window registry routing', () => {
     expect(registry.windowIdForWebContentsId(webContentsId)).toBe(window)
   })
 
+  it('keeps a tombstone while a late save can still arrive, however many windows close, and forgets it after ten minutes (#1278)', () => {
+    // One tombstone per closed window was kept for the life of the process.
+    // A count cap (review of #1417, b) could drop a still-queued final save
+    // during a mass close, so the bound is age: a mass close keeps them all,
+    // and a later close sweeps the ones past ten minutes.
+    vi.useFakeTimers({ toFake: ['performance'] })
+    try {
+      for (let i = 0; i < 300; i++) {
+        registry.createAppWindow()
+        built[i]?.hooks.onClosed()
+      }
+      // The fake assigns webContents.id from creation order, starting at 1.
+      expect(registry.windowIdForWebContentsId(1)).not.toBeNull()
+      expect(registry.windowIdForWebContentsId(300)).not.toBeNull()
+
+      vi.advanceTimersByTime(10 * 60_000)
+      registry.createAppWindow()
+      built[300]?.hooks.onClosed()
+      expect(registry.windowIdForWebContentsId(1)).toBeNull()
+      expect(registry.windowIdForWebContentsId(300)).toBeNull()
+      expect(registry.windowIdForWebContentsId(301)).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ages tombstones by elapsed time, not the wall clock (#1278)', () => {
+    // Review of #1417, round 2 (b): the wall clock stepped back and then
+    // corrected made a second-old tombstone look twenty minutes old, so a
+    // queued final save from that window was refused.
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      vi.setSystemTime(20 * 60_000)
+      vi.setSystemTime(0)
+      registry.createAppWindow()
+      built[0]?.hooks.onClosed()
+      vi.advanceTimersByTime(1_000)
+      vi.setSystemTime(20 * 60_000 + 1_000)
+      registry.createAppWindow()
+      built[1]?.hooks.onClosed()
+      expect(registry.windowIdForWebContentsId(1)).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('broadcasts app-wide state to every live window', () => {
     registry.createAppWindow()
     registry.createAppWindow()

@@ -1,10 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, renameSync, statSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { collectProxyRunDirs, collectSessionRecordingDirs, runPrunePasses } from './debugRetention.js'
+import { cachedManualLegacyBundlePaths, collectProxyRunDirs, collectSessionRecordingDirs, legacyDebugBundleBucketForPath, parseManualLegacyBundlePaths, removeEmptyProxyParents, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -224,6 +224,191 @@ describe('runPrunePasses', () => {
     // found it still there); never counted as freed.
     expect(calls).toEqual(['stuck', 'stuck', 'stuck'])
     expect(result).toEqual({ removed: 0, bytesFreed: 0, remainingBytes: 500 })
+  })
+})
+
+describe('removeEmptyProxyParents (#1278)', () => {
+  // Proxy runs live at proxy/<project>/<session>/<timestamp>/. Pruning removed
+  // only the leaf, and the parent sweep called rm() without `recursive` on a
+  // directory, which always throws EISDIR, so no parent was ever removed:
+  // the author's machine held 2,978 empty session/project dirs, walked on
+  // every prune. This drives the real filesystem because the in-memory prune
+  // tests never reached the sweep.
+  it('removes the emptied session and project dirs, stops at a non-empty one, and never removes the root', async () => {
+    const proxyRoot = join(root, 'proxy')
+    const lonelyRun = join(proxyRoot, 'project-a', 'session-1', '2026-09-01T00-00-00')
+    const keptRun = join(proxyRoot, 'project-b', 'session-2', '2026-09-01T00-00-00')
+    const prunedSibling = join(proxyRoot, 'project-b', 'session-3', '2026-09-01T00-00-00')
+    for (const dir of [lonelyRun, keptRun, prunedSibling]) mkdirSync(dir, { recursive: true })
+    rmSync(lonelyRun, { recursive: true })
+    rmSync(prunedSibling, { recursive: true })
+
+    await removeEmptyProxyParents(lonelyRun, proxyRoot)
+    await removeEmptyProxyParents(prunedSibling, proxyRoot)
+
+    expect(existsSync(join(proxyRoot, 'project-a'))).toBe(false)
+    // Review of #1417 (a), a surviving mutation: `startsWith(root)` without the
+    // separator. A sibling root sharing the prefix must never be walked into.
+    const sibling = join(root, 'proxy-old', 'empty-project', 'session')
+    mkdirSync(sibling, { recursive: true })
+    await removeEmptyProxyParents(join(sibling, 'gone-run'), proxyRoot)
+    expect(existsSync(sibling)).toBe(true)
+    expect(existsSync(join(proxyRoot, 'project-b', 'session-3'))).toBe(false)
+    expect(existsSync(keptRun)).toBe(true)
+    expect(existsSync(proxyRoot)).toBe(true)
+  })
+})
+
+describe('cachedManualLegacyBundlePaths (#1278)', () => {
+  // The legacy mixed ledger no longer grows, but it was re-parsed on every
+  // five-minute prune. It is now parsed again only when the file changes.
+  it('parses once while the ledger is unchanged and again after it changes', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    writeFileSync(ledger, '{"event":"saved","reason":"manual","bundlePath":"/b/1"}\n')
+    const load = vi.fn(async () => new Set(['/b/1']))
+
+    await cachedManualLegacyBundlePaths(ledger, load)
+    await cachedManualLegacyBundlePaths(ledger, load)
+    expect(load).toHaveBeenCalledTimes(1)
+
+    writeFileSync(ledger, '{"event":"saved","reason":"manual","bundlePath":"/b/1"}\n{"event":"saved","reason":"manual","bundlePath":"/b/2"}\n')
+    await cachedManualLegacyBundlePaths(ledger, load)
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('legacy ledger classification fails closed (steering q109)', () => {
+  const manualRow = (bundlePath: string) => `${JSON.stringify({ event: 'saved', reason: 'manual', bundlePath })}\n`
+
+  // The blocker: a read failure returned an empty set, which classified every
+  // hand-saved legacy bundle as deletable, and the identity cache then kept
+  // that empty set after access recovered.
+  it('protects every legacy bundle while the ledger is unreadable, and classifies correctly once it is readable', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    const manualBundle = join(root, '2026-01-01T00-00-00')
+    const otherBundle = join(root, '2026-01-02T00-00-00')
+    writeFileSync(ledger, manualRow(manualBundle))
+    chmodSync(ledger, 0o000)
+    try {
+      const unreadable = await cachedManualLegacyBundlePaths(ledger)
+      expect(unreadable).toBe('unknown')
+      expect(legacyDebugBundleBucketForPath(manualBundle, unreadable)).toBe('debug-bundles-manual')
+      expect(legacyDebugBundleBucketForPath(otherBundle, unreadable)).toBe('debug-bundles-manual')
+    } finally {
+      chmodSync(ledger, 0o600)
+    }
+    const readable = await cachedManualLegacyBundlePaths(ledger)
+    expect(legacyDebugBundleBucketForPath(manualBundle, readable)).toBe('debug-bundles-manual')
+    expect(legacyDebugBundleBucketForPath(otherBundle, readable)).toBe('debug-bundles-legacy')
+  })
+
+  // chmod moves ctime, so the sequence above re-parses through the identity
+  // key alone. This pins the other half on its own: a failed load is never
+  // cached, even when the file's identity has not changed at all.
+  it('retries a failed load on the next call even with an unchanged file identity', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    writeFileSync(ledger, manualRow('/b/1'))
+    const results: Array<Set<string> | 'unknown'> = ['unknown', new Set(['/b/1'])]
+    const load = vi.fn(async () => results.shift()!)
+    expect(await cachedManualLegacyBundlePaths(ledger, load)).toBe('unknown')
+    expect(await cachedManualLegacyBundlePaths(ledger, load)).toEqual(new Set(['/b/1']))
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  // Review of #1417 (a): the ledger renamed away between the stat and the
+  // read. The loader sees ENOENT and says "no ledger"; that empty answer must
+  // not classify the manual bundle as deletable, nor be cached, whether the
+  // file is still away or already back.
+  for (const back of [false, true]) {
+    it(`does not trust a load that raced a rename of the ledger (${back ? 'renamed back' : 'still away'})`, async () => {
+      const ledger = join(root, 'saved-debug-bundles.jsonl')
+      const manualBundle = join(root, '2026-01-01T00-00-00')
+      writeFileSync(ledger, manualRow(manualBundle))
+      const raced = vi.fn(async (file: string) => {
+        renameSync(file, `${file}.away`)
+        if (back) renameSync(`${file}.away`, file)
+        return new Set<string>()
+      })
+      const first = await cachedManualLegacyBundlePaths(ledger, raced)
+      expect(first).toBe('unknown')
+      expect(legacyDebugBundleBucketForPath(manualBundle, first)).toBe('debug-bundles-manual')
+      if (!back) renameSync(`${ledger}.away`, ledger)
+      const settled = await cachedManualLegacyBundlePaths(ledger)
+      expect(legacyDebugBundleBucketForPath(manualBundle, settled)).toBe('debug-bundles-manual')
+    })
+  }
+
+  // Review of #1417, round 2 (a): a ledger moved aside BEFORE the prune and
+  // back after it. Both stats see ENOENT, so no identity check can notice;
+  // an absent ledger must itself protect every legacy bundle.
+  it('protects every legacy bundle while the ledger is absent, and classifies again once it is back', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    const manualBundle = join(root, '2026-01-01T00-00-00')
+    writeFileSync(`${ledger}.away`, manualRow(manualBundle))
+    const absent = await cachedManualLegacyBundlePaths(ledger)
+    expect(absent).toBe('unknown')
+    expect(legacyDebugBundleBucketForPath(manualBundle, absent)).toBe('debug-bundles-manual')
+    renameSync(`${ledger}.away`, ledger)
+    const back = await cachedManualLegacyBundlePaths(ledger)
+    expect(legacyDebugBundleBucketForPath(manualBundle, back)).toBe('debug-bundles-manual')
+    expect(legacyDebugBundleBucketForPath(join(root, '2026-01-02T00-00-00'), back)).toBe('debug-bundles-legacy')
+  })
+
+  // An operator edit with the same size that also restores the old mtime.
+  it('re-parses a same-size edit whose mtime was set back', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    writeFileSync(ledger, manualRow('/bundles/2026-01-01T00-00-01'))
+    // A whole-second mtime, so setting it back later reproduces it exactly.
+    const pinned = new Date('2026-01-01T00:00:00Z')
+    utimesSync(ledger, pinned, pinned)
+    const before = statSync(ledger)
+    expect(await cachedManualLegacyBundlePaths(ledger)).toEqual(new Set(['/bundles/2026-01-01T00-00-01']))
+    writeFileSync(ledger, manualRow('/bundles/2026-01-01T00-00-02'))
+    utimesSync(ledger, pinned, pinned)
+    expect(statSync(ledger).size).toBe(before.size)
+    expect(statSync(ledger).mtimeMs).toBe(before.mtimeMs)
+    expect(await cachedManualLegacyBundlePaths(ledger)).toEqual(new Set(['/bundles/2026-01-01T00-00-02']))
+  })
+})
+
+describe('parseManualLegacyBundlePaths (#1251 row 13)', () => {
+  // The legacy ledger is append-only JSONL written across many app versions.
+  // A row that parses as JSON but is not a saved-entry object (a bare `null`,
+  // a number, an entry without a string bundlePath) used to throw out of the
+  // loop (`null.event`, `resolve(undefined)`), which rejected collectArtifacts
+  // and so stopped EVERY prune pass, for every bucket, on every trigger.
+  it('keeps every readable manual row and skips rows that are not saved-entry objects', () => {
+    const raw = [
+      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: '/bundles/2026-01-01T00-00-00' }),
+      'null',
+      '42',
+      '"saved"',
+      JSON.stringify({ event: 'saved', reason: 'manual' }),
+      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: 42 }),
+      JSON.stringify({ event: 'saved', reason: 7, bundlePath: '/bundles/2026-01-03T00-00-00' }),
+      '{not json',
+      JSON.stringify({ event: 'saved', reason: 'autosave-crash', bundlePath: '/bundles/2026-01-02T00-00-00' }),
+      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: '/bundles/2026-01-04T00-00-00' }),
+    ].join('\n')
+    expect([...parseManualLegacyBundlePaths(raw)]).toEqual([
+      '/bundles/2026-01-01T00-00-00',
+      // A non-string reason is not an autosave label, and an unlabelled save
+      // was user-triggered in the versions that wrote this ledger, so it stays
+      // protected: when in doubt, retention keeps the bundle.
+      '/bundles/2026-01-03T00-00-00',
+      '/bundles/2026-01-04T00-00-00',
+    ])
+  })
+
+  // Review of #1411 (b), a surviving mutation: the parser test alone could not
+  // see the loader stop using it. This goes through the real loader and cache.
+  it('classifies through the real loader, past rows that are not entries', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    const manualBundle = join(root, '2026-01-01T00-00-00')
+    writeFileSync(ledger, ['null', JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: manualBundle }), ''].join('\n'))
+    const paths = await cachedManualLegacyBundlePaths(ledger)
+    expect(legacyDebugBundleBucketForPath(manualBundle, paths)).toBe('debug-bundles-manual')
+    expect(legacyDebugBundleBucketForPath(join(root, '2026-01-02T00-00-00'), paths)).toBe('debug-bundles-legacy')
   })
 })
 

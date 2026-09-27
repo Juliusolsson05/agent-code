@@ -48,16 +48,38 @@ import type {
 
 const FLUSH_INTERVAL_MS = 100
 
+// Bound on lines held while appends keep failing (review of #1417, round 2).
+// A paste logs tens of lines; a thousand is many pastes' worth of retries.
+const MAX_QUEUED_LINES = 1000
+
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 
 export class PasteDebugJournal {
   private queue: string[] = []
   private timer: NodeJS.Timeout | null = null
   private ensuredDir = false
-  private draining = false
+  // The append currently writing, if any (review of #1417, b and c). The old
+  // `draining` boolean made a second drain return at once, so flush() on a
+  // writer whose timer drain was mid-append resolved before that append
+  // landed: an evicted writer then escaped the shutdown drain and a quit could
+  // lose its events. flush() now joins this promise, then writes the rest.
+  private inFlight: Promise<void> | null = null
+  // Lines dropped because the queue hit MAX_QUEUED_LINES while appends kept
+  // failing; reported as one ERROR line once a write succeeds.
+  private dropped = 0
   private sessionStartedAtMs: number | null = null
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly options: {
+      appendFile?: typeof appendFile
+      // A previous writer for the same file whose final flush is still
+      // landing (an evicted paste that is written to again). This writer's
+      // first append waits for it, so the file keeps event order: the reader
+      // takes a session's start from its first line.
+      after?: Promise<void>
+    } = {},
+  ) {}
 
   append(input: PasteDebugEventInput): void {
     const now = Date.now()
@@ -76,38 +98,89 @@ export class PasteDebugJournal {
       clearTimeout(this.timer)
       this.timer = null
     }
-    await this.drain()
+    for (;;) {
+      if (this.inFlight) {
+        // A joined drain that failed put its batch back in the queue (see
+        // drain), so the next pass retries it and THIS flush reports the
+        // outcome of that retry. It never resolves over a lost batch (review
+        // of #1417, round 2, c).
+        await this.inFlight.catch(() => {})
+        continue
+      }
+      if (this.queue.length === 0) return
+      await this.drain()
+    }
   }
 
   private scheduleDrain(): void {
     if (this.timer) return
     this.timer = setTimeout(() => {
       this.timer = null
-      void this.drain()
+      // No caller awaits the timer: without this catch a failed append was an
+      // unhandled rejection in the main process (review of #1417, round 2, c).
+      // The batch is already back in the queue; the next append or flush
+      // retries it.
+      this.drain().catch(error => { console.warn('[pasteDebugJournal] append failed; will retry:', error) })
     }, FLUSH_INTERVAL_MS)
   }
 
-  private async drain(): Promise<void> {
-    if (this.draining) return
-    if (this.queue.length === 0) return
-    this.draining = true
-    try {
-      const batch = this.queue.splice(0).join('')
-      await this.appendRaw(batch)
-    } finally {
-      this.draining = false
+  private drain(): Promise<void> {
+    if (this.inFlight) return this.inFlight
+    if (this.queue.length === 0) return Promise.resolve()
+    const lines = this.queue.splice(0)
+    const dropped = this.dropped
+    const batch = (dropped ? this.droppedLine(dropped) : '') + lines.join('')
+    const writing = this.appendRaw(batch).then(
+      () => {
+        this.dropped -= dropped
+        // Lines appended while this write was in flight: their timer found the
+        // write busy and joined it, so drain them now. Only after SUCCESS: after
+        // a failure the next append or flush retries, instead of a dead disk
+        // being hammered every 100 ms.
+        if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
+      },
+      (error: unknown) => {
+        // A failed append used to drop its batch for good (review of #1417,
+        // round 2, a, b, c). Put it back IN FRONT, so order holds and the next
+        // drain retries it, but bounded: a disk that keeps failing must not
+        // turn this into unbounded memory (#1278 is about exactly that).
+        this.queue.unshift(...lines)
+        const excess = this.queue.length - MAX_QUEUED_LINES
+        if (excess > 0) {
+          this.queue.splice(0, excess)
+          this.dropped += excess
+        }
+        throw error
+      },
+    ).finally(() => {
+      this.inFlight = null
+    })
+    this.inFlight = writing
+    return writing
+  }
+
+  private droppedLine(lines: number): string {
+    const now = Date.now()
+    const event: PasteDebugEvent = {
+      ts: now,
+      tMs: this.sessionStartedAtMs === null ? 0 : now - this.sessionStartedAtMs,
+      layer: 'ERROR',
+      event: 'journal:dropped-lines',
+      data: { lines },
     }
-    if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
+    return JSON.stringify(event) + '\n'
   }
 
   private async appendRaw(content: string): Promise<void> {
+    if (this.options.after) await this.options.after.catch(() => {})
+    const append = this.options.appendFile ?? appendFile
     try {
-      await appendFile(this.filePath, content, { mode: 0o600 })
+      await append(this.filePath, content, { mode: 0o600 })
     } catch {
       if (!this.ensuredDir) {
         await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 })
         this.ensuredDir = true
-        await appendFile(this.filePath, content, { mode: 0o600 })
+        await append(this.filePath, content, { mode: 0o600 })
       } else {
         throw new Error(`paste-debug append failed for ${this.filePath}`)
       }
@@ -115,14 +188,42 @@ export class PasteDebugJournal {
   }
 }
 
+/**
+ * How many paste writers the registry keeps (#1278), the same bound and
+ * eviction as dictationJournal's MAX_OPEN_JOURNALS (#1276). A paste id is a
+ * fresh renderer UUID that is never reused, and dispose() has no caller, so a
+ * long-running app kept one writer (and its queue) per paste forever. A paste
+ * logs for a second or two around one Enter, so evicting the oldest of 64 never
+ * touches a live one in practice; if it ever did, get() just opens a new writer
+ * that appends to the same file.
+ */
+const MAX_OPEN_JOURNALS = 64
+
 export class PasteDebugJournalRegistry {
   private journals = new Map<string, PasteDebugJournal>()
+  /** Flushes started by dispose(), until they settle; see flushAll. */
+  private readonly disposing = new Set<Promise<void>>()
+  /** The same flushes by paste id, so a re-created writer appends after them. */
+  private readonly disposingById = new Map<string, Promise<void>>()
+
+  constructor(private readonly options: { appendFile?: typeof appendFile } = {}) {}
+
+  get size(): number {
+    return this.journals.size
+  }
 
   get(pasteId: string): PasteDebugJournal {
     let j = this.journals.get(pasteId)
     if (!j) {
-      j = new PasteDebugJournal(pasteDebugLogPath(pasteId))
+      j = new PasteDebugJournal(pasteDebugLogPath(pasteId), { ...this.options, after: this.disposingById.get(pasteId) })
       this.journals.set(pasteId, j)
+      // Insertion order is age: evict the oldest paste (flushing it first),
+      // never the one just asked for.
+      while (this.journals.size > MAX_OPEN_JOURNALS) {
+        const oldest = this.journals.keys().next().value
+        if (oldest === undefined || oldest === pasteId) break
+        this.dispose(oldest)
+      }
     }
     return j
   }
@@ -133,14 +234,22 @@ export class PasteDebugJournalRegistry {
         console.warn('[pasteDebugJournal] flush error:', err)
       }),
     )
-    await Promise.all(drains)
+    // An evicted writer is no longer in the map, but its final flush belongs
+    // to the shutdown drain too, or its queued events are lost on quit.
+    await Promise.all([...drains, ...this.disposing])
   }
 
   dispose(pasteId: string): void {
     const j = this.journals.get(pasteId)
     if (!j) return
-    void j.flush().catch(err => {
+    const flushing = j.flush().catch(err => {
       console.warn('[pasteDebugJournal] dispose flush error:', err)
+    })
+    this.disposing.add(flushing)
+    this.disposingById.set(pasteId, flushing)
+    void flushing.finally(() => {
+      this.disposing.delete(flushing)
+      if (this.disposingById.get(pasteId) === flushing) this.disposingById.delete(pasteId)
     })
     this.journals.delete(pasteId)
   }

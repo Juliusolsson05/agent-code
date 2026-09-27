@@ -1,5 +1,5 @@
-import { mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { mkdir, readFile, readdir, rm, rmdir, stat, statfs, writeFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
@@ -458,8 +458,83 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
   }
 }
 
+/**
+ * Which legacy root-level bundles were saved by hand, or 'unknown' when the
+ * ledger cannot be read OR is absent (steering q109; review of #1417 round 2).
+ *
+ * WHY 'unknown' instead of an empty set: the manual/legacy split is what keeps
+ * a hand-saved bundle out of the deletable `debug-bundles-legacy` bucket. An
+ * empty set on a transient read failure (EACCES, EMFILE) classified every
+ * manual bundle as deletable for that prune; with the cache below it would
+ * have stayed that way until the file changed. 'unknown' makes every legacy
+ * bundle protected for that prune instead.
+ *
+ * WHY an ABSENT ledger is 'unknown' too (review of #1417, round 2, a): a
+ * ledger moved aside before a prune and back after it is indistinguishable,
+ * from inside the prune, from one that never existed, and treating absence as
+ * "no manual bundles" made every hand-saved legacy bundle deletable for that
+ * prune. The ledger is the only record of which root-level bundles were
+ * manual, so without it none can be proven disposable. Stated cost: with no
+ * ledger at all, pre-split legacy bundles are never aged out; that is the
+ * owner's "do not delete stuff often" applied to evidence we cannot classify.
+ */
+export type ManualLegacyBundlePaths = Set<string> | 'unknown'
+
+// WHY the legacy ledger parse is cached by file identity (#1278): nothing has
+// appended to the pre-split mixed ledger since manual and autosave bundles got
+// their own folders (debugBundleLog.ts), yet it was re-read and re-parsed on
+// every prune, every five minutes for the life of the process (18.4 MB on the
+// author's machine).
+//
+// The identity is inode + ctime + mtime + size, not mtime + size alone
+// (steering q109): a replacement by rename gets a new inode, and ctime moves on
+// ANY content or metadata change and, unlike mtime, cannot be set back with
+// utimes, so a same-size edit that restores the old mtime still re-parses.
+// A failed stat or read ('unknown') is never cached: the next prune retries,
+// exactly as it did before the cache existed.
+let legacyLedgerCache: { key: string; paths: Set<string> } | null = null
+
+export async function cachedManualLegacyBundlePaths(
+  file: string = DEBUG_BUNDLE_LOG_FILE,
+  load: (file: string) => Promise<ManualLegacyBundlePaths> = loadManualLegacyBundlePaths,
+): Promise<ManualLegacyBundlePaths> {
+  const identity = await ledgerIdentity(file)
+  if (identity === 'unknown') return 'unknown'
+  const key = `${file}\0${identity}`
+  if (legacyLedgerCache?.key === key) return legacyLedgerCache.paths
+  const paths = await load(file)
+  // WHY a second stat (review of #1417, round 1, a): the load is a separate
+  // operation, so the file it reads need not be the file the first stat saw.
+  // In round 1 the loader still answered ENOENT with an empty set, and a
+  // ledger renamed away between the stat and the read cached that empty set
+  // under the identity of the file that WAS there, so a manual bundle became
+  // deletable. The loader now answers ENOENT with 'unknown' (round 2), which
+  // closes that exact case, but a ledger REPLACED mid-read (renamed over, or
+  // edited) still parses successfully as some other content. So the parse is
+  // trusted only if the identity is the same before and after the read; any
+  // change (gone, replaced, edited mid-read) is 'unknown': protective for this
+  // prune, never cached.
+  if (paths === 'unknown' || (await ledgerIdentity(file)) !== identity) {
+    legacyLedgerCache = null
+    return 'unknown'
+  }
+  legacyLedgerCache = { key, paths }
+  return paths
+}
+
+async function ledgerIdentity(file: string): Promise<string> {
+  try {
+    const info = await stat(file)
+    return `${info.ino}:${info.ctimeMs}:${info.mtimeMs}:${info.size}`
+  } catch {
+    // ENOENT included: an absent ledger classifies nothing (see
+    // ManualLegacyBundlePaths), so it is never cached as an answer.
+    return 'unknown'
+  }
+}
+
 async function collectArtifacts(): Promise<Artifact[]> {
-  const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
+  const manualLegacyBundlePaths = await cachedManualLegacyBundlePaths()
   // Captured at run start (holdDebugStoragePruneUntilRecovered); a run that
   // never held the gate (tests, odd call orders) captures here instead.
   const keyLogOnlyBaseline = await (keyLogBaselineTask ??= keyLogBaseline())
@@ -579,7 +654,7 @@ async function collectIncidentRunDirs(): Promise<Artifact[]> {
 
 async function collectLegacyDebugBundleDirs(
   dir: string,
-  manualLegacyBundlePaths: Set<string>,
+  manualLegacyBundlePaths: ManualLegacyBundlePaths,
 ): Promise<Artifact[]> {
   try {
     const entries = await readdir(dir, { withFileTypes: true })
@@ -610,8 +685,10 @@ async function collectLegacyDebugBundleDirs(
 
 export function legacyDebugBundleBucketForPath(
   bundlePath: string,
-  manualLegacyBundlePaths: Set<string>,
+  manualLegacyBundlePaths: ManualLegacyBundlePaths,
 ): DebugStorageBucket {
+  // An unreadable ledger protects every legacy bundle; see ManualLegacyBundlePaths.
+  if (manualLegacyBundlePaths === 'unknown') return 'debug-bundles-manual'
   return manualLegacyBundlePaths.has(resolve(bundlePath))
     ? 'debug-bundles-manual'
     : 'debug-bundles-legacy'
@@ -631,26 +708,39 @@ function isProtectedFromDebugPrune(artifact: Artifact): boolean {
     artifact.bucket === 'debug-bundles-manual'
 }
 
-async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
-  const manual = new Set<string>()
+async function loadManualLegacyBundlePaths(file: string = DEBUG_BUNDLE_LOG_FILE): Promise<ManualLegacyBundlePaths> {
   let raw: string
   try {
-    raw = await readFile(DEBUG_BUNDLE_LOG_FILE, 'utf8')
+    raw = await readFile(file, 'utf8')
   } catch {
-    return manual
+    // Every failure, including ENOENT, is unknown and fails closed (steering
+    // q109, review of #1417 round 2); see ManualLegacyBundlePaths.
+    return 'unknown'
   }
+  return parseManualLegacyBundlePaths(raw)
+}
 
+export function parseManualLegacyBundlePaths(raw: string): Set<string> {
+  const manual = new Set<string>()
   for (const line of raw.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed) continue
-    let entry: DebugBundleLogEntry
+    let parsed: unknown
     try {
-      entry = JSON.parse(trimmed) as DebugBundleLogEntry
+      parsed = JSON.parse(trimmed)
     } catch {
       continue
     }
-    if (entry.event !== 'saved') continue
-    if (isAutosaveDebugBundleReason(entry.reason)) continue
+    // WHY a shape check and not only the JSON.parse guard (#1251 row 13): a
+    // line can be valid JSON and still not an entry (`null`, a number, a row
+    // from a build that wrote bundlePath differently). Such a row threw here,
+    // which rejected collectArtifacts and stopped every prune pass for every
+    // bucket. Skipping it can only fail to protect a bundle the row does not
+    // name, so it never exposes a manual bundle to deletion.
+    if (typeof parsed !== 'object' || parsed === null) continue
+    const entry = parsed as Partial<DebugBundleLogEntry> & { bundlePath?: unknown; reason?: unknown }
+    if (entry.event !== 'saved' || typeof entry.bundlePath !== 'string') continue
+    if (isAutosaveDebugBundleReason(typeof entry.reason === 'string' ? entry.reason : null)) continue
     // WHY manual legacy classification comes from the old mixed ledger instead
     // of folder contents: every bundle contains a manifest, but reading
     // thousands of manifests during retention would turn a cheap directory
@@ -860,16 +950,27 @@ async function removeArtifact(artifact: Artifact): Promise<number> {
 
 async function removeEmptyParents(path: string, bucket: DebugStorageBucket): Promise<void> {
   if (bucket !== 'proxy') return
+  await removeEmptyProxyParents(path, PROXY_EVENTS_DIR)
+}
+
+// WHY rmdir and not rm (#1278): this used to readdir() and then call
+// rm(dir, { recursive: false }), which ALWAYS throws EISDIR on a directory, so
+// the catch returned on the first parent and no emptied session or project
+// dir was ever removed (2,978 of them on the author's machine, each walked by
+// collectProxyRunDirs on every prune). rmdir removes a directory only while it
+// is empty, and it does so atomically: a session that creates a new run dir
+// between our check and the removal makes rmdir fail with ENOTEMPTY instead of
+// deleting its fresh run, which the old readdir-then-remove shape could not
+// promise. `root + sep` keeps a sibling like `proxy-old/` out of scope.
+export async function removeEmptyProxyParents(path: string, root: string): Promise<void> {
   let current = dirname(path)
-  while (current.startsWith(PROXY_EVENTS_DIR) && current !== PROXY_EVENTS_DIR) {
+  while (current.startsWith(root + sep)) {
     try {
-      const entries = await readdir(current)
-      if (entries.length > 0) return
-      await rm(current, { recursive: false, force: true })
-      current = dirname(current)
+      await rmdir(current)
     } catch {
       return
     }
+    current = dirname(current)
   }
 }
 
