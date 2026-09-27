@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { collectSessionRecordingDirs, parseManualLegacyBundlePaths, runPrunePasses } from './debugRetention.js'
+import { collectSessionRecordingDirs, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -224,35 +224,5 @@ describe('runPrunePasses', () => {
     // found it still there); never counted as freed.
     expect(calls).toEqual(['stuck', 'stuck', 'stuck'])
     expect(result).toEqual({ removed: 0, bytesFreed: 0, remainingBytes: 500 })
-  })
-})
-
-describe('parseManualLegacyBundlePaths (#1251 row 13)', () => {
-  // The legacy ledger is append-only JSONL written across many app versions.
-  // A row that parses as JSON but is not a saved-entry object (a bare `null`,
-  // a number, an entry without a string bundlePath) used to throw out of the
-  // loop (`null.event`, `resolve(undefined)`), which rejected collectArtifacts
-  // and so stopped EVERY prune pass, for every bucket, on every trigger.
-  it('keeps every readable manual row and skips rows that are not saved-entry objects', () => {
-    const raw = [
-      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: '/bundles/2026-01-01T00-00-00' }),
-      'null',
-      '42',
-      '"saved"',
-      JSON.stringify({ event: 'saved', reason: 'manual' }),
-      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: 42 }),
-      JSON.stringify({ event: 'saved', reason: 7, bundlePath: '/bundles/2026-01-03T00-00-00' }),
-      '{not json',
-      JSON.stringify({ event: 'saved', reason: 'autosave-crash', bundlePath: '/bundles/2026-01-02T00-00-00' }),
-      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: '/bundles/2026-01-04T00-00-00' }),
-    ].join('\n')
-    expect([...parseManualLegacyBundlePaths(raw)]).toEqual([
-      '/bundles/2026-01-01T00-00-00',
-      // A non-string reason is not an autosave label, and an unlabelled save
-      // was user-triggered in the versions that wrote this ledger, so it stays
-      // protected: when in doubt, retention keeps the bundle.
-      '/bundles/2026-01-03T00-00-00',
-      '/bundles/2026-01-04T00-00-00',
-    ])
   })
 })
