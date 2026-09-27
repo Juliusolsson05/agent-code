@@ -1,4 +1,4 @@
-import { carryWorkflowRuns, handOverGoalLoops, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
+import { carryOrchestrationParents, carryWorkflowRuns, handOverGoalLoops, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
@@ -460,6 +460,9 @@ export function useUndoCloseAction(
         : await restoreTabEntry(entry, recordingPublish)
       if (result === 'retryable-failure') return result
       carryWorkflowRuns(successors)
+      // The restored pane resumes the same conversation that closed those
+      // children through the MCP; it should still see them (#1283).
+      carryOrchestrationParents(successors)
       handOverGoalLoops(successors, hasGoalLoopTools)
       const closedIds = entry.type === 'session'
         ? [entry.sessionId]

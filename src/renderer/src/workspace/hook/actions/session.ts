@@ -1,5 +1,5 @@
 import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
-import { carryGoalLoops, carryWorkflowRuns, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
+import { carryGoalLoops, carryOrchestrationParents, carryWorkflowRuns, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
 import { hasReportingDomain } from '@shared/types/tldr'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -1458,6 +1458,9 @@ export function useSessionActions(
         // (#1280). A different conversation swapped into the pane does not
         // inherit them: they belong to the conversation that started them.
         if (!opts?.newConversation) carryWorkflowRuns(idMap)
+        // Closed orchestration children follow the PANE, like the live ones
+        // remapped in the commit above, newConversation included (#1283).
+        carryOrchestrationParents(idMap)
         setRuntimes(prev => {
           // Replacement can await spawn and backend retirement while the user
           // keeps editing. Transfer the latest draft in the same state update
@@ -1737,6 +1740,7 @@ export function useSessionActions(
         // reaches this line, so its predecessor's runs are never handed to a
         // process that is being killed.
         carryWorkflowRuns(new Map([[oldId, newId]]))
+        carryOrchestrationParents(new Map([[oldId, newId]]))
         if (hasDurableProviderSession(fresh)) {
           void loadInitialHistoryForSession({ sessionId: newId, meta: fresh, refs, setRuntimes })
         }
