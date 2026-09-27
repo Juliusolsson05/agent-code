@@ -19,6 +19,15 @@ describe('codexExecScriptCalls', () => {
       .toEqual([{ tool: 'exec_command', argument: '{cmd:"ok"}' }])
   })
 
+  // #1368 verification c: two more places a lexer's regex guess fails in
+  // valid code: division after an object literal, and a regex after `await`.
+  it('keeps a call between divisions after `}` and after a regex following await', () => {
+    expect(codexExecScriptCalls('const n = {} / 2; tools.exec_command({cmd:"echo real"}); const m = 6 / 2;'))
+      .toEqual([{ tool: 'exec_command', argument: '{cmd:"echo real"}' }])
+    expect(codexExecScriptCalls('await /\'/; tools.exec_command({cmd:"echo real"});'))
+      .toEqual([{ tool: 'exec_command', argument: '{cmd:"echo real"}' }])
+  })
+
   // The same characters as real division: the call in the middle runs.
   it('keeps a call written between two divisions', () => {
     expect(codexExecScriptCalls('const n = (x) / tools.apply_patch(foo) / 2'))
