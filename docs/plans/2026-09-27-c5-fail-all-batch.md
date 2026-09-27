@@ -56,3 +56,15 @@ Rows 14–15 (key vault index, agent-name registry, tmux recovery) are strict by
 | **b survivor:** the rename-failure guard | valid | A read-only run dir makes the set-aside fail; the refused file stays byte-for-byte and `shortened` is set. Mutant red. |
 | **a / c survivors:** the `source`, `first_user_message`, `cwd` and `git_branch` type guards | valid | The wrong-type test now BLOBs every projected string column, plus a second row whose empty title falls to a BLOB first message; all four mutants red. |
 | **c3, minor:** the picker still shows a partial Codex list as complete | residual, **filed as #1433** | Needs a per-source degraded status through `Discovery` and a curated picker line (q39); out of scope for a fail-all fix. |
+
+## Steering q115 (after round 2)
+
+**Finding.** Startup found set-aside refused files by listing each run with `.catch(() => [])`. A failed listing therefore read as "no set-aside file". A prior run holding ONLY a set-aside file had no marker, so the next maintenance deleted it with the refused bytes. This is the unknown-as-empty shape q109 forbade.
+
+**Fix.** A failed per-run listing is unknown: the run is marked unindexed, which maintenance never expires, and the store is degraded. Only ENOENT (the run is already gone) means there is nothing to find.
+
+**Test.** `MonitorHistoryStore.listingFailure.test.ts` uses a real temp run holding only an `incidents.refused-*` file and injects one failed plain listing of that run at startup (the parent `runNames()` listing succeeds). Maintenance then runs after reads recover, and the run and its exact bytes must survive.
+- Red at `56891812`: `ENOENT` on the deleted run.
+- Removing the unindexed mark: red.
+
+**Loss-path audit.** Whole runs leave disk only through `clear()`, budget `pruneRuns` and maintenance expiry, and expiry is guarded by the incident, foreign, refused, set-aside and unindexed markers. The other file removals are expired tier files, an empty `incidents.json` and `*.tmp` scratch. The remaining `.catch(() => [])` listings either sweep only `*.tmp` or undercount bytes, which makes budget pruning less aggressive, never more.

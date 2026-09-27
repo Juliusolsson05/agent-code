@@ -385,8 +385,21 @@ export class MonitorHistoryStore {
     try {
       await this.cleanupTemps()
       for (const run of await this.runNames()) {
-        const entries = await readdir(join(this.root, RUNS_DIR, run)).catch(() => [] as string[])
-        if (entries.some(name => name.startsWith(REFUSED_INCIDENTS_PREFIX))) this.refusedAsideRuns.add(run)
+        // A failed listing is UNKNOWN, not empty (steering q115): read as "no
+        // set-aside file", a prior run holding only one had no marker left and
+        // the next maintenance deleted it with the refused bytes. Such a run is
+        // marked unindexed, which maintenance never expires, and the store is
+        // degraded. Only ENOENT (the run is already gone) means nothing to find.
+        // Budget pruning (pruneRuns) stays the only way this run leaves disk.
+        try {
+          const entries = await readdir(join(this.root, RUNS_DIR, run))
+          if (entries.some(name => name.startsWith(REFUSED_INCIDENTS_PREFIX))) this.refusedAsideRuns.add(run)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            this.degraded = true
+            this.unindexedRuns.add(run)
+          }
+        }
         for (const resolution of TIERS) {
           const file = join(this.root, RUNS_DIR, run, `${resolution}.jsonl`)
           try {
