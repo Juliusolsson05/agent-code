@@ -29,14 +29,17 @@ vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: 
 
 const cleanups: Array<() => Promise<unknown>> = []
 afterEach(async () => {
-  // A loop persists after every delivery, so a test that ends on
-  // waitFor(deliver) can still have a temp file being renamed. Let it settle
-  // before the directory goes (the #1028 re-review measured ENOTEMPTY in 4 of
-  // 12 runs without this).
-  await settle()
+  // Each setup registers its loop service's dispose() to run before its directory is removed: a
+  // loop persists after every delivery, and a test ending on waitFor(deliver) could still be
+  // renaming a temp file. The 20 ms sleep that stood here still measured ENOTEMPTY under load
+  // (#1296 item 3); the drain cannot (#1341).
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
+  current = undefined
 })
-const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+// The service the current test's hooks drive. `settle` waits for everything it started, so a
+// following "not delivered" is proven rather than hoped for (#1296 item 7).
+let current: GoalLoopService | undefined
+const settle = () => current?.whenSettled() ?? Promise.resolve()
 
 async function setup() {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-hooks-'))
@@ -61,6 +64,8 @@ async function setup() {
   })
   const loops = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
   await loops.start()
+  cleanups.push(() => loops.dispose())
+  current = loops
   const host = new BuiltInMcpHttpHost()
   host.setDependencies({ tldrStore: store, goalStore, tldrEnforcement: new TldrEnforcement(store, undefined, goalStore), goalLoopService: loops })
   await host.start()
