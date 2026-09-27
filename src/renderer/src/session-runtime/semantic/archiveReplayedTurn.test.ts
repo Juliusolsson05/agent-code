@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest'
 
 import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import { groupSemanticActivity } from '@renderer/features/feed/ui/semantic/renderUnits'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { archiveReplayedTurn, semanticHistoryRow } from './helpers'
 
 // #1391 (review a rounds 1-3, steering q93): at bootstrap-complete a replay
@@ -102,4 +104,57 @@ it('keeps an archived block the replay has not re-emitted yet', () => {
     turn('', [{ text: 'first part' }], 3),
   )
   expect(painted(history)).toMatchObject({ 'sem:T:0': 'first part', 'sem:T:1': 'second part' })
+})
+
+// Round 4 (review a): lifecycle fields take the MORE advanced value from
+// either copy. The archive can be cut while a block is still streaming and the
+// replay can complete it; keeping the archived lifecycle left the merged block
+// without its ownership key, so it double-rendered beside the JSONL answer.
+it('takes a completion the replay reached (Codex status)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'answer', status: 'in_progress', finalized: false }], null))],
+    turn('', [{ text: 'answer', status: 'completed', finalized: false }], 3),
+  )
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+it('takes a completion the replay reached (Claude finalized, no status)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'answer', status: undefined, finalized: false }], null))],
+    turn('', [{ text: 'answer', status: undefined, finalized: true }], 3),
+  )
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+// A Read the archive saw pending and the replay resolved must not paint as
+// running; nor may a reopened replay make a resolved one run again.
+function readTurn(state: 'in_progress' | 'completed', endedAt: number | null) {
+  const base = turn('', [{ kind: 'tool_use', toolName: 'Read', toolUseId: 'r1', inputJson: '{"file_path":"/a"}', status: undefined, finalized: true }], endedAt) as ReturnType<typeof turn> & Record<string, never>
+  const t = base as unknown as SemanticLiveTurn
+  return {
+    ...t,
+    task: { ...t.task, inProgressToolUseIds: state === 'in_progress' ? ['r1'] : [], activeToolNames: state === 'in_progress' ? ['Read'] : [] },
+    lookups: {
+      toolCallsById: { r1: { toolUseId: 'r1', blockIndex: 0, kind: 'tool_use', toolName: 'Read', status: state, inputJson: '{"file_path":"/a"}', resultContent: state === 'completed' ? 'contents' : null } },
+      toolUseIdsInOrder: ['r1'],
+      resolvedToolUseIds: state === 'completed' ? ['r1'] : [],
+      erroredToolUseIds: [],
+    },
+  } as SemanticLiveTurn
+}
+const running = (history: ReturnType<typeof archiveReplayedTurn>) => {
+  const row = history[0] as unknown as SemanticLiveTurn
+  const blocks = row.blockOrder.map(index => row.blocks[index]!)
+  return groupSemanticActivity(blocks, row).some(unit => unit.type === 'collapsed_activity' && unit.isRunning)
+}
+
+it.each([
+  ['archived pending, replay resolved', 'in_progress', 'completed'],
+  ['archived resolved, replay reopened', 'completed', 'in_progress'],
+] as const)('%s: the merged Read is not running', (_label, archivedState, replayState) => {
+  const history = archiveReplayedTurn([semanticHistoryRow(readTurn(archivedState, 2))], readTurn(replayState, 3))
+  expect(running(history)).toBe(false)
+  const row = history[0] as unknown as SemanticLiveTurn
+  expect(row.task.inProgressToolUseIds).toEqual([])
+  expect(row.task.activeToolNames).toEqual([])
 })
