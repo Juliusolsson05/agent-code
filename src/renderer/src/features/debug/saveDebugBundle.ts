@@ -514,10 +514,16 @@ export async function assembleAndSaveDebugBundle(params: {
   // run dir already exists under `shell-<sessionId>`, and nothing renames it.
   // So every manual bundle of a fresh session that had taken a turn asked
   // only for `resume-<id>`, got `match: 'none'`, and carried no proxy
-  // section at all (no events tail, no latest request body). Both keys name
-  // THIS pane's own runs, so the fallback keeps the reader's exact-provenance
-  // rule: never another session's run. `resume-` is tried first because a
-  // resumed process writes there, and its run is the current one.
+  // section at all (no events tail, no latest request body).
+  //
+  // The fallback key is pane-keyed, so it can only ever find THIS pane's own
+  // run. The `resume-` key is NOT (#1399 review a): it names a conversation,
+  // and another pane that resumed the same conversation writes there too. The
+  // reader's "exact" is a segment-name match, so a pane whose conversation was
+  // later resumed elsewhere can still bundle that other pane's run. That risk
+  // predates this fallback (main asked only for `resume-`); the proper fix is
+  // recording the launch-time key per pane, #1405. `resume-` stays first so a
+  // resumed pane (whose own run lives there) keeps what it had on main.
   const readProxy = (sessionKey: string) => window.api.readProxyEvents({ cwd: cwd!, sessionKey }).catch(() => null)
   const shellSessionKey = `shell-${sessionId}`
   let proxySection = cwd && includeProxyPayload ? await readProxy(proxySessionKey) : null

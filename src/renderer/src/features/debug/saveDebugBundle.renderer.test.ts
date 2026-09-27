@@ -85,7 +85,27 @@ it('finds a fresh session\'s proxy run after its first turn revealed the provide
   const { asked, proxyFile, manifest } = await bundleWithProxy('thread-1', 'shell-pane-1')
   expect(asked).toEqual(['resume-thread-1', 'shell-pane-1'])
   expect(proxyFile).toBeDefined()
-  expect(JSON.stringify(manifest)).toContain('shell-pane-1')
+  // The manifest describes the run that was actually read (#1399 review a).
+  expect(JSON.stringify(manifest)).toContain('"matchedSessionSegment":"shell-pane-1"')
+  expect(JSON.stringify(manifest)).toContain('"requestedSessionKey":"shell-pane-1"')
+})
+
+it('asks once, and bundles nothing, when neither key has a run', async () => {
+  // A `match: 'none'` fallback answer must not replace the first miss with
+  // an empty section (#1399 review a: this branch was untested).
+  const { asked, proxyFile, manifest } = await bundleWithProxy('thread-1', 'no-such-segment')
+  expect(asked).toEqual(['resume-thread-1', 'shell-pane-1'])
+  expect(proxyFile).toBeUndefined()
+  expect(JSON.stringify(manifest)).toContain('"requestedSessionKey":"resume-thread-1"')
+})
+
+it('does not repeat the read for a fresh session with no provider id yet', async () => {
+  const { asked, proxyFile } = await bundleWithProxy(null, 'shell-pane-1')
+  expect(asked).toEqual(['shell-pane-1'])
+  expect(proxyFile).toBeDefined()
+  // Also when that one key misses: the fallback key is the same key.
+  const missed = await bundleWithProxy(null, 'no-such-segment')
+  expect(missed.asked).toEqual(['shell-pane-1'])
 })
 
 it('prefers the resumed run when the process was launched to resume', async () => {
