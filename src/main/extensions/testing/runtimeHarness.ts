@@ -44,12 +44,29 @@ async function until(predicate: () => Promise<boolean>, label: string): Promise<
 
 void (async () => {
   await app.whenReady()
+  // Only requests for EGRESS_PATH are runtime egress (#1187). Every renderer
+  // probe below (fetch, window.open, navigation) targets exactly that path.
+  // Anything else on this port comes from outside the extension runtime: when
+  // the suite runs inside an Agent Code agent lane, the host app's browser-
+  // pocket LanePortWatcher finds this listener in the lane's process tree and
+  // probes it with one `GET /` (src/main/browserPocket/lanePortsIo.ts, Node
+  // fetch, `user-agent: node`). Under load that probe landed before the
+  // assertion below and failed the run with `['/']`, which the issue read as
+  // a runtime-API race. Recorded with request headers: every local run got that
+  // one `GET /` about 1.6 s after startup; CI has no watching app.
+  const EGRESS_PATH = '/private-state'
   const hits: string[] = []
-  const server = createServer((request, response) => { hits.push(request.url ?? ''); response.end('unexpected egress') })
+  const foreignHits: string[] = []
+  const server = createServer((request, response) => {
+    const url = request.url ?? ''
+    if (url.startsWith(EGRESS_PATH)) hits.push(url)
+    else foreignHits.push(`${request.method} ${url} ${request.headers['user-agent'] ?? ''}`)
+    response.end('unexpected egress')
+  })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
-  const endpoint = `http://127.0.0.1:${address.port}/private-state`
+  const endpoint = `http://127.0.0.1:${address.port}${EGRESS_PATH}`
   const statuses: RuntimeStatus[] = []
   const lifecycle: string[] = []
   const projectRoot = join(root!, 'project')
@@ -220,7 +237,7 @@ void (async () => {
     await command('navigate')
     await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(object(await command('snapshot')).activations, 1, 'renderer navigation must be refused')
-    assert.deepEqual(hits, [])
+    assert.deepEqual(hits, [], `runtime egress reached the server (foreign, ignored: ${JSON.stringify(foreignHits)})`)
     console.log('PASS runtime: command errors, host/preload isolation, forged namespaces and direct network/navigation denial')
 
     await views.attach(66, 'update-view', 'engine', revision, 'engine.main')
