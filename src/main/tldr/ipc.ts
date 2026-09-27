@@ -16,7 +16,17 @@ function assertApplicationWindow(event: Electron.IpcMainInvokeEvent): void {
   }
 }
 
-const identityList = z.array(z.string().refine(validTldrIdentity)).max(10_000)
+// WHY invalid identities are dropped from a batch instead of failing it
+// (#1251 row 12): Agent Activity reads every visible agent's TLDR and goal in
+// ONE batch, and a single identity outside the alphabet used to reject the
+// whole parse and blank every row. Dropping is exact, not lenient: TldrStore
+// only ever writes under identities that pass validTldrIdentity, so an invalid
+// one has no record, and "absent from the result" is the answer the store
+// would give it anyway. The shape stays strict (a bounded array of bounded
+// strings), so a malformed payload is still refused outright. The 256-char
+// element cap only bounds what zod copies; the predicate's own limit is 128.
+const identityList = z.array(z.string().max(256)).max(10_000)
+  .transform(identities => identities.filter(validTldrIdentity))
 const singleIdentity = z.string().refine(validTldrIdentity)
 
 /**
