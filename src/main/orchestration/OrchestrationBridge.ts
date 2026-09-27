@@ -551,6 +551,16 @@ export class OrchestrationBridge {
     this.invalidateStatusCacheForSession(sessionId)
   }
 
+  /**
+   * Whether an Agent Code window still owns this parent session: the same lease
+   * check dispatch uses. The late bootstrap asks before EVERY attempt, not only
+   * at adoption (review of #1375, round 1 b): a parent can close during a retry
+   * delay, and its brief must not then start an ownerless child.
+   */
+  isParentAttached(parentSessionId: string): boolean {
+    return Boolean(windowForSession(parentSessionId))
+  }
+
   promptSubmissionCount(sessionId: string): number {
     return this.promptDeliveries.get(sessionId)?.promptSubmissionCount ?? 0
   }
@@ -660,7 +670,7 @@ export class OrchestrationBridge {
     // a). Starting the parent's brief then puts an ownerless agent to work.
     // The same lease check dispatch uses decides it; the child itself is left
     // for the user, because closing an agent is not this path's call.
-    if (!windowForSession(parentSessionId)) {
+    if (!this.isParentAttached(parentSessionId)) {
       this.journal?.recordIncident({
         kind: 'orchestration.prompt_delivery_failed',
         severity: 'warn',

@@ -16,10 +16,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const renderer = {
   requests: [] as Array<Record<string, unknown>>,
   heldCreate: null as null | Record<string, unknown>,
+  // Whether a window still owns the parent (the lease the bridge checks).
+  parentAttached: true,
 }
 
 vi.mock('@main/window/windowRegistry.js', () => ({
-  windowForSession: () => 'test-window',
+  windowForSession: () => (renderer.parentAttached ? 'test-window' : null),
   sendToWindow: (_windowId: string, _channel: string, request: Record<string, unknown>) => {
     renderer.requests.push(request)
     if (request.type === 'create-agent') {
@@ -57,6 +59,7 @@ function agent(sessionId: string, bootstrapped = false) {
 beforeEach(() => {
   renderer.requests.length = 0
   renderer.heldCreate = null
+  renderer.parentAttached = true
   bridge = new OrchestrationBridge()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 })
@@ -183,6 +186,23 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
       bridge.notePromptSubmitted('child-late')
       await vi.advanceTimersByTimeAsync(60_000)
       expect(deliverPromptToAgent).toHaveBeenCalledTimes(1)
+    } finally {
+      await run.close()
+    }
+  })
+
+  // Review of #1375 (b): the parent was checked once, at adoption. A parent that closed during a
+  // retry delay still had its brief delivered to the now-ownerless child.
+  it('stops retrying when the parent closes during a retry delay', async () => {
+    const deliverPromptToAgent = vi.fn(async () => notReady)
+    const journal = { recordIncident: vi.fn() }
+    const run = await lateCreate(deliverPromptToAgent, journal)
+    try {
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
+      renderer.parentAttached = false
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(1)
+      expect(journal.recordIncident).toHaveBeenCalledWith(expect.objectContaining({ reason: 'create_agent_late_bootstrap_parent_gone' }))
     } finally {
       await run.close()
     }

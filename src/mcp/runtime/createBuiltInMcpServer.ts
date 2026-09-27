@@ -1185,6 +1185,17 @@ function orchestrationCreateAgentCallKey(
         const deliverLateBootstrap = async (late: OrchestrationAgentRecord, task: string): Promise<void> => {
           for (let attempt = 0; ; attempt += 1) {
             if (bridge.promptSubmissionCount(late.sessionId) > 0) return
+            // Before every attempt, not only at adoption: a parent that closed during the
+            // retry delay must not have its brief start an ownerless child (review of #1375, b).
+            if (!bridge.isParentAttached(scope.sessionId)) {
+              dependencies.appRunJournal?.recordIncident({
+                kind: 'orchestration.prompt_delivery_failed',
+                severity: 'warn',
+                reason: 'create_agent_late_bootstrap_parent_gone',
+                context: { sessionId: late.sessionId, parentSessionId: scope.sessionId, attempts: attempt },
+              })
+              return
+            }
             const reply = await deliverBootstrap(late, task, true)
             if (reply !== LATE_NOT_READY) return
             const delay = LATE_BOOTSTRAP_RETRY_DELAYS_MS[attempt]
