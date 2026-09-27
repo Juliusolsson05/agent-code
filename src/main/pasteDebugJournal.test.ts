@@ -130,3 +130,33 @@ it('holds at most 1000 lines while writes fail, and reports what it dropped once
   expect(events[0]).toMatchObject({ layer: 'ERROR', event: 'journal:dropped-lines', data: { lines: 500 } })
   expect(events.slice(1).map(event => event.event)).toEqual(Array.from({ length: 1000 }, (_, i) => `e${i + 500}`))
 })
+
+// Manager verification of #1417: re-queueing a failed batch at the BACK passed
+// every test. A line appended while the failing write was in flight must land
+// after the retried batch; the reader takes a session's start from line one.
+it('retries a failed batch ahead of lines appended while it was writing', async () => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-paste-user-'))
+  dirs.push(userData.dir)
+  const { appendFile: realAppend } = await import('node:fs/promises')
+  let release: () => void = () => {}
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let calls = 0
+  const appendFile = (async (...args: Parameters<typeof realAppend>) => {
+    calls++
+    if (calls <= 2) {
+      // The first write and its mkdir retry: held, then both fail.
+      await gate
+      throw Object.assign(new Error('injected EIO'), { code: 'EIO' })
+    }
+    return realAppend(...args)
+  }) as typeof realAppend
+  const journal = new PasteDebugJournalRegistry({ appendFile }).get('paste-order')
+  journal.append({ layer: 'RENDER', event: 'first' })
+  await vi.waitFor(() => expect(calls).toBe(1))
+  journal.append({ layer: 'RENDER', event: 'second' })
+  release()
+  await journal.flush()
+
+  const events = (await readFile(pasteDebugLogPath('paste-order'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).event)
+  expect(events).toEqual(['first', 'second'])
+})
