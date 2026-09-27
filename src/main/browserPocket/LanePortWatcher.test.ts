@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { LanePortWatcher, SCAN_FLOOR_MS, type LanePortWatcherDeps } from './LanePortWatcher'
+import { LanePortWatcher, PROBE_SETTLE_MS, SCAN_FLOOR_MS, type LanePortWatcherDeps } from './LanePortWatcher'
 import { parseLsofListen, parsePsTable, parseTmuxPanesAll } from './core/lanePorts'
 
 // Replays the Stage-1 recording of a live machine: two apps' agents, a
@@ -38,7 +38,10 @@ function harness(agents: Record<string, number>) {
     now: () => (t += 5),
     setTimer: (fn, ms) => { timers.push({ fn, ms }); return () => {} },
   }
-  return { watcher: new LanePortWatcher(deps), timers, listListeners, listTmuxPanes, probe, broadcast }
+  // `advance` plays wall time passing between scans, which is what the settle
+  // window (#1409) measures; `now()` alone only ticks 5 ms per read.
+  const advance = (ms: number) => { t += ms }
+  return { watcher: new LanePortWatcher(deps), timers, listListeners, listTmuxPanes, probe, broadcast, advance }
 }
 
 describe('LanePortWatcher on the recorded machine', () => {
@@ -160,5 +163,55 @@ describe('review A #8 / surviving mutations', () => {
     release()
     await scanning
     expect(broadcast.mock.calls.map(c => c[0])).toEqual([{}])
+  })
+})
+
+// #1409: agents run test suites inside their lanes, and those suites' loopback
+// servers (every one in the issue's inventory binds port 0 and lives for one
+// test) received the watcher's unsolicited `GET /`. The recorder's own page
+// server in the recording is exactly such a listener: `listen(0)` on 62678,
+// under claude 81647.
+describe('#1409: short-lived listeners are never contacted', () => {
+  const RECORDER_PAGE_SERVER = 62678
+
+  it('a loopback server that is gone by the next scan is never probed nor listed', async () => {
+    const h = harness({ a: ancestorClaude(RECORDER_PAGE_SERVER) })
+    h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    await h.watcher.scan()
+    h.listListeners.mockImplementation(async () => [])
+    h.advance(PROBE_SETTLE_MS)
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+    for (const [bySession] of h.broadcast.mock.calls) expect(bySession.a ?? []).toEqual([])
+  })
+
+  it('a dev server is probed and listed only once it has listened for the settle window', async () => {
+    const h = harness({ a: ancestorClaude(4173) })
+    h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+    expect(h.broadcast.mock.calls.at(-1)?.[0].a ?? []).toEqual([])
+    h.advance(PROBE_SETTLE_MS)
+    await h.watcher.scan()
+    expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173])
+    expect(h.broadcast.mock.calls.at(-1)![0].a.map((p: { port: number }) => p.port)).toEqual([4173])
+  })
+
+  it('while a listener is unsettled the next scan comes when it settles, not after a longer back-off', async () => {
+    const timers: number[] = []
+    let t = 0
+    const watcher = new LanePortWatcher({
+      // 400 ms per scan ⇒ a 20 × 400 = 8 s back-off, longer than the window.
+      listProcesses: async () => { t += 400; return parentOf },
+      listListeners: async pids => listeners.filter(l => pids.includes(l.pid)), listTmuxPanes: async () => [],
+      probe: async port => probes.get(port) ?? { status: null, contentType: null },
+      agentPid: () => ancestorClaude(4173), terminalPid: () => null, broadcast: () => {},
+      now: () => t, setTimer: (_fn, ms) => { timers.push(ms); return () => {} },
+    })
+    watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    await watcher.scan()
+    const next = timers.at(-1)!
+    expect(next).toBeGreaterThanOrEqual(SCAN_FLOOR_MS)
+    expect(next).toBeLessThanOrEqual(PROBE_SETTLE_MS)
   })
 })
