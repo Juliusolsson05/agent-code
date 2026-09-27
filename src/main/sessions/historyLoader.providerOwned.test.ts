@@ -57,6 +57,18 @@ describe('historyLoader with a provider-owned history source', () => {
     expect(span.end).not.toHaveBeenCalled()
   })
 
+  // #1413 verification a: a Codex rollout the resolver can no longer find
+  // (removed, or unreadable) made an OLDER page an empty `hasMore: false`,
+  // so the pane dropped "older history exists" with nothing said. An older
+  // page is only asked for after one loaded; it now rejects, which the
+  // renderer reports as a failed, retryable page.
+  it('rejects an older page whose transcript can no longer be resolved', async () => {
+    registry.resolveTranscriptPath.mockResolvedValue(null)
+    await expect(loadOlderHistoryChunk({ kind: 'codex', cwd: '/w', providerSessionId: 'thread-1', beforeMarker: 'm', limit: 5 }))
+      .rejects.toThrow('could not be found')
+    expect(span.fail).toHaveBeenCalledOnce()
+  })
+
   it('keeps file-backed providers on the JSONL path', async () => {
     registry.resolveTranscriptPath.mockResolvedValue(null)
     // The assertion that matters is the ROUTING: a provider without its own
