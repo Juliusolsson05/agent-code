@@ -16,6 +16,10 @@ describe('LazyTextProse browser boundary', () => {
 
   it('loads the bounded Markdown surface on demand in a renderer environment', async () => {
     render(<LazyTextProse text="**Evidence-backed** rendering" />)
+    // The boundary itself (review of #1377, a): even with the chunk preloaded, React.lazy suspends on
+    // the first render and shows the fallback. An eager import would render the prose at once and
+    // skip it, so this assertion is what fails if the component stops loading on demand.
+    expect(screen.getByRole('status')).toHaveTextContent('Formatting content')
     const strong = await screen.findByText('Evidence-backed')
     expect(strong.tagName).toBe('STRONG')
     expect(strong.parentElement).toHaveTextContent('Evidence-backed rendering')
