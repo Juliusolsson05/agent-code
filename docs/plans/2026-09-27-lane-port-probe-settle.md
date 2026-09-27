@@ -46,8 +46,10 @@ comment it left admits the residual: a runtime escape that requests exactly
 ## Change
 
 1. **Settle before probing (product).** The watcher records when it first saw
-   each `pid:port`. It probes, and lists, a listener only once it has been
-   listening for `PROBE_SETTLE_MS` (5 s). The first-seen entry is dropped when
+   each `pid:port`. It probes, and lists, a listener only once it has SEEN it
+   listening for `PROBE_SETTLE_MS` (5 s), measured from the lsof answer that
+   first reported it. That is conservative: a server that was already up
+   before the watcher saw it still waits the full window. The first-seen entry is dropped when
    the listener disappears, just as the probe cache already is.
    - A test server that lives for less than the window is never contacted.
    - A dev server's chip appears one or two scans later: about 6–9 s after

@@ -17,8 +17,8 @@ import { attributePorts, classifyProbe, type Listener, type ProbeResult, type Se
  * - Scans back off with their own cost: max(3 s, 20 × last scan) — VS Code's
  *   auto-forward formula — so a slow machine scans less, not more.
  * - A probe answer is cached per pid:port; a dev server is probed once.
- * - A listener is probed (and listed) only after it has been listening for
- *   PROBE_SETTLE_MS; see that constant for why (#1409).
+ * - A listener is probed (and listed) only after the watcher has SEEN it
+ *   listening for PROBE_SETTLE_MS; see that constant for why (#1409).
  */
 export type LanePortWatcherDeps = {
   /** pid → parent pid for every process (`ps -axo pid=,ppid=`). */
@@ -62,7 +62,7 @@ export const SCAN_FLOOR_MS = 3000
  * - Listing an unsettled listener unprobed, as "other", would flash a chip for
  *   every test server.
  *
- * WHY 5 s (an UNCONFIRMED product call): it is several times the 1.6 s
+ * WHY 5 s (an UNCONFIRMED product call): it is about three times the 1.6 s
  * observed in #1187 and longer than a typical single test's server. A dev
  * server's chip still appears about 6–9 s after it starts, at the 3 s scan
  * floor. A counting test whose server outlives the window is still reachable;
