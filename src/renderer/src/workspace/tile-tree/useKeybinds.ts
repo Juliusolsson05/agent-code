@@ -9,7 +9,7 @@ import type { BindingContext, CommandBindingDefault } from '@renderer/features/c
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
-import { hasAppInteractionOwner, isInPaneInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { APP_INTERACTION_OWNER_SELECTOR, hasAppInteractionOwner, isInPaneInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import { selectVisibleDispatchRow } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -325,6 +325,46 @@ function buildBindingIndex(
  * after it. `.monaco-editor` is Monaco's own root class, so this covers every
  * instance the app mounts, present and future.
  */
+/**
+ * The extension modal iframe a key event belongs to, or null.
+ *
+ * WHY not only "the target is the iframe" (#1307): that holds once the
+ * extension's document has focus, because main then captures the chord and
+ * re-dispatches it with the <iframe> as its target. Before that, focus is in
+ * the HOST shell: Radix autofocuses the first tabbable element, which is the
+ * shell's close button while viewBridge keeps the iframe hidden until ready,
+ * and focus stays in the shell until the user clicks into the extension. The
+ * focused frame is then the host frame, so main forwards nothing, and the key
+ * targets an element inside the owner-marked DialogContent. The shell is
+ * the extension's own chrome, so the palette and ⌘W must behave there exactly
+ * as they do inside the frame.
+ *
+ * WHY scoped to the target's own owner element: only the dialog that CONTAINS
+ * the modal iframe counts. Another owned surface stacked over it (the palette
+ * itself, a confirmation) has no extension iframe inside it, so it keeps the
+ * ordinary ownership gate.
+ */
+function extensionModalFrameForTarget(target: EventTarget | null): HTMLIFrameElement | null {
+  if (target instanceof HTMLIFrameElement) return target.dataset.extensionShell === 'modal' ? target : null
+  if (!(target instanceof Element)) return null
+  // WHY the topmost owner when the target is outside every owner (#1394
+  // review b): closing the command palette over an extension modal leaves
+  // focus on <body>, because the palette is a controlled Radix Dialog with no
+  // trigger to return focus to. The modal is still open and owns the screen,
+  // but a key aimed at <body> has no owner ancestor, so both chords went dead
+  // until the user clicked back in. The topmost owned surface is the last one
+  // in DOM order: Radix portals append to <body> as they open. If that surface
+  // is a confirmation stacked over the extension, it contains no extension
+  // iframe and the gate holds, exactly as for a key aimed inside it.
+  const owner = target.closest(APP_INTERACTION_OWNER_SELECTOR) ?? topmostAppInteractionOwner()
+  return owner?.querySelector<HTMLIFrameElement>('iframe[data-extension-shell="modal"]') ?? null
+}
+
+function topmostAppInteractionOwner(): Element | null {
+  const owners = document.querySelectorAll(APP_INTERACTION_OWNER_SELECTOR)
+  return owners.length > 0 ? owners[owners.length - 1]! : null
+}
+
 const MONACO_TARGET_SELECTOR = '[data-global-editor-input-owner], .monaco-editor'
 
 export function useKeybinds(
@@ -619,12 +659,12 @@ export function useKeybinds(
         // it; only an app-wide chord can mean "dismiss the thing in front of
         // me".
         const dismissCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
-        const extensionModal = e.target instanceof HTMLIFrameElement && e.target.dataset.extensionShell === 'modal'
+        const extensionModal = extensionModalFrameForTarget(e.target)
         if (extensionModal && dismissCommandId === 'close-pane') {
           e.preventDefault()
           // This is a host DOM event on the owned iframe element. It closes the
           // modal surface, never the workspace pane hidden underneath it.
-          e.target.dispatchEvent(new Event('agent-code-extension-close'))
+          extensionModal.dispatchEvent(new Event('agent-code-extension-close'))
           return
         }
         if (extensionModal && dismissCommandId === 'open-command-palette') {
