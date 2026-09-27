@@ -287,3 +287,51 @@ describe('malformed rows in a real registry (#1246)', () => {
     expect(await registry.list()).toHaveLength(2)
   })
 })
+
+// #1285 (residual of #1260 review B, round 2): the registry owes a
+// preservation copy of rows it could not read, and that copy is blocked (a
+// directory sits on its path). The user's file write succeeds; only the status
+// refresh that follows it, which saves state and so must make the owed copy
+// first, fails. Reporting the WRITE as failed told the editor (and an agent)
+// that the edit had not landed when it had.
+//
+// The state is the REAL recorded registry (two workspaces from the owner's
+// ai-workspaces.json). Its paths are redacted, so one real entry is pointed at
+// a temp file; one real workspace is made malformed, exactly as the #1260
+// owed-copy tests do, so a copy is owed.
+describe('a write whose status refresh cannot be saved (#1285)', () => {
+  it('reports the write as done, with a warning, when only the status save fails', async () => {
+    const recorded = JSON.parse(await readFile(join(import.meta.dirname,
+      '../../../testing/fixtures/ai-workspace/real-workspaces-2026-09-25.json'), 'utf8')) as {
+      state: { workspaces: Array<Record<string, any>> }
+    }
+    const state = recorded.state
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-ai-workspace-owed-'))
+    tempRoots.push(root)
+    const filePath = join(root, 'attached.txt')
+    await writeFile(filePath, 'v1')
+    state.workspaces[0]!.entries[0]!.path = filePath
+    state.workspaces[0]!.entries[0]!.projectRoot = root
+    state.workspaces[1]!.updatedAt = 1789000000
+    const statePath = join(root, 'ai-workspaces.json')
+    const source = JSON.stringify(state)
+    await writeFile(statePath, source)
+    const { createHash } = await import('node:crypto')
+    const { mkdir } = await import('fs/promises')
+    await mkdir(join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`))
+
+    const registry = new AiWorkspaceRegistry(statePath)
+    const target = await realpath(filePath)
+    const result = await registry.writeFile({ path: target, text: 'v2' })
+
+    // The write landed, and the result says so, with the status failure as a
+    // warning rather than as the outcome.
+    expect(await readFile(target, 'utf8')).toBe('v2')
+    expect(result).toMatchObject({ ok: true, path: target })
+    expect((result as { warning?: string }).warning).toMatch(/saved.*status/i)
+    // The stored state was not rewritten: the owed copy still blocks saves.
+    expect(await readFile(statePath, 'utf8')).toBe(source)
+    // A refused save says why and how to unblock it, not the raw errno text.
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow(/needs attention.*Clear whatever occupies/s)
+  })
+})
