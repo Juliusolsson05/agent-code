@@ -28,10 +28,17 @@ function runDir(root: string, parts: string[], files: Record<string, string>): s
   return dir
 }
 
-it('collects a key-log-only run dir as a proxy artifact, alongside normal run dirs', async () => {
+// Narrowed to FUTURE runs (B6 oldest-first list, owner decision q91 kept):
+// a key-log-only dir is collected only when it started on or after the
+// cutoff. The existing ones (the owner's 23, May-September 2026, shaped like
+// medlo/shell-89d43b9b below) are left untouched, and so is one whose name
+// cannot be dated.
+it('collects a NEW key-log-only run dir, never an existing one, alongside normal run dirs', async () => {
   const root = mkdtempSync(join(tmpdir(), 'proxy-retention-'))
   roots.push(root)
   runDir(root, ['medlo', 'shell-89d43b9b', '2026-08-28T17-30-06-452Z'], { 'session-meta.json': '{}', 'sslkeylog.log': 'x'.repeat(4096) })
+  runDir(root, ['medlo', 'shell-7a1b2c3d', '2026-09-29T08-15-00-000Z'], { 'session-meta.json': '{}', 'sslkeylog.log': 'x'.repeat(4096) })
+  runDir(root, ['medlo', 'shell-undated', 'run-without-a-timestamp'], { 'sslkeylog.log': 'x'.repeat(128) })
   runDir(root, ['agent-code', 'resume-a5fb379b', '2026-09-27T01-03-52-273Z'], { 'session-meta.json': '{}', 'proxy-events.jsonl': '{}\n', 'sslkeylog.log': 'x'.repeat(1024) })
   // Shared mitmproxy state is never a run dir, whatever it holds.
   runDir(root, ['_shared-conf'], { 'mitmproxy-ca-cert.pem': 'ca' })
@@ -41,9 +48,9 @@ it('collects a key-log-only run dir as a proxy artifact, alongside normal run di
   const artifacts = await collectProxyRunDirs(root)
   expect(artifacts.map(artifact => relative(root, artifact.path)).sort()).toEqual([
     join('agent-code', 'resume-a5fb379b', '2026-09-27T01-03-52-273Z'),
-    join('medlo', 'shell-89d43b9b', '2026-08-28T17-30-06-452Z'),
+    join('medlo', 'shell-7a1b2c3d', '2026-09-29T08-15-00-000Z'),
   ])
-  const keyLogOnly = artifacts.find(artifact => artifact.path.includes('shell-89d43b9b'))!
+  const keyLogOnly = artifacts.find(artifact => artifact.path.includes('shell-7a1b2c3d'))!
   expect(keyLogOnly).toMatchObject({ kind: 'dir', bucket: 'proxy' })
   expect(keyLogOnly.bytes).toBeGreaterThanOrEqual(4096)
 })
@@ -62,7 +69,7 @@ it('a run dir with a child it cannot read is protected, and is collected normall
   roots.push(root)
   const now = Date.now()
   const old = new Date(now - 30 * 24 * 3_600_000)
-  const dir = runDir(root, ['agent-code', 'shell-1', '2026-09-27T00-00-00-000Z'], { 'sslkeylog.log': 'k'.repeat(512) })
+  const dir = runDir(root, ['agent-code', 'shell-1', '2026-09-29T00-00-00-000Z'], { 'sslkeylog.log': 'k'.repeat(512) })
   utimesSync(join(dir, 'sslkeylog.log'), old, old)
   const streams = join(dir, 'streams')
   mkdirSync(streams)

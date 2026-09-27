@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
@@ -585,7 +585,21 @@ async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
   return manual
 }
 
-const PROXY_RUN_EVIDENCE = new Set(['proxy-events.jsonl', 'sslkeylog.log'])
+/**
+ * Key-log-only run dirs are collected FORWARD ONLY (#1385, owner-approved
+ * narrowing in B6's oldest-first list): only those whose run timestamp is at
+ * or after this cutoff. Every earlier one, including the 23 dirs found on the
+ * owner's machine (May-September 2026), is left exactly as it is, because
+ * deleting existing TLS key logs is an owner decision (q91) that this PR does
+ * not make. The cutoff is the day this narrowing was written, so every run
+ * made by a build that contains it is newer.
+ *
+ * Run dirs are named by their ISO start time with `:` and `.` replaced
+ * (`2026-08-28T17-30-06-452Z`), which sorts as text. A name that is not in
+ * that shape cannot be dated, so it is not collected (unknown is never "new").
+ */
+const KEY_LOG_ONLY_SINCE = '2026-09-28T00-00-00-000Z'
+const RUN_DIR_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/
 
 export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
   const out: Artifact[] = []
@@ -596,16 +610,22 @@ export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
     } catch {
       return
     }
-    // A run dir is recognised by its EVIDENCE files, either of them (#1385).
-    // Keying on proxy-events.jsonl alone missed run dirs that held only
+    // A run dir is recognised by its EVIDENCE files (#1385). Keying on
+    // proxy-events.jsonl alone missed run dirs that held only
     // session-meta.json + sslkeylog.log: walked into, never collected, never
     // budgeted, never removed. Those are plaintext TLS session secrets; the
     // owner's machine had 23 such dirs (5.18 MB, May-September 2026, #1380
-    // review c). Match the key log itself rather than assume it sits beside an
-    // events file. session-meta.json alone is NOT evidence of a run.
-    if (entries.some(entry => entry.isFile() && PROXY_RUN_EVIDENCE.has(entry.name))) {
-      const artifact = await collectDirArtifact(dir, 'proxy')
-      if (artifact) out.push(artifact)
+    // review c). A key-log-only dir is a run dir either way (never walked
+    // into), but it is COLLECTED only when it is new (KEY_LOG_ONLY_SINCE).
+    // session-meta.json alone is NOT evidence of a run.
+    const files = new Set(entries.filter(entry => entry.isFile()).map(entry => entry.name))
+    if (files.has('proxy-events.jsonl') || files.has('sslkeylog.log')) {
+      const name = basename(dir)
+      const collectable = files.has('proxy-events.jsonl') || (RUN_DIR_NAME.test(name) && name >= KEY_LOG_ONLY_SINCE)
+      if (collectable) {
+        const artifact = await collectDirArtifact(dir, 'proxy')
+        if (artifact) out.push(artifact)
+      }
       return
     }
     if (depth >= 4) return
