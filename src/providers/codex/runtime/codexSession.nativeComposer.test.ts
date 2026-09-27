@@ -21,11 +21,13 @@ const at = (label: string) => recording.events.find(event => event.label === lab
 const headlesses: CodexHeadless[] = []
 afterEach(() => { headlesses.splice(0) })
 
-async function sessionWith(bytes: string[]): Promise<{ session: CodexSession; headless: CodexHeadless }> {
+type Replayed = { session: CodexSession; headless: CodexHeadless; feed(chunks: string[]): Promise<void> }
+
+async function sessionWith(bytes: string[]): Promise<Replayed> {
   return sessionAt(Number.POSITIVE_INFINITY, bytes)
 }
 
-async function sessionAt(until: number, bytes?: string[]): Promise<{ session: CodexSession; headless: CodexHeadless }> {
+async function sessionAt(until: number, bytes?: string[]): Promise<Replayed> {
   const listeners = new Set<(data: string) => void>()
   const pty = {
     pid: 1, process: 'codex', cols: recording.cols, rows: recording.rows, handleFlowControl: false,
@@ -38,12 +40,23 @@ async function sessionAt(until: number, bytes?: string[]): Promise<{ session: Co
   const terminal = (headless as unknown as { terminal: { attach(): void; snapshotComposerCells(): unknown } }).terminal
   terminal.attach()
   const chunks = bytes ?? recording.events.filter(event => event.dir === 'out' && event.t < until).map(event => event.data!)
-  for (const chunk of chunks) for (const listener of listeners) listener(chunk)
-  const deadline = Date.now() + 2000
-  while (terminal.snapshotComposerCells() === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+  // Recorded chunks in batches of 50, draining xterm between batches (#1343
+  // reviews). A synchronous burst of ~630 events plus a 2 s wall-clock wait
+  // returned a half-painted frame under load (the tall draft stopped at line
+  // 10 or 18); one chunk per drain cost ~630 scheduler ticks and ran past the
+  // 5 s test timeout under load. Batches keep the queue shallow and the
+  // replay to ~13 drains.
+  const pending = () => (terminal as unknown as { pendingWrites: number }).pendingWrites
+  const feed = async (more: string[]) => {
+    for (let start = 0; start < more.length; start += 50) {
+      for (const chunk of more.slice(start, start + 50)) for (const listener of listeners) listener(chunk)
+      while (pending() !== 0) await new Promise(resolve => setImmediate(resolve))
+    }
+  }
+  await feed(chunks)
   const session = new CodexSession()
   ;(session as unknown as { headless: unknown }).headless = headless
-  return { session, headless }
+  return { session, headless, feed }
 }
 
 describe('Codex native composer (0.157 recording)', () => {
@@ -79,11 +92,12 @@ describe('Codex native composer (0.157 recording)', () => {
     expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 
-  // Steering q40: a draft longer than the package's 12-row composer bound
-  // reads `unknown`, while the legacy screen check still sees `›` over a
-  // status row. `unknown` must not be ready: the paste would land in the
-  // human's draft.
-  const longDraft = ['\x1b[2J\x1b[H› ', ...Array.from({ length: 12 }, () => '  real draft'), '', '  GPT-6-Sol high fast · ~/p'].join('\r\n')
+  // Steering q40: a draft the package cannot read (`unknown`) while the
+  // legacy screen check still sees `›` over a status row must not be ready:
+  // the paste would land in the human's draft. Since #1327 an UNBROKEN draft
+  // past 12 rows reads `drafted` (see the tall-draft recording below), so the
+  // unreadable shape is one with a blank line more than 12 rows up.
+  const longDraft = ['\x1b[2J\x1b[H› ', '', ...Array.from({ length: 12 }, () => '  real draft'), '', '  GPT-6-Sol high fast · ~/p'].join('\r\n')
 
   it('does not write into a draft the composer reading cannot classify', async () => {
     const { session, headless } = await sessionWith([longDraft])
@@ -191,5 +205,36 @@ describe('Codex native composer (0.157 recording)', () => {
     const result = await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Restart the server', write, requireEmptyNativeComposer: true } as never)
     expect(result).toMatchObject({ ok: false, promptWritten: false })
     expect(write).not.toHaveBeenCalled()
+  })
+
+  // #1327, on a raw recording of codex-cli 0.157.1 typing a 20-line draft
+  // (codex-headless testing/fixtures/composer-0157/tall-draft-ctrlc.json).
+  // It read `unknown` and published provider-not-ready, so the pane's own
+  // Enter appended to it. It is a draft: occupied, and nothing is written.
+  it('publishes a recorded 20-row draft as composer-occupied and refuses to write into it (#1327)', async () => {
+    const tall = JSON.parse(readFileSync(join(import.meta.dirname,
+      '../../../../packages/codex-headless/testing/fixtures/composer-0157/tall-draft-ctrlc.json'), 'utf8')) as Recording
+    const typed = tall.events.find(event => event.label === 'draft-typed')!.t + 800
+    const { session, headless, feed } = await sessionWith(tall.events.filter(event => event.dir === 'out' && event.t < typed).map(event => event.data!))
+    expect(headless.getScreen()).toContain('  long draft line 20 with a few words')
+    expect(headless.getComposerState()).toBe('drafted')
+    const readiness: Array<{ ready: boolean; reason?: string }> = []
+    session.on('input-readiness', state => readiness.push(state))
+    ;(session as unknown as { composerReady: boolean }).composerReady = true
+    ;(session as unknown as { publishNativeComposer(): void }).publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: false, reason: 'composer-occupied' })
+    const write = vi.fn(() => true)
+    expect(await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Status?', write } as never))
+      .toMatchObject({ ok: false, stage: 'before-write', disposition: 'retry-after-resolve', promptWritten: false })
+    expect(write).not.toHaveBeenCalled()
+
+    // #1343 review A: and once the human clears it (the recorded Ctrl+C), the
+    // pane is ready again; occupied never latches.
+    // The same pane, fed on to just after the recorded Ctrl+C.
+    const cleared = tall.events.find(event => event.label === 'ctrl-c-1')!.t + 800
+    await feed(tall.events.filter(event => event.dir === 'out' && event.t >= typed && event.t < cleared).map(event => event.data!))
+    expect(headless.getComposerState()).toBe('empty')
+    ;(session as unknown as { publishNativeComposer(): void }).publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 })

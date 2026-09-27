@@ -1,0 +1,4 @@
+{
+  "source": "Claude proxy-events.jsonl written by claude-code-headless mitmAddon.py, 2026-09-25, line 21 of a live session file. A content_block_stop SSE chunk: no model text, no message id, no token. Copied byte-exact.",
+  "line": "{\"kind\": \"response-chunk\", \"flow_id\": 4521954896, \"method\": \"POST\", \"url\": \"https://api.anthropic.com/v1/messages?beta=true\", \"host\": \"api.anthropic.com\", \"path\": \"/v1/messages?beta=true\", \"chunk_b64\": \"ZXZlbnQ6IGNvbnRlbnRfYmxvY2tfc3RvcApkYXRhOiB7InR5cGUiOiJjb250ZW50X2Jsb2NrX3N0b3AiLCJpbmRleCI6MCAgICAgICAgfQoK\"}"
+}
