@@ -705,13 +705,13 @@ let keyLogBaselineTask: Promise<ReadonlySet<string> | null> | null = null
  * later start retries.
  */
 export async function keyLogBaseline(file = KEY_LOG_BASELINE_FILE, root = PROXY_EVENTS_DIR): Promise<ReadonlySet<string> | null> {
-  // Taken synchronously, before the first await (#1388 review a round 3): a
-  // run a session creates WHILE the scan runs must not become a permanent
-  // baseline member, so only dirs born before this moment join the set. A
-  // filesystem without birthtimes (0) keeps every dir: the conservative side
-  // (a new run kept, never an old one exposed). Same millisecond counts as
-  // existing, for the same reason.
-  const captureStartedAt = Date.now()
+  // NO birthtime filter (#1388 review b round 3): excluding dirs "born after
+  // capture started" re-introduced a clock comparison in the UNSAFE direction.
+  // After a clock step back, a pre-existing dir's birthtime can look later than
+  // the capture start, so it would be left out of the baseline and collected.
+  // The price is conservative: a run a session creates during the few
+  // milliseconds of the startup scan is baselined and kept forever (never
+  // deleted). Capture starts at run start, before any session exists.
   const read = async (): Promise<ReadonlySet<string> | null> => {
     try {
       const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown
@@ -741,10 +741,7 @@ export async function keyLogBaseline(file = KEY_LOG_BASELINE_FILE, root = PROXY_
     const files = new Set(entries.filter(entry => entry.isFile()).map(entry => entry.name))
     const hasEvents = [...PROXY_RUN_MARKERS].some(marker => files.has(marker))
     if (hasEvents || files.has('sslkeylog.log')) {
-      if (!hasEvents) {
-        const born = (await stat(dir)).birthtimeMs
-        if (!born || Math.floor(born) <= captureStartedAt) existing.push(relative(root, dir))
-      }
+      if (!hasEvents) existing.push(relative(root, dir))
       return
     }
     if (depth >= 4) return

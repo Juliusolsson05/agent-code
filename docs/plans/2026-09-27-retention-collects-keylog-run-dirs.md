@@ -46,6 +46,6 @@
 
 ## Review a round 3 (last pass)
 - **Fixed, unsafe direction:** a proxy root missing at capture saved an empty baseline, so old key logs that reappeared became collectable. Capture now has no ENOENT exception, even for the root: no baseline, nothing written, retried at a later start.
-- **Fixed, conservative direction:** a run created WHILE the asynchronous scan ran was baselined forever. Only dirs whose filesystem birthtime is at or before the moment capture started join the set. A missing birthtime (0) keeps the dir (conservative); the race test is macOS-only, where birthtimes exist.
+- **Not fixed, conservative direction (decided with review b round 3):** a run created WHILE the startup scan runs is baselined and kept forever. A birthtime filter was tried and REVERTED: after a clock step back, a pre-existing dir's birthtime can look later than the capture start, which would exclude an old key log from the baseline (the unsafe direction). Capture starts at run start, before any session exists, so the window is the few milliseconds of the scan.
 - **Residual, conservative direction:** after a failed capture (for example an unwritable state dir), runs made before a later successful capture are baselined and never collected. That is a retention gap, never a deletion. The same holds on a fresh install that has no proxy folder yet: the first capture happens at the start after the folder appears.
-- **Mutations killed:** the root ENOENT exception, and birthtime ignored.
+- **Mutation killed:** the root ENOENT exception.
