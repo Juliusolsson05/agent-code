@@ -28,6 +28,18 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 }))
 
 // The sub-agent watcher polls real directories; nothing here is about fleets.
+// #1442 review c: the durable gap rows cross main -> renderer on `session:load-initial-history`,
+// and nothing pinned that handler. The transcript read itself is historyLoader's (tested there);
+// here it returns one fixed chunk so the test is about what the handler adds to it.
+const history = vi.hoisted(() => ({ chunk: null as null | Record<string, unknown> }))
+vi.mock('@main/sessions/historyLoader.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@main/sessions/historyLoader.js')>()
+  return {
+    ...actual,
+    loadInitialHistoryChunk: async (...args: Parameters<typeof actual.loadInitialHistoryChunk>) =>
+      history.chunk ? { ...history.chunk } : actual.loadInitialHistoryChunk(...args),
+  }
+})
 vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
 
 const { registerSessionIpc, classifySpawnFailure } = await import('./session.js')
@@ -71,6 +83,27 @@ it('transports generated-task draft protection from preload through main without
   // at either IPC end. The internal supersede option must not cross with it.
   await sessionApi.deliverPrompt('s1', 'Restart the server', undefined, undefined, { requireEmptyNativeComposer: true, supersedesPendingPrompt: true } as never)
   expect(deliverPromptToAgent).toHaveBeenCalledExactlyOnceWith('s1', 'Restart the server', undefined, undefined, undefined, { requireEmptyNativeComposer: true })
+})
+
+describe('a conversation\'s transport-gap rows on the initial history chunk (#1381)', () => {
+  it('rides the chunk for the conversation that lost data, and only for it', async () => {
+    const { TransportGapLedger } = await import('@main/sessions/transportGapLedger.js')
+    const ledger = new TransportGapLedger()
+    const held = ledger.record('conv-1', { since: 1_000, until: 2_000, lostGenerations: 1 })
+    history.chunk = { entries: [{ type: 'user' }], hasMore: false }
+    try {
+      registerSessionIpc({ getTransportGaps: (id: string) => ledger.list(id) } as never, {} as never, { flushCommitted: () => {} })
+      // Through the real preload call, as a feed rebuild makes it.
+      const withGap = await sessionApi.loadInitialHistory({ kind: 'claude', cwd: '/p', providerSessionId: 'conv-1' })
+      expect(withGap).toEqual({ entries: [{ type: 'user' }], hasMore: false, transportGaps: [held] })
+      // A conversation that lost nothing gets the chunk byte-identical, with no key at all.
+      const without = await sessionApi.loadInitialHistory({ kind: 'claude', cwd: '/p', providerSessionId: 'conv-2' })
+      expect(without).toEqual({ entries: [{ type: 'user' }], hasMore: false })
+      expect('transportGaps' in without).toBe(false)
+    } finally {
+      history.chunk = null
+    }
+  })
 })
 
 describe('recovered renderer screen seed', () => {

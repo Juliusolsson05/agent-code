@@ -51,6 +51,10 @@ import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
 import { TerminalReplayBuffer } from '@main/sessions/terminalReplayBuffer.js'
 import { ScreenFrameGate } from '@main/sessions/screenFrameGate.js'
+import { TransportGapLedger } from '@main/sessions/transportGapLedger.js'
+import type { SessionTransportGapEvent } from '@shared/sessionFeed/types.js'
+import type { TransportGapRecord } from '@shared/types/session.js'
+import type { TransportGap } from 'claude-code-headless'
 import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
@@ -195,7 +199,8 @@ type ManagerEvents = {
     observation?: AgentTranscriptObservationMetadata
   }]
   'jsonl-error': [{ sessionId: string; error: Error }]
-  'proxy-transport-gap': [{ sessionId: string; lostGenerations: number }]
+  /** A durable feed row's record (#1381); also held for reseeds (getTransportGaps). */
+  'proxy-transport-gap': [SessionTransportGapEvent]
   /** Durable-history generation boundary (grok). Never completion or idle;
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
   'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
@@ -572,7 +577,7 @@ export type ResolveConditionResult =
 
 /** The one Claude-only event SessionManager subscribes to (ClaudeSessionEvents declares it). */
 type ProxyGapSource = {
-  on(event: 'proxy-transport-gap', listener: (gap: { lostGenerations: number }) => void): unknown
+  on(event: 'proxy-transport-gap', listener: (gap: TransportGap) => void): unknown
 }
 
 export class SessionManager extends EventEmitter {
@@ -665,6 +670,10 @@ export class SessionManager extends EventEmitter {
   // See screenFrameGate.ts — drops spinner-only repaints before they fan out.
   private readonly screenFrameGate = new ScreenFrameGate()
   private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
+  // #1381: NOT one of the generation-owned caches above — the durable gap rows
+  // must survive the respawn an agent reload does under the same id. See
+  // TransportGapLedger for the lifetime and bounds.
+  private readonly transportGaps = new TransportGapLedger()
   private readonly lastInputReadiness = new Map<string, SessionInputReadiness>()
   // WHY this is one manager-global sequence instead of a bounded per-id map:
   // a persisted pane may reuse its stable local id after arbitrarily many
@@ -691,6 +700,27 @@ export class SessionManager extends EventEmitter {
   // every history chunk, and the phone's TranscriptStore discards a chunk
   // whose file disagrees with the file its live frames carry.
   private readonly lastTranscriptFile = new Map<string, string>()
+  /**
+   * The Claude conversation each live Claude session is writing (#1381, #1442 review a), from the
+   * `sessionId` every committed JSONL entry carries. It is the key TransportGapLedger holds a gap
+   * under, and the renderer sends the SAME value back as `providerSessionId` when it rebuilds a
+   * feed (it captures it from the same entries).
+   *
+   * WHY a map here and not `getProviderSessionId()`: ClaudeSession does not implement that getter,
+   * and adding it would change what backend snapshots and spawn results report for every Claude
+   * pane, well outside this fix. The first version relied on the getter anyway; its test fake
+   * implemented it, so every real Claude gap silently took the live-only path and its row was gone
+   * after the first reload.
+   *
+   * WHY entries and not the spawn's `--session-id`/`--resume` id alone: a `/clear` moves the same
+   * process to a new conversation, and only its transcript says so. The resume id is only the
+   * fallback before the respawned tailer has emitted anything. Cleared at teardown with the other
+   * per-process caches, so a fresh conversation spawned into the same pane never inherits the
+   * previous one's key (pinned in sessionManager.proxyGap.test.ts).
+   */
+  private readonly claudeConversationIds = new Map<string, string>()
+  /** Distinct ids for live-only gap rows (see the proxy-transport-gap handler). */
+  private liveTransportGapSequence = 0
   private readonly codexCandidateObservationEdges = new Map<
     string,
     {
@@ -1123,6 +1153,7 @@ export class SessionManager extends EventEmitter {
     this.screenFrameGate.forget(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
+    this.claudeConversationIds.delete(sessionId)
     this.codexCandidateObservationEdges.delete(sessionId)
     this.codexAttachmentObservationState.delete(sessionId)
     this.lastInputReadiness.delete(sessionId)
@@ -3315,6 +3346,10 @@ export class SessionManager extends EventEmitter {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.lastTranscriptFile.set(sessionId, file)
+        if (kind === 'claude') {
+          const conversationId = (entry as { sessionId?: unknown } | null)?.sessionId
+          if (typeof conversationId === 'string' && conversationId) this.claudeConversationIds.set(sessionId, conversationId)
+        }
         if (kind === 'codex' && observation) {
           const rollout = entry && typeof entry === 'object'
             ? entry as unknown as Record<string, unknown>
@@ -3385,15 +3420,31 @@ export class SessionManager extends EventEmitter {
       // hole in the live Claude feed is never silent.
       // Claude-only (its ClaudeSessionEvents declares it; other providers have no proxy tail), so it
       // is subscribed through that type rather than widening every provider's event map.
-      if (kind === 'claude') (session as unknown as ProxyGapSource).on('proxy-transport-gap', (gap: { lostGenerations: number }) => {
+      // #1381: and held as a durable feed row (option B, owner-approved by B6): the event carries
+      // the record, and getTransportGaps answers a renderer that reloads and rebuilds its feed.
+      if (kind === 'claude') (session as unknown as ProxyGapSource).on('proxy-transport-gap', (gap: TransportGap) => {
         if (!ownsEntry()) return
         this.journal?.recordIncident({
           kind: 'claude.proxy_transport_gap',
           severity: 'warn',
           reason: 'events_deleted_unread',
-          context: { sessionId, lostGenerations: gap.lostGenerations },
+          context: { sessionId, lostGenerations: gap.lostGenerations, since: gap.since, until: gap.until },
         })
-        this.emit('proxy-transport-gap', { sessionId, lostGenerations: gap.lostGenerations })
+        const fields = { since: gap.since, until: gap.until, lostGenerations: gap.lostGenerations }
+        // Held per CONVERSATION (see TransportGapLedger and claudeConversationIds). With no
+        // conversation id yet the row is live-only: there is no history to rebuild it from. In
+        // practice the id is known, since a gap needs >= 1 GiB of this session's proxy traffic,
+        // long after its transcript exists.
+        const conversationId = this.getNativeConversationId(sessionId)
+          ?? this.claudeConversationIds.get(sessionId)
+          ?? this.spawnInfo.get(sessionId)?.resumeSessionId
+          ?? null
+        // A live-only id is a sequence, never `until`: two lost spans of one poll share the
+        // poll's `until`, and the renderer merges rows by id (#1442 review a).
+        const record = conversationId
+          ? this.transportGaps.record(conversationId, fields)
+          : { id: `gap-live-${++this.liveTransportGapSequence}`, ...fields }
+        this.emit('proxy-transport-gap', { sessionId, gap: record })
       })
       session.on('transcript-diagnostic', (diagnostic: unknown) => {
         if (!ownsEntry()) return
@@ -5758,6 +5809,14 @@ export class SessionManager extends EventEmitter {
    *  late-attaching consumers (remote companion) to seed their state. */
   getScreenSnapshot(sessionId: string): AgentScreenSnapshot | null {
     return this.lastScreenSnapshot.get(sessionId) ?? null
+  }
+
+  /** Every proxy-transport gap still held for this provider conversation
+   *  (#1381), oldest first, for a feed being rebuilt from its history. Empty
+   *  when it never lost any — an honest answer, because the ledger is the only
+   *  record main keeps and nothing but its bounds ever drops one. */
+  getTransportGaps(conversationId: string): readonly TransportGapRecord[] {
+    return this.transportGaps.list(conversationId)
   }
 
   getProcessStateSnapshot(sessionId: string): AgentProcessState | null {

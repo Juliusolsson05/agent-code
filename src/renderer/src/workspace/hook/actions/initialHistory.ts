@@ -1,6 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
-import { emptyRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime, mergeTransportGaps } from '@renderer/session-runtime/state'
 import { worktreesForAttribution } from '@renderer/workspace/work-context/worktreesForAttribution'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
@@ -460,6 +460,11 @@ export async function loadInitialHistoryForSession({
             ? initialOldestOffset
             : current.historyOldestOffset,
           hasOlderHistory: chunk.hasMore,
+          // #1381: the conversation's durable "not captured" rows, which main
+          // holds per conversation and hands back with this chunk — the path
+          // every feed rebuild (window reload, agent reload, resume) takes.
+          // Merged by id with any the live event already delivered.
+          transportGaps: mergeTransportGaps(current.transportGaps, chunk.transportGaps),
           // The projection can remain readable after the event reader stops
           // for good. Snapshot success repairs a history failure only; it
           // cannot certify ongoing observation or follow TUI navigation.

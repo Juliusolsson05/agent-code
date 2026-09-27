@@ -62,6 +62,7 @@ describe('ClaudeSession proxy wiring', () => {
     const session = new ClaudeSession()
     const proxy = new EventEmitter()
     const handleProxyTransportEvent = vi.fn()
+    const sealFlowsForTransportGap = vi.fn()
     const internals = session as unknown as {
       proxyServer: unknown
       headless: unknown
@@ -69,9 +70,9 @@ describe('ClaudeSession proxy wiring', () => {
       detachProxyServer(): void
     }
     internals.proxyServer = proxy
-    internals.headless = { handleProxyTransportEvent }
+    internals.headless = { handleProxyTransportEvent, proxy: { sealFlowsForTransportGap } }
     internals.attachProxyServer()
-    return { session, proxy, handleProxyTransportEvent, detach: () => internals.detachProxyServer() }
+    return { session, proxy, handleProxyTransportEvent, sealFlowsForTransportGap, detach: () => internals.detachProxyServer() }
   }
 
   it('forwards every proxy event to the adapter', () => {
@@ -85,8 +86,24 @@ describe('ClaudeSession proxy wiring', () => {
     const { session, proxy } = wired()
     const gaps: unknown[] = []
     session.on('proxy-transport-gap', gap => { gaps.push(gap) })
-    proxy.emit('transport-gap', { lostGenerations: 2 })
-    expect(gaps).toEqual([{ lostGenerations: 2 }])
+    const gap = { lostGenerations: 2, since: 1_000, until: 5_000 }
+    proxy.emit('transport-gap', gap)
+    expect(gaps).toEqual([gap])
+  })
+
+  // #1381: the flows that were streaming across the lost span are missing frames. The adapter is
+  // sealed at the gap's place in the event order — before the re-emit (SessionManager's durable
+  // row follows the seal) and before the next post-gap event reaches it.
+  it('seals the adapter at the gap, before the re-emit and before any post-gap event', () => {
+    const { session, proxy, handleProxyTransportEvent, sealFlowsForTransportGap } = wired()
+    const order: string[] = []
+    sealFlowsForTransportGap.mockImplementation(() => { order.push('seal') })
+    handleProxyTransportEvent.mockImplementation(() => { order.push('event') })
+    session.on('proxy-transport-gap', () => { order.push('re-emit') })
+    proxy.emit('event', { kind: 'response-chunk', flow_id: 1 })
+    proxy.emit('transport-gap', { lostGenerations: 1, since: 1, until: 2 })
+    proxy.emit('event', { kind: 'response-chunk', flow_id: 1 })
+    expect(order).toEqual(['event', 'seal', 're-emit', 'event'])
   })
 
   it('detaches both channels', () => {

@@ -100,6 +100,20 @@ describe('SessionFeedTap', () => {
     expect(remote).toEqual(expected)
   })
 
+  // #1442 review b: the transport-gap row follows the seal it marks. The seal's semantic events
+  // may still sit in the coalescing window, so the tap flushes them first; dropping that flush left
+  // every test green while a sink could learn where the row goes before the turn was cut.
+  it('delivers buffered semantic events before a transport-gap row', () => {
+    const { manager, tap } = makeTap()
+    const seen = record(tap)
+    manager.emit('semantic-event', textDelta('half an answ'))
+    manager.emit('proxy-transport-gap', { sessionId: 'pane', gap: { id: 'gap-1', since: 1, until: 2, lostGenerations: 1 } })
+    expect(seen).toEqual([
+      { channel: 'semantic-event', kind: 'text_delta' },
+      { channel: 'transport-gap', kind: '' },
+    ])
+  })
+
   it('keeps a throwing sink from costing another sink its delivery, and raises where a listener would', () => {
     // One coalescer flush fans out to every sink in one loop. A remote failure
     // must not strand the desktop's copy, and it must surface where a

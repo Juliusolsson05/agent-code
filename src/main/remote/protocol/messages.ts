@@ -242,6 +242,9 @@ export type OutboundFrame =
         // every other v2 frame: a phone bundle that predates them finds no
         // listener set for the channel and drops the frame.
         | 'transcript-diagnostic'
+        // #1381: a durable "not captured" row's record. Additive, dropped by
+        // phone bundles with no listener.
+        | 'transport-gap'
         | 'provider-session-changed'
         | 'semantic-event'
         | 'conditions'

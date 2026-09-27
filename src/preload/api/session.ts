@@ -16,6 +16,7 @@ import type {
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionTranscriptDiagnosticEvent,
+  SessionTransportGapEvent,
   SessionAgentPtyDataEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -259,6 +260,8 @@ export const sessionApi = {
    *  say so. */
   onSessionTranscriptDiagnostic: (cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub =>
     subscribe('session:transcript-diagnostic', cb),
+  onSessionTransportGap: (cb: (e: SessionTransportGapEvent) => void): Unsub =>
+    subscribe('session:transport-gap', cb),
 
   /** Raw PTY bytes for terminal sessions. Claude sessions do NOT
    *  emit on this channel — they use screen/jsonl-entry instead. */

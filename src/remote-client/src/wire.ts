@@ -54,6 +54,9 @@ export type FeedChannel =
   // #1177: relayed since the phone sinks from the same main-side tap as the
   // desktop. Unknown to older desktops, which simply never send them.
   | 'transcript-diagnostic'
+  // #1381: a durable "not captured" row's record. The phone does not paint it
+  // yet (follow-up); older desktops never send it.
+  | 'transport-gap'
   | 'provider-session-changed'
   | 'semantic-event'
   | 'conditions'

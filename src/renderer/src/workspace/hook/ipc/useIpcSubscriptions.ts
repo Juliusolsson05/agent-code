@@ -13,7 +13,7 @@ import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import type { SessionSemanticEvent } from '@shared/sessionFeed/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
-import { emptyRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime, mergeTransportGaps } from '@renderer/session-runtime/state'
 import { applyDecisionToWindow, decideHistoryBoundary, emptyHistoryWindow } from '@renderer/session-runtime/historyBoundary.js'
 import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
 import { applyConditionSnapshot } from '@renderer/session-runtime/conditions'
@@ -914,6 +914,22 @@ export function useIpcSubscriptions(
           })
         })
       }
+    })
+
+    // #1381: a span of this pane's live output the proxy transport lost. A DURABLE feed row
+    // (option B, owner-approved by B6): appended to the runtime by record id, so the same record
+    // arriving again with a rebuilt feed's history chunk is not painted twice. Only onto a pane
+    // that exists — updateRuntime would create an orphan for one closed meanwhile; the record is
+    // not lost, main hands it back with that conversation's next history load.
+    const offTransportGap = feed.onSessionTransportGap(({ sessionId, gap }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current) return prev
+        const transportGaps = mergeTransportGaps(current.transportGaps, [gap])
+        if (transportGaps === current.transportGaps) return prev
+        return { ...prev, [sessionId]: { ...current, transportGaps } }
+      })
     })
 
     // #881. The one diagnostic the renderer acts on, and the reason the
@@ -2852,6 +2868,7 @@ export function useIpcSubscriptions(
       offProviderSessionChanged()
       offErr()
       offDiagnostic()
+      offTransportGap()
       offProcessState()
       offSemantic()
       offConditions()

@@ -7,6 +7,7 @@ import type {
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionTranscriptDiagnosticEvent,
+  SessionTransportGapEvent,
   SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
@@ -117,6 +118,7 @@ export class WebSocketSessionFeed implements SessionFeed {
     'jsonl-error': new Set(),
     'history-boundary': new Set(),
     'transcript-diagnostic': new Set(),
+    'transport-gap': new Set(),
     'provider-session-changed': new Set(),
     'semantic-event': new Set(),
     conditions: new Set(),
@@ -279,6 +281,13 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub {
     return this.sub('history-boundary', cb)
+  }
+  /** Relayed like every tap channel (#1381). The phone's TranscriptStore does
+   *  not render the durable gap row yet — tracked as a follow-up — so a phone
+   *  bundle subscribes nothing and the frame is dropped, as for any additive
+   *  channel. */
+  onSessionTransportGap(cb: (e: SessionTransportGapEvent) => void): Unsub {
+    return this.sub('transport-gap', cb)
   }
   /**
    * Relayed since #1177 for the same reason as the diagnostic above; main

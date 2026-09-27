@@ -1,0 +1,335 @@
+# Say where the Claude live feed lost proxy events (#1381)
+
+Size: standard plan. The change crosses repos (claude-code-headless, then the
+app). The cause is known; the gap's placement has a real design choice.
+
+## Outcome
+
+When the proxy transport loses generations of events
+(claude-code-headless#64 `transport-gap`), the Claude feed stops showing
+the surviving chunks as one continuous answer.
+- The turn that was streaming across the gap is sealed.
+- The feed shows a DURABLE row among the conversation, where the loss
+  began: **"Part of this response was not captured (HH:MM:SS–HH:MM:SS)"**.
+  - The row stays after later turns.
+  - It comes back whenever the conversation's feed is rebuilt within this
+    app run. It does not survive an app restart (decision 5, #1445).
+- The saved transcript (JSONL, Claude's own file) is untouched and still
+  fills in the full message as usual.
+
+## Evidence (verified 2026-09-27, do not re-derive)
+
+- **Today nothing consumes it.**
+  - Package `ProxyServer.pollEventsOnce` emits
+    `transport-gap {lostGenerations}`.
+  - `ClaudeSession.attachProxyServer` re-emits it as
+    `proxy-transport-gap`.
+  - `SessionManager` records the `claude.proxy_transport_gap` incident
+    and re-emits it, with no listener.
+  - Proxy `event`s go to `headless.handleProxyTransportEvent` →
+    `ClaudeProxyAdapter.handleTransportEvent`, the live streaming turn.
+- **The gap is emitted at the wrong position.** `pollEventsOnce` emits
+  `transport-gap` BEFORE every line of the poll, but
+  `EventsFileTail.poll()` returns:
+  - the held generation's tail;
+  - then, on adopting a new live generation, `settleBelow` (which reads
+    `.1` if still readable and counts the rest as lost);
+  - then the new live lines.
+
+  So the lost span sits between the old tail and the `.1`/live lines. One
+  poll can settle twice: the first adoption, then a rotation. Emitting
+  first would make the app seal before it applies the old tail. A pre-gap
+  `request` would then create a flow AFTER the seal, whose chunks were
+  lost, and it would stream corrupted with no marker.
+- **The seal mechanism already exists.**
+  - `ClaudeProxyAdapter.reapStaleActiveFlow(state, interruption)` publishes
+    `turn_stopped {interruption}` + `finishTurn` + phase idle, and deletes
+    the flow.
+  - Chunks for a flow the adapter no longer tracks are ignored
+    (`onChunk`: `if (!state) return`).
+  - `sealFlowsSilentSince` (#963) and `onTransportError` (#1040) use it
+    with `'system-suspended'` and `'transport-error'`.
+- **App template: #1040 (`'transport-error'`, commits 4e799727 and
+  b58bada3).** The interruption flows through:
+  - `foldEvent.ts` (`turn_stopped` copies `interruption`);
+  - `state.ts` (`SemanticTurn.interruption`);
+  - `collectLedgerInput.ts` (`transportInterruptedTurnId` statics key);
+  - `rendering/model/types.ts`;
+  - `ledgerFeedItems.ts`, `feed/model/renderModel.ts`, and `Feed.tsx`
+    (the `MarkerRow` "Interrupted before the response finished");
+  - `rendering/observations/local.ts`, `replay/redact.ts` (the
+    `interruption` key is allowed, as a closed enum), and
+    `replay/invariants.ts`.
+
+  The phone shares this pipeline.
+- **Recordings.** Real Claude mitm events live in
+  `~/.config/agent-code/proxy/**/proxy-events.jsonl` (`flow_id`,
+  `chunk_b64`). They are private conversation content, so they are used
+  only to calibrate frame shapes. No rotated `.1` files exist locally,
+  because the packaged app predates #64's rotation. The package's adapter
+  tests use synthetic SSE frames in the recorded shape
+  (`ClaudeProxyAdapter.clientDisconnect.test.ts`), and so will these.
+
+## Decisions (3 and 5 are OWNER-APPROVED; the rest are rulings)
+
+1. **Wording:** superseded by decision 5.
+2. **What gets sealed:** every flow the adapter is tracking at the gap
+   point.
+   - Streaming flows are sealed with the new interruption
+     `'transport-gap'` (marker).
+   - Tracked non-streaming flows (a request seen, no chunk yet) are
+     forgotten without a marker, because their first chunks may be in the
+     lost span. A decoder that starts mid-SSE would mis-assemble blocks.
+   - **Cost:** the rest of such a response does not stream live; the
+     JSONL row still lands.
+   - Alternative rejected: resetting the SSE parser and continuing. The
+     lost frames include `content_block_start`/`stop`, so block
+     assembly after the gap is unreliable.
+3. **The spinner after a seal:** the phase goes idle for the remainder of
+   that one response, even though Claude may still be streaming it. The
+   next request (the next tool round-trip) starts a new flow and a new
+   phase. Same trade as #1040. OWNER-APPROVED (B6 proxy, 2026-09-27):
+   option A.
+4. **Where the gap is placed:** at its true position in the line order,
+   with a package change. We don't approximate it app-side.
+5. **How long the row stays: OWNER-APPROVED (B6 proxy, 2026-09-27, q119
+   as amended by q120), verbatim:** "Option B, bounded to the
+   main-process lifetime; restart durability needs a dedicated store and is
+   an owner decision (1445), related to #1235."
+   - The row is a durable FEED-HISTORY row, not a work-slot marker (a
+     work-slot marker would vanish once the agent worked again).
+   - It survives later turns in this app run, and every feed rebuild
+     within it. It does not survive an app restart: that is #1445.
+   - The row reads **"Part of this response was not captured
+     (HH:MM:SS–HH:MM:SS)"**, which supersedes the decision-1 wording. It is
+     one row kind, adds no new UI surface, and uses the existing muted
+     MarkerRow styling.
+   - Tried and withdrawn: reseeding prior runs' rows from the
+     AppRunJournal's `claude.proxy_transport_gap` incidents. B6 (q120)
+     ruled the journal forensic, lossy and without a conversation id; it
+     stays a diagnostic copy only.
+   - Ruling: the row is held by MAIN, in memory, per provider
+     CONVERSATION (`TransportGapLedger`). It rides the conversation's
+     initial history chunk, the load every feed rebuild makes: a window
+     reload, an agent reload or crash respawn, a resume in another pane,
+     live or exited.
+     - Not on disk: the owner removed on-disk feed rows once (#1235 ghost
+       log). The always-on `claude.proxy_transport_gap` incident is the
+       on-disk record.
+     - Bounded: the newest 50 gaps per conversation, and 500
+       conversations (least recently recorded evicted).
+     - Lost on an app (main process) restart, per the approved answer
+       above (#1445).
+   - Ruling: the span is app-clock time, from `since` (when the tail's
+     previous poll STARTED reading; its finish time was the first version,
+     corrected in claude-code-headless#69 review a) to `until`
+     (when the gap was detected). Wire events carry no timestamp, and the
+     lost events were written inside that window. Cost if wrong: the
+     window is wider than the true loss, never narrower.
+   - Ruling: the #1040-style work-slot marker from 91b05b03 is withdrawn
+     (one row kind). The fold still keeps `interruption: 'transport-gap'`
+     on the turn, so the sealed turn reads as cut off rather than
+     finished.
+
+## Change
+
+### Package (claude-code-headless#69; app pointer bump after merge)
+
+- `EventsFilePoll` gains `gaps: Array<{ index: number; lostGenerations:
+  number }>`.
+  - `index` = how many of the poll's lines were written before the loss.
+    `settleBelow` records `out.lines.length` at entry.
+  - `lostGenerations` stays as the total (API compatible).
+- `ProxyServer.pollEventsOnce` emits lines and `transport-gap` interleaved
+  at each gap's index.
+  - The payload is `TransportGap = { lostGenerations, since, until }`
+    (app-clock ms): `since` = when the previous poll completed (null
+    before the first), `until` = now. It is exported.
+  - The console.warn is unchanged.
+- `ClaudeProxyAdapter.sealFlowsForTransportGap()` (public, synchronous):
+  - a streaming turn → `reapStaleActiveFlow(state, 'transport-gap')`;
+  - a flow with a first chunk but no turn yet → phase idle;
+  - a turn that already stopped (awaiting its tool) keeps its phase;
+  - every tracked flow is then forgotten.
+- `SemanticTurnStoppedEvent.interruption` adds `'transport-gap'`.
+- API.md updated.
+
+### App
+
+- `ClaudeSession.proxyGapHandler` calls
+  `this.headless?.proxy?.sealFlowsForTransportGap()` BEFORE re-emitting
+  the `TransportGap`.
+- `SessionManager`:
+  - on a gap: records the always-on incident (now with `since`/`until`)
+    and appends a record to `TransportGapLedger`, keyed by the session's
+    provider conversation id (`getNativeConversationId`; with none yet
+    the record is live-only);
+  - emits `proxy-transport-gap {sessionId, gap: TransportGapRecord}`;
+  - `getTransportGaps(conversationId)`;
+  - the ledger is NOT one of the caches cleared with the process.
+- Wire:
+  - `TransportGapRecord` lives in `@shared/types/session`;
+  - `SessionHistoryChunk.transportGaps?`;
+  - `SessionTransportGapEvent`;
+  - the tap channel `transport-gap` (the desktop's `session:transport-gap`,
+    and an additive remote protocol / phone wire channel);
+  - `SessionFeed.onSessionTransportGap` on all four implementations.
+- `session:load-initial-history` returns the conversation's gaps, only
+  when there are any.
+- Renderer:
+  - `runtime.transportGaps`, fed by the live subscription (only onto an
+    existing pane) and by `initialHistory.ts`, merged by record id
+    (`mergeTransportGaps`);
+  - `collectTransportGaps` makes one `provider-notice`-owner candidate per
+    gap, contentKind `transport-gap`, at `since ?? until`, riding the
+    notice candidates;
+  - the feed item `transport-gap`, rendered as the existing muted
+    `MarkerRow` (`transportGapSentence`);
+  - `foldEvent` keeps `interruption: 'transport-gap'` on the sealed turn.
+- The submodule pointer is bumped to #69's merge commit, with a lockfile
+  resync if needed.
+
+## Tests (fail-first; each would fail before its fix)
+
+- **Package:**
+  - `eventsFileTail.test.ts`: the gap position, no positions when nothing
+    is lost, and the ProxyServer emit order plus `since`/`until`;
+  - `ClaudeProxyAdapter.transportGap.test.ts` (5).
+- **App:**
+  - `claudeSession.suspension.test.ts`: event → seal → re-emit → event;
+  - `sessionManager.proxyGap.test.ts`: the incident and record, held for
+    the conversation across a respawn, not following the pane into a new
+    conversation;
+  - `transportGapLedger.test.ts`: the bounds;
+  - `transportGapRow.test.ts`: the REAL adapter → fold → ledger → view
+    bridge (seal, placement, persistence after later turns, rebuild merge,
+    the sentence);
+  - `initialHistory.renderer.test.tsx`: the loader restores gaps into a
+    rebuilt runtime, once;
+  - `useIpcSubscriptions.renderer.test.tsx`: the live event is held once
+    per id and ignored for a pane that is gone.
+
+## Verification
+
+- Package: `tsc` and vitest.
+- App: `npx tsc -b` and the scoped vitest runs.
+- Boundary: no live gap can be produced here. It needs >= 1 GiB of proxy
+  traffic through a stalled poller, and the app is never launched. The
+  path is pinned from the package event to the rendered row by tests at
+  each boundary.
+
+## Out of scope
+
+- Codex's proxy (`codex-headless` responsesProxy) has no rotation or gap
+  contract.
+- The 1.2–1.4 GB unrotated `proxy-events.jsonl` files under
+  `~/.config/agent-code/proxy` come from the packaged app predating #64.
+  That is noted for the manager, not fixed here.
+
+## Coordination
+
+claude-code-headless#67 (another worker's, for #1380) also edits
+`src/proxy/proxyServer.ts`, in different hunks (`startUnlocked`, options).
+The two app pointer bumps must land in sequence. This was reported to the
+manager before any package code was written, and the manager cleared it.
+
+HOLD (steering q119): #1442 stays out of integration until #69 merges.
+Then: repoint the submodule to the merge commit, resync the lockfile if
+needed, run exact-head CI, and run three independent reviews.
+
+Residual surfaces outside this PR, filed:
+- #1443: the phone does not paint the row yet;
+- #1444: recordings do not capture the channel.
+
+## Execution notes
+
+- Package: claude-code-headless#69 (`8be9a7a` on `fix/proxy-gap-position`)
+  - `EventsFilePoll.gaps`, the in-order `transport-gap` with
+    `{since, until}`, `sealFlowsForTransportGap`, and the `'transport-gap'`
+    interruption;
+  - the full suite passes 205/205;
+  - two mutations are caught (all gaps emitted first; a stopped turn
+    sealed too).
+- Ruling (superseded an earlier draft that held gaps per session and reseeded them over an IPC like conditions; the Change section now describes the result): main's
+  `TransportGapLedger` is keyed by the provider CONVERSATION id, and the
+  records ride `session:load-initial-history` (`SessionHistoryChunk.transportGaps`).
+  - Every feed rebuild goes through that load, whether the window reloads,
+    the agent reloads or respawns after a crash, or the conversation is
+    resumed in another pane, and whether the pane is live or not.
+    Conditions-style reseeding would only cover live backends.
+  - A new conversation in the same pane (Claude /clear) does not inherit
+    the old row.
+  - With no conversation id yet, the row is live-only. This can't happen
+    in practice: a gap needs >= 1 GiB of the session's traffic.
+  - Cost if wrong: none found. It is one optional chunk field.
+- Ruling: no new RenderOwner (the model says adding one needs plan review).
+  - The row is a `provider-notice`-owner candidate with contentKind
+    `transport-gap`, riding the notice candidates, so the ledger input
+    keeps its shape and ordering follows the notice contract ("status
+    follows equal-time conversation").
+  - It is placed at `since ?? until`. A gap older than every loaded entry
+    shows at the top of the window instead of being withheld.
+- Ruling: the phone (remote client) relays the channel but does not paint
+  the row yet. The phone keeps its own TranscriptStore, and wiring it is a
+  separate surface. Follow-up issue to file.
+- Ruling: the time text uses 24-hour HH:MM:SS from Date getters, not
+  `toLocaleTimeString`, so the one visible sentence can be tested.
+- Tests: package 205/205. App:
+  - ClaudeSession seal order;
+  - SessionManager: incident, record, held for the conversation across a
+    respawn, not following /clear;
+  - the ledger bounds;
+  - the end-to-end row (real adapter → fold → ledger → view bridge):
+    placement, persistence after later turns, the rebuild merge, and the
+    sentence;
+  - the loader restoring gaps into a rebuilt runtime;
+  - the live subscription.
+  - Mutations caught: bridge drop, missing candidates, the fold dropping
+    the interruption, history ingest dropping the gaps.
+
+## Hold lifted: pointer bumped to claude-code-headless#69's merge (0928344e)
+- #69 merged after its own round 1. Reviewers a and b found real defects, fixed fail-first there:
+  - `since` is now the previous poll's START time, a true lower bound;
+  - a request-only flow is kept until its first post-gap chunk, and streams if that chunk opens with `message_start`;
+  - the phase owner is sealed last, so a concurrent seal no longer clears an `awaiting-tool` phase.
+- The app calls only `sealFlowsForTransportGap()`, whose signature did not change, so no app code changes.
+- No lockfile resync: `package.json` and `package-lock.json` have no `claude-code-headless` entry (the app resolves it through a path alias), and the package's own manifests are unchanged.
+- `npx tsc -b` is clean. The Claude provider, main sessions and renderer workspace-hook suites pass 739/739.
+
+## Review round 1, reviewer a (FIX-BEFORE-MERGE), each fix fail-first
+- **Blocker: the durable row was never kept for a real Claude session.**
+  - Cause: `getNativeConversationId` asks `session.getProviderSessionId()`, which `ClaudeSession` does not implement. The manager test's fake implemented it, so every real gap took the live-only path and vanished on the first reload.
+  - Fix: `SessionManager.claudeConversationIds` records the `sessionId` of every committed Claude JSONL entry. That is the same value the renderer sends back as `providerSessionId`, and it follows `/clear`. The resume id is the fallback before the respawned tailer emits anything. The map is cleared at teardown.
+  - Ruling: do not add `getProviderSessionId` to `ClaudeSession`. It would change what backend snapshots and spawn results report for every Claude pane. Cost if wrong: a second place knows the Claude conversation id.
+  - The test fake now matches the real session: no getter, only transcript entries.
+- **Major: two gaps of one poll shared a live-only id.** `gap-live-<session>-<until>` collided, because one poll has one `until`, and the renderer's id merge hid a lost span. Live-only ids are now a sequence.
+- Mutations, each red:
+  - no entry capture (2);
+  - no resume fallback;
+  - an id built from `until`;
+  - no teardown clear.
+- The spawn-time clear I added first was redundant with teardown (its mutation survived), so it was removed.
+
+## Review round 1, reviewer b (MERGE-READY), minors fixed fail-first
+- **The live feed had no cap; main keeps 50.** An open pane painted every gap, while the same pane after a reload painted main's newest 50. `TRANSPORT_GAPS_PER_CONVERSATION` now lives in `@shared/types/session`; the ledger and `mergeTransportGaps` both keep the newest that many. Removing the renderer cap: 1 red.
+- **Survivor: the tap's flush before a transport-gap row.** Now pinned in `sessionFeedTap.test.ts`: a buffered semantic event reaches every sink before the row. Removing the flush: 1 red.
+- **Suspicions left as stated:**
+  - a `history-boundary` reset keeps `transportGaps`; no path was found where a Claude pane switches conversation in place and gets that reset;
+  - a gap before the first committed entry is keyed by the resume id when there is one, and is otherwise live-only. The 1 GiB threshold makes it unreachable in practice, and b's 215-fixture count found no counterexample.
+
+## Review round 1, reviewer c (FIX-BEFORE-MERGE), each fixed fail-first
+- **Major: the IPC delivery of the rows was untested.** `session:load-initial-history`'s `transportGaps` attach is the one link from main to a rebuilt feed. `session.test.ts` now drives it through the real preload call, with a real `TransportGapLedger`: the chunk carries the conversation's rows, and a conversation that lost nothing gets the chunk with no key. Returning the plain chunk: 1 red.
+- **Minor: the notice-cache invalidation on the gaps slice.** A reused adapter (one per pane, as `useLedgerFeedItems` keeps it) must paint a gap that arrives alone. Dropping the gaps identity check: 1 red.
+- **Minor: the real row was never rendered.** `Feed.transportGap.renderer.test.tsx` renders the real `Feed` with the ledger's items and finds the sentence. `return null` for the row: 1 red.
+- **Minor: stale `since` docs.** `TransportGapRecord`'s doc and decision 5 now say the previous poll's START.
+- **Already fixed in 5d4502d2 (review b):** the tap flush pin and the shared renderer cap.
+- **Residuals, stated:**
+  - `mergeTransportGaps`' sort: a near-equivalent mutant, because the feed re-derives order from timestamps;
+  - the package's forgotten no-turn flow (P7): a package test gap in merged claude-code-headless#69, not this PR's code;
+  - c's three suspicions, which c did not rank above notes.
+
+## Merge of origin/main after #1450 (a real conflict)
+- `initialHistory.ts`: both branches changed the same import line (`mergeTransportGaps` here, `worktreesForAttribution` from #1450). Both kept.
+- `initialHistory.renderer.test.tsx`: both added a `describe` block at the end. Both kept.
+- Main's `claude-code-headless` is `1cfa8c92` (#68's merge), an ancestor of this PR's `0928344e`, so the bump is a fast-forward.
+- `npx tsc -b` clean. The workspace, feed, session-runtime, rendering, main-session and Claude suites pass 2315/2315.

@@ -63,6 +63,7 @@ export type SessionFeedTapChannel =
   | 'jsonl-error'
   | 'history-boundary'
   | 'transcript-diagnostic'
+  | 'transport-gap'
   | 'provider-session-changed'
   | 'semantic-event'
   | 'conditions'
@@ -218,6 +219,15 @@ export class SessionFeedTap {
       this.emit('history-boundary', payload)
     })
     on('transcript-diagnostic', payload => this.emit('transcript-diagnostic', payload))
+    // #1381: a durable feed row. The seal it follows (turn_stopped with
+    // interruption 'transport-gap') is a semantic event still in the 100 ms
+    // window, so flush that first: every sink then learns the turn was cut
+    // before it learns where the row goes. Never coalesced: each record is a
+    // row of its own, not state to keep current.
+    on('proxy-transport-gap', payload => {
+      this.semanticEvents.flush(payload.sessionId)
+      this.emit('transport-gap', payload)
+    })
     on('provider-session-changed', payload => {
       // An ordering fact like history-boundary: rows of the OLD session still
       // buffered must land before the identity moves, so both windows flush

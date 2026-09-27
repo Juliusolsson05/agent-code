@@ -55,6 +55,7 @@ import {
   SemanticCollapsedActivityRow,
 } from '@renderer/features/feed/ui/semantic'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { transportGapSentence } from '@renderer/features/feed/lib/transportGapText'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
 import {
@@ -1030,6 +1031,20 @@ function FeedImpl({
           <RenderDebugBoundary key={item.key} snapshot={{ sourcePlane: item.sourcePlane === 'committed' ? 'feed-entry' : 'feed-semantic', lifecycle: 'visible', eventType: 'provider-notice', input: item.notice, routingTrace: [{ id: 'ledger-provider-notice', condition: 'Which provider status owns this notice?', outcome: item.key }] }}>
             <UsageLimitNoticeView notice={item.notice} sessionRunId={item.sessionRunId} actions={usageLimitActions} />
           </RenderDebugBoundary>
+        )
+      case 'transport-gap':
+        // #1381, option B (OWNER-APPROVED, B6 proxy 2026-09-27): a span of live
+        // output never reached the app. A durable row in the conversation, not
+        // a work-slot marker, because lost data is never hidden — it stays
+        // after later turns and comes back when the feed is rebuilt in this
+        // app run (an app restart loses it: #1445, the owner's call). The
+        // existing muted MarkerRow: no new UI surface.
+        return (
+          <MarkerRow key={item.key} marker="" tone="muted">
+            <div className="py-0.5 text-[13px] leading-[1.55] text-muted">
+              {transportGapSentence(item.gap)}
+            </div>
+          </MarkerRow>
         )
       case 'entry': {
         const e = item.entry
