@@ -33,6 +33,9 @@ export function useConversationList(params: ConversationListParams): {
   stale: boolean
 } {
   const version = useRef(0)
+  // The response the NEXT page would be appended to (read inside run, which
+  // must not depend on it: that would re-create run on every page).
+  const responseRef = useRef<ConversationListResponse | null>(null)
   const [response, setResponse] = useState<ConversationListResponse | null>(null)
   // The parameters `response` was fetched for, set with it.
   const [responseKey, setResponseKey] = useState<string | null>(null)
@@ -57,6 +60,18 @@ export function useConversationList(params: ConversationListParams): {
         includeChildren, query: query.trim() || undefined, cursor, limit: PAGE,
       })
       if (request !== version.current) return
+      // #1430 review a: a page is only an append of the pages before it when
+      // both came from the SAME family. Page 1 built while git timed out
+      // (the cwd alone) and a page 2 built after git recovered (the whole
+      // repository) interleave differently: the recovered order can place
+      // rows BEFORE the cursor that page 1 never had, so appending loses them
+      // for good — and page 2's family (no gitTimedOut) would clear the
+      // warning while rows are missing. Start over from page 1 instead.
+      const current = responseRef.current
+      if (cursor && current && !sameFamily(current.family, next.family)) {
+        void run(null)
+        return
+      }
       setResponse(prev => (cursor && prev ? { ...next, rows: [...prev.rows, ...next.rows] } : next))
       setResponseKey(requestKey)
     } catch {
@@ -73,6 +88,7 @@ export function useConversationList(params: ConversationListParams): {
 
   const hasResponse = useRef(false)
   hasResponse.current = response !== null
+  responseRef.current = response
   useEffect(() => {
     if (!open) {
       version.current += 1
@@ -97,4 +113,9 @@ export function useConversationList(params: ConversationListParams): {
   }, [response, loading, run, stale])
 
   return { response, loading, error, needsPane, loadMore, stale }
+}
+
+/** Same family = same repository root, same roots, same git-timeout answer. */
+function sameFamily(a: ConversationListResponse['family'], b: ConversationListResponse['family']): boolean {
+  return a.repoRoot === b.repoRoot && a.gitTimedOut === b.gitTimedOut && a.roots.length === b.roots.length && a.roots.every((root, i) => root === b.roots[i])
 }

@@ -36,7 +36,7 @@ describe('TLDR identity through real session actions', () => {
     const saved = { text: 'The original work is complete. PR #123 is merged.', revision: 1, updatedAt: '2026-09-11T00:00:00.000Z' }
     window.api = {
       ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true),
-      rewindToPrompt: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl', promptText: 'Earlier prompt', promptTimestamp: null, promptMode: 'prompt' as const, promptImages: [], promptAttachments: [] })),
+      rewindToPrompt: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl', promptText: 'Earlier prompt', promptTimestamp: null, promptMode: 'prompt' as const, promptImages: [], promptAttachments: [], projectionFidelity: { profile: 'native-resume' as const, sourceProvider: 'codex', targetProvider: 'codex', providerProfileId: 'test', providerEvidence: {}, counts: { preserved: 0, dropped: 0, demoted: 0, synthesized: 0, repaired: 0, retargeted: 0, opaque: 0 }, codes: [], sourceLinesOmitted: 0 } })),
       stripCodexCyberPolicy: vi.fn(async () => ({ provider: 'codex' as const, newProviderSessionId: 'native-rewound', newFilePath: '/recorded/rewound.jsonl' })),
       readTldrs: vi.fn(async (ids: string[]): Promise<Record<string, TldrRecord>> => ids.includes('summary-source') ? { 'summary-source': saved } : {}),
       onTldrChanged: () => () => {},

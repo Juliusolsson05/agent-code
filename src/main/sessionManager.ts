@@ -4115,8 +4115,11 @@ export class SessionManager extends EventEmitter {
     // The origin the caller supplies is as precise as the boundary can be
     // without a contract change; see InputWriteOrigin.
     this.recordInputWrite(sessionId, data, origin)
-    entry.session.write(data)
-    return true
+    // A session may refuse input it cannot take (#1114: OpenCode Terminal's
+    // bounded hold before its TUI paints). Refused input was not written, so
+    // the caller is told, exactly as for a missing backend above. The journal
+    // row above still says the write was attempted, which it was.
+    return entry.session.write(data) !== false
   }
 
   private writeReserved(
@@ -4772,6 +4775,15 @@ export class SessionManager extends EventEmitter {
        * refusal there would be a genuine double-arm worth surfacing.
        */
       supersedesPendingPrompt?: boolean
+      /**
+       * Asked the moment the gate answers `ready`, before anything is written:
+       * false refuses the delivery with nothing written. The late create
+       * bootstrap passes its parent-lease check (review of #1375, round 2 a
+       * and b): a waiter armed while the parent was attached must not start
+       * the brief in a child whose parent has since closed, and closing a
+       * parent does not cancel its children's waiters.
+       */
+      shouldDeliver?: () => boolean
     },
   ): Promise<PromptDeliveryResult> {
     if (options?.supersedesPendingPrompt) {
@@ -4892,6 +4904,14 @@ export class SessionManager extends EventEmitter {
           // construction.
           if (this.pendingPromptDeliveries.get(sessionId) === pending) {
             this.pendingPromptDeliveries.delete(sessionId)
+          }
+          if (options?.shouldDeliver && !options.shouldDeliver()) {
+            return {
+              ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+              disposition: 'do-not-retry',
+              promptWritten: false, enterWritten: false,
+              message: 'The prompt was not delivered: whoever asked for it is gone.',
+            }
           }
           return await this.deliverPromptToAgent(sessionId, prompt, undefined, record)
         }

@@ -219,3 +219,10 @@ describe('coerceSettings public-release defaults (#973)', () => {
   const saved = coerceSettings({ browserPocketEnabled: false, browserPocketDefaultsInitialized: true })
   expect(coerceSettings(JSON.parse(JSON.stringify(saved))).browserPocketDefaultsInitialized).toBe(true)
  })
+
+describe('coerceSettings built-in MCP defaults (#1339)', () => {
+  it('ships the Usage domain off: an agent gets quota only when someone asks', () => {
+    const defaults = coerceSettings({}).defaultBuiltInMcpDomains
+    for (const domains of Object.values(defaults)) expect(domains).not.toContain('usage')
+  })
+})

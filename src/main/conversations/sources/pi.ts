@@ -1,11 +1,11 @@
-import { open, stat } from 'node:fs/promises'
+import { open, readdir, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 
-import { listAllPiSessionFiles, readPiBranch, resolvePiSessionFile, sessionIdFromFileName } from 'pi-terminal-headless'
+import { listAllPiSessionFiles, readPiBranch, resolvePiSessionDir, resolvePiSessionFile, resolvePiSessionsRoot, sessionIdFromFileName } from 'pi-terminal-headless'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import type { ConversationSource, SourceConversation, SourceScope } from './types.js'
+import { ConversationPromptsUnreadable, isMissingFileError, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
 
 // Pi conversation discovery, straight from Pi's session files — the same
 // files pi's own /resume picker lists. There is no separate index: each
@@ -124,8 +124,60 @@ export class PiConversationSource implements ConversationSource {
   /** Every user prompt on the session's active branch, newest first. */
   async prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> {
     try {
-      const file = await resolvePiSessionFile({ env: this.deps.env ?? process.env, cwd, sessionId: nativeId, ...(this.deps.homeDirectory ? { homeDirectory: this.deps.homeDirectory } : {}) })
-      if (!file) return []
+      const env = { env: this.deps.env ?? process.env, ...(this.deps.homeDirectory ? { homeDirectory: this.deps.homeDirectory } : {}) }
+      // The package's listings swallow their own readdir errors (they answer
+      // "none"), so probe the two directories here (#1306, steering q116):
+      // absent is "not here", anything else is unknown, never "no prompts".
+      for (const dir of [(await resolvePiSessionsRoot(env)).root, await resolvePiSessionDir({ ...env, cwd })]) {
+        try {
+          await readdir(dir)
+        } catch (error) {
+          if (!isMissingFileError(error)) throw new ConversationPromptsUnreadable('pi', error)
+        }
+      }
+      const file = await resolvePiSessionFile({ ...env, cwd, sessionId: nativeId })
+      if (!file) {
+        // WHY look again (#1306): resolution mirrors Pi, which skips a file
+        // whose header it cannot read, so an UNREADABLE session reads as "no
+        // such session". A file named for this session that cannot even be
+        // opened is that case, and is said; a readable one whose header
+        // simply does not match this cwd is genuinely not this session.
+        // A listing that fails for anything but absence is unknown, never
+        // "no prompts" (steering q116).
+        const named = (await listAllPiSessionFiles(env).catch((error: unknown) => {
+          if (isMissingFileError(error)) return [] as string[]
+          throw new ConversationPromptsUnreadable('pi', error)
+        }))
+          .find(candidate => sessionIdFromFileName(basename(candidate)) === nativeId)
+        if (named) {
+          // The resolver skipped a file named for this session. Either it is
+          // unreadable, its header is damaged, or its header is readable and
+          // names another cwd. Only the last is "not this session"; the first
+          // two are this conversation, present and unreadable (#1434 round 1,
+          // a: a `{bad json}` header used to read as "no prompts").
+          let header: string
+          try {
+            header = await readFirstLine(named)
+          } catch (error) {
+            throw new ConversationPromptsUnreadable('pi', error)
+          }
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(header)
+          } catch (error) {
+            throw new ConversationPromptsUnreadable('pi', error)
+          }
+          // Only a real session header (type 'session', this id) can say "not
+          // this session" — its cwd simply differs. Any other first row (a
+          // message row, another id, no type) means the header itself is
+          // damaged: present, unreadable (#1434 verification a).
+          const row = parsed as { type?: unknown; id?: unknown } | null
+          if (!row || typeof row !== 'object' || row.type !== 'session' || row.id !== nativeId) {
+            throw new ConversationPromptsUnreadable('pi', new Error('the session header is damaged'))
+          }
+        }
+        return []
+      }
       const { rows } = await readPiBranch(file)
       const prompts: ConversationPrompt[] = []
       for (const row of rows) {
@@ -139,8 +191,11 @@ export class PiConversationSource implements ConversationSource {
         if (text.trim()) prompts.push({ text, timestamp: typeof message.timestamp === 'number' ? message.timestamp : null })
       }
       return prompts.reverse()
-    } catch {
-      return []
+    } catch (error) {
+      // #1306: only a missing file is "no prompts"; a damaged one is said.
+      if (error instanceof ConversationPromptsUnreadable) throw error
+      if (isMissingFileError(error)) return []
+      throw new ConversationPromptsUnreadable('pi', error)
     }
   }
 
@@ -173,5 +228,21 @@ export class PiConversationSource implements ConversationSource {
       available: true,
       file,
     }
+  }
+}
+
+/** The first line of a session file (its header), bounded: a header is one
+ *  small JSON record, so 64 KiB without a newline is itself damage. */
+async function readFirstLine(file: string): Promise<string> {
+  const handle = await open(file, 'r')
+  try {
+    const buf = Buffer.alloc(64 * 1024)
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
+    const newline = text.indexOf('\n')
+    if (newline < 0 && bytesRead === buf.length) throw new Error('the session header exceeds 64 KiB')
+    return newline < 0 ? text : text.slice(0, newline)
+  } finally {
+    await handle.close()
   }
 }

@@ -122,6 +122,11 @@ export type AppRunIncidentKind =
   | 'orchestration.late_response_adopted'
   | 'claude.proxy_transport_gap'
   | 'orchestration.prompt_delivery_failed'
+  // A bootstrap prompt WAS delivered but its "delivered" mark could not be
+  // persisted, on a path with no tool reply to carry the warning (a create
+  // adopted after its caller's deadline, #1370 / q85). The child may later be
+  // reported as never bootstrapped.
+  | 'orchestration.bootstrap_mark_failed'
   | 'mcp.host_start_failed'
   // Remote mobile companion (src/main/remote/) — declared here because this
   // union is the app-wide incident vocabulary; the remote subsystem imports

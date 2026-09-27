@@ -16,6 +16,7 @@ import {
 import { journalCaptureDirectory, journalTemporaryPath, SkillPathSafety } from './skillPathSafety.js'
 import type { InstalledSkillPackageStore } from './installedSkillPackageStore.js'
 import type { AgentCodeConventionsTarget } from './targets.js'
+import { userFacingSkillError } from './userFacingError.js'
 
 export type InstalledPackagePreflight =
   | { kind: 'writable' }
@@ -187,7 +188,7 @@ export class InstalledSkillMaterializer {
       return {
         ok: false,
         kind: 'error',
-        message: error instanceof Error ? error.message : 'Unknown installed skill filesystem error',
+        message: userFacingSkillError(error, 'installed-skill-materializer'),
       }
     }
   }
@@ -282,7 +283,7 @@ export class InstalledSkillMaterializer {
     } catch (error) {
       return conflictForPath(
         directory,
-        error instanceof Error ? error.message : 'Could not inspect the installed skill destination.',
+        error instanceof Error ? userFacingSkillError(error, 'installed-skill-materializer') : 'Could not inspect the installed skill destination.',
       )
     }
   }

@@ -1,11 +1,14 @@
+import { appendFile, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { ClaudeHistoryIndex } from './sources/claudeHistory.js'
 import { ClaudeConversationSource } from './sources/claude.js'
 import { CodexConversationSource } from './sources/codex.js'
 import { OpencodeConversationSource } from './sources/opencode.js'
 import { ConversationService } from './service.js'
+import { ConversationPromptsUnreadable } from './sources/types.js'
+import { sanitizePath } from '@shared/runtime/projectDir.js'
 import { setMainOperationSink } from '@main/performance/operations.js'
 import { corpusWorktreesPorcelain, installConversationCorpus, type InstalledCorpus } from '../../../testing/support/conversations/installCorpus.js'
 
@@ -61,6 +64,33 @@ describe('ConversationService', () => {
     expect(children.every(c => c.parentNativeId === codexParent!.nativeId)).toBe(true)
   })
 
+  // #1306: an unreadable conversation file now throws from its source. View
+  // Prompts rejects with the typed error; search degrades that one row to
+  // label-only and still lists the rest.
+  it('rejects View Prompts for an unreadable file, and search still lists', async () => {
+    const s = service()
+    const all = await s.list({ cwd: '/fixture/repo', scope: 'repository', includeChildren: true, limit: 5000 })
+    const claudeRows = all.rows.filter(r => r.provider === 'claude' && (r.promptCount ?? 0) > 1 && r.cwd)
+    const row = claudeRows[0]!
+    const other = claudeRows[1]!
+    const needle = (await s.prompts({ provider: 'claude', nativeId: other.nativeId, cwd: other.cwd! }))[0]!.text.slice(0, 10)
+    const file = join(corpus.claudeConfigDir, 'projects', sanitizePath(row.cwd!), `${row.nativeId}.jsonl`)
+    await appendFile(file, '\n')
+    await chmod(file, 0o000)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(s.prompts({ provider: 'claude', nativeId: row.nativeId, cwd: row.cwd! })).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+      // The cause is logged in main, once (#1434 review c: the log was not
+      // asserted, so removing the service's catch passed every test).
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('prompts'), expect.anything())
+      const hits = await s.list({ cwd: '/fixture/repo', scope: 'repository', query: needle, includeChildren: true, limit: 5000 })
+      expect(hits.rows.some(r => r.nativeId === other.nativeId)).toBe(true)
+    } finally {
+      await chmod(file, 0o600)
+      warn.mockRestore()
+    }
+  })
+
   it('serves a second listing from cache without re-discovering within the freshness window', async () => {
     const s = service()
     const first = await s.list({ cwd: '/fixture/repo', scope: 'repository', limit: 20 })
@@ -109,3 +139,44 @@ describe('ConversationService', () => {
   })
 })
 
+// #1430 (found by #1429 review b): `git worktree list` timing out answered `[]`,
+// resolveFamily fell back to the cwd alone, and the service cached that guess
+// for DISCOVERY_FRESH_MS. From a linked checkout the main checkout's
+// conversations dropped out of the repository picker and nothing said so.
+describe('ConversationService when git times out listing worktrees', () => {
+  it('says the family is incomplete, does not cache it, and recovers when git answers', async () => {
+    const porcelain = await corpusWorktreesPorcelain()
+    const worktrees = porcelain.split('\n').filter(l => l.startsWith('worktree ')).map(l => ({ path: l.slice('worktree '.length) }))
+    let timedOut = true
+    const calls: string[] = []
+    const claudeHistory = new ClaudeHistoryIndex(join(corpus.claudeConfigDir, 'history.jsonl'))
+    const s = new ConversationService({
+      sources: [
+        new ClaudeConversationSource({ projectsDir: join(corpus.claudeConfigDir, 'projects'), history: claudeHistory }),
+        new CodexConversationSource({ codexHome: corpus.codexHome }),
+        new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir }),
+      ],
+      ledger: null,
+      // The shape main's listWorktreesForCwdDetailed answers.
+      listWorktrees: async cwd => {
+        calls.push(cwd)
+        return timedOut ? { worktrees: [], timedOut: true } : { worktrees, timedOut: false }
+      },
+      claudeHistory,
+    })
+    const cwd = '/fixture/repo/.worktrees/extension-platform'
+
+    const slow = await s.list({ cwd, scope: 'repository', limit: 500 })
+    expect(slow.family.gitTimedOut).toBe(true)
+    // Asked again at once: a guessed family is never served from the cache.
+    await s.list({ cwd, scope: 'repository', limit: 500 })
+    expect(calls).toHaveLength(2)
+
+    timedOut = false
+    const answered = await s.list({ cwd, scope: 'repository', limit: 500 })
+    expect(answered.family.gitTimedOut).toBeUndefined()
+    expect(answered.family.repoRoot).toBe('/fixture/repo')
+    // The main checkout's rows are back: the guessed family was missing some.
+    expect(answered.total).toBeGreaterThan(slow.total)
+  })
+})

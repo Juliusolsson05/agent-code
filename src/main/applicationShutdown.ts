@@ -20,6 +20,10 @@ export interface ApplicationShutdownServices {
   disposeControl: Stop
   disposeWorkflowBridge: Stop
   disposeCaffeinate: Stop
+  /** GoalLoopService.dispose() (#1371, #1372): cancels its timers and drains an
+   *  in-flight loop-state persist or continuation. Without it a persist begun
+   *  just before quit could be cut off and the loop state lost. */
+  disposeGoalLoop: Stop
   stopHeapWatchdog: Stop
   /** The periodic detached-tmux reaper (#1030 item 4). Stopping it is pure
    *  timer teardown — it must NEVER kill tmux sessions at quit, because those
@@ -141,6 +145,11 @@ export function installApplicationShutdown(options: {
       run('control', services.disposeControl),
       run('workflow-bridge', services.disposeWorkflowBridge),
       run('caffeinate', services.disposeCaffeinate),
+      // In this wave, not earlier (#1372): sessions have stopped, so no turn
+      // boundary can start a new persist after dispose, and the built-in MCP
+      // host has stopped, so no goal_loop tool call arrives on a disposed
+      // service. Its drain then settles before quit is allowed.
+      run('goal-loop', services.disposeGoalLoop),
       run('heap-watchdog', services.stopHeapWatchdog),
     ])
     await join([

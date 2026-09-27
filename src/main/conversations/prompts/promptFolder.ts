@@ -57,6 +57,30 @@ type CacheEntry = {
   seam?: Buffer
   /** Bytes read by the most recent extraction (test/diagnostic hook). */
   lastBytesRead?: number
+  /** Complete lines folded so far that parsed as a JSON record, and that did
+   *  not (#1434 review b). A transcript whose EVERY complete line is garbage
+   *  is damaged, not a conversation without prompts; only a whole-file fold
+   *  (parsedFrom === 0) can say "every", so the verdict waits for it. */
+  parsedRecords?: number
+  malformedRecords?: number
+}
+
+/** A transcript that is present and readable but in which not one complete
+ *  line parses (#1434 review b). The source maps it to
+ *  ConversationPromptsUnreadable, exactly like an I/O failure: "no prompts"
+ *  would claim a damaged conversation is an empty one. A file with at least
+ *  one good record keeps today's behaviour (bad lines are skipped). */
+export class TranscriptUnparseable extends Error {
+  constructor(file: string) {
+    super(`no complete line of ${file} parses as a JSON record`)
+    this.name = 'TranscriptUnparseable'
+  }
+}
+
+function assertParseable(entry: CacheEntry, file: string): void {
+  if (entry.parsedFrom === 0 && (entry.parsedRecords ?? 0) === 0 && (entry.malformedRecords ?? 0) > 0) {
+    throw new TranscriptUnparseable(file)
+  }
 }
 
 // WHY a byte range instead of "the whole file, keyed by mtime" (#735): both
@@ -184,9 +208,14 @@ async function extractPromptsUnlocked(
     const st = await stat(file)
     size = st.size
     mtime = st.mtime.getTime()
-  } catch {
+  } catch (error) {
     span.end({ result: 'stat-failed' })
-    return { prompts: [], cwd: '' }
+    // WHY only a MISSING file is "no prompts" (#1306): a file that is there
+    // but cannot be read is not an empty conversation. The error propagates
+    // to the source, which says it (View Prompts) or skips the row (search).
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { prompts: [], cwd: '' }
+    throw error
   }
   if (
     entry &&
@@ -204,6 +233,7 @@ async function extractPromptsUnlocked(
     (entry.parsedFrom === 0 || entry.prompts.length >= wanted)
   ) {
     span.end({ result: 'cache-hit', prompts: entry.prompts.length })
+    assertParseable(entry, file)
     return { prompts: entry.prompts.slice().reverse(), cwd: entry.cwd }
   }
   if (!entry) {
@@ -240,9 +270,14 @@ async function extractPromptsUnlocked(
       entry.cwd = await readHeadCwd(file, size)
       entry.headCwdChecked = true
     }
-  } catch {
+  } catch (error) {
     span.end({ result: 'read-failed' })
-    return { prompts: [], cwd: '' }
+    // A file that vanished between stat and read is missing; anything else
+    // (a permission change, an I/O error) is unreadable and propagates
+    // (#1306). The cache entry is not updated on this path.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ENOENT') return { prompts: [], cwd: '' }
+    throw error
   }
   entry.mtime = mtime
   entry.size = size
@@ -255,6 +290,7 @@ async function extractPromptsUnlocked(
     parsedFrom: entry.parsedFrom,
     hasCwd: entry.cwd.length > 0,
   })
+  assertParseable(entry, file)
   return { prompts: entry.prompts.slice().reverse(), cwd: entry.cwd }
 }
 
@@ -290,6 +326,8 @@ async function foldForward(
   if (lastNewline < 0) return buf.length
   const text = buf.subarray(0, lastNewline + 1).toString('utf8')
   const folded = foldLines(kind, text, lastPromptText(entry.prompts))
+  entry.parsedRecords = (entry.parsedRecords ?? 0) + folded.parsed
+  entry.malformedRecords = (entry.malformedRecords ?? 0) + folded.malformed
   entry.prompts.push(...folded.prompts)
   if (!entry.cwd && folded.cwd) entry.cwd = folded.cwd
   entry.parsedTo = entry.parsedTo + lastNewline + 1
@@ -355,6 +393,8 @@ async function foldBackward(
     }
     const text = buf.subarray(from, to).toString('utf8')
     const folded = foldLines(kind, text, null)
+    entry.parsedRecords = (entry.parsedRecords ?? 0) + folded.parsed
+    entry.malformedRecords = (entry.malformedRecords ?? 0) + folded.malformed
     // Seam: the adjacent-duplicate rule keeps the OLDER occurrence, so if the
     // newest folded prompt repeats the oldest one already held, the held one
     // is the later duplicate and goes.
@@ -400,14 +440,20 @@ function foldLines(
   kind: AgentProviderKind,
   jsonl: string,
   previousText: string | null,
-): { prompts: FoldedPrompt[]; cwd: string } {
+): { prompts: FoldedPrompt[]; cwd: string; parsed: number; malformed: number } {
   const chronological: FoldedPrompt[] = []
   let cwd = ''
   let lastText = previousText
+  let parsed = 0
+  let malformed = 0
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue
     const obj = parseJsonRecord(line)
-    if (!obj) continue
+    if (!obj) {
+      malformed += 1
+      continue
+    }
+    parsed += 1
     if (!cwd) cwd = recordCwd(kind, obj)
     const prompt = kind === 'claude' ? foldClaudeRecord(obj) : foldCodexRecord(obj)
     if (!prompt) continue
@@ -415,7 +461,7 @@ function foldLines(
     chronological.push(prompt)
     lastText = prompt.text
   }
-  return { prompts: chronological, cwd }
+  return { prompts: chronological, cwd, parsed, malformed }
 }
 
 function recordCwd(kind: AgentProviderKind, obj: Record<string, unknown>): string {

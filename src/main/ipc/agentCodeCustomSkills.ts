@@ -12,6 +12,7 @@ import type {
   UpdateAgentCodeCustomSkillRequest,
 } from '@shared/types/agentCodeCustomSkills.js'
 import { isAgentProviderKind } from '@shared/types/providerKind.js'
+import { revealFailureMessage } from '@main/agentCodeConventions/userFacingError.js'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -118,7 +119,7 @@ export function registerAgentCodeCustomSkillsIpc(service: AgentCodeConventionsSe
       if (file?.isFile()) shell.showItemInFolder(path)
       else {
         const error = await shell.openPath(dirname(path))
-        if (error) return { ok: false, message: error }
+        if (error) return { ok: false, message: revealFailureMessage(error, 'agent-code-custom-skills') }
       }
       return { ok: true }
     },

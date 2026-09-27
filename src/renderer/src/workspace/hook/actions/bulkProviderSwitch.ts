@@ -10,6 +10,7 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { LOSSY_SWITCH_TOAST_MS, switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import type { SwitchStrategy } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import { pluralAgents } from '@renderer/features/workspace/lib/sessionDisplay'
+import { materialProjectionLoss } from '@shared/types/projectionFidelity'
 
 // Bulk provider switch + remembered-batch return.
 //
@@ -211,6 +212,10 @@ export function useBulkProviderSwitchActions(
         } else if (meta && originalKind) {
           counts[result.strategy] += 1
           if (result.shrinkSummary) notes.add(result.shrinkSummary)
+          // #927: projection loss is reported beside the shrink note, not
+          // folded into the strategy; see the single-pane toast in provider.ts.
+          const loss = materialProjectionLoss(result.projectionFidelity)
+          if (loss) notes.add(loss)
           switched.push({
             sessionId: result.newSessionId,
             cwd: meta.cwd,
@@ -320,6 +325,8 @@ export function useBulkProviderSwitchActions(
       if (result.status === 'switched') {
         returned += 1
         if (result.shrinkSummary) notes.add(result.shrinkSummary)
+        const loss = materialProjectionLoss(result.projectionFidelity)
+        if (loss) notes.add(loss)
       } else if (result.status === 'failed') {
         failed += 1
         notes.add(result.message)

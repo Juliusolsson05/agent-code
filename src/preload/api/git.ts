@@ -43,7 +43,9 @@ export const gitApi = {
         summaries: WorktreeActivitySummary[]
         status: WorktreeActivityIndexStatus
       }
-    | { ok: false }
+    // `timedOut` (#1430): git worktree list did not answer in time; the
+    // activity is unknown, not absent.
+    | { ok: false; timedOut?: true }
   > => ipcRenderer.invoke('worktree-activity:summary', cwd, refresh),
 
   gitStatus: (cwd: string): Promise<GitBarStatusResult> =>

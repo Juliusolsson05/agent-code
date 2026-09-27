@@ -37,11 +37,24 @@ export type RepositoryFamily = {
    *  project directory name from the literal cwd, so a lowercased root
    *  would name a directory that does not exist. */
   rawRoots: string[]
+  /** `git worktree list` timed out (#1430), so the siblings are UNKNOWN, not
+   *  absent: `roots` fell back to the cwd alone and may be missing the main
+   *  checkout and other worktrees. The service does not cache such a family,
+   *  and the picker says so. False when git answered (or is simply not a
+   *  repository here). */
+  gitTimedOut: boolean
   matches(candidate: string | null | undefined): boolean
 }
 
+/** A plain list means git answered. The detailed form (main's
+ *  listWorktreesForCwdDetailed) can also say the list timed out (#1430);
+ *  both are accepted so fixtures that hand in a known list stay as they are. */
+export type ListedWorktrees =
+  | ReadonlyArray<{ path: string }>
+  | { worktrees: ReadonlyArray<{ path: string }>; timedOut: boolean }
+
 export type FamilyDeps = {
-  listWorktrees(cwd: string): Promise<ReadonlyArray<{ path: string }>>
+  listWorktrees(cwd: string): Promise<ListedWorktrees>
 }
 
 /** `path.resolve` collapses `..` and trailing slashes; darwin and win32 file
@@ -76,8 +89,12 @@ export async function resolveFamily(
   const cwdForms = forms(cwd)
   const cwdRoots = cwdForms.map(normalizeCwd)
   let worktreeForms: string[][] = []
+  let gitTimedOut = false
   try {
-    worktreeForms = (await deps.listWorktrees(cwd)).map(w => forms(w.path))
+    const listed = await deps.listWorktrees(cwd)
+    const worktrees = 'timedOut' in listed ? listed.worktrees : listed
+    gitTimedOut = 'timedOut' in listed && listed.timedOut === true
+    worktreeForms = worktrees.map(w => forms(w.path))
   } catch {
     worktreeForms = []
   }
@@ -122,6 +139,7 @@ export async function resolveFamily(
     root,
     roots,
     rawRoots,
+    gitTimedOut,
     matches(candidate) {
       if (scope === 'everywhere') return true
       if (!candidate) return false

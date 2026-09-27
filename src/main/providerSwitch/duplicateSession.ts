@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { NativeProjectionFidelity } from '@shared/types/projectionFidelity.js'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
+import { summarizeProjectionReport } from '@main/providerSwitch/projectionFidelity.js'
 
 export type DuplicateSessionRequest = {
   provider: AgentProviderKind
@@ -16,6 +18,9 @@ export type DuplicateSessionResult = {
   provider: AgentProviderKind
   newProviderSessionId: string
   newFilePath: string
+  /** What the projector did to the copy (#927). A same-provider duplicate
+   *  is not automatically lossless: Codex -> Codex drops opaque records. */
+  projectionFidelity: NativeProjectionFidelity
 }
 
 export async function duplicateSession(
@@ -64,7 +69,8 @@ export async function duplicateSession(
     now: new Date().toISOString(),
     ...(sourceProfile ? { targetProfile: sourceProfile } : {}),
   })
+  const projectionFidelity = summarizeProjectionReport(projection)
   const newProviderSessionId = adapter.sessionId(projection)
   const newFilePath = await adapter.write(targetCwd, projection)
-  return { provider: request.provider, newProviderSessionId, newFilePath }
+  return { provider: request.provider, newProviderSessionId, newFilePath, projectionFidelity }
 }

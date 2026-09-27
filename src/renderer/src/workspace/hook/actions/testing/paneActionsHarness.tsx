@@ -43,6 +43,7 @@ export function makeRefs(state: WorkspaceState): WorkspaceRefs {
     seenUuidsRef: ref({}),
     historyWindowsRef: { current: {} } as never,
     historyAwaitingTurnStartRef: { current: new Set<string>() } as never,
+    worktreeReconcilerRef: { current: null },
     undoStackRef: ref(new UndoCloseStack()),
     bootstrapTimersRef: ref(new Map()),
     persistedFeedDebugIdRef: ref({}),

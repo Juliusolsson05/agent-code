@@ -34,6 +34,7 @@ function harness() {
     disposeControl: vi.fn(async (): Promise<void> => undefined),
     disposeWorkflowBridge: vi.fn(async (): Promise<void> => undefined),
     disposeCaffeinate: vi.fn(async (): Promise<void> => undefined),
+    disposeGoalLoop: vi.fn(async (): Promise<void> => undefined),
     stopHeapWatchdog: vi.fn(async (): Promise<void> => undefined),
     stopDetachedTmuxSweep: vi.fn(async (): Promise<void> => undefined),
     drainWorkspace: vi.fn(async (): Promise<void> => undefined),
@@ -186,6 +187,32 @@ describe('application shutdown composition', () => {
     extensions.resolve()
     await vi.waitFor(() => expect(h.onQuitAllowed).toHaveBeenCalledOnce())
     expect(h.services.stopBuiltInMcp).toHaveBeenCalledOnce()
+  })
+
+  // #1372: GoalLoopService.dispose() (#1371) cancels its timers and drains an
+  // in-flight loop-state persist. Nothing awaited it, so a persist started just
+  // before quit could be cut off. It must run only after sessions stop (no new
+  // turn boundary) and the built-in MCP host stops (no new goal_loop tool
+  // call), and quit must wait for it.
+  it('disposes the goal loop after sessions and the built-in MCP host stop, and holds quit for its drain', async () => {
+    const h = harness()
+    const sessions = deferred()
+    const mcp = deferred()
+    const goalLoop = deferred()
+    h.sessionStop.mockImplementation(() => sessions.promise)
+    h.services.stopBuiltInMcp.mockImplementation(() => mcp.promise)
+    h.services.disposeGoalLoop.mockImplementation(() => goalLoop.promise)
+    h.install()
+    h.app.quit()
+    expect(h.services.disposeGoalLoop).not.toHaveBeenCalled()
+    sessions.resolve()
+    await vi.waitFor(() => expect(h.services.stopBuiltInMcp).toHaveBeenCalledOnce())
+    expect(h.services.disposeGoalLoop).not.toHaveBeenCalled()
+    mcp.resolve()
+    await vi.waitFor(() => expect(h.services.disposeGoalLoop).toHaveBeenCalledOnce())
+    expect(h.onQuitAllowed).not.toHaveBeenCalled()
+    goalLoop.resolve()
+    await vi.waitFor(() => expect(h.onQuitAllowed).toHaveBeenCalledOnce())
   })
 
   it('closes an initializing workflow immediately, while startup settlement still gates support disposal', async () => {

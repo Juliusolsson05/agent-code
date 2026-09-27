@@ -98,7 +98,10 @@ export type CliUpdateState =
       wantedLatest: string
       installMethod: CliInstallMethod
       reason: CliUpdateFailureReason
-      logPath: string
+      /** The attempt's log. Null only for `could-not-start` (#1425): the
+       *  attempt stopped before it could create one, so there is nothing to
+       *  open and the banner offers a retry instead of View Log. */
+      logPath: string | null
       finishedAt: number
     }
   /** Update was skipped because a session of this kind is currently spawned
@@ -153,6 +156,11 @@ export type CliUpdateFailureReason =
    *  the CLI is not installed or the PATH entry points at something
    *  unexpected. */
   | 'unparseable-version'
+  /** The update never ran: Agent Code could not create its log for the
+   *  attempt (a full disk, or an Agent Code data folder it cannot write).
+   *  #1425: this used to leave the state `updating` forever. No log exists;
+   *  the cause is in main's diagnostic output only (q22). */
+  | 'could-not-start'
 
 /** User preference for how aggressive the auto-updater should be. Persisted
  *  in setup.json (not the renderer's settings.json) because setup.json is

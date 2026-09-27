@@ -257,6 +257,81 @@ function clientFor(state: WorkflowState): WorkflowClient {
 }
 
 describe('WorkflowRunView', () => {
+  // #1348: a transcript reference outlives its run directory (retention,
+  // #1275). The store answered "not found" as a generic error, the header fell
+  // back to the reference's `failed` status, and Resume stayed; it could only
+  // fail with run-not-found.
+  const missingClient = (): WorkflowClient => ({ ...clientFor(completedState()), async getSnapshot() { return null } })
+
+  it('shows a run whose stored data is gone as expired, with no Resume or Retry', async () => {
+    render(
+      <WorkflowClientProvider value={missingClient()}>
+        <WorkflowRunView reference={{ runId: 'run-ui', cwd: '/repo', status: 'failed' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.getByText(/stored data is gone/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  // #1440 review a: while the snapshot is still loading, the header falls
+  // back to the reference's `failed`, and Resume was clickable into a
+  // run-not-found. No action is offered until the store has answered.
+  it('offers no Resume while the snapshot is still loading, and none once it says expired', async () => {
+    let answer!: (value: null) => void
+    const pending: WorkflowClient = { ...clientFor(completedState()), getSnapshot: () => new Promise(resolve => { answer = resolve }) }
+    render(
+      <WorkflowClientProvider value={pending}>
+        <WorkflowRunView reference={{ runId: 'run-ui', cwd: '/repo', status: 'failed' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('Loading workflow activity…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    answer(null)
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+
+  // #1440 review c: a reference that launched `running` but whose run is gone
+  // offers no Cancel either (it would silently do nothing).
+  it('offers no Cancel for a missing run that its reference says is running', async () => {
+    render(
+      <WorkflowClientProvider value={missingClient()}>
+        <WorkflowRunView reference={{ runId: 'run-ui', cwd: '/repo', status: 'running' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+  })
+
+  // The lookup is global by run id (review b), so a reference without its
+  // own cwd whose run is gone is expired too.
+  it('calls a missing run without its own cwd expired as well', async () => {
+    render(
+      <WorkflowClientProvider value={missingClient()}>
+        <WorkflowRunView reference={{ runId: 'run-ui', status: 'failed' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+
+  // Unknown is not missing: a failed READ (IPC, storage) proves nothing about
+  // the run, so the user keeps Retry and the Resume the reference allows.
+  it('keeps Retry and Resume when the snapshot read fails rather than reporting the run missing', async () => {
+    const failing: WorkflowClient = { ...clientFor(completedState()), async getSnapshot() { throw new Error('storage offline') } }
+    render(
+      <WorkflowClientProvider value={failing}>
+        <WorkflowRunView reference={{ runId: 'run-ui', cwd: '/repo', status: 'failed' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('storage offline')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
+    expect(screen.queryByText('Expired')).toBeNull()
+  })
+
   it('distinguishes a soft stall from work that requires operator recovery', async () => {
     const state = recoveryHealthState()
     render(

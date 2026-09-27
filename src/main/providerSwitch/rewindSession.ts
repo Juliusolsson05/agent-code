@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { RewindAttachment } from '@main/providerSwitch/rewindAttachments.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { NativeProjectionFidelity } from '@shared/types/projectionFidelity.js'
 import type {
   ListRewindPromptsRequest,
   RewindPrompt,
@@ -10,6 +11,7 @@ import type {
 import { rewindConversation } from 'agent-transcript-parser'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
+import { summarizeProjectionReport } from '@main/providerSwitch/projectionFidelity.js'
 
 export type RewindSessionRequest = {
   provider: AgentProviderKind
@@ -49,6 +51,8 @@ export type RewindSessionResult = {
   /** Every attachment the rewound prompt had, bytes excluded — see above. */
   promptAttachments: RewindSessionAttachment[]
   promptTimestamp: string | null
+  /** What the projector did to the rewound copy (#927). */
+  projectionFidelity: NativeProjectionFidelity
 }
 
 /**
@@ -126,6 +130,7 @@ export async function rewindSession(
     now: new Date().toISOString(),
     ...(sourceProfile ? { targetProfile: sourceProfile } : {}),
   })
+  const projectionFidelity = summarizeProjectionReport(projection)
   const newProviderSessionId = adapter.sessionId(projection)
   const draft = adapter.draft(rewind.draft)
 
@@ -152,5 +157,6 @@ export async function rewindSession(
         entry.source.line === rewind.anchor.line
       ))?.timestamp ?? null
       : null,
+    projectionFidelity,
   }
 }

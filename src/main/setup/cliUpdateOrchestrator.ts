@@ -432,7 +432,32 @@ export class CliUpdateOrchestrator extends EventEmitter {
       startedAt: Date.now(),
     })
 
-    const logPath = await this.openLog(cli)
+    // #1425: `updating` is already published, and it is undismissable in the
+    // banner — so a failure here must END in another state, never leave this
+    // one standing. openLog's mkdir is the one await in this method that can
+    // throw (every later step catches or returns a result; see appendLog,
+    // appendDiagnostics, readInstalledVersion). A folder we cannot create
+    // (EACCES on the data folder, ENOSPC) means we do not run the update at
+    // all: a package install into a full or unwritable disk is likely to
+    // fail too, and a failure with no log would leave the user nothing to
+    // look at. The OS text stays here; the state carries a fixed reason.
+    let logPath: string
+    try {
+      logPath = await this.openLog(cli)
+    } catch (err) {
+      console.warn('[cli-update] could not create the update log; the update was not started:', err)
+      this.updateSnapshot(cli, {
+        kind: 'failed',
+        cli,
+        from: ctx.from,
+        wantedLatest: ctx.to,
+        installMethod: ctx.installMethod,
+        reason: 'could-not-start',
+        logPath: null,
+        finishedAt: Date.now(),
+      })
+      return
+    }
     const command = updateCommandFor(cli, ctx.installMethod)
     let commandFailed = false
     let timedOut = false
@@ -556,7 +581,19 @@ export class CliUpdateOrchestrator extends EventEmitter {
 
   private updateSnapshot(cli: CliUpdateKind, state: CliUpdateState): void {
     this.snapshot = { ...this.snapshot, [cli]: state }
-    this.emit('state', this.snapshot)
+    // WHY publication is contained (#1447 review a): emit is synchronous and
+    // its listener broadcasts to every window through webContents.send, which
+    // throws for a window torn down mid-send. That exception used to escape
+    // into runUpdate right after `updating` was published and abort it before
+    // any later state — leaving the snapshot (the source of truth, already
+    // committed above) and the other windows on an undismissable "Updating…".
+    // The state machine decides the state; a failed publication is logged and
+    // the next publication (or the renderer's snapshot fetch) catches up.
+    try {
+      this.emit('state', this.snapshot)
+    } catch (error) {
+      console.warn('[cli-update] publishing the update state failed:', error)
+    }
   }
 
   private async openLog(cli: CliUpdateKind): Promise<string> {
@@ -565,7 +602,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
     // file per attempt so a re-run doesn't overwrite the last failure's
     // log while a user is trying to inspect it.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    return join(CLI_UPDATE_LOG_DIR, `${cli}-${stamp}.log`)
+    const logPath = join(CLI_UPDATE_LOG_DIR, `${cli}-${stamp}.log`)
+    // WHY the file is CREATED here, not just named (#1447 review a): a folder
+    // that already exists but will not take a new file (EACCES on it, ENOSPC)
+    // passed mkdir, the update ran, every appendLog was swallowed, and View
+    // Log pointed at a file that was never written. Creating it up front is
+    // the real "can we keep a log" check; it throws into runUpdate's
+    // could-not-start path before the command runs. `wx` never truncates an
+    // earlier attempt's log that happens to share the name.
+    await writeFile(logPath, `[Agent Code] ${cli} update log, ${new Date().toISOString()}\n`, { flag: 'wx' })
+    return logPath
   }
 }
 

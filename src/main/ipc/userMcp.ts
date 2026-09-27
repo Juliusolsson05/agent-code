@@ -57,6 +57,15 @@ export function registerUserMcpIpc(service: UserMcpService): void {
     return service.setSecret(id, inputId, value)
   })
 
+  // User-only (q114): the Settings dialog's "Confirm for this server". Not on
+  // the agent tool surface.
+  ipcMain.handle('user-mcp:confirm-secret', (_evt, id: unknown, inputId: unknown) => {
+    if (!isUserMcpServerId(id) || typeof inputId !== 'string') {
+      throw new Error('user-mcp:confirm-secret: invalid arguments')
+    }
+    return service.confirmSecret(id, inputId)
+  })
+
   ipcMain.handle('user-mcp:import', (_evt, text: unknown, fallbackName: unknown) => {
     if (typeof text !== 'string' || text.length > MAX_IMPORT_CHARS) throw new Error('user-mcp:import: invalid text')
     return service.importConfig(text, typeof fallbackName === 'string' ? fallbackName : undefined)
