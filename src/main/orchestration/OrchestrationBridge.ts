@@ -642,10 +642,16 @@ export class OrchestrationBridge {
     this.lateCreates.delete(response.requestId)
     if (!response.ok || response.type !== 'create-agent') return
     const parentSessionId = response.agent.orchestrationParentId
-    this.promptDeliveries.set(response.agent.sessionId, {
-      createdAt: Date.now(),
-      promptSubmissionCount: 0,
-    })
+    // Only when there is no record yet (review of #1375, round 2 c): the renderer files the child
+    // BEFORE its create answer reaches main, so the parent can find it with list_agents and
+    // send_prompt to it first. Overwriting that record with a zero count erased the submission,
+    // and the late bootstrap then delivered a second brief.
+    if (!this.promptDeliveries.has(response.agent.sessionId)) {
+      this.promptDeliveries.set(response.agent.sessionId, {
+        createdAt: Date.now(),
+        promptSubmissionCount: 0,
+      })
+    }
     this.parentSessionByChildSession.set(response.agent.sessionId, parentSessionId)
     this.closedAgents.delete(response.agent.sessionId)
     this.invalidateStatusCache(parentSessionId)

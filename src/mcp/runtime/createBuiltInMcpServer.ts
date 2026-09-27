@@ -1070,6 +1070,9 @@ function orchestrationCreateAgentCallKey(
             // Nothing can be waiting yet for a child that did not exist a
             // moment ago, and a refusal here would be a real double-arm.
             supersedesPendingPrompt: false,
+            // Late only: the waiter can fire long after this call, so it re-checks the parent at
+            // the moment of delivery (review of #1375, round 2 a and b).
+            ...(late ? { shouldDeliver: () => bridge.isParentAttached(scope.sessionId) } : {}),
           })) {
             return toolText({
               ok: true,
@@ -1083,6 +1086,11 @@ function orchestrationCreateAgentCallKey(
             })
           }
           if (late && !delivery.ok && isNotReadyYet(delivery)) return LATE_NOT_READY
+          // A collision with another delivery to this child (typically the parent's own
+          // send_prompt holding the reservation) is transient too: the late loop re-checks the
+          // landed count and the parent before trying again, instead of giving up on a
+          // collision whose other side may itself fail (review of #1375, round 2 c).
+          if (late && !delivery.ok && delivery.stage === 'reservation' && delivery.code === 'delivery-in-flight') return LATE_NOT_READY
           if (!delivery.ok) {
             let cleanupAttempted = false
             let agentClosed = false
@@ -1979,6 +1987,8 @@ function armPromptWhenReady(input: {
   incidentReason: 'create_agent_bootstrap_pending' | 'send_prompt_pending'
   /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
   supersedesPendingPrompt: boolean
+  /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
+  shouldDeliver?: () => boolean
 }): { supersededPendingPrompt: boolean } | null {
   const { dependencies, bridge, manager, delivery, sessionId } = input
   if (
@@ -1995,7 +2005,12 @@ function armPromptWhenReady(input: {
     sessionId,
     input.prompt,
     event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
-    input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : undefined,
+    input.supersedesPendingPrompt || input.shouldDeliver
+      ? {
+        ...(input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : {}),
+        ...(input.shouldDeliver ? { shouldDeliver: input.shouldDeliver } : {}),
+      }
+      : undefined,
   )
   // Visible to `list_agents` / `wait_agents` as `prompt_sent` until it
   // settles (#1134 review) — see `PromptDeliveryMetadata.pendingPrompt`.

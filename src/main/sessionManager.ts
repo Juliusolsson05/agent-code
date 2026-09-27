@@ -4629,6 +4629,15 @@ export class SessionManager extends EventEmitter {
        * refusal there would be a genuine double-arm worth surfacing.
        */
       supersedesPendingPrompt?: boolean
+      /**
+       * Asked the moment the gate answers `ready`, before anything is written:
+       * false refuses the delivery with nothing written. The late create
+       * bootstrap passes its parent-lease check (review of #1375, round 2 a
+       * and b): a waiter armed while the parent was attached must not start
+       * the brief in a child whose parent has since closed, and closing a
+       * parent does not cancel its children's waiters.
+       */
+      shouldDeliver?: () => boolean
     },
   ): Promise<PromptDeliveryResult> {
     if (options?.supersedesPendingPrompt) {
@@ -4749,6 +4758,14 @@ export class SessionManager extends EventEmitter {
           // construction.
           if (this.pendingPromptDeliveries.get(sessionId) === pending) {
             this.pendingPromptDeliveries.delete(sessionId)
+          }
+          if (options?.shouldDeliver && !options.shouldDeliver()) {
+            return {
+              ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+              disposition: 'do-not-retry',
+              promptWritten: false, enterWritten: false,
+              message: 'The prompt was not delivered: whoever asked for it is gone.',
+            }
           }
           return await this.deliverPromptToAgent(sessionId, prompt, undefined, record)
         }

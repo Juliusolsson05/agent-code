@@ -47,3 +47,12 @@ The parent is left with an idle child that never received its brief. It was told
 | **c1, major:** a parent closing during a retry delay still got its brief delivered | valid, **already fixed** in `5f54f8c0` (b1) | The parent is re-checked before every late attempt; c reviewed the prior head. |
 | **c2, minor:** the timeout reply promised more than the contract (a renderer that never answers means no delivery at all) | valid | The reply now says delivery is *attempted* if the renderer later confirms the child, names the ways it can fail, and tells the parent to check `orchestration_list_agents` and `orchestration_read_agent` (`promptSubmitted`) before sending. |
 | **c survivor:** shrinking the last backoff delay to 1 ms passed (only the total count was checked) | valid | Each wait is pinned exactly (no attempt 1 ms early, one exactly on time), with microtasks drained without moving the clock. The last-delay and first-delay mutants are both red. |
+
+## Review round 2 (a, b, c codex at `ed86637b`): all FIX-BEFORE-MERGE, the final round
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **a + b, major:** on a provider WITH a readiness gate (Claude, Codex), the late attempt arms a waiter that could deliver after the parent detached; the per-attempt check does not govern it | valid | `SessionManager.deliverPromptWhenReady` takes a `shouldDeliver` guard, asked the moment the gate opens, before anything is written; a refusal is `do-not-retry` with nothing written. The late path arms its waiter with the parent-lease check. Manager unit tests (refuse writes nothing / allow delivers as before) and a system test that the late waiter carries the guard. Red at `ed86637b`. |
+| **c, major:** the renderer files the child before its create answer reaches main, so the parent can send first; adoption reset the child's record to zero and the late bootstrap sent a second brief | valid | Adoption keeps an existing delivery record. A system test sends through the real `orchestration_send_prompt` before the late answer: one delivery in all. Red at `ed86637b`. |
+| **c, minor:** a reservation collision (the parent's send in flight) ended the late loop | valid | A `reservation` / `delivery-in-flight` result on the late path retries, re-checking the landed count and the parent first. Red at `ed86637b`. |
+| **b, minor:** the stop test called `notePromptSubmitted` directly, so removing it from `send_prompt` survived | valid | The test sends through the real `orchestration_send_prompt` during a retry delay; the bookkeeping mutant is red. |

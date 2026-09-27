@@ -30,6 +30,21 @@ vi.mock('@main/window/windowRegistry.js', () => ({
       return true
     }
     queueMicrotask(() => {
+      // The parent's own orchestration_send_prompt path (review of #1375, round 2 b): it reads the
+      // child and wakes it before delivering.
+      if (request.type === 'read-agent') {
+        bridge.resolve({
+          requestId: request.requestId as string, ok: true, type: 'read-agent',
+          output: { agent: agent(request.sessionId as string), messages: [] },
+        } as never)
+        return
+      }
+      if (request.type === 'ensure-agent-live') {
+        bridge.resolve({
+          requestId: request.requestId as string, ok: true, type: 'ensure-agent-live', agent: agent(request.sessionId as string),
+        } as never)
+        return
+      }
       if (request.type === 'mark-bootstrap-prompt-delivered') {
         bridge.resolve({
           requestId: request.requestId as string, ok: true, type: 'mark-bootstrap-prompt-delivered',
@@ -117,11 +132,15 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
     retrySafe: true, disposition: 'retry-same-session', promptWritten: false, enterWritten: false,
   }
 
-  async function lateCreate(deliverPromptToAgent: ReturnType<typeof vi.fn>, journal?: { recordIncident: ReturnType<typeof vi.fn> }) {
+  async function lateCreate(
+    deliverPromptToAgent: ReturnType<typeof vi.fn>,
+    journal?: { recordIncident: ReturnType<typeof vi.fn> },
+    options: { readinessGate?: boolean; deliverPromptWhenReady?: ReturnType<typeof vi.fn>; holdAnswer?: boolean } = {},
+  ) {
     const sessionManager = {
       deliverPromptToAgent,
-      canWaitForPromptReadiness: vi.fn(() => false),
-      deliverPromptWhenReady: vi.fn(async () => ({ ok: true })),
+      canWaitForPromptReadiness: vi.fn(() => options.readinessGate === true),
+      deliverPromptWhenReady: options.deliverPromptWhenReady ?? vi.fn(async () => ({ ok: true })),
       getSessionKind: vi.fn(() => 'opencode'),
     }
     const server = createBuiltInMcpServer(
@@ -136,10 +155,16 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
     await vi.waitFor(() => expect(renderer.heldCreate).not.toBeNull())
     await vi.advanceTimersByTimeAsync(30_000)
     await call
-    bridge.resolve({
+    const answer = () => bridge.resolve({
       requestId: renderer.heldCreate!.requestId as string, ok: true, type: 'create-agent', agent: agent('child-late'),
     } as never)
-    return { close: async () => { await client.close(); await server.close() } }
+    if (!options.holdAnswer) answer()
+    return {
+      client,
+      answer,
+      sendPrompt: (prompt: string) => client.callTool({ name: 'orchestration_send_prompt', arguments: { sessionId: 'child-late', prompt } }),
+      close: async () => { await client.close(); await server.close() },
+    }
   }
 
   it('retries a late child that is not ready yet until the brief lands', async () => {
@@ -191,15 +216,80 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
     }
   })
 
-  it('stops retrying once a prompt has landed on the child some other way', async () => {
-    const deliverPromptToAgent = vi.fn(async () => notReady)
+  // Through the parent's REAL orchestration_send_prompt, not the bookkeeping call it makes (review
+  // of #1375, round 2 b: removing that call from send_prompt survived the old version of this test).
+  it('stops retrying once the parent sends the brief itself during a retry delay', async () => {
+    const deliverPromptToAgent = vi.fn()
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValue({ ok: true })
     const run = await lateCreate(deliverPromptToAgent)
     try {
       await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
-      // The parent checked orchestration_read_agent and sent the brief itself.
-      bridge.notePromptSubmitted('child-late')
+      await run.sendPrompt('review the PR, sent by hand')
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(2)
+      expect(bridge.promptSubmissionCount('child-late')).toBe(1)
+    } finally {
+      await run.close()
+    }
+  })
+
+  // Review of #1375, round 2 c: the renderer files the child before its create answer reaches main,
+  // so the parent can send to it first. Adoption used to reset the child's record to zero and the
+  // late bootstrap then sent a second brief.
+  it('sends no second brief when the parent sent one before the late answer arrived', async () => {
+    const deliverPromptToAgent = vi.fn(async () => ({ ok: true }))
+    const run = await lateCreate(deliverPromptToAgent, undefined, { holdAnswer: true })
+    try {
+      await run.sendPrompt('review the PR, sent by hand')
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(1)
+      run.answer()
       await vi.advanceTimersByTimeAsync(60_000)
       expect(deliverPromptToAgent).toHaveBeenCalledTimes(1)
+      expect(bridge.promptSubmissionCount('child-late')).toBe(1)
+    } finally {
+      await run.close()
+    }
+  })
+
+  // Review of #1375, round 2 c: a collision with another delivery (the parent's send holding the
+  // reservation) ended the late loop, though that other delivery could itself fail.
+  it('keeps retrying after a reservation collision', async () => {
+    const collision = {
+      ok: false, stage: 'reservation', code: 'delivery-in-flight', message: 'another delivery is in flight',
+      retrySafe: true, disposition: 'retry-same-session', promptWritten: false, enterWritten: false,
+    }
+    const deliverPromptToAgent = vi.fn()
+      .mockResolvedValueOnce(collision)
+      .mockResolvedValue({ ok: true })
+    const run = await lateCreate(deliverPromptToAgent)
+    try {
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(2))
+      expect(bridge.promptSubmissionCount('child-late')).toBe(1)
+    } finally {
+      await run.close()
+    }
+  })
+
+  // Review of #1375, round 2 a and b: on a provider WITH a readiness gate the late attempt arms a
+  // waiter, which can deliver long after. It must be armed with the parent check, so a parent that
+  // closes in the meantime stops it at the moment of delivery.
+  it('arms a late readiness waiter that re-checks the parent before delivering', async () => {
+    let armed: { shouldDeliver?: () => boolean } | undefined
+    const deliverPromptWhenReady = vi.fn((_id: string, _prompt: string, _record: unknown, opts?: { shouldDeliver?: () => boolean }) => {
+      armed = opts
+      return new Promise(() => {})
+    })
+    const deliverPromptToAgent = vi.fn(async () => notReady)
+    const run = await lateCreate(deliverPromptToAgent, undefined, { readinessGate: true, deliverPromptWhenReady })
+    try {
+      await vi.waitFor(() => expect(deliverPromptWhenReady).toHaveBeenCalledTimes(1))
+      expect(armed?.shouldDeliver?.()).toBe(true)
+      renderer.parentAttached = false
+      expect(armed?.shouldDeliver?.()).toBe(false)
     } finally {
       await run.close()
     }
