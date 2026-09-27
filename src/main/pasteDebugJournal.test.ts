@@ -60,3 +60,73 @@ it('drains an evicted writer whose append is already in flight, and keeps the fi
   const lines = (await readFile(pasteDebugLogPath('paste-0'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).event)
   expect(lines).toEqual(['first', 'second'])
 })
+
+// Review of #1417, round 2 (a, b, c): a failed append dropped its batch for
+// good, the timer's failure was an unhandled rejection, and a flush that
+// joined the failed write resolved as if it had landed.
+it('keeps a failed batch, retries it in order, and never resolves a flush over a lost write', async () => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-paste-user-'))
+  dirs.push(userData.dir)
+  const { appendFile: realAppend } = await import('node:fs/promises')
+  let failures = 2
+  const appendFile = (async (...args: Parameters<typeof realAppend>) => {
+    if (failures > 0) {
+      failures--
+      throw Object.assign(new Error('injected EIO'), { code: 'EIO' })
+    }
+    return realAppend(...args)
+  }) as typeof realAppend
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const registry = new PasteDebugJournalRegistry({ appendFile })
+    const journal = registry.get('paste-retry')
+    journal.append({ layer: 'RENDER', event: 'first' })
+    // The timer's drain fails twice (the append and its mkdir retry).
+    await vi.waitFor(() => expect(failures).toBe(0))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    journal.append({ layer: 'RENDER', event: 'second' })
+    await registry.flushAll()
+
+    const events = (await readFile(pasteDebugLogPath('paste-retry'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).event)
+    expect(events).toEqual(['first', 'second'])
+    expect(unhandled).toEqual([])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+it('a flush that cannot write rejects instead of reporting success', async () => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-paste-user-'))
+  dirs.push(userData.dir)
+  const appendFile = (async () => { throw Object.assign(new Error('injected EIO'), { code: 'EIO' }) }) as unknown as typeof import('node:fs/promises').appendFile
+  const journal = new PasteDebugJournalRegistry({ appendFile }).get('paste-dead-disk')
+  journal.append({ layer: 'RENDER', event: 'lost?' })
+  // Both callers, including the one that joined the other's write (round 2,
+  // c: it used to settle as fulfilled).
+  const settled = await Promise.allSettled([journal.flush(), journal.flush()])
+  expect(settled.map(result => result.status)).toEqual(['rejected', 'rejected'])
+})
+
+// The retry queue is itself bounded: a disk that keeps failing must not turn
+// this writer into the unbounded growth #1278 is about.
+it('holds at most 1000 lines while writes fail, and reports what it dropped once they work', async () => {
+  userData.dir = await mkdtemp(join(tmpdir(), 'ac-paste-user-'))
+  dirs.push(userData.dir)
+  const { appendFile: realAppend } = await import('node:fs/promises')
+  let broken = true
+  const appendFile = (async (...args: Parameters<typeof realAppend>) => {
+    if (broken) throw Object.assign(new Error('injected EIO'), { code: 'EIO' })
+    return realAppend(...args)
+  }) as typeof realAppend
+  const journal = new PasteDebugJournalRegistry({ appendFile }).get('paste-bounded')
+  for (let i = 0; i < 1500; i++) journal.append({ layer: 'RENDER', event: `e${i}` })
+  await expect(journal.flush()).rejects.toThrow()
+
+  broken = false
+  await journal.flush()
+  const events = (await readFile(pasteDebugLogPath('paste-bounded'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  expect(events[0]).toMatchObject({ layer: 'ERROR', event: 'journal:dropped-lines', data: { lines: 500 } })
+  expect(events.slice(1).map(event => event.event)).toEqual(Array.from({ length: 1000 }, (_, i) => `e${i + 500}`))
+})

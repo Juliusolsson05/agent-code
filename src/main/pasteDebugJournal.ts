@@ -48,6 +48,10 @@ import type {
 
 const FLUSH_INTERVAL_MS = 100
 
+// Bound on lines held while appends keep failing (review of #1417, round 2).
+// A paste logs tens of lines; a thousand is many pastes' worth of retries.
+const MAX_QUEUED_LINES = 1000
+
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 
 export class PasteDebugJournal {
@@ -60,6 +64,9 @@ export class PasteDebugJournal {
   // landed: an evicted writer then escaped the shutdown drain and a quit could
   // lose its events. flush() now joins this promise, then writes the rest.
   private inFlight: Promise<void> | null = null
+  // Lines dropped because the queue hit MAX_QUEUED_LINES while appends kept
+  // failing; reported as one ERROR line once a write succeeds.
+  private dropped = 0
   private sessionStartedAtMs: number | null = null
 
   constructor(
@@ -93,8 +100,10 @@ export class PasteDebugJournal {
     }
     for (;;) {
       if (this.inFlight) {
-        // Another drain's failure is reported where it started; here we only
-        // need it settled before writing what follows it.
+        // A joined drain that failed put its batch back in the queue (see
+        // drain), so the next pass retries it and THIS flush reports the
+        // outcome of that retry. It never resolves over a lost batch (review
+        // of #1417, round 2, c).
         await this.inFlight.catch(() => {})
         continue
       }
@@ -107,20 +116,59 @@ export class PasteDebugJournal {
     if (this.timer) return
     this.timer = setTimeout(() => {
       this.timer = null
-      void this.drain()
+      // No caller awaits the timer: without this catch a failed append was an
+      // unhandled rejection in the main process (review of #1417, round 2, c).
+      // The batch is already back in the queue; the next append or flush
+      // retries it.
+      this.drain().catch(error => { console.warn('[pasteDebugJournal] append failed; will retry:', error) })
     }, FLUSH_INTERVAL_MS)
   }
 
   private drain(): Promise<void> {
     if (this.inFlight) return this.inFlight
     if (this.queue.length === 0) return Promise.resolve()
-    const batch = this.queue.splice(0).join('')
-    const writing = this.appendRaw(batch).finally(() => {
+    const lines = this.queue.splice(0)
+    const dropped = this.dropped
+    const batch = (dropped ? this.droppedLine(dropped) : '') + lines.join('')
+    const writing = this.appendRaw(batch).then(
+      () => {
+        this.dropped -= dropped
+        // Lines appended while this write was in flight: their timer found the
+        // write busy and joined it, so drain them now. Only after SUCCESS: after
+        // a failure the next append or flush retries, instead of a dead disk
+        // being hammered every 100 ms.
+        if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
+      },
+      (error: unknown) => {
+        // A failed append used to drop its batch for good (review of #1417,
+        // round 2, a, b, c). Put it back IN FRONT, so order holds and the next
+        // drain retries it, but bounded: a disk that keeps failing must not
+        // turn this into unbounded memory (#1278 is about exactly that).
+        this.queue.unshift(...lines)
+        const excess = this.queue.length - MAX_QUEUED_LINES
+        if (excess > 0) {
+          this.queue.splice(0, excess)
+          this.dropped += excess
+        }
+        throw error
+      },
+    ).finally(() => {
       this.inFlight = null
-      if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
     })
     this.inFlight = writing
     return writing
+  }
+
+  private droppedLine(lines: number): string {
+    const now = Date.now()
+    const event: PasteDebugEvent = {
+      ts: now,
+      tMs: this.sessionStartedAtMs === null ? 0 : now - this.sessionStartedAtMs,
+      layer: 'ERROR',
+      event: 'journal:dropped-lines',
+      data: { lines },
+    }
+    return JSON.stringify(event) + '\n'
   }
 
   private async appendRaw(content: string): Promise<void> {
