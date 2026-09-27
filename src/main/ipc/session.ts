@@ -584,10 +584,16 @@ export function registerSessionIpc(
         limit?: number
       },
     ) => {
-      return await loadInitialHistoryChunk({
+      const chunk = await loadInitialHistoryChunk({
         ...params,
         limit: params.limit ?? 120,
       })
+      // #1381: the conversation's durable "not captured" rows ride the initial chunk, the one
+      // request every feed rebuild makes (window reload, agent reload, resume elsewhere). Omitted
+      // when there are none, so the chunk is byte-identical for every conversation that lost
+      // nothing.
+      const transportGaps = manager.getTransportGaps(params.providerSessionId)
+      return transportGaps.length > 0 ? { ...chunk, transportGaps: [...transportGaps] } : chunk
     },
   )
 

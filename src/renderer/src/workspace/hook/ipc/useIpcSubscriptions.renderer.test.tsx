@@ -159,6 +159,47 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(runtimes[sessionId]?.liveChannelWarning).toBeNull()
   })
 
+  // #1381, option B (OWNER-APPROVED by B6): a lost proxy span becomes a durable feed row. The
+  // live event appends its record to the pane's runtime, once per record id, and only onto a pane
+  // that exists (an orphan runtime would outlive a closed pane; main hands the record back with
+  // that conversation's next history load instead).
+  it('holds each live transport gap once on its pane, and ignores one for a pane that is gone', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'claude-gap' as SessionId
+    let workspaceState = { sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } } } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: emptyRuntime() }
+    let refsForTest!: WorkspaceRefs
+    const commitRuntimes = (
+      updater: Record<SessionId, SessionRuntime> | ((current: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ): void => {
+      runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+      refsForTest.latestRuntimesRef.current = runtimes
+    }
+    Object.defineProperty(window, 'api', { configurable: true, value: { gitWorktrees: vi.fn(async () => ({ ok: false })) } })
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(workspaceState)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForTest = refs.current
+      }
+      useIpcSubscriptions(fake, refs.current, updater => {
+        workspaceState = typeof updater === 'function' ? updater(workspaceState) : updater
+        refs.current!.stateRef.current = workspaceState
+        refs.current!.latestStateRef.current = workspaceState
+      }, commitRuntimes, (id, patch) => commitRuntimes(current => ({ ...current, [id]: { ...current[id]!, ...patch } })), () => {})
+      return <div />
+    }
+    render(<Harness />)
+
+    const gap = { id: 'gap-1', since: 1_000, until: 9_000, lostGenerations: 2 }
+    act(() => { fake.emitTransportGap({ sessionId, gap }) })
+    act(() => { fake.emitTransportGap({ sessionId, gap }) })
+    expect(runtimes[sessionId]?.transportGaps).toEqual([gap])
+    act(() => { fake.emitTransportGap({ sessionId: 'closed-pane' as SessionId, gap: { ...gap, id: 'gap-2' } }) })
+    expect(runtimes['closed-pane' as SessionId]).toBeUndefined()
+  })
+
   it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {
     const fake = createFakeSessionFeed()
     const sessionId = 'fresh-codex-identity-and-queue' as SessionId

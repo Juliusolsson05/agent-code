@@ -10,6 +10,7 @@ import type {
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionTranscriptDiagnosticEvent,
+  SessionTransportGapEvent,
   SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
@@ -84,6 +85,8 @@ export interface SessionFeed {
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub
   /** Channel HEALTH, not content: see SessionTranscriptDiagnosticEvent. */
   onSessionTranscriptDiagnostic(cb: (e: SessionTranscriptDiagnosticEvent) => void): Unsub
+  /** A durable "not captured" row for the feed (#1381): see TransportGapRecord. */
+  onSessionTransportGap(cb: (e: SessionTransportGapEvent) => void): Unsub
   onSessionHistoryBoundary(cb: (e: SessionHistoryBoundaryEvent) => void): Unsub
   onSessionProviderSessionChanged(cb: (e: SessionProviderSessionChangedEvent) => void): Unsub
   onSessionSemanticEvent(cb: (e: SessionSemanticEvent) => void): Unsub

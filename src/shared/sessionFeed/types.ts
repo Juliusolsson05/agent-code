@@ -5,6 +5,7 @@ import type {
   AgentTranscriptObservationMetadata,
   SessionHistoryChunk,
   SessionInputReadiness,
+  TransportGapRecord,
 } from '@shared/types/session.js'
 
 // Session-feed wire types — the payload shapes that cross the SessionFeed
@@ -145,6 +146,12 @@ export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 export type SessionTranscriptDiagnosticEvent = {
   sessionId: string
   diagnostic: unknown
+}
+
+/** A live gap record for the pane `sessionId` (#1381); see TransportGapRecord. */
+export type SessionTransportGapEvent = {
+  sessionId: string
+  gap: TransportGapRecord
 }
 
 export type SessionConditionsEvent = {

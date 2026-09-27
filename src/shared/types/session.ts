@@ -804,4 +804,47 @@ export type SessionHistoryChunk = {
   // The renderer echoes the one for its pagination cursor line back as
   // `beforeOffset`. See `HistoryChunk.offsets` in historyLoader.ts.
   offsets?: number[]
+  // #1381: the conversation's proxy-transport gaps, oldest first, on
+  // initial-load chunks only — every one main still holds, not just those
+  // inside this page's time range, because a lost span is never hidden; one
+  // older than the first loaded entry is placed at the top of the window.
+  // Absent means main had none (or predates the field).
+  transportGaps?: TransportGapRecord[]
 }
+
+/**
+ * A span of a Claude session's live output that never reached the app (#1381):
+ * the proxy events transport rotated generations away before main read them
+ * (claude-code-headless#64 `transport-gap`). The feed shows one durable row per
+ * record — the owner-approved call (B6 proxy, 2026-09-27) is that lost data is
+ * never hidden, so the row stays after later turns and comes back whenever the
+ * conversation's feed is rebuilt within this app run (not across an app
+ * restart: #1445). Main holds the records per CONVERSATION
+ * (main/sessions/transportGapLedger) and hands them out with the initial
+ * history chunk (`SessionHistoryChunk.transportGaps`).
+ *
+ * `since`..`until` is app-clock milliseconds: `since` is when the proxy
+ * tail's previous poll STARTED reading (null if the loss came before its first
+ * poll; claude-code-headless#69 review a: that poll's finish time could
+ * postdate a loss that landed while it read), `until` is when the loss was
+ * detected. The proxy's events carry no timestamps, so this is
+ * the tightest honest bound — possibly wider than the loss, never narrower.
+ * `id` is unique per record for the app's lifetime; the renderer de-duplicates
+ * a reseed against it.
+ */
+export type TransportGapRecord = {
+  id: string
+  since: number | null
+  until: number
+  lostGenerations: number
+}
+
+/**
+ * The most gap rows one conversation keeps: main's TransportGapLedger and the renderer's
+ * mergeTransportGaps both keep the NEWEST this many (#1442 review b). Shared so the live feed and a
+ * rebuilt one agree: with only main capped, an open pane painted every gap and the same pane after
+ * a reload painted the newest 50. A gap needs >= 1 GiB of proxy traffic, so this is far beyond any
+ * real conversation; it bounds memory, not normal use.
+ */
+export const TRANSPORT_GAPS_PER_CONVERSATION = 50
+

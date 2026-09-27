@@ -1,5 +1,7 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { collectProviderNotices } from '@renderer/rendering/observations/providerNotices'
+import { collectTransportGaps } from '@renderer/rendering/observations/transportGaps'
+import type { TransportGapRecord } from '@shared/types/session'
 import type { SemanticErrorEntry } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import type { AgentProviderKind } from '@shared/types/providerKind'
@@ -66,8 +68,8 @@ export type RuntimeSemanticTurn = {
   startedAt: number
   endedAt: number | null
   isCompactionSynthesis?: boolean
-  /** #963: the adapter sealed this turn because the machine slept. */
-  interruption?: 'system-suspended' | 'transport-error'
+  /** #963/#1040/#1381: why the adapter sealed this turn (see SemanticTurn). */
+  interruption?: 'system-suspended' | 'transport-error' | 'transport-gap'
   /** Runtime lookup snapshot — tool-call status by id. Optional because
    *  hand-written fixtures omit it. `toTurnLike` reads
    *  lookups.toolCallsById[toolUseId].status to stamp lookupStatus onto
@@ -83,6 +85,9 @@ export type RuntimeSemanticTurn = {
 
 export type RuntimeLedgerSlices = {
   semanticErrors?: readonly SemanticErrorEntry[]
+  /** runtime.transportGaps (#1381). Optional like semanticErrors: hosts that
+   *  hold none (the phone today, recordings made before it) omit it. */
+  transportGaps?: readonly TransportGapRecord[]
   provider: AgentProviderKind
   sessionId: string
   /** runtime.entries — committed JSONL rows PLUS embedded optimistic rows
@@ -217,7 +222,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
     optimistic: readonly RenderCandidate[]
     merged: readonly RenderCandidate[]
   } | null = null
-  let noticeCache: { errors: readonly SemanticErrorEntry[] | undefined; provider: AgentProviderKind; sessionId: string; candidates: readonly RenderCandidate[] } | null = null
+  let noticeCache: { errors: readonly SemanticErrorEntry[] | undefined; gaps: readonly TransportGapRecord[] | undefined; provider: AgentProviderKind; sessionId: string; candidates: readonly RenderCandidate[] } | null = null
   let lastBundle: { input: LedgerInput; bundle: LedgerInputBundle } | null = null
 
   // Unknown-behavior plumbing (Stage 2 diagnostic): sightings recorded at
@@ -236,9 +241,15 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
 
   return slices => {
     const { provider, sessionId } = slices
-    if (!noticeCache || noticeCache.errors !== slices.semanticErrors || noticeCache.provider !== provider || noticeCache.sessionId !== sessionId) {
-      noticeCache = { errors: slices.semanticErrors, provider, sessionId,
-        candidates: collectProviderNotices(slices.semanticErrors ?? [], provider, sessionId) }
+    if (!noticeCache || noticeCache.errors !== slices.semanticErrors || noticeCache.gaps !== slices.transportGaps
+      || noticeCache.provider !== provider || noticeCache.sessionId !== sessionId) {
+      // #1381: the durable "not captured" rows ride the notice candidates — same owner, same
+      // ordering contract (see observations/transportGaps.ts) — so the ledger input keeps its shape.
+      noticeCache = { errors: slices.semanticErrors, gaps: slices.transportGaps, provider, sessionId,
+        candidates: [
+          ...collectProviderNotices(slices.semanticErrors ?? [], provider, sessionId),
+          ...collectTransportGaps(slices.transportGaps ?? [], provider, sessionId),
+        ] }
     }
 
     if (

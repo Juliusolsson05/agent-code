@@ -19,6 +19,7 @@ const noop: SessionFeed = {
   onSessionJsonlEntries: () => () => {},
   onSessionJsonlError: () => () => {},
   onSessionTranscriptDiagnostic: () => () => {},
+  onSessionTransportGap: () => () => {},
   onSessionHistoryBoundary: () => () => {},
   onSessionProviderSessionChanged: () => () => {},
   onSessionSemanticEvent: () => () => {},
