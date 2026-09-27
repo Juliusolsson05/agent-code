@@ -1,5 +1,5 @@
 import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
-import { carryWorkflowRuns } from '@renderer/workspace/hook/actions/workflowCarry'
+import { carryGoalLoops, carryWorkflowRuns, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
 import { hasReportingDomain } from '@shared/types/tldr'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -1941,39 +1941,4 @@ export function useSessionActions(
   )
 
   return { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView }
-}
-
-/** End the loop of each replaced pane that did NOT get it carried (#1287
- *  review A2): its old id is gone from the workspace, so no pane could ever
- *  resume or stop it, and a successor without goal_loop could not complete
- *  it. Same rule AgentMcpServersModal applies before its own reload. Runs
- *  after the commit, so a replacement that failed keeps its loop. A pane
- *  with no loop gets a harmless null back. */
-function stopGoalLoops(oldIds: readonly string[]): void {
-  const control = window.api?.controlGoalLoop
-  if (!control) return
-  for (const sessionId of oldIds) {
-    void control({ sessionId, action: 'stop' }).catch(error => {
-      console.warn('[goal-loop] stopping the replaced pane\'s loop failed:', error)
-    })
-  }
-}
-
-/** Tell main that each replaced pane's goal loop now belongs to its
- *  successor (#1279). Callers pass only successors that continue the SAME
- *  conversation with Goal Loop tools; every other replaced pane's loop is
- *  ended by stopGoalLoops above (#1287 review A2), never left behind. Main
- *  keys loops by session id and cannot see the swap; this is the same
- *  old -> new map the commit just applied to pins, lanes and relationships.
- *  Fire-and-forget: a failed carry leaves the loop where it was (the
- *  pre-#1279 behaviour), never blocks the swap, and main refuses to overwrite
- *  a loop the successor already has. */
-function carryGoalLoops(idMap: ReadonlyMap<string, string>): void {
-  const carry = window.api?.carryGoalLoop
-  if (!carry) return
-  for (const [oldId, newId] of idMap) {
-    void carry(oldId, newId).catch(error => {
-      console.warn('[goal-loop] carry to the replacement session failed:', error)
-    })
-  }
 }
