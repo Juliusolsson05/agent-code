@@ -74,7 +74,12 @@ comment it left admits the residual: a runtime escape that requests exactly
      also edits that file, and #1406's `GET /` excuse already keeps the
      harness green. The follow-up narrows the excuse to `GET /` AND the probe
      UA, closing #1406's documented residual.
-   - `serviceLanListener.test.ts` (the upstream `seen` list);
+   - `serviceLanListener.test.ts` is NOT changed (decided during the fix).
+     Each of its servers lives for one test, far under the window. The LAN
+     listener also forwards only an allow-list of headers
+     (`LAN_FORWARDED_HEADERS`, no `user-agent`), and that is correct product
+     behavior, so a forwarded probe could not be told apart upstream anyway.
+     The settle window is its fix.
    - `scripts/proxy-harness.mts` (`requestCount`).
 
    The latent listeners (netFetch/netPolicy, LanTransport/Cloudflared) count
