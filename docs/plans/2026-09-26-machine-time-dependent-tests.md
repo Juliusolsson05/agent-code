@@ -1,0 +1,64 @@
+# Machine- and time-dependent tests (#1296)
+
+## Problem
+
+The C9 hunt listed tests whose outcome depends on the machine they run on, on wall-clock timing, or
+that leak developer data. Each item below is taken from the issue, with its current state on
+`origin/main` checked in this branch.
+
+## Items and decisions (defaults)
+
+1. **`prerequisites.firstRun.test.ts` compares rows the live probe found machine-wide.**
+   - `binaryResolver` scans `/opt/homebrew/bin` and `/usr/local/bin` (the `WELL_KNOWN_BIN_DIRS`) even
+     under a temp HOME and a minimal PATH.
+   - The test already skips rows the *recording* found at a machine-wide path, but not rows the
+     *live* probe finds there. So on a Mac with Homebrew `claude`/`codex`/`opencode` the test fails,
+     and it passes only on machines like the recorder's.
+   - **Fix, test-side:** a row either side found at a machine-wide absolute path (outside the simulated
+     HOME and the staged app root) is a fact about that machine, and is not compared.
+   - No production seam is added: an injectable search list would exist only for this test.
+2. **`githubCli.system.test.ts` asserts a wall-clock bound** (`elapsed < GH_TOKEN_TIMEOUT_MS + 2 s`)
+   around a real `gh` spawn.
+   - The production code already enforces `GH_TOKEN_TIMEOUT_MS`. A loaded machine can exceed
+     "timeout + 2 s" without anything being wrong, and the vitest timeout (20 s) already fails a real
+     hang.
+   - **Fix:** drop the elapsed assertion and keep the settle-never-throws and token-shape contract.
+   - **Declined: making it opt-in.** It reads the developer's `gh` token into memory only to check its
+     shape, never prints or stores it. CI has no `gh`, where it resolves to `null`.
+3. **`goalLoopTurnHooks.system.test.ts` settles for 20 ms before `rm`** (ENOTEMPTY under load).
+   **Moved to #1341**: persistence outliving `afterEach` is the same root cause. The fix is a drain on
+   the service, not a sleep, and that touches `GoalLoopService.test.ts`, which #1337 is changing.
+4. **`BrowserPocketHost.renderer.test.tsx` sleeps 400 ms, then asserts a restart.** The first crash
+   restarts after `nextCrashDelay` = 250 ms. **Fix:** wait for the observed restart (`vi.waitFor` on
+   the src and the unregister) instead of a fixed sleep.
+5. **`SubAgentWatcher.test.ts` polls a 1.5 s wall-clock deadline.** `watcher.refresh()` already
+   returns the coalesced tick's promise. **Fix:** await it and assert once, with no deadline.
+6. **Electron harness budgets** (`electronHarness.ts`, `runtimeHarness.ts`). **Declined, with the
+   reason stated:**
+   - These are bounded *condition* waits in the Electron journey tier. They fail fast instead of
+     hanging a journey, and they are not part of the unit or system suites.
+   - Replacing them needs Electron-level events (frame teardown, binding publication) that the
+     harness cannot observe today.
+   - Widening them is forbidden anyway.
+7. **Weak negatives (fixed sleeps followed by "not called").** The `GoalLoopService.test.ts` and
+   goal-loop system-test instances **move to #1341** with item 3: the same drain makes "nothing
+   happened" provable instead of hoped for.
+8. **Harness secrets dir** `os.tmpdir()/agent-code-harness-secrets-<pid>` (plaintext codec) is never
+   cleaned. **Fix:** a `mkdtemp` directory per harness run, removed at the harness's end.
+9. **`testing/fixtures/agent-activity/runtime-states.json` holds personal data.** Beyond the
+   `/Users/juliusolsson` paths and private project names the issue lists, it held **queued prompts,
+   drafts, prompt suggestions, sub-agent task descriptions and streaming baselines** (read in full,
+   per q36).
+   - **Fix:** same-length redaction. Text fields are filled with `x` at their own length. The home
+     user and non-Agent-Code project names become same-length placeholders, including in object keys.
+     The two small fleet fixtures had one private project name each, replaced the same way.
+   - The extractor (`scripts/extract-agent-activity-runtimes.mts`) now applies the same pass, so a
+     regeneration stays redacted.
+   - The row model reads none of that text: the 32 agent-activity tests pass unchanged.
+   - **Owner decision (not done here):** the original content remains in `main`'s git history.
+     Removing it means rewriting `main`.
+
+## Tests
+
+Each fixed test is shown to pass on this machine. Item 1 was failing here before the fix: this Mac
+has Homebrew CLIs.
