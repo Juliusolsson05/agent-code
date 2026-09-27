@@ -107,11 +107,16 @@ export type WorkflowBridgeOptions = {
   maxBatchBytes?: number
   send?: WorkflowBridgeSender
   /**
-   * Where replaced-pane aliases persist (#1280). Omitted, carries still move
-   * the runs for this process but a restart files them under the id they
-   * started with.
+   * Where replaced-pane aliases persist (#1280); null keeps them in memory
+   * only, so a restart files runs under the id they started with.
+   *
+   * WHY required rather than optional (#1325 round-2 review c): with an
+   * optional field, dropping it from the one production construction in
+   * index.ts passed every test while making every carry process-local. A
+   * required field turns that into a type error. Production passes
+   * workflowSessionAliasFile() (createWorkflowService.ts), beside the store.
    */
-  aliasFile?: string
+  aliasFile: string | null
 }
 
 /**
@@ -154,7 +159,7 @@ export class WorkflowBridge {
 
   constructor(
     private readonly service: WorkflowService,
-    options: WorkflowBridgeOptions = {},
+    options: WorkflowBridgeOptions,
   ) {
     this.send = options.send ?? sendToTargetWindow
     this.batchWindowMs = options.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS
@@ -162,7 +167,7 @@ export class WorkflowBridge {
       options.maxBatchBytes ?? DEFAULT_MAX_BATCH_BYTES,
       'maxBatchBytes',
     )
-    this.aliasFile = options.aliasFile ?? null
+    this.aliasFile = options.aliasFile
   }
 
   async start(): Promise<void> {
@@ -175,13 +180,20 @@ export class WorkflowBridge {
     // run names its source yet (the late-registration case it exists for).
     const loaded = new Map(this.aliases)
     if (typeof this.service.listStoredRunReferences === 'function') {
-      const references = await this.service.listStoredRunReferences()
-      const clientIds = new Set<string>()
-      for (const reference of references) {
-        if (!reference.clientId) continue
-        clientIds.add(reference.clientId)
+      const references = (await this.service.listStoredRunReferences())
+        .filter((reference): reference is typeof reference & { clientId: string } => Boolean(reference.clientId))
+      const clientIds = new Set(references.map(reference => reference.clientId))
+      // WHY two passes, runs a pane still owns directly before runs that
+      // reach it through an alias: ownerFor refuses to let an aliased run
+      // displace a slot in another cwd, and that check can only see a slot
+      // that is already filed. In storage order an aliased run could file
+      // first and then be displaced by the owner's own run (upsertRun keeps
+      // one cwd per slot), which is the round-2 A1 loss in the other order.
+      const direct = references.filter(reference => !this.aliases.has(reference.clientId))
+      const aliased = references.filter(reference => this.aliases.has(reference.clientId))
+      for (const reference of [...direct, ...aliased]) {
         const { cwd, clientId, ...run } = reference
-        this.upsertRun(this.resolveSession(clientId), cwd, run)
+        this.upsertRun(this.ownerFor(clientId, cwd), cwd, run)
       }
       await this.pruneAliases(loaded, clientIds)
     }
@@ -196,8 +208,15 @@ export class WorkflowBridge {
    * A1): a workflow the pane's MCP started just before the swap registers
    * through `registerRun(from, ...)` when its tool call returns, which can be
    * after this commit, and its durable clientId is `from` forever. Without the
-   * edge that run lands in a dead slot now and after every restart. The file
-   * stays small because `start()` prunes every edge no stored run reaches.
+   * edge that run lands in a dead slot now and after every restart.
+   *
+   * WHY every edge points straight at the live pane (#1325 round-2 review
+   * c3): each replacement of one pane used to add a hop, A→B→C→…, and every
+   * hop stayed reachable from a run whose clientId is A, so the file grew
+   * with reloads, not with runs. Rewriting X→from to X→to on each carry keeps
+   * one hop per replaced id; `start()` then drops the edges no stored run's
+   * clientId names, so after a restart the file holds at most one edge per
+   * distinct clientId in the workflow store.
    */
   async carrySession(from: string, to: string): Promise<void> {
     const source = nonEmpty(from, 'from')
@@ -209,9 +228,12 @@ export class WorkflowBridge {
       // WHY skip instead of letting one side win (#1325 review A4): a slot
       // holds runs for one cwd, so a merge is impossible, and overwriting the
       // target silently deleted runs the successor already showed. Every
-      // renderer carry is a same-cwd replacement, so reaching this means the
-      // two ids are not really one pane; leaving both slots (and recording no
-      // alias) keeps each run visible where it was instead of guessing.
+      // renderer carry is a same-cwd replacement, so this is outside the
+      // contract. The cost is honest, not free (round-2 review c2): the
+      // source's runs stay filed under the replaced id, which no pane shows,
+      // so they are out of sight until something queries that id; they are
+      // still intact in the workflow store. Deleting the successor's runs
+      // instead would lose visible work to recover invisible work.
       console.warn('[workflows] not carrying workflow runs across different working directories')
       return
     }
@@ -219,6 +241,9 @@ export class WorkflowBridge {
     // once and is back) would send its runs to a pane that no longer exists,
     // and with this carry could form a cycle, so it goes.
     this.aliases.delete(target)
+    for (const [from, to] of this.aliases) {
+      if (to === source) this.aliases.set(from, target)
+    }
     this.aliases.set(source, target)
     let session = existing
     if (moving) {
@@ -242,7 +267,31 @@ export class WorkflowBridge {
     }
   }
 
-  /** Follow the replacement chain to the pane that owns a clientId today. */
+  /**
+   * The session a run started by `sessionId` in `cwd` is filed under now.
+   *
+   * WHY not plain resolveSession (#1325 round-2 review A1): an edge is
+   * recorded even when the replaced pane had no runs, so nothing checked the
+   * cwd when it was made. A run that then registers late, or loads at start,
+   * through that edge into a pane whose slot holds another cwd would make
+   * upsertRun replace that slot and hide the successor's runs. Such a run
+   * stays under the id that started it instead: out of sight, like the
+   * source of a skipped cross-cwd carry, but never at the cost of runs the
+   * successor shows. This is the same rule carrySession applies, for the
+   * cases where the source's cwd was not known at carry time.
+   */
+  private ownerFor(sessionId: string, cwd: string): string {
+    const resolved = this.resolveSession(sessionId)
+    const slot = this.runsBySession.get(resolved)
+    return resolved !== sessionId && slot && slot.cwd !== cwd ? sessionId : resolved
+  }
+
+  /**
+   * Follow the replacement chain to the pane that owns a clientId today.
+   * Carries keep every edge one hop, but a file written by the round-1 build
+   * of this change, or edited by hand, can still hold a chain or a cycle, so
+   * this walks and stops at a repeat.
+   */
   private resolveSession(sessionId: string): string {
     let current = sessionId
     const seen = new Set<string>()
@@ -270,11 +319,13 @@ export class WorkflowBridge {
 
   /**
    * Drop loaded edges that no stored run's clientId reaches. WHY: every
-   * replacement now records an edge (see carrySession), so without this the
-   * file grows with every reload for the life of the install. An edge only
-   * matters for a run whose durable clientId leads through it; a late
-   * registration from a previous process cannot happen after a restart, so
-   * after the inventory an unreachable loaded edge is dead weight.
+   * replacement records an edge (see carrySession), so without this the file
+   * grows with every reload for the life of the install. An edge only matters
+   * for a run whose durable clientId leads through it; a late registration
+   * from a previous process cannot happen after a restart, so after the
+   * inventory an unreachable loaded edge is dead weight. The walk (not just
+   * `clientIds.has(from)`) keeps an uncompressed chain from an older or
+   * crashed write working until the next carry compresses it.
    */
   private async pruneAliases(
     loaded: ReadonlyMap<string, string>,
@@ -461,7 +512,7 @@ export class WorkflowBridge {
     // the service; either can land after the pane was replaced. Filing under
     // the captured id would recreate the dead pane's slot.
     const { sessionId: normalizedSessionId, session } = this.upsertRun(
-      this.resolveSession(nonEmpty(sessionId, 'sessionId')),
+      this.ownerFor(nonEmpty(sessionId, 'sessionId'), nonEmpty(cwd, 'cwd')),
       cwd,
       run,
     )

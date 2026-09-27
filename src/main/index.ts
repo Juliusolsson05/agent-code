@@ -160,7 +160,7 @@ import {
   PREVIOUS_RUN_CLASSIFIER_VERSION,
 } from '@main/incident/previousRunClassifier.js'
 import { getBuildInfo } from '@main/buildInfo.js'
-import { createWorkflowService } from '@main/workflows/createWorkflowService.js'
+import { createWorkflowService, workflowSessionAliasFile } from '@main/workflows/createWorkflowService.js'
 import { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import { WorkflowServiceError, type WorkflowService } from 'workflow-mcp'
 
@@ -884,9 +884,8 @@ async function startApp(): Promise<void> {
       onCreated: service => { workflowService = service },
     })
     assertStartupOpen()
-    // Replaced panes' workflow runs (#1280): beside the workflow store, not
-    // inside it, so workflow-mcp's own store never sees a file it did not write.
-    workflowBridge = new WorkflowBridge(workflowService, { aliasFile: join(app.getPath('userData'), 'workflow-session-aliases.json') })
+    // Replaced panes' workflow runs (#1280); see workflowSessionAliasFile.
+    workflowBridge = new WorkflowBridge(workflowService, { aliasFile: workflowSessionAliasFile() })
     // Recovery successors may be created during service.initialize(), before the bridge exists.
     // Await rehydration so the first renderer query sees the durable lineage owner instead of a
     // stale parent with a misleading Resume action.
