@@ -1,0 +1,325 @@
+{
+  "evidence": "A real codex-cli 0.157.1 Agent Code session (2026-09-27): the SSE frames of one assistant commentary message as the proxy saw them (response.created id, output_item.added, text deltas, output_item.done), and the rollout response_item for the same msg_ id. Verbatim; the text is a one-line reviewer commentary. The same provider item id is on both sides.",
+  "sseFrames": [
+    {
+      "type": "response.created",
+      "response": {
+        "id": "resp_0026e3aaf911d31d016ab8cd41842887d0ae8dfc0e472b6154"
+      }
+    },
+    {
+      "type": "response.output_item.added",
+      "item": {
+        "id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+        "type": "message",
+        "status": "in_progress",
+        "content": [],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "01a0e1e1-bff7-76c1-bae1-5640298cdbb0"
+        },
+        "phase": "commentary",
+        "role": "assistant",
+        "metadata": {
+          "turn_id": "01a0e1e1-bff7-76c1-bae1-5640298cdbb0"
+        }
+      },
+      "output_index": 1,
+      "sequence_number": 4
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": "I",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "s3NGFSUEXsyAqDD",
+      "output_index": 1,
+      "sequence_number": 6
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": "’ll",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "JzPKfZkfTDmyp",
+      "output_index": 1,
+      "sequence_number": 7
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " read",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "6RIQnoxrKMM",
+      "output_index": 1,
+      "sequence_number": 8
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " the",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "q2MRS3wAC5Ox",
+      "output_index": 1,
+      "sequence_number": 9
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " review",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "iIit1lmNW",
+      "output_index": 1,
+      "sequence_number": 10
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " brief",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "uMOhhOTFsv",
+      "output_index": 1,
+      "sequence_number": 11
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " and",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "qRVlraF17yr4",
+      "output_index": 1,
+      "sequence_number": 12
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " project",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "zRB0TMCm",
+      "output_index": 1,
+      "sequence_number": 13
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " conventions",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "hIB9",
+      "output_index": 1,
+      "sequence_number": 14
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": ",",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "yrKplQgvqroXEyC",
+      "output_index": 1,
+      "sequence_number": 15
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " inspect",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "KdFpeHqR",
+      "output_index": 1,
+      "sequence_number": 16
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " the",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "ofZUo4dJfHzc",
+      "output_index": 1,
+      "sequence_number": 17
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " requested",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "AFdKPR",
+      "output_index": 1,
+      "sequence_number": 18
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " changes",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "1LONkU7R",
+      "output_index": 1,
+      "sequence_number": 19
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": ",",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "LzcPLJEjqbUJ8C1",
+      "output_index": 1,
+      "sequence_number": 20
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " and",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "12yRzcEfsL9u",
+      "output_index": 1,
+      "sequence_number": 21
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " write",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "etZCPCA3QZ",
+      "output_index": 1,
+      "sequence_number": 22
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " the",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "ZD8aHXsKqqtf",
+      "output_index": 1,
+      "sequence_number": 23
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " report",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "c7xgWpNbh",
+      "output_index": 1,
+      "sequence_number": 24
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " at",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "tuFfhLkkWrK3D",
+      "output_index": 1,
+      "sequence_number": 25
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " the",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "ZjzDEPb5P9SM",
+      "output_index": 1,
+      "sequence_number": 26
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " specified",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "BWeh47",
+      "output_index": 1,
+      "sequence_number": 27
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": " path",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "iOZhG76UfQX",
+      "output_index": 1,
+      "sequence_number": 28
+    },
+    {
+      "type": "response.output_text.delta",
+      "content_index": 0,
+      "delta": ".",
+      "item_id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "logprobs": [],
+      "obfuscation": "5q71z1jNW2LcmOY",
+      "output_index": 1,
+      "sequence_number": 29
+    },
+    {
+      "type": "response.output_item.done",
+      "item": {
+        "id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+        "type": "message",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "annotations": [],
+            "logprobs": [],
+            "text": "I’ll read the review brief and project conventions, inspect the requested changes, and write the report at the specified path."
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "create_time": 1790496065.682551,
+          "turn_id": "01a0e1e1-bff7-76c1-bae1-5640298cdbb0"
+        },
+        "phase": "commentary",
+        "role": "assistant",
+        "metadata": {
+          "turn_id": "01a0e1e1-bff7-76c1-bae1-5640298cdbb0"
+        }
+      },
+      "output_index": 1,
+      "sequence_number": 32
+    }
+  ],
+  "rolloutRecord": {
+    "timestamp": "2026-09-27T08:01:06.814Z",
+    "ordinal": 14,
+    "type": "response_item",
+    "payload": {
+      "type": "message",
+      "id": "msg_0026e3aaf911d31d016ab8cd426c9487d09f76109642b72ed6",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "I’ll read the review brief and project conventions, inspect the requested changes, and write the report at the specified path."
+        }
+      ],
+      "phase": "commentary",
+      "internal_chat_message_metadata_passthrough": {
+        "turn_id": "01a0e1e1-bff7-76c1-bae1-5640298cdbb0",
+        "create_time": 1790496065.682551,
+        "content_item_kinds": [
+          "unknown"
+        ]
+      }
+    },
+    "metadata": {
+      "client_authored": false,
+      "user_input_order": 1
+    }
+  }
+}

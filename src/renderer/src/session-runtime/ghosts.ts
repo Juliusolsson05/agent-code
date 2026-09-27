@@ -12,7 +12,7 @@
 // `ClaudeEntry` records via atp's `createGhost`. When the
 // authoritative JSONL entry lands (Claude's batched 100 ms drain;
 // Codex's mpsc flush), `reconcileUpstream` matches by message.id /
-// codexTurnId / tool_use_id and supersedes the ghost. If JSONL
+// Codex item id / tool_use_id and supersedes the ghost. If JSONL
 // never matches (Claude Code's auxiliary calls — title gen,
 // predict-next-prompt, branch-name gen — are not written to the
 // rollout), `orphanStale` flags the ghost after the TTL.
@@ -37,11 +37,14 @@
 // so one upstream entry supersedes every ghost block for that
 // turn at once.
 //
-// Codex: rollout emits one entry per content block, with the
-// rollout response_id stamped onto the mapped entry by
-// `stampCodexTurnId` in ../codex/rollout.ts. Match is by
-// (turnId, blockIndex). When that fails, both providers fall back
-// to tool_use_id / call_id pairing for tool blocks.
+// Codex: the ghost's turnId is the proxy response id (`resp_…`), which
+// the rollout never records, so turn-level matching is impossible
+// (#1231). Instead each ghost records its block's provider item id
+// (`msg_…`, `rs_…`, `fc_…`) in `context.itemId`, and the rollout mapper
+// stamps the same id on each committed entry as `codexItemId`
+// (`stampCodexItemId` in providers/codex/renderer/transcript/rollout.ts).
+// Match is by that id, one block at a time. Tool blocks can also still
+// pair by tool_use_id / call_id.
 //
 // -----------------------------------------------------------------------------
 // Reference stability
@@ -341,6 +344,9 @@ function ghostContextForBlock(
   if (block.messagePhase) out.messagePhase = block.messagePhase
   if (block.toolUseId) out.toolUseId = block.toolUseId
   if (block.callId) out.callId = block.callId
+  // The Codex provider item id (#1231): the only id the live block and
+  // its committed rollout entry share. `reconcileUpstream` matches on it.
+  if (block.itemId) out.itemId = block.itemId
   return out
 }
 
@@ -396,15 +402,13 @@ export function reconcileUpstream(
     typeof messageRecord?.id === 'string'
       ? messageRecord.id
       : null
-  // Codex rollout-sourced entries don't carry message.id (the Codex
-  // response id lives elsewhere on the rollout payload). Plumbing it
-  // through the mapper to this matcher is Task 6 of the rendering-
-  // fixes plan; the field is read defensively here so the match path
-  // lights up the moment `mapCodexRolloutToFeedEntries` stamps it.
+  // Codex rollout-sourced entries carry no message.id and never the
+  // proxy response id a Codex ghost is keyed by. They do carry the
+  // provider item id, stamped by the rollout mapper (#1231).
   const codexRecord = asRecord(entry)
-  const codexTurnId =
-    typeof codexRecord?.codexTurnId === 'string'
-      ? codexRecord.codexTurnId
+  const codexItemId =
+    typeof codexRecord?.codexItemId === 'string'
+      ? codexRecord.codexItemId
       : null
 
   // Gather tool_use ids carried by this upstream entry — used for
@@ -428,12 +432,12 @@ export function reconcileUpstream(
     // Claude match by message.id → turnId equality.
     if (messageId && ghost._atp.turnId === messageId) match = true
 
-    // Codex match by response id → turnId equality. Ghosts are minted
-    // with `turnId = responseId` when the live source is Codex rollout,
-    // so a committed entry carrying the same responseId supersedes
-    // every ghost for that turn in one shot — matching the Claude
-    // message.id contract.
-    if (!match && codexTurnId && ghost._atp.turnId === codexTurnId) match = true
+    // Codex match by provider item id (#1231). This replaced a
+    // `codexTurnId === ghost.turnId` comparison that could never be
+    // true: the entry's codexTurnId is the rollout turn UUID, and the
+    // ghost's turnId is the proxy response id. Every Codex text ghost
+    // therefore orphaned. The item id is exact per block.
+    if (!match && codexItemId && ghost._atp.context?.itemId === codexItemId) match = true
 
     // Shared: tool_use id equality. Works for both providers; wins
     // over message-id in ambiguous cases (the ghost knows the exact

@@ -98,6 +98,9 @@
     // the authoritative typecheck validate those evidence contracts instead
     // of forcing tests to duplicate captured structures inline.
     "testing/fixtures/rendering-shapes/**/*.json",
+    // Recorded Codex ghost-identity pairs (#1231): proxy SSE frames and the
+    // rollout record for the same provider item, imported by the ghost tests.
+    "testing/fixtures/ghosts/**/*.json",
     // The phone client is browser code type-checked here (react-jsx, DOM
     // lib) even though it builds through its own plain-Vite config — the
     // tsc gate must cover it or client drift ships silently.
