@@ -217,8 +217,12 @@ export class AgentActivityStore {
           aliases.set(line.f, line.t)
         }
       }
-    } catch {
-      // No aliases yet.
+    } catch (error) {
+      // Only a missing file means "no aliases yet" (B6 check, q115). An
+      // unreadable one was cached as empty, so every read grouped agents
+      // wrongly until restart. Throw instead; nothing is cached, so a later
+      // call reads again.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     this.aliases = aliases
     return aliases
@@ -281,8 +285,12 @@ export class AgentActivityStore {
         } finally {
           await handle.close()
         }
-      } catch {
-        // No file yet: nothing to repair.
+      } catch (error) {
+        // Only a missing file has no tail to repair (B6 check, q115). A file
+        // that cannot be read (write-only, EIO) has an unseen tail: appending
+        // blindly glued the new line onto a torn last line and lost it.
+        // Refuse the append instead.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
     await appendFile(path, text)

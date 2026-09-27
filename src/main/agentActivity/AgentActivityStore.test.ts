@@ -301,3 +301,27 @@ describe('a recovery that fails partway', () => {
     }
   })
 })
+
+// B6 check (q115): an aliases file that exists but cannot be READ was treated
+// as absent twice over. The tail repair skipped its newline check, so a new
+// edge was glued onto a torn last line and lost; and the aliases were cached
+// as empty. Only ENOENT is "no file": otherwise the append is refused, the
+// bytes are untouched, and nothing is cached, so a later call reads again.
+describe('an unreadable aliases file', () => {
+  it('refuses the append instead of gluing onto an unseen tail, and works once readable', async () => {
+    const file = join(dir, 'aliases.jsonl')
+    await mkdir(dir, { recursive: true })
+    await writeFile(file, '{"f":"A","t":"B"}')
+    const before = await readFile(file)
+    await chmod(file, 0o200)
+    try {
+      await expect(new AgentActivityStore(dir).appendAliases([['B', 'C']])).rejects.toThrow()
+    } finally {
+      await chmod(file, 0o600)
+    }
+    expect(await readFile(file)).toEqual(before)
+    await new AgentActivityStore(dir).appendAliases([['B', 'C']])
+    const lines = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { f: string; t: string })
+    expect(lines).toEqual([{ f: 'A', t: 'B' }, { f: 'B', t: 'C' }])
+  })
+})
