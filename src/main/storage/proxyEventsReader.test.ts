@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, readFile, realpath, rename, truncate, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, readFile, realpath, rename, stat, truncate, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -31,6 +31,11 @@ vi.mock('node:fs/promises', async importOriginal => {
     // test can change the file between that fstat and the read.
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args)
+      if (afterLiveOpen && String(args[0]).endsWith('/proxy-events.jsonl')) {
+        const hook = afterLiveOpen
+        afterLiveOpen = null
+        await hook()
+      }
       const statHandle = handle.stat.bind(handle)
       handle.stat = (async (...statArgs: Parameters<typeof handle.stat>) => {
         const stats = await statHandle(...statArgs)
@@ -46,6 +51,9 @@ vi.mock('node:fs/promises', async importOriginal => {
   }
 })
 let afterHandleStat: (() => Promise<void>) | null = null
+// Runs right after the reader opens the live file, before it sizes or reads
+// it: a rotation landing between the reader's two opens.
+let afterLiveOpen: (() => Promise<void>) | null = null
 const { readProxyEventsForBundle } = await import('./proxyEventsReader.js')
 
 async function runDir(sessionKey: string, files: Record<string, string>): Promise<string> {
@@ -196,6 +204,86 @@ for (const provider of ['codex', 'claude'] as const) {
       const { ids } = await bundle(run)
       expect(afterHandleStat).toBeNull()
       expect(ids).toEqual([1, 2])
+    })
+
+    // #1332 review A1/B1/C2: the writer renamed live to `.1` and has not
+    // created the next file yet. The run is still found, from `.1`.
+    it('finds a run whose live file is missing mid-rotation', async () => {
+      const run = await runWith(provider, { rotated: [1, 4] })
+      await unlink(join(run.dir, 'proxy-events.jsonl'))
+      const section = await readProxyEventsForBundle({ cwd: run.cwd, sessionKey: run.sessionKey })
+      expect(section.match).toBe('exact')
+      expect(section.runDir).toBe(run.dir)
+      const { ids } = await bundle(run)
+      expect(ids).toEqual([1, 2, 3, 4])
+    })
+
+    // #1332 review A2 and B3: the writer rotates right after the reader
+    // opened the live file. Read once, both handles would be that file (now
+    // `.1`), the previous generation would be gone, and the bundle would look
+    // complete. The reader tries again and gets the consistent pair.
+    it('reads a consistent pair when the file rotates between the two opens', async () => {
+      const run = await runWith(provider, { rotated: [1, 3], live: [4, 6] })
+      afterLiveOpen = async () => {
+        await rename(join(run.dir, 'proxy-events.jsonl'), join(run.dir, 'proxy-events.1.jsonl'))
+        await writeFile(join(run.dir, 'proxy-events.jsonl'), PROVIDERS[provider](7) + '\n')
+      }
+      const { lines, ids } = await bundle(run)
+      expect(afterLiveOpen).toBeNull()
+      expect(lines[0]?.kind).not.toBe('truncated')
+      expect(ids).toEqual([4, 5, 6, 7])
+    })
+
+    // #1332 review C3: an unfinished LAST line of the live file does not
+    // break its adjacency to `.1`.
+    it('still fills from .1 when the live file ends in an unfinished line', async () => {
+      const run = await runWith(provider, { rotated: [1, 4], live: [5, 6] })
+      const partial = PROVIDERS[provider](7).slice(0, 40)
+      await writeFile(join(run.dir, 'proxy-events.jsonl'), partial, { flag: 'a' })
+      const { lines, ids } = await bundle(run)
+      expect(ids).toEqual([1, 2, 3, 4, 5, 6])
+      expect(lines[0]).toMatchObject({ kind: 'truncated', dropped_bytes: Buffer.byteLength(partial) })
+    })
+
+    // #1332 review A5: dropped_bytes counts BYTES. A non-ASCII unfinished
+    // line (the recorded proxy message shape) would be undercounted in UTF-16
+    // units. And a `.1` left out entirely is counted whole.
+    it('counts dropped bytes exactly, in bytes', async () => {
+      const partial = '{"kind":"response-error","message":"upstream said: överbelastad ✗'
+      const small = await runWith(provider, { live: [1, 2] })
+      // A kept line with non-ASCII text too, so a UTF-16 count of the kept
+      // text would come out wrong.
+      await writeFile(join(small.dir, 'proxy-events.jsonl'), '{"kind":"response-error","requestId":"req-3","message":"upstream said: överbelastad ✗"}\n' + partial, { flag: 'a' })
+      expect((await bundle(small)).lines[0]).toMatchObject({ kind: 'truncated', dropped_bytes: Buffer.byteLength(partial) })
+
+      const big = await runWith(provider, { rotated: [1, 10], live: [11, over + 10] })
+      const { lines, ids } = await bundle(big)
+      const liveSize = (await stat(join(big.dir, 'proxy-events.jsonl'))).size
+      const rotatedSize = (await stat(join(big.dir, 'proxy-events.1.jsonl'))).size
+      const kept = ids.map(id => Buffer.byteLength(PROVIDERS[provider](id) + '\n')).reduce((a, b) => a + b, 0)
+      expect(lines[0]).toMatchObject({ dropped_bytes: liveSize - kept + rotatedSize })
+      expect(String(lines[0]!.reason)).toContain('proxy-events.1.jsonl + ')
+    })
+
+    // #1332 review B2: a selected run that vanished before it could be read
+    // is no payload, not an `exact` match with nothing in it.
+    it('reports no match when the selected run vanishes before the read', async () => {
+      const run = await runWith(provider, { live: [1, 2] })
+      afterSelectionStat = async () => { await unlink(join(run.dir, 'proxy-events.jsonl')) }
+      const section = await readProxyEventsForBundle({ cwd: run.cwd, sessionKey: run.sessionKey })
+      expect(afterSelectionStat).toBeNull()
+      expect(section).toMatchObject({ proxyEvents: null, match: 'none', runDir: null })
+    })
+
+    // #1332 review C: the bundle keeps its locators, the run dir and the
+    // run's session-meta.json, alongside the rotated read.
+    it('keeps the run dir and session meta with a rotated read', async () => {
+      const run = await runWith(provider, { rotated: [1, 2], live: [3, 3] })
+      const meta = JSON.stringify({ cwd: run.cwd, sessionKey: run.sessionKey })
+      await writeFile(join(run.dir, 'session-meta.json'), meta)
+      const section = await readProxyEventsForBundle({ cwd: run.cwd, sessionKey: run.sessionKey })
+      expect(section.runDir).toBe(run.dir)
+      expect(section.sessionMeta).toBe(meta)
     })
 
     it('drops a trailing line the writer has not finished', async () => {

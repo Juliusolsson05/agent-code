@@ -89,3 +89,19 @@ A Codex session's `proxy-events.jsonl` mirror:
   - It fills from `.1` only when the live file fit whole.
 
   Tests run on a recorded Codex chunk line and a recorded Claude `content_block_stop` line (`testing/fixtures/proxy-events-reader/claude-response-chunk.json`). They cover: rotation between selection and read (via a real interleave), a saved size from an old inode, the same-inode case, the two-generation 5 MiB cap, the live-only case, a shrink after `fstat`, and an unfinished last line. Against the same tests, main's reader fails 10, W4's `0905ba83` fails 8, and this PR's first version fails 4. The `bytesRead` mutant is equivalent here: zero-filled bytes are never `\n`, so the trailing line cut removes them. The guard stays anyway.
+- **Review round 1** (6 Codex reviewers, all FIX-BEFORE-MERGE):
+  - **Package** (`7575ae3`):
+    - per-stream write accounting (A1);
+    - a queue bound on the aggregate across open streams (A2);
+    - a synchronous fd open, sized from that fd, so a rotation never waits for a pending open. Every write is marker plus line and must fit its file; what cannot fit is dropped and counted (A3/A4/B2/C2);
+    - a drop marker written at close (B1/C1).
+  - **Reader:**
+    - a run is selected from `.1` when live is missing mid-rotation (A1/B1/C2);
+    - a paired-open retry when the rotation lands between the opens (A2/B3);
+    - adjacency comes from the live read starting at byte 0, not from "nothing dropped" (C3);
+    - a vanished run reports `none` (B2);
+    - an accurate header reason (A4);
+    - byte-exact `dropped_bytes` (A5).
+  - **Routed elsewhere:**
+    - the Claude sidecar appended past the 5 MiB budget (A3) is pre-existing Claude wiring, so it goes to W4 (#1273);
+    - a Codex prompt body can fall outside a 5 MiB tail (C1) is pre-existing policy, so it goes to a follow-up issue.
