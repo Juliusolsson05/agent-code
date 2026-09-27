@@ -146,3 +146,33 @@ describe('a failed context write', () => {
     expect(read.map(interval => interval.startedAt)).toEqual([start + 2 * HOUR])
   })
 })
+
+// #1414 review a+b: a PARTIAL write (A's context line lands, then the append
+// fails before its interval line) left id 1 on disk for A. A was not cached, so
+// B's next context also took id 1; after a restart a later A interval reused
+// id 1 and read back as B's time.
+describe('a partially written context', () => {
+  it('never lets another agent reuse its id', async () => {
+    const store = new AgentActivityStore(dir)
+    const internal = store as unknown as { appendLines: (file: string, lines: string[]) => Promise<void> }
+    const realAppend = internal.appendLines.bind(store)
+    let partial = true
+    internal.appendLines = async (file, lines) => {
+      if (partial) {
+        partial = false
+        await appendFile(file, lines[0] + '\n')
+        throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+      }
+      return realAppend(file, lines)
+    }
+    const start = Date.parse('2026-09-01T09:00:00Z')
+    const a = { ...context, agentKey: 'A', label: 'A' }
+    const b = { ...context, agentKey: 'B', label: 'B' }
+    await expect(store.appendInterval({ context: a, startedAt: start, endedAt: start + HOUR })).rejects.toThrow('no space left')
+    await store.appendInterval({ context: b, startedAt: start + HOUR, endedAt: start + 2 * HOUR })
+    const restarted = new AgentActivityStore(dir)
+    await restarted.appendInterval({ context: a, startedAt: start + 2 * HOUR, endedAt: start + 3 * HOUR })
+    const read = await new AgentActivityStore(dir).readIntervals(start, start + 4 * HOUR)
+    expect(read.map(interval => interval.context.agentKey)).toEqual(['B', 'A'])
+  })
+})

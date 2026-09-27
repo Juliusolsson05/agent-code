@@ -115,6 +115,15 @@ export class AgentActivityStore {
   private readonly cleanTails = new Set<string>()
   /** Context ids already written to each month file this process has touched. */
   private readonly monthContexts = new Map<string, Map<string, number>>()
+  /**
+   * The next context id to mint per month (#1414 review). Minting always
+   * advances it, even when the write then fails, so an id is never issued
+   * twice: a PARTIAL write can leave a context line on disk for an id whose
+   * mapping was never cached, and reusing that id for another agent made the
+   * later reads attribute one agent's time to the other. Loaded as the
+   * file's highest id + 1.
+   */
+  private readonly monthNextId = new Map<string, number>()
 
   constructor(private readonly dir: string) {}
 
@@ -132,9 +141,11 @@ export class AgentActivityStore {
     const known = this.monthContexts.get(month)
     if (known) return known
     const ids = new Map<string, number>()
+    let highest = 0
     try {
       for (const line of parseJsonLines(await readFile(join(this.dir, `${month}.jsonl`), 'utf8'))) {
         if (line.t !== 'c' || !isNumber(line.c)) continue
+        highest = Math.max(highest, line.c)
         const context = parseContext(line)
         if (context) ids.set(contextKey(context), line.c)
       }
@@ -142,6 +153,7 @@ export class AgentActivityStore {
       // No file yet for this month.
     }
     this.monthContexts.set(month, ids)
+    this.monthNextId.set(month, highest + 1)
     return ids
   }
 
@@ -156,7 +168,8 @@ export class AgentActivityStore {
       let id = ids.get(key)
       const isNewContext = id === undefined
       if (id === undefined) {
-        id = ids.size + 1
+        id = this.monthNextId.get(month) ?? ids.size + 1
+        this.monthNextId.set(month, id + 1)
         const contextLine: ContextLine = { t: 'c', c: id, ...interval.context }
         lines.push(JSON.stringify(contextLine))
       }
@@ -167,10 +180,10 @@ export class AgentActivityStore {
       // first meant one failed append (ENOSPC, EIO) left every later interval
       // for this agent this month pointing at a context line that never
       // landed, and readIntervals drops an interval with no context. Not
-      // caching on failure means the next interval re-mints the same id
-      // (`ids.size + 1` is unchanged) and writes the context line again. If
-      // the failed append landed partially, a duplicate context line with the
-      // same id and content is harmless on read.
+      // caching on failure means the next interval for this agent mints a
+      // NEW id (monthNextId already advanced) and writes its context line
+      // again. The failed id is burned: if its line landed partially, it
+      // still names this agent, and no other agent is ever given that id.
       if (isNewContext) ids.set(key, id)
     })
   }
