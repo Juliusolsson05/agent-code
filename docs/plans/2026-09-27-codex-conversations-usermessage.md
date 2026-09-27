@@ -14,3 +14,11 @@
 The fixture `testing/fixtures/conversations/codex-0157/typed-prompt-head.json` is a real 0.157.1 rollout head: `session_meta`, three role-user response items (AGENTS.md, context, the prompt) and the first typed prompt's `UserMessage` item. Text is redacted to the same length. It runs through the real `CodexConversationSource`, with no index beside it.
 1. The row's `userTexts` is exactly the typed prompt, not the injected context, and user activity is set. Red on main (`[]`).
 2. The same head plus a legacy `user_message` for the same prompt lists it once. Listing both carriers fails this test.
+
+## Reviews a and b (round 1)
+- **Carriers merged, not "legacy wins".** A file with both carriers can hold a prompt only the items have. Both are read in file order, and the same prompt written by both counts once: each carrier consumes a pending match from the other. These are the two carriers Codex's own index reads (`rust-v0.157.1 state/src/extract.rs`).
+- **Activity from the tail.** When the 200-record head is truncated, a bounded 512 KiB tail pass takes the newest user timestamp. In 33 of 61 local 0.157.0 files a later prompt lay past the head, one 46.8 h later. `headTruncated` is set as for Claude and Pi.
+- **Text and images.** Parts are joined with no separator, as Codex's `UserMessageItem::message()` does. An image-only message reads `[Image]`, Codex's preview text.
+- **Comment narrowed.** Older CLIs' UserMessage items can hold injected context or command wrappers. The index lists those too, and `firstUnwrappedPrompt` and classify decide what labels a row.
+- **Fixture rebuilt as a CONTIGUOUS real head.** It holds all 10 records from `session_meta` through the first UserMessage of the one local 0.157 file whose first prompt is typed. The expected length and timestamp are recorded independently in the fixture. Composed cases say they are composed.
+- **Filed, not fixed here (pre-existing):** #1418 (0.149–0.151 rollouts with no prompt event) and #1419 (search matches injected context).

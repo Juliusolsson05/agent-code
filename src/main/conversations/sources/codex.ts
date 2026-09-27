@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { open, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
@@ -70,6 +70,8 @@ type RolloutHead = {
   source: string | null
   userTexts: string[]
   lastUserAt: number | null
+  /** The head hit its record bound with no user text (as for Claude and Pi). */
+  headTruncated?: boolean
 }
 
 function isSubagentSource(row: IndexRow): boolean {
@@ -89,24 +91,36 @@ function isSubagentSource(row: IndexRow): boolean {
  *  contract for a fallback path is not worth a cross-repository change. */
 async function readRolloutHead(file: string): Promise<RolloutHead> {
   const out: RolloutHead = { cwd: null, gitBranch: null, createdAt: null, originator: null, source: null, userTexts: [], lastUserAt: null }
-  // Two carriers of a typed prompt, kept apart and chosen at the end (#1363).
-  // Codex up to 0.14x writes `event_msg:user_message`. Codex 0.157 writes
-  // none: a typed prompt is `event_msg:item_completed` with
-  // `item.type: 'UserMessage'` (every one of 120 local 0.15x rollouts, 149
-  // items, none with a legacy event). The UserMessage item, not the role-user
-  // response_item next to it, because Codex builds the item only for what the
-  // user sent: the injected AGENTS.md and environment context are role-user
-  // response items too, and the item leaves them out, as the index does. A
-  // file that has the legacy event uses it alone, so a rollout carrying both
-  // shapes can never list its prompts twice.
-  const legacy: { texts: string[]; lastAt: number | null } = { texts: [], lastAt: null }
-  const items: { texts: string[]; lastAt: number | null } = { texts: [], lastAt: null }
-  const note = (into: typeof legacy, text: string, timestamp: unknown) => {
-    if (into.texts.length < 6) into.texts.push(text)
+  // Two carriers of a user prompt (#1363). Codex up to 0.14x wrote
+  // `event_msg:user_message`; 0.157 writes none, and a prompt is
+  // `event_msg:item_completed` with `item.type: 'UserMessage'` (414 of 416
+  // local 0.157 files; the other two are native subagents with no prompt).
+  // These are exactly the two carriers Codex's own index reads for
+  // `first_user_message` (rust-v0.157.1 state/src/extract.rs); it ignores the
+  // role-user response_item, which also carries injected context. WHY both are
+  // read and merged, not "legacy wins" (#1407 reviews a and b): a file with
+  // both carriers (a session resumed across writer versions) could then lose
+  // a prompt only the items hold. The same prompt written by both carriers is
+  // counted once: each carrier consumes a pending match from the other.
+  // What older CLIs put in UserMessage items (sometimes injected context or a
+  // command wrapper) is what the index lists too; firstUnwrappedPrompt and
+  // classify decide what is a label, as for every other source.
+  const pending = { legacy: new Map<string, number>(), item: new Map<string, number>() }
+  const noteUser = (carrier: 'legacy' | 'item', text: string, timestamp: unknown) => {
+    const other = carrier === 'legacy' ? pending.item : pending.legacy
+    const matched = other.get(text) ?? 0
+    if (matched > 0) {
+      other.set(text, matched - 1)
+    } else {
+      const own = pending[carrier]
+      own.set(text, (own.get(text) ?? 0) + 1)
+      if (out.userTexts.length < 6) out.userTexts.push(text)
+    }
     const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
-    if (Number.isFinite(ts)) into.lastAt = ts
+    if (Number.isFinite(ts)) out.lastUserAt = Math.max(out.lastUserAt ?? ts, ts)
   }
   let records = 0
+  let truncated = false
   for await (const record of streamJsonl<Record<string, unknown>>(file)) {
     if (!record) continue
     records++
@@ -118,36 +132,98 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
       out.createdAt = typeof payload.timestamp === 'string' && Number.isFinite(Date.parse(payload.timestamp)) ? Date.parse(payload.timestamp) : null
       out.originator = typeof payload.originator === 'string' ? payload.originator : null
       out.source = typeof payload.source === 'string' ? payload.source : payload.source ? JSON.stringify(payload.source) : null
-    } else if (record.type === 'event_msg' && payload?.type === 'user_message' && typeof payload.message === 'string') {
-      note(legacy, payload.message, record.timestamp)
-    } else if (record.type === 'event_msg' && payload?.type === 'item_completed') {
-      const text = userMessageItemText(payload.item)
-      if (text) note(items, text, record.timestamp)
+    } else {
+      const user = userPromptOf(record, payload)
+      if (user !== null) noteUser(user.carrier, user.text, record.timestamp)
     }
     // WHY the limit is unconditional: a rollout whose first two hundred
     // records hold no user event (exec runs, synthesized transcripts) has
     // nothing further up the file the head can label it by, and reading such
     // files to the end made discovery cost the size of the store.
-    if (records >= HEAD_RECORD_LIMIT) break
+    if (records >= HEAD_RECORD_LIMIT) {
+      truncated = true
+      break
+    }
   }
-  const chosen = legacy.texts.length > 0 ? legacy : items
-  out.userTexts = chosen.texts
-  out.lastUserAt = chosen.lastAt
+  if (truncated) {
+    // WHY a tail pass (#1407 reviews a and b): the listing sorts by user
+    // activity, and a head-bounded read reported the last prompt within the
+    // first 200 records. In 33 of 61 local 0.157.0 files a later prompt lay
+    // beyond them (one 46.8 hours later), so a live session sorted days too
+    // old. The newest prompt is near the end of the file, so reading a
+    // bounded tail finds it at a fixed cost; the head keeps the labels.
+    const tailAt = await newestUserTimestampInTail(file)
+    if (tailAt !== null) out.lastUserAt = Math.max(out.lastUserAt ?? tailAt, tailAt)
+    out.headTruncated = out.userTexts.length === 0
+  }
   return out
 }
 
+// Bytes read from the end of a rollout for the newest user timestamp. A
+// Codex turn's own records (reasoning, tool calls, outputs) fill this many
+// bytes long before the next prompt in the usual case; a prompt further back
+// than this keeps the head's time, which is at worst the old behaviour.
+const TAIL_ACTIVITY_BYTES = 512 * 1024
+
+async function newestUserTimestampInTail(file: string): Promise<number | null> {
+  let handle
+  try {
+    handle = await open(file, 'r')
+    const { size } = await handle.stat()
+    const start = Math.max(0, size - TAIL_ACTIVITY_BYTES)
+    const buffer = Buffer.alloc(size - start)
+    await handle.read(buffer, 0, buffer.length, start)
+    const lines = buffer.toString('utf8').split('\n')
+    // The first line of a mid-file window is partial; the last may be too.
+    if (start > 0) lines.shift()
+    let newest: number | null = null
+    for (const line of lines) {
+      if (!line.includes('"user_message"') && !line.includes('"UserMessage"')) continue
+      let record: Record<string, unknown>
+      try {
+        record = JSON.parse(line) as Record<string, unknown>
+      } catch {
+        continue
+      }
+      if (userPromptOf(record, asRecord(record.payload)) === null) continue
+      const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
+      if (Number.isFinite(ts)) newest = Math.max(newest ?? ts, ts)
+    }
+    return newest
+  } catch {
+    return null
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
+/** The user prompt a rollout record carries, and through which carrier. */
+function userPromptOf(record: Record<string, unknown>, payload: Record<string, unknown> | null): { carrier: 'legacy' | 'item'; text: string } | null {
+  if (record.type !== 'event_msg' || !payload) return null
+  if (payload.type === 'user_message' && typeof payload.message === 'string') return { carrier: 'legacy', text: payload.message }
+  if (payload.type === 'item_completed') {
+    const text = userMessageItemText(payload.item)
+    if (text !== null) return { carrier: 'item', text }
+  }
+  return null
+}
+
 /** The text of a 0.157 `UserMessage` turn item (`{type, id, content: [{type:
- *  'text', text, text_elements}]}`), or null for any other item. Image parts
- *  carry no text and are skipped; a message of only images has no label. */
+ *  'text', text, text_elements}]}`), or null for any other item. Text parts
+ *  are joined with no separator, as Codex's own UserMessageItem::message()
+ *  does (protocol/src/items.rs). A message of only images reads `[Image]`,
+ *  Codex's own preview text (protocol.rs user_message_preview), so an
+ *  image-only prompt is still a prompt (#1407 review b). */
 function userMessageItemText(value: unknown): string | null {
   const item = asRecord(value)
   if (item?.type !== 'UserMessage' || !Array.isArray(item.content)) return null
-  const text = item.content
-    .map(part => asRecord(part))
-    .filter(part => part?.type === 'text' && typeof part.text === 'string')
+  const parts = item.content.map(part => asRecord(part)).filter(part => part !== null)
+  const text = parts
+    .filter(part => part!.type === 'text' && typeof part!.text === 'string')
     .map(part => part!.text as string)
     .join('')
-  return text.length > 0 ? text : null
+  if (text.length > 0) return text
+  return parts.some(part => part!.type !== 'text') ? '[Image]' : null
 }
 
 export class CodexConversationSource implements ConversationSource {
@@ -217,6 +293,7 @@ export class CodexConversationSource implements ConversationSource {
       userTexts: head.userTexts,
       createdAt: head.createdAt,
       lastUserActivityAt: head.lastUserAt,
+      ...(head.headTruncated ? { headTruncated: true } : {}),
       activitySource: head.lastUserAt !== null ? 'tail' : null,
       mtime,
       promptCount: null,
