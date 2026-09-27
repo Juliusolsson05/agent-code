@@ -65,6 +65,9 @@ type SessionRegistration = {
   token: string
   scope: McpSessionScope
   revoked: boolean
+  /** The reporting pin taken for this registration (#1328), released
+   *  exactly once when the registration is revoked. */
+  releasePin?: () => void
 }
 
 type BuiltInMcpServerFactory = (
@@ -73,8 +76,10 @@ type BuiltInMcpServerFactory = (
 ) => McpServer
 
 export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDependencies & {
-  tldrStore?: Pick<TldrStore, 'update'>
-  goalStore?: Pick<TldrStore, 'update' | 'complete'>
+  // pin/unpin are optional only so tests of unrelated tools can pass a bare
+  // `update`; the app's stores always have them (see pinReportingIdentity).
+  tldrStore?: Pick<TldrStore, 'update'> & Partial<Pick<TldrStore, 'pin' | 'unpin'>>
+  goalStore?: Pick<TldrStore, 'update' | 'complete'> & Partial<Pick<TldrStore, 'pin' | 'unpin'>>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
@@ -243,13 +248,67 @@ export class BuiltInMcpHttpHost {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 
+  /** The TLDR/Goal identity a registration with this scope reports as: the
+   *  same rule registerSession's scope uses. */
+  private reportingIdentity(scope: { tldrIdentity?: string; sessionId: string; providerKind: AgentProviderKind; domains: readonly BuiltInMcpDomain[] | undefined }): string | undefined {
+    return scope.tldrIdentity
+      ?? (hasReportingDomain(filterBuiltInMcpDomainsForProvider(scope.providerKind, scope.domains)) ? scope.sessionId : undefined)
+  }
+
+  /**
+   * Pin the identity a session is about to register as, in both reporting
+   * stores, and wait until the pin is in each store's write queue (#1328 q52).
+   * Returns the release for the caller to call if the session does NOT end up
+   * registered (cancelled, or registerSession threw); once it is registered,
+   * revokeSession releases it instead.
+   *
+   * WHY the spawn path awaits this BEFORE registerSession: registerSession is
+   * synchronous, and the stores' cap eviction must be ordered against "this
+   * identity became live". A pin queued before an eviction protects the
+   * record; one queued behind an in-flight eviction waits for its outcome.
+   *
+   * WHY a release, and allSettled (#1328 verification, steering q56): a pin
+   * with no registration had no owner — revokeSession finds no token — so a
+   * cancelled spawn left its identity protected forever, and at a full store
+   * whose only free record it was, every new agent was refused until
+   * restart. A pin that succeeded in one store while the other failed is
+   * released before the error propagates.
+   */
+  async pinReportingIdentity(scope: { tldrIdentity?: string; sessionId: string; providerKind: AgentProviderKind; domains: readonly BuiltInMcpDomain[] | undefined }): Promise<() => void> {
+    const identity = this.reportingIdentity(scope)
+    if (!identity) return () => {}
+    const stores = [this.dependencies.tldrStore, this.dependencies.goalStore].filter(store => store?.pin && store.unpin)
+    const pinned = await Promise.allSettled(stores.map(store => store!.pin!(identity)))
+    const release = (only: typeof stores) => { for (const store of only) void store!.unpin!(identity).catch(() => {}) }
+    const failed = pinned.find(result => result.status === 'rejected')
+    if (failed) {
+      release(stores.filter((_, index) => pinned[index]!.status === 'fulfilled'))
+      throw (failed as PromiseRejectedResult).reason
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      release(stores)
+    }
+  }
+
   registerSession(scope: {
     tldrIdentity?: string
     sessionId: string
     cwd: string
     providerKind: AgentProviderKind
     domains: readonly BuiltInMcpDomain[] | undefined
-  }): BuiltInMcpServerConfig[] {
+  },
+  // The release pinReportingIdentity returned for this spawn. WHY the
+  // registration takes it (#1328 second verification, all three): a pin
+  // needs exactly one owner. Released by identity on revoke, a pin whose
+  // registration was never created had none: a recovered session whose only
+  // domains the provider policy filters away returns `[]`, no token exists,
+  // and its identity stayed protected forever. Now the pin is released right
+  // here when no registration is created, and otherwise by revokeSession.
+  releasePin?: () => void,
+  ): BuiltInMcpServerConfig[] {
     // WHY provider filtering is repeated at this main-owned boundary even
     // though the renderer resolves the same policy: session metadata and IPC
     // payloads are inputs, not authority. In particular, stale persisted data
@@ -276,6 +335,7 @@ export class BuiltInMcpHttpHost {
       // revoke any token left under that id rather than letting the stale
       // registration outlive the now-capability-free replacement.
       this.revokeSession(scope.sessionId)
+      releasePin?.()
       return []
     }
     if (!this.server || this.port === null) {
@@ -285,7 +345,7 @@ export class BuiltInMcpHttpHost {
     this.revokeSession(scope.sessionId)
     const token = randomBytes(32).toString('base64url')
     const mcpScope = {
-      tldrIdentity: scope.tldrIdentity ?? (hasReportingDomain(domains) ? scope.sessionId : undefined),
+      tldrIdentity: this.reportingIdentity(scope),
       sessionId: scope.sessionId,
       cwd: scope.cwd,
       domains,
@@ -297,6 +357,7 @@ export class BuiltInMcpHttpHost {
       token,
       scope: mcpScope,
       revoked: false,
+      ...(releasePin ? { releasePin } : {}),
     })
     this.tokensBySession.set(scope.sessionId, token)
 
@@ -354,6 +415,10 @@ export class BuiltInMcpHttpHost {
     // tear down — each request owns and closes its own scoped server.
     if (registration) registration.revoked = true
     this.dependencies.tldrEnforcement?.forget(token)
+    // Release the pin pinReportingIdentity took for this registration. The
+    // stores count pins, so a replacement's successor (registered before its
+    // predecessor is revoked, same identity) stays protected.
+    registration?.releasePin?.()
   }
 
   private serverConfig(token: string): BuiltInMcpServerConfig {
