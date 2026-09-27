@@ -263,6 +263,24 @@ describe('a rebuilt cap state keeps the file\'s drop count', () => {
     expect(await lastMarkerDrops('capped-rebuilt')).toBeGreaterThanOrEqual(1_001)
   })
 
+  // Review b, round 5: drops are only persisted at a doubling, so a forget
+  // discarded up to half of them. Three forget cycles of 1 + 999 drops each
+  // on a file marked at 1,000 used to leave a last marker of 1,003 for 4,000
+  // true drops.
+  it('across repeated forgets, the last marker stays within 2x of the true drops', async () => {
+    await cappedFileWithMarker('capped-cycles', 1_000)
+    let id = 0
+    for (let cycle = 0; cycle < 3; cycle++) {
+      forgetFeedDebugSession('capped-cycles')
+      await queueFeedDebugAppend('capped-cycles', [entry(++id)], 1_000)
+      await queueFeedDebugAppend('capped-cycles', Array.from({ length: 999 }, () => entry(++id)), 1_000)
+    }
+    forgetFeedDebugSession('capped-cycles')
+    await queueFeedDebugAppend('capped-cycles', [], 1_000)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(await lastMarkerDrops('capped-cycles')).toBeGreaterThanOrEqual(4_000)
+  })
+
   it('after a forget during the first size check', async () => {
     await cappedFileWithMarker('capped-during-stat', 1_000)
     let release!: () => void

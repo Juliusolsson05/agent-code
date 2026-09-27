@@ -284,7 +284,7 @@ export function queueFeedDebugAppend(
       const freshEntries = entries.filter(entry => entry.id > lastWritten)
       if (freshEntries.length === 0) return
       await mkdir(FEED_DEBUG_DIR, { recursive: true })
-      const filePath = join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
+      const filePath = feedDebugFilePath(sessionId)
 
       // Per-file cap bookkeeping. The counter is process-local: the on-disk
       // file might already contain bytes from a previous run (feed-debug lives
@@ -499,6 +499,41 @@ export function feedDebugSessionStateSizesForTest(sessionId?: string): { ids: nu
  *  long-since-closed panes still benefit from reading the trail. The
  *  unified sweep in storage/debugRetention.ts is what eventually
  *  deletes the file. */
+function feedDebugFilePath(sessionId: string): string {
+  return join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
+}
+
+/**
+ * Write the drops a capped session counted since its last on-disk marker,
+ * before its in-memory count is forgotten (#1392 review b, round 5).
+ *
+ * WHY: drops are persisted only at a doubling, so up to half of them live
+ * only in memory. Every forget (process exit with the pane open, a same-id
+ * wake, the renderer's release) used to discard them, and a session that
+ * crossed a few forgets reported a fraction of its true total in its last
+ * marker, breaking the 2x promise. Chained on the session's write queue so it
+ * lands after any append already queued, which makes it the file's LAST
+ * marker (the one readLastTombstoneDrops and forensics read). Best effort: a
+ * failed write loses only what the old code always lost.
+ *
+ * Residual: a crash or a kill of main still loses the unmarked drops. Only a
+ * write per drop could avoid that, which is what the doubling rule exists to
+ * prevent.
+ */
+function flushUnmarkedDrops(sessionId: string, capState: FeedDebugCapState | undefined): void {
+  if (!capState?.tombstoneWritten || capState.droppedEntries <= capState.lastTombstoneDrops) return
+  const line = buildTombstoneLine(sessionId, capState)
+  const previous = feedDebugWriteQueues.get(sessionId) ?? Promise.resolve()
+  const next = previous
+    .catch(() => {})
+    .then(() => writeFile(feedDebugFilePath(sessionId), line, { encoding: 'utf8', flag: 'a' }))
+    .catch(() => {})
+  feedDebugWriteQueues.set(sessionId, next)
+  void next.then(() => {
+    if (feedDebugWriteQueues.get(sessionId) === next) feedDebugWriteQueues.delete(sessionId)
+  })
+}
+
 export function forgetFeedDebugSession(sessionId: string): void {
   // We never delete `feedDebugWriteQueues` synchronously here —
   // there might be an in-flight write that still owns the chain.
@@ -514,5 +549,6 @@ export function forgetFeedDebugSession(sessionId: string): void {
   // in this process, we'll re-stat the on-disk file and prime a fresh counter;
   // never carrying stale cap state across "session forgotten" boundaries keeps
   // the map from growing unbounded across long-lived main processes.
+  flushUnmarkedDrops(sessionId, feedDebugCapState.get(sessionId))
   feedDebugCapState.delete(sessionId)
 }
