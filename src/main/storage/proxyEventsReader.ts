@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { open, readFile, readdir, stat, type FileHandle } from 'node:fs/promises'
 import { join } from 'path'
 
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
@@ -121,8 +121,13 @@ export async function readProxyEventsForBundle(opts: {
     const latest = await findLatestRun(projectDir, selection.segments)
     if (!latest) return empty
 
-    const eventsPath = join(latest.runDir, 'proxy-events.jsonl')
-    const tail = await readEventsTail(eventsPath, latest.size)
+    // The selection's size is deliberately not passed: the file may have
+    // rotated since (see readEventsTail).
+    const tail = await readEventsTail(latest.runDir)
+    // Neither generation could be opened (it vanished after selection):
+    // report no payload, not an `exact` match with nothing in it (#1332
+    // review B). The previous reader got here by throwing into the catch.
+    if (tail === null) return empty
     const newestBody = await readLatestRequestBody(latest.runDir)
     const proxyEvents = tail === null ? newestBody : newestBody ? `${tail.replace(/\n?$/, '\n')}${newestBody}` : tail
     const sessionMeta = await readSessionMeta(join(latest.runDir, 'session-meta.json'))
@@ -204,16 +209,23 @@ async function findLatestRun(
     }
     for (const runName of runEntries) {
       const runDir = join(sessionDir, runName)
-      const eventsPath = join(runDir, 'proxy-events.jsonl')
-      try {
-        const stats = await stat(eventsPath)
-        if (!stats.isFile()) continue
-        if (best === null || stats.mtimeMs > best.mtimeMs) {
-          best = { runDir, size: stats.size, mtimeMs: stats.mtimeMs, sessionSegment }
+      // WHY `.1` too (#1332 review A1/B1/C2): a writer rotates by renaming
+      // the live file and THEN creating the next one. A bundle taken in that
+      // gap (or after a writer that failed to create the next file) finds
+      // only `.1`, which holds the run's newest traffic. Skipping the run
+      // then dropped the whole proxy section, or picked an older run.
+      for (const name of [LIVE_EVENTS_FILE, ROTATED_EVENTS_FILE]) {
+        try {
+          const stats = await stat(join(runDir, name))
+          if (!stats.isFile()) continue
+          if (best === null || stats.mtimeMs > best.mtimeMs) {
+            best = { runDir, size: stats.size, mtimeMs: stats.mtimeMs, sessionSegment }
+          }
+          break
+        } catch {
+          // Missing: an empty run dir, a proxy that has not fired a request
+          // yet, or the live file mid-rotation (then `.1` is tried).
         }
-      } catch {
-        // events file missing — empty run dir or fresh proxy that
-        // hasn't fired any requests yet. Skip silently.
       }
     }
   }
@@ -221,38 +233,139 @@ async function findLatestRun(
 }
 
 
-async function readEventsTail(path: string, size: number): Promise<string | null> {
-  try {
-    if (size <= PROXY_EVENTS_BUNDLE_MAX_BYTES) {
-      return await readFile(path, 'utf-8')
-    }
-    // Read the trailing PROXY_EVENTS_BUNDLE_MAX_BYTES bytes. We can't
-    // use readFile with a position arg (no slice option in fs.promises
-    // readFile), so open + read directly.
-    const { open } = await import('node:fs/promises')
-    const handle = await open(path, 'r')
+// The previous generation of a rotated events file. Both providers' writers
+// rotate `proxy-events.jsonl` to this name and start a fresh file: the Codex
+// mirror at 64 MiB (codex-headless `rotatedMirrorPath`, #372) and the Claude
+// mitm addon (claude-code-headless `_rotated_path()`, #1273). The name must
+// match both. This reader is the one owner of reading across it (steering
+// q54): provider wiring builds on it rather than re-implementing it.
+const LIVE_EVENTS_FILE = 'proxy-events.jsonl'
+const ROTATED_EVENTS_FILE = 'proxy-events.1.jsonl'
+
+/**
+ * The last PROXY_EVENTS_BUNDLE_MAX_BYTES of a run's wire log, read across a
+ * rotation as if the previous generation and the live file were one file.
+ *
+ * WHY across the rotation: right after a rotation the live file holds a few
+ * lines, so a bundle made then would carry almost none of the recent traffic
+ * a bug report is about. When the live file is under the budget, the rest is
+ * filled from the END of the previous generation, which is the traffic
+ * immediately before the live file's first line.
+ *
+ * WHY every size comes from fstat on the handle we read (steering q54): the
+ * writers rotate by rename while we read. A size taken earlier (the run
+ * selection's stat) can belong to an inode that has since become `.1`, while
+ * the path now opens a new, empty file. Reading that saved size from the new
+ * file returned a buffer of NULs (never-read bytes), or a header with no
+ * lines. One handle, sized by its own fstat, is always one consistent file.
+ *
+ * WHY the inode check: if the rotation lands between opening the live file
+ * and opening `.1`, both handles are the SAME file (the live one we opened
+ * was just renamed to `.1`). Reading both would duplicate every line, so the
+ * second is skipped; the bundle is then a consistent snapshot as of the first
+ * open, which is the best a reader without a lock can do.
+ */
+async function readEventsTail(runDir: string): Promise<string | null> {
+  const livePath = join(runDir, LIVE_EVENTS_FILE)
+  const rotatedPath = join(runDir, ROTATED_EVENTS_FILE)
+  // WHY retry (#1332 review A2): when the writer rotates between our two
+  // opens, both handles are the file we opened as live (now renamed to
+  // `.1`), and the generation that WAS `.1` has been replaced and is gone.
+  // Reading once more gives a consistent pair (the renamed file as `.1`,
+  // the fresh live file). Rotations are 64 MiB apart, so a second collision
+  // in a row means something odd; after the last attempt the bundle says in
+  // its header that older traffic was lost rather than presenting the
+  // remainder as complete.
+  for (let attempt = 1; ; attempt += 1) {
+    const live = await openForTail(livePath)
+    const rotated = await openForTail(rotatedPath)
     try {
-      const start = size - PROXY_EVENTS_BUNDLE_MAX_BYTES
-      const buf = Buffer.alloc(PROXY_EVENTS_BUNDLE_MAX_BYTES)
-      await handle.read(buf, 0, PROXY_EVENTS_BUNDLE_MAX_BYTES, start)
-      // Drop the first partial line so consumers always see a clean
-      // JSONL boundary at byte 0 of the captured content.
-      const content = buf.toString('utf-8')
-      const firstNewline = content.indexOf('\n')
-      const trimmed = firstNewline >= 0 ? content.slice(firstNewline + 1) : content
-      const droppedBytes = size - trimmed.length
-      const header = JSON.stringify({
-        kind: 'truncated',
-        reason: `proxy-events.jsonl exceeded ${PROXY_EVENTS_BUNDLE_MAX_BYTES} bytes; only the trailing portion is included in this bundle. Full log on disk: ${path}`,
-        dropped_bytes: droppedBytes,
-      })
-      return `${header}\n${trimmed}`
+      if (!live && !rotated) return null
+      const sameFile = !!live && !!rotated && live.ino === rotated.ino && live.dev === rotated.dev
+      if (sameFile && attempt < 3) continue
+      return await tailOfGenerations(live, sameFile ? null : rotated, sameFile, livePath, rotatedPath)
+    } catch {
+      return null
     } finally {
-      await handle.close()
+      await live?.handle.close().catch(() => undefined)
+      await rotated?.handle.close().catch(() => undefined)
     }
+  }
+}
+
+async function tailOfGenerations(
+  live: TailHandle | null,
+  rotated: TailHandle | null,
+  lostOlderGeneration: boolean,
+  livePath: string,
+  rotatedPath: string,
+): Promise<string> {
+  const liveTail = live ? await readTailLines(live, PROXY_EVENTS_BUNDLE_MAX_BYTES) : null
+  const room = PROXY_EVENTS_BUNDLE_MAX_BYTES - (liveTail ? Buffer.byteLength(liveTail.text) : 0)
+  // `.1` is adjacent to the live file only if the live read began at its
+  // first byte. An unfinished LAST line does not break adjacency (#1332
+  // review C3: it used to, and a writer mid-append right after a rotation
+  // hid the whole previous generation).
+  const adjacent = !liveTail || liveTail.startedAtZero
+  const older = rotated && adjacent && room > 0 ? await readTailLines(rotated, room) : null
+  const droppedBytes = (liveTail?.droppedBytes ?? 0) + (older?.droppedBytes ?? 0) +
+    (rotated && !older ? rotated.size : 0)
+  const text = `${older?.text ?? ''}${liveTail?.text ?? ''}`
+  if (droppedBytes === 0 && !lostOlderGeneration) return text
+  const onDisk = rotated ? `${rotatedPath} + ${livePath}` : livePath
+  return `${truncatedHeader(droppedBytes, onDisk, lostOlderGeneration)}\n${text}`
+}
+
+type TailHandle = { handle: FileHandle; size: number; ino: number; dev: number }
+
+async function openForTail(path: string): Promise<TailHandle | null> {
+  let handle: FileHandle
+  try { handle = await open(path, 'r') } catch { return null }
+  try {
+    const stats = await handle.stat()
+    if (!stats.isFile()) { await handle.close(); return null }
+    return { handle, size: stats.size, ino: stats.ino, dev: stats.dev }
   } catch {
+    await handle.close().catch(() => undefined)
     return null
   }
+}
+
+/**
+ * The last `maxBytes` of an open file as whole JSONL lines, and how many of
+ * its bytes were left out.
+ *
+ * Both ends are cut to line boundaries: a read that does not start at byte 0
+ * drops its first partial line, and a trailing line without its newline (a
+ * writer mid-append, or a file that shrank under us) is dropped too, so the
+ * bundle is always parseable. Only `bytesRead` bytes are used: a file that is
+ * shorter than its fstat by the time we read never yields padding.
+ */
+async function readTailLines(file: TailHandle, maxBytes: number): Promise<{ text: string; droppedBytes: number; startedAtZero: boolean }> {
+  const want = Math.min(maxBytes, file.size)
+  const start = file.size - want
+  const buf = Buffer.alloc(want)
+  const { bytesRead } = want > 0 ? await file.handle.read(buf, 0, want, start) : { bytesRead: 0 }
+  let bytes = buf.subarray(0, bytesRead)
+  if (start > 0) {
+    const firstNewline = bytes.indexOf(0x0a)
+    bytes = firstNewline >= 0 ? bytes.subarray(firstNewline + 1) : bytes.subarray(bytes.length)
+  }
+  const lastNewline = bytes.lastIndexOf(0x0a)
+  bytes = bytes.subarray(0, lastNewline + 1)
+  return { text: bytes.toString('utf-8'), droppedBytes: file.size - bytes.length, startedAtZero: start === 0 }
+}
+
+// WHY the reason names no single cause (#1332 review A4): bytes are left out
+// for three reasons, a budget cut at the start, an unfinished last line, and
+// a generation lost to a rotation during the read, and a reason that always
+// said "exceeded 5 MiB" was false for the other two.
+function truncatedHeader(droppedBytes: number, onDisk: string, lostOlderGeneration = false): string {
+  return JSON.stringify({
+    kind: 'truncated',
+    reason: `This bundle holds whole lines from the last ${PROXY_EVENTS_BUNDLE_MAX_BYTES} bytes of the run's wire log; dropped_bytes were left out (older lines past the budget, or an unfinished last line)${lostOlderGeneration ? '. The previous generation was rotated away during the read, so older traffic is missing' : ''}. Full log on disk: ${onDisk}`,
+    dropped_bytes: droppedBytes,
+  })
 }
 
 
