@@ -39,8 +39,10 @@ async function sessionAt(until: number, bytes?: string[]): Promise<{ session: Co
   terminal.attach()
   const chunks = bytes ?? recording.events.filter(event => event.dir === 'out' && event.t < until).map(event => event.data!)
   for (const chunk of chunks) for (const listener of listeners) listener(chunk)
-  const deadline = Date.now() + 2000
-  while (terminal.snapshotComposerCells() === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+  // Wait for xterm to parse everything fed (#1343 review B). A 2 s wall-clock
+  // deadline returned a half-painted frame under load (the tall draft stopped
+  // at line 10 or 18); draining is the real completion signal.
+  while ((terminal as unknown as { pendingWrites: number }).pendingWrites !== 0) await new Promise(resolve => setTimeout(resolve, 5))
   const session = new CodexSession()
   ;(session as unknown as { headless: unknown }).headless = headless
   return { session, headless }
