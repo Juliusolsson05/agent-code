@@ -155,7 +155,7 @@ export function classifyProviderFailure(status: number | undefined): DictationOu
  * prefix followed by unbounded provider text still leaks. `detail` is only
  * ever a number this module formats itself.
  */
-export function dictationReasonMessage(reason: DictationOutcomeReason, detail: { micOpenMs?: number } = {}): string | null {
+export function dictationReasonMessage(reason: DictationOutcomeReason, detail: { micOpenMs?: number; previous?: boolean } = {}): string | null {
   switch (reason) {
     case 'success':
     case 'cancelled.short-press':
@@ -208,7 +208,7 @@ export function dictationReasonMessage(reason: DictationOutcomeReason, detail: {
     case 'delivery.hidden-terminal':
       return 'Dictation stopped: the terminal pane was hidden, so the transcript was not sent.'
     case 'delivery.failed':
-      return 'The transcript could not be sent to the terminal. It is in Settings → Dictation → History.'
+      return `The ${detail.previous ? 'previous ' : ''}transcript could not be sent to the terminal. It is in Settings → Dictation → History.`
     case 'unknown':
       return 'Dictation failed.'
   }

@@ -50,6 +50,11 @@ type ActiveRecording = {
   nextChunkIndex: number
   streamStartPromise: Promise<string | null> | null
   streamStartTimer: number | null
+  /** The stream id main returned, set the moment it answers, BEFORE the
+   *  queued chunks are drained and `id` is published (#1340 round 2 C): a
+   *  drain that hangs never publishes `id`, and main's session must still be
+   *  cancelled. */
+  startedStreamId: string | null
   /** When start() began, i.e. the press. `startedAt - pressStartedAt` is how
    *  long the microphone took to open (#243 `mic.opened-late`). */
   pressStartedAt: number
@@ -363,7 +368,7 @@ export function useComposerDictation({
   // What the user reads comes from the code, never from provider or IPC text
   // (q22/q39). `null` means say nothing (a tap the user abandoned, a pane
   // that is gone).
-  const showReason = useCallback((reason: DictationOutcomeReason, detail?: { micOpenMs?: number }): string | null => {
+  const showReason = useCallback((reason: DictationOutcomeReason, detail?: { micOpenMs?: number; previous?: boolean }): string | null => {
     const message = dictationReasonMessage(reason, detail)
     if (message) reportMessage(message)
     return message
@@ -494,8 +499,13 @@ export function useComposerDictation({
         event: 'delivery:failed',
         data: { code: 'delivery.failed' satisfies DictationOutcomeReason },
       })
-      const message = showReason('delivery.failed')
-      if (message) setDictationOverlayState({ errorMessage: message })
+      // A newer dictation may already be recording by the time this one's
+      // paste fails (#1340 round 2 C). Its failure is still reported, but
+      // named as the previous one, and it does not take over the overlay
+      // the new recording is using.
+      const previous = activeRef.current !== null
+      const message = showReason('delivery.failed', { previous })
+      if (message && !previous) setDictationOverlayState({ errorMessage: message })
     }
     void withinDeadline(Promise.resolve(delivered), DICTATION_DEADLINES_MS.terminalInsertion, 'delivery.failed')
       .then(ok => { if (ok) committed(); else failed() }, failed)
@@ -708,7 +718,8 @@ export function useComposerDictation({
     recordOutcome(reason, { streamId: recording.id, ...details })
     const message = showReason(reason)
     if (message && sinkRef.current.kind === 'terminal') setDictationOverlayState({ errorMessage: message })
-    if (recording.id) void window.api.cancelDictationStream({ id: recording.id })
+    const knownId = recording.id ?? recording.startedStreamId
+    if (knownId) void window.api.cancelDictationStream({ id: knownId })
     else if (recording.streamStartPromise) {
       void recording.streamStartPromise.then(id => { if (id) void window.api.cancelDictationStream({ id }) }, () => {})
     }
@@ -877,7 +888,10 @@ export function useComposerDictation({
       recording.discarded = true
       // Main's half of the session is released too (a drain that timed out
       // never reached stop); cancelling an id main already closed is a no-op.
-      if (recording.id) void window.api.cancelDictationStream({ id: recording.id })
+      // `startedStreamId` covers a stream main started whose queued drain
+      // hung before `id` was published (#1340 round 2 C).
+      const knownId = recording.id ?? recording.startedStreamId
+      if (knownId) void window.api.cancelDictationStream({ id: knownId })
       cleanup(recording)
       activeRef.current = null
       restoreBaseInput(recording)
@@ -1045,6 +1059,10 @@ export function useComposerDictation({
       const constraints = await pickDictationAudioConstraints(audioInput, (event, data) => {
         window.api.recordDictationDebugEvent(debugSessionId, { layer: 'DEVICE', event, data })
       })
+      // Unmounted while devices were being enumerated (#1340 round 2 C): do
+      // not ask for a microphone (or trigger a permission prompt) for a pane
+      // the user already closed. The unmount wrote the OUTCOME row.
+      if (unmountedRef.current) return
       const finishCapture = rendererOperations.begin('dictation.capture')
       const stream = await navigator.mediaDevices.getUserMedia(constraints).then(stream => { finishCapture(); return stream }).catch(cause => {
         finishCapture('error')
@@ -1121,6 +1139,7 @@ export function useComposerDictation({
         nextChunkIndex: 0,
         streamStartPromise: null,
         streamStartTimer: null,
+        startedStreamId: null,
         pressStartedAt,
         firstAudioTimer: null,
         connectTimer: null,
@@ -1176,6 +1195,7 @@ export function useComposerDictation({
             // Main's code, not its text (#243).
             throw new DictationReasonError(started.reason)
           }
+          recording.startedStreamId = started.id
           if (recording.discarded || activeRef.current !== recording) {
             await window.api.cancelDictationStream({ id: started.id })
             return null

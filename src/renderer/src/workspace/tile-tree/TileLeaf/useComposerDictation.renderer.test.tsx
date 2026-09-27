@@ -632,4 +632,80 @@ describe('dictation outcome codes (#243)', () => {
     expect(journal).toContainEqual(expect.objectContaining({ layer: 'TRANSCRIPT', event: 'delivery:failed', data: { code: 'delivery.failed' } }))
     expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('could not be sent to the terminal'))
   })
+
+  // #1340 round 2 C: main started the stream, but the queued first chunk's
+  // push never settled, so the drain never published the id. The drain
+  // deadline must still cancel main's half of the session.
+  it('cancels main’s stream when the queued drain times out before the id is published', async () => {
+    const api = window as unknown as { api: { pushDictationChunk: unknown; cancelDictationStream: unknown } }
+    api.api.pushDictationChunk = () => new Promise(() => {})
+    const cancel = vi.fn(async () => ({ kind: 'ok' }))
+    api.api.cancelDictationStream = cancel
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { controller?.toggle(); await wait(10) })
+    await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'final.timeout' }) })])
+    expect(cancel).toHaveBeenCalledWith({ id: 'stream-1' })
+  })
+
+  // #1340 round 2 C: unmounted while devices are being enumerated; no
+  // microphone may be requested afterwards.
+  it('asks for no microphone when the pane unmounts during device enumeration', async () => {
+    const view = mount()
+    await act(async () => {})
+    let release!: () => void
+    const enumerated = new Promise<void>(resolve => { release = resolve })
+    const devices = navigator.mediaDevices as unknown as { enumerateDevices: () => Promise<unknown[]> }
+    const real = devices.enumerateDevices
+    devices.enumerateDevices = async () => { await enumerated; return real() }
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockClear()
+    await act(async () => { controller?.toggle() })
+    await act(async () => { view.unmount() })
+    await act(async () => { release(); await wait(20) })
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'cancelled.unmount' }) })])
+  })
+
+  // Terminal success (#1340 round 2 C survivor): the paste is attempted with
+  // bracketed paste and `committed` is written only once it answers true.
+  it('pastes into the terminal and logs committed once the write succeeds', async () => {
+    ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
+      async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
+    const feed = createFakeSessionFeed()
+    render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { controller?.toggle(); await wait(30) })
+    expect(feed.calls).toContainEqual(expect.objectContaining({ method: 'sendInput', sessionId: 'session-1', data: '\x1b[200~<stt>hello</stt>\x1b[201~' }))
+    expect(journal.some(row => row.layer === 'TRANSCRIPT' && row.event === 'committed')).toBe(true)
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
+  // #1340 round 2 C: dictation A's paste times out while dictation B is
+  // already recording. A's failure is still reported, named as the
+  // previous transcript, not as B's.
+  it('names a late terminal-delivery failure as the previous transcript', async () => {
+    ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
+      async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
+    const feed = createFakeSessionFeed()
+    feed.sendInput = () => new Promise(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { controller?.toggle(); await wait(30) })
+    // B starts, and is producing audio, before A's 5 s insertion deadline.
+    await act(async () => { controller?.toggle(); await wait(20) })
+    await speak()
+    expect(controller?.status).toBe('recording')
+    await act(async () => { vi.advanceTimersByTime(5_000); await wait(10) })
+    expect(onMessage).toHaveBeenCalledWith('The previous transcript could not be sent to the terminal. It is in Settings → Dictation → History.')
+    expect(controller?.status).toBe('recording')
+  })
 })

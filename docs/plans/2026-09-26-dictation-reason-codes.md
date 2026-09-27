@@ -94,3 +94,11 @@ Reviewers A and C returned FIX-BEFORE-MERGE (B pending). All their findings were
 Tests: 10 new cases.
 - Eight are red on the round-1 head: the recorded 408, shutdown OUTCOME, unknown-error text, unmount during mic open, connect timeout during stop, hung push, and terminal paste answering false or rejecting.
 - Two pin mutation survivors (unmount mid-recording, IPC throw); removing each guard fails them.
+
+## Review round 2 (#1340, reviewer c; the last round)
+- **A queued drain that hangs never published the stream id,** so the drain deadline's cleanup could not cancel main's session. `startedStreamId` is set the moment main answers, and every cancel path uses `id ?? startedStreamId`.
+- **Unmount during device enumeration** still asked for a microphone afterwards. `start()` now checks `unmountedRef` between enumeration and `getUserMedia` too.
+- **A terminal-delivery timeout from dictation A reported during dictation B,** unattributed. If a newer recording is active, the sentence names "the previous transcript", and the overlay the new recording is using is not touched. The `delivery.failed` row is always written.
+- **Survivor (terminal success untested):** a test asserts the bracketed-paste write and `committed` once it answers true. Replacing the write with `Promise.resolve(false)` fails it.
+
+Tests: 4 new. 3 are red on `deafa064`; the success-path pin kills its mutant.
