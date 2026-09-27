@@ -110,16 +110,19 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'new-agent-in', Component: NewAgentInSurface },
   // Appended per the contract above. Opened only from a session command that
   // closes the palette first; it must paint over every established modal so
-  // the warning is never hidden behind the surface it is warning about.
+  // the warning is never hidden behind the surface it is warning about, and
+  // it does because it opens after them (open order).
   { id: 'root-management-confirm', Component: RootManagementConfirmSurface },
   // Appended per the contract above; opened only from a command that closes
   // the palette first (#913).
   { id: 'merge-project-tabs', Component: MergeProjectTabsSurface },
   // Appended per the contract above. Opened only from a session command that
-  // closes the palette first, so it stacks over established modals by order.
+  // closes the palette first; it paints over anything already open because it
+  // opens later (open order, see the stacking note above).
   { id: 'tldr-history', Component: ReportHistorySurface },
   // Appended per the contract above (#964). Opened only from a command that
-  // closes the palette first, so it stacks over established modals by order.
+  // closes the palette first; it paints over anything already open because it
+  // opens later.
   { id: 'agent-analytics', Component: AgentAnalyticsSurface },
   // Appended per the contract above (#1143); both are opened from commands
   // that close the palette first. The per-agent picker can hand off to the
@@ -130,21 +133,22 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'mcp-server-dialog', Component: McpServerDialogSurface },
   // Appended per the contract above (#1161). Opened from the Skills grid, the
   // "Add Skill…" command (which closes the palette first) and an external
-  // skill's "Manage with Agent Code"; it stacks over Settings by order.
+  // skill's "Manage with Agent Code"; it paints over Settings because it opens
+  // after it.
   { id: 'add-skill-dialog', Component: AddSkillDialogSurface },
-  // Built-in apps host. Last in the array, which per the paint-order contract
-  // above means it paints above every modal already mounted. That placement is
-  // reasoned, not defaulted: an app is always user-initiated from the palette and
-  // is the thing awaiting input for as long as it is open, so nothing already on
-  // screen has a claim to cover it. No app has a reason to sit *under* another
-  // modal — if one ever does, that is a signal it should not be an app.
+  // Built-in apps host. An app is always user-initiated and is the thing
+  // awaiting input while open, so it should cover what is already on screen,
+  // and it does: it opens after them (open order, see the stacking note above).
+  // Its last-in-array position only decides a same-commit tie. A dialog opened
+  // AFTER an app paints over it; no app has a reason to sit under another
+  // modal, and if one ever does, that is a signal it should not be an app.
   { id: 'app-host', Component: AppHostSurface },
   // The shared in-app confirm (replaced window.confirm, keyboard-first plan
-  // D8). LAST, after even app-host, because a confirm is always a question
-  // ABOUT the surface underneath it — the Conventions editor asking "discard
-  // changes?", Key Vault asking "delete key?" — so it must paint above
-  // whichever surface asked. It renders nothing until requestConfirm queues
-  // a request.
+  // D8). A confirm is always a question ABOUT the surface underneath it (the
+  // Conventions editor asking "discard changes?", Key Vault asking "delete
+  // key?"), so it must paint above whichever surface asked. It does, because
+  // it opens after that surface (open order); being last here only decides a
+  // same-commit tie. It renders nothing until requestConfirm queues a request.
   { id: 'confirm-dialog', Component: ConfirmHost },
   // #512: RemotePanel renders a centred Radix Dialog, but was registered as a
   // side panel, so it mounted inside the main row and only painted as a modal
