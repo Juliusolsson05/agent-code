@@ -143,10 +143,12 @@ export async function saveWorktreeActivityIndex(
   index: WorktreeActivityIndexFile,
 ): Promise<void> {
   await mkdir(STATE_DIR, { recursive: true })
+  // The caller's `updatedAt` is the content generation it keeps in memory and
+  // keys its summary cache on; re-stamping here made disk and memory disagree
+  // by a few ms (#767).
   const next = {
     ...index,
     version: WORKTREE_ACTIVITY_INDEX_VERSION,
-    updatedAt: Date.now(),
   }
   // WHY the temp path is unique even though the index is only a derived cache:
   //

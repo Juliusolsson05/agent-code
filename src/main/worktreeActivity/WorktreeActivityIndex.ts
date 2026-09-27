@@ -289,15 +289,33 @@ export class WorktreeActivityIndex {
         }
       }
 
-      const updatedAt = Date.now()
-      const indexFile: WorktreeActivityIndexFile = {
-        version: WORKTREE_ACTIVITY_INDEX_VERSION,
-        updatedAt,
-        transcripts: nextTranscripts,
+      const checkedAt = Date.now()
+      // WHY a refresh that found nothing new writes nothing (#767 item 3): the
+      // background refresh runs at least every 60 s, and it used to stamp a
+      // new `updatedAt`, stringify the whole index (30 MB+ for heavy users)
+      // and replace the file even when every candidate was a cache hit. The
+      // new `updatedAt` also keyed `collectSummaries`' cache, so it threw
+      // away the very cache that stops a 10 s UI poll from re-reading the
+      // index. Content changed only if something was (re)parsed, a parse
+      // failed (that entry drops out), or the entry count moved (a deleted
+      // transcript). Otherwise this was a re-check: record WHEN we checked
+      // (`lastIndexedAt`, shown as "Activity index updated") and keep the
+      // content generation (`updatedAt`) as it was.
+      const nextCount = Object.keys(nextTranscripts).length
+      const contentChanged =
+        this.status.parsedFiles > 0 ||
+        this.status.skippedFiles > 0 ||
+        nextCount !== this.totalOnDisk
+      if (contentChanged) {
+        const indexFile: WorktreeActivityIndexFile = {
+          version: WORKTREE_ACTIVITY_INDEX_VERSION,
+          updatedAt: checkedAt,
+          transcripts: nextTranscripts,
+        }
+        await saveWorktreeActivityIndex(indexFile)
+        this.updatedAt = checkedAt
       }
-      await saveWorktreeActivityIndex(indexFile)
-      this.updatedAt = updatedAt
-      this.totalOnDisk = Object.keys(nextTranscripts).length
+      this.totalOnDisk = nextCount
       // Repopulate the LRU from the just-saved set. We don't clear
       // first: set() re-inserts existing keys at the MRU end and
       // evicts oldest once size exceeds the cap, so iterating the
@@ -311,7 +329,7 @@ export class WorktreeActivityIndex {
       for (const key of Object.keys(nextTranscripts)) {
         this.transcripts.set(key, nextTranscripts[key])
       }
-      this.status.lastIndexedAt = updatedAt
+      this.status.lastIndexedAt = checkedAt
       this.status.stale = false
       span.end({
         candidates: candidates.length,
