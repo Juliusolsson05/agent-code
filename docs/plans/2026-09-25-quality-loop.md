@@ -929,3 +929,4 @@ Nothing in this loop runs the app, a packaged build, a long soak or a real
 signed self-update. Each PR states what it could not verify; UX that can only
 be judged by eye goes on the owner's checklist.
 - 2026-09-27 09:42Z B6: q93 sent to W2 (#1391 held, not batched); q94 sent to W3 (och#10 + app pointer held: creation-time order loses launch-window rows). Manager-verified #1349 a/c (764bdeb0 red at c90fea0c; totalOnDisk survivor is a residual) and #1353 c (88ccb3ea .git walk). Batch D #1389 waiting on the exact-head quality-gate.
+- 2026-09-27 10:00Z B6: och#10 MERGED 7a009541 (q94 resolved: latch-based gap report; precreated/backward-clock/BUSY pinned; recheck2 a/b MERGE-READY). App pointer PR (Fixes #1114) must pin the host latch + no-input-before-first-output contract. #1349/#1353/#1364 member-gate PASS, going to batch E. Batch D #1389 still queued for a CI runner.
