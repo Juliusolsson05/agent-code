@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
+import { DebugPanelHeader } from './DebugPanelHeader'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 // HtmlDebugPanel — grabs the focused pane's `outerHTML` and shows
 // it as copy-pasteable text. Fourth in the debug-panel family
@@ -188,25 +190,17 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
     : `no pane found for ${sessionId.slice(0, 8)}`
 
   return (
-    <div className="
-      h-full w-[540px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col overflow-hidden
-      text-[10px] font-code
-    ">
+    <SidePanel label="HTML debug" className="w-[540px] text-[10px] font-code">
       {/* Header — matches the existing debug panels: red uppercase
           title, row of action buttons on the right, × close.
           Width of 540px (not 380 like DebugPanel) because HTML
           wraps badly at narrower widths — FeedDebugPanel landed
           at 540 for the same reason. */}
-      <div className="
-        flex items-center justify-between
-        px-3 py-2 border-b border-border
-        text-[9px] text-danger uppercase tracking-wider
-        select-none flex-shrink-0
-      ">
-        <span>debug — html ({kind})</span>
-        <div className="flex items-center gap-2">
+      <DebugPanelHeader
+        title={`debug — html (${kind})`}
+        closeLabel="Close HTML debug"
+        onClose={onClose}
+        actions={<>
           <button
             type="button"
             onClick={refresh}
@@ -224,16 +218,8 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
           >
             copy
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-muted hover:text-ink text-[14px] leading-none"
-            title="Close"
-          >
-            ×
-          </button>
-        </div>
-      </div>
+        </>}
+      />
 
       {/* Mode toggle row. Inline tab-style: two text buttons with
           the active one underlined/accented. Placed as its own
@@ -298,7 +284,7 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </SidePanel>
   )
 }
 

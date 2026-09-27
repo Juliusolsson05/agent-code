@@ -11,6 +11,7 @@ import type {
 } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { worktreeColorForIdentity } from '@renderer/workspace/tile-tree/TileLeaf/worktreeBadgeColor'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 type Props = {
   cwd: string | null
@@ -231,7 +232,7 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
   }, [rows])
 
   return (
-    <div className="h-full w-[340px] flex-shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden text-[11px] font-code">
+    <SidePanel label="Worktrees" className="w-[340px] text-[11px] font-code">
       {/* The shared side-panel header (UI pass, G-26): Title Case ghost
           actions instead of lowercase text links, and a named close (the ×
           had no accessible name). */}
@@ -295,7 +296,7 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
           ))}
         </div>
       )}
-    </div>
+    </SidePanel>
   )
 }
 

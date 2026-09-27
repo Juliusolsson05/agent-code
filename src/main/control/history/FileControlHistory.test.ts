@@ -1,20 +1,28 @@
 import { mkdtemp, readFile, readdir, appendFile, writeFile, rm, stat, chmod, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { createHash, randomUUID } from 'node:crypto'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { createControlExecutor, createControlRegistry } from '../../../control-sdk/host'
 import { defineCapability, type ControlHistory, type ControlResult } from '@control-sdk'
-import { FileControlHistory } from './FileControlHistory'
+import { CONTROL_HISTORY_RETENTION_MS, FileControlHistory } from './FileControlHistory'
+import { taskHistoryCapabilities } from './tasks'
 import { historyCapabilities } from './control'
 
+// The recorded rows in real-rows-2026-09.json were written on 2026-09-05. The
+// history's retention clock (#1274) is pinned there, so a recorded unkeyed
+// call is "recent" as it was when recorded, not pruned for being weeks old by
+// the wall clock. Rows these tests append are stamped with the wall clock,
+// which is later still, so they are recent too. Retention itself is tested
+// against its own clock at the end of the file.
+const RECORDED_AT = () => new Date('2026-09-05T09:00:00.000Z')
 const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
 async function setup() {
   const directory = await mkdtemp(join(tmpdir(), 'ac-control-history-'))
   directories.push(directory)
-  return { directory, history: new FileControlHistory(directory) }
+  return { directory, history: new FileControlHistory(directory, { now: RECORDED_AT }) }
 }
 const caller = { kind: 'external' as const, id: 'trial-client' }
 function executor(history: ControlHistory, handler: () => Promise<unknown> = async () => 'done') {
@@ -150,7 +158,7 @@ async function seeded() {
 type Recovery = { kind: string; quarantinePath: string; sha256: string; keyedCallsBlocked: boolean }
 function reopen(directory: string) {
   const reports: Recovery[] = []
-  return { history: new FileControlHistory(directory, { onRecovered: report => reports.push(report as Recovery) }), reports }
+  return { history: new FileControlHistory(directory, { now: RECORDED_AT, onRecovered: report => reports.push(report as Recovery) }), reports }
 }
 // The real keyed row as its own external caller would retry it.
 const realCaller = { kind: 'external' as const, id: realRows.keyedReceived.caller.replace(/^external:/, '') }
@@ -456,5 +464,378 @@ describe('damaged history recovery (#1240) keeps request keys idempotent', () =>
     expect((await nextLaunch.events()).map(event => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
     expect(reports).toEqual([])
     await access(path)
+  })
+})
+
+// #1274: the journal and its payloads grew forever (129 MB after 22 days on
+// the owner's machine, 105 MB of it read-only transcripts.page results) and
+// the whole journal lived in memory. Retention may only drop calls that can
+// never be looked up for dedupe (steering q12): unkeyed, finished, not reused.
+const retentionRows = JSON.parse(await readFile(join(import.meta.dirname,
+  '../../../../testing/fixtures/control-history/retention-rows-2026-09-27.json'), 'utf8')) as {
+  rows: Array<{ sequence: number; callId: string; kind: string; payload?: string; requestKey?: string }>
+}
+// "Now" for retention cases. It was 2026-09-27 against a 7-day window; the
+// owner's 90-day window (2026-09-27) is 83 days longer, so "now" moves 83 days
+// later. Every recorded call then sits exactly where it did relative to the
+// window's edge, and the same rows are pruned and kept.
+const RETENTION_NOW = new Date('2026-12-19T12:00:00.000Z')
+const OLD_UNKEYED = ['95caa49c-eb60-44e2-9b62-938ce2243d11', '5ea10842-a1c8-463c-aee9-5d0e238c56e1', '37763f2f-c479-49b7-8d79-4c990bc0784c']
+const KEPT = ['95c97fce-bca0-4bc7-9901-90b45d988d1c', '13e43d53-5120-41ae-88d7-820dc9088728', 'a346f752-9eec-4b37-b7df-145dfaf1aaf5',
+  'e8a21d19-b139-4012-8e09-6139b5643bb5', '2ebe82c0-c877-4bb6-9877-56ded38d4739']
+// The old unkeyed externalControl.status and transcripts.page calls'
+// `dispatched` rows name the same digest as the keyed app.windowFocus call's
+// `dispatched` row (#1330 review B5 corrected which rows); pruning the first
+// two must not take it away from the third.
+const SHARED_DIGEST = 'e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1'
+const ORPHAN_DIGEST = 'f'.repeat(64)
+
+describe('control history retention (#1274)', () => {
+  // Payload CONTENTS are not recorded (they hold prompts and results), and
+  // retention now READS result and step payloads (#1330 review: an unknown
+  // outcome or a task origin must be kept), through the same digest check
+  // every reader uses. So each recorded digest is replaced, here and not in
+  // the fixture, by the digest of a body of the right shape for the row
+  // that first names it: a settled `completed` result, an ordinary owner
+  // step, or an opaque input. One recorded digest maps to one body, so rows
+  // that shared a payload still share one. Everything else is the recording.
+  const bodies = new Map<string, string>()
+  for (const row of retentionRows.rows) {
+    if (!row.payload || bodies.has(row.payload)) continue
+    bodies.set(row.payload, JSON.stringify(row.kind === 'result'
+      ? { ok: true, value: { recorded: row.payload }, operation: { callId: row.callId, instanceId: 'recorded', status: 'completed' } }
+      : row.kind === 'step' ? { step: 'resolve-owner', recorded: row.payload } : { recorded: row.payload }))
+  }
+  const digestOf = (body: string) => createHash('sha256').update(body).digest('hex')
+  const remap = new Map([...bodies].map(([recorded, body]) => [recorded, digestOf(body)]))
+  const rowsWithBodies = retentionRows.rows.map(row => row.payload ? { ...row, payload: remap.get(row.payload)! } : row)
+  const SHARED = remap.get(SHARED_DIGEST)!
+  async function writePayload(directory: string, body: string): Promise<string> {
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'payloads'), { recursive: true })
+    const digest = digestOf(body)
+    await writeFile(join(directory, 'payloads', `${digest}.json`), body)
+    return digest
+  }
+  async function seededJournal(rows: Array<Record<string, unknown> & { callId: string; kind: string; payload?: string }> = rowsWithBodies) {
+    const { directory } = await setup()
+    await writeFile(join(directory, 'events.jsonl'), rows.map((row, index) => `${JSON.stringify({ ...row, sequence: index + 1 })}\n`).join(''), { mode: 0o600 })
+    for (const body of bodies.values()) await writePayload(directory, body)
+    // An orphan, as a failed append leaves, and a temp file of a write that
+    // never renamed: GC takes the first and must never touch the second.
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'payloads'), { recursive: true })
+    await writeFile(join(directory, 'payloads', `${ORPHAN_DIGEST}.json`), '{}')
+    await writeFile(join(directory, 'payloads', `${ORPHAN_DIGEST}.json.tmp`), '{}')
+    return directory
+  }
+  const open = (directory: string, onRecovered?: () => void) =>
+    new FileControlHistory(directory, { now: () => RETENTION_NOW, onRecovered })
+
+  it('drops old unkeyed finished calls and their payloads, and keeps every keyed, reused and recent call', async () => {
+    const directory = await seededJournal()
+    const events = await open(directory).events()
+    expect([...new Set(events.map(event => event.callId))].sort()).toEqual([...KEPT].sort())
+    // Kept rows are the recorded rows, in order, with only sequences renumbered.
+    const expected = rowsWithBodies.filter(row => KEPT.includes(row.callId))
+    expect(events.map(({ sequence: _s, ...rest }) => rest)).toEqual(expected.map(({ sequence: _s, ...rest }) => rest))
+    expect(events.map(event => event.sequence)).toEqual(expected.map((_, index) => index + 1))
+    const payloads = new Set(await readdir(join(directory, 'payloads')))
+    const keptDigests = new Set(expected.map(row => row.payload!).filter(Boolean))
+    expect(payloads).toEqual(new Set([...[...keptDigests].map(digest => `${digest}.json`), `${ORPHAN_DIGEST}.json.tmp`]))
+    expect(payloads.has(`${SHARED}.json`)).toBe(true)
+    expect(payloads.has(`${ORPHAN_DIGEST}.json`)).toBe(false)
+    // The rewrite is durable and clean: a second launch prunes nothing and
+    // reports no recovery.
+    const reports: unknown[] = []
+    expect(await open(directory, () => reports.push(1)).events()).toEqual(events)
+    expect(reports).toEqual([])
+  })
+
+  it('keeps a call with no result row however old it is', async () => {
+    const rows = rowsWithBodies.filter(row => !(row.callId === OLD_UNKEYED[2] && row.kind === 'result'))
+    const directory = await seededJournal(rows)
+    const events = await open(directory).events()
+    expect(events.some(event => event.callId === OLD_UNKEYED[2])).toBe(true)
+    expect(events.some(event => event.callId === OLD_UNKEYED[0])).toBe(false)
+  })
+
+  it('does not prune in a launch that had to recover the journal', async () => {
+    const directory = await seededJournal()
+    await appendFile(join(directory, 'events.jsonl'), '{"sequence":31,"kind":"resu')
+    const reports: unknown[] = []
+    const events = await open(directory, () => reports.push(1)).events()
+    expect(reports).toHaveLength(1)
+    expect(events.some(event => event.callId === OLD_UNKEYED[0])).toBe(true)
+  })
+
+  it('still replays an old keyed call after its unkeyed neighbours were pruned', async () => {
+    const { directory } = await setup()
+    const then = new Date('2026-09-01T00:00:00.000Z')
+    let effects = 0
+    const at = (clock: () => Date, history: ControlHistory) => {
+      const registry = createControlRegistry()
+      registry.register({ kind: 'main', generation: 'trial' }, [defineCapability({
+        id: 'trial.act', title: 'Harmless trial', description: 'Exercise durable admission',
+        execution: 'main', effect: 'mutation', input: z.object({ text: z.string() }), output: z.unknown(),
+        handler: async () => { effects++; return 'sent' },
+      })])
+      return createControlExecutor({ history, instanceId: randomUUID(), id: randomUUID, now: () => clock().toISOString(),
+        catalog: () => registry.list(), dispatch: (req, context) => registry.invoke(req, context) })
+    }
+    const old = new FileControlHistory(directory, { now: () => then })
+    const first = await at(() => then, old).invoke(request, caller)
+    await at(() => then, old).invoke({ ...request, requestKey: undefined, input: { text: 'unkeyed' } }, caller)
+    expect(effects).toBe(2)
+
+    const later = new FileControlHistory(directory, { now: () => RETENTION_NOW })
+    const replay = await at(() => RETENTION_NOW, later).invoke(request, caller)
+    expect(replay).toMatchObject({ ok: true, value: 'sent', operation: { reusedCallId: first.operation?.callId } })
+    expect(effects).toBe(2)
+    const kept = await new FileControlHistory(directory, { now: () => RETENTION_NOW }).events()
+    expect(kept.every(event => event.requestKey === request.requestKey)).toBe(true)
+  })
+
+  // Rows shaped exactly like the executor's and the task writer's, for one
+  // unkeyed call ending at `at`, each with a real hashed payload.
+  type Built = { callId: string; rows: Array<Record<string, unknown> & { callId: string; kind: string; payload?: string }> }
+  async function call(directory: string, options: { at: string; result?: unknown; steps?: unknown[]; reusedCallId?: string; callId?: string }): Promise<Built> {
+    const callId = options.callId ?? randomUUID()
+    const base = { at: options.at, instanceId: 'recorded', callId, capabilityId: 'agents.resume', caller: 'external:agent-code-control' }
+    const rows: Built['rows'] = [
+      { ...base, kind: 'received', payload: await writePayload(directory, JSON.stringify({ input: { callId } })) },
+      { ...base, kind: 'dispatched', payload: await writePayload(directory, JSON.stringify({ owner: { kind: 'main', generation: 'g' } })) },
+    ]
+    for (const step of options.steps ?? []) rows.push({ ...base, kind: 'step', payload: await writePayload(directory, JSON.stringify(step)) })
+    if (options.result !== undefined) rows.push({ ...base, kind: 'result', payload: await writePayload(directory, JSON.stringify(options.result)), ...(options.reusedCallId ? { reusedCallId: options.reusedCallId } : {}) })
+    return { callId, rows }
+  }
+  async function journal(directory: string, calls: Built[]) {
+    await writeFile(join(directory, 'events.jsonl'), calls.flatMap(built => built.rows).map((row, index) => `${JSON.stringify({ ...row, sequence: index + 1 })}\n`).join(''), { mode: 0o600 })
+  }
+  const OLD = '2026-09-01T00:00:00.000Z'
+  const settled = (status = 'completed') => ({ ok: true, value: {}, operation: { callId: 'x', instanceId: 'recorded', status } })
+  const kept = async (directory: string, ids: string[]) => {
+    const present = new Set((await open(directory).events()).map(event => event.callId))
+    return ids.map(id => present.has(id))
+  }
+
+  // #1330 review A1/C1, q49: an unkeyed task's original call is the task
+  // store's lookup key. Pruning it turned operations.read into not_found and
+  // made operations.finish unable to find its origin.
+  it('keeps an unkeyed task origin, so operations.read still answers after the window', async () => {
+    const { directory } = await setup()
+    const owner = { kind: 'main' as const, generation: 'g' }
+    const task = await call(directory, { at: OLD, result: settled('pending'), steps: [
+      { step: 'task.started', owner },
+      { step: 'task.finished', result: { ok: true, value: { newSessionId: 'new' } } },
+    ] })
+    const plain = await call(directory, { at: OLD, result: settled() })
+    await journal(directory, [task, plain])
+    const history = open(directory)
+    const read = taskHistoryCapabilities(history, () => false).find(item => item.descriptor.id === 'operations.read')!
+    const context = { requestId: 'read', owner, caller: { kind: 'external' as const, id: 'operator' } }
+    expect(await read.execute({ callId: task.callId }, context)).toMatchObject({ ok: true, value: { status: 'completed', result: { ok: true, value: { newSessionId: 'new' } } } })
+    expect(await kept(directory, [task.callId, plain.callId])).toEqual([true, false])
+  })
+
+  // #1330 review A3, q49: an unknown outcome is the evidence that the effect
+  // may have run; `pending` is still open. Only a proven-settled result goes.
+  it('keeps results that are not proven settled, and prunes settled ones', async () => {
+    const { directory } = await setup()
+    const unknown = await call(directory, { at: OLD, result: { ok: false, error: { code: 'unavailable', message: 'lost', outcome: 'unknown' }, operation: { callId: 'x', instanceId: 'recorded', status: 'outcome_unknown' } } })
+    const pending = await call(directory, { at: OLD, result: settled('pending') })
+    const refused = await call(directory, { at: OLD, result: { ok: false, error: { code: 'unavailable', message: 'no', outcome: 'not_started' }, operation: { callId: 'x', instanceId: 'recorded', status: 'blocked' } } })
+    const done = await call(directory, { at: OLD, result: settled() })
+    const opened = await call(directory, { at: OLD, result: settled('ui_opened') })
+    const transport = await call(directory, { at: OLD, result: { direction: 'outbound', payload: { jsonrpc: '2.0' } } })
+    await journal(directory, [unknown, pending, refused, done, opened, transport])
+    expect(await kept(directory, [unknown, pending, refused, done, opened, transport].map(built => built.callId)))
+      .toEqual([true, true, false, false, false, false])
+    // The unknown outcome's payload is still readable for reconciliation.
+    const history = open(directory)
+    const row = (await history.events()).find(event => event.callId === unknown.callId && event.kind === 'result')!
+    expect(await history.payload(row.payload!)).toMatchObject({ error: { outcome: 'unknown' } })
+  })
+
+  // #1330 review A2, q49: an unaccepted recovery's quarantine names rows and
+  // payloads the operator must still be able to read. The first launch
+  // recovers (no prune); the second must not prune what the quarantine
+  // names; once the operator accepts the digest, it may go.
+  it('keeps what an unaccepted recovery quarantine names, until it is accepted', async () => {
+    const { directory } = await setup()
+    const old = await call(directory, { at: OLD, result: settled() })
+    await journal(directory, [old])
+    await appendFile(join(directory, 'events.jsonl'), 'not json\n')
+    const reports: Array<{ sha256: string }> = []
+    await new FileControlHistory(directory, { now: () => RETENTION_NOW, onRecovered: report => reports.push(report) }).events()
+    expect(reports).toHaveLength(1)
+    const second = open(directory)
+    const events = await second.events()
+    const result = events.find(event => event.callId === old.callId && event.kind === 'result')
+    expect(result).toBeDefined()
+    expect(await second.payload(result!.payload!)).toMatchObject({ ok: true })
+    await writeFile(join(directory, 'recovery-accepted.json'), JSON.stringify({ accepted: [reports[0]!.sha256] }))
+    expect(await kept(directory, [old.callId])).toEqual([false])
+  })
+
+  // #1330 review B1: payload GC must only follow a durable rewrite. A
+  // rewrite that fails (here: the directory refuses the temp file) leaves the
+  // old journal naming every payload, and the load itself still works.
+  it('leaves every payload and serves the unpruned rows when the rewrite fails', async () => {
+    const directory = await seededJournal()
+    const before = new Set(await readdir(join(directory, 'payloads')))
+    await chmod(directory, 0o500)
+    try {
+      const events = await open(directory).events()
+      expect(new Set(events.map(event => event.callId))).toEqual(new Set(retentionRows.rows.map(row => row.callId)))
+      expect(new Set(await readdir(join(directory, 'payloads')))).toEqual(before)
+    } finally { await chmod(directory, 0o700) }
+    // Writable again, the next launch prunes as usual.
+    expect(await kept(directory, OLD_UNKEYED)).toEqual([false, false, false])
+  })
+
+  // #1330 review A/B survivors: each rule on its own.
+  it('keeps an old unkeyed call a kept duplicate reuses, and a call of unknown age', async () => {
+    const { directory } = await setup()
+    const target = await call(directory, { at: OLD, result: settled() })
+    const reuser = await call(directory, { at: RETENTION_NOW.toISOString(), result: settled(), reusedCallId: target.callId })
+    const unknownAge = await call(directory, { at: 'not a time', result: settled() })
+    await journal(directory, [target, reuser, unknownAge])
+    expect(await kept(directory, [target.callId, reuser.callId, unknownAge.callId])).toEqual([true, true, true])
+  })
+
+  // #1330 review C: the window is pinned at its boundary, not only by rows
+  // three weeks apart.
+  it('prunes a call exactly past the window and keeps one just inside it', async () => {
+    const { directory } = await setup()
+    const minute = 60_000
+    const inside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS + minute).toISOString(), result: settled() })
+    const outside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS - minute).toISOString(), result: settled() })
+    // Exactly at the edge is still inside (#1330 verification: `>=` vs `>`
+    // survived every other case). With infrequent deletion as the owner's
+    // standing preference, the boundary instant is kept.
+    const edge = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS).toISOString(), result: settled() })
+    await journal(directory, [inside, outside, edge])
+    expect(await kept(directory, [inside.callId, outside.callId, edge.callId])).toEqual([true, false, true])
+    // The owner's 90-day window (2026-09-27); pinned by value, not only through the constant.
+    expect(CONTROL_HISTORY_RETENTION_MS).toBe(90 * 24 * 60 * 60 * 1000)
+  })
+
+  // #1330 round 2 (a, b, c; Blocker): once the rewrite has landed, a failed
+  // payload deletion must not put the pre-rewrite rows back in memory. Those
+  // made the next append number itself past the end of the shorter file, and
+  // the gap got the journal quarantined with every keyed call blocked.
+  it('serves the rewritten rows when a payload deletion fails after the rewrite', async () => {
+    const { directory } = await setup()
+    const old = await call(directory, { at: OLD, result: settled() })
+    const recent = await call(directory, { at: RETENTION_NOW.toISOString(), result: settled() })
+    await journal(directory, [old, recent])
+    // A digest-named DIRECTORY in payloads/: rm() without `recursive` fails.
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'payloads', `${'e'.repeat(64)}.json`))
+    const history = open(directory)
+    const events = await history.events()
+    expect(new Set(events.map(event => event.callId))).toEqual(new Set([recent.callId]))
+    expect(events.map(event => event.sequence)).toEqual(recent.rows.map((_, index) => index + 1))
+    // The next append continues the file it is really appending to.
+    const appended = await history.append({ callId: 'next', instanceId: 'recorded', capabilityId: 'agents.read', caller: 'external:agent-code-control', kind: 'received', at: RETENTION_NOW.toISOString() })
+    expect(appended.sequence).toBe(recent.rows.length + 1)
+    const reports: unknown[] = []
+    await open(directory, () => reports.push(1)).events()
+    expect(reports).toEqual([])
+  })
+
+  // #1330 verification b (Blocker): the same divergence through the rewrite's
+  // directory sync, which runs AFTER the rename. It failed with EIO, the
+  // prune rejected, and open() served the six pre-rewrite rows over a
+  // three-row file; the next append wrote sequence 7 and the next launch
+  // quarantined the journal.
+  it('serves the rewritten rows when syncing the directory fails after the rename', async () => {
+    const { directory } = await setup()
+    const old = await call(directory, { at: OLD, result: settled() })
+    const recent = await call(directory, { at: RETENTION_NOW.toISOString(), result: settled() })
+    await journal(directory, [old, recent])
+    const sync = vi.spyOn(FileControlHistory.prototype as unknown as { syncDirectory: () => Promise<void> }, 'syncDirectory')
+      .mockRejectedValueOnce(Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const history = open(directory)
+      const events = await history.events()
+      expect(new Set(events.map(event => event.callId))).toEqual(new Set([recent.callId]))
+      // GC is skipped while the rewrite is unsynced: a power loss could bring
+      // back the old journal, which names the expired call's payloads.
+      for (const row of old.rows) await expect(access(join(directory, 'payloads', `${row.payload}.json`))).resolves.toBeUndefined()
+      const onDisk = (await readFile(join(directory, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean)
+      expect(events).toHaveLength(onDisk.length)
+      const appended = await history.append({ callId: 'next', instanceId: 'recorded', capabilityId: 'agents.read', caller: 'external:agent-code-control', kind: 'received', at: RETENTION_NOW.toISOString() })
+      expect(appended.sequence).toBe(recent.rows.length + 1)
+      const reports: unknown[] = []
+      await open(directory, () => reports.push(1)).events()
+      expect(reports).toEqual([])
+    } finally {
+      sync.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
+  // #1330 round 2 (a, b, c): a torn tail blocks no keyed call, so it has no
+  // guard, but its torn line can be the only row naming a result payload
+  // fsynced before the append tore. Kept until the operator accepts it.
+  it('keeps a payload that only an unaccepted torn-tail quarantine names', async () => {
+    const { directory } = await setup()
+    const torn = await call(directory, { at: OLD })
+    const unknownResult = await writePayload(directory, JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'lost', outcome: 'unknown' }, operation: { callId: torn.callId, instanceId: 'recorded', status: 'outcome_unknown' } }))
+    await journal(directory, [torn])
+    await appendFile(join(directory, 'events.jsonl'), JSON.stringify({ sequence: 3, at: OLD, instanceId: 'recorded', callId: torn.callId, kind: 'result', capabilityId: 'agents.resume', caller: 'external:agent-code-control', payload: unknownResult }).slice(0, -2))
+    const reports: Array<{ sha256: string; kind: string }> = []
+    await new FileControlHistory(directory, { now: () => RETENTION_NOW, onRecovered: report => reports.push(report as never) }).events()
+    expect(reports).toEqual([expect.objectContaining({ kind: 'torn-tail' })])
+    await open(directory).events()
+    expect(await open(directory).payload(unknownResult)).toMatchObject({ error: { outcome: 'unknown' } })
+    // Accepted, it is ordinary garbage (no kept row names it).
+    await writeFile(join(directory, 'recovery-accepted.json'), JSON.stringify({ accepted: [reports[0]!.sha256] }))
+    await open(directory).events()
+    await expect(open(directory).payload(unknownResult)).rejects.toThrow()
+  })
+
+  // #1330 verification b (survivor): the torn call above is kept for having
+  // no result, so nothing was expired and GC never had to honour the
+  // quarantine's digests. Here another old settled call IS pruned in the same
+  // launch, so GC runs, and the digest only the torn line names must survive.
+  it('keeps a quarantine-only payload while pruning another call in the same launch', async () => {
+    const { directory } = await setup()
+    const torn = await call(directory, { at: OLD })
+    const unknownResult = await writePayload(directory, JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'lost', outcome: 'unknown' }, operation: { callId: torn.callId, instanceId: 'recorded', status: 'outcome_unknown' } }))
+    await journal(directory, [torn])
+    await appendFile(join(directory, 'events.jsonl'), JSON.stringify({ sequence: 3, at: OLD, instanceId: 'recorded', callId: torn.callId, kind: 'result', capabilityId: 'agents.resume', caller: 'external:agent-code-control', payload: unknownResult }).slice(0, -2))
+    await open(directory).events()
+    // A clean journal now, plus an old settled call that retention expires.
+    const expiring = await call(directory, { at: OLD, result: settled() })
+    await journal(directory, [torn, expiring])
+    expect(await kept(directory, [torn.callId, expiring.callId])).toEqual([true, false])
+    expect(await open(directory).payload(unknownResult)).toMatchObject({ error: { outcome: 'unknown' } })
+  })
+
+  // #1330 round 2 (a, b, c): a task origin is recognised by what its step
+  // payload SAYS (the task store parses it), not by its first bytes, and a
+  // step that cannot be read is unknown, so kept. Settled results here, so
+  // only the task rule can keep these calls.
+  it('keeps a settled task origin whose step has another key order, or cannot be read', async () => {
+    const { directory } = await setup()
+    const owner = { kind: 'main' as const, generation: 'g' }
+    const reordered = await call(directory, { at: OLD, result: settled(), steps: [
+      { owner, step: 'task.started' },
+      { result: { ok: true, value: { newSessionId: 'new' } }, step: 'task.finished' },
+    ] })
+    const corrupted = await call(directory, { at: OLD, result: settled(), steps: [{ step: 'task.started', owner }] })
+    await journal(directory, [reordered, corrupted])
+    const stepDigest = corrupted.rows.find(row => row.kind === 'step')!.payload!
+    await writeFile(join(directory, 'payloads', `${stepDigest}.json`), '{ "tampered": true }')
+    const history = open(directory)
+    const read = taskHistoryCapabilities(history, () => false).find(item => item.descriptor.id === 'operations.read')!
+    expect(await read.execute({ callId: reordered.callId }, { requestId: 'read', owner, caller: { kind: 'external', id: 'operator' } }))
+      .toMatchObject({ ok: true, value: { status: 'completed' } })
+    expect(await kept(directory, [reordered.callId, corrupted.callId])).toEqual([true, true])
   })
 })

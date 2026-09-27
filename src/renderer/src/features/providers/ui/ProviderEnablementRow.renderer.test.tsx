@@ -62,6 +62,58 @@ describe('ProviderEnablementRow', () => {
     expect(setMock).toHaveBeenCalledWith('grok', true)
   })
 
+  // #1250 row 6: a failed write was an unhandled rejection with nothing on
+  // screen. It is said, in fixed words (never the raw IPC text, which can
+  // carry a filesystem path: q22), and the switch keeps main's value.
+  it('says a failed toggle or reset did not save, without raw error text', async () => {
+    setMock.mockRejectedValueOnce(new Error("EACCES: permission denied, open '/Users/someone/.config/agent-code/setup.json'"))
+    await setup()
+    const grokSwitch = screen.getAllByRole('switch').find(el => el.getAttribute('aria-label') === 'Enable Grok')!
+    fireEvent.click(grokSwitch)
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save this change. Nothing was changed.")
+    expect(document.body.textContent).not.toContain('EACCES')
+    expect(grokSwitch.getAttribute('aria-checked')).toBe('false')
+
+    // A later toggle that saves clears the message (#1403 review b: a stale
+    // alert after a good retry was unpinned).
+    fireEvent.click(grokSwitch)
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+
+  // #1403 review b: this used to be checked after a failed toggle whose alert
+  // was still up, so a silent reset passed. Its own render, its own alert.
+  it('says a failed reset did not save, without raw error text', async () => {
+    resetMock.mockRejectedValueOnce(new Error('EROFS: read-only file system'))
+    await setup()
+    fireEvent.click(screen.getByText('Reset to Detection'))
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save this change. Nothing was changed.")
+    expect(document.body.textContent).not.toContain('EROFS')
+  })
+
+  it('says a failed usage-source write did not save, without raw error text', async () => {
+    const usageMock = vi.fn()
+      .mockRejectedValueOnce(new Error("ENOSPC: no space left on device, write '/Users/someone/setup.json'"))
+      .mockResolvedValue({ ...snapshot, opencodeUsageSource: 'zai', zaiCredentialPresent: true })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { providerEnablementSet: setMock, providerEnablementReset: resetMock, providerEnablementSetOpencodeUsageSource: usageMock },
+    })
+    const { ProviderEnablementRow } = await import('./ProviderEnablementRow')
+    const { useProviderEnablementStore } = await import('@renderer/features/providers/store')
+    useProviderEnablementStore.getState().setSnapshot({
+      ...snapshot,
+      entries: snapshot.entries.map(entry => entry.kind === 'opencode' ? { ...entry, enabled: true } : entry),
+      zaiCredentialPresent: true,
+    })
+    render(<ProviderEnablementRow />)
+    fireEvent.change(screen.getByLabelText('OpenCode usage source'), { target: { value: 'zai' } })
+    expect(await screen.findByText("Couldn't save this change. Nothing was changed.")).toBeTruthy()
+    expect(document.body.textContent).not.toContain('ENOSPC')
+    // A later choice that saves clears the message (#1403 review b).
+    fireEvent.change(screen.getByLabelText('OpenCode usage source'), { target: { value: 'zai' } })
+    await vi.waitFor(() => expect(screen.queryByText("Couldn't save this change. Nothing was changed.")).toBeNull())
+  })
+
   it('reset link appears only for user overrides and calls the API', async () => {
     await setup()
     const resetButtons = screen.getAllByText('Reset to Detection')

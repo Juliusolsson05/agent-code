@@ -2,6 +2,7 @@ import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import * as React from 'react'
 
 import { cn } from '@renderer/lib/utils'
+import { LAYERS } from '@renderer/ui/layers'
 
 // Adapted from https://ui.shadcn.com/docs/components/dropdown-menu.
 //
@@ -51,7 +52,8 @@ const DropdownMenuContent = React.forwardRef<
       data-slot="dropdown-menu-content"
       sideOffset={sideOffset}
       className={cn(
-        'modal-pop z-[1150] min-w-[180px] overflow-hidden rounded-float border border-popover-border bg-popover-bg p-1 font-code text-ink shadow-[0_8px_24px_var(--theme-shadow-color)] outline-none',
+        LAYERS.menu,
+        'modal-pop min-w-[180px] overflow-hidden rounded-float border border-popover-border bg-popover-bg p-1 font-code text-ink shadow-[0_8px_24px_var(--theme-shadow-color)] outline-none',
         className,
       )}
       {...props}

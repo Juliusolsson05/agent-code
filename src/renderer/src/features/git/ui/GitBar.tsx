@@ -11,6 +11,7 @@ import type {
   GitRecentCommit,
   GitSubmoduleStatus,
 } from '@shared/types/gitStatus'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 // GitBar — a narrow right-edge panel showing git state for the
 // focused pane's cwd: current branch, latest 5 commits, and the
@@ -82,13 +83,7 @@ export function GitBar({ cwd, onClose }: Props) {
   const totalDel = data?.files.reduce((s, f) => s + f.deletions, 0) ?? 0
 
   return (
-    <div className="
-      h-full w-[280px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col
-      overflow-hidden
-      text-[11px] font-code
-    ">
+    <SidePanel label="Git" className="w-[280px] text-[11px] font-code">
       {/* The shared side-panel header (UI pass, G-26). Its close had no
           accessible name and no focus style. */}
       <PanelHeader label="Git" onClose={onClose} />
@@ -195,7 +190,7 @@ export function GitBar({ cwd, onClose }: Props) {
       {!data && !error && (
         <div className="px-3 py-4 text-muted text-center">loading…</div>
       )}
-    </div>
+    </SidePanel>
   )
 }
 
