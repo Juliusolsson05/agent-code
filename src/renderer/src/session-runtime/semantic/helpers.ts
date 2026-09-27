@@ -138,6 +138,35 @@ export function appendSemanticHistory(
   ].slice(-SEMANTIC_HISTORY_CAP)
 }
 
+/**
+ * Archive a turn that REPLAY reopened and left open, keeping whichever copy
+ * of it renders more (#1391 review a).
+ *
+ * WHY not plain appendSemanticHistory here: replay can reopen an archived turn
+ * T with a repeated `turn_started`, which starts it EMPTY (foldEvent). If
+ * replay then quiets before T's content re-arrives, replacing by turnId swapped
+ * the full archived T for the empty copy, and with no durable assistant entry
+ * yet the answer vanished from the feed. Here the reopened copy only replaces
+ * the archived one when it carries at least as much renderable content (text
+ * and blocks). Otherwise the archived row stays, still exactly one per turnId.
+ *
+ * Only the bootstrap-complete path uses this: on the live fold paths a newer
+ * copy of the same turn is the authoritative one and should win.
+ */
+export function archiveReplayedTurn(
+  history: SemanticRuntimeState['history'],
+  turn: SemanticLiveTurn,
+): SemanticRuntimeState['history'] {
+  const archived = history.find(existing => existing.turnId === turn.turnId)
+  if (
+    archived &&
+    (turn.text.length < archived.text.length || turn.blockOrder.length < archived.blockOrder.length)
+  ) {
+    return history
+  }
+  return appendSemanticHistory(history, turn)
+}
+
 /** True when the turn is still live — hasn't received its
  *  terminal `turn_stopped`/`turn_completed` yet. Used by session-
  *  status derivation and the foldSemanticEvent branch that decides

@@ -24,15 +24,15 @@ afterEach(() => {
   Object.defineProperty(window, 'api', { configurable: true, value: originalWindowApi })
 })
 
-const turn = (endedAt: number | null) => ({
-  turnId: 'turn-T', source: 'rollout' as const, text: 'replayed answer', blocks: {}, blockOrder: [],
+const turn = (endedAt: number | null, text = 'replayed answer') => ({
+  turnId: 'turn-T', source: 'rollout' as const, text, blocks: {}, blockOrder: [],
   stopReason: null, usage: null,
   task: { todos: [], doneCount: 0, totalCount: 0, inProgressToolUseIds: [], activeToolNames: [] },
   startedAt: 1, endedAt,
   lookups: { toolCallsById: {}, toolUseIdsInOrder: [], resolvedToolUseIds: [], erroredToolUseIds: [] },
 })
 
-it('archives a reopened replayed turn at bootstrap-complete without duplicating it in history', () => {
+function run(reopened: ReturnType<typeof turn>) {
   vi.useFakeTimers()
   const fake = createFakeSessionFeed()
   const sessionId = 'bootstrap-dedupe' as SessionId
@@ -44,7 +44,7 @@ it('archives a reopened replayed turn at bootstrap-complete without duplicating 
         ...emptyRuntime().semantic,
         // T is already archived AND reopened as the current turn by replay.
         history: [semanticHistoryRow(turn(2) as never)],
-        currentTurn: turn(null) as never,
+        currentTurn: reopened as never,
       },
     },
   }
@@ -76,7 +76,20 @@ it('archives a reopened replayed turn at bootstrap-complete without duplicating 
   })
   act(() => { vi.advanceTimersByTime(1_000) })
 
-  const semantic = runtimes[sessionId]!.semantic
+  return runtimes[sessionId]!.semantic
+}
+
+it('archives a reopened replayed turn at bootstrap-complete without duplicating it in history', () => {
+  const semantic = run(turn(null))
   expect(semantic.currentTurn).toBeNull()
   expect(semantic.history.map(row => row.turnId)).toEqual(['turn-T'])
+})
+
+// #1391 review a (major): a replayed turn_started reopens T EMPTY; if replay
+// quiets before T's content re-arrives, the empty copy must not replace the
+// archived one, or the answer vanishes from the feed (no durable entry yet).
+it('keeps the richer archived copy when the reopened replay copy has less content', () => {
+  const semantic = run(turn(null, ''))
+  expect(semantic.currentTurn).toBeNull()
+  expect(semantic.history.map(row => [row.turnId, row.text])).toEqual([['turn-T', 'replayed answer']])
 })

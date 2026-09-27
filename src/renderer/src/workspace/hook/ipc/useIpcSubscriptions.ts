@@ -22,7 +22,7 @@ import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
 import {
-  appendSemanticHistory,
+  archiveReplayedTurn,
   hasPendingSemanticTools,
   isSemanticTurnRunning,
   withDerivedSessionStatus,
@@ -2786,7 +2786,9 @@ export function useIpcSubscriptions(
                 // ledger hides the copy while it is live); a raw append here
                 // then held that turn twice, repeating its `sem:T:i`
                 // candidate ids and `semantic-block:T:i` React keys.
-                history: appendSemanticHistory(next.semantic.history, closedTurn),
+                // …and never lets a THINNER replay copy displace the archived
+                // one (#1391 review a): see archiveReplayedTurn.
+                history: archiveReplayedTurn(next.semantic.history, closedTurn),
                 currentTurn: null,
               },
             }
