@@ -1,4 +1,4 @@
-import { appendFile, mkdir, open, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { SystemSuspension } from '@shared/types/systemSuspension.js'
@@ -107,6 +107,16 @@ function parseJsonLines(text: string): Record<string, unknown>[] {
   return out
 }
 
+type SetAsideSnapshot = { aliveAt: number | null; open: unknown[] }
+
+/** An open-interval snapshot recovered only partway: `remaining` starts at
+ *  the entry whose append failed (#1414 review c). */
+class PartialRecovery extends Error {
+  constructor(readonly recovered: number, readonly remaining: SetAsideSnapshot) {
+    super('open-interval recovery stopped partway')
+  }
+}
+
 export class AgentActivityStore {
   private tail: Promise<void> = Promise.resolve()
   /** aliases.jsonl in memory, loaded on first use. */
@@ -115,6 +125,15 @@ export class AgentActivityStore {
   private readonly cleanTails = new Set<string>()
   /** Context ids already written to each month file this process has touched. */
   private readonly monthContexts = new Map<string, Map<string, number>>()
+  /**
+   * The next context id to mint per month (#1414 review). Minting always
+   * advances it, even when the write then fails, so an id is never issued
+   * twice: a PARTIAL write can leave a context line on disk for an id whose
+   * mapping was never cached, and reusing that id for another agent made the
+   * later reads attribute one agent's time to the other. Loaded as the
+   * file's highest id + 1.
+   */
+  private readonly monthNextId = new Map<string, number>()
 
   constructor(private readonly dir: string) {}
 
@@ -132,16 +151,26 @@ export class AgentActivityStore {
     const known = this.monthContexts.get(month)
     if (known) return known
     const ids = new Map<string, number>()
+    let highest = 0
     try {
       for (const line of parseJsonLines(await readFile(join(this.dir, `${month}.jsonl`), 'utf8'))) {
         if (line.t !== 'c' || !isNumber(line.c)) continue
+        highest = Math.max(highest, line.c)
         const context = parseContext(line)
         if (context) ids.set(contextKey(context), line.c)
       }
-    } catch {
-      // No file yet for this month.
+    } catch (error) {
+      // Only a missing file means "no contexts yet" (#1414 review a round 2,
+      // q115 "unknown is never empty"). A file that exists but cannot be read
+      // was treated as empty: ids restarted at 1, a second agent got the id
+      // the first agent's lines already use, and once readable the first
+      // agent's later hours read back as the second's. Refuse the append
+      // instead (the interval is lost, as for any failed write); nothing is
+      // cached, so the next append reads again.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     this.monthContexts.set(month, ids)
+    this.monthNextId.set(month, highest + 1)
     return ids
   }
 
@@ -154,15 +183,28 @@ export class AgentActivityStore {
       const key = contextKey(interval.context)
       const lines: string[] = []
       let id = ids.get(key)
+      const isNewContext = id === undefined
       if (id === undefined) {
-        id = ids.size + 1
-        ids.set(key, id)
+        // contextsFor always sets the month's next id. No `ids.size + 1`
+        // fallback: counting contexts reissues an id after any gap (#1414
+        // review c; the gap test pins it).
+        id = this.monthNextId.get(month)!
+        this.monthNextId.set(month, id + 1)
         const contextLine: ContextLine = { t: 'c', c: id, ...interval.context }
         lines.push(JSON.stringify(contextLine))
       }
       const intervalLine: IntervalLine = { t: 'i', c: id, s: interval.startedAt, e: interval.endedAt }
       lines.push(JSON.stringify(intervalLine))
       await this.appendLines(join(this.dir, `${month}.jsonl`), lines)
+      // Cache the id only once its context line is on disk (#1303). Caching it
+      // first meant one failed append (ENOSPC, EIO) left every later interval
+      // for this agent this month pointing at a context line that never
+      // landed, and readIntervals drops an interval with no context. Not
+      // caching on failure means the next interval for this agent mints a
+      // NEW id (monthNextId already advanced) and writes its context line
+      // again. The failed id is burned: if its line landed partially, it
+      // still names this agent, and no other agent is ever given that id.
+      if (isNewContext) ids.set(key, id)
     })
   }
 
@@ -175,8 +217,12 @@ export class AgentActivityStore {
           aliases.set(line.f, line.t)
         }
       }
-    } catch {
-      // No aliases yet.
+    } catch (error) {
+      // Only a missing file means "no aliases yet" (B6 check, q115). An
+      // unreadable one was cached as empty, so every read grouped agents
+      // wrongly until restart. Throw instead; nothing is cached, so a later
+      // call reads again.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     this.aliases = aliases
     return aliases
@@ -239,8 +285,12 @@ export class AgentActivityStore {
         } finally {
           await handle.close()
         }
-      } catch {
-        // No file yet: nothing to repair.
+      } catch (error) {
+        // Only a missing file has no tail to repair (B6 check, q115). A file
+        // that cannot be read (write-only, EIO) has an unseen tail: appending
+        // blindly glued the new line onto a torn last line and lost it.
+        // Refuse the append instead.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
     await appendFile(path, text)
@@ -310,29 +360,101 @@ export class AgentActivityStore {
 
   /** Close every interval a previous run left open at that run's last touch.
    *  An unclean shutdown therefore contributes at most one touch period of time
-   *  that was not observed, never the hours until the next launch. */
+   *  that was not observed, never the hours until the next launch.
+   *
+   *  "Unknown is never empty" (#1414 review a round 3, q115): recovery used to
+   *  treat ANY failure (unreadable, corrupt, a failed append midway) as "no
+   *  open file" and then overwrite open.json with an empty snapshot, losing the
+   *  pending interval for good. Now only a missing file (ENOENT) is empty.
+   *  Anything else is moved aside to `open.json.unrecovered-<time>` (a rename
+   *  needs no read permission), so its bytes survive the fresh snapshot this
+   *  run must write, and every later start retries each set-aside copy it can
+   *  read, removing it once recovered. If even the move fails, nothing is
+   *  overwritten and the error propagates. */
   async recoverOpenIntervals(now: number): Promise<number> {
-    let recovered = 0
+    let recovered = await this.recoverSetAside()
+    const path = join(this.dir, 'open.json')
     try {
-      const json: unknown = JSON.parse(await readFile(join(this.dir, 'open.json'), 'utf8'))
-      const record = json && typeof json === 'object' ? (json as Record<string, unknown>) : {}
-      const aliveAt = isNumber(record.aliveAt) ? record.aliveAt : null
-      for (const raw of Array.isArray(record.open) ? record.open : []) {
-        if (!raw || typeof raw !== 'object') continue
-        const entry = raw as Record<string, unknown>
-        const context = entry.context && typeof entry.context === 'object'
-          ? parseContext(entry.context as Record<string, unknown>)
-          : null
-        if (!context || !isNumber(entry.startedAt) || aliveAt === null) continue
-        if (aliveAt > entry.startedAt) {
-          await this.appendInterval({ context, startedAt: entry.startedAt, endedAt: aliveAt })
-          recovered += 1
+      recovered += await this.recoverSnapshot(path)
+    } catch (error) {
+      if (error instanceof PartialRecovery) {
+        // Only what was NOT recovered goes aside (#1414 review c): setting the
+        // whole snapshot aside made the next start re-append the entries
+        // already written, counting that time twice.
+        recovered += error.recovered
+        try {
+          await this.writeSetAside(`${path}.unrecovered-${now}`, error.remaining)
+        } catch {
+          await rename(path, `${path}.unrecovered-${now}`)
         }
+      } else if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        await rename(path, `${path}.unrecovered-${now}`)
       }
-    } catch {
-      // No open file: a clean first run.
     }
     await this.writeOpen([], now)
+    return recovered
+  }
+
+  /** Recover set-aside snapshots that can be read now; keep the rest. */
+  private async recoverSetAside(): Promise<number> {
+    let names: string[]
+    try {
+      names = (await readdir(this.dir)).filter(name => name.startsWith('open.json.unrecovered-')).sort()
+    } catch {
+      // No directory yet, or unlistable: nothing is removed, so nothing is lost.
+      return 0
+    }
+    let recovered = 0
+    for (const name of names) {
+      const path = join(this.dir, name)
+      try {
+        recovered += await this.recoverSnapshot(path)
+      } catch (error) {
+        // Partly recovered: keep only the remainder, so a later start never
+        // re-appends what this one wrote. Unreadable: keep it as it is.
+        if (error instanceof PartialRecovery) {
+          recovered += error.recovered
+          await this.writeSetAside(path, error.remaining).catch(() => {})
+        }
+        continue
+      }
+      await rm(path, { force: true })
+    }
+    return recovered
+  }
+
+  private async writeSetAside(path: string, remaining: SetAsideSnapshot): Promise<void> {
+    const temp = `${path}.${process.pid}.tmp`
+    await writeFile(temp, JSON.stringify(remaining))
+    await rename(temp, path)
+  }
+
+  /** Append the intervals a snapshot left open. Throws on a read or parse
+   *  failure, and PartialRecovery (with what is left) when an append fails
+   *  partway, so the caller never treats the snapshot as recovered. */
+  private async recoverSnapshot(path: string): Promise<number> {
+    const json: unknown = JSON.parse(await readFile(path, 'utf8'))
+    const record = json && typeof json === 'object' ? (json as Record<string, unknown>) : {}
+    const aliveAt = isNumber(record.aliveAt) ? record.aliveAt : null
+    const entries = Array.isArray(record.open) ? record.open : []
+    let recovered = 0
+    for (let index = 0; index < entries.length; index += 1) {
+      const raw: unknown = entries[index]
+      if (!raw || typeof raw !== 'object') continue
+      const entry = raw as Record<string, unknown>
+      const context = entry.context && typeof entry.context === 'object'
+        ? parseContext(entry.context as Record<string, unknown>)
+        : null
+      if (!context || !isNumber(entry.startedAt) || aliveAt === null) continue
+      if (aliveAt > entry.startedAt) {
+        try {
+          await this.appendInterval({ context, startedAt: entry.startedAt, endedAt: aliveAt })
+        } catch {
+          throw new PartialRecovery(recovered, { aliveAt, open: entries.slice(index) })
+        }
+        recovered += 1
+      }
+    }
     return recovered
   }
 
