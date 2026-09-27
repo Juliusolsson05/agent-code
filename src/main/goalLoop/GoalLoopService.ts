@@ -1139,7 +1139,21 @@ export class GoalLoopService extends EventEmitter {
     settle?.()
   }
 
-  private async persist(): Promise<void> {
+  /**
+   * Every persist is in flight until it lands, awaited or not (#1449 review a).
+   * The public mutators (goal_loop_start / goal_loop_complete via MCP) awaited
+   * their write without tracking it, so dispose() at quit saw nothing in
+   * flight and the process could exit mid-write; the next launch then read the
+   * old state and turned a completed loop into paused(interrupted). Tracking
+   * here, at the one write path, covers every caller present and future.
+   */
+  private persist(): Promise<void> {
+    const work = this.persistNow()
+    this.track(work)
+    return work
+  }
+
+  private async persistNow(): Promise<void> {
     // Bound the map (and so the file, whose reader rejects more than
     // GOAL_LOOP_STORE_LIMIT entries). Eviction order, least valuable first:
     // oldest ended, then oldest paused. ACTIVE loops are never evicted — each

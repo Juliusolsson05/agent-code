@@ -104,6 +104,36 @@ describe('GoalLoopService drain (#1341)', () => {
     expect(deliver).toHaveBeenCalledTimes(1)
   })
 
+  // #1449 review a: a PUBLIC mutator (goal_loop_complete / goal_loop_start
+  // through MCP) awaited persist() without tracking it, so dispose() saw
+  // nothing in flight and quit could cut the write off; the next launch then
+  // turned the completed loop into paused(interrupted).
+  for (const [name, act] of [
+    ['complete', (svc: GoalLoopService) => svc.complete('s1', 'done', 'Shipped.')],
+    ['startLoop', (svc: GoalLoopService) => svc.startLoop('s2', { goal: 'G2.', loopPrompt: 'P2.' })],
+  ] as const) {
+    it(`dispose waits for a public ${name} whose write is in flight`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+      directories.push(directory)
+      const store = new GatedStore(join(directory, 'goal-loop.json'))
+      const { svc } = await service(undefined, store)
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      let open!: () => void
+      store.gate = new Promise(resolve => { open = resolve })
+      const mutation = act(svc)
+      await new Promise(resolve => setImmediate(resolve))
+      let disposed = false
+      const disposing = svc.dispose().then(() => { disposed = true })
+      await new Promise(resolve => setImmediate(resolve))
+      expect(disposed).toBe(false)
+      open()
+      await mutation
+      await disposing
+      const written = await readFile(join(directory, 'goal-loop.json'), 'utf8')
+      expect(written).toContain(name === 'complete' ? '"ended"' : '"s2"')
+    })
+  }
+
   it('a disposed service ignores a held loop\'s quiet edge, which continues directly', async () => {
     // The process-state edge calls requestContinue with no timer in between, so only the service's
     // own disposed check stands between it and a delivery.
