@@ -139,43 +139,76 @@ export function appendSemanticHistory(
 }
 
 /**
- * Archive a turn that REPLAY reopened and left open, keeping whichever copy
- * of it renders more (#1391 review a).
+ * Archive a turn that REPLAY reopened and left open, WITHOUT ever erasing
+ * anything the archived copy of it could paint (#1391, steering q93).
  *
- * WHY not plain appendSemanticHistory here: replay can reopen an archived turn
- * T with a repeated `turn_started`, which starts it EMPTY (foldEvent). If
- * replay then quiets before T's content re-arrives, replacing by turnId swapped
- * the full archived T for the empty copy, and with no durable assistant entry
- * yet the answer vanished from the feed. Here the reopened copy only replaces
- * the archived one when it carries at least as much renderable content;
- * otherwise the archived row stays, still exactly one per turnId.
+ * Source-of-truth rule: when the same turnId is already archived, the result
+ * is a FIELD-WISE MONOTONIC MERGE of the archived row and the replay copy:
+ *   - two strings at the same path: the replay's only when it EXTENDS the
+ *     archived one (starts with it and is longer), else the archived one.
+ *     Streamed content only grows by appending, so this takes a replay that
+ *     got further, while an enum-like string (`status: 'completed'` vs a
+ *     reopened `'in_progress'`, which is LONGER) or a replay that diverged
+ *     keeps the archived value. A first draft used "longer string wins" and
+ *     would have flipped a completed block back to in_progress, which drops
+ *     its text ownership key (semantic.ts keys it on finalized/completed)
+ *     and double-renders it next to JSONL;
+ *   - two plain objects (the turn, `blocks`, each block, `lookups`,
+ *     `toolCallsById`, `usage`, ...): merged key by key, recursively, so a
+ *     key only one copy has survives;
+ *   - two arrays of primitives (`blockOrder`, the lookups' id lists): their
+ *     union, archived order first;
+ *   - anything else (numbers, booleans, arrays of objects such as todos): the
+ *     archived value unless it is missing, then the replay's.
+ * INVARIANT: every string in the archived row survives at its path, unchanged
+ * or extended, and every archived block index and id stays. The ledger renders
+ * only from these fields (turn text when blockless, each block's text /
+ * thinking / reasoningSummary / reasoningText / arguments / input / result),
+ * so no field visible before can vanish, while content the replay ADDED
+ * (a block the archive lacked, longer text) is kept too.
  *
- * WHY content size and not counts (#1391 review a, round 2): the reopened
- * copy's BLOCKS can be empty too. Replay re-emits `block_started` for index 0
- * and quiets before `text_delta`, so an equal block count held an empty block
- * where the archived turn held the answer. renderableSize measures what the
- * feed can actually paint (turn text plus each block's text, thinking, tool
- * input and tool result).
+ * WHY not a proxy: three proxies failed review (#1391 review a, rounds 1-3).
+ * Turn-text length missed empty blocks; block counts missed an empty block
+ * at the same index; one content total missed provider fields
+ * (reasoningSummary) and let turn text the ledger never paints outweigh a
+ * missing answer block. A merge needs no judgement of which copy is
+ * "richer": it keeps both.
  *
- * Only the bootstrap-complete path uses this: on the live fold paths a newer
- * copy of the same turn is the authoritative one and should win.
+ * Only the bootstrap-complete path uses this. On the live fold paths a newer
+ * copy of a turn is authoritative (appendSemanticHistory's plain replace).
  */
 export function archiveReplayedTurn(
   history: SemanticRuntimeState['history'],
   turn: SemanticLiveTurn,
 ): SemanticRuntimeState['history'] {
   const archived = history.find(existing => existing.turnId === turn.turnId)
-  if (archived && renderableSize(turn) < renderableSize(archived)) return history
-  return appendSemanticHistory(history, turn)
+  const merged = archived ? (mergeMonotonic(archived, turn) as SemanticLiveTurn) : turn
+  return appendSemanticHistory(history, merged)
 }
 
-function renderableSize(turn: SemanticLiveTurn): number {
-  let size = turn.text.length
-  for (const block of Object.values(turn.blocks)) {
-    size += (block.text?.length ?? 0) + (block.thinking?.length ?? 0) +
-      (block.inputJson?.length ?? 0) + (block.resultContent?.length ?? 0)
+function mergeMonotonic(archived: unknown, replay: unknown): unknown {
+  if (archived === undefined || archived === null) return replay
+  if (replay === undefined || replay === null) return archived
+  if (typeof archived === 'string' && typeof replay === 'string') {
+    return replay.length > archived.length && replay.startsWith(archived) ? replay : archived
   }
-  return size
+  if (Array.isArray(archived) && Array.isArray(replay)) {
+    const primitive = (value: unknown) => value === null || typeof value !== 'object'
+    if (archived.every(primitive) && replay.every(primitive)) {
+      return [...archived, ...replay.filter(value => !archived.includes(value))]
+    }
+    return archived.length > 0 ? archived : replay
+  }
+  if (isPlainObject(archived) && isPlainObject(replay)) {
+    const out: Record<string, unknown> = { ...archived }
+    for (const [key, value] of Object.entries(replay)) out[key] = mergeMonotonic(archived[key], value)
+    return out
+  }
+  return archived
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** True when the turn is still live — hasn't received its
