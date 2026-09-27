@@ -384,9 +384,10 @@ export class UserMcpService {
   }
 
   /**
-   * Inputs whose stored secret is WITHHELD: a record exists but does not match
-   * its current binding (legacy, or bound before an agent changed another
-   * input). The user can still confirm or re-enter them.
+   * Inputs whose stored secret is WITHHELD: a blob exists but does not prove
+   * its current binding (legacy, bound before an agent changed another input,
+   * or not decryptable at all, q130). The user can still confirm, re-enter or
+   * recover them.
    *
    * WHY an agent may not overwrite or delete one (r3 round-2 reviews a+b): a
    * withheld secret is kept precisely so the USER decides what happens to it.
@@ -400,7 +401,10 @@ export class UserMcpService {
     const bindings = await this.bindingsFor(server)
     const withheld: string[] = []
     for (const input of server.inputs) {
-      if (await this.secrets.storedValue(server.id, input.id) === null) continue
+      // Raw presence, not a decrypted value (q130): a blob that exists but
+      // cannot be decrypted is a secret the user may still recover, so it
+      // counts as withheld. Only ENOENT means there is nothing to protect.
+      if (!(await this.secrets.present(server.id, input.id))) continue
       if (await this.secrets.get(server.id, input.id, bindings[input.id]!) === null) withheld.push(input.id)
     }
     return withheld

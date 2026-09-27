@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -973,6 +973,43 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     expect(await blob(id, 'tok')).toEqual(tokBytes)
     expect((await service().delete(id)).ok).toBe(true)
     await expect(blob(id, 'tok')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  // q130: a blob that exists but cannot be decrypted (a key mismatch, a
+  // corrupt file) is NOT an absent secret. It counts as withheld, so none of
+  // the three agent routes may replace or delete it; only the user may. The
+  // bytes below are real ciphertext this codec cannot decrypt.
+  it('an agent cannot overwrite or remove a secret whose blob exists but cannot be decrypted', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const unreadable = Buffer.from('v10\u0000\u00ff\u0013 sealed by another keychain', 'utf8')
+    await writeFile(join(dir, 'mcp-secrets', id, 'tok.bin'), unreadable, { mode: 0o600 })
+    const svc = service()
+    expect((await svc.setSecret(id, 'tok', 'bpr_live_agent_value_8888', 'agent')).ok).toBe(false)
+    expect((await svc.save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_9999' } } as UserMcpSaveInput, 'agent')).ok).toBe(false)
+    expect((await svc.delete(id, 'agent')).ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(unreadable)
+    expect((await svc.snapshot()).servers.map(server => server.id)).toEqual([id])
+    // The user's re-entry replaces it.
+    expect((await svc.setSecret(id, 'tok', 'bpr_live_user_value_7777')).ok).toBe(true)
+    expect(await blob(id, 'tok')).not.toEqual(unreadable)
+  })
+
+  // q130: presence that cannot be CHECKED is unknown, not absent. A
+  // self-referencing link makes stat fail (ELOOP) while the atomic write's
+  // rename would still replace it, so only the presence check stands
+  // between an agent and the entry. (An unreadable directory does not
+  // discriminate: the write fails there too.)
+  it('an agent write is refused when the blob cannot even be stat-ed', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const file = join(dir, 'mcp-secrets', id, 'tok.bin')
+    await rm(file)
+    await symlink(file, file)
+    expect((await service().setSecret(id, 'tok', 'bpr_live_agent_value_1212', 'agent')).ok).toBe(false)
+    expect((await lstat(file)).isSymbolicLink()).toBe(true)
   })
 
   // Gap 2 (B6): both guards had no committed test.

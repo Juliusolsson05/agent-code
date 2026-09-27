@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
@@ -115,6 +115,23 @@ export class UserMcpSecretStore {
     const record = await this.record(serverId, inputId)
     if (record?.kind !== 'bound' || record.value === '') return null
     return record.destination === binding.destination && record.inputs === binding.inputs ? record.value : null
+  }
+
+  /**
+   * Whether a blob EXISTS for this input, decryptable or not (q130). Only a
+   * verified-absent file (ENOENT) is "no secret". Any other failure throws,
+   * so a caller deciding whether it may overwrite or delete fails closed. A
+   * present blob that cannot be decrypted (a key mismatch, a corrupt file)
+   * still holds the user's secret and must not be treated as empty.
+   */
+  async present(serverId: string, inputId: string): Promise<boolean> {
+    try {
+      await stat(this.path(serverId, inputId))
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    }
   }
 
   /**
