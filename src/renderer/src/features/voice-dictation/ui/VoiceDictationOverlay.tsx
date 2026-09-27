@@ -1,4 +1,5 @@
 import { useDictationOverlayState } from '@renderer/features/voice-dictation/dictationStatusStore'
+import { LAYERS } from '@renderer/ui/layers'
 
 // VoiceDictationOverlay — terminal-mode floating chip rendered at App root.
 // Rendered Agent mode keeps the old inline composer mic affordance; only
@@ -53,7 +54,7 @@ export function VoiceDictationOverlay() {
   return (
     <div
       className={`
-        pointer-events-none fixed bottom-4 left-1/2 z-[1200] -translate-x-1/2
+        pointer-events-none fixed bottom-4 left-1/2 ${LAYERS.toast} -translate-x-1/2
         flex items-center gap-3 rounded-float border bg-surface px-3 py-2
         font-code text-[11px] leading-none
         ${isError ? 'border-danger' : 'border-border'}

@@ -8,6 +8,7 @@ import type { GoalLoopControlAction, GoalLoopState } from '@shared/types/goalLoo
 import { dismissGoalLoop, useGoalLoopView } from './viewState'
 import { withVisibleControls } from '@shared/text/visibleControls'
 import { useSwapFocus } from '@renderer/lib/useSwapFocus'
+import { LAYERS } from '@renderer/ui/layers'
 
 const PHASE_LABEL: Record<GoalLoopState['phase'], string> = {
   active: 'active', paused: 'paused', ended: 'ended',
@@ -79,7 +80,7 @@ function GoalLoopOverlay({ children, takeFocus }: { children: ReactNode; takeFoc
     data-goal-loop-active={takeFocus ? '' : undefined}
     role="dialog"
     aria-label="Agent goal loop"
-    className="absolute inset-0 z-50 bg-canvas text-ink"
+    className={`absolute inset-0 ${LAYERS.paneTakeover} bg-canvas text-ink`}
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
     onKeyDown={event => {
@@ -204,7 +205,7 @@ export function GoalLoopPane({ sessionId, focused = true }: { sessionId: string;
   // also a genuine blocking surface, may do the same.
   const strip = <div
     data-goal-loop-strip=""
-    className="pointer-events-auto absolute inset-x-0 top-0 z-40 flex items-center justify-between gap-2 bg-canvas/90 px-3 py-1 text-xs text-ink"
+    className={`pointer-events-auto absolute inset-x-0 top-0 ${LAYERS.paneOverlay} flex items-center justify-between gap-2 bg-canvas/90 px-3 py-1 text-xs text-ink`}
     onMouseDown={event => event.stopPropagation()}
     onClick={event => event.stopPropagation()}
   >

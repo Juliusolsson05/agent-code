@@ -9,6 +9,7 @@ import {
 } from '@renderer/components/ui/pane-dialog'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import { cn } from '@renderer/lib/utils'
+import { LAYERS } from '@renderer/ui/layers'
 
 // Adapted from https://ui.shadcn.com/docs/components/dialog.
 //
@@ -52,7 +53,8 @@ const DialogOverlay = React.forwardRef<
     ref={ref}
     data-slot="dialog-overlay"
     className={cn(
-      'fixed inset-0 z-[1100] bg-overlay-scrim-strong',
+      'fixed inset-0 bg-overlay-scrim-strong',
+      LAYERS.dialog,
       className,
     )}
     {...props}
@@ -157,7 +159,8 @@ const DialogContent = React.forwardRef<
       // the TRACK minimum lets the child shrink first; each child still owns
       // whether its content truncates, wraps, or scrolls.
       className={cn(
-        'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-[0_16px_48px_var(--theme-shadow-color)] outline-none',
+        LAYERS.dialog,
+        'fixed left-1/2 top-1/2 grid grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-[0_16px_48px_var(--theme-shadow-color)] outline-none',
         dialogSizes[size],
         // The corner `× ⎋` (below) sits over the header's right end, so the
         // header must leave room for it. Owned HERE (UI pass, G-20): five
