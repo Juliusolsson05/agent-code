@@ -156,7 +156,77 @@ function ttlHours(): number {
   return envNumber('AGENT_CODE_DEBUG_TTL_HOURS', DEFAULT_TTL_HOURS)
 }
 
+// ── The boot gate (#775) ───────────────────────────────────────────────
+//
+// WHY: the first prune of every run used to start about 1 s after launch
+// (AppRunJournal.start), while the first window's workspace was still
+// rehydrating, so its statfs, directory walk and rm -rf competed with the
+// session herd coming back. In the owner's 50 journaled runs, 27 of the 30
+// run-start prunes landed before that run's first `rehydrate.complete`
+// (reported 2.2-70.5 s after start, excluding one run that slept mid-boot)
+// and one landed 1.8 s after it, still inside the burst; the largest
+// journaled one freed 1.98 GiB at 25.4 s. Nothing about retention is urgent at boot: the budget
+// is 3% of the disk and the TTL is days, so waiting past recovery costs
+// nothing.
+//
+// Closed only by holdDebugStoragePruneUntilRecovered() (the run's boot, once
+// per process), so every other caller and test keeps the old behavior.
+// While closed, requests coalesce into ONE pending prune, keeping the first
+// reason. It opens a while after the first window reports
+// `rehydrate.complete`, or after a fallback, so a run with no window (5 of
+// the 50 journaled runs never reported one) still prunes.
+//
+// WHY 120 s after recovery (#1351 review c): session wakes continue past
+// 60 s after `rehydrate.complete` in 19 of 45 journaled runs (the densest
+// burst is inside 60 s; the tail runs to ~280 s and may be user-initiated).
+// 120 s covers most of it; the 5-minute fallback bounds the whole wait.
+export const DEBUG_PRUNE_AFTER_RECOVERY_MS = 120_000
+export const DEBUG_PRUNE_BOOT_FALLBACK_MS = 5 * 60_000
+
+type BootGate = {
+  pendingReason: string | null
+  fallback: ReturnType<typeof setTimeout>
+  opening: ReturnType<typeof setTimeout> | null
+}
+let bootGate: BootGate | null = null
+let bootGateUsed = false
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  // A pending prune must never keep a quitting process alive.
+  (timer as { unref?: () => void }).unref?.()
+}
+
+/** Called once, at the start of a run, before its first prune request. */
+export function holdDebugStoragePruneUntilRecovered(): void {
+  if (bootGateUsed) return
+  bootGateUsed = true
+  const fallback = setTimeout(openDebugStoragePruneGate, DEBUG_PRUNE_BOOT_FALLBACK_MS)
+  unrefTimer(fallback)
+  bootGate = { pendingReason: null, fallback, opening: null }
+}
+
+/** The first window finished rehydrating its workspace; open the gate after
+ *  the session-wake burst that follows. Later reports change nothing. */
+export function noteWorkspaceRecovered(): void {
+  if (!bootGate || bootGate.opening) return
+  bootGate.opening = setTimeout(openDebugStoragePruneGate, DEBUG_PRUNE_AFTER_RECOVERY_MS)
+  unrefTimer(bootGate.opening)
+}
+
+function openDebugStoragePruneGate(): void {
+  const gate = bootGate
+  if (!gate) return
+  bootGate = null
+  clearTimeout(gate.fallback)
+  if (gate.opening) clearTimeout(gate.opening)
+  if (gate.pendingReason) scheduleDebugStoragePrune(gate.pendingReason)
+}
+
 export function scheduleDebugStoragePrune(reason: string): void {
+  if (bootGate) {
+    bootGate.pendingReason ??= reason
+    return
+  }
   const now = Date.now()
   if (pruneInFlight || now - lastPruneStartedAt < PRUNE_COOLDOWN_MS) return
   lastPruneStartedAt = now

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'fs/promises'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
+import { withReportingPublicationLock } from '@main/storage/reportingPublicationLock.js'
 import { sweepAbandonedScratch } from '@main/storage/scratchSweep.js'
 import {
   collectSessionIds,
@@ -293,7 +294,10 @@ export class WorkspaceFileStore {
    * life, so this cannot be left to luck.
    */
   private commit(compose: (current: WorkspaceFile) => WorkspaceFile): Promise<void> {
-    const save = this.saveTail.then(async () => {
+    // Inside the shared reporting lock (#1328 q56): this save's rename and the
+    // `this.file` advance the TLDR/Goal stores read their in-use answer from
+    // must never overlap a store write that evicts a record.
+    const save = this.saveTail.then(() => withReportingPublicationLock(async () => {
       const next = compose(this.file)
       await mkdir(STATE_DIR, { recursive: true })
       // WHY this temp file is still unique even though saves are serialized:
@@ -365,7 +369,7 @@ export class WorkspaceFileStore {
           console.warn('[workspace] observer failed', error)
         }
       }
-    })
+    }))
     this.saveTail = save.catch(() => undefined)
     return save
   }
