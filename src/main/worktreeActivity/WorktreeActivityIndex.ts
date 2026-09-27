@@ -304,16 +304,18 @@ export class WorktreeActivityIndex {
       // and replace the file even when every candidate was a cache hit. The
       // new `updatedAt` also keyed `collectSummaries`' cache, so it threw
       // away the very cache that stops a 10 s UI poll from re-reading the
-      // index. Content changed only if something was (re)parsed, a parse
-      // failed (that entry drops out), or the SET of transcript paths moved (a
-      // deleted, added or swapped transcript). Otherwise this was a re-check: record WHEN we checked
+      // index. Content changed only if something was (re)parsed or the SET of
+      // transcript paths moved (a deleted, added, swapped or newly unparsable
+      // transcript). Otherwise this was a re-check: record WHEN we checked
       // (`lastIndexedAt`, shown as "Activity index updated") and keep the
       // content generation (`updatedAt`) as it was.
       const nextKeys = Object.keys(nextTranscripts)
       const nextCount = nextKeys.length
+      // No `skippedFiles` term (review of #1349): a previously indexed transcript that now fails to
+      // parse drops out of the key set, which the set comparison sees; one that never parsed changes
+      // nothing, and counting it forced a full rewrite on every refresh while it stayed unreadable.
       const contentChanged =
         this.status.parsedFiles > 0 ||
-        this.status.skippedFiles > 0 ||
         nextCount !== this.onDiskKeys.size ||
         nextKeys.some(key => !this.onDiskKeys.has(key))
       if (contentChanged) {
