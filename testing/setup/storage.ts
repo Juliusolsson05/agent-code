@@ -12,14 +12,17 @@ import { Storage } from 'happy-dom'
  * to Node's broken storage instead of the DOM's. On Node 22/24, happy-dom's
  * storage is already in place and this changes nothing.
  *
- * "Working" is judged by `clear` being a function: Node 25's placeholder lacks
- * it, and every real Storage has it.
+ * "Working" means happy-dom's own Storage (review c of #1408). A check for
+ * `clear` accepted Node 25's FILE-backed storage too: with
+ * `--localstorage-file` (on the command line or in NODE_OPTIONS) Node's
+ * storage is complete, so it stayed in place and a test read values another
+ * process had written to that file instead of the DOM's fresh, empty
+ * storage. Anything that is not a happy-dom Storage is replaced.
  */
 export function installWorkingStorage(target: object): Array<'localStorage' | 'sessionStorage'> {
   const replaced: Array<'localStorage' | 'sessionStorage'> = []
   for (const name of ['localStorage', 'sessionStorage'] as const) {
-    const current = (target as Record<string, unknown>)[name] as { clear?: unknown } | undefined
-    if (typeof current?.clear === 'function') continue
+    if ((target as Record<string, unknown>)[name] instanceof Storage) continue
     Object.defineProperty(target, name, { configurable: true, writable: true, value: new Storage() })
     replaced.push(name)
   }
