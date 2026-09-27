@@ -55,7 +55,11 @@ async function replay(session: string) {
   const upload = row(session, 'batch:upload:start').data!
   const { id } = await invoke('stream-start', { provider: 'deepgram', debugSessionId: 'debug' })
   for (let i = 0; i < (upload.chunkCount as number); i++) await invoke('stream-chunk', { id, chunk: new ArrayBuffer(8) })
-  return invoke('stream-stop', { id, audioDurationMs: row(session, 'stop:ipc-result').data!.audioDurationMs })
+  // The hold as the renderer reported it; the recorded 408 session has no
+  // stop:ipc-result row, so its outcome row carries it instead.
+  const held = recorded.sessions[session]!.rows.find(r => r.event === 'stop:ipc-result')?.data?.audioDurationMs
+    ?? recorded.sessions[session]!.rows.find(r => r.layer === 'OUTCOME')!.data!.audioDurationMs
+  return invoke('stream-stop', { id, audioDurationMs: held })
 }
 const outcome = () => mocks.journal.filter(entry => entry.layer === 'OUTCOME')
 
@@ -63,6 +67,9 @@ describe('dictation outcome codes in main (#243)', () => {
   it.each([
     ['provider-400', 'provider.bad-audio', 'Deepgram could not process this recording. Try again.'],
     ['network', 'network', 'Could not reach Deepgram. Check the network connection.'],
+    // #1340 review A5/C: the recorded 408 was a 370 ms, 3-chunk press, so the
+    // short-clip downgrade told the user "No speech detected".
+    ['provider-408', 'provider.timeout', 'Deepgram took too long to transcribe. Try again.'],
   ])('answers the recorded %s failure with its code', async (session, reason, sentence) => {
     const thrown = row(session, 'batch:upload:throw').data!
     mocks.batch.mockRejectedValue(Object.assign(new Error(thrown.message as string), {
@@ -100,5 +107,19 @@ describe('dictation outcome codes in main (#243)', () => {
     await invoke('stream-cancel', { id })
     expect(outcome()).toEqual([])
     expect(mocks.journal).toContainEqual(expect.objectContaining({ layer: 'IPC', event: 'stream-cancel' }))
+  })
+
+  // #1340 review A3: quit aborts an in-flight transcription; its handler
+  // answers cancelled.shutdown and that must be journaled, not fenced out.
+  it('journals cancelled.shutdown for a transcription quit aborts', async () => {
+    mocks.batch.mockImplementation(({ signal }: { signal: AbortSignal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+    }))
+    const stopping = replay('provider-400')
+    await vi.waitFor(() => expect(mocks.batch).toHaveBeenCalled())
+    const module = await import('./dictation')
+    await module.cleanupDictationIpcResources()
+    expect(await stopping).toMatchObject({ kind: 'error', reason: 'cancelled.shutdown' })
+    expect(outcome()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'cancelled.shutdown' }) })])
   })
 })

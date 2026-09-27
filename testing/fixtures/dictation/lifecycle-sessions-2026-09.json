@@ -1,5 +1,5 @@
 {
- "source": "Owner's dictation-debug journals (~/Library/Application Support/agent-code/dictation-debug), recorded 2026-09; one session per terminal shape in the #243 census. Lifecycle rows only: AUDIO_LEVEL samples, CHUNK rows, recorder:dataavailable, Deepgram preview-socket rows and TRANSCRIPT rows (which hold dictated text) are dropped; 64-hex device ids are zeroed at the same length. Device labels, the user agent and provider error bodies are kept after review; the owner's first name in one device label and the Deepgram request_id are replaced at the same length.",
+ "source": "Owner's dictation-debug journals (~/Library/Application Support/agent-code/dictation-debug), recorded 2026-09; one session per terminal shape in the #243 census, plus the one recorded HTTP 408 (added for #1340 review). Lifecycle rows only: AUDIO_LEVEL samples, CHUNK rows, recorder:dataavailable, Deepgram preview-socket rows and TRANSCRIPT rows (which hold dictated text) are dropped; 64-hex device ids are zeroed at the same length. Device labels, the user agent and provider error bodies are kept after review; the owner's first name in one device label and the Deepgram request_id are replaced at the same length.",
  "sessions": {
   "mic-opened-late": {
    "session": "028f6c14-b0bc-4913-9c31-7bf123d76fb7",
@@ -880,6 +880,290 @@
         "readyState": "live"
        }
       ]
+     }
+    }
+   ]
+  },
+  "provider-408": {
+   "session": "ec3c75c2-a90d-4e1f-a179-179ef5d42cd6",
+   "rows": [
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "session:created",
+     "data": {
+      "provider": "deepgram",
+      "focused": true,
+      "baseInputLen": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) agent-code/0.0.2-beta.1 Chrome/150.0.7871.114 Electron/43.1.1 Safari/537.36",
+      "platform": "MacIntel"
+     }
+    },
+    {
+     "tMs": 2,
+     "layer": "META",
+     "event": "start:begin",
+     "data": {
+      "lifecycle": "idle",
+      "provider": "deepgram",
+      "focused": true
+     }
+    },
+    {
+     "tMs": 13,
+     "layer": "DEVICE",
+     "event": "enumerate:audioinput",
+     "data": {
+      "count": 4,
+      "labels": [
+       "Default - MacBook Air Microphone (Built-in)",
+       "Person \u2013 iPhone Microphone",
+       "BlackHole 2ch (Virtual)",
+       "MacBook Air Microphone (Built-in)"
+      ]
+     }
+    },
+    {
+     "tMs": 13,
+     "layer": "DEVICE",
+     "event": "select:built-in",
+     "data": {
+      "label": "MacBook Air Microphone (Built-in)"
+     }
+    },
+    {
+     "tMs": 216,
+     "layer": "DEVICE",
+     "event": "start:get-user-media:done",
+     "data": {
+      "lifecycle": "starting",
+      "ms": 213,
+      "forcedDeviceId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tracks": [
+       {
+        "label": "MacBook Air Microphone (Built-in)",
+        "enabled": true,
+        "muted": false,
+        "readyState": "live"
+       }
+      ]
+     }
+    },
+    {
+     "tMs": 218,
+     "layer": "RECORDER",
+     "event": "start:recorder-created",
+     "data": {
+      "lifecycle": "starting",
+      "requestedMimeType": "audio/webm;codecs=opus",
+      "recorderMimeType": "audio/webm;codecs=opus",
+      "state": "inactive"
+     }
+    },
+    {
+     "tMs": 219,
+     "layer": "RECORDER",
+     "event": "recorder:start-called",
+     "data": {
+      "lifecycle": "starting",
+      "state": "recording",
+      "timesliceMs": 120
+     }
+    },
+    {
+     "tMs": 400,
+     "layer": "IPC",
+     "event": "stream:start:request",
+     "data": {
+      "lifecycle": "recording",
+      "mimeType": "audio/webm;codecs=opus",
+      "queuedChunks": 1,
+      "recorderState": "recording"
+     }
+    },
+    {
+     "tMs": 402,
+     "layer": "PROVIDER",
+     "event": "stream:start",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "streamingId": null,
+      "provider": "deepgram",
+      "phase": "stream:start",
+      "runId": "5fb67ee8-5206-45ad-b2df-04ddb01295c4",
+      "model": "flux-general-en",
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 402,
+     "layer": "PROVIDER",
+     "event": "streaming:start:ok",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "streamingId": "5fb67ee8-5206-45ad-b2df-04ddb01295c4",
+      "provider": "deepgram",
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 402,
+     "layer": "IPC",
+     "event": "stream-start:accepted",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "provider": "deepgram",
+      "mimeType": "audio/webm;codecs=opus",
+      "streamingId": "5fb67ee8-5206-45ad-b2df-04ddb01295c4",
+      "hasApiKey": true
+     }
+    },
+    {
+     "tMs": 404,
+     "layer": "IPC",
+     "event": "stream:start:result",
+     "data": {
+      "lifecycle": "recording",
+      "kind": "started",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "message": null
+     }
+    },
+    {
+     "tMs": 405,
+     "layer": "IPC",
+     "event": "stream:drain-and-publish",
+     "data": {
+      "lifecycle": "recording",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "drained": 1
+     }
+    },
+    {
+     "tMs": 584,
+     "layer": "META",
+     "event": "stop:called",
+     "data": {
+      "lifecycle": "recording",
+      "hasRecording": true,
+      "heldMs": 585
+     }
+    },
+    {
+     "tMs": 584,
+     "layer": "RECORDER",
+     "event": "stop:stopping-recorder",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "recorderState": "recording",
+      "queuedChunks": 0,
+      "pendingPushes": 2
+     }
+    },
+    {
+     "tMs": 584,
+     "layer": "RECORDER",
+     "event": "stop:request-data",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e"
+     }
+    },
+    {
+     "tMs": 585,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stop-called",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e"
+     }
+    },
+    {
+     "tMs": 585,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stopped",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "queuedChunks": 0,
+      "pendingPushes": 3
+     }
+    },
+    {
+     "tMs": 588,
+     "layer": "IPC",
+     "event": "stop:pending-pushes-settled",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "queuedChunks": 0,
+      "pendingPushes": 3,
+      "hasStreamStartPromise": true
+     }
+    },
+    {
+     "tMs": 588,
+     "layer": "PROVIDER",
+     "event": "stream:stop",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "streamingId": "5fb67ee8-5206-45ad-b2df-04ddb01295c4",
+      "provider": "deepgram",
+      "phase": "stream:stop",
+      "runId": "5fb67ee8-5206-45ad-b2df-04ddb01295c4",
+      "chunkCount": 3,
+      "audioBytes": 5021,
+      "ms": 188,
+      "closeGraceMs": 0,
+      "endOfTurnWatchdogMs": 1500
+     }
+    },
+    {
+     "tMs": 588,
+     "layer": "PROVIDER",
+     "event": "batch:upload:start",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "provider": "deepgram",
+      "audioBytes": 5021,
+      "chunkCount": 3,
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 13124,
+     "layer": "META",
+     "event": "cleanup",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "recorderState": "inactive"
+     }
+    },
+    {
+     "tMs": 14904,
+     "layer": "ERROR",
+     "event": "batch:upload:throw",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "message": "Deepgram transcription failed",
+      "status": 408,
+      "provider": "deepgram",
+      "details": "<html><body><h1>408 Request Time-out</h1>\nYour browser didn't send a complete request in time.\n</body></html>\n",
+      "ms": 14502
+     }
+    },
+    {
+     "tMs": 14904,
+     "layer": "OUTCOME",
+     "event": "no-speech",
+     "data": {
+      "streamId": "1ea23f57-0dc6-4647-bf00-8459280bcf1e",
+      "reason": "too-short-provider-rejected",
+      "chunkCount": 3,
+      "audioBytes": 5021,
+      "audioDurationMs": 370
      }
     }
    ]

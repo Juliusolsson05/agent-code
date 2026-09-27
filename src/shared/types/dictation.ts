@@ -100,25 +100,34 @@ export type DictationOutcomeReason =
   | 'final.timeout'
   | 'delivery.hidden-terminal'
   | 'delivery.abandoned'
+  | 'delivery.failed'
   | 'unknown'
 
 /**
- * The phase deadlines (#243), each at least 3× the longest the owner's
- * recorded journals show (148 sessions, 2026-09-27). Named here so main and
- * renderer tests read the same numbers. Recorded p50 / p95 / max, in ms:
- * - connect (stream-start request → result): 4 / 19 / 55. The unbounded part
- *   is the keychain read inside it.
- * - first audio (recorder started → first non-empty chunk): 177 / 245 / 626.
- *   A muted microphone still encodes silence, so only a capture that
- *   produces NOTHING trips this.
- * - final (batch transcription): 450 / 1,646 / 14,316.
- * Insertion has no deadline: it is a synchronous draft write (3 / 11 / 21 ms)
- * that cannot hang; its non-delivery cases carry `delivery.*` codes instead.
+ * The phase deadlines (#243), set against the longest the owner's recorded
+ * journals show (148 sessions, 2026-09-27). Named here so main and renderer
+ * tests read the same numbers. Recorded p50 / p95 / max, in ms, and margin:
+ * - connect (stream-start request → result): 4 / 19 / 55; 10 s is 180×.
+ *   The unbounded part is the keychain read inside it.
+ * - first audio (recorder started → first non-empty chunk): 177 / 245 / 626;
+ *   2 s is 3.2×. A muted microphone still encodes silence, so only a capture
+ *   that produces NOTHING trips this.
+ * - drain (release → every queued chunk pushed to main): local IPC like
+ *   connect, so the same 10 s. It bounds the stretch before main's final
+ *   timer exists (#1340 review C: a hung push stranded "stopping").
+ * - final (batch transcription): 450 / 1,646 / 14,316; 30 s is 2.1× the
+ *   longest recorded, chosen as the longest a user will watch a pill.
+ * - insertion into a TERMINAL (an async session write): 5 s. The composer
+ *   sink is a synchronous draft write (3 / 11 / 21 ms recorded) that cannot
+ *   hang. Terminal delivery was never journaled before this, so its bound is
+ *   a judgment, not a measurement.
  */
 export const DICTATION_DEADLINES_MS = {
   connect: 10_000,
   firstAudio: 2_000,
+  drain: 10_000,
   final: 30_000,
+  terminalInsertion: 5_000,
 } as const
 
 /**
@@ -198,6 +207,8 @@ export function dictationReasonMessage(reason: DictationOutcomeReason, detail: {
       return 'Dictation could not start in time. Try again.'
     case 'delivery.hidden-terminal':
       return 'Dictation stopped: the terminal pane was hidden, so the transcript was not sent.'
+    case 'delivery.failed':
+      return 'The transcript could not be sent to the terminal. It is in Settings → Dictation → History.'
     case 'unknown':
       return 'Dictation failed.'
   }

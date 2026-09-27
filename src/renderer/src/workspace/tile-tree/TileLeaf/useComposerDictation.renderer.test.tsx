@@ -510,4 +510,113 @@ describe('dictation outcome codes (#243)', () => {
     expect(onMessage).toHaveBeenCalledWith('Deepgram could not process this recording. Try again.')
     expect(onMessage).not.toHaveBeenCalledWith('Deepgram transcription failed')
   })
+
+  // #1340 review A1 (q22/q39): an error name the mapping does not know must
+  // not put the browser's own text in front of the user.
+  it('never shows an unknown microphone error’s own text', async () => {
+    mount()
+    await act(async () => {})
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(Object.assign(new Error('PRIVATE_BROWSER_TOKEN'), { name: 'UnknownError' }))
+    await act(async () => { controller?.toggle() })
+    expect(onMessage).toHaveBeenCalledTimes(1)
+    expect(onMessage.mock.calls[0]![0]).not.toContain('PRIVATE_BROWSER_TOKEN')
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'mic.error' }) })])
+  })
+
+  // #1340 review A2: unmounted while the microphone is still opening. The
+  // late stream must be closed, no recorder built, and the session end with
+  // one cancelled.unmount row.
+  it('closes a microphone that opens after the pane unmounted', async () => {
+    const view = mount()
+    await act(async () => {})
+    slowMicrophone(200)
+    const tracks: Array<{ stop: ReturnType<typeof vi.fn> }> = []
+    const real = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation()!
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => {
+      const stream = await real(constraints) as unknown as { getTracks: () => Array<{ stop: () => void }> }
+      const track = { ...stream.getTracks()[0]!, stop: vi.fn() }
+      tracks.push(track)
+      return { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
+    })
+    await act(async () => { controller?.toggle() })
+    await act(async () => { await wait(10); view.unmount() })
+    await act(async () => { await wait(300) })
+    expect(FakeMediaRecorder.instances).toHaveLength(0)
+    expect(tracks.every(track => track.stop.mock.calls.length > 0)).toBe(true)
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'cancelled.unmount' }) })])
+  })
+
+  // #1340 review A (survivor): unmount while recording writes its OUTCOME.
+  it('records cancelled.unmount when the pane goes away mid-recording', async () => {
+    const view = mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { view.unmount() })
+    expect(outcomes()).toEqual([expect.objectContaining({ layer: 'OUTCOME', data: expect.objectContaining({ code: 'cancelled.unmount' }) })])
+  })
+
+  // #1340 review A4: released while the stream start is pending, then the
+  // connect deadline fires. One ending, one sentence.
+  it('ends a recording once when the connect deadline fires during a stop', async () => {
+    ;(window as unknown as { api: { startDictationStream: unknown } }).api.startDictationStream = () => new Promise(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await act(async () => { controller?.toggle(); await wait(10) })
+    await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
+    expect(onMessage.mock.calls.map(call => call[0])).toEqual(['Dictation could not start in time. Try again.'])
+    expect(outcomes()).toHaveLength(1)
+  })
+
+  // #1340 review A (survivor): main never answered (the stop IPC threw), so
+  // the renderer writes the row.
+  it('records an outcome when the stop IPC throws', async () => {
+    ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream = async () => { throw new Error('ipc gone') }
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await act(async () => { controller?.toggle(); await wait(20) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'unknown' }) })])
+    expect(onMessage).toHaveBeenCalledWith('Dictation failed.')
+  })
+
+  // #1340 review C: a chunk push that never settles used to strand the
+  // recording in "stopping" before main's final timer existed.
+  it('bounds a stop whose chunk push never settles', async () => {
+    ;(window as unknown as { api: { pushDictationChunk: unknown } }).api.pushDictationChunk = () => new Promise(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 2)); await wait(20) })
+    await act(async () => { controller?.toggle(); await wait(10) })
+    await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'final.timeout' }) })])
+    expect(controller?.status).not.toBe('stopping')
+  })
+
+  // #1340 review C: terminal insertion is an async session write that can
+  // answer false. `committed` must wait for it, and a failed paste is a
+  // delivery.failed row the user is told about, not a silent success.
+  it.each([
+    ['answers false', (feed: ReturnType<typeof createFakeSessionFeed>) => { feed.nextSendInputResult = false }],
+    ['rejects', (feed: ReturnType<typeof createFakeSessionFeed>) => { feed.sendInput = async () => { throw new Error('gone') } }],
+  ])('reports a terminal paste that %s instead of logging it committed', async (_label, arrange) => {
+    ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
+      async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
+    const feed = createFakeSessionFeed()
+    arrange(feed)
+    render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await act(async () => { controller?.toggle(); await wait(30) })
+    expect(journal.some(row => row.layer === 'TRANSCRIPT' && row.event === 'committed')).toBe(false)
+    expect(journal).toContainEqual(expect.objectContaining({ layer: 'TRANSCRIPT', event: 'delivery:failed', data: { code: 'delivery.failed' } }))
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('could not be sent to the terminal'))
+  })
 })

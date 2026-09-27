@@ -79,3 +79,18 @@ Each is red on main.
 
 ## Verification boundary
 Real microphone and Deepgram behaviour cannot be run here (never launch the app). The deadlines are checked with fake timers against the recorded maxima; real-world tuning is reported as a residual.
+
+## Review round 1 (#1340) and steering q61
+Reviewers A and C returned FIX-BEFORE-MERGE (B pending). All their findings were valid:
+- **Unknown microphone error text reached the user (A, blocker; C).** `dictationAudioInputError` fell through to `error.message`. It now returns a fixed sentence, and the only interpolated value (the user's own device label) is capped at 80 characters.
+- **Unmount while the microphone was opening (A, blocker).** `start()` resumed on an unmounted hook and started a recorder nothing owned. `unmountedRef` is checked after the capture resolves (and in `start()`'s catch): the late stream is closed and nothing is built. The unmount writes the session's one `cancelled.unmount` row.
+- **Two terminal decisions (A).** A deadline that failed the recording while `stop()` was awaiting was followed by `stop()`'s own "No speech detected". `failRecording` is now the single owner: `stop()` returns when the recording is already discarded, at every await. The first-audio timer no longer fires once the user has released.
+- **Shutdown dropped its OUTCOME (A).** The late-row fence now lets OUTCOME through. Only admitted handlers write it, and they are joined before the final flush.
+- **A 408 downgraded to no-speech (A, C).** 408 is excluded from the short-clip downgrade, so the recorded 408 (370 ms, 3 chunks) is now `provider.timeout`.
+- **Terminal insertion was not awaited (C). This reverses the plan's earlier insertion ruling.** For a terminal sink, insertion is an async session write that can answer false or reject. `committed` is written only after it answers true. False, rejection, or no answer within 5 s (`terminalInsertion`) gives a `delivery.failed` row and a sentence. The composer sink stays a synchronous write.
+- **A hung chunk push stranded `stopping` (C).** The drain before the stop IPC (pending pushes, and a queued stream start) is bounded by `drain` (10 s). On expiry, the recording ends as `final.timeout` and main's half is cancelled.
+- **Wording (C).** Margins are stated per phase: connect 180×, first audio 3.2×, final 2.1× (not "3×"). The fixture had five sessions; it now has six, with the one recorded 408 added under the same redaction.
+
+Tests: 10 new cases.
+- Eight are red on the round-1 head: the recorded 408, shutdown OUTCOME, unknown-error text, unmount during mic open, connect timeout during stop, hung push, and terminal paste answering false or rejecting.
+- Two pin mutation survivors (unmount mid-recording, IPC throw); removing each guard fails them.

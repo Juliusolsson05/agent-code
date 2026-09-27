@@ -60,6 +60,17 @@ type ActiveRecording = {
   discarded: boolean
 }
 
+/** Rejects with `reason` when `promise` has not settled within `ms` (#1340
+ *  review C). The timer is cleared either way, so it never fires into a
+ *  later press. */
+function withinDeadline<T>(promise: Promise<T>, ms: number, reason: DictationOutcomeReason): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new DictationReasonError(reason)), ms) }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 /** A failure that already knows its #243 code, so the catch that reports it
  *  never has to guess from (or show) an error's text. */
 class DictationReasonError extends Error {
@@ -224,6 +235,10 @@ export function useComposerDictation({
    * written and leaves it alone.
    */
   const abandonedStopRef = useRef(false)
+  // Set once the hook has unmounted (#1340 review A2). start() checks it
+  // after every await: a microphone that opens after the pane is gone must
+  // be closed again, never recorded from.
+  const unmountedRef = useRef(false)
   const cancelRecordingRef = useRef<(recording: ActiveRecording) => void>(() => {})
   const pendingStopRef = useRef(false)
   const pendingDiscardRef = useRef(false)
@@ -270,8 +285,14 @@ export function useComposerDictation({
   // wrote what, when, and what did the input look like before/after?". This
   // is how we will reproduce the rare bug where the composer shows phantom
   // text after dictation: just rewind through the trace.
-  const writeInput = useCallback((next: string, source: string) => {
+  // Returns whether the text was delivered. The composer draft write is
+  // synchronous and always lands; a TERMINAL write is an async session write
+  // that can answer false (the session is gone, or a prompt delivery owns its
+  // input) or reject (#1340 review C). Callers that must know, the commit,
+  // await it; previews and restores do not.
+  const writeInput = useCallback((next: string, source: string): boolean | Promise<boolean> => {
     const activeSink = sinkRef.current
+    let delivered: boolean | Promise<boolean> = true
     if (activeSink.kind === 'composer') {
       inputRef.current = next
       activeSink.setInputText(next)
@@ -280,7 +301,7 @@ export function useComposerDictation({
       // series of keystrokes. The STT wrapper contains newlines; sending it raw
       // can be interpreted as Enter by provider TUIs. Bracketed paste is the
       // existing safe path for multiline text into Claude/Codex terminals.
-      void feed.sendInput(activeSink.sessionId, `\x1b[200~${next}\x1b[201~`)
+      delivered = feed.sendInput(activeSink.sessionId, `\x1b[200~${next}\x1b[201~`)
     }
     // eslint-disable-next-line no-console
     console.debug('[dictation:write-input]', {
@@ -292,6 +313,7 @@ export function useComposerDictation({
     // `feed` is identity-stable by construction (module const via context —
     // see the WHY on useIpcSubscriptions), so this dep never re-creates the
     // callback in practice; it's listed for hook-lint correctness.
+    return delivered
   }, [feed])
   const reportMessage = useCallback((message: string) => {
     onMessageRef.current(message)
@@ -439,7 +461,7 @@ export function useComposerDictation({
       ? inputRef.current
       : recording.baseInput
     const separator = base.trim().length > 0 ? '\n\n' : ''
-    writeInput(`${base}${separator}${text}`, 'commit')
+    const delivered = writeInput(`${base}${separator}${text}`, 'commit')
     // Clear the preview flag now that the final STT-wrapped text is the
     // committed draft. Without this, hasTranscriptPreview stays true after
     // a successful commit and the next composer render observes a stale
@@ -450,11 +472,33 @@ export function useComposerDictation({
     // landed. If a session has TRANSCRIPT:committed but no preview events,
     // we're on the batch-only path (currently the default per
     // src/main/ipc/dictation.ts:84-92).
-    window.api.recordDictationDebugEvent(recording.debugSessionId, {
+    const committed = () => window.api.recordDictationDebugEvent(recording.debugSessionId, {
       layer: 'TRANSCRIPT',
       event: 'committed',
       data: { textLen: text.length, head: text.slice(0, 240) },
     })
+    if (delivered === true) {
+      committed()
+      return
+    }
+    // The terminal sink (#1340 review C): `committed` is written only once
+    // the session write has actually answered true, and a write that answers
+    // false, rejects or does not answer within the insertion deadline is a
+    // `delivery.failed` row the user is told about. Before, the promise was
+    // dropped, `committed` was logged at once, and a failed paste lost the
+    // transcript with a recorded success and no message.
+    const debugSessionId = recording.debugSessionId
+    const failed = () => {
+      window.api.recordDictationDebugEvent(debugSessionId, {
+        layer: 'TRANSCRIPT',
+        event: 'delivery:failed',
+        data: { code: 'delivery.failed' satisfies DictationOutcomeReason },
+      })
+      const message = showReason('delivery.failed')
+      if (message) setDictationOverlayState({ errorMessage: message })
+    }
+    void withinDeadline(Promise.resolve(delivered), DICTATION_DEADLINES_MS.terminalInsertion, 'delivery.failed')
+      .then(ok => { if (ok) committed(); else failed() }, failed)
   }, [debug, showReason, writeInput])
 
   const restoreBaseInput = useCallback((recording: ActiveRecording) => {
@@ -758,14 +802,21 @@ export function useComposerDictation({
         queuedChunks: recording.queuedChunks.length,
         pendingPushes: recording.pendingPushes.length,
       }, 'RECORDER')
-      await Promise.allSettled(recording.pendingPushes)
+      await withinDeadline(Promise.allSettled(recording.pendingPushes), DICTATION_DEADLINES_MS.drain, 'final.timeout')
       debug('stop:pending-pushes-settled', {
         id: recording.id,
         queuedChunks: recording.queuedChunks.length,
         pendingPushes: recording.pendingPushes.length,
         hasStreamStartPromise: !!recording.streamStartPromise,
       }, 'IPC')
-      const streamId = recording.id ?? await recording.streamStartPromise
+      const streamId = recording.id ?? await withinDeadline(recording.streamStartPromise ?? Promise.resolve(null), DICTATION_DEADLINES_MS.drain, 'final.timeout')
+      // WHY this check (#1340 review A4): a deadline (connect, first audio) or
+      // a recorder error may have failed this recording while stop() was
+      // awaiting above. failRecording is then the recording's one terminal
+      // owner: it wrote the OUTCOME row, told the user and tore down. Going on
+      // would report a contradictory second ending ("No speech detected"
+      // after "could not start in time").
+      if (recording.discarded) return
       if (!streamId) {
         // Nothing reached main, so this is the renderer's call. WHY two codes
         // (#243): in the owner's journals every one of these 25 sessions said
@@ -820,6 +871,13 @@ export function useComposerDictation({
       setLifecycleStatus('error')
       window.setTimeout(() => setLifecycleStatus('idle'), 1600)
     } catch (err) {
+      // Same single owner as above: a deadline that failed the recording
+      // mid-stop already reported it.
+      if (recording.discarded) return
+      recording.discarded = true
+      // Main's half of the session is released too (a drain that timed out
+      // never reached stop); cancelling an id main already closed is a no-op.
+      if (recording.id) void window.api.cancelDictationStream({ id: recording.id })
       cleanup(recording)
       activeRef.current = null
       restoreBaseInput(recording)
@@ -882,8 +940,23 @@ export function useComposerDictation({
       abandonedStopRef.current = true
       return
     }
+    unmountedRef.current = true
     const recording = activeRef.current
-    if (!recording) return
+    if (!recording) {
+      // Unmounted while start() is still inside getUserMedia (#1340 review
+      // A2): there is no recording object yet, and start() will resume on a
+      // hook nothing owns. `unmountedRef` makes it stop the late stream and
+      // build nothing; this is the session's one OUTCOME row.
+      const debugSessionId = debugSessionIdRef.current
+      if (statusRef.current === 'starting' && debugSessionId) {
+        window.api.recordDictationDebugEvent(debugSessionId, {
+          layer: 'OUTCOME',
+          event: 'cancel',
+          data: { code: 'cancelled.unmount' satisfies DictationOutcomeReason, streamId: null },
+        })
+      }
+      return
+    }
     if (sinkRef.current.kind === 'terminal') resetDictationOverlay()
     activeRef.current = null
     if (recording.streamStartTimer !== null) {
@@ -1008,6 +1081,12 @@ export function useComposerDictation({
           readyState: track.readyState,
         })),
       }, 'DEVICE')
+      if (unmountedRef.current) {
+        // The unmount already wrote this session's OUTCOME; only the late
+        // stream is left to close.
+        for (const track of stream.getTracks()) track.stop()
+        return
+      }
       if (pendingStopRef.current && pendingDiscardRef.current) {
         for (const track of stream.getTracks()) track.stop()
         pendingStopRef.current = false
@@ -1315,7 +1394,9 @@ export function useComposerDictation({
       // a capture producing nothing at all reaches it.
       recording.firstAudioTimer = window.setTimeout(() => {
         recording.firstAudioTimer = null
-        if (recording.nextChunkIndex === 0) failRecording(recording, 'recorder.no-audio')
+        // Not once the user has released: stop() owns a recording that is
+        // stopping, and its last chunk may still be in flight.
+        if (recording.nextChunkIndex === 0 && statusRef.current === 'recording') failRecording(recording, 'recorder.no-audio')
       }, DICTATION_DEADLINES_MS.firstAudio)
       startMeter(stream)
       setLifecycleStatus('recording')
@@ -1331,6 +1412,9 @@ export function useComposerDictation({
       debug('start:error', {
         message: err instanceof Error ? err.message : String(err),
       }, 'ERROR')
+      // Unmounted meanwhile: the unmount wrote the OUTCOME row and there is
+      // no pane left to tell (#1340 review A2).
+      if (unmountedRef.current) return
       // getUserMedia failures are tagged above; anything else here is the
       // MediaRecorder refusing to build or start.
       const reason: DictationOutcomeReason = err instanceof DictationReasonError ? err.reason : 'recorder.error'

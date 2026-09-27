@@ -160,7 +160,13 @@ export function registerDictationIpc(deps: {
   ): void => {
     // Preview cancellation may abandon an unresolved package stop promise.
     // Late optional observations must not append behind the final debug flush.
-    if (shutdownAdmitted || !debugSessionId) return
+    //
+    // A terminal OUTCOME row is not optional (#1340 review A3): a stop
+    // handler aborted by quit answers `cancelled.shutdown` and must journal
+    // it. It is safe to let through: OUTCOME is only written by admitted
+    // handlers, and cleanupDictationIpcResources joins every admitted handler
+    // (pendingOperations) before the final debug flush runs.
+    if (!debugSessionId || (shutdownAdmitted && layer !== 'OUTCOME')) return
     deps.dictationDebugJournals
       .get(debugSessionId)
       .append({ layer, event, ...(data !== undefined ? { data } : {}) })
@@ -665,8 +671,11 @@ export function registerDictationIpc(deps: {
         // any audio exists. Raising it would start discarding real short
         // dictations, which is a worse failure than a stray toast.
         const status = (err as { status?: unknown } | null)?.status
+        // 408 is excluded too (#1340 review A5/C): it is Deepgram timing out,
+        // not rejecting the clip. The one recorded 408 (a 370 ms, 3-chunk
+        // press) was told "No speech detected", the wrong recovery.
         const providerRejectedTheClip = typeof status === 'number' && status >= 400 && status < 500
-          && status !== 401 && status !== 403 && status !== 429
+          && status !== 401 && status !== 403 && status !== 408 && status !== 429
         const looksLikeStrayTap =
           providerRejectedTheClip
           && session.chunkCount <= 3
