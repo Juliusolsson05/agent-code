@@ -202,9 +202,14 @@ async function extractPromptsUnlocked(
     const st = await stat(file)
     size = st.size
     mtime = st.mtime.getTime()
-  } catch {
+  } catch (error) {
     span.end({ result: 'stat-failed' })
-    return { prompts: [], cwd: '' }
+    // WHY only a MISSING file is "no prompts" (#1306): a file that is there
+    // but cannot be read is not an empty conversation. The error propagates
+    // to the source, which says it (View Prompts) or skips the row (search).
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { prompts: [], cwd: '' }
+    throw error
   }
   if (
     entry &&
@@ -258,9 +263,14 @@ async function extractPromptsUnlocked(
       entry.cwd = await readHeadCwd(file, size)
       entry.headCwdChecked = true
     }
-  } catch {
+  } catch (error) {
     span.end({ result: 'read-failed' })
-    return { prompts: [], cwd: '' }
+    // A file that vanished between stat and read is missing; anything else
+    // (a permission change, an I/O error) is unreadable and propagates
+    // (#1306). The cache entry is not updated on this path.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ENOENT') return { prompts: [], cwd: '' }
+    throw error
   }
   entry.mtime = mtime
   entry.size = size

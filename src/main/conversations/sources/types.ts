@@ -48,6 +48,30 @@ export type PromptReadOptions = {
   maxBytes?: number
 }
 
+/**
+ * A conversation whose transcript or store EXISTS but cannot be read (#1306).
+ * Sources used to answer `[]` for it, so View Prompts said "no prompts" for a
+ * damaged file. The rule every source follows:
+ *   - no file (yet): `[]`. A freshly started session has no transcript, and
+ *     View Prompts then shows the live feed's prompts; that is not a failure;
+ *   - a file or store that is there but unreadable: throw this.
+ * Search catches it per conversation (label-only search for that row); View
+ * Prompts surfaces it. The cause stays on the error for the main-side log; the
+ * message is fixed, because it crosses IPC to the UI (q22).
+ */
+export class ConversationPromptsUnreadable extends Error {
+  constructor(readonly provider: string, readonly cause: unknown) {
+    super('The conversation file could not be read')
+    this.name = 'ConversationPromptsUnreadable'
+  }
+}
+
+/** True for the "no such file" family: a missing transcript is not a failure. */
+export function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
 export interface ConversationSource {
   readonly provider: AgentProviderKind
   discover(scope: SourceScope): Promise<SourceConversation[]>

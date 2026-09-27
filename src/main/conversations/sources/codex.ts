@@ -9,7 +9,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder.js'
 import { findCodexRolloutPathByThreadId } from 'codex-headless'
 import { newestCodexStateDb, openReadOnlySqlite } from './sqlite.js'
-import type { ConversationSource, SourceConversation, SourceScope, PromptReadOptions } from './types.js'
+import { ConversationPromptsUnreadable, isMissingFileError, type ConversationSource, type SourceConversation, type SourceScope, type PromptReadOptions } from './types.js'
 
 // Codex keeps its own index at ~/.codex/state_N.sqlite (`threads`,
 // `thread_spawn_edges`), maintained by the CLI and backfilled from rollouts.
@@ -316,14 +316,31 @@ export class CodexConversationSource implements ConversationSource {
       }
     }
     if (!file) {
+      const sessionsDir = join(this.deps.codexHome, 'sessions')
+      // The package's walk swallows its own readdir errors (it answers null),
+      // so an unreadable sessions tree would still read as "no prompts". Probe
+      // the root here: absent is "not here", anything else is unknown.
       try {
-        file = await findCodexRolloutPathByThreadId(join(this.deps.codexHome, 'sessions'), nativeId)
-      } catch {
+        await readdir(sessionsDir)
+      } catch (error) {
+        if (!isMissingFileError(error)) throw new ConversationPromptsUnreadable('codex', error)
+      }
+      try {
+        file = await findCodexRolloutPathByThreadId(sessionsDir, nativeId)
+      } catch (error) {
+        // Only absence is "not here" (#1306, steering q116): a rollout walk
+        // that fails for any other reason is unknown, never "no prompts".
+        if (!isMissingFileError(error)) throw new ConversationPromptsUnreadable('codex', error)
         file = null
       }
     }
     if (!file) return []
+    // #1306: a found rollout that cannot be read is said, typed, not raw.
     const { prompts } = await extractPromptsFromFile('codex', nativeId, file, options.need ?? 'all', { maxBytes: options.maxBytes })
+      .catch((error: unknown) => {
+        if (isMissingFileError(error)) return { prompts: [] }
+        throw new ConversationPromptsUnreadable('codex', error)
+      })
     return prompts.map(p => ({ text: p.text, timestamp: p.ts }))
   }
 }

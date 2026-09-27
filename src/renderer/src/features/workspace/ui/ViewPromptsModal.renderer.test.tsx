@@ -37,6 +37,22 @@ describe('ViewPromptsModal', () => {
     expect(listConversationPrompts).toHaveBeenCalledWith({ provider: 'claude', nativeId: 'native-1', cwd: '/repo/project' })
   })
 
+  // #1306: main now rejects when the conversation file is there but
+  // unreadable (it used to answer "no prompts"). The modal says so in fixed
+  // words, never the IPC text (q22).
+  it('says an unreadable conversation in fixed words, not the IPC text', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      listConversationPrompts: vi.fn(async () => { throw new Error("Error invoking remote method 'conversations:prompts': ConversationPromptsUnreadable: The conversation file could not be read") }),
+    } })
+    const workspace = {
+      state: { sessions: { s: { kind: 'pi', cwd: '/repo/project', providerSessionId: 'native-1' } } },
+      getRuntime: () => ({ entries: [], hasOlderHistory: false, loadingOlderHistory: false }),
+    } as unknown as Workspace
+    render(<ViewPromptsModal open sessionId="s" workspace={workspace} onClose={vi.fn()} />)
+    expect(await screen.findByText("Couldn't read this conversation's prompts.")).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('Error invoking remote method')
+  })
+
   it('focuses a scroller that is a Tab stop, and closes from one Close ⎋ button', async () => {
     // Plan S8: the read-only viewer's scroller was tabIndex -1, so after
     // tabbing to the footer Shift+Tab could never get back to scrolling; the

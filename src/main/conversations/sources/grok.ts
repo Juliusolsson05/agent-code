@@ -7,7 +7,7 @@ import { loadGrokSnapshotAt } from '@main/providerSwitch/grokTranscript.js'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import type { ConversationSource, SourceConversation, SourceScope } from './types.js'
+import { ConversationPromptsUnreadable, isMissingFileError, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
 
 // Grok conversation discovery: native's own sessions index. Every session
 // directory under the Grok home carries a summary.json (id, cwd, titles,
@@ -55,8 +55,10 @@ export class GrokConversationSource implements ConversationSource {
     let snapshot: Awaited<ReturnType<typeof loadGrokSnapshotAt>>
     try {
       snapshot = await loadGrokSnapshotAt(resolveGrokTranscriptPath(cwd, nativeId, this.deps.grokHome))
-    } catch {
-      return []
+    } catch (error) {
+      // #1306: only a missing file is "no prompts"; a damaged one is said.
+      if (isMissingFileError(error)) return []
+      throw new ConversationPromptsUnreadable('grok', error)
     }
     const texts: string[] = []
     for (const entry of snapshot.conversation.entries) {

@@ -1,11 +1,14 @@
+import { appendFile, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { ClaudeHistoryIndex } from './sources/claudeHistory.js'
 import { ClaudeConversationSource } from './sources/claude.js'
 import { CodexConversationSource } from './sources/codex.js'
 import { OpencodeConversationSource } from './sources/opencode.js'
 import { ConversationService } from './service.js'
+import { ConversationPromptsUnreadable } from './sources/types.js'
+import { sanitizePath } from '@shared/runtime/projectDir.js'
 import { corpusWorktreesPorcelain, installConversationCorpus, type InstalledCorpus } from '../../../testing/support/conversations/installCorpus.js'
 
 // One corpus install per file: the install copies 450 files and costs more
@@ -58,6 +61,30 @@ describe('ConversationService', () => {
     const children = await s.children({ provider: 'codex', nativeId: codexParent!.nativeId, cwd: codexParent!.cwd! })
     expect(children.length).toBeGreaterThan(0)
     expect(children.every(c => c.parentNativeId === codexParent!.nativeId)).toBe(true)
+  })
+
+  // #1306: an unreadable conversation file now throws from its source. View
+  // Prompts rejects with the typed error; search degrades that one row to
+  // label-only and still lists the rest.
+  it('rejects View Prompts for an unreadable file, and search still lists', async () => {
+    const s = service()
+    const all = await s.list({ cwd: '/fixture/repo', scope: 'repository', includeChildren: true, limit: 5000 })
+    const claudeRows = all.rows.filter(r => r.provider === 'claude' && (r.promptCount ?? 0) > 1 && r.cwd)
+    const row = claudeRows[0]!
+    const other = claudeRows[1]!
+    const needle = (await s.prompts({ provider: 'claude', nativeId: other.nativeId, cwd: other.cwd! }))[0]!.text.slice(0, 10)
+    const file = join(corpus.claudeConfigDir, 'projects', sanitizePath(row.cwd!), `${row.nativeId}.jsonl`)
+    await appendFile(file, '\n')
+    await chmod(file, 0o000)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(s.prompts({ provider: 'claude', nativeId: row.nativeId, cwd: row.cwd! })).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+      const hits = await s.list({ cwd: '/fixture/repo', scope: 'repository', query: needle, includeChildren: true, limit: 5000 })
+      expect(hits.rows.some(r => r.nativeId === other.nativeId)).toBe(true)
+    } finally {
+      await chmod(file, 0o600)
+      warn.mockRestore()
+    }
   })
 
   it('serves a second listing from cache without re-discovering within the freshness window', async () => {
