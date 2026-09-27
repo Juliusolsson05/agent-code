@@ -137,3 +137,47 @@ describe('bounded local performance history', () => {
     expect((await store.query(10 * 60_000, 16 * 60_000, undefined, 7)).resolution).toBe('1s')
   })
 })
+
+// #1453 (q115 "unknown is never empty"): retention deleted any run folder
+// its in-memory index did not know. A run created AFTER this store indexed,
+// by a second store sharing the folder (`--packaging-smoke` skips the
+// single-instance lock), was never examined, so it looked empty and was
+// deleted on the next maintenance pass. Real files throughout: the unknown
+// run survives, a restart examines it, and it still expires once its data
+// really is past retention (the protection is not permanent).
+describe('a run this store never examined', () => {
+  it('is kept by retention until a later start examines it, then expires normally', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    const DAY = 24 * 60 * 60_000
+    let now = 20_000
+    const first = new MonitorHistoryStore(root, 'run-b', () => now)
+    await first.settled()
+    // What the other store writes once it starts: its incidents and operations.
+    const foreign = join(root, 'runs', 'run-a')
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([incident]))
+    await writeFile(join(foreign, 'operations.json'), '[]')
+
+    first.record(snapshot(now), null, [], 0, 0)
+    await first.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+
+    now += 2 * 60_000
+    first.record(snapshot(now), null, [], 0, 0)
+    await first.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+
+    // A later start examines run-a; its incident is still within retention.
+    const restarted = new MonitorHistoryStore(root, 'run-c', () => now)
+    restarted.record(snapshot(now), null, [], 0, 0)
+    await restarted.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+
+    // Past retention, the examined run goes as before.
+    now += 8 * DAY
+    restarted.record(snapshot(now), null, [], 0, 0)
+    await restarted.settled()
+    await expect(readFile(join(foreign, 'incidents.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})

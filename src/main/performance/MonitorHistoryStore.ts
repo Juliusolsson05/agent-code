@@ -73,6 +73,12 @@ export class MonitorHistoryStore {
   // Runs with a file that could not be indexed. Retention must treat them as
   // unknown, not empty; only the capacity budget may still remove them.
   private unindexedRuns = new Set<string>()
+  // Runs startup indexing actually looked at (#1453). Retention may delete a
+  // run as empty only if it was examined. A run that appeared later (a second
+  // store sharing this folder: `--packaging-smoke` skips the single-instance
+  // lock) is UNKNOWN, not empty, and waits for the next start to index it.
+  // Only the capacity budget may still remove it, as with unindexedRuns.
+  private examinedRuns = new Set<string>()
   private rollups: Record<MonitorHistoryResolution, TierRollup> = { '1s': new TierRollup('1s'), '10s': new TierRollup('10s'), '1m': new TierRollup('1m') }
   // Coalesced work. Incidents and operations are whole-value replacements, so
   // only the newest value matters; the old promise chain queued one rewrite
@@ -298,7 +304,7 @@ export class MonitorHistoryStore {
       await mkdir(this.runDir, { recursive: true })
       this.index.clear(); this.incidentRuns.clear(); this.repairedTails.clear(); this.indexed = true
       this.bytes = 0; this.shortened = false; this.degraded = false
-      this.operationFingerprint = ''; this.unindexedRuns.clear()
+      this.operationFingerprint = ''; this.unindexedRuns.clear(); this.examinedRuns.clear()
       this.lastMaintenanceAt = -Infinity
     } catch { this.degraded = true }
     return this.status()
@@ -352,6 +358,7 @@ export class MonitorHistoryStore {
     try {
       await this.cleanupTemps()
       for (const run of await this.runNames()) {
+        this.examinedRuns.add(run)
         for (const resolution of TIERS) {
           const file = join(this.root, RUNS_DIR, run, `${resolution}.jsonl`)
           try {
@@ -545,7 +552,7 @@ export class MonitorHistoryStore {
     // with no remaining points or incidents holds only an unattributable
     // operations snapshot, so it is retention-expired, not capacity-pruned.
     if (this.indexed) for (const run of await this.runNames()) {
-      if (run === this.runId || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
+      if (run === this.runId || !this.examinedRuns.has(run) || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
     }
     this.bytes = await this.diskBytes()
