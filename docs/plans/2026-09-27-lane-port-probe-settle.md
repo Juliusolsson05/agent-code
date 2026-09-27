@@ -101,3 +101,34 @@ comment it left admits the residual: a runtime escape that requests exactly
   carries the probe UA.
 - (Follow-up after #1436) runtimeHarness: an untagged `GET /` IS counted,
   extending #1406's positive control.
+
+## Review round 1 (a, b): what changed and what was corrected
+
+- **Corrected claim (b):** the settle window is a MITIGATION, not a guarantee.
+  Test servers and dev servers both live for arbitrary lengths, and a stalled
+  run can hold a test server past 5 s. Counting tests therefore get
+  deterministic guards as well:
+  - `serviceLanListener.test.ts` DOES change, reversing the earlier decision
+    above. Its upstream ignores exactly `GET /`, and `send()` never uses `/`.
+    A probe forwarded through the LAN listener loses its User-Agent, so shape
+    is the only thing the upstream can check. A real-socket test replays that
+    sequence.
+  - `proxy-harness.mts` excuses `GET /` plus the UA, not the UA alone, so a
+    `POST /responses` carrying that UA is still counted and forwarded.
+- **Window timing (a):**
+  - The age now starts when lsof returned the listener, not at scan start.
+    Otherwise a slow lsof, or a scan straddling a plan change, shortened the
+    window.
+  - An empty plan and `stop()` forget ages and probe answers.
+  - A failed lsof (timeout, signal, missing binary) throws instead of reading
+    as empty, so a settled chip is not pruned and hidden for another window.
+  - Known limit, documented at `PROBE_SETTLE_MS`: a close and rebind on the
+    same pid:port BETWEEN scans is invisible to sampling.
+- **Escalated product alternative (b), OWNER/MANAGER DECISION:** stop
+  automatic HTTP probes entirely. Publish owned listening ports unverified,
+  and request a port only when the user clicks it or an agent opens it. That
+  gives zero unsolicited requests and immediate discovery. The costs: the
+  html/other classification the chip relies on (`LanePortChip` shows html
+  ports only), and non-page listeners shown as candidates, which the settle
+  window could still debounce. It is out of scope here: it changes what the
+  chip shows.
