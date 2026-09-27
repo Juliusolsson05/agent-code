@@ -1,3 +1,5 @@
+import { GitHubSkillSourceError } from './githubSkillSource.js'
+
 /**
  * The text a Skills, Conventions or Custom Skills surface may show for an
  * error (#1427, q22/q39).
@@ -58,7 +60,6 @@ const MAX_KEPT_MESSAGE = 300
 // a package-relative `scripts/a.sh`) stays readable; a spaced ` / ` in prose
 // is treated as a path and rewritten, which fails closed.
 const PATH_LIKE = /(^|[^\w])\.{0,2}\/|~[\/\\]|\\\\|[A-Za-z]:[\/\\]|file:\/\//
-const OWN_ERROR_NAMES = new Set(['Error', 'GitHubSkillSourceError', 'GitHubSkillDiscoveryLimitError'])
 
 function systemCode(error: unknown): string | null {
   if (!(error instanceof Error)) return null
@@ -73,8 +74,10 @@ function isChildProcessError(error: Error): boolean {
 function isOwnCuratedText(error: unknown): error is Error {
   if (!(error instanceof Error) || !error.message) return false
   if (isChildProcessError(error)) return false
-  // By constructor, not `name` alone: a library can set any name.
-  const own = error.constructor === Error || OWN_ERROR_NAMES.has(error.constructor?.name ?? '')
+  // By identity, not by name (review of #1456, round 2 a): a library class that happens to be
+  // called GitHubSkillSourceError is not this package's text. A plain Error is this package's
+  // own throw; GitHubSkillSourceError (and its discovery-limit subclass) is checked by instanceof.
+  const own = error.constructor === Error || error instanceof GitHubSkillSourceError
   return own
     && error.message.length <= MAX_KEPT_MESSAGE
     && !error.message.includes('\n')

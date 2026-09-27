@@ -141,4 +141,13 @@ describe('userFacingSkillError', () => {
     expect(userFacingSkillError(error)).toBe(error.message)
     expect(warn).toHaveBeenCalledWith(expect.any(String), error)
   })
+
+  // Review of #1456, round 2 (a): a foreign class that happens to share the
+  // package error's NAME is not this package's text.
+  it('does not keep a foreign error just because its class name matches', () => {
+    class GitHubSkillSourceError extends Error {}
+    const foreign = new GitHubSkillSourceError('A library returned a sensitive value')
+    expect(userFacingSkillError(foreign)).toBe(GENERIC_SKILL_ERROR)
+    expect(warn).toHaveBeenCalledWith(expect.any(String), foreign)
+  })
 })

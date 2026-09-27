@@ -671,7 +671,9 @@ describe('bounded GitHub transport', () => {
   it('reports invalid YAML frontmatter by line, not in the parser\'s words', () => {
     const thrown = (() => { try { parseSkillFrontmatter('---\nname: [x\ndescription: y\n---\n# Body\n'); return null } catch (caught) { return caught } })()
     expect(thrown).toBeInstanceOf(GitHubSkillSourceError)
-    expect((thrown as Error).message).toMatch(/^SKILL\.md contains invalid YAML frontmatter( near line \d+)?\.$/)
+    // The line is REQUIRED now (review of #1456, round 2 a and b: it never appeared): `name: [x`
+    // opens a flow sequence on file line 2, and the parser reports it where the next line begins.
+    expect((thrown as Error).message).toBe('SKILL.md contains invalid YAML frontmatter near line 3.')
   })
 
   // Review of #1456 (b): a classified git failure replaced git's error with a
@@ -735,6 +737,15 @@ describe('bounded GitHub transport', () => {
     try {
       expect(() => parseSkillFrontmatter('---\nname: [x\ndescription: y\n---\n# Body\n')).toThrow(/invalid YAML frontmatter/)
       expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('names the line of a duplicate key', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => parseSkillFrontmatter('---\nname: x\nname: y\n---\n# Body\n')).toThrow('SKILL.md contains invalid YAML frontmatter near line 3.')
     } finally {
       warn.mockRestore()
     }

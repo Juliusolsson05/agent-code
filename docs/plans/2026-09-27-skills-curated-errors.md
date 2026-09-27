@@ -70,3 +70,12 @@ c also confirmed both #1427 system tests fail on origin/main for the stated reas
 | **c2, minor:** the 60 s fetch abort logged nothing | valid | The AbortError is logged before the fixed sentence. Fake-timer test, red at `a037caff`. |
 | **c3, minor:** the YAML parser branch logged nothing | valid | The parser's first error is logged. Red at `a037caff`. |
 | **c4, minor:** the file-in-the-way reason had no test | valid | A real-filesystem test (a file where `.agents` should be); the path-in-message mutant is red. |
+
+## Review round 2, a and b (codex at `a037caff`)
+
+| Finding | Verdict | Change |
+|---|---|---|
+| a1 / b1 / b2: the YAML parse and fetch-timeout rewrites were not logged; b's "remove the timeout branch" survivor | valid, **already fixed** in `ad031252` (c2, c3) | Both log. The fake-timer test asserts the timeout sentence, so deleting the branch is red. |
+| **a2 / b1, minor:** the YAML line number never appeared (`linePos` is unset with prettyErrors off) | valid | The line is computed from the error's offset (the frontmatter starts on file line 2). Tests now REQUIRE `near line 3` for a broken flow sequence and for a duplicate key; the old `linePos` mutant is red. |
+| **a3, minor:** a foreign class NAMED GitHubSkillSourceError passed the own-text check | valid | By identity: a plain `Error`, or `instanceof GitHubSkillSourceError`. The mapper can import it now, because githubSkillSource no longer imports the mapper, so there is no cycle. A foreign same-name class gets the generic sentence and is logged. |
+| a / b survivor: the FILE_COMPONENT wording | valid, **already fixed** in `ad031252` (c4) | A real-filesystem test pins it. |

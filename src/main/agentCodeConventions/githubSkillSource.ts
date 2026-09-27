@@ -859,19 +859,24 @@ export function parseSkillFrontmatter(text: string): {
   if (end < 0) {
     throw new GitHubSkillSourceError('validation', 'SKILL.md frontmatter has no closing delimiter.')
   }
-  const document = parseDocument(lines.slice(1, end).join('\n'), {
+  const frontmatterText = lines.slice(1, end).join('\n')
+  const document = parseDocument(frontmatterText, {
     prettyErrors: false,
     uniqueKeys: true,
   })
   if (document.errors.length > 0) {
     // The parser's own wording is raw library text (review of #1456, a); the
     // line number is what a user needs to find the mistake.
-    const line = document.errors[0]!.linePos?.[0]?.line
+    // From the error's character offset, not `linePos`: with prettyErrors off the parser leaves
+    // `linePos` unset, so the line was never shown (review of #1456, round 2 a and b). The
+    // frontmatter starts on the file's second line, after the opening `---`.
+    const offset = document.errors[0]!.pos?.[0]
+    const line = typeof offset === 'number' ? frontmatterText.slice(0, offset).split('\n').length + 1 : undefined
     // The parser's own detail goes to the log (review of #1456, round 2 c).
     console.warn('[github-skill-source] invalid SKILL.md frontmatter:', document.errors[0])
     throw new GitHubSkillSourceError(
       'validation',
-      `SKILL.md contains invalid YAML frontmatter${typeof line === 'number' ? ` near line ${line + 1}` : ''}.`,
+      `SKILL.md contains invalid YAML frontmatter${typeof line === 'number' ? ` near line ${line}` : ''}.`,
     )
   }
   let frontmatter: unknown
