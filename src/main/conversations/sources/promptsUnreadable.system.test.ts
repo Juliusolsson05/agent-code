@@ -16,6 +16,7 @@ import { PiConversationSource } from './pi.js'
 import { GrokConversationSource } from './grok.js'
 import { OpencodeConversationSource } from './opencode.js'
 import { ConversationPromptsUnreadable } from './types.js'
+import type { LruMap } from '@shared/lib/lruMap.js'
 import { corpusWorktreesPorcelain, installConversationCorpus } from '../../../../testing/support/conversations/installCorpus.js'
 
 // #1306: a conversation whose transcript or store is THERE but unreadable
@@ -68,10 +69,13 @@ describe('a conversation file that is there but unreadable', () => {
     const source = new CodexConversationSource({ codexHome: corpus.codexHome })
     const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees })
     const rows = await source.discover({ scope: 'repository', family })
-    const paths = (source as unknown as { rolloutPaths: Map<string, string> }).rolloutPaths
+    // rolloutPaths is a bounded LruMap since #1417; peek() reads it without
+    // touching recency, so the lookup here cannot change which path the
+    // source would evict next.
+    const paths = (source as unknown as { rolloutPaths: LruMap<string, string> }).rolloutPaths
     // A rollout the corpus actually holds (some recorded paths point elsewhere).
-    const row = rows.find(r => paths.has(r.nativeId) && existsSync(paths.get(r.nativeId)!))!
-    const file = paths.get(row.nativeId)!
+    const row = rows.find(r => { const file = paths.peek(r.nativeId); return file !== undefined && existsSync(file) })!
+    const file = paths.peek(row.nativeId)!
     expect(file).toBeTruthy()
     await expect(unreadable(file, () => source.prompts(row.nativeId, row.cwd ?? ''))).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
   })
@@ -170,10 +174,10 @@ describe('round 1: unknown is never "no prompts"', () => {
     const source = new CodexConversationSource({ codexHome: corpus.codexHome })
     const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees })
     const rows = await source.discover({ scope: 'repository', family })
-    const paths = (source as unknown as { rolloutPaths: Map<string, string> }).rolloutPaths
-    const row = rows.find(r => paths.has(r.nativeId) && existsSync(paths.get(r.nativeId)!))!
+    const paths = (source as unknown as { rolloutPaths: LruMap<string, string> }).rolloutPaths
+    const row = rows.find(r => { const file = paths.peek(r.nativeId); return file !== undefined && existsSync(file) })!
     const before = await source.prompts(row.nativeId, row.cwd ?? '')
-    const day = join(paths.get(row.nativeId)!, '..')
+    const day = join(paths.peek(row.nativeId)!, '..')
     await expect(locked(day, () => source.prompts(row.nativeId, row.cwd ?? ''))).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
     expect(await source.prompts(row.nativeId, row.cwd ?? '')).toEqual(before)
   })

@@ -113,11 +113,26 @@ function deliverSessionLease(lease: SessionWindowLease, channel: string, args: u
  * admitting exactly that save. A sender that was NEVER registered is still
  * rejected; this only remembers senders that were.
  *
- * Bounded because window ids are minted per window and a session has a
- * realistic ceiling on how many it opens; entries are tiny and the map is
- * cleared with the registry.
+ * Bounded by AGE, not count (#1278). The old comment said the map was
+ * "cleared with the registry", but only the test-only reset ever cleared it,
+ * so a long-running app kept one tombstone per window it ever closed. The
+ * first fix capped it at 256 by insertion order, and review of #1417 (b)
+ * showed that can still drop the save it exists for: a queued final save from
+ * a window, followed by 256 more closes before main handles that IPC (a mass
+ * close, a stalled main thread). Age is what makes a tombstone useless: the
+ * late sender is a save dequeued moments after `closed`, so one older than
+ * RETIRED_WEB_CONTENTS_TTL_MS is dropped whenever another window closes.
+ * webContents ids are never reused within a process, so a forgotten id
+ * cannot be confused with a live window's.
+ *
+ * WHY a monotonic clock (review of #1417, round 2): with Date.now(), a wall
+ * clock stepped back and then corrected made a one-second-old tombstone look
+ * twenty minutes old, dropping a queued final save, and a future-dated
+ * tombstone at the front stopped the sweep from reaching expired ones behind
+ * it. performance.now() only moves forward, so insertion order is age order.
  */
-const retiredWebContentsIds = new Map<number, WindowId>()
+const RETIRED_WEB_CONTENTS_TTL_MS = 10 * 60_000
+const retiredWebContentsIds = new Map<number, { windowId: WindowId; closedAt: number }>()
 
 /**
  * Notified (debounced) when a window is moved, resized, or full-screened, so
@@ -424,7 +439,14 @@ export function createAppWindow(options?: {
       onClosed: () => {
         const closing = windows.get(id)
         if (closing && !closing.window.isDestroyed()) {
-          retiredWebContentsIds.set(closing.window.webContents.id, id)
+          const now = performance.now()
+          // Insertion order is close order and the clock is monotonic, so the
+          // expired ones are a prefix.
+          for (const [webContentsId, tombstone] of retiredWebContentsIds) {
+            if (now - tombstone.closedAt < RETIRED_WEB_CONTENTS_TTL_MS) break
+            retiredWebContentsIds.delete(webContentsId)
+          }
+          retiredWebContentsIds.set(closing.window.webContents.id, { windowId: id, closedAt: now })
         }
         windows.delete(id)
         const index = focusOrder.indexOf(id)
@@ -489,7 +511,7 @@ export function windowIdForWebContentsId(webContentsId: number): WindowId | null
     if (entry.window.isDestroyed()) continue
     if (entry.window.webContents.id === webContentsId) return entry.id
   }
-  return retiredWebContentsIds.get(webContentsId) ?? null
+  return retiredWebContentsIds.get(webContentsId)?.windowId ?? null
 }
 
 /** The focused window, else the most recently focused one that still exists. */

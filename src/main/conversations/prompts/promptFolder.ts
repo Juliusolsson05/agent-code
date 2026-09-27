@@ -3,6 +3,7 @@ import { open, stat } from 'fs/promises'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
+import { LruMap } from '@shared/lib/lruMap.js'
 
 // Incremental user-prompt reader over an append-only provider transcript.
 //
@@ -106,26 +107,7 @@ const HEAD_CWD_WINDOW_BYTES = 64 * 1024
  *  across providers in practice, but we prefix to be safe. Bounded:
  *  every transcript ever listed or searched used to stay here forever
  *  with its full prompt list. */
-const promptCache = new Map<string, CacheEntry>()
-
-function cacheGet(key: string): CacheEntry | undefined {
-  const entry = promptCache.get(key)
-  if (entry === undefined) return undefined
-  // Re-insert so Map iteration order doubles as LRU order.
-  promptCache.delete(key)
-  promptCache.set(key, entry)
-  return entry
-}
-
-function cacheSet(key: string, entry: CacheEntry): void {
-  if (promptCache.has(key)) promptCache.delete(key)
-  promptCache.set(key, entry)
-  while (promptCache.size > PROMPT_CACHE_MAX_ENTRIES) {
-    const oldest = promptCache.keys().next().value as string | undefined
-    if (oldest === undefined) break
-    promptCache.delete(oldest)
-  }
-}
+const promptCache = new LruMap<string, CacheEntry>(PROMPT_CACHE_MAX_ENTRIES)
 
 /** Test-only hooks: the cache is module state by design (one per process). */
 export function __resetPromptFolderCacheForTests(): void {
@@ -135,7 +117,7 @@ export function __promptFolderCacheEntryForTests(
   kind: AgentProviderKind,
   sessionId: string,
 ): { parsedFrom: number; parsedTo: number; prompts: number; cwd: string; lastBytesRead: number } | null {
-  const entry = promptCache.get(cacheKey(kind, sessionId))
+  const entry = promptCache.peek(cacheKey(kind, sessionId))
   if (!entry) return null
   return {
     parsedFrom: entry.parsedFrom,
@@ -219,7 +201,7 @@ async function extractPromptsUnlocked(
     need: need === 'all' ? -1 : need,
   })
   const key = cacheKey(kind, sessionId)
-  let entry = cacheGet(key)
+  let entry = promptCache.get(key)
   let size: number
   let mtime: number
   try {
@@ -300,7 +282,7 @@ async function extractPromptsUnlocked(
   entry.mtime = mtime
   entry.size = size
   entry.lastBytesRead = bytesRead
-  cacheSet(key, entry)
+  promptCache.set(key, entry)
   span.end({
     result: 'parsed',
     bytes: bytesRead,
