@@ -154,6 +154,14 @@ export class WorkflowBridge {
    */
   private readonly aliases = new Map<string, string>()
   private readonly aliasFile: string | null
+  /**
+   * Run id -> the session that started it (its durable clientId, or for a
+   * Resume its parent's). The home rule in upsertRun needs it: a slot can
+   * mix a pane's own runs with runs that reached it through an alias, and
+   * only the latter may be sent home. Bounded by the runs this process has
+   * seen, like latestLifecycleByRunId.
+   */
+  private readonly homeByRunId = new Map<string, string>()
   private aliasSave: Promise<void> = Promise.resolve()
   private aliasTempCounter = 0
 
@@ -183,17 +191,12 @@ export class WorkflowBridge {
       const references = (await this.service.listStoredRunReferences())
         .filter((reference): reference is typeof reference & { clientId: string } => Boolean(reference.clientId))
       const clientIds = new Set(references.map(reference => reference.clientId))
-      // WHY two passes, runs a pane still owns directly before runs that
-      // reach it through an alias: ownerFor refuses to let an aliased run
-      // displace a slot in another cwd, and that check can only see a slot
-      // that is already filed. In storage order an aliased run could file
-      // first and then be displaced by the owner's own run (upsertRun keeps
-      // one cwd per slot), which is the round-2 A1 loss in the other order.
-      const direct = references.filter(reference => !this.aliases.has(reference.clientId))
-      const aliased = references.filter(reference => this.aliases.has(reference.clientId))
-      for (const reference of [...direct, ...aliased]) {
+      // Storage order does not matter: upsertRun's home rule keeps an
+      // aliased run from displacing, or being displaced by, a pane's own runs
+      // in another cwd, whichever is filed first.
+      for (const reference of references) {
         const { cwd, clientId, ...run } = reference
-        this.upsertRun(this.ownerFor(clientId, cwd), cwd, run)
+        this.upsertRun(this.resolveSession(clientId), cwd, run, clientId)
       }
       await this.pruneAliases(loaded, clientIds)
     }
@@ -265,25 +268,6 @@ export class WorkflowBridge {
       this.publishSessionRuns(source, { cwd: moving.cwd, slots: new Map() })
       this.publishSessionRuns(target, session)
     }
-  }
-
-  /**
-   * The session a run started by `sessionId` in `cwd` is filed under now.
-   *
-   * WHY not plain resolveSession (#1325 round-2 review A1): an edge is
-   * recorded even when the replaced pane had no runs, so nothing checked the
-   * cwd when it was made. A run that then registers late, or loads at start,
-   * through that edge into a pane whose slot holds another cwd would make
-   * upsertRun replace that slot and hide the successor's runs. Such a run
-   * stays under the id that started it instead: out of sight, like the
-   * source of a skipped cross-cwd carry, but never at the cost of runs the
-   * successor shows. This is the same rule carrySession applies, for the
-   * cases where the source's cwd was not known at carry time.
-   */
-  private ownerFor(sessionId: string, cwd: string): string {
-    const resolved = this.resolveSession(sessionId)
-    const slot = this.runsBySession.get(resolved)
-    return resolved !== sessionId && slot && slot.cwd !== cwd ? sessionId : resolved
   }
 
   /**
@@ -511,25 +495,58 @@ export class WorkflowBridge {
     // tool call's scope, and Resume holds the owner it found before awaiting
     // the service; either can land after the pane was replaced. Filing under
     // the captured id would recreate the dead pane's slot.
+    const requested = nonEmpty(sessionId, 'sessionId')
+    // A Resume's child belongs where its parent belongs: Resume registers
+    // under the pane that shows the parent, which may be an alias target.
+    const home = (run.resumedFromRunId && this.homeByRunId.get(run.resumedFromRunId)) || requested
     const { sessionId: normalizedSessionId, session } = this.upsertRun(
-      this.ownerFor(nonEmpty(sessionId, 'sessionId'), nonEmpty(cwd, 'cwd')),
+      this.resolveSession(requested),
       cwd,
       run,
+      home,
     )
     this.publishSessionRuns(normalizedSessionId, session)
   }
 
+  /**
+   * File `run` under `sessionId`. `home` is the session that started it (its
+   * durable clientId); it differs from `sessionId` when the run reached this
+   * pane through a replacement alias.
+   *
+   * WHY the home rule (#1325 rounds 2 and 3, review A1 and B): a slot holds
+   * runs for ONE cwd, and a run in another cwd used to replace the slot
+   * outright. An alias edge can be recorded before anyone knows the replaced
+   * pane's cwd (a carry of an empty pane, for a late registration), so an
+   * aliased run and the pane's own run can meet in different cwds, in either
+   * order. Round 2 guarded one order and the start-up order; round 3 found
+   * the live order the other way round (aliased run filed into an empty
+   * pane, then the pane's own run evicting it). One rule covers every order:
+   *   - an aliased run never takes a slot of another cwd: it stays under its
+   *     home id, out of sight like the source of a skipped cross-cwd carry,
+   *     but intact;
+   *   - a pane's own run in a new cwd sends the aliased runs it displaces
+   *     back to their homes instead of deleting them.
+   * Only a pane's own runs are still dropped by its own cwd change, as
+   * before; a live pane does not change cwd.
+   */
   private upsertRun(
     sessionId: string,
     cwd: string,
     run: WorkflowRunStartResult,
+    home: string,
   ): {
     sessionId: string
     session: { cwd: string; slots: Map<string, WorkflowRunReferenceData> }
   } {
     const normalizedSessionId = nonEmpty(sessionId, 'sessionId')
     const normalizedCwd = nonEmpty(cwd, 'cwd')
+    if (!this.homeByRunId.has(run.runId)) this.homeByRunId.set(run.runId, home)
+    const runHome = this.homeByRunId.get(run.runId)!
     const existing = this.runsBySession.get(normalizedSessionId)
+    if (existing && existing.cwd !== normalizedCwd) {
+      if (runHome !== normalizedSessionId) return this.upsertRun(runHome, cwd, run, runHome)
+      this.sendAliasedRunsHome(normalizedSessionId, existing)
+    }
     const session = existing?.cwd === normalizedCwd
       ? existing
       : { cwd: normalizedCwd, slots: new Map<string, WorkflowRunReferenceData>() }
@@ -552,6 +569,28 @@ export class WorkflowBridge {
     collapseLineage(session.slots)
     this.runsBySession.set(normalizedSessionId, session)
     return { sessionId: normalizedSessionId, session }
+  }
+
+  /** The eviction half of upsertRun's home rule. */
+  private sendAliasedRunsHome(
+    sessionId: string,
+    displaced: { cwd: string; slots: Map<string, WorkflowRunReferenceData> },
+  ): void {
+    for (const [slotKey, reference] of displaced.slots) {
+      const home = this.homeByRunId.get(reference.runId)
+      if (!home || home === sessionId) continue
+      const slot = this.runsBySession.get(home) ?? { cwd: displaced.cwd, slots: new Map<string, WorkflowRunReferenceData>() }
+      if (slot.cwd !== displaced.cwd) {
+        // Its home already shows runs in yet another cwd. Nothing on this
+        // path can produce that, and guessing a slot would hide real runs.
+        console.warn('[workflows] a displaced workflow run has no slot in its cwd to return to')
+        continue
+      }
+      slot.slots.set(slotKey, reference)
+      collapseLineage(slot.slots)
+      this.runsBySession.set(home, slot)
+      this.publishSessionRuns(home, slot)
+    }
   }
 
   getSessionRuns(request: WorkflowSessionRunsRequest): WorkflowSessionRunsResult {
