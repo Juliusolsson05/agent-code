@@ -118,7 +118,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerConversationsIpc(deps.conversationService, deps.appRunJournal)
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerAgentNamesIpc()
-  registerWindowIpc(deps.workspaceFileStore)
+  registerWindowIpc(deps.workspaceFileStore, deps.manager)
   registerMenuIpc()
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
