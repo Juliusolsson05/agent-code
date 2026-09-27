@@ -77,9 +77,6 @@ export function collectLifecycleCandidates(params: {
   sleepInterruptedTurnId?: string | null
   /** The same, for a turn whose stream died before it finished (#1040). */
   transportInterruptedTurnId?: string | null
-  /** The same, for a turn sealed because the proxy events transport lost a
-   *  span of its chunks (#1381). */
-  gapInterruptedTurnId?: string | null
 }): RenderCandidate[] {
   const out: RenderCandidate[] = []
   if (!params.streamPhaseIdle) {
@@ -122,22 +119,6 @@ export function collectLifecycleCandidates(params: {
       sourcePlane: 'process',
       sessionId: params.sessionId,
       contentKind: 'transport-interruption',
-      timestampMs: null,
-      sequence: 1,
-    })
-  } else if (params.gapInterruptedTurnId) {
-    // #1381: the turn was sealed because events were LOST between the proxy and
-    // the app (a stalled poller outran the addon's rotation). Checked last: a
-    // turn carries exactly one interruption, so the order only matters for
-    // stating it — sleep and a dead socket are explanations of why the stream
-    // ended, a gap is only a statement that we did not see all of it.
-    out.push({
-      id: `gap-interruption:${params.gapInterruptedTurnId}`,
-      owner: 'work',
-      provider: params.provider,
-      sourcePlane: 'process',
-      sessionId: params.sessionId,
-      contentKind: 'gap-interruption',
       timestampMs: null,
       sequence: 1,
     })

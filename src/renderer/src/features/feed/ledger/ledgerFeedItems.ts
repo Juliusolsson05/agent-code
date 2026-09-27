@@ -95,21 +95,6 @@ export function ledgerFeedContextFromRuntime(
   }
 }
 
-/** The work-slot interruption markers (#963 sleep, #1040 dead socket, #1381
- *  lost transport span): phase facts of the process plane that paint in the
- *  work slot and carry no provider content. One predicate because the three
- *  checks below used to spell the list out each time, and the third marker
- *  would otherwise have to be remembered in every copy — missing it in the
- *  empty-repair test paints "waiting for Claude…" over a sealed answer. */
-const INTERRUPTION_MARKER_TYPES = new Set<FeedRenderItem['type']>([
-  'sleep-interruption',
-  'transport-interruption',
-  'gap-interruption',
-])
-function isWorkSlotItem(item: FeedRenderItem): boolean {
-  return item.type === 'work' || INTERRUPTION_MARKER_TYPES.has(item.type)
-}
-
 function orderAt(index: number, phase: FeedRenderItemOrder['phase']): FeedRenderItemOrder {
   return { phase, timeMs: null, sequence: index, source: 'ledger' }
 }
@@ -335,12 +320,6 @@ export function ledgerToFeedItems(
             key: c.id,
             order: orderAt(items.length, 'work'),
           })
-        } else if (c.contentKind === 'gap-interruption') {
-          items.push({
-            type: 'gap-interruption',
-            key: c.id,
-            order: orderAt(items.length, 'work'),
-          })
         } else {
           items.push({
             type: 'empty',
@@ -366,10 +345,12 @@ export function ledgerToFeedItems(
   // upstream data decision—Feed receives an explicit empty item and never
   // filters a selected row itself.
   const hasPaintedContent = items.some(item =>
-    item.type !== 'absorbed-entry' && item.type !== 'empty' && !isWorkSlotItem(item),
+    item.type !== 'absorbed-entry' && item.type !== 'empty' && item.type !== 'work'
+    && item.type !== 'sleep-interruption' && item.type !== 'transport-interruption',
   )
   if (!hasPaintedContent && !items.some(item => item.type === 'empty')) {
-    const workIndex = items.findIndex(isWorkSlotItem)
+    const workIndex = items.findIndex(item =>
+      item.type === 'work' || item.type === 'sleep-interruption' || item.type === 'transport-interruption')
     const insertionIndex = workIndex < 0 ? items.length : workIndex
     items.splice(insertionIndex, 0, {
       type: 'empty',
@@ -380,7 +361,7 @@ export function ledgerToFeedItems(
     // Keep the order metadata truthful after inserting before a work item.
     for (let index = insertionIndex + 1; index < items.length; index += 1) {
       const item = items[index]
-      const phase = isWorkSlotItem(item)
+      const phase = item.type === 'work' || item.type === 'sleep-interruption' || item.type === 'transport-interruption'
         ? 'work'
         : item.type === 'empty' ? 'empty' : 'content'
       item.order = orderAt(index, phase)

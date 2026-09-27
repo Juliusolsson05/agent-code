@@ -100,8 +100,6 @@ const shape = (i: FeedRenderItem): string => {
       return `sleep-interruption:${i.key}`
     case 'transport-interruption':
       return `transport-interruption:${i.key}`
-    case 'gap-interruption':
-      return `gap-interruption:${i.key}`
     case 'empty':
       return 'empty'
   }

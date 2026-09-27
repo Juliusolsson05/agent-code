@@ -1170,19 +1170,6 @@ function FeedImpl({
             </div>
           </MarkerRow>
         )
-      case 'gap-interruption':
-        // #1381: events between the proxy and the app were LOST (the poller
-        // stalled through the addon's rotations, claude-code-headless#64), so
-        // the live text above skipped part of this answer. The wording claims
-        // only that: the saved transcript is Claude's own file and may well be
-        // complete, and the gap says nothing about why the stream ended.
-        return (
-          <MarkerRow key={item.key} marker="" tone="muted">
-            <div className="py-0.5 text-[13px] leading-[1.55] text-muted">
-              Some live output was not captured
-            </div>
-          </MarkerRow>
-        )
       case 'empty':
         return (
           <div

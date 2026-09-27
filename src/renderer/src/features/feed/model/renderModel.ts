@@ -122,13 +122,6 @@ export type FeedRenderItem =
       order: FeedRenderItemOrder
     }
   | {
-      /** The newest turn was sealed because the proxy events transport lost a
-       *  span of its chunks (#1381). Same slot, its own sentence. */
-      type: 'gap-interruption'
-      key: string
-      order: FeedRenderItemOrder
-    }
-  | {
       type: 'empty'
       key: string
       provider: AgentProvider
@@ -160,8 +153,6 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
       return 'interrupted while asleep'
     case 'transport-interruption':
       return 'interrupted before the response finished'
-    case 'gap-interruption':
-      return 'some live output was not captured'
     case 'empty':
       return `waiting for ${getRendererProviderCapabilities(provider).name}…`
   }
@@ -181,7 +172,6 @@ function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
     case 'work':
     case 'sleep-interruption':
     case 'transport-interruption':
-    case 'gap-interruption':
       return 'work'
     case 'empty':
       return 'empty'
