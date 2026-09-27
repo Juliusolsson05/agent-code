@@ -476,6 +476,33 @@ function FeedImpl({
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
+    const loadOlderNearTop = () => {
+      if (
+        el.scrollTop < 160 &&
+        hasOlderHistory &&
+        !loadingOlderHistory &&
+        !loadingOlderRef.current &&
+        !tailMode &&
+        onLoadOlderHistory
+      ) {
+        loadingOlderRef.current = true
+        const beforeHeight = el.scrollHeight
+        const beforeTop = el.scrollTop
+        void onLoadOlderHistory()
+          .then(() => {
+            requestAnimationFrame(() => {
+              const next = scrollerRef.current
+              if (!next) return
+              const delta = next.scrollHeight - beforeHeight
+              next.scrollTop = beforeTop + Math.max(0, delta)
+              lastScrollTopRef.current = next.scrollTop
+            })
+          })
+          .finally(() => {
+            loadingOlderRef.current = false
+          })
+      }
+    }
     const onScroll = () => {
       if (tailMode) {
         el.scrollTop = el.scrollHeight
@@ -520,34 +547,22 @@ function FeedImpl({
         onScrollInfo({ fraction })
       }
 
-      if (
-        el.scrollTop < 160 &&
-        hasOlderHistory &&
-        !loadingOlderHistory &&
-        !loadingOlderRef.current &&
-        !tailMode &&
-        onLoadOlderHistory
-      ) {
-        loadingOlderRef.current = true
-        const beforeHeight = el.scrollHeight
-        const beforeTop = el.scrollTop
-        void onLoadOlderHistory()
-          .then(() => {
-            requestAnimationFrame(() => {
-              const next = scrollerRef.current
-              if (!next) return
-              const delta = next.scrollHeight - beforeHeight
-              next.scrollTop = beforeTop + Math.max(0, delta)
-              lastScrollTopRef.current = next.scrollTop
-            })
-          })
-          .finally(() => {
-            loadingOlderRef.current = false
-          })
-      }
+      loadOlderNearTop()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
+    // WHY a wheel trigger too (#1413 review a, b): the loader used to fire only
+    // on a `scroll` event. At scrollTop 0 an upward wheel or trackpad gesture
+    // moves nothing, so no scroll event fires, and after a failed page the
+    // pane's "Scroll up again to retry" could not be done without first
+    // scrolling down. An upward wheel AT the top is the same request.
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0 && el.scrollTop <= 0) loadOlderNearTop()
+    }
+    el.addEventListener('wheel', onWheel, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+    }
   }, [
     sessionId,
     onScrollInfo,

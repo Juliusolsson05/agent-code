@@ -32,3 +32,13 @@ Renderer tests drive the real hook and the real TileLeaf. The app is not launche
 ## Steering q106
 - The dispatch layout re-renders the SAME TileLeaf with another agent's `sessionId` when a lane switches. One timestamp per mounted leaf therefore let agent A's toast silence agent B's first failure for 5 s.
 - The cooldown is now keyed by `sessionId`. Test: same-leaf rerender, A fails and toasts, the lane switches to B, B fails and toasts, and B's repeat still coalesces. It fails with the per-leaf timestamp.
+
+## Review round 1 (a, b: FIX-BEFORE-MERGE)
+- **a (Major): an unreadable transcript was paged as an empty page with `hasMore: false`.** The main-side `readOlderTranscriptWindow` swallowed stat/open/read failures, so the renderer dropped "older history exists" and returned `loaded`.
+  - **Ruling:** this reader serves only older paging, so a failure now rejects. The page is reported `failed` and stays retryable. An empty file (stat succeeded, size 0) is still an honest empty page, and the initial-chunk reader is unchanged.
+  - Test in `historyLoader.test.ts`: the first page loads, the file is removed, the older page rejects with ENOENT, and an empty file stays empty. It fails on the old loader.
+  - This landed in `e905104e`, whose message names only q106.
+- **a, b (Major): "Scroll up again to retry" was impossible at the top.** At `scrollTop` 0 an upward gesture fires no scroll event, and Feed triggered only on scroll. An upward wheel at the top now makes the same request.
+  - Test: the real Feed, two upward wheels at 0, two requests (red on the old Feed). A downward wheel makes none. It also kills a's survivor (`loadingOlderRef` left true).
+- **b (Major): the cooldown was shared across agents in one lane.** This is q106, fixed.
+- **b (Minor): the raw error still reaches `console.warn` and the perf span.** Declined: these are developer diagnostics, not user-visible text (q22 governs what the user sees). The perf journal already records file paths on this path by design (`finishOlderChunk`).
