@@ -797,7 +797,12 @@ export async function loadInitialHistoryChunk(
       providerSource({ cwd: params.cwd, providerSessionId: params.providerSessionId, limit: params.limit }),
     )
   }
-  const span = performanceService.span('historyLoader.loadInitialChunk', {
+  // WHY its own name (#769): this span ends once the path is resolved, and
+  // loadInitialHistoryChunkFromFile opens the span that times the read. Under
+  // the same name the monitor counted every load twice, half of them timing
+  // only the path lookup, which pulled transcript.read's percentiles down.
+  // This one stays in the perf journal and is not a monitor operation.
+  const span = performanceService.span('historyLoader.resolveInitialPath', {
     kind: params.kind,
     limit: params.limit,
   })
