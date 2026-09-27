@@ -134,3 +134,9 @@ comment it left admits the residual: a runtime escape that requests exactly
   ports only), and non-page listeners shown as candidates, which the settle
   window could still debounce. It is out of scope here: it changes what the
   chip shows.
+
+## Decision (B6 q129, owner proxy)
+
+Accepted as a MITIGATION: the PR says `Refs #1409`, not `Fixes`. The settle
+window's residual and the roughly 6–9 s chip latency are accepted. The passive,
+probe-free discovery alternative is #1458.
