@@ -48,3 +48,4 @@ Renderer tests drive the real hook and the real TileLeaf. The app is not launche
   - the toast text is asserted literally;
   - the toast goes to this pane.
   c's mutations M7 (no-older → failed) and T3 (5 s → 500 ms) now fail.
+- **Verification b (Major): the touch form of the gesture was still missing.** A downward finger drag at the top now makes the same request. Test with the real Feed: an upward drag makes none, a downward one makes one. It fails on the previous Feed.

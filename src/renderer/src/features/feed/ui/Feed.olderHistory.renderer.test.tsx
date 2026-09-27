@@ -22,6 +22,23 @@ describe('Feed older-history trigger', () => {
     expect(onLoadOlderHistory).toHaveBeenCalledTimes(2)
   })
 
+  // Verification b: the touch form of the same gesture.
+  it('retries on a downward finger drag at the very top, and not on an upward one', async () => {
+    const onLoadOlderHistory = vi.fn(async () => {})
+    render(<Feed sessionId="s1" provider="claude" entries={[]} hasOlderHistory onLoadOlderHistory={onLoadOlderHistory} />)
+    const scroller = screen.getByRole('region', { name: 'Conversation' })
+    await act(async () => {
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 60 }] })
+    })
+    expect(onLoadOlderHistory).not.toHaveBeenCalled()
+    await act(async () => {
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 140 }] })
+    })
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(1)
+  })
+
   it('does not load on a downward wheel', async () => {
     const onLoadOlderHistory = vi.fn(async () => {})
     render(<Feed sessionId="s1" provider="claude" entries={[]} hasOlderHistory onLoadOlderHistory={onLoadOlderHistory} />)
