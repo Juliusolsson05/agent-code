@@ -102,6 +102,12 @@ Nothing deletes any of it:
      from July never wrote one.
    - Tests: an EACCES journal, a truncated journal, and an unknown id shape, each with an old
      referenced rollout and an old orphan; nothing is deleted. Both damage cases fail on `4d541115`.
+
+   **Unreclaimed deletions (workflow-mcp#65, round 4).**
+   - The store deletes a run by moving it to `runs/.deleted-…`, then removes the bytes. A removal
+     that keeps failing (a locked subdirectory) used to be silent.
+   - Each pass now calls `reclaimDeletedRuns()` after its deletes, and reports what is still on disk
+     (`runsUnreclaimed`, logged). The next pass retries.
 5. **When:** once after `WorkflowService` initialization (so startup recovery decisions have already
    been made on the full history), then every 24 h while the app runs (an unref'd timer). It is a
    no-op while any run is non-terminal in the lineage being considered.

@@ -153,6 +153,7 @@ describe('workflow run retention (#1275)', () => {
       deleteRun: async (runId: string) => { order.push(runId); await deleteRun(runId) },
       listRuns: store.listRuns.bind(store),
       journalPath: store.journalPath.bind(store),
+      reclaimDeletedRuns: store.reclaimDeletedRuns.bind(store),
     })
 
     await pruneWorkflowHistory({ store: spied, codexHome, now: T0, ttlMs: 7 * DAY })
@@ -233,6 +234,29 @@ describe('workflow run retention (#1275)', () => {
     const result = await pruneWorkflowHistory({ store, codexHome, now, ttlMs: 7 * DAY })
     expect(result).toMatchObject({ rolloutsDeleted: 0, rolloutsSkipped: true })
     expect(await exists(orphan)).toBe(true)
+  })
+
+  // workflow-mcp#65, round 4: a deleted run whose bytes cannot be removed is reported, and the next
+  // pass retries it — never silently assumed gone.
+  it('reports a deleted run it could not reclaim, and reclaims it on a later pass', async () => {
+    const { root, store, codexHome } = await fixture()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    await terminalRun(store, 'run_old', 'run.cancelled')
+    const locked = join(root, 'workflows', 'runs', 'run_old', 'transcripts', 'locked')
+    await mkdir(locked, { recursive: true })
+    await writeFile(join(locked, 'agent.jsonl'), '{}\n')
+    await chmod(locked, 0o500)
+    try {
+      const first = await pruneWorkflowHistory({ store, codexHome, now: T0 + 40 * DAY, ttlMs: 7 * DAY })
+      expect(first).toMatchObject({ runsDeleted: 1, runsUnreclaimed: 1 })
+      const [trash] = store.listUnreclaimedDeletions()
+      await chmod(join(root, 'workflows', 'runs', trash!, 'transcripts', 'locked'), 0o700)
+      const second = await pruneWorkflowHistory({ store, codexHome, now: T0 + 41 * DAY, ttlMs: 7 * DAY })
+      expect(second).toMatchObject({ runsDeleted: 0, runsUnreclaimed: 0 })
+    } finally {
+      await chmod(locked, 0o700).catch(() => undefined)
+    }
   })
 
   it('reads the TTL from the environment, defaulting to 7 days', () => {

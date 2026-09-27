@@ -50,7 +50,7 @@ const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // Codex names rollouts sessions/YYYY/MM/DD/rollout-<timestamp>-<thread id>.jsonl.
 const ROLLOUT_FILE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/
 
-export type WorkflowRetentionStore = Pick<WorkflowStore, 'listRuns' | 'deleteRun'> & {
+export type WorkflowRetentionStore = Pick<WorkflowStore, 'listRuns' | 'deleteRun' | 'reclaimDeletedRuns'> & {
   journalPath(runId: string): string
 }
 
@@ -64,6 +64,11 @@ export type WorkflowRetentionResult = {
    * could not be read or understood (steering q64/q66): its references are unknown, not empty.
    */
   rolloutsSkipped: boolean
+  /**
+   * Deleted runs whose bytes are still on disk after this pass retried them (workflow-mcp#65,
+   * round 4): a locked or failing directory is reported, not silently assumed gone.
+   */
+  runsUnreclaimed: number
 }
 
 export function workflowRunTtlMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -81,7 +86,7 @@ export async function pruneWorkflowHistory(input: {
 }): Promise<WorkflowRetentionResult> {
   const { store, codexHome, now, ttlMs } = input
   const cutoff = now - ttlMs
-  const result: WorkflowRetentionResult = { runsDeleted: 0, rolloutsDeleted: 0, lineagesFailed: 0, rolloutsSkipped: false }
+  const result: WorkflowRetentionResult = { runsDeleted: 0, rolloutsDeleted: 0, lineagesFailed: 0, rolloutsSkipped: false, runsUnreclaimed: 0 }
   if (!store.listRuns || !store.deleteRun) return result
 
   const runs = await allRuns(store)
@@ -115,6 +120,10 @@ export async function pruneWorkflowHistory(input: {
       }
     }
   }
+
+  // Retry the bytes of runs deleted earlier (this pass's or a previous one's) that the store could
+  // not remove; what remains is reported. After this pass's deletes, so their leftovers count too.
+  if (store.reclaimDeletedRuns) result.runsUnreclaimed = (await store.reclaimDeletedRuns()).remaining
 
   const referenced = await referencedCodexSessions(store, kept)
   if (referenced === undefined) {
