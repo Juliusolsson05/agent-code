@@ -1023,25 +1023,19 @@ function orchestrationCreateAgentCallKey(
       return await bridge.createAgentCallOnce(
         orchestrationCreateAgentCallKey(scope.sessionId, args),
         async () => {
-        const agent = await bridge.createAgent({
-          parentSessionId: scope.sessionId,
-          kind: args.kind as OrchestrationAgentKind,
-          ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
-          cwd: args.cwd,
-          title: args.title,
-          role: args.role,
-          runId: args.runId,
-          // WHY force clean children even if an older tool caller passes true:
-          // the inheritance implementation is intentionally disabled in this PR.
-          // Keeping the schema field avoids breaking stale provider tool caches,
-          // but honoring it would re-enable the broken clone/translate path.
-          inheritParentContext: false,
-          builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
-        })
-
-        if (args.prompt && args.prompt.trim().length > 0) {
+        // The bootstrap delivery, shared by a punctual create and a late-adopted one (#1370): a create
+        // that outlived the 30 s bridge deadline is adopted when the renderer finally answers, and
+        // gets exactly this delivery then, through `onLateCreate`. For the late path the returned
+        // tool result has no reader; every failure branch below also records an incident, which is
+        // where a late outcome is seen.
+        // `late`: the child arrived after the deadline, and nobody reads this reply (review of
+        // #1375, a). A child that is simply not ready yet, on a provider with no readiness gate to
+        // arm a waiter on (OpenCode, Grok, #854), then answers LATE_NOT_READY instead of a failure
+        // reply: the punctual path's parent can see that failure and retry, the late path's cannot,
+        // so `deliverLateBootstrap` retries it instead.
+        const deliverBootstrap = async (agent: OrchestrationAgentRecord, task: string, late: boolean) => {
           const prompt = buildOrchestrationBootstrapPrompt({
-            task: args.prompt,
+            task,
           })
           const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
           // A child that is not ready YET is not a failed child (#854).
@@ -1082,6 +1076,9 @@ function orchestrationCreateAgentCallKey(
             // Nothing can be waiting yet for a child that did not exist a
             // moment ago, and a refusal here would be a real double-arm.
             supersedesPendingPrompt: false,
+            // Late only: the waiter can fire long after this call, so it re-checks the parent at
+            // the moment of delivery (review of #1375, round 2 a and b).
+            ...(late ? { shouldDeliver: () => bridge.isParentAttached(scope.sessionId) } : {}),
           })) {
             return toolText({
               ok: true,
@@ -1094,6 +1091,12 @@ function orchestrationCreateAgentCallKey(
               message: `The child was created and its prompt is waiting for its composer (${delivery.message}). It will be delivered as soon as the child can accept it — do not send it again; use orchestration_read_agent to see when it lands.`,
             })
           }
+          if (late && !delivery.ok && isNotReadyYet(delivery)) return LATE_NOT_READY
+          // A collision with another delivery to this child (typically the parent's own
+          // send_prompt holding the reservation) is transient too: the late loop re-checks the
+          // landed count and the parent before trying again, instead of giving up on a
+          // collision whose other side may itself fail (review of #1375, round 2 c).
+          if (late && !delivery.ok && delivery.stage === 'reservation' && delivery.code === 'delivery-in-flight') return LATE_NOT_READY
           if (!delivery.ok) {
             let cleanupAttempted = false
             let agentClosed = false
@@ -1177,16 +1180,92 @@ function orchestrationCreateAgentCallKey(
               promptSubmitted: true,
             })
           } catch (err) {
+            const warning = err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not persist orchestration bootstrap delivery state.'
+            // WHY an incident only on the late path (q85): a punctual create
+            // returns this warning to its caller, who reads it. A late create's
+            // result goes to `onLateCreate`, whose caller already got "outcome
+            // unknown" and has left; nothing reads its return value, and
+            // `adoptLateResponse` only journals a REJECTED continuation, so the
+            // warning vanished while the child could later be reported as
+            // never bootstrapped. The journal is the late path's only reader.
+            if (late) {
+              dependencies.appRunJournal?.recordIncident({
+                kind: 'orchestration.bootstrap_mark_failed',
+                severity: 'warn',
+                reason: 'create_agent_late_bootstrap',
+                context: { sessionId: agent.sessionId, parentSessionId: scope.sessionId, message: warning },
+              })
+            }
             return toolText({
               ok: true,
               agent,
               promptSubmitted: true,
               bootstrapPromptDelivered: true,
-              bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
-                ? err.message
-                : 'Could not persist orchestration bootstrap delivery state.',
+              bootstrapPromptPersistenceWarning: warning,
             })
           }
+        }
+        // The late child's bootstrap (#1370), retried while the child is merely not ready yet
+        // (review of #1375, a): its parent was told delivery is automatic, so a single refused
+        // attempt must not leave it idle. Bounded (about a minute in all), and it stops as soon as
+        // any prompt has landed on the child, so a parent that sent the brief itself after
+        // checking orchestration_read_agent never gets a second copy.
+        const deliverLateBootstrap = async (late: OrchestrationAgentRecord, task: string): Promise<void> => {
+          for (let attempt = 0; ; attempt += 1) {
+            if (bridge.promptSubmissionCount(late.sessionId) > 0) return
+            // Before every attempt, not only at adoption: a parent that closed during the
+            // retry delay must not have its brief start an ownerless child (review of #1375, b).
+            if (!bridge.isParentAttached(scope.sessionId)) {
+              dependencies.appRunJournal?.recordIncident({
+                kind: 'orchestration.prompt_delivery_failed',
+                severity: 'warn',
+                reason: 'create_agent_late_bootstrap_parent_gone',
+                context: { sessionId: late.sessionId, parentSessionId: scope.sessionId, attempts: attempt },
+              })
+              return
+            }
+            const reply = await deliverBootstrap(late, task, true)
+            if (reply !== LATE_NOT_READY) return
+            const delay = LATE_BOOTSTRAP_RETRY_DELAYS_MS[attempt]
+            if (delay === undefined) {
+              dependencies.appRunJournal?.recordIncident({
+                kind: 'orchestration.prompt_delivery_failed',
+                severity: 'error',
+                reason: 'create_agent_late_bootstrap_never_ready',
+                context: { sessionId: late.sessionId, attempts: attempt + 1 },
+              })
+              return
+            }
+            await new Promise(resolveDelay => setTimeout(resolveDelay, delay))
+          }
+        }
+        const agent = await bridge.createAgent({
+          parentSessionId: scope.sessionId,
+          kind: args.kind as OrchestrationAgentKind,
+          ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
+          cwd: args.cwd,
+          title: args.title,
+          role: args.role,
+          runId: args.runId,
+          // WHY force clean children even if an older tool caller passes true:
+          // the inheritance implementation is intentionally disabled in this PR.
+          // Keeping the schema field avoids breaking stale provider tool caches,
+          // but honoring it would re-enable the broken clone/translate path.
+          inheritParentContext: false,
+          builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
+          ...(args.prompt && args.prompt.trim().length > 0
+            ? { onLateCreate: (late: OrchestrationAgentRecord) => deliverLateBootstrap(late, args.prompt!) }
+            : {}),
+        })
+
+        const task = args.prompt && args.prompt.trim().length > 0 ? args.prompt : undefined
+        if (task) {
+          const reply = await deliverBootstrap(agent, task, false)
+          // Only the late path can see LATE_NOT_READY.
+          if (reply === LATE_NOT_READY) throw new Error('unreachable: a punctual create never answers LATE_NOT_READY')
+          return reply
         }
 
         return toolText({
@@ -1870,6 +1949,11 @@ const EXPIRED = Symbol('wait-agents-expired')
  * for it — and a future provider that writes before it decides it is not ready
  * would otherwise inherit that silently.
  */
+/** See `deliverBootstrap`'s `late` parameter. */
+const LATE_NOT_READY = Symbol('late-bootstrap-not-ready')
+/** Waits between late bootstrap attempts: about a minute in all (review of #1375, a). */
+const LATE_BOOTSTRAP_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 30_000]
+
 function isNotReadyYet(delivery: Extract<PromptDeliveryResult, { ok: false }>): boolean {
   if (delivery.promptWritten || delivery.enterWritten) return false
   // The stage check is also what keeps the RESERVATION refusal out (#1134
@@ -1925,6 +2009,8 @@ function armPromptWhenReady(input: {
   incidentReason: 'create_agent_bootstrap_pending' | 'send_prompt_pending'
   /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
   supersedesPendingPrompt: boolean
+  /** See `SessionManager.deliverPromptWhenReady`'s option of the same name. */
+  shouldDeliver?: () => boolean
 }): { supersededPendingPrompt: boolean } | null {
   const { dependencies, bridge, manager, delivery, sessionId } = input
   if (
@@ -1941,7 +2027,12 @@ function armPromptWhenReady(input: {
     sessionId,
     input.prompt,
     event => { if (event === 'pending-superseded') supersededPendingPrompt = true },
-    input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : undefined,
+    input.supersedesPendingPrompt || input.shouldDeliver
+      ? {
+        ...(input.supersedesPendingPrompt ? { supersedesPendingPrompt: true } : {}),
+        ...(input.shouldDeliver ? { shouldDeliver: input.shouldDeliver } : {}),
+      }
+      : undefined,
   )
   // Visible to `list_agents` / `wait_agents` as `prompt_sent` until it
   // settles (#1134 review) — see `PromptDeliveryMetadata.pendingPrompt`.
