@@ -13,6 +13,7 @@ import { ElectronWorkflowWorkerLauncher } from '@main/workflows/ElectronWorkflow
 import { resolveClaudeAgentType } from '@main/workflows/ClaudeAgentTypeResolver.js'
 import { prepareGitWorkflowWorktree } from '@main/workflows/GitWorkflowWorktree.js'
 import { WorkflowSourceApprovalStore } from '@main/workflows/WorkflowSourceApprovalStore.js'
+import { pruneWorkflowHistory, workflowRunTtlMs } from '@main/workflows/workflowRetention.js'
 import { withVisibleControls } from '@shared/text/visibleControls.js'
 
 export async function createWorkflowService(options: {
@@ -117,5 +118,31 @@ export async function createWorkflowService(options: {
   // main must be able to reach that owner during a partial-startup quit.
   options.onCreated?.(service)
   await service.initialize()
+  scheduleWorkflowRetention(store, workflowCodexHome)
   return service
+}
+
+/**
+ * Prune old workflow run lineages and their Codex rollouts (agent-code #1275): once now, then daily.
+ *
+ * WHY after initialize(): startup recovery decides from the FULL history which interrupted runs to
+ * resume; pruning first could change that decision. WHY fire-and-forget with its own catch: retention
+ * is housekeeping and must never delay or fail workflow startup. The daily timer is unref'd so it
+ * never keeps the app alive; a pass after the store's lease is gone fails inside `deleteRun` and is
+ * simply logged.
+ */
+function scheduleWorkflowRetention(store: FileWorkflowStore, workflowCodexHome: string): void {
+  const pass = () => {
+    void pruneWorkflowHistory({ store, codexHome: workflowCodexHome, now: Date.now(), ttlMs: workflowRunTtlMs() })
+      .then(result => {
+        if (result.runsDeleted > 0 || result.rolloutsDeleted > 0 || result.lineagesFailed > 0) {
+          console.info(`[workflows] retention: removed ${result.runsDeleted} run(s) and ${result.rolloutsDeleted} Codex rollout(s); ${result.lineagesFailed} lineage(s) left for the next pass`)
+        }
+      })
+      .catch(error => {
+        console.warn('[workflows] retention pass failed:', error instanceof Error ? error.message : String(error))
+      })
+  }
+  pass()
+  setInterval(pass, 24 * 60 * 60_000).unref()
 }
