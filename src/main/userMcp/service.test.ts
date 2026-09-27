@@ -519,6 +519,35 @@ describe('destination/secret pairing never mixes (#1304, q110)', () => {
     await expect(store.snapshotServer('never-saved')).resolves.toEqual(new Map())
   })
 
+  // Worker rule "unknown is never empty" (q109, q115): through the SERVICE, on
+  // the real filesystem. A save that cannot list the secrets directory must
+  // fail without touching the stored bytes. After the permission comes back,
+  // routine maintenance (a save that changes no secret, which prunes) must
+  // keep the same ciphertext, and a launch still gets the original token.
+  // WHY both this and the snapshotServer test above: on a real filesystem an
+  // unlistable directory also blocks the write and the rm, so an "empty on any
+  // error" snapshot cannot do damage HERE. It does damage on a transient
+  // EMFILE/EIO, which no real fs reproduces on demand. The test above is the
+  // one that fails when snapshotServer treats a non-ENOENT error as empty.
+  it('an unlistable secrets directory fails the save once and the token bytes survive recovery and maintenance', async () => {
+    const { live, id } = await seeded()
+    const serverDir = join(dir, 'mcp-secrets', id)
+    const [blob] = await readdir(serverDir)
+    const before = await readFile(join(serverDir, blob!))
+    await chmod(serverDir, 0o000)
+    try {
+      const failed = await live.save(beeper({ id, secrets: { 'beeper-authorization': 'bpr_live_new_token_5555' } } as Partial<UserMcpSaveInput>))
+      expect(failed.ok).toBe(false)
+    } finally {
+      await chmod(serverDir, 0o700)
+    }
+    expect(await readFile(join(serverDir, blob!))).toEqual(before)
+    const maintained = await live.save(beeper({ id, name: 'beeper-renamed', secrets: {} } as Partial<UserMcpSaveInput>))
+    expect(maintained.ok).toBe(true)
+    expect(await readFile(join(serverDir, blob!))).toEqual(before)
+    expect(await launchedToken(service(), id)).toBe(TOKEN)
+  })
+
   it('a listener that throws after commit does not turn a committed save into a failure', async () => {
     const { live, id } = await seeded()
     live.onChange(() => { throw new Error('broadcast failed') })
