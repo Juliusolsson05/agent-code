@@ -113,10 +113,15 @@ function deliverSessionLease(lease: SessionWindowLease, channel: string, args: u
  * admitting exactly that save. A sender that was NEVER registered is still
  * rejected; this only remembers senders that were.
  *
- * Bounded because window ids are minted per window and a session has a
- * realistic ceiling on how many it opens; entries are tiny and the map is
- * cleared with the registry.
+ * Bounded by insertion order at RETIRED_WEB_CONTENTS_LIMIT (#1278). The old
+ * comment said the map was "cleared with the registry", but only the test-only
+ * reset ever cleared it, so a long-running app kept one tombstone per window it
+ * ever closed. The late sender this exists for is a save dequeued moments after
+ * `closed`, so forgetting a window only after 256 newer ones have closed can
+ * never drop it. webContents ids are never reused within a process, so a
+ * forgotten id cannot be confused with a live window's.
  */
+const RETIRED_WEB_CONTENTS_LIMIT = 256
 const retiredWebContentsIds = new Map<number, WindowId>()
 
 /**
@@ -425,6 +430,11 @@ export function createAppWindow(options?: {
         const closing = windows.get(id)
         if (closing && !closing.window.isDestroyed()) {
           retiredWebContentsIds.set(closing.window.webContents.id, id)
+          while (retiredWebContentsIds.size > RETIRED_WEB_CONTENTS_LIMIT) {
+            const oldest = retiredWebContentsIds.keys().next().value
+            if (oldest === undefined) break
+            retiredWebContentsIds.delete(oldest)
+          }
         }
         windows.delete(id)
         const index = focusOrder.indexOf(id)

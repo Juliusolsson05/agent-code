@@ -241,6 +241,21 @@ describe('window registry routing', () => {
     expect(registry.windowIdForWebContentsId(webContentsId)).toBe(window)
   })
 
+  it('keeps a bounded tombstone: the newest closed windows still resolve, the oldest are forgotten (#1278)', () => {
+    // One tombstone per closed window was kept for the life of the process.
+    // Only a save dequeued moments after `closed` needs one, so the oldest
+    // can go once 256 newer windows have closed.
+    for (let i = 0; i < 300; i++) {
+      registry.createAppWindow()
+      built[i]?.hooks.onClosed()
+    }
+    // The fake assigns webContents.id from creation order, starting at 1.
+    expect(registry.windowIdForWebContentsId(300)).not.toBeNull()
+    expect(registry.windowIdForWebContentsId(300 - 255)).not.toBeNull()
+    expect(registry.windowIdForWebContentsId(300 - 256)).toBeNull()
+    expect(registry.windowIdForWebContentsId(1)).toBeNull()
+  })
+
   it('broadcasts app-wide state to every live window', () => {
     registry.createAppWindow()
     registry.createAppWindow()
