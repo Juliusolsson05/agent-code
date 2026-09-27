@@ -166,6 +166,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
     resize.mockClear()
     sendInput.mockClear()
     workspace.acknowledgeSession = vi.fn()
+    workspace.showPaneToast = vi.fn()
 
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       const id = ++nextFrameId
@@ -207,6 +208,47 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
     await act(async () => { await Promise.resolve() })
 
     expect(sendInput).toHaveBeenCalledWith('session-1', '\r')
+  })
+
+  // #1114 / steering q97: main answers `false` when the session refused the
+  // input (an OpenCode terminal's full pre-paint hold, a missing backend). The
+  // pane says so once, instead of dropping it silently.
+  it('tells the user, once, when the agent refuses terminal input', async () => {
+    settings.mouseModeEnabled = true
+    sendInput.mockResolvedValue(false)
+    render(leaf())
+    act(() => flushAnimationFrames())
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    const button = screen.getByRole('button', { name: 'Send' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(workspace.showPaneToast).toHaveBeenCalledTimes(1)
+    expect(workspace.showPaneToast).toHaveBeenCalledWith('session-1', "That input didn't reach the agent.")
+    sendInput.mockResolvedValue(undefined)
+  })
+
+  // Steering q100: input queued BEFORE attach is flushed as one write, the
+  // largest the pane makes; its refusal was dropped silently.
+  it('tells the user when input typed before attach is refused on flush', async () => {
+    settings.mouseModeEnabled = true
+    sendInput.mockResolvedValue(false)
+    render(leaf())
+    act(() => flushAnimationFrames())
+    // Queued before attach.
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(sendInput).not.toHaveBeenCalled()
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(sendInput).toHaveBeenCalledWith('session-1', '\r')
+    expect(workspace.showPaneToast).toHaveBeenCalledWith('session-1', "What you typed while the terminal was attaching didn't reach the agent.")
+    sendInput.mockResolvedValue(undefined)
   })
 
   it('queues a pre-attach Submit and delivers it once attach lands', async () => {

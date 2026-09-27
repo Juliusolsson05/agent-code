@@ -19,6 +19,14 @@ import type {
 } from '@shared/types/session.js'
 
 const TUI_READY_GRACE_MS = 250
+// Bounds on terminal input held before the TUI's first output (#1114,
+// steering q97). A TUI that never paints (the recorded port conflict neither
+// paints nor exits) must not turn pastes into unbounded growth of Electron's
+// main process. 256 chunks matches the renderer's own pre-attach input queue;
+// 64 KiB is far more than anyone types into a pane that has not painted, and
+// small next to a paste worth refusing loudly.
+const HELD_INPUT_MAX_CHUNKS = 256
+const HELD_INPUT_MAX_CHARS = 64 * 1024
 
 class OpencodeTerminalNotReadyError extends Error {
   readonly code = 'opencode-terminal-not-ready'
@@ -111,6 +119,24 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
   private ptyDataSubscription: { dispose(): void } | null = null
   private providerSessionId: string | null = null
   private readinessTimer: ReturnType<typeof setTimeout> | null = null
+  // #1114: the TUI now spawns before OpenCode's database path is known, and
+  // the package's durable reader positions at the database's head only when
+  // the lookup lands. Rows committed before that are behind the head. The
+  // package can prove there were none only if two things hold, and both are
+  // this adapter's job (opencode-terminal-headless#10, recheck2 a/b):
+  //   1. `tuiOutput` is latched from SPAWN (a data subscription does not
+  //      replay, and the headless is built after the spawn), and handed to
+  //      the headless as `tuiOutputSeen`;
+  //   2. nothing that can make OpenCode commit reaches the PTY before the
+  //      TUI's first output. Programmatic prompts go through the server and
+  //      the package gates them; terminal input (keystrokes, pastes) comes
+  //      through `write`, which HOLDS it until then (`heldInput`).
+  // OpenCode takes input only after it paints, so with both, "no output yet"
+  // proves nothing was committed. Without them a gap is reported as possible
+  // and the renderer re-reads history (#1117).
+  private tuiOutput = false
+  private heldInput: string[] = []
+  private heldInputChars = 0
 
   private readonly cwd: string
   private readonly cols: number
@@ -209,9 +235,21 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       env: launch.env,
     })
     this.pty = pty
+    this.tuiOutput = false
+    this.heldInput = []
+    this.heldInputChars = 0
 
     this.ptyDataSubscription = pty.onData(data => {
       if (generation !== this.startGeneration || this.pty !== pty || this.exited) return
+      if (!this.tuiOutput) {
+        // Latched BEFORE the input is released, so the package never sees
+        // "no output" once the TUI could have received any.
+        this.tuiOutput = true
+        const held = this.heldInput
+        this.heldInput = []
+        this.heldInputChars = 0
+        for (const chunk of held) pty.write(chunk)
+      }
       // SessionManager already owns a capped attach/replay buffer for agent PTY
       // bytes. Forwarding the native stream through that channel is what makes
       // a TUI launched before React mounts appear complete instead of blank.
@@ -243,6 +281,8 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       // storm gets whatever a sibling has since resolved for free, and only a
       // genuinely unresolved path costs another process start.
       resolveDbPath: () => resolveOpencodeDbPath({ binary: this.binary, env, cwd: this.cwd }),
+      // Latched from spawn above (see `tuiOutput`).
+      tuiOutputSeen: () => this.tuiOutput,
     })
     this.headless = headless
     this.forwardHeadless(headless, pty, launch.server.url)
@@ -348,6 +388,9 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       this.pty = null
       this.headless = null
       this.exited = true
+      // Input held for a TUI that exited before painting goes nowhere.
+      this.heldInput = []
+      this.heldInputChars = 0
       this.ptyDataSubscription?.dispose()
       this.ptyDataSubscription = null
       this.clearReadinessTimer()
@@ -357,8 +400,29 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     })
   }
 
-  write(data: string): void {
-    this.pty?.write(data)
+  /**
+   * `false` means the input was REFUSED: not written, not held. The caller
+   * (SessionManager.write, then the renderer) tells the user (steering q97:
+   * never a silent drop).
+   */
+  write(data: string): boolean {
+    if (!this.pty) return false
+    // Held until the TUI's first output (see `tuiOutput`): keystrokes typed
+    // into a pane that has not painted yet must not be able to commit rows
+    // the package's reader cannot see. They are written, in order, the moment
+    // the TUI paints.
+    if (!this.tuiOutput) {
+      // Bounded (see HELD_INPUT_MAX_*). Past the bound the NEW input is
+      // refused rather than an old chunk dropped: what was already accepted
+      // stays in order, and the refusal is reported for exactly the input it
+      // concerns.
+      if (this.heldInput.length >= HELD_INPUT_MAX_CHUNKS || this.heldInputChars + data.length > HELD_INPUT_MAX_CHARS) return false
+      this.heldInput.push(data)
+      this.heldInputChars += data.length
+      return true
+    }
+    this.pty.write(data)
+    return true
   }
 
   /**
@@ -460,6 +524,9 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
     this.importAbort = null
     this.ptyDataSubscription?.dispose()
     this.ptyDataSubscription = null
+    // Input held for a TUI that never painted goes nowhere now.
+    this.heldInput = []
+    this.heldInputChars = 0
     this.exited = true
     this.clearReadinessTimer()
     const headless = this.headless
