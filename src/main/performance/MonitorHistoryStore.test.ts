@@ -355,5 +355,26 @@ describe('a run this store never examined', () => {
     await b.settled()
     expect(JSON.parse(await readFile(file, 'utf8'))).toHaveLength(2)
   })
+
+  // #1455 review b round 3: the GLOBAL incident limit (fifty across runs)
+  // evicted from B's cached copy of A's incidents and rewrote A's file,
+  // removing the incident A had just added.
+  it('never enforces the incident limit on another live store\'s changed file', async () => {
+    const { root } = await setup()
+    const now = Date.now()
+    const many = (ids: number[]) => ids.map(id => ({ ...incident, id, at: now - (100 - id) * 1000 }))
+    const a = new MonitorHistoryStore(root, 'run-a', () => now)
+    a.record(snapshot(now), null, many(Array.from({ length: 50 }, (_, i) => i + 1)), 0, 0)
+    await a.flush()
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    a.record(snapshot(now), null, many(Array.from({ length: 50 }, (_, i) => i + 2)), 0, 1)
+    await a.flush()
+    const file = join(root, 'runs', 'run-a', 'incidents.json')
+    expect((JSON.parse(await readFile(file, 'utf8')) as Array<{ id: number }>).map(row => row.id)).toContain(51)
+    b.record(snapshot(now), null, [{ ...incident, id: 900, at: now }], 0, 1)
+    await b.settled()
+    expect((JSON.parse(await readFile(file, 'utf8')) as Array<{ id: number }>).map(row => row.id)).toContain(51)
+  })
 })
 

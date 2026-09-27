@@ -578,11 +578,7 @@ export class MonitorHistoryStore {
     const incidentCutoff = now - RETENTION['1m']
     for (const [run, rows] of [...this.incidentRuns]) {
       const kept = rows.filter(incident => incident.at >= incidentCutoff)
-      if (kept.length === rows.length) continue
-      const file = join(this.root, RUNS_DIR, run, 'incidents.json')
-      if (await this.foreignChanged(file, run)) continue
-      await this.writeRunIncidents(run, kept)
-      if (run !== this.runId) await this.noteForeign(file)
+      if (kept.length !== rows.length) await this.writeRunIncidents(run, kept)
     }
     // Expired runs used to live until the byte budget forced them out. A run
     // with no remaining points or incidents holds only an unattributable
@@ -628,14 +624,23 @@ export class MonitorHistoryStore {
     this.index.set(file, next)
   }
 
+  /**
+   * Replace (or remove) a run's incident file with `rows`. For ANOTHER run the
+   * file must be unchanged since this store last saw it (#1455 review b rounds
+   * 2 and 3): both retention and the global incident limit rewrite foreign
+   * files from the cached rows, and a changed file holds incidents the other
+   * live store wrote afterwards. The check lives here so no caller can skip it.
+   */
   private async writeRunIncidents(run: string, rows: MonitorIncident[]): Promise<void> {
     const file = join(this.root, RUNS_DIR, run, 'incidents.json')
+    if (await this.foreignChanged(file, run)) return
     if (rows.length) {
       if (await this.replaceBounded(file, JSON.stringify(rows), INCIDENT_BUDGET)) this.incidentRuns.set(run, rows)
     } else {
       await rm(file, { force: true })
       this.incidentRuns.delete(run)
     }
+    if (run !== this.runId) await this.noteForeign(file)
   }
 
   /** Fifty incidents across all retained runs, newest first. */

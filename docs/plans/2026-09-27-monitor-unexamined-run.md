@@ -51,3 +51,6 @@ A second store's write can land between retention's final `touchedSince()` check
   - a fresh incident added after indexing (incident rewrite).
   With the check disabled, the first two fail; removing only the incident-loop check fails the third.
 - **Residual unchanged:** the sub-millisecond window between the check and the act (the review a round 2 cross-process residual).
+
+## Review b round 3, fixed
+The global incident limit also rewrote a foreign incident file from the cached rows. The unchanged-file check now lives inside `writeRunIncidents`, so retention and the limit both pass it. Pinned by "never enforces the incident limit on another live store's changed file". Removing the check fails that test and the incident-retention test.
