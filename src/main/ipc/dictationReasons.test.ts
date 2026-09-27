@@ -123,3 +123,26 @@ describe('dictation outcome codes in main (#243)', () => {
     expect(outcome()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'cancelled.shutdown' }) })])
   })
 })
+
+// #1340 review b survivors: the deadline values and the whole status table
+// were pinned only from one side. Deadlines against the recorded maxima (the
+// fixture's source census), and every mapping row.
+describe('dictation deadline values and provider mapping (#243)', () => {
+  it('keeps each deadline above the recorded maximum and at its chosen value', async () => {
+    const { DICTATION_DEADLINES_MS } = await import('@shared/types/dictation.js')
+    expect(DICTATION_DEADLINES_MS).toEqual({ connect: 10_000, firstAudio: 2_000, drain: 10_000, final: 30_000, terminalInsertion: 5_000 })
+    // Recorded maxima (148 journals): connect 55 ms, first audio 626 ms, batch 14,316 ms.
+    expect(DICTATION_DEADLINES_MS.connect).toBeGreaterThan(55 * 3)
+    expect(DICTATION_DEADLINES_MS.firstAudio).toBeGreaterThan(626 * 3)
+    expect(DICTATION_DEADLINES_MS.final).toBeGreaterThan(14_316 * 2)
+  })
+
+  it.each([
+    [undefined, 'network'], [400, 'provider.bad-audio'], [401, 'provider.auth'], [403, 'provider.auth'],
+    [408, 'provider.timeout'], [429, 'provider.rate-limited'], [500, 'provider.unavailable'], [503, 'provider.unavailable'],
+    [404, 'provider.rejected'],
+  ])('classifies status %s as %s', async (status, reason) => {
+    const { classifyProviderFailure } = await import('@shared/types/dictation.js')
+    expect(classifyProviderFailure(status as number | undefined)).toBe(reason)
+  })
+})

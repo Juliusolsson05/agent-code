@@ -753,4 +753,60 @@ describe('dictation outcome codes (#243)', () => {
     expect(onMessage).toHaveBeenCalledWith(sentence)
     expect(journal).toContainEqual(expect.objectContaining({ event: 'delivery:failed', data: expect.objectContaining({ savedInHistory: entries[0]!.text === 'hello' }) }))
   })
+
+  // #1340 review b survivors.
+  // A start that answers AFTER the connect deadline must not leave main's
+  // session (and its preview socket) allocated.
+  it('cancels a stream that starts after the connect deadline already failed the recording', async () => {
+    let answer!: (value: unknown) => void
+    streamStarts.mockImplementation(() => new Promise(resolve => { answer = resolve }))
+    const cancel = vi.fn(async () => ({ kind: 'ok' }))
+    ;(window as unknown as { api: { cancelDictationStream: unknown } }).api.cancelDictationStream = cancel
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)) })
+    await act(async () => { await vi.waitFor(() => expect(streamStarts).toHaveBeenCalled()) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); await wait(10) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'connect.timeout' }) })])
+    await act(async () => { answer({ kind: 'started', id: 'late-stream' }); await wait(10) })
+    expect(cancel).toHaveBeenCalledWith({ id: 'late-stream' })
+  })
+
+  // The other side of the mic.opened-late branch: a quick microphone and a
+  // too-short hold is still "No speech detected".
+  it('keeps no-speech.too-short when the microphone opened quickly', async () => {
+    mount()
+    await act(async () => {})
+    let openMic!: () => void
+    const micOpen = new Promise<void>(resolve => { openMic = resolve })
+    const real = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation()!
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => { await micOpen; return real(constraints) })
+    const t0 = Date.parse('2026-09-20T10:00:00.000Z')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(t0)
+    await act(async () => { beginDictationHold('keyboard') })
+    // Released at 250 ms (past the tap threshold) while a 190 ms microphone
+    // open is still resolving: nothing was recorded, but not because of it.
+    vi.setSystemTime(t0 + 190)
+    await act(async () => { openMic(); await Promise.resolve() })
+    vi.setSystemTime(t0 + 250)
+    await act(async () => { endDictationHold() })
+    await act(async () => { await vi.waitFor(() => expect(outcomes()).toHaveLength(1)) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'no-speech.too-short' }) })])
+    expect(onMessage).toHaveBeenCalledWith('No speech detected')
+  })
+
+  // A start main refuses mid-recording keeps main's code and sentence.
+  it('shows the start refusal’s own sentence when main has no API key', async () => {
+    streamStarts.mockImplementation(async () => ({ kind: 'error', reason: 'config.missing-api-key', message: 'raw main text' }))
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { controller?.toggle(); await wait(30) })
+    expect(onMessage).toHaveBeenCalledWith('No Deepgram API key configured. Open Settings → Dictation and paste a key.')
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'config.missing-api-key' }) })])
+  })
 })
