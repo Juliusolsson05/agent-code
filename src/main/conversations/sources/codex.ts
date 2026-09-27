@@ -89,6 +89,23 @@ function isSubagentSource(row: IndexRow): boolean {
  *  contract for a fallback path is not worth a cross-repository change. */
 async function readRolloutHead(file: string): Promise<RolloutHead> {
   const out: RolloutHead = { cwd: null, gitBranch: null, createdAt: null, originator: null, source: null, userTexts: [], lastUserAt: null }
+  // Two carriers of a typed prompt, kept apart and chosen at the end (#1363).
+  // Codex up to 0.14x writes `event_msg:user_message`. Codex 0.157 writes
+  // none: a typed prompt is `event_msg:item_completed` with
+  // `item.type: 'UserMessage'` (every one of 120 local 0.15x rollouts, 149
+  // items, none with a legacy event). The UserMessage item, not the role-user
+  // response_item next to it, because Codex builds the item only for what the
+  // user sent: the injected AGENTS.md and environment context are role-user
+  // response items too, and the item leaves them out, as the index does. A
+  // file that has the legacy event uses it alone, so a rollout carrying both
+  // shapes can never list its prompts twice.
+  const legacy: { texts: string[]; lastAt: number | null } = { texts: [], lastAt: null }
+  const items: { texts: string[]; lastAt: number | null } = { texts: [], lastAt: null }
+  const note = (into: typeof legacy, text: string, timestamp: unknown) => {
+    if (into.texts.length < 6) into.texts.push(text)
+    const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
+    if (Number.isFinite(ts)) into.lastAt = ts
+  }
   let records = 0
   for await (const record of streamJsonl<Record<string, unknown>>(file)) {
     if (!record) continue
@@ -102,9 +119,10 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
       out.originator = typeof payload.originator === 'string' ? payload.originator : null
       out.source = typeof payload.source === 'string' ? payload.source : payload.source ? JSON.stringify(payload.source) : null
     } else if (record.type === 'event_msg' && payload?.type === 'user_message' && typeof payload.message === 'string') {
-      if (out.userTexts.length < 6) out.userTexts.push(payload.message)
-      const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
-      if (Number.isFinite(ts)) out.lastUserAt = ts
+      note(legacy, payload.message, record.timestamp)
+    } else if (record.type === 'event_msg' && payload?.type === 'item_completed') {
+      const text = userMessageItemText(payload.item)
+      if (text) note(items, text, record.timestamp)
     }
     // WHY the limit is unconditional: a rollout whose first two hundred
     // records hold no user event (exec runs, synthesized transcripts) has
@@ -112,7 +130,24 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
     // files to the end made discovery cost the size of the store.
     if (records >= HEAD_RECORD_LIMIT) break
   }
+  const chosen = legacy.texts.length > 0 ? legacy : items
+  out.userTexts = chosen.texts
+  out.lastUserAt = chosen.lastAt
   return out
+}
+
+/** The text of a 0.157 `UserMessage` turn item (`{type, id, content: [{type:
+ *  'text', text, text_elements}]}`), or null for any other item. Image parts
+ *  carry no text and are skipped; a message of only images has no label. */
+function userMessageItemText(value: unknown): string | null {
+  const item = asRecord(value)
+  if (item?.type !== 'UserMessage' || !Array.isArray(item.content)) return null
+  const text = item.content
+    .map(part => asRecord(part))
+    .filter(part => part?.type === 'text' && typeof part.text === 'string')
+    .map(part => part!.text as string)
+    .join('')
+  return text.length > 0 ? text : null
 }
 
 export class CodexConversationSource implements ConversationSource {

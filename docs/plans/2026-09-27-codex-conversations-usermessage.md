@@ -1,0 +1,16 @@
+# Codex 0.157 prompts survive the conversation catalog's no-index fallback (#1363)
+
+## Evidence
+- **The fallback reader.** Without a usable `state_N.sqlite` (missing, failing schema validation, or a rollout the index does not cover), `CodexConversationSource` reads each rollout's head with `readRolloutHead`. That took prompt text ONLY from `event_msg:{type:"user_message"}`.
+- **What 0.157 writes instead.** 120 recent local 0.15x rollouts all carry `event_msg:item_completed` with `item.type: 'UserMessage'`: 149 items, each `content: [{type:'text', text, text_elements}]`. None carries a legacy `user_message`. The issue's census found 233 of 233 0.157.x files without the legacy event.
+- **Effect.** Every 0.157 row on the degraded path had `userTexts: []`. It was classified `empty` and hidden from the default listing, or lost its label and user activity.
+
+## Change
+`readRolloutHead` also reads `UserMessage` items: the joined text parts, with their record timestamp as user activity.
+- **Why the item, not the role-user `response_item`.** Codex builds the item only for what the user sent. The injected AGENTS.md and environment context are role-user response items too, and the item leaves them out, as the index does.
+- **Why a file uses one carrier.** Legacy events and items are collected apart. A file with any legacy event uses those alone, so a rollout carrying both shapes never lists its prompt twice.
+
+## Tests (`codex.userMessage0157.test.ts`)
+The fixture `testing/fixtures/conversations/codex-0157/typed-prompt-head.json` is a real 0.157.1 rollout head: `session_meta`, three role-user response items (AGENTS.md, context, the prompt) and the first typed prompt's `UserMessage` item. Text is redacted to the same length. It runs through the real `CodexConversationSource`, with no index beside it.
+1. The row's `userTexts` is exactly the typed prompt, not the injected context, and user activity is set. Red on main (`[]`).
+2. The same head plus a legacy `user_message` for the same prompt lists it once. Listing both carriers fails this test.
