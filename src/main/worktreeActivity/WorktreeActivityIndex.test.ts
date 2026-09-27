@@ -109,8 +109,7 @@ describe('WorktreeActivityIndex refresh persistence (#767)', () => {
     await index.getSummary({ worktrees, refresh: true })
     candidates.pop()
     candidates.push(two)
-    const { status } = await index.getSummary({ worktrees, refresh: true })
-    expect(status.parsedFiles).toBe(0)
+    await index.getSummary({ worktrees, refresh: true })
     const keys = Object.keys((JSON.parse(await readFile(indexFile, 'utf8')) as { transcripts: Record<string, unknown> }).transcripts)
     expect(keys.map(key => key.slice(key.lastIndexOf('/') + 1)).sort()).toEqual(['one.jsonl', 'two.jsonl'])
   })
@@ -126,6 +125,18 @@ describe('WorktreeActivityIndex refresh persistence (#767)', () => {
     await addRollout('one', '/fixture/elsewhere')
     const after = await index.getSummary({ worktrees, refresh: true })
     expect(JSON.stringify(after.summaries)).not.toContain('one')
+  })
+
+  // Review of #1349 (round 2): the LRU kept a removed transcript, and light-user summaries read
+  // the LRU, so a deleted session stayed in the Worktrees bar.
+  it('drops a removed transcript from the served summaries', async () => {
+    await addRollout('one', '/fixture/project')
+    const index = new WorktreeActivityIndex()
+    const before = await index.getSummary({ worktrees, refresh: true })
+    expect(JSON.stringify(before.summaries)).toContain('"one"')
+    candidates.pop()
+    const after = await index.getSummary({ worktrees, refresh: true })
+    expect(JSON.stringify(after.summaries)).not.toContain('"one"')
   })
 
   it('re-parses a transcript whose provider session changed at the same path, mtime and size', async () => {
