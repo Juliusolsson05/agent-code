@@ -1,8 +1,9 @@
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
 import type { SetupCheckResult, SetupToolId } from '@shared/types/setup'
 
 // Stage 1 of docs/decomposition/onboarding-first-run.md (#995): the fresh-run
@@ -53,6 +54,11 @@ const REPO = resolve(__dirname, '../../..')
 const FIXTURES = join(REPO, 'testing/fixtures/first-run')
 const RECORD = process.env.RECORD_FIRST_RUN === '1'
 const PROVIDER_ROWS: SetupToolId[] = ['claude', 'codex', 'opencode', 'grok']
+// The command each provider row resolves — the same registry binaryResolver's
+// TOOL_COMMAND derives from, so a renamed binary cannot drift between them.
+const PROVIDER_COMMANDS = Object.fromEntries(
+  listProviderSetupDescriptors().map(([kind, descriptor]) => [kind, descriptor.binaryName]),
+) as Partial<Record<SetupToolId, string>>
 
 type Environment = 'clean-machine' | 'clean-machine-packaged' | 'developer-machine'
 
@@ -221,11 +227,21 @@ describe.skipIf(process.platform !== 'darwin')('first-run prerequisites on a sim
       // unrelated to the code. Rows found under HOME or bundled, and rows
       // neither side found, are deterministic on any machine and are always
       // compared.
+      //
+      // WHY the executable's name must match the row (review of #1353): the
+      // exclusion trusts the live probe's answer about WHERE, so it must not
+      // also trust it about WHAT. A resolver regression that returned
+      // /opt/homebrew/bin/grok for the `opencode` row was machine-wide, so it
+      // was skipped, and both clean environments passed while the app would
+      // launch Grok for OpenCode. A machine-wide row is only "a fact about
+      // this machine" when it is the provider's own command; any other name
+      // is compared, and fails.
       const home = process.env.HOME ?? ''
       const liveMachineWide = (id: SetupToolId) => {
         const path = live.tools[id].path
         return path !== null && path !== undefined && path.startsWith('/')
           && !(home && path.startsWith(home)) && !path.startsWith(appRoot.path)
+          && basename(path) === PROVIDER_COMMANDS[id]
       }
       const machineWide = (id: SetupToolId) => recording.tools[id].path?.startsWith('/') === true || liveMachineWide(id)
       for (const id of PROVIDER_ROWS.filter(id => !machineWide(id))) {
