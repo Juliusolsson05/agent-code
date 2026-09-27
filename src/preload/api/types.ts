@@ -125,6 +125,10 @@ export type DictationStopResult =
       audioBytes: number
       chunkCount: number
       sttMs: number
+      /** Id of the History row main enqueued for this transcript. The row
+       *  may still fail to write; this only lets the renderer look for THIS
+       *  row rather than for matching text (steering q71). */
+      historyId: string
     }
   | { kind: 'no-speech'; reason: DictationOutcomeReason }
   | { kind: 'error'; reason: DictationOutcomeReason; message: string }

@@ -155,7 +155,22 @@ export function classifyProviderFailure(status: number | undefined): DictationOu
  * prefix followed by unbounded provider text still leaks. `detail` is only
  * ever a number this module formats itself.
  */
-export function dictationReasonMessage(reason: DictationOutcomeReason, detail: { micOpenMs?: number; previous?: boolean; saved?: boolean } = {}): string | null {
+/**
+ * What is KNOWN about a transcript's History row after its terminal paste
+ * failed (steering q71). Three states, not a boolean, because "we could not
+ * read History" is not "the row is missing": telling the user the transcript
+ * "could not be saved" when only the READ failed is the same unchecked claim
+ * q67 removed in the other direction.
+ *
+ * - `saved`: History was read and holds the row with this append's id.
+ * - `absent`: History was read (serialised behind the append) and has no row
+ *   with that id, so the write failed (or the row was deleted meanwhile —
+ *   either way it is not there).
+ * - `unknown`: the read failed, or there is no id to look for.
+ */
+export type DictationHistorySave = 'saved' | 'absent' | 'unknown'
+
+export function dictationReasonMessage(reason: DictationOutcomeReason, detail: { micOpenMs?: number; previous?: boolean; history?: DictationHistorySave } = {}): string | null {
   switch (reason) {
     case 'success':
     case 'cancelled.short-press':
@@ -208,11 +223,19 @@ export function dictationReasonMessage(reason: DictationOutcomeReason, detail: {
     case 'delivery.hidden-terminal':
       return 'Dictation stopped: the terminal pane was hidden, so the transcript was not sent.'
     case 'delivery.failed':
-      // "It is in History" only when the caller confirmed the row exists
-      // (steering q67); otherwise the sentence says the truth.
-      return `The ${detail.previous ? 'previous ' : ''}transcript could not be sent to the terminal${detail.saved
-        ? '. It is in Settings → Dictation → History.'
-        : ', and it could not be saved to History either.'}`
+      // "It is in History" only when the caller found this append's row
+      // (steering q67), "could not be saved" only when History was read and
+      // the row is not there, and a bounded "could not be confirmed" when the
+      // read itself failed (q71). A missing `history` is treated as unknown:
+      // the affirmative sentences need evidence, the hedge does not.
+      {
+        const lead = `The ${detail.previous ? 'previous ' : ''}transcript could not be sent to the terminal`
+        switch (detail.history) {
+          case 'saved': return `${lead}. It is in Settings → Dictation → History.`
+          case 'absent': return `${lead}, and it could not be saved to History either.`
+          default: return `${lead}. Check Settings → Dictation → History; it could not be confirmed there.`
+        }
+      }
     case 'unknown':
       return 'Dictation failed.'
   }

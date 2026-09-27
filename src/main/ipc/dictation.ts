@@ -599,7 +599,15 @@ export function registerDictationIpc(deps: {
         //
         // A failed write must never fail the dictation. The transcript reaching
         // the composer is the product; this row is bookkeeping.
+        // The id is minted HERE, not inside the store, and handed back on the
+        // success result (steering q71): if the transcript later fails to reach
+        // the terminal, the renderer asks History for exactly this row. The
+        // append is enqueued synchronously inside appendEntry, so any History
+        // read the renderer issues after receiving this result is serialised
+        // behind it and sees the row if the write succeeded at all.
+        const historyId = randomUUID()
         void appendEntry({
+          id: historyId,
           text: cleanText,
           provider: session.provider,
           audioDurationMs: params.audioDurationMs ?? 0,
@@ -635,6 +643,7 @@ export function registerDictationIpc(deps: {
           audioBytes: session.audioBytes,
           chunkCount: session.chunkCount,
           sttMs: Date.now() - startedAt,
+          historyId,
         } satisfies DictationStopResult
       } catch (err) {
         emit(session.debugSessionId, 'ERROR', 'batch:upload:throw', {

@@ -108,3 +108,18 @@ Tests: 4 new. 3 are red on `deafa064`; the success-path pin kills its mutant.
 - **Fix:** on a failed terminal paste, the renderer reads History, which is queued behind in-flight appends. It promises History only if this transcript's row is among the newest entries. Otherwise the sentence says it could not be saved either. The `delivery:failed` row records `savedInHistory`. No filesystem or IPC text is shown.
 - Tests: saved, and not saved (a write that failed), both red on `b07ca169`. Two older timing-based tests (the recorded tap, and the late mic) now fake `Date`, so the recorded 49 ms and 3,280 ms are measured exactly under any load.
 - **Round-2 A's remaining findings** (the hung-drain cancel, and the late paste taking over the global overlay) were fixed in `b07ca169`. Its test caveat, that the connect-timeout-during-stop test advanced timers synchronously, is fixed: the test now uses `advanceTimersByTimeAsync`, and removing the guard fails it.
+
+## Steering q71: saved, absent or unknown, by this append's identity
+q67's check still claimed more than it knew. A failed History read was reported as "could not be saved", when only the read had failed. And matching `text === raw` among the newest five rows let an older dictation with the same words ("yes", "continue") make a failed append look saved.
+- **Fix:** main mints the History row id before the un-awaited append and returns it as `historyId` on the success result. `appendEntry` accepts a caller id.
+- **The renderer asks History for exactly that id,** giving `DictationHistorySave`:
+  - `saved`: the row is there;
+  - `absent`: History was read, serialised behind the append, and the row is not there;
+  - `unknown`: the read failed, or there is no id.
+- **Copy:** only `saved` says "It is in … History"; only `absent` says "could not be saved". `unknown` gets the hedge "Check Settings → Dictation → History; it could not be confirmed there."
+- **Journal:** the `delivery:failed` row records `history` instead of `savedInHistory`.
+- **Tests:**
+  - renderer: this append's row present, only an older identical transcript present, and a rejected read;
+  - main: the returned id is the appended id;
+  - store: a caller id is stored verbatim.
+- **Separate:** the owner's disposition on deadlines and wording is unchanged by this.

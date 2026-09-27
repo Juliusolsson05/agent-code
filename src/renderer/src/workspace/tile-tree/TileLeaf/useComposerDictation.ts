@@ -7,7 +7,7 @@ import { pickDictationAudioConstraints, dictationAudioInputError } from '@render
 
 import type { DictationProviderId } from '@renderer/app-state/settings/types'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
-import type { DictationOutcomeReason, DictationStatus } from '@shared/types/dictation'
+import type { DictationHistorySave, DictationOutcomeReason, DictationStatus } from '@shared/types/dictation'
 import { DICTATION_DEADLINES_MS, dictationReasonMessage } from '@shared/types/dictation'
 import {
   resetDictationOverlay,
@@ -368,7 +368,7 @@ export function useComposerDictation({
   // What the user reads comes from the code, never from provider or IPC text
   // (q22/q39). `null` means say nothing (a tap the user abandoned, a pane
   // that is gone).
-  const showReason = useCallback((reason: DictationOutcomeReason, detail?: { micOpenMs?: number; previous?: boolean; saved?: boolean }): string | null => {
+  const showReason = useCallback((reason: DictationOutcomeReason, detail?: { micOpenMs?: number; previous?: boolean; history?: DictationHistorySave }): string | null => {
     const message = dictationReasonMessage(reason, detail)
     if (message) reportMessage(message)
     return message
@@ -425,7 +425,7 @@ export function useComposerDictation({
     setHasTranscriptPreview(true)
   }, [writeInput])
 
-  const commitTranscript = useCallback((recording: ActiveRecording, text: string, raw: string = text) => {
+  const commitTranscript = useCallback((recording: ActiveRecording, text: string, historyId?: string) => {
     // The pane went away mid-finalise. There is nothing left to write to, and
     // writing anyway reaches a global store (#1079 review, 5).
     if (abandonedStopRef.current) {
@@ -501,25 +501,37 @@ export function useComposerDictation({
       // paste was therefore a promise nobody had checked, and with both
       // sinks failed the transcript was simply gone. History reads are
       // queued behind in-flight appends, so this read sees this dictation's
-      // row if it was written at all; only then is it promised.
-      let saved = false
-      try {
-        const history = await window.api.listDictationHistory()
-        saved = history.entries.slice(0, 5).some(entry => entry.text === raw)
-      } catch {
-        // Unreadable history: not promised.
+      // row if it was written at all.
+      //
+      // WHY by id and three-valued (steering q71). The first version matched
+      // `entry.text === raw` among the newest five rows and folded a failed
+      // read into "not saved". Both were claims the evidence did not support:
+      // an older dictation with the same words ("yes", "continue") made a
+      // failed append look saved, and a History that could not be READ told
+      // the user their transcript "could not be saved" when nobody knew. Main
+      // now mints the row's id before appending and returns it, so only this
+      // append's own row can confirm it; a failed read, or no id, is
+      // `unknown` and gets the hedged sentence.
+      let history: DictationHistorySave = 'unknown'
+      if (historyId) {
+        try {
+          const snapshot = await window.api.listDictationHistory()
+          history = snapshot.entries.some(entry => entry.id === historyId) ? 'saved' : 'absent'
+        } catch {
+          // Unreadable History: neither promised nor denied.
+        }
       }
       window.api.recordDictationDebugEvent(debugSessionId, {
         layer: 'TRANSCRIPT',
         event: 'delivery:failed',
-        data: { code: 'delivery.failed' satisfies DictationOutcomeReason, savedInHistory: saved },
+        data: { code: 'delivery.failed' satisfies DictationOutcomeReason, history },
       })
       // A newer dictation may already be recording by the time this one's
       // paste fails (#1340 round 2 C). Its failure is still reported, but
       // named as the previous one, and it does not take over the overlay
       // the new recording is using.
       const previous = activeRef.current !== null
-      const message = showReason('delivery.failed', { previous, saved })
+      const message = showReason('delivery.failed', { previous, history })
       if (message && !previous) setDictationOverlayState({ errorMessage: message })
     }
     void withinDeadline(Promise.resolve(delivered), DICTATION_DEADLINES_MS.terminalInsertion, 'delivery.failed')
@@ -875,7 +887,7 @@ export function useComposerDictation({
       activeRef.current = null
 
       if (result.kind === 'success') {
-        commitTranscript(recording, result.text, result.raw)
+        commitTranscript(recording, result.text, result.historyId)
         setLifecycleStatus('idle')
         return
       }

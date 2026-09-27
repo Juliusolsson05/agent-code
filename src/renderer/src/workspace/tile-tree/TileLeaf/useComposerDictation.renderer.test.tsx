@@ -714,9 +714,9 @@ describe('dictation outcome codes (#243)', () => {
   // previous transcript, not as B's.
   it('names a late terminal-delivery failure as the previous transcript', async () => {
     ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
-      async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
+      async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5, historyId: 'row-this' })
     ;(window as unknown as { api: { listDictationHistory: unknown } }).api.listDictationHistory =
-      async () => ({ stats: {}, entries: [{ text: 'hello' }] })
+      async () => ({ stats: {}, entries: [{ id: 'row-this', text: 'hello' }] })
     const feed = createFakeSessionFeed()
     feed.sendInput = () => new Promise(() => {})
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
@@ -734,15 +734,23 @@ describe('dictation outcome codes (#243)', () => {
     expect(controller?.status).toBe('recording')
   })
 
-  // Steering q67: "it is in History" is said only when History really holds
-  // this transcript; main's history write is not awaited and can fail.
+  // Steering q67 + q71: "it is in History" is said only when History holds
+  // THIS append's row (by the id main returned), "could not be saved" only
+  // when History was read and that row is absent, and a hedge when History
+  // could not be read at all. The older-identical-text case is the q71 trap:
+  // the first version matched on text and called a failed append saved.
+  const PASTE_FAILED = 'The transcript could not be sent to the terminal'
   it.each([
-    ['holds the transcript', [{ text: 'hello' }], 'The transcript could not be sent to the terminal. It is in Settings → Dictation → History.'],
-    ['does not hold it (the write failed)', [{ text: 'an older dictation' }], 'The transcript could not be sent to the terminal, and it could not be saved to History either.'],
-  ])('after a failed terminal paste, promises History only when it %s', async (_label, entries, sentence) => {
+    ['holds this append\'s row', async () => ({ stats: {}, entries: [{ id: 'row-this', text: 'hello' }, { id: 'row-old', text: 'hello' }] }), 'saved',
+      `${PASTE_FAILED}. It is in Settings → Dictation → History.`],
+    ['holds only an older identical transcript (the append failed)', async () => ({ stats: {}, entries: [{ id: 'row-old', text: 'hello' }] }), 'absent',
+      `${PASTE_FAILED}, and it could not be saved to History either.`],
+    ['cannot be read', async () => { throw new Error('history store unavailable') }, 'unknown',
+      `${PASTE_FAILED}. Check Settings → Dictation → History; it could not be confirmed there.`],
+  ])('after a failed terminal paste, when History %s', async (_label, listDictationHistory, history, sentence) => {
     const api = (window as unknown as { api: { stopDictationStream: unknown; listDictationHistory: unknown } }).api
-    api.stopDictationStream = async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5 })
-    api.listDictationHistory = async () => ({ stats: {}, entries })
+    api.stopDictationStream = async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5, historyId: 'row-this' })
+    api.listDictationHistory = listDictationHistory
     const feed = createFakeSessionFeed()
     feed.nextSendInputResult = false
     render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
@@ -751,7 +759,7 @@ describe('dictation outcome codes (#243)', () => {
     await speak()
     await act(async () => { controller?.toggle(); await wait(30) })
     expect(onMessage).toHaveBeenCalledWith(sentence)
-    expect(journal).toContainEqual(expect.objectContaining({ event: 'delivery:failed', data: expect.objectContaining({ savedInHistory: entries[0]!.text === 'hello' }) }))
+    expect(journal).toContainEqual(expect.objectContaining({ event: 'delivery:failed', data: expect.objectContaining({ history }) }))
   })
 
   // #1340 review b survivors.

@@ -83,6 +83,17 @@ describe('dictation outcome codes in main (#243)', () => {
     expect(dictationReasonMessage(result.reason)).toBe(sentence)
   })
 
+  // Steering q71: the renderer can only claim "it is in History" for THIS
+  // append's row, so main mints the row id and returns the same id. The
+  // recorded press shape is reused; only the provider's answer differs.
+  it('returns the id of the History row it appended for a success', async () => {
+    mocks.batch.mockResolvedValue({ kind: 'success', raw: 'hello', polished: null, transcript: { text: 'hello' } })
+    const result = await replay('provider-400')
+    expect(result).toMatchObject({ kind: 'success', raw: 'hello' })
+    expect(result.historyId).toEqual(expect.any(String))
+    expect(mocks.append).toHaveBeenCalledWith(expect.objectContaining({ id: result.historyId, text: 'hello' }))
+  })
+
   it('answers a missing API key with config.missing-api-key', async () => {
     mocks.key.mockResolvedValue(null)
     expect(await invoke('stream-start', { provider: 'deepgram', debugSessionId: 'debug' }))

@@ -71,6 +71,12 @@ describe('dictation history store', () => {
     expect(after.stats.lifetimeSessions).toBe(1)
   })
 
+  // Steering q71: main stamps the id so the renderer can find THIS row.
+  it('stores a caller-supplied id verbatim', async () => {
+    const snapshot = await appendEntry({ ...input('one two'), id: 'row-from-main' })
+    expect(snapshot.entries[0]!.id).toBe('row-from-main')
+  })
+
   it('keeps lifetime totals when the list is cleared, and drops them only on reset', async () => {
     await appendEntry(input('one two'))
     const cleared = await clearEntries()
