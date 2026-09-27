@@ -31,6 +31,7 @@ export const ipcSessionFeed: SessionFeed = {
   onSessionJsonlEntries: cb => window.api.onSessionJsonlEntries(cb),
   onSessionJsonlError: cb => window.api.onSessionJsonlError(cb),
   onSessionTranscriptDiagnostic: cb => window.api.onSessionTranscriptDiagnostic(cb),
+  onSessionTransportGap: cb => window.api.onSessionTransportGap(cb),
   onSessionHistoryBoundary: cb => window.api.onSessionHistoryBoundary(cb),
   onSessionProviderSessionChanged: cb => window.api.onSessionProviderSessionChanged(cb),
   onSessionSemanticEvent: cb => window.api.onSessionSemanticEvent(cb),

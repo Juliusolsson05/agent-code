@@ -221,3 +221,49 @@ claude-code-headless#67 (another worker's, for #1380) also edits
 `src/proxy/proxyServer.ts`, in different hunks (`startUnlocked`, options).
 The two app pointer bumps must land in sequence. This was reported to the
 manager before any package code was written.
+
+## Execution notes
+
+- Package: claude-code-headless#69 (`8be9a7a` on `fix/proxy-gap-position`)
+  - `EventsFilePoll.gaps`, the in-order `transport-gap` with
+    `{since, until}`, `sealFlowsForTransportGap`, and the `'transport-gap'`
+    interruption;
+  - the full suite passes 205/205;
+  - two mutations are caught (all gaps emitted first; a stopped turn
+    sealed too).
+- Ruling (supersedes "held per session" and the reseed IPC above): main's
+  `TransportGapLedger` is keyed by the provider CONVERSATION id, and the
+  records ride `session:load-initial-history` (`SessionHistoryChunk.transportGaps`).
+  - Every feed rebuild goes through that load, whether the window reloads,
+    the agent reloads or respawns after a crash, or the conversation is
+    resumed in another pane, and whether the pane is live or not.
+    Conditions-style reseeding would only cover live backends.
+  - A new conversation in the same pane (Claude /clear) does not inherit
+    the old row.
+  - With no conversation id yet, the row is live-only. This can't happen
+    in practice: a gap needs >= 1 GiB of the session's traffic.
+  - Cost if wrong: none found. It is one optional chunk field.
+- Ruling: no new RenderOwner (the model says adding one needs plan review).
+  - The row is a `provider-notice`-owner candidate with contentKind
+    `transport-gap`, riding the notice candidates, so the ledger input
+    keeps its shape and ordering follows the notice contract ("status
+    follows equal-time conversation").
+  - It is placed at `since ?? until`. A gap older than every loaded entry
+    shows at the top of the window instead of being withheld.
+- Ruling: the phone (remote client) relays the channel but does not paint
+  the row yet. The phone keeps its own TranscriptStore, and wiring it is a
+  separate surface. Follow-up issue to file.
+- Ruling: the time text uses 24-hour HH:MM:SS from Date getters, not
+  `toLocaleTimeString`, so the one visible sentence can be tested.
+- Tests: package 205/205. App:
+  - ClaudeSession seal order;
+  - SessionManager: incident, record, held for the conversation across a
+    respawn, not following /clear;
+  - the ledger bounds;
+  - the end-to-end row (real adapter → fold → ledger → view bridge):
+    placement, persistence after later turns, the rebuild merge, and the
+    sentence;
+  - the loader restoring gaps into a rebuilt runtime;
+  - the live subscription.
+  - Mutations caught: bridge drop, missing candidates, the fold dropping
+    the interruption, history ingest dropping the gaps.

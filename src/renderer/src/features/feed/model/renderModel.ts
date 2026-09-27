@@ -1,4 +1,6 @@
 import type { UsageLimitNotice } from '@shared/types/usageLimitNotice'
+import type { TransportGapRecord } from '@shared/types/session'
+import { transportGapSentence } from '@renderer/features/feed/lib/transportGapText'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { Entry } from '@shared/types/transcript'
 
@@ -40,6 +42,9 @@ export type FeedRenderItemOrder = {
 
 export type FeedRenderItem =
   | { type: 'provider-notice'; key: string; sourcePlane: 'committed' | 'semantic'; notice: UsageLimitNotice; sessionRunId?: string; order: FeedRenderItemOrder }
+  /** A durable "not captured" row (#1381): a span of live output the proxy
+   *  transport lost. Placed by time among the conversation, and kept. */
+  | { type: 'transport-gap'; key: string; gap: TransportGapRecord; order: FeedRenderItemOrder }
   | {
       type: 'entry'
       key: string
@@ -132,6 +137,8 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
   switch (item.type) {
     case 'provider-notice':
       return `${item.notice.provider} ${item.notice.title}`
+    case 'transport-gap':
+      return transportGapSentence(item.gap)
     case 'entry':
     case 'absorbed-entry':
       return debugLabelForEntry(item.entry)
@@ -161,6 +168,7 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
 function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
   switch (item.type) {
     case 'provider-notice':
+    case 'transport-gap':
       return 'entry'
     case 'entry':
     case 'absorbed-entry':

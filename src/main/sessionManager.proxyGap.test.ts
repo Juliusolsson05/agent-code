@@ -48,6 +48,10 @@ vi.mock('@main/storage/feedDebugLog.js', () => ({
 }))
 
 class FakeAgentSession extends EventEmitter {
+  // The provider conversation this process is running (#1381 keys the durable gap rows by it).
+  conversationId: string | null = 'conv-1'
+  getProviderSessionId(): string | null { return this.conversationId }
+
   async start(): Promise<void> {
     this.emit('started', { projectDir: '/tmp/project' })
   }
@@ -78,13 +82,53 @@ describe('a Claude proxy transport gap', () => {
     manager.on('proxy-transport-gap', gap => { gaps.push(gap) })
 
     await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
-    session.emit('proxy-transport-gap', { lostGenerations: 3 })
+    session.emit('proxy-transport-gap', { lostGenerations: 3, since: 1_000, until: 9_000 })
 
-    expect(gaps).toEqual([{ sessionId: 's1', lostGenerations: 3 }])
+    const record = { id: expect.any(String), since: 1_000, until: 9_000, lostGenerations: 3 }
+    expect(gaps).toEqual([{ sessionId: 's1', gap: record }])
     expect(incidents).toContainEqual(expect.objectContaining({
       kind: 'claude.proxy_transport_gap',
-      context: { sessionId: 's1', lostGenerations: 3 },
+      context: { sessionId: 's1', lostGenerations: 3, since: 1_000, until: 9_000 },
     }))
+  })
+
+  // #1381 option B (owner-approved by B6): the gap is a DURABLE feed row. A renderer that reloads
+  // rebuilds its feed from main, and an agent reload respawns under the same id — the record must
+  // survive both, which is why it is not one of the caches that die with the process.
+  it('is held for its conversation, surviving the respawn an agent reload does', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const first = new FakeAgentSession()
+    const second = new FakeAgentSession()
+    createSession.mockImplementationOnce(() => first).mockImplementationOnce(() => second)
+    const journal = { recordIncident: vi.fn(), record: vi.fn(), recordError: vi.fn() }
+    const manager = new SessionManager(null, null, journal as never)
+
+    expect(manager.getTransportGaps('conv-1')).toEqual([])
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    first.emit('proxy-transport-gap', { lostGenerations: 1, since: null, until: 5_000 })
+    first.emit('exit', { exitCode: 0 })
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    second.emit('proxy-transport-gap', { lostGenerations: 2, since: 6_000, until: 7_000 })
+
+    const held = manager.getTransportGaps('conv-1')
+    expect(held.map(gap => [gap.since, gap.until, gap.lostGenerations])).toEqual([[null, 5_000, 1], [6_000, 7_000, 2]])
+    expect(new Set(held.map(gap => gap.id)).size).toBe(2)
+    expect(manager.getTransportGaps('s1')).toEqual([])
+  })
+
+  // A gap is a fact about one conversation. A pane that moves to a new conversation (Claude /clear)
+  // must not carry the old conversation's row into it.
+  it('does not follow the pane into a new conversation', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const session = new FakeAgentSession()
+    createSession.mockImplementationOnce(() => session)
+    const manager = new SessionManager(null, null, { recordIncident: vi.fn(), record: vi.fn(), recordError: vi.fn() } as never)
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    session.emit('proxy-transport-gap', { lostGenerations: 1, since: 1, until: 2 })
+    session.conversationId = 'conv-2'
+    session.emit('proxy-transport-gap', { lostGenerations: 1, since: 3, until: 4 })
+    expect(manager.getTransportGaps('conv-1').map(gap => gap.until)).toEqual([2])
+    expect(manager.getTransportGaps('conv-2').map(gap => gap.until)).toEqual([4])
   })
 
   // Focused review of #1376 (c): a replaced session's late gap must not be recorded against the

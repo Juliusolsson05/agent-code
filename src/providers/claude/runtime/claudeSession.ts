@@ -39,6 +39,7 @@ import type {
   ProxyServer,
   ResumePromptState,
   SemanticEvent,
+  TransportGap,
   TrustDialogState,
 } from 'claude-code-headless'
 
@@ -97,7 +98,7 @@ export type ClaudeSessionEvents = {
   // Declared for the provider-neutral AgentSession contract. Claude currently
   // emits no transcript-discovery diagnostics, so this event never fires.
   'transcript-diagnostic': [unknown]
-  'proxy-transport-gap': [{ lostGenerations: number }]
+  'proxy-transport-gap': [TransportGap]
   // Optional status: the spinner verb ("Cogitating…", "Cascading…",
   // …) so the renderer can label its activity indicator with what CC
   // is actually doing rather than a generic "thinking…" placeholder.
@@ -169,7 +170,7 @@ export class ClaudeSession extends EventEmitter {
   // proxy shutdown path drop the emitter isn't enough — the closure
   // captures `this.headless` and delays GC of the session object.
   private proxyEventHandler: ((ev: unknown) => void) | null = null
-  private proxyGapHandler: ((gap: { lostGenerations: number }) => void) | null = null
+  private proxyGapHandler: ((gap: TransportGap) => void) | null = null
   private exited = false
   /** Gate for the committed `tool_result` bridge. False until the
    *  JSONL tailer's initial replay has quiesced (250 ms without a new
@@ -1168,6 +1169,12 @@ export class ClaudeSession extends EventEmitter {
    * nothing but a main-process console line — the "every event exactly once, or an explicit gap"
    * contract stopped at the package boundary. The gap is re-emitted as `proxy-transport-gap`, which
    * SessionManager records as an always-on incident for this session.
+   *
+   * WHY the adapter is sealed FIRST (#1381): whatever was streaming across the lost span is
+   * missing frames, and the next `event` (the package now emits the gap exactly between the events
+   * written before and after the loss) would otherwise be stitched onto it. Sealing is synchronous,
+   * so the turn's `turn_stopped {interruption: 'transport-gap'}` is published before any post-gap
+   * event reaches the adapter, and before SessionManager records the durable feed row.
    */
   private attachProxyServer(): void {
     if (!this.proxyServer) return
@@ -1178,7 +1185,10 @@ export class ClaudeSession extends EventEmitter {
         >[0],
       )
     }
-    this.proxyGapHandler = gap => { this.emit('proxy-transport-gap', gap) }
+    this.proxyGapHandler = gap => {
+      this.headless?.proxy?.sealFlowsForTransportGap()
+      this.emit('proxy-transport-gap', gap)
+    }
     this.proxyServer.on('event', this.proxyEventHandler)
     this.proxyServer.on('transport-gap', this.proxyGapHandler)
   }

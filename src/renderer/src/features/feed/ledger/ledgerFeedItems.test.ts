@@ -84,6 +84,8 @@ const shape = (i: FeedRenderItem): string => {
   switch (i.type) {
     case 'provider-notice':
       return `notice:${i.key}`
+    case 'transport-gap':
+      return `transport-gap:${i.key}`
     case 'entry':
       return `entry:${typeof i.entry.uuid === 'string' ? i.entry.uuid : '?'}`
     case 'absorbed-entry':

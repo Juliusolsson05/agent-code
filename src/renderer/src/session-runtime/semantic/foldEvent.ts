@@ -1010,7 +1010,11 @@ export function foldSemanticEvent(
         // finished — by sleep, or by a stream whose socket died. Dropping the
         // transport case left an unexplained half-answer on desktop and
         // phone, which share this pipeline.
+        // #1381: and by a span the proxy events transport lost (the durable
+        // "not captured" row is painted from runtime.transportGaps; this keeps
+        // the turn itself reading as cut off).
         ...(ev.interruption === 'system-suspended' || ev.interruption === 'transport-error'
+          || ev.interruption === 'transport-gap'
           ? { interruption: ev.interruption }
           : {}),
       }

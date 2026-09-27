@@ -244,6 +244,12 @@ export function ledgerToFeedItems(
         sessionRunId: c.sessionRunId, order: orderAt(items.length, 'content') })
       continue
     }
+    // #1381: a durable "not captured" row. Same shortcut as the notice above —
+    // the candidate carries the one validated record the row paints.
+    if (c.transportGap) {
+      items.push({ type: 'transport-gap', key: c.id, gap: c.transportGap, order: orderAt(items.length, 'content') })
+      continue
+    }
     switch (c.sourcePlane) {
       case 'committed':
       case 'local-submit':

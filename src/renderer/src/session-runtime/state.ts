@@ -1,4 +1,5 @@
 import type { SessionRoutingGap } from '@shared/types/sessionRouting'
+import type { TransportGapRecord } from '@shared/types/session'
 // -----------------------------------------------------------------------------
 // session-runtime/state.ts — the INGEST layer's clean object (#493).
 //
@@ -295,8 +296,12 @@ export type SemanticLiveTurn = {
    *  `system-suspended`: the machine slept mid-stream (#963).
    *  `transport-error`: the stream's socket died before the message ended —
    *  an Esc interrupt, a proxy timeout, an upstream failure (#1040). The
-   *  provider cannot tell those apart, so neither does this. */
-  interruption?: 'system-suspended' | 'transport-error'
+   *  provider cannot tell those apart, so neither does this.
+   *  `transport-gap`: the proxy events transport LOST a span of this turn's
+   *  chunks (#1381), so the live text is not the whole answer. The durable
+   *  "not captured" feed row (runtime.transportGaps) is what the user sees;
+   *  this only keeps the turn reading as cut off rather than finished. */
+  interruption?: 'system-suspended' | 'transport-error' | 'transport-gap'
 }
 
 export type SemanticFlow = {
@@ -449,6 +454,13 @@ export type SessionRuntime = {
    * active lifetime from main rather than resurrecting a stale process claim.
    */
   sessionRunId: string | null
+  /** Spans of this conversation's live output that never reached the app
+   *  (#1381), oldest first, each painted as a durable "not captured" feed row.
+   *  Fed by the live `session:transport-gap` event and by the initial history
+   *  chunk (main holds them per conversation, so a rebuilt feed gets them
+   *  back); merged by record id, so the two paths never paint one gap twice.
+   *  Never trimmed here: main bounds them. */
+  transportGaps: readonly TransportGapRecord[]
   projectDir: string | null
   workContext: AgentWorkContext | null
   workActivity: WorktreeActivityState | null
@@ -841,6 +853,9 @@ export type RuntimeRenderInput = Pick<
    *  satisfy the contract with a shared frozen empty map. The full runtime's
    *  Map is assignable, so desktop callers still pass `runtime` unchanged. */
   ghosts: ReadonlyMap<string, GhostEntry>
+  /** Optional (#1381): a host that holds no transport gaps — the phone today —
+   *  omits it and paints no "not captured" rows. The desktop runtime has it. */
+  transportGaps?: readonly TransportGapRecord[]
 }
 
 export function emptySemanticRuntime(): SemanticRuntimeState {
@@ -884,6 +899,7 @@ export function emptyRuntime(): SessionRuntime {
     queuedMessages: [],
     exited: null,
     sessionRunId: null,
+    transportGaps: [],
     projectDir: null,
     workContext: null,
     workActivity: null,
@@ -945,4 +961,21 @@ export function emptyRuntime(): SessionRuntime {
     ghosts: new Map(),
     subAgents: {},
   }
+}
+
+/**
+ * Merge gap records by id, oldest first (#1381). The live event and the initial
+ * history chunk can both carry one record (a gap seen live, then the pane's
+ * feed rebuilt); the id is unique per record for the app's lifetime, so this
+ * never paints one gap twice and never drops one either path held.
+ */
+export function mergeTransportGaps(
+  current: readonly TransportGapRecord[],
+  incoming: readonly TransportGapRecord[] | undefined,
+): readonly TransportGapRecord[] {
+  if (!incoming || incoming.length === 0) return current
+  const known = new Set(current.map(gap => gap.id))
+  const added = incoming.filter(gap => !known.has(gap.id))
+  if (added.length === 0) return current
+  return [...current, ...added].sort((a, b) => (a.since ?? a.until) - (b.since ?? b.until))
 }
