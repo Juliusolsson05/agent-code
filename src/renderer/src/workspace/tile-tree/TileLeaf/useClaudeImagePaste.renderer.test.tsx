@@ -27,8 +27,8 @@ afterEach(() => {
   else Reflect.deleteProperty(navigator, 'clipboard')
 })
 
-function paste(options: { image?: boolean; text?: string; html?: string }) {
-  const items = options.image ? [{ kind: 'file', type: png.type, getAsFile: () => png }] : []
+function paste(options: { image?: boolean; text?: string; html?: string; items?: Array<{ kind: string; type: string }> }) {
+  const items = options.items ?? (options.image ? [{ kind: 'file', type: png.type, getAsFile: () => png }] : [])
   return {
     clipboardData: {
       items,
@@ -40,8 +40,9 @@ function paste(options: { image?: boolean; text?: string; html?: string }) {
 
 function hook(provider: 'codex' | 'opencode' | 'grok' | 'pi' | 'claude') {
   const showToast = vi.fn()
-  const { result } = renderHook(() => useClaudeImagePaste({ provider, sessionId: 's1' as never, setDraftImages: vi.fn(), showToast }))
-  return { handlePaste: result.current.handlePaste, showToast }
+  const setDraftImages = vi.fn()
+  const { result } = renderHook(() => useClaudeImagePaste({ provider, sessionId: 's1' as never, setDraftImages, showToast }))
+  return { handlePaste: result.current.handlePaste, showToast, setDraftImages }
 }
 
 describe('pasting an image into a composer that cannot take one', () => {
@@ -93,8 +94,24 @@ describe('pasting an image into a composer that cannot take one', () => {
   })
 
   it('does not say it for Claude, which takes the image', async () => {
-    const { handlePaste, showToast } = hook('claude')
-    await act(async () => { await handlePaste(paste({ image: true })) })
+    const { handlePaste, showToast, setDraftImages } = hook('claude')
+    let answer: unknown
+    await act(async () => { answer = await handlePaste(paste({ image: true })) })
     expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining("can't be sent"))
+    // Taken, not just unmentioned (#1426 review c).
+    expect(answer).toEqual({ handledImages: true })
+    expect(setDraftImages).toHaveBeenCalled()
+  })
+
+  // #1426 review c: only an IMAGE FILE counts. A PDF, a type-less Finder file,
+  // or a string item that happens to say image/* is not an image paste, and a
+  // missing clipboardData says nothing.
+  it('stays silent for a non-image file, a string item, and no clipboard data', async () => {
+    const { handlePaste, showToast } = hook('codex')
+    await act(async () => { await handlePaste(paste({ items: [{ kind: 'file', type: 'application/pdf' }] })) })
+    await act(async () => { await handlePaste(paste({ items: [{ kind: 'file', type: '' }] })) })
+    await act(async () => { await handlePaste(paste({ items: [{ kind: 'string', type: 'image/png' }] })) })
+    await act(async () => { await handlePaste({ clipboardData: null, preventDefault: vi.fn() }) })
+    expect(showToast).not.toHaveBeenCalled()
   })
 })

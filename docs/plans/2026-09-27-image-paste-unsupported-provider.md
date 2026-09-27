@@ -18,7 +18,7 @@ New `useClaudeImagePaste.renderer.test.tsx` renders the real hook, with a real P
 - Codex, image only: the toast shows. Red on main.
 - Codex, image plus text: no toast (the text pastes).
 - Codex, text only: no toast.
-- Claude, image only: no such toast (the image is taken).
+- Claude, image only: no such toast, and the image is taken (`handledImages: true`, draft images set).
 
 ## Out of scope
 - #1250's other rows.
@@ -32,3 +32,4 @@ New `useClaudeImagePaste.renderer.test.tsx` renders the real hook, with a real P
 - **a1 (terminal view): declined.** There the paste goes to the provider's own TUI, which owns image handling (Grok's attaches images); the app's capability flag is about its composer.
 - **a4: every provider's wording is tested** (Codex, OpenCode, Grok, Pi).
 - `parseImagesFromHtml` uses `querySelectorAll('img')` instead of `doc.images`. It is identical in a browser, and the happy-dom test DOM lacks `images` on a parsed document.
+- **c (MERGE-READY, reviewing the round-0 head; test gaps pinned):** a non-image file, a type-less file, a string item typed `image/*`, and a null `clipboardData` stay silent. The Claude case asserts the image is taken. The provider label is covered by the per-provider cases.
