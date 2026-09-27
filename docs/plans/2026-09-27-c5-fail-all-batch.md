@@ -31,3 +31,17 @@ Rows 14–15 (key vault index, agent-name registry, tmux recovery) are strict by
   - Carried foreign rows never expire on their own. They leave disk only with their run directory (budget pruning, clear).
   - A run whose incident file holds only foreign rows is kept from expiry-by-emptiness. It is still pruned by the data budget.
 - **Row 12:** a renderer that sends an invalid identity gets no record and no error for it. That is the same answer as "no TLDR yet".
+
+## Review round 1 (a, b, c codex at `129f8c5a`): all FIX-BEFORE-MERGE
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **a1 / b1 / c1, major:** a WHOLLY refused incident file (a newer-format object, over the row limit, oversized, malformed JSON, unreadable) kept no marker. The current run's next incident replaced it with only the new row, and maintenance expired a prior run holding one as empty. | valid | The run is marked refused. The current run moves the refused file aside to `incidents.refused-<ms>.json` (same run dir, counted in the byte budget) before its first write, and writes nothing if the move fails. Maintenance keeps refused runs. Three fail-first cases (object, 51 rows, malformed JSON). |
+| **a and c survivor:** the foreign-only prior-run expiry guard was unpinned. | valid | The prior-run test covers a foreign-only run and a refused run; removing either guard goes red. |
+| **b2, major:** one indexed row with a wrong-typed value (a BLOB title) made `.trim()` throw and rejected the whole index. | valid | `normalizeIndexRow` types each field by value. A wrong type becomes the empty value, so the title falls back; only a row with no string id is dropped (and counted). Fail-first with a BLOB title on the recorded corpus: the row still lists under its fallback label. |
+| **c2, minor:** a skipped rollout left discovery looking complete. | valid | Skips are counted into the discovery span, `lastDowngradeReason` and one console warning (counts only). **Residual:** the picker has no degraded indicator for any source yet, including the existing no-index downgrade. |
+| **b3, minor:** `tldr:history` and `goal:history` threw for an invalid identity that the batch reads skip. | valid | Empty history for an invalid identity; a non-string payload is still refused. Mutant red. |
+| **a3, minor:** with the file full of carried rows, a new incident was silently not kept. | valid | Carried rows still win (owner rule), but `shortened` is set. Fail-first. |
+| **a survivor:** dropping the `approvedAt` check passed. | valid | An entry missing `approvedAt` prompts. Mutant red. |
+| **b survivor:** the row 13 loader returning an empty set passed. | valid | Row 13 moved to #1417 (manager q109: the same loader as steering q109), with a test through the real loader there. This PR no longer touches `debugRetention`. |
+| **a2, minor:** carried rows change position on rewrite. | declined | Values are all kept. Neither reader gives order any authority: incidents are sorted by `at`, and approvals are keyed by identity plus hash. Preserving the original interleaving would need positional bookkeeping for no reader. |
