@@ -4,7 +4,7 @@ import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { MISSING_WORKSPACE_FOLDER_PREFIX, SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import type {
   SessionId,
@@ -14,6 +14,8 @@ import type {
 } from '@renderer/workspace/types'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
+  dropEntryPointersTo,
+  dropPointersTo,
   remapMetaLineage,
   remapSingleEntryLineage,
 } from '@renderer/lib/undoClose'
@@ -77,6 +79,35 @@ type PublishLineage = (lineage: UndoLineage) => void
  * has not landed in this snapshot; production `spawn` writes SessionMeta into
  * workspace state itself, so in the app it is normally present.
  */
+
+/**
+ * Point every live session's cross-session pointers (orchestration parent and
+ * root, linked parent) at the restored ids (#1373).
+ *
+ * WHY every session and not only the restored rows: a pane's LIVE children
+ * (orchestration children, linked panes left open) are not part of its undo
+ * entry, so remapping only the carried rows left them naming the dead id. The
+ * renderer's orchestration visibility gate compares ids, so the restored
+ * parent could not list, read or prompt its own children, and they rendered
+ * as top-level rows. Replace and Reload Agents already remap every session;
+ * this is the same rule on the undo path.
+ *
+ * WHY remapMetaLineage and not remapSessionsRelationships: the latter DROPS a
+ * pointer whose target is not in the record. A child of a different pane that
+ * is still closed (still on the undo stack) would lose its link, and undoing
+ * that pane later could no longer relink it. remapMetaLineage keeps any id the
+ * map does not name, and returns the same object when nothing changed, so
+ * untouched rows keep their identity.
+ */
+function remapLiveLineage(
+  sessions: Record<SessionId, SessionMeta>,
+  idMap: ReadonlyMap<SessionId, SessionId>,
+): Record<SessionId, SessionMeta> {
+  const out: Record<SessionId, SessionMeta> = {}
+  for (const [sessionId, meta] of Object.entries(sessions)) out[sessionId] = remapMetaLineage(meta, idMap)
+  return out
+}
+
 export function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
   // Extension panes skip spawn entirely: all of their metadata is durable UI
   // identity, including the view ID. The process-specific allowlist below is
@@ -261,7 +292,8 @@ export function useUndoCloseAction(
           // files a session has always done.
           activeTabId: projectId,
           sessions: {
-            ...prev.sessions,
+            // Live children of the closed pane follow it to its new id (#1373).
+            ...remapLiveLineage(prev.sessions, new Map([[entry.sessionId, newSessionId]])),
             // carryDurableMeta restores membership too — `projectId` and,
             // critically, `joinedAt`, so the row returns to its old position
             // in the index rather than jumping to the bottom.
@@ -388,7 +420,9 @@ export function useUndoCloseAction(
         const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
         const tabs = [...prev.tabs]
         tabs.splice(insertIdx, 0, restoredTab)
-        const sessions = { ...prev.sessions }
+        // Live children of the restored members, wherever they live, follow
+        // them to their new ids (#1373).
+        const sessions = remapLiveLineage(prev.sessions, idMap)
         for (const [newId, closed] of carried) {
           sessions[newId] = {
             // Relationship pointers follow the restore: a linked child
@@ -448,6 +482,22 @@ export function useUndoCloseAction(
   //     they are finished history in the store, not live state to stop.
   // `publish` is the source of truth for "came back": each restore calls it
   // after its commit and only then, with exactly the old -> new pairs.
+  // Pointers kept for a restorable parent (#1379) must go once nothing can
+  // restore it. See dropPointersTo.
+  const dropGhostPointers = useCallback((gone: Set<SessionId>) => {
+    if (gone.size === 0) return
+    setState(prev => {
+      const sessions = dropPointersTo(prev.sessions, gone)
+      return sessions === prev.sessions ? prev : { ...prev, sessions }
+    })
+  }, [setState])
+  // Entries that expire or are evicted leave the stack without a restore.
+  useEffect(() => {
+    const stack = refs.undoStackRef.current
+    stack.setDroppedListener(dropGhostPointers)
+    return () => stack.setDroppedListener(null)
+  }, [dropGhostPointers, refs.undoStackRef])
+
   const restoreSingleEntry = useCallback(
     async (entry: SingleClosedEntry, publish: PublishLineage): Promise<RestoreResult> => {
       const successors = new Map<string, string>()
@@ -467,10 +517,14 @@ export function useUndoCloseAction(
       const closedIds = entry.type === 'session'
         ? [entry.sessionId]
         : entry.sessions.map(member => member.sessionId)
-      stopGoalLoops(closedIds.filter(id => !successors.has(id)))
+      const notBack = closedIds.filter(id => !successors.has(id))
+      stopGoalLoops(notBack)
+      // A consumed entry whose members did not come back can never be
+      // restored now: drop live pointers to them (#1387 review a).
+      dropGhostPointers(new Set(notBack))
       return result
     },
-    [hasGoalLoopTools, restoreSessionEntry, restoreTabEntry],
+    [dropGhostPointers, hasGoalLoopTools, restoreSessionEntry, restoreTabEntry],
   )
 
   // Replay one close OPERATION's units last-first (see ClosedGroup).
@@ -500,6 +554,14 @@ export function useUndoCloseAction(
       // review: a deleted-folder member was retried, and re-toasted, on
       // every later ⌘⇧T).
       let consumedAny = false
+      // WHY the group remembers consumed ids (#1387 review a, round 2): undo
+      // replays newest-first, so a parent can be consumed as stale BEFORE its
+      // child in the same group comes back, carrying its old pointers to that
+      // parent. The per-entry drop in restoreSingleEntry ran while the child
+      // was not live yet, so it missed it. Dropping once the whole group has
+      // replayed catches every member restored after the consumed one.
+      const consumedIds = new Set<SessionId>()
+      const dropConsumed = (): void => dropGhostPointers(consumedIds)
       while (remaining.length > 0) {
         const member = remaining[remaining.length - 1]
         remaining = remaining.slice(0, -1)
@@ -511,19 +573,28 @@ export function useUndoCloseAction(
           restoredAny = true
         } else if (result === 'stale') {
           consumedAny = true
+          if (member.type === 'session') consumedIds.add(member.sessionId)
+          else for (const closed of member.sessions) consumedIds.add(closed.sessionId)
         } else if (result === 'retryable-failure') {
           if (!restoredAny && !consumedAny) return 'retryable-failure'
           const rest = [...remaining, member]
-          const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
+          // Strip pointers to members this replay consumed from what goes
+          // back for retry, or the retry restores them (#1387 review a r3).
+          const leftover: ClosedEntry = dropEntryPointersTo(
+            rest.length === 1 ? rest[0] : { ...entry, entries: rest },
+            consumedIds,
+          )
           refs.undoStackRef.current.push(leftover)
           // Part of the group came back; say what did not (#1242).
           showToast(restoreFailureMessage(leftover), RESTORE_FAILURE_TOAST_MS)
+          dropConsumed()
           return 'restored'
         }
       }
+      dropConsumed()
       return restoredAny ? 'restored' : 'stale'
     },
-    [refs.undoStackRef, restoreSingleEntry, showToast],
+    [dropGhostPointers, refs.undoStackRef, restoreSingleEntry, showToast],
   )
 
   const undoClose = useCallback(async () => {

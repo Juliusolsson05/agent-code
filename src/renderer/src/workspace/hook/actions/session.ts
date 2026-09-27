@@ -364,6 +364,21 @@ function waitForSessionInputReady(
 /** A reload successor whose agent went away while it spawned. */
 type ReloadOrphan = { newId: SessionId; owner: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'> }
 
+/**
+ * The ids a replacement's relationship remap may keep pointing at: every live
+ * session, plus every session the undo stack can still restore (#1379). See
+ * UndoCloseStack.restorableSessionIds for why a closed-but-restorable parent
+ * must not be treated as gone.
+ */
+function knownOrRestorable(
+  sessions: Record<SessionId, SessionMeta>,
+  undoStack: { restorableSessionIds(): Set<SessionId> },
+): Set<SessionId> {
+  const known = new Set(Object.keys(sessions) as SessionId[])
+  for (const id of undoStack.restorableSessionIds()) known.add(id)
+  return known
+}
+
 export function useSessionActions(
   state: { activeTabId: string; sessions: Record<SessionId, SessionMeta>; tabs: Tab[] },
   setState: WorkspaceSetState,
@@ -1431,7 +1446,12 @@ export function useSessionActions(
             // swap has to update those too or the child renders top-level and
             // parent-scoped orchestration reads break. (rehydrate already does
             // this; reload/switch/resume/rewind funnel through here and didn't.)
-            sessions: remapSessionsRelationships(sessions, idMap),
+            //
+            // WHY the undo stack's ids count as "known" (#1379): a pointer
+            // whose target is neither live nor in idMap is dropped, and a
+            // parent that is closed but still restorable is neither. Dropping
+            // it here meant undoing that parent later had nothing to relink.
+            sessions: remapSessionsRelationships(sessions, idMap, knownOrRestorable(sessions, refs.undoStackRef.current)),
             // A pinned agent that gets a fresh id on reload/switch must follow
             // to the new id instead of silently dropping out of the Pinned list.
             pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
@@ -1494,6 +1514,7 @@ export function useSessionActions(
       refs.latestRuntimesRef,
       refs.seenUuidsRef,
       refs.stateRef,
+      refs.undoStackRef,
       setRuntimes,
       setState,
       spawn,
@@ -1819,8 +1840,9 @@ export function useSessionActions(
             ...prev,
             // A fresh id: remap relationship pointers across all sessions
             // (children keep pointing at the right parent), the pinned list
-            // (pins follow) and the lanes.
-            sessions: remapSessionsRelationships(sessions, idMap),
+            // (pins follow) and the lanes. A pointer to a closed parent that
+            // undo can still restore survives, as in replace (#1379).
+            sessions: remapSessionsRelationships(sessions, idMap, knownOrRestorable(sessions, refs.undoStackRef.current)),
             pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
             stage: remapTiledLanes(prev.stage, idMap),
           }
@@ -1832,6 +1854,7 @@ export function useSessionActions(
       refs.latestRuntimesRef,
       refs.seenUuidsRef,
       refs.stateRef,
+      refs.undoStackRef,
       refs.useProxyStreamingRef,
       setRuntimes,
       setState,

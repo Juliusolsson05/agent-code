@@ -9,6 +9,7 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { killSessionBackendIfOwned, useSessionActions } from './session'
 import { freshStage } from '@renderer/workspace/dispatch/gridShape'
+import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
@@ -426,6 +427,8 @@ describe('useSessionActions recovery retry', () => {
       useProxyStreamingRef: ref(false),
       defaultBuiltInMcpDomainsRef: ref([]),
       seenUuidsRef: ref({}),
+      // Replace consults the undo stack for restorable parents (#1379).
+      undoStackRef: ref(new UndoCloseStack()),
     } as unknown as WorkspaceRefs
     const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
