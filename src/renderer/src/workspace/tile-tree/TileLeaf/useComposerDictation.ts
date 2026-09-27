@@ -190,6 +190,35 @@ type DictationSink =
       sessionId: SessionId
     }
 
+/**
+ * Tell main to drop its half of a recording the renderer is abandoning.
+ *
+ * WHY one helper for every exit (#1340 verify a): the id main returned lives
+ * in two places. `startedStreamId` is set the moment main answers, while `id`
+ * is published only after the queued chunks drain. A drain whose push never
+ * settles therefore leaves `id` null and `streamStartPromise` pending
+ * forever. Round 2 taught the stop and failure paths about
+ * `startedStreamId`, but unmount and the short-press cancel kept their own
+ * copy of the old `id`-or-promise shape, so those exits sent no cancel and
+ * main's session lived until quit. Four hand-written copies of one rule is
+ * how that happened; this is the only copy now.
+ *
+ * Only when no id is known yet does it wait on the start promise. That
+ * promise resolves null for a start that lands after the recording was
+ * discarded, because the start path cancels that stream itself, so no
+ * stream is cancelled twice.
+ */
+function releaseMainStream(recording: ActiveRecording): void {
+  const knownId = recording.id ?? recording.startedStreamId
+  if (knownId) {
+    void window.api.cancelDictationStream({ id: knownId })
+  } else if (recording.streamStartPromise) {
+    void recording.streamStartPromise.then(id => {
+      if (id) void window.api.cancelDictationStream({ id })
+    }, () => {})
+  }
+}
+
 export function useComposerDictation({
   enabled,
   focused,
@@ -526,11 +555,22 @@ export function useComposerDictation({
         event: 'delivery:failed',
         data: { code: 'delivery.failed' satisfies DictationOutcomeReason, history },
       })
-      // A newer dictation may already be recording by the time this one's
+      // A newer dictation may already be under way by the time this one's
       // paste fails (#1340 round 2 C). Its failure is still reported, but
       // named as the previous one, and it does not take over the overlay
-      // the new recording is using.
-      const previous = activeRef.current !== null
+      // the new attempt is using.
+      //
+      // WHY the lifecycle status and not only `activeRef` (#1340 verify c):
+      // `activeRef` is published only once the microphone has opened, so a
+      // newer attempt still enumerating devices or waiting on getUserMedia
+      // ('starting') looked like no attempt at all. This one's failure was
+      // then named "the transcript" and painted over the overlay start()
+      // had just cleared. The status cannot be stale for THIS dictation:
+      // stop() set it to 'idle' synchronously after committing, and this
+      // callback runs later, so anything but 'idle' belongs to a newer one.
+      // That includes 'error': a newer attempt's own failure keeps the
+      // overlay.
+      const previous = activeRef.current !== null || statusRef.current !== 'idle'
       const message = showReason('delivery.failed', { previous, history })
       if (message && !previous) setDictationOverlayState({ errorMessage: message })
     }
@@ -723,13 +763,7 @@ export function useComposerDictation({
     activeRef.current = null
     restoreBaseInput(recording)
     recording.discarded = true
-    if (recording.id) {
-      void window.api.cancelDictationStream({ id: recording.id })
-    } else if (recording.streamStartPromise) {
-      void recording.streamStartPromise.then(id => {
-        if (id) void window.api.cancelDictationStream({ id })
-      })
-    }
+    releaseMainStream(recording)
     pendingStopRef.current = false
     pendingDiscardRef.current = false
     setLifecycleStatus('idle')
@@ -745,11 +779,7 @@ export function useComposerDictation({
     recordOutcome(reason, { streamId: recording.id, ...details })
     const message = showReason(reason)
     if (message && sinkRef.current.kind === 'terminal') setDictationOverlayState({ errorMessage: message })
-    const knownId = recording.id ?? recording.startedStreamId
-    if (knownId) void window.api.cancelDictationStream({ id: knownId })
-    else if (recording.streamStartPromise) {
-      void recording.streamStartPromise.then(id => { if (id) void window.api.cancelDictationStream({ id }) }, () => {})
-    }
+    releaseMainStream(recording)
     if (recording.recorder.state !== 'inactive') {
       try { recording.recorder.stop() } catch { /* already stopping */ }
     }
@@ -915,10 +945,7 @@ export function useComposerDictation({
       recording.discarded = true
       // Main's half of the session is released too (a drain that timed out
       // never reached stop); cancelling an id main already closed is a no-op.
-      // `startedStreamId` covers a stream main started whose queued drain
-      // hung before `id` was published (#1340 round 2 C).
-      const knownId = recording.id ?? recording.startedStreamId
-      if (knownId) void window.api.cancelDictationStream({ id: knownId })
+      releaseMainStream(recording)
       cleanup(recording)
       activeRef.current = null
       restoreBaseInput(recording)
@@ -1024,13 +1051,7 @@ export function useComposerDictation({
       event: 'cancel',
       data: { code: 'cancelled.unmount' satisfies DictationOutcomeReason, streamId: recording.id },
     })
-    if (recording.id) {
-      void window.api.cancelDictationStream({ id: recording.id })
-    } else if (recording.streamStartPromise) {
-      void recording.streamStartPromise.then(id => {
-        if (id) void window.api.cancelDictationStream({ id })
-      })
-    }
+    releaseMainStream(recording)
     // No setInputText here on purpose: by the time we reach unmount, the
     // composer that owned the draft is gone — touching it would just race the
     // teardown of the parent component.

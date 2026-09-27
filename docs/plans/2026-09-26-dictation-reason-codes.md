@@ -123,3 +123,15 @@ q67's check still claimed more than it knew. A failed History read was reported 
   - main: the returned id is the appended id;
   - store: a caller id is stored verbatim.
 - **Separate:** the owner's disposition on deadlines and wording is unchanged by this.
+
+## Verification pass (a, c at `03f6ccdc`; b at `2abc991e`)
+- **a (major): unmount and short-press left main's stream alive** when the queued drain hung. Those two exits kept the old `id`-or-promise cancel shape; only stop and fail had learned `startedStreamId`.
+  - Fix: one `releaseMainStream(recording)` helper serves all four exits.
+  - Tests: unmount and short press during a stalled drain, both red before.
+  - Also committed:
+    - a's overlay assertion on the late-failure test (killed the `!previous` survivor);
+    - its read-ordering probe as a store test.
+- **c (minor residual): a late paste failure while the next dictation was still `starting`** was named "the transcript" and painted the new overlay, because `activeRef` is published only once the mic opens.
+  - Fix: `previous` also counts any non-idle lifecycle. It cannot be stale for this dictation, because stop() set 'idle' synchronously before this callback.
+  - Test: red before.
+- **b: MERGE-READY at `2abc991e`.** Its one real-behaviour survivor, the stop-catch single-owner guard (recorder error + hung push + drain deadline), is stated as a residual.

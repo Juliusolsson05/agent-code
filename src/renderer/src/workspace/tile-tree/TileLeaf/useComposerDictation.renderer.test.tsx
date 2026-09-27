@@ -9,6 +9,7 @@ import { useComposerDictation } from './useComposerDictation'
 import { useAppStore } from '@renderer/app-state/store'
 import type { ComposerDictationController } from './useComposerDictation'
 import { beginDictationHold, endDictationHold } from './dictationHotkeyRegistry'
+import { getDictationOverlayState } from '@renderer/features/voice-dictation/dictationStatusStore'
 
 // Regression net for the cold-start audio-loss bug.
 //
@@ -675,6 +676,42 @@ describe('dictation outcome codes (#243)', () => {
     expect(cancel).toHaveBeenCalledWith({ id: 'stream-1' })
   })
 
+  // #1340 verify a: the same stalled drain, left by unmount or by a short
+  // press instead of stop. Both exits used to wait only for `id` or the start
+  // promise, neither of which a hung push ever settles, so main's session
+  // stayed allocated until quit.
+  it('cancels main’s stream when the pane unmounts during a stalled queued drain', async () => {
+    const api = window as unknown as { api: { pushDictationChunk: unknown; cancelDictationStream: unknown } }
+    api.api.pushDictationChunk = () => new Promise(() => {})
+    const cancel = vi.fn(async () => ({ kind: 'ok' }))
+    api.api.cancelDictationStream = cancel
+    const view = mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { view.unmount(); await wait(10) })
+    expect(cancel).toHaveBeenCalledWith({ id: 'stream-1' })
+  })
+
+  it('cancels main’s stream when a short press ends during a stalled queued drain', async () => {
+    const api = window as unknown as { api: { pushDictationChunk: unknown; cancelDictationStream: unknown } }
+    api.api.pushDictationChunk = () => new Promise(() => {})
+    const cancel = vi.fn(async () => ({ kind: 'ok' }))
+    api.api.cancelDictationStream = cancel
+    mount()
+    await act(async () => {})
+    // Only Date is faked, so the hold measures exactly the recorded 49 ms tap
+    // however long the stream start takes on a loaded machine.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-20T10:00:00.000Z'))
+    await act(async () => { beginDictationHold('keyboard') })
+    await speak()
+    vi.setSystemTime(new Date(Date.parse('2026-09-20T10:00:00.000Z') + at('tap-while-starting', 'stop:called').tMs))
+    await act(async () => { endDictationHold(); await wait(10) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'cancelled.short-press' }) })])
+    expect(cancel).toHaveBeenCalledWith({ id: 'stream-1' })
+  })
+
   // #1340 round 2 C: unmounted while devices are being enumerated; no
   // microphone may be requested afterwards.
   it('asks for no microphone when the pane unmounts during device enumeration', async () => {
@@ -732,6 +769,34 @@ describe('dictation outcome codes (#243)', () => {
     await act(async () => { vi.advanceTimersByTime(5_000); await wait(10) })
     expect(onMessage).toHaveBeenCalledWith('The previous transcript could not be sent to the terminal. It is in Settings → Dictation → History.')
     expect(controller?.status).toBe('recording')
+    // The new recording owns the overlay; the old failure must not paint an
+    // error over it (#1340 verify a: this guard had no committed assertion).
+    expect(getDictationOverlayState().errorMessage ?? null).toBeNull()
+  })
+
+  // #1340 verify c: the same late failure while B is still STARTING (held in
+  // device enumeration, so `activeRef` is not yet published). It is still the
+  // previous transcript, and B's freshly cleared overlay stays clear.
+  it('names a late terminal-delivery failure as previous while the next dictation is still starting', async () => {
+    ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
+      async () => ({ kind: 'success', raw: 'hello', text: '<stt>hello</stt>', provider: 'deepgram', audioBytes: 8, chunkCount: 1, sttMs: 5, historyId: 'row-this' })
+    ;(window as unknown as { api: { listDictationHistory: unknown } }).api.listDictationHistory =
+      async () => ({ stats: {}, entries: [{ id: 'row-this', text: 'hello' }] })
+    const feed = createFakeSessionFeed()
+    feed.sendInput = () => new Promise(() => {})
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { controller?.toggle(); await wait(30) })
+    const devices = navigator.mediaDevices as unknown as { enumerateDevices: () => Promise<unknown[]> }
+    devices.enumerateDevices = () => new Promise(() => {})
+    await act(async () => { controller?.toggle(); await wait(20) })
+    expect(controller?.status).toBe('starting')
+    await act(async () => { vi.advanceTimersByTime(5_000); await wait(10) })
+    expect(onMessage).toHaveBeenCalledWith('The previous transcript could not be sent to the terminal. It is in Settings → Dictation → History.')
+    expect(getDictationOverlayState().errorMessage ?? null).toBeNull()
   })
 
   // Steering q67 + q71: "it is in History" is said only when History holds
