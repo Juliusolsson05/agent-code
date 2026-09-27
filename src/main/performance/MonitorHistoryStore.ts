@@ -2,6 +2,7 @@ import { createReadStream, createWriteStream } from 'node:fs'
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { finished } from 'node:stream/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
@@ -26,6 +27,7 @@ const INCIDENT_BUDGET = 8 * 1024 * 1024
 const OPERATIONS_BUDGET = 1024 * 1024
 const REPORT_BUDGET = 8 * 1024 * 1024
 const LINE_LIMIT = 16 * 1024
+const REFUSED_INCIDENTS_PREFIX = 'incidents.refused-'
 const INCIDENT_LIMIT = MONITOR_POLICY.incidentCount
 // About seven minutes of rolled-up points (67 per minute across tiers). A disk
 // that stalls longer sheds new points as "shortened" coverage instead of
@@ -88,6 +90,13 @@ export class MonitorHistoryStore {
   // kept by maintenance and leaves disk only with its directory (budget
   // pruning, clear), like foreign rows.
   private refusedIncidentRuns = new Set<string>()
+  // Runs that HOLD a set-aside `incidents.refused-*.json` (review of #1411,
+  // round 2). Setting a refused file aside clears refusedIncidentRuns, so the
+  // run then looked empty again once its readable incidents expired, and
+  // maintenance deleted the directory with the set-aside bytes in it. Found by
+  // listing each run at startup and added on every set-aside; maintenance
+  // never expires such a run. Only budget pruning and clear() remove it.
+  private refusedAsideRuns = new Set<string>()
   private repairedTails = new Set<string>()
   // False until startup indexing completes. Retention deletes any run the
   // index does not know about, so a partial index (EPERM, ENOSPC or an I/O
@@ -320,7 +329,7 @@ export class MonitorHistoryStore {
     try {
       await rm(join(this.root, RUNS_DIR), { recursive: true, force: true })
       await mkdir(this.runDir, { recursive: true })
-      this.index.clear(); this.incidentRuns.clear(); this.foreignIncidents.clear(); this.refusedIncidentRuns.clear(); this.repairedTails.clear(); this.indexed = true
+      this.index.clear(); this.incidentRuns.clear(); this.foreignIncidents.clear(); this.refusedIncidentRuns.clear(); this.refusedAsideRuns.clear(); this.repairedTails.clear(); this.indexed = true
       this.bytes = 0; this.shortened = false; this.degraded = false
       this.operationFingerprint = ''; this.unindexedRuns.clear()
       this.lastMaintenanceAt = -Infinity
@@ -376,6 +385,8 @@ export class MonitorHistoryStore {
     try {
       await this.cleanupTemps()
       for (const run of await this.runNames()) {
+        const entries = await readdir(join(this.root, RUNS_DIR, run)).catch(() => [] as string[])
+        if (entries.some(name => name.startsWith(REFUSED_INCIDENTS_PREFIX))) this.refusedAsideRuns.add(run)
         for (const resolution of TIERS) {
           const file = join(this.root, RUNS_DIR, run, `${resolution}.jsonl`)
           try {
@@ -579,7 +590,7 @@ export class MonitorHistoryStore {
     // with no remaining points or incidents holds only an unattributable
     // operations snapshot, so it is retention-expired, not capacity-pruned.
     if (this.indexed) for (const run of await this.runNames()) {
-      if (run === this.runId || this.incidentRuns.has(run) || this.foreignIncidents.has(run) || this.refusedIncidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
+      if (run === this.runId || this.incidentRuns.has(run) || this.foreignIncidents.has(run) || this.refusedIncidentRuns.has(run) || this.refusedAsideRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
     }
     this.bytes = await this.diskBytes()
@@ -731,18 +742,22 @@ export class MonitorHistoryStore {
   }
 
   /**
-   * Moves a refused incidents.json to `incidents.refused-<ms>.json` in the same
+   * Moves a refused incidents.json to `incidents.refused-<ms>-<uuid>.json` in the same
    * run directory, keeping its bytes (and counting them in the budget), so the
    * run can record new incidents. False, and nothing is written, when the
    * move fails: losing the new rows beats overwriting the refused ones.
    */
   private async setRefusedIncidentsAside(file: string): Promise<boolean> {
     try {
-      await rename(file, join(dirname(file), `incidents.refused-${Date.now()}.json`))
+      // A UUID, not only the time (review of #1411, round 2): rename replaces an
+      // existing destination, so a second refusal in the same millisecond, or
+      // after the clock stepped back, overwrote the first set-aside file.
+      await rename(file, join(dirname(file), `${REFUSED_INCIDENTS_PREFIX}${Date.now()}-${randomUUID()}.json`))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { this.degraded = true; this.shortened = true; return false }
     }
     this.refusedIncidentRuns.delete(this.runId)
+    this.refusedAsideRuns.add(this.runId)
     return true
   }
 
@@ -821,6 +836,7 @@ export class MonitorHistoryStore {
       this.incidentRuns.delete(run)
       this.foreignIncidents.delete(run)
       this.refusedIncidentRuns.delete(run)
+      this.refusedAsideRuns.delete(run)
       this.unindexedRuns.delete(run)
       total = Math.max(0, total - size); this.shortened = true
     }

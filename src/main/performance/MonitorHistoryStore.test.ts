@@ -1,7 +1,7 @@
-import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MonitorWorkerSnapshot } from '@shared/performance/monitorSnapshot.js'
 import { MonitorHistoryStore } from './MonitorHistoryStore.js'
 
@@ -160,6 +160,95 @@ describe('bounded local performance history', () => {
       expect(restarted.status().state).toBe('degraded')
     })
   }
+
+  // Review of #1411, round 2 (a, b, c): once the refused file was set aside,
+  // nothing marked its run, so a later run's retention expired the run's
+  // readable incidents, found it empty, and deleted the directory with the
+  // set-aside bytes in it.
+  it('keeps a run holding a set-aside refused file after its readable incidents expire', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const runA = join(root, 'runs', 'run-a')
+    const refused = JSON.stringify({ version: 2, incidents: [incident] })
+    await mkdir(runA, { recursive: true })
+    await writeFile(join(runA, 'incidents.json'), refused)
+    const first = new MonitorHistoryStore(root, 'run-a')
+    await first.settled()
+    first.record(snapshot(11_000), null, [{ ...incident, id: 2, at: 11_000 }], 0, 1)
+    await first.settled()
+
+    const later = new MonitorHistoryStore(root, 'run-b')
+    await later.settled()
+    later.record(snapshot(11_000 + 8 * 24 * 60 * 60_000), null, [], 0, 0)
+    await later.settled()
+
+    const aside = (await readdir(runA)).filter(name => name.startsWith('incidents.refused-'))
+    expect(aside).toHaveLength(1)
+    expect(await readFile(join(runA, aside[0]!), 'utf8')).toBe(refused)
+  })
+
+  // Review of #1411, round 2 (a, b, c): the set-aside name was only the time,
+  // and rename replaces an existing file, so a second refusal in the same
+  // millisecond erased the first. Also pins that recording again after a
+  // set-aside writes normally and does not set the new file aside (a stale
+  // refusal marker survived mutation in round 2).
+  it('keeps every refused file when two refusals set aside in the same millisecond', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(123_456)
+    try {
+      const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+      roots.push(root)
+      const runDir = join(root, 'runs', 'run-twice')
+      await mkdir(runDir, { recursive: true })
+      const firstBody = JSON.stringify({ version: 2, generation: 'first' })
+      const secondBody = JSON.stringify({ version: 3, generation: 'second' })
+      await writeFile(join(runDir, 'incidents.json'), firstBody)
+      const store = new MonitorHistoryStore(root, 'run-twice')
+      await store.settled()
+      store.record(snapshot(11_000), null, [{ ...incident, id: 2, at: 11_000 }], 0, 1)
+      await store.settled()
+      store.record(snapshot(12_000), null, [{ ...incident, id: 2, at: 11_000 }, { ...incident, id: 3, at: 12_000 }], 0, 1)
+      await store.settled()
+      expect((await readdir(runDir)).filter(name => name.startsWith('incidents.refused-'))).toHaveLength(1)
+      const current = JSON.parse(await readFile(join(runDir, 'incidents.json'), 'utf8')) as Array<{ id: number }>
+      expect(current.map(row => row.id)).toEqual([2, 3])
+
+      await writeFile(join(runDir, 'incidents.json'), secondBody)
+      const restarted = new MonitorHistoryStore(root, 'run-twice')
+      await restarted.settled()
+      restarted.record(snapshot(13_000), null, [{ ...incident, id: 4, at: 13_000 }], 0, 1)
+      await restarted.settled()
+
+      const aside = (await readdir(runDir)).filter(name => name.startsWith('incidents.refused-'))
+      const bodies = await Promise.all(aside.map(name => readFile(join(runDir, name), 'utf8')))
+      expect(bodies.sort()).toEqual([firstBody, secondBody].sort())
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Review of #1411, round 2 (b): the guard that writes nothing when the
+  // set-aside rename fails was unpinned. Losing the new rows beats
+  // overwriting the refused ones.
+  it('writes nothing over a refused file it could not set aside', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const runDir = join(root, 'runs', 'run-stuck')
+    await mkdir(runDir, { recursive: true })
+    const refused = JSON.stringify({ version: 2 })
+    await writeFile(join(runDir, 'incidents.json'), refused)
+    const store = new MonitorHistoryStore(root, 'run-stuck')
+    await store.settled()
+    await chmod(runDir, 0o500)
+    try {
+      store.record(snapshot(11_000), null, [{ ...incident, id: 2, at: 11_000 }], 0, 1)
+      await store.settled()
+    } finally {
+      await chmod(runDir, 0o700)
+    }
+    expect(await readFile(join(runDir, 'incidents.json'), 'utf8')).toBe(refused)
+    expect(store.status().shortened).toBe(true)
+  })
 
   // Review of #1411 (a, b, c), a surviving mutation: maintenance deletes a
   // prior run it believes empty. A run whose incident file holds only rows
