@@ -34,6 +34,9 @@ type Props = {
   onClose: () => void
 }
 
+
+export const PROMPTS_UNREADABLE = "Couldn't read this conversation's prompts."
+
 export function ViewPromptsModal({
   open,
   sessionId,
@@ -67,7 +70,11 @@ export function ViewPromptsModal({
       .catch((error: unknown) => {
         if (cancelled) return
         setFromDisk(null)
-        setLoadError(error instanceof Error && error.message.length > 0 ? error.message : 'Could not read prompts.')
+        // Fixed words (q22, #1306): the rejection is IPC text, and main's
+        // cause can name a path. Main now rejects when the conversation file
+        // is there but unreadable, instead of answering "no prompts".
+        void error
+        setLoadError(PROMPTS_UNREADABLE)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)

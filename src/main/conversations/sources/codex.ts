@@ -9,7 +9,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder.js'
 import { findCodexRolloutPathByThreadId } from 'codex-headless'
 import { newestCodexStateDb, openReadOnlySqlite } from './sqlite.js'
-import type { ConversationSource, SourceConversation, SourceScope, PromptReadOptions } from './types.js'
+import { assertTreeListable, ConversationPromptsUnreadable, isMissingFileError, isPresent, type ConversationSource, type SourceConversation, type SourceScope, type PromptReadOptions } from './types.js'
 
 // Codex keeps its own index at ~/.codex/state_N.sqlite (`threads`,
 // `thread_spawn_edges`), maintained by the CLI and backfilled from rollouts.
@@ -535,27 +535,59 @@ export class CodexConversationSource implements ConversationSource {
   }
 
   async prompts(nativeId: string, _cwd: string, options: PromptReadOptions = {}): Promise<ConversationPrompt[]> {
+    // isPresent, not existsSync (#1434 round 1, a/b): existsSync answers false
+    // for EACCES too, so a known rollout under a locked directory read as
+    // "absent" and the conversation as having no prompts.
     const known = this.rolloutPaths.get(nativeId)
-    let file: string | null = known && existsSync(known) ? known : null
+    let file: string | null = known && await isPresent('codex', known) ? known : null
     const dbPath = file ? null : newestCodexStateDb(this.deps.codexHome)
     const opened = dbPath ? openReadOnlySqlite(dbPath, { threads: ['id', 'rollout_path'] }) : null
+    // An index that is THERE but cannot be opened (corrupt, locked, an older
+    // schema) cannot tell us where the rollout is. The walk below may still
+    // find it; if it does not, "not found" is unknown, not "no prompts".
+    const indexUnknown = dbPath !== null && opened !== null && !opened.ok && await isPresent('codex', dbPath)
     if (opened?.ok) {
       try {
         const row = opened.db.prepare('select rollout_path from threads where id = ?').get(nativeId) as { rollout_path: string } | undefined
-        if (row && existsSync(row.rollout_path)) file = row.rollout_path
+        if (row && await isPresent('codex', row.rollout_path)) file = row.rollout_path
       } finally {
         opened.close()
       }
     }
     if (!file) {
+      const sessionsDir = join(this.deps.codexHome, 'sessions')
+      // The package's walk swallows its own readdir errors (it answers null),
+      // so an unreadable sessions tree would still read as "no prompts". Probe
+      // the root here: absent is "not here", anything else is unknown.
       try {
-        file = await findCodexRolloutPathByThreadId(join(this.deps.codexHome, 'sessions'), nativeId)
-      } catch {
+        await readdir(sessionsDir)
+      } catch (error) {
+        if (!isMissingFileError(error)) throw new ConversationPromptsUnreadable('codex', error)
+      }
+      try {
+        file = await findCodexRolloutPathByThreadId(sessionsDir, nativeId)
+      } catch (error) {
+        // Only absence is "not here" (#1306, steering q116): a rollout walk
+        // that fails for any other reason is unknown, never "no prompts".
+        if (!isMissingFileError(error)) throw new ConversationPromptsUnreadable('codex', error)
         file = null
+      }
+      if (!file) {
+        // The package's walk skips every directory below the root it cannot
+        // list (RolloutLocator.collectMatches), so "not found" can mean "in a
+        // locked sessions/YYYY/MM/DD". Prove the tree was listable before
+        // calling it absent (#1434 round 1, a/b). Only on this miss path.
+        await assertTreeListable('codex', sessionsDir, 3, name => name.endsWith('.jsonl') && name.includes(nativeId))
+        if (indexUnknown) throw new ConversationPromptsUnreadable('codex', new Error('the Codex state index exists but could not be opened, and no rollout was found by walking'))
       }
     }
     if (!file) return []
+    // #1306: a found rollout that cannot be read is said, typed, not raw.
     const { prompts } = await extractPromptsFromFile('codex', nativeId, file, options.need ?? 'all', { maxBytes: options.maxBytes })
+      .catch((error: unknown) => {
+        if (isMissingFileError(error)) return { prompts: [] }
+        throw new ConversationPromptsUnreadable('codex', error)
+      })
     return prompts.map(p => ({ text: p.text, timestamp: p.ts }))
   }
 }
