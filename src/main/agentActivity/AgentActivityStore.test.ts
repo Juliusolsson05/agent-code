@@ -324,4 +324,24 @@ describe('an unreadable aliases file', () => {
     const lines = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { f: string; t: string })
     expect(lines).toEqual([{ f: 'A', t: 'B' }, { f: 'B', t: 'C' }])
   })
+
+  // The READ path has one guard: `loadAliases`' ENOENT-only catch (B6 check,
+  // 2110). The append test above cannot pin it, because the tail repair
+  // refuses that append on its own. Here the SAME store instance reads while
+  // the file is unreadable: with a catch-all, the empty map would be cached
+  // and A and B would stay split for the life of the store.
+  it('does not cache an unreadable file as empty: the same store groups once it is readable', async () => {
+    const file = join(dir, 'aliases.jsonl')
+    await mkdir(dir, { recursive: true })
+    await writeFile(file, '{"f":"A","t":"B"}\n')
+    const store = new AgentActivityStore(dir)
+    await chmod(file, 0o200)
+    try {
+      await expect(store.agentKeyGrouping()).rejects.toThrow()
+    } finally {
+      await chmod(file, 0o600)
+    }
+    const group = await store.agentKeyGrouping()
+    expect(group('A')).toBe(group('B'))
+  })
 })
