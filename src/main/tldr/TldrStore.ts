@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:
 import { dirname, join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { normalizeTldrText, TLDR_HISTORY_LIMIT, validTldrIdentity } from '@shared/types/tldr.js'
+import { withReportingPublicationLock } from '@main/storage/reportingPublicationLock.js'
 import type { TldrHistoryEntry, TldrRecord, TldrUpdate } from '@shared/types/tldr.js'
 
 // The cap is a bound on the file, not on how many agents may ever report: past
@@ -366,19 +367,27 @@ export class TldrStore extends EventEmitter {
       // A record is therefore never deleted while its identity is live, and
       // nothing is ever deleted and then compensated.
       const needed = records[identity] ? 0 : Object.keys(records).length + 1 - TLDR_MAX_RECORDS
-      const workspace = needed > 0 ? this.inUse() : null
-      const protectedIds = workspace === null ? null : new Set([...workspace, ...this.pins.keys()])
-      const evicted = needed > 0 ? leastRecentlyWritten(records, needed, protectedIds) : []
-      if (evicted.length < needed) throw new Error(`${this.label} storage is full.`)
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
       // (#1182). The agent sets a new goal exactly when it is given new work.
       const previousRevision = records[identity]?.revision ?? this.setAsideRevisions.get(identity) ?? 0
       const record: TldrRecord = { text, updatedAt: this.now().toISOString(), revision: previousRevision + 1 }
-      // Same atomic write as the new record: a crash between two writes must
-      // not leave the file over the cap, which load() refuses as damage.
-      const evictedRecords = new Map(evicted.map(id => [id, records[id]!] as const))
-      await this.commit(identity, records, record, authorized, evicted)
+      // An evicting write reads who the workspace names, chooses, writes and
+      // renames while holding the lock workspace saves also hold (#1328 q56):
+      // a save naming the chosen record cannot land in the middle. Every
+      // other write (an existing identity, or room left) takes no lock.
+      const evictedRecords = new Map<string, TldrRecord>()
+      const write = async () => {
+        const workspace = needed > 0 ? this.inUse() : null
+        const protectedIds = workspace === null ? null : new Set([...workspace, ...this.pins.keys()])
+        const evicted = needed > 0 ? leastRecentlyWritten(records, needed, protectedIds) : []
+        if (evicted.length < needed) throw new Error(`${this.label} storage is full.`)
+        for (const id of evicted) evictedRecords.set(id, records[id]!)
+        // Same atomic write as the new record: a crash between two writes
+        // must not leave the file over the cap, which load() refuses as damage.
+        await this.commit(identity, records, record, authorized, evicted)
+      }
+      await (needed > 0 ? withReportingPublicationLock(write) : write())
       // Only once the eviction is durable: a refused write evicted nothing.
       for (const [id, evictedRecord] of evictedRecords) this.setAsideRevisions.set(id, evictedRecord.revision)
       // The current record is already durable and acknowledged. History is the

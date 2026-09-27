@@ -255,20 +255,39 @@ export class BuiltInMcpHttpHost {
   /**
    * Pin the identity a session is about to register as, in both reporting
    * stores, and wait until the pin is in each store's write queue (#1328 q52).
+   * Returns the release for the caller to call if the session does NOT end up
+   * registered (cancelled, or registerSession threw); once it is registered,
+   * revokeSession releases it instead.
    *
-   * WHY the spawn path awaits this BEFORE registerSession, and not the
-   * registration itself: registerSession is synchronous, and the stores'
-   * cap eviction must be ordered against "this identity became live". A pin
-   * queued before an eviction protects the record; one queued behind an
-   * in-flight eviction waits for its outcome, so the session never becomes
-   * live while a write that deletes its record is still landing. revokeSession
-   * releases the pin. A pin whose registration then fails is never released,
-   * which only ever protects a record too much.
+   * WHY the spawn path awaits this BEFORE registerSession: registerSession is
+   * synchronous, and the stores' cap eviction must be ordered against "this
+   * identity became live". A pin queued before an eviction protects the
+   * record; one queued behind an in-flight eviction waits for its outcome.
+   *
+   * WHY a release, and allSettled (#1328 verification, steering q56): a pin
+   * with no registration had no owner — revokeSession finds no token — so a
+   * cancelled spawn left its identity protected forever, and at a full store
+   * whose only free record it was, every new agent was refused until
+   * restart. A pin that succeeded in one store while the other failed is
+   * released before the error propagates.
    */
-  async pinReportingIdentity(scope: { tldrIdentity?: string; sessionId: string; providerKind: AgentProviderKind; domains: readonly BuiltInMcpDomain[] | undefined }): Promise<void> {
+  async pinReportingIdentity(scope: { tldrIdentity?: string; sessionId: string; providerKind: AgentProviderKind; domains: readonly BuiltInMcpDomain[] | undefined }): Promise<() => void> {
     const identity = this.reportingIdentity(scope)
-    if (!identity) return
-    await Promise.all([this.dependencies.tldrStore?.pin?.(identity), this.dependencies.goalStore?.pin?.(identity)])
+    if (!identity) return () => {}
+    const stores = [this.dependencies.tldrStore, this.dependencies.goalStore].filter(store => store?.pin && store.unpin)
+    const pinned = await Promise.allSettled(stores.map(store => store!.pin!(identity)))
+    const release = (only: typeof stores) => { for (const store of only) void store!.unpin!(identity).catch(() => {}) }
+    const failed = pinned.find(result => result.status === 'rejected')
+    if (failed) {
+      release(stores.filter((_, index) => pinned[index]!.status === 'fulfilled'))
+      throw (failed as PromiseRejectedResult).reason
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      release(stores)
+    }
   }
 
   registerSession(scope: {

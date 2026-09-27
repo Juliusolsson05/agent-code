@@ -70,3 +70,22 @@ The q51 attempt, "evict, then give the record back if its identity registered du
 - the host pins exactly the registration's identity and releases it on revoke.
 
 Mutations: ignoring pins in the choice fails 5 tests; a pin that bypasses the queue fails the race test.
+
+## Verification pass (a, b, c) and steering q56
+Two reproduced loss paths remained after the q52 redesign:
+- **A workspace save naming the evictee during the eviction's write (a, b, c; Major).** Pins protect live sessions, but a parked pane is named only by the workspace file, and `WorkspaceFileStore.commit` had its own queue. **Fix:** a small shared lock, `withReportingPublicationLock` (`src/main/storage/reportingPublicationLock.ts`).
+  - `WorkspaceFileStore.commit` holds it for write, rename, and the `this.file` advance that the stores' in-use answer reads.
+  - An *evicting* store write holds it for sample, choose, write and rename.
+  - Lock order is always "own queue, then the lock", and neither side waits on the other's queue, so there is no deadlock. Non-evicting store writes take no lock.
+  - A save that names the evictee after the choice waits until the write has landed. It never overlaps it.
+- **A pre-registration pin with no owner (a, b, c; Major).** A spawn cancelled after pinning, or a `registerSession` that threw, left a pin nothing could release. At a full store whose only free record it protected, every new agent was refused until restart. **Fix:** `pinReportingIdentity` returns an idempotent `release`, and `SessionManager.spawn` calls it when cancellation or registration throws. A partial pin failure (one store pinned, the other failed) releases the store that pinned before rethrowing (`allSettled`). Once registered, `revokeSession` releases, as before.
+
+Tests (all mutation-checked; each mutant fails exactly one test):
+- a workspace save requested during the eviction's rename sees the completed write, and its naming then protects that identity;
+- `WorkspaceFileStore` does not rename or advance while the lock is held;
+- through the real host and a real capped store, an unregistered pin's release frees the sole candidate, and a partial pin failure releases the other store;
+- `SessionManager.spawn` registers only after the pin settles and releases it when cancelled.
+
+Mutants: the store without the lock; the workspace without the lock; no release on cancel; an unawaited pin.
+
+**Invariant, as it now stands:** a record is never deleted while its identity is pinned by a live or registering session, or named by the committed workspace. A pane or session that names an identity only AFTER an eviction chose it starts without that record ("No goal yet").

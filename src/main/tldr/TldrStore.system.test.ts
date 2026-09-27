@@ -13,6 +13,7 @@ import { GOAL_INSTRUCTIONS, TLDR_INSTRUCTIONS } from '@shared/types/tldr.js'
 import { TLDR_MAX_RECORDS, TldrStore } from './TldrStore.js'
 import { tldrIdentitiesInUse } from './identitiesInUse.js'
 import { createReportingStores } from './reportingStores.js'
+import { withReportingPublicationLock } from '@main/storage/reportingPublicationLock.js'
 
 vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: { record: vi.fn() } }))
 // A pass-through `rename` a test can fault (#1328 review B1). Everything else
@@ -728,6 +729,70 @@ describe('a store at its record cap (#1277)', () => {
     await pinned
     expect(order).toEqual(['eviction landed', 'pin resolved'])
     // identity-0 was chosen before the pin was queued; identity-1 is now live.
+    await store.update('newer-agent', 'Starting too.', () => true)
+    const records = await onDisk(file)
+    expect(records).not.toHaveProperty('identity-0')
+    expect(records).toHaveProperty('identity-1')
+    expect(records).not.toHaveProperty('identity-2')
+  })
+
+  // #1328 verification (a, b, c) and steering q56, through the REAL host and
+  // a real store at the cap. A pin whose session never registered had no
+  // owner; at a full store whose only free record it protected, every new
+  // agent was refused until restart.
+  it('frees the record again when a pinned session never registers', async () => {
+    const document = fullDocument(realRecords.goal.records as never)
+    const workspace = new Set(Object.keys(document.records).filter(id => id !== 'identity-0'))
+    const { store } = await storeAtCap('goal.json', document, { ...GOAL, inUse: () => workspace })
+    const host = new BuiltInMcpHttpHost()
+    host.setDependencies({ goalStore: store } as never)
+    const scope = { sessionId: 's', tldrIdentity: 'identity-0', cwd: '/tmp/project', providerKind: 'claude' as const, domains: ['goal' as const] }
+    const release = await host.pinReportingIdentity(scope)
+    await expect(store.update('new-agent', 'Starting work.', () => true)).rejects.toThrow('Goal storage is full.')
+    // The spawn is cancelled (or registerSession throws: this host was never
+    // started) and releases; the record is the free one again.
+    expect(() => host.registerSession(scope)).toThrow()
+    release()
+    release()
+    await expect(store.update('new-agent', 'Starting work.', () => true)).resolves.toMatchObject({ revision: 1 })
+  })
+
+  it('releases the pin that succeeded when the other store’s pin fails', async () => {
+    const document = fullDocument(realRecords.goal.records as never)
+    const workspace = new Set(Object.keys(document.records).filter(id => id !== 'identity-0'))
+    const { store } = await storeAtCap('goal.json', document, { ...GOAL, inUse: () => workspace })
+    const failing = { update: async () => { throw new Error('unused') }, pin: async () => { throw new Error('pin failed') }, unpin: async () => {} }
+    const host = new BuiltInMcpHttpHost()
+    host.setDependencies({ tldrStore: failing, goalStore: store } as never)
+    await expect(host.pinReportingIdentity({ sessionId: 's', tldrIdentity: 'identity-0', providerKind: 'claude', domains: ['goal', 'tldr'] }))
+      .rejects.toThrow('pin failed')
+    await expect(store.update('new-agent', 'Starting work.', () => true)).resolves.toMatchObject({ revision: 1 })
+  })
+
+  // #1328 steering q56: a workspace save that names the evictee while the
+  // eviction is being written waits for that write; the two never overlap.
+  // Driven through the shared lock both writers hold, on the real files.
+  it('makes a workspace save requested mid-eviction wait for the eviction to land', async () => {
+    const workspace = new Set<string>()
+    const { file, store } = await storeAtCap('goal.json', fullDocument(realRecords.goal.records as never), { ...GOAL, inUse: () => workspace })
+    // What the save sees on disk when it runs: the eviction's write must have
+    // landed completely (new record in, evictee out) before it may run.
+    let seenBySave: Record<string, unknown> | null = null
+    let saved!: Promise<void>
+    renameFault.current = to => {
+      if (to === file && !saved) {
+        saved = withReportingPublicationLock(async () => {
+          seenBySave = await onDisk(file)
+          workspace.add('identity-1')
+        })
+      }
+      return false
+    }
+    await store.update('new-agent', 'Starting work.', () => true)
+    await saved
+    expect(seenBySave).toHaveProperty('new-agent')
+    expect(seenBySave).not.toHaveProperty('identity-0')
+    // The save that landed after it protects identity-1 from the next one.
     await store.update('newer-agent', 'Starting too.', () => true)
     const records = await onDisk(file)
     expect(records).not.toHaveProperty('identity-0')

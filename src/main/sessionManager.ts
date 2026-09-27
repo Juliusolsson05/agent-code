@@ -3031,9 +3031,16 @@ export class SessionManager extends EventEmitter {
         // Pinned in the TLDR/Goal stores' write queues BEFORE the session
         // becomes live, so a store at its cap can never be mid-way through
         // evicting this identity's record once it is (#1328 q52).
-        await this.builtInMcpHost.pinReportingIdentity(mcpScope)
-        this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
-        builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope)
+        const releasePin = await this.builtInMcpHost.pinReportingIdentity(mcpScope)
+        try {
+          this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+          builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope)
+        } catch (error) {
+          // Not registered, so revokeSession will never release this pin;
+          // left, it would protect the identity forever (#1328 q56).
+          releasePin()
+          throw error
+        }
         mcpRegistered = true
       }
       const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
