@@ -20,8 +20,11 @@ const catalogIndex = buildFingerprintIndex([CODEX_RENDER_SHAPES])
 
 function blocksFromRecording(): { toolUse: ToolUseBlock; toolResult: ToolResultBlock } {
   const [call, output] = fixture.records.map(record => mapCodexRolloutToFeedEntries(record as Record<string, unknown>))
-  const toolUse = (call![0]!.message!.content as unknown[])[0] as ToolUseBlock
-  const toolResult = (output![0]!.message!.content as unknown[])[0] as ToolResultBlock
+  // The mapper's Entry keeps `message` loosely typed; its first content block
+  // is the tool block (see transcript/entries.ts codexToolUseEntry/ResultEntry).
+  const firstBlock = (entries: unknown[]) => (entries[0] as { message: { content: unknown[] } }).message.content[0]
+  const toolUse = firstBlock(call!) as ToolUseBlock
+  const toolResult = firstBlock(output!) as ToolResultBlock
   return { toolUse, toolResult }
 }
 
