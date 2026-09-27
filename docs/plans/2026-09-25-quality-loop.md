@@ -946,3 +946,4 @@ be judged by eye goes on the owner's checklist.
 - 2026-09-27 12:55Z B6: batch G #1422 opened from 5ebd2455: #1330, #1377, #1386, #1398, #1403 (member gates PASS; disposition posted). q110: #1420 held (SECURITY: destination/token split), W2 fixes it fail-closed, then fresh reviews. #1376 conflicts with main, so W4 merges main in. #1413 NEED-MANAGER is next.
 - 2026-09-27 13:00Z B6: #1413 manager-verified at fd5c2ef9 (verify a/b majors fixed; 2 new tests red at f72f8670; q106 per-session cooldown present). Batch G #1422 CI running.
 - 2026-09-27 13:30Z B6: batch G #1422 MERGED after the non-member gate PASS (recorded): #1330, #1377 (Fixes #1107), #1386 (Fixes #1289), #1398, #1403. Manager-verified #1423 (b1 split to #1425). q111: #1424 held (W3).
+- 2026-09-27 13:40Z B6: batch H #1428 opened from 6938e612: #1413, #1376, #1406 (member PASS; disposition posted). #1392 gate fails on c round-2 FIX, sent back to W2 for manager check.
