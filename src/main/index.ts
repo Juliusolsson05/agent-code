@@ -124,7 +124,7 @@ import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
 import { tldrIdentitiesInUse } from '@main/tldr/identitiesInUse.js'
 import { createReportingStores } from '@main/tldr/reportingStores.js'
-import { getUsageSnapshot } from '@main/usage/usageService.js'
+import { getUsageSnapshot, readUsageSnapshotForTools } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -1306,6 +1306,14 @@ async function startApp(): Promise<void> {
   })
   builtInMcpHost.setDependencies({
     browserPockets,
+    // #1339: the `usage` domain reads through the same cached, sanitized
+    // reader as root management's usage.read, never with `force`. Passed as
+    // the function itself, not a wrapper: usage_read calls it with no
+    // argument (pinned in usageTools.test.ts) and the reader's no-force
+    // default is pinned in usageSnapshotForTools.test.ts, so there is no
+    // unpinned lambda here where a `{ force: true }` could slip in (#1451
+    // review c).
+    readUsageSnapshot: readUsageSnapshotForTools,
     tldrStore,
     goalStore,
     tldrEnforcement,

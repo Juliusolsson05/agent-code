@@ -434,4 +434,11 @@ describe('orchestration child domains (#1143 review round 2)', () => {
   it('still passes them on when the parent holds them itself', async () => {
     expect(await createChild(['orchestration', 'mcp_servers'], ['mcp_servers'])).toEqual(['mcp_servers'])
   })
+
+  // #1451 review a: usage is off by default so quota reaches an agent only when
+  // the user enabled it; a parent with only Orchestration must not mint it.
+  it('never hands a child usage the parent does not hold, and passes it on when it does', async () => {
+    expect(await createChild(['orchestration'], ['tldr', 'usage'])).toEqual(['tldr'])
+    expect(await createChild(['orchestration', 'usage'], ['usage'])).toEqual(['usage'])
+  })
 })

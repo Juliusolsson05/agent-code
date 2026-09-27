@@ -20,6 +20,9 @@ export type BuiltInMcpDomain =
   | 'mcp_servers'
   // #1161: find and propose personal skills for the user's review.
   | 'skills'
+  // #1339: read provider quota (the Usage screen's snapshot) without root
+  // management, so orchestrating agents can pick a provider with headroom.
+  | 'usage'
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
@@ -35,6 +38,7 @@ export const BUILT_IN_MCP_DOMAINS = [
   'browser',
   'mcp_servers',
   'skills',
+  'usage',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
@@ -79,6 +83,11 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   // an agent can only PROPOSE a skill (saved off, pending the user's review).
   // Off by default: not in the shipped default set.
   'skills',
+  // #1339: read-only, returns no credentials, and shows only the numbers the
+  // user's own Usage screen shows, so it is configurable, not confirmation-
+  // gated and not parent-held-only. Off by default all the same: an agent
+  // gets it only when the user (or an orchestrating parent) asks.
+  'usage',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 export type ConfigurableBuiltInMcpDomain =
@@ -185,6 +194,12 @@ export const PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS: ReadonlySet<BuiltInMcpDomain
   // need the user's review, but a parent with only Orchestration must not be
   // able to hand a child a capability the user never gave the parent.
   'skills',
+  // #1451 review a: usage is OFF by default precisely so an agent reads the
+  // account's cross-provider quota only when the user said so. Without this,
+  // any agent with Orchestration could mint it for a child and read the
+  // numbers back through orchestration_read_agent. A parent may pass usage on
+  // only when it holds usage itself.
+  'usage',
 ])
 
 /**
@@ -221,6 +236,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
     'browser',
     'mcp_servers',
     'skills',
+    'usage',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],
