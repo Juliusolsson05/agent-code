@@ -18,13 +18,12 @@ describe('resolveGitHubCliToken against the real gh binary', () => {
   })
 
   it('resolves to a plausible token or null — never throws, never hangs', async () => {
-    const startedAt = Date.now()
+    // "Never hangs" is the production timeout's job (GH_TOKEN_TIMEOUT_MS) and
+    // this test's own 20 s limit catches a real hang. A wall-clock assertion
+    // of "timeout + 2 s" measured the machine's load instead (#1296): a busy
+    // runner can take longer to launch `gh` without anything being wrong.
+    expect(GH_TOKEN_TIMEOUT_MS).toBeLessThan(20_000)
     const token = await resolveGitHubCliToken()
-    const elapsed = Date.now() - startedAt
-
-    // Bound includes slack for a cold binary launch; the timeout itself is
-    // GH_TOKEN_TIMEOUT_MS, and the promise must settle well inside it.
-    expect(elapsed).toBeLessThan(GH_TOKEN_TIMEOUT_MS + 2_000)
 
     if (token !== null) {
       expect(token).toBeTruthy()
