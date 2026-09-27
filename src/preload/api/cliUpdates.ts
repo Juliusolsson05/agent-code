@@ -34,12 +34,12 @@ export const cliUpdatesApi = {
    *  for the state push. */
   cliUpdatesSetBehavior: (behavior: CliUpdateBehavior): Promise<CliUpdateSnapshot> =>
     ipcRenderer.invoke('cli-updates:set-behavior', behavior),
-  /** Open a failure log file in the OS default handler. No return value
-   *  — success is a spawned OS window, failure is silent (the log path
-   *  can be stale after retention pruning; a hard error case is
-   *  logged in main). */
-  cliUpdatesOpenLog: (logPath: string): Promise<void> =>
-    ipcRenderer.invoke('cli-updates:open-log', logPath),
+  /** Open this CLI's current failure log in the OS default handler. Main
+   *  picks the path from its own failed state (#1423 review a: a
+   *  renderer-supplied path could open anything). `false` when it did not
+   *  open; the caller says so in its own words (#1250 row 10). */
+  cliUpdatesOpenLog: (cli: CliUpdateKind): Promise<boolean> =>
+    ipcRenderer.invoke('cli-updates:open-log', cli),
   /** Subscribe to state changes. Returns an Unsub. The subscriber gets
    *  every transition — updating→updated, updating→failed, notify
    *  transitions on manual refresh, and behavior changes. */
