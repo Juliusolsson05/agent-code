@@ -332,6 +332,58 @@ describe('raw PTY attach ownership (#1311)', () => {
   })
 })
 
+// #1281 / #1283 item 3 (terminal half): a plain terminal's view reference now
+// outlives the shell too, so it gets the same page ownership as the agent PTY
+// above. Before, the manager flag had no release at all, and a reloaded or
+// crashed renderer could never give one back.
+describe('terminal attach ownership (#1281)', () => {
+  function register(id: number) {
+    const detached: string[] = []
+    const manager = Object.assign(new EventEmitter(), {
+      attachTerminal: (sessionId: string) => (sessionId === 'agent-pane' ? null : 'replay'),
+      detachTerminal: (sessionId: string) => { detached.push(sessionId) },
+      detachAgentPty: vi.fn(),
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    const sender = Object.assign(new EventEmitter(), { id })
+    return {
+      detached,
+      sender,
+      attach: (sessionId: string, document: string) => harness.handlers.get('session:terminal-attach')!({ sender }, sessionId, document),
+      detach: (sessionId: string, document: string) => harness.handlers.get('session:terminal-detach')!({ sender }, sessionId, document),
+      announce: (document: string) => harness.handlers.get('session:screen-document')!({ sender }, document),
+    }
+  }
+
+  it('releases a page\'s terminal views when it reloads or dies, and ignores its late detach', () => {
+    const page = register(6161)
+    page.announce('doc-1')
+    expect(page.attach('shell', 'doc-1')).toBe('replay')
+    // Not a terminal: main took no reference, so the reload releases none.
+    expect(page.attach('agent-pane', 'doc-1')).toBe('')
+    page.announce('doc-2')
+    expect(page.detached).toEqual(['shell'])
+    // The dead page's queued detach must not take the new page's reference.
+    page.attach('shell', 'doc-2')
+    page.detach('shell', 'doc-1')
+    expect(page.detached).toEqual(['shell'])
+    page.sender.emit('destroyed')
+    expect(page.detached).toEqual(['shell', 'shell'])
+  })
+
+  it('passes a leaf\'s detach through once per attach, and a stale page gets the replay without a reference', () => {
+    const page = register(6262)
+    page.announce('doc')
+    page.attach('shell', 'doc')
+    page.detach('shell', 'doc')
+    page.detach('shell', 'doc')
+    expect(page.detached).toEqual(['shell'])
+    // A page that already reloaded away takes nothing that could leak.
+    expect(page.attach('shell', 'old-doc')).toBe('')
+    page.sender.emit('destroyed')
+    expect(page.detached).toEqual(['shell'])
+  })
+})
 
 // #1267 (steering q22 at the source): session:spawn relayed the raw provider
 // exception over IPC, where every renderer surface had to remember not to
