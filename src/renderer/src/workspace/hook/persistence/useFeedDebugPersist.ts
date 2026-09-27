@@ -95,8 +95,16 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
   // still wrote one last batch to disk).
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
+  // The release bookkeeping (see releaseGone) lives in a ref, not in the
+  // effect: the effect re-runs whenever persistence is switched on or off,
+  // and a set recreated there forgot every id it was tracking, so a pane
+  // closed across a persistence toggle was never released (#1392 review c).
+  const releaseStateRef = useRef({
+    known: new Set<SessionId>(),
+    releasing: new Set<SessionId>(),
+    seenSinceRelease: new Set<SessionId>(),
+  })
   useEffect(() => {
-    if (!enabled) return
     const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
       if (runtime.feedDebugLog.length === 0) return
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
@@ -158,10 +166,66 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
         })
     }
 
+    // Sessions this hook has seen a runtime for. A session whose runtime is
+    // gone (pane closed, or replaced by a new id) can never append again, so
+    // it is released here: its flush cursors, and main's per-session state
+    // (#1392). Main's own forget runs at PROCESS exit, but the pane outlives
+    // the process (exit rows, a same-id wake) and its later appends
+    // re-created that state with nothing left to forget it.
+    //
+    // Entries not yet flushed when the runtime was removed are lost, as they
+    // were before: this changes only what is forgotten, not what is written.
+    //
+    // An id leaves `known` only once main has ACKNOWLEDGED the release: a
+    // failed IPC is retried on the next tick (#1392 review a, round 3), or
+    // main would keep that session's state until the process exits.
+    // `releasing` stops a slow acknowledgement from sending it twice.
+    //
+    // A release covers only the lifetime it was SENT for (#1392 review b,
+    // round 4): if the id reappears (and appends, re-creating main's state)
+    // while an acknowledgement is still in flight, that late ACK must not
+    // retire the later lifetime. `seenSinceRelease` records a reappearance;
+    // the ACK then leaves the id in `known`, and the next absence sends a new
+    // release.
+    //
+    // Releasing keeps running while persistence is OFF (#767): a session that
+    // appended while persistence was on still has state in main after the
+    // user switches persistence off (#1392 review c). The release then tells
+    // main not to persist unmarked drops, so it causes no disk write either
+    // (review c, round 2).
+    //
+    // Known residual: a release that fails during the hook's own teardown
+    // (workspace unmount) has no later tick to retry it. Main keeps that one
+    // session's few numbers until it exits.
+    const { known, releasing, seenSinceRelease } = releaseStateRef.current
+    const releaseGone = (): void => {
+      const runtimes = refs.latestRuntimesRef.current
+      for (const sessionId of known) {
+        if (runtimes[sessionId] || releasing.has(sessionId)) continue
+        delete refs.persistedFeedDebugIdRef.current[sessionId]
+        delete refs.inFlightFeedDebugIdRef.current[sessionId]
+        releasing.add(sessionId)
+        seenSinceRelease.delete(sessionId)
+        // Promise.resolve().then: a synchronous throw (a test double without
+        // the method) becomes a rejection, retried like any failed release,
+        // instead of escaping the interval with `releasing` held.
+        void Promise.resolve()
+          // Off means no disk writes, including main's final drop marker
+          // (#1392 review c, round 2); read at send time, not effect time.
+          .then(() => window.api.forgetFeedDebugLog({ sessionId, persistUnmarkedDrops: enabledRef.current }))
+          .then(() => { if (!seenSinceRelease.has(sessionId)) known.delete(sessionId) }, () => {})
+          .finally(() => releasing.delete(sessionId))
+      }
+    }
+
     const flush = (): void => {
       for (const [sessionId, runtime] of Object.entries(refs.latestRuntimesRef.current)) {
-        flushSession(sessionId, runtime)
+        known.add(sessionId)
+        if (releasing.has(sessionId)) seenSinceRelease.add(sessionId)
+        // Disk writes only while persistence is on; releases always.
+        if (enabled) flushSession(sessionId, runtime)
       }
+      releaseGone()
     }
 
     // WHY an interval independent of runtimes: busy agents replace that map
@@ -179,6 +243,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       // Not when persistence was just switched off: the user asked for no
       // more disk writes.
       if (enabledRef.current) flush()
+      else releaseGone()
     }
   }, [
     enabled,

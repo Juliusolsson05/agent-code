@@ -137,6 +137,16 @@ export function usePasteToFocus({
       // synchronously: no await, so no delay, no reorder race, and no
       // chance of an async failure swallowing the text.
       if (!clipboardHasImageCandidate(e.clipboardData)) {
+        // An EMPTY event (no text, no HTML, no items) is the one shape whose
+        // image only the async clipboard API can show (claudeImages.ts). It
+        // goes to the shared handler, which probes it (Claude attaches it;
+        // other composers say it cannot be sent, #1426 verification a).
+        // Ordinary text never takes this branch, so it is never delayed.
+        const data = e.clipboardData
+        if (!text && data && !data.getData('text/html') && data.items.length === 0) {
+          void handlePaste(e)
+          return
+        }
         appendText(text)
         return
       }

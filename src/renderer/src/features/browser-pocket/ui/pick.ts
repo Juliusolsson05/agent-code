@@ -1,4 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { formatElementChip, insertAtCaret } from '@shared/browserPocket/elementChip'
 import type { PocketPickOutcome } from '@shared/browserPocket/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
@@ -45,7 +46,15 @@ export async function pickIntoComposer(pocketId: string, sessionId: SessionId, w
   const chip = formatElementChip(result)
   const composer = document.querySelector<HTMLTextAreaElement>(`[data-composer-input="${CSS.escape(sessionId)}"]`)
   if (!composer) {
-    await navigator.clipboard.writeText(chip).catch(() => {})
+    // WHY the write is checked (#1421 review b): a refused write was
+    // swallowed and "Element copied" shown anyway, so the user pasted
+    // whatever the clipboard held before.
+    try {
+      await navigator.clipboard.writeText(chip)
+    } catch {
+      showToast(CLIPBOARD_WRITE_FAILED)
+      return
+    }
     showToast('Element copied — paste it into the agent')
     return
   }

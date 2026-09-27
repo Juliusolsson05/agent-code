@@ -655,7 +655,18 @@ async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
   return manual
 }
 
-async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
+/**
+ * A proxy run is a directory holding the live events file OR only its rotated generation.
+ *
+ * WHY `.1` too (review of #1376, a): claude-code-headless#64 renames the live file to
+ * `proxy-events.1.jsonl` before creating the next one. If that creation fails, or the addon dies in
+ * between, the run holds only `.1`; matching the live name alone made such a run invisible to
+ * TTL, cap and budget alike, so stranded runs could accumulate. The bundle reader already treats
+ * `.1` as a run (proxyEventsReader.ts).
+ */
+const PROXY_RUN_MARKERS = new Set(['proxy-events.jsonl', 'proxy-events.1.jsonl'])
+
+export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
   const out: Artifact[] = []
   async function walk(dir: string, depth: number): Promise<void> {
     let entries
@@ -664,7 +675,7 @@ async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
     } catch {
       return
     }
-    if (entries.some(entry => entry.isFile() && entry.name === 'proxy-events.jsonl')) {
+    if (entries.some(entry => entry.isFile() && PROXY_RUN_MARKERS.has(entry.name))) {
       const artifact = await collectDirArtifact(dir, 'proxy')
       if (artifact) out.push(artifact)
       return
