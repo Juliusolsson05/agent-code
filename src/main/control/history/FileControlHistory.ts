@@ -209,7 +209,27 @@ export class FileControlHistory implements ControlHistory {
     // original rows with the sequences the unchanged file still has.
     const renumbered = kept.map((event, index) => ({ ...event, sequence: index + 1 }))
     if (expired.size > 0) {
-      await this.writeAtomic(join(this.directory, JOURNAL), renumbered.map(event => `${JSON.stringify(event)}\n`).join(''))
+      // WHY the rename is tracked (#1330 verification b; Blocker): the rows on
+      // disk change at the RENAME, not when `writeAtomic` resolves. Its
+      // directory sync comes after, and when that failed (EIO) the whole
+      // prune rejected, so open() served the pre-rewrite rows over a journal
+      // that no longer had them: the next append numbered itself from the
+      // longer list and the gap got the journal quarantined. Once the rename
+      // landed, the renumbered rows are served whatever fails next.
+      //
+      // An unsynced directory entry can still be undone by a power loss,
+      // bringing the OLD journal back. Its extra rows name the expired calls'
+      // payloads, so GC is skipped for this launch (`unsynced`): the old
+      // journal must never come back naming deleted files. The orphans are
+      // collected by the next launch whose rewrite syncs.
+      const renamed = { landed: false }
+      try {
+        await this.writeAtomic(join(this.directory, JOURNAL), renumbered.map(event => `${JSON.stringify(event)}\n`).join(''), renamed)
+      } catch (error) {
+        if (!renamed.landed) throw error
+        console.warn('[control-history] retention rewrite landed, but syncing its directory failed:', (error as NodeJS.ErrnoException).code ?? 'error')
+        return renumbered
+      }
     }
     // Payload GC runs only AFTER the rewrite is durable (a failed rewrite
     // throws above, so GC never runs; see open()): a crash in between leaves
@@ -481,12 +501,14 @@ export class FileControlHistory implements ControlHistory {
     try { await file.sync() } finally { await file.close() }
   }
 
-  private async writeAtomic(path: string, text: string): Promise<void> {
+  private async writeAtomic(path: string, text: string, renamed?: { landed: boolean }): Promise<void> {
     const temporary = `${path}.${randomUUID()}.tmp`
     try {
       const file = await open(temporary, 'wx', 0o600)
       try { await file.writeFile(text); await file.sync() } finally { await file.close() }
       await rename(temporary, path)
+      // From here the new contents ARE the file; see the retention rewrite.
+      if (renamed) renamed.landed = true
       await this.syncDirectory(this.directory)
     } finally { await rm(temporary, { force: true }) }
   }

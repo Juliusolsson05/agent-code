@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, appendFile, writeFile, rm, stat, chmod, acc
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { createControlExecutor, createControlRegistry } from '../../../control-sdk/host'
 import { defineCapability, type ControlHistory, type ControlResult } from '@control-sdk'
@@ -746,6 +746,39 @@ describe('control history retention (#1274)', () => {
     expect(reports).toEqual([])
   })
 
+  // #1330 verification b (Blocker): the same divergence through the rewrite's
+  // directory sync, which runs AFTER the rename. It failed with EIO, the
+  // prune rejected, and open() served the six pre-rewrite rows over a
+  // three-row file; the next append wrote sequence 7 and the next launch
+  // quarantined the journal.
+  it('serves the rewritten rows when syncing the directory fails after the rename', async () => {
+    const { directory } = await setup()
+    const old = await call(directory, { at: OLD, result: settled() })
+    const recent = await call(directory, { at: RETENTION_NOW.toISOString(), result: settled() })
+    await journal(directory, [old, recent])
+    const sync = vi.spyOn(FileControlHistory.prototype as unknown as { syncDirectory: () => Promise<void> }, 'syncDirectory')
+      .mockRejectedValueOnce(Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const history = open(directory)
+      const events = await history.events()
+      expect(new Set(events.map(event => event.callId))).toEqual(new Set([recent.callId]))
+      // GC is skipped while the rewrite is unsynced: a power loss could bring
+      // back the old journal, which names the expired call's payloads.
+      for (const row of old.rows) await expect(access(join(directory, 'payloads', `${row.payload}.json`))).resolves.toBeUndefined()
+      const onDisk = (await readFile(join(directory, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean)
+      expect(events).toHaveLength(onDisk.length)
+      const appended = await history.append({ callId: 'next', instanceId: 'recorded', capabilityId: 'agents.read', caller: 'external:agent-code-control', kind: 'received', at: RETENTION_NOW.toISOString() })
+      expect(appended.sequence).toBe(recent.rows.length + 1)
+      const reports: unknown[] = []
+      await open(directory, () => reports.push(1)).events()
+      expect(reports).toEqual([])
+    } finally {
+      sync.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
   // #1330 round 2 (a, b, c): a torn tail blocks no keyed call, so it has no
   // guard, but its torn line can be the only row naming a result payload
   // fsynced before the append tore. Kept until the operator accepts it.
@@ -764,6 +797,24 @@ describe('control history retention (#1274)', () => {
     await writeFile(join(directory, 'recovery-accepted.json'), JSON.stringify({ accepted: [reports[0]!.sha256] }))
     await open(directory).events()
     await expect(open(directory).payload(unknownResult)).rejects.toThrow()
+  })
+
+  // #1330 verification b (survivor): the torn call above is kept for having
+  // no result, so nothing was expired and GC never had to honour the
+  // quarantine's digests. Here another old settled call IS pruned in the same
+  // launch, so GC runs, and the digest only the torn line names must survive.
+  it('keeps a quarantine-only payload while pruning another call in the same launch', async () => {
+    const { directory } = await setup()
+    const torn = await call(directory, { at: OLD })
+    const unknownResult = await writePayload(directory, JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'lost', outcome: 'unknown' }, operation: { callId: torn.callId, instanceId: 'recorded', status: 'outcome_unknown' } }))
+    await journal(directory, [torn])
+    await appendFile(join(directory, 'events.jsonl'), JSON.stringify({ sequence: 3, at: OLD, instanceId: 'recorded', callId: torn.callId, kind: 'result', capabilityId: 'agents.resume', caller: 'external:agent-code-control', payload: unknownResult }).slice(0, -2))
+    await open(directory).events()
+    // A clean journal now, plus an old settled call that retention expires.
+    const expiring = await call(directory, { at: OLD, result: settled() })
+    await journal(directory, [torn, expiring])
+    expect(await kept(directory, [torn.callId, expiring.callId])).toEqual([true, false])
+    expect(await open(directory).payload(unknownResult)).toMatchObject({ error: { outcome: 'unknown' } })
   })
 
   // #1330 round 2 (a, b, c): a task origin is recognised by what its step

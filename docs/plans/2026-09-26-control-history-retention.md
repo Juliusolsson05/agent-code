@@ -63,3 +63,10 @@ Tests: 3 new cases (red on `65175615`). They also kill round 2's surviving mutat
 - Both `history.read` / `history.list` descriptions now say 90 days.
 - **Tests:** the recorded-store retention cases move "now" 83 days later, the amount the window grew. Every recorded call keeps its position relative to the edge, so the same rows are pruned and kept.
 - **Cost:** on the owner's store today, 30 days already kept everything, so the 90-day window deletes nothing yet. At ~5 MB of payloads a day, steady state is up to ~450 MB. What stays bounded is long-run growth of a journal held whole in memory.
+
+## Verification (b: FIX-BEFORE-MERGE; c: MERGE-READY)
+- **b (Blocker): the same served/disk divergence through the rewrite's directory sync**, which runs after the rename. EIO there rejected the prune, and open() served the pre-rewrite rows.
+  - **Ruling:** the rows on disk change at the rename. `writeAtomic` reports when the rename landed. A failure after that point serves the renumbered rows, with a warning, and skips payload GC for this launch.
+  - **Why skip GC:** a power loss could undo the unsynced directory entry and bring back the old journal, which names the expired calls' payloads. The orphans are collected by the next launch.
+  - Test: EIO injected at the directory sync after the rename. The served rows match the file, the expired call's payloads remain, the next append continues the file, and the next launch reports no recovery. The test fails on the previous head.
+- **b (survivor): the GC's quarantine digests were unpinned alongside a real prune.** Test: a torn-tail quarantine, then another old settled call pruned in the same launch; the quarantine-only payload survives. The test fails with the digests removed from GC's `referenced` set.
