@@ -8,6 +8,9 @@ const operationThresholds: Partial<Record<MonitorOperationName, number>> = {
   'transcript.read': 1000, 'transcript.parse': 100, 'transcript.fold': 100,
   'transcript.commit': 100, 'terminal.write': 250, 'persistence.serialize': 100,
   'persistence.write': 2000, 'worktree.refresh': 5000,
+  // One file's synchronous extraction, a search's prompt gathering (many
+  // rows, mostly I/O-bound), and a full discovery pass (#769).
+  'conversations.extract': 250, 'conversations.search': 1000, 'conversations.discover': 2000,
 }
 // Each capture retains at most 160 evidence points. Eight simultaneous scopes
 // bound post-trigger memory to ~1.3k points even during an app-wide storm,

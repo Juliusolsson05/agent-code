@@ -6,6 +6,7 @@ import { ClaudeConversationSource } from './sources/claude.js'
 import { CodexConversationSource } from './sources/codex.js'
 import { OpencodeConversationSource } from './sources/opencode.js'
 import { ConversationService } from './service.js'
+import { setMainOperationSink } from '@main/performance/operations.js'
 import { corpusWorktreesPorcelain, installConversationCorpus, type InstalledCorpus } from '../../../testing/support/conversations/installCorpus.js'
 
 // One corpus install per file: the install copies 450 files and costs more
@@ -66,5 +67,26 @@ describe('ConversationService', () => {
     const second = await s.list({ cwd: '/fixture/repo', scope: 'repository', limit: 20 })
     expect(second.rows.map(r => r.nativeId)).toEqual(first.rows.map(r => r.nativeId))
     expect(s.discoveriesForTests()).toBe(1)
+  })
+
+  // #769 (measure first): the catalog's discovery, search and per-file prompt
+  // extraction had no monitor boundary, so nothing could tell whether they
+  // are what stalls main. Driven on the recorded corpus.
+  it('records discovery, search and prompt extraction as monitor operations', async () => {
+    const operations: Array<{ name: string; outcome: string }> = []
+    setMainOperationSink(record => { operations.push(record) })
+    try {
+      const s = service()
+      const all = await s.list({ cwd: '/fixture/repo', scope: 'repository', includeChildren: true, limit: 5000 })
+      const codex = all.rows.find(r => r.provider === 'codex' && r.cwd)!
+      await s.prompts({ provider: 'codex', nativeId: codex.nativeId, cwd: codex.cwd! })
+      await s.list({ cwd: '/fixture/repo', scope: 'repository', query: 'the', limit: 50 })
+    } finally {
+      setMainOperationSink(() => {})
+    }
+    const names = new Set(operations.map(op => op.name))
+    expect(names).toContain('conversations.discover')
+    expect(names).toContain('conversations.search')
+    expect(names).toContain('conversations.extract')
   })
 })

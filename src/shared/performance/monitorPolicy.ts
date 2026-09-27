@@ -49,6 +49,13 @@ export const MONITOR_OPERATIONS = [
   'transcript.commit',
   'terminal.write',
   'worktree.refresh',
+  // The conversations catalog (#769, measure first): its prompt extraction
+  // parses windows of up to 16 MiB synchronously on main, and search can run
+  // it for 150 rows, yet it had no monitor boundary at all, so nothing could
+  // say whether it is what stalls main.
+  'conversations.discover',
+  'conversations.extract',
+  'conversations.search',
   'persistence.serialize',
   'persistence.write',
   'orchestration.queue',

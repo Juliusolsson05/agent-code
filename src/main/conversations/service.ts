@@ -118,6 +118,21 @@ export class ConversationService {
   }
 
   private async promptTextsFor(rows: readonly Conversation[]): Promise<Map<string, string[]>> {
+    // Search's prompt gathering is the catalog's widest synchronous parse
+    // (up to SEARCH_PROMPT_ROWS rows of extraction on main), so it is a
+    // monitor boundary of its own (#769).
+    const span = performanceService.span('conversations.search', { rows: rows.length })
+    try {
+      const out = await this.gatherPromptTexts(rows)
+      span.end({ rows: out.size })
+      return out
+    } catch (error) {
+      span.fail(error)
+      throw error
+    }
+  }
+
+  private async gatherPromptTexts(rows: readonly Conversation[]): Promise<Map<string, string[]>> {
     const out = new Map<string, string[]>()
     const candidates = [...rows].sort((a, b) => b.lastUserActivityAt - a.lastUserActivityAt).slice(0, SEARCH_PROMPT_ROWS)
     await Promise.all(candidates.map(async row => {

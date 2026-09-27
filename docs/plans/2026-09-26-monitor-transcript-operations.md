@@ -14,9 +14,8 @@
   - `conversations.extract`: the existing `sessionIndex.extractPrompts` span.
   - `conversations.search`: a new span around search's prompt gathering.
 - **Slow-operation thresholds:** extract 250 ms (one file's synchronous parse), search 1000 ms, discover 2000 ms. Picked like the existing ones: a user-visible delay, not a precise budget.
-- **Discovery failure closes its span.** Today a failed discovery leaves its span open until the 10-minute sweep records a `timeout`.
 - **No worker yet.** Moving work to a worker waits until the data says which path stalls main.
 
 ## Tests
 - **History loader:** one initial load through `loadInitialHistoryChunk` records exactly one `transcript.read` (red on main: two).
-- **Catalog:** a search with a query records `conversations.search`, and an extract records `conversations.extract`; a failed discovery records an `error` outcome.
+- **Catalog:** a search with a query records `conversations.search`, and an extract records `conversations.extract`, driven on the recorded conversations corpus.
