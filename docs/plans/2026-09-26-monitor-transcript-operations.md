@@ -19,3 +19,14 @@
 ## Tests
 - **History loader:** one initial load through `loadInitialHistoryChunk` records exactly one `transcript.read` (red on main: two).
 - **Catalog:** a search with a query records `conversations.search`, and an extract records `conversations.extract`, driven on the recorded conversations corpus.
+
+## Round 1 review decisions (#1352)
+- **a1: a discovery that rejects left its span open.** It became a `timeout` sample at the sweep. The earlier call that discovery "cannot fail" was wrong: family resolution rejects a malformed cwd. The span now closes with `fail(error)`. Test added; red before.
+- **a2: the vocabulary outgrew the histogram cap.** 26 operations × 4 outcomes is 104 pairs, but the aggregator, the snapshot parser and the history store each hard-coded 100. One derived constant, `MAX_MONITOR_OPERATION_PAIRS`, now serves all three. Test: every legal pair is stored and the snapshot parses. Red before.
+- **a3, b1, c2: no test pinned the three new thresholds.** Each now gets a sample just above (a named slow-operation incident) and just below (none).
+- **c1: discovery's 2000 ms threshold sat above main-stall's 1000 ms band.** A 1.5 s discovery stall raised no named incident, so discovery and search are now both 1000 ms.
+- **b2: the extraction assertion ignored whether prompts came back.** It now requires at least one prompt.
+- **c3: the load-time test counted samples but not which span.** With the resolver taking 80 ms, the single sample must be shorter than that, so it timed the read, not the lookup. Mapping the lookup span instead fails it.
+- **Declined:**
+  - b3 and c5, the corpus-install `beforeAll` timing out under heavy load: the hook predates this PR and CI runs it. Timeouts are never widened.
+  - c4, a 60 s cooldown slot per scope shared by all main-scope slow operations: pre-existing semantics, outside this PR.

@@ -1,3 +1,4 @@
+import { MAX_MONITOR_OPERATION_PAIRS } from './monitorPolicy.js'
 import { parseIncidentSummary } from './parseMonitorIncident.js'
 import { parseMonitorHistoryStatus } from './parseMonitorHistory.js'
 import { parseMonitorRendererRecord } from './monitorContracts.js'
@@ -25,7 +26,7 @@ export function parseMonitorSnapshot(value: unknown): MonitorWorkerSnapshot | nu
     || !finite(value.sampledAt) || !finite(value.workerRss)
     || !Array.isArray(value.windows) || value.windows.length > 64
     || !Array.isArray(value.recent) || value.recent.length > 120
-    || !Array.isArray(value.operations) || value.operations.length > 100) return null
+    || !Array.isArray(value.operations) || value.operations.length > MAX_MONITOR_OPERATION_PAIRS) return null
   const incidents = value.incidents === undefined ? [] : Array.isArray(value.incidents) && value.incidents.length <= 50 ? value.incidents.map(parseIncidentSummary) : null
   const history = value.history === undefined ? undefined : parseMonitorHistoryStatus(value.history)
   if (!incidents || incidents.some(row => !row) || (value.history !== undefined && !history)) return null

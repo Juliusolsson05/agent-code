@@ -99,6 +99,14 @@ export class ConversationService {
         this.discoveries++
         span.end({ rows: discovery.sources.length })
         return discovery
+      } catch (error) {
+        // #1352 review a: family resolution can reject (a malformed cwd from a
+        // future caller; IPC validates it first today). Left open, the span
+        // became a `timeout` sample at the ten-minute sweep and could raise a
+        // slow-operation incident blaming discovery for a stall it never
+        // caused. Close it as the error it is.
+        span.fail(error)
+        throw error
       } finally {
         // Only one flight per key can exist (identical keys coalesce above),
         // so clearing by key is clearing this flight.

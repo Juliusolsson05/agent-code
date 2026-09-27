@@ -79,7 +79,8 @@ describe('ConversationService', () => {
       const s = service()
       const all = await s.list({ cwd: '/fixture/repo', scope: 'repository', includeChildren: true, limit: 5000 })
       const codex = all.rows.find(r => r.provider === 'codex' && r.cwd)!
-      await s.prompts({ provider: 'codex', nativeId: codex.nativeId, cwd: codex.cwd! })
+      // #1352 review b: the extraction measured must be a real one.
+      expect((await s.prompts({ provider: 'codex', nativeId: codex.nativeId, cwd: codex.cwd! })).length).toBeGreaterThan(0)
       await s.list({ cwd: '/fixture/repo', scope: 'repository', query: 'the', limit: 50 })
     } finally {
       setMainOperationSink(() => {})
@@ -89,4 +90,22 @@ describe('ConversationService', () => {
     expect(names).toContain('conversations.search')
     expect(names).toContain('conversations.extract')
   })
+
+  // #1352 review a: a discovery that rejects closes its span as an error,
+  // instead of leaving it pending until the sweep reports a timeout.
+  it('closes a failed discovery as an error, not a pending span', async () => {
+    const { mainOperations } = await import('@main/performance/operations.js')
+    const operations: Array<{ name: string; outcome: string }> = []
+    setMainOperationSink(record => { operations.push(record) })
+    const pendingBefore = mainOperations.size
+    try {
+      const failing = new ConversationService({ sources: [], ledger: null, listWorktrees: async () => [], claudeHistory: null })
+      await expect(failing.list({ cwd: null, scope: 'repository', limit: 1 } as never)).rejects.toThrow()
+    } finally {
+      setMainOperationSink(() => {})
+    }
+    expect(operations.filter(op => op.name === 'conversations.discover').map(op => op.outcome)).toEqual(['error'])
+    expect(mainOperations.size).toBe(pendingBefore)
+  })
 })
+
