@@ -7,7 +7,6 @@ import { mainOperations } from '@main/performance/operations.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
 import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
-import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { BrowserPocketController, type GuestLike } from '@main/browserPocket/controller/BrowserPocketController.js'
 import { LanePortWatcher } from '@main/browserPocket/LanePortWatcher.js'
@@ -123,6 +122,8 @@ import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
+import { tldrIdentitiesInUse } from '@main/tldr/identitiesInUse.js'
+import { createReportingStores } from '@main/tldr/reportingStores.js'
 import { getUsageSnapshot } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
@@ -287,6 +288,9 @@ const vaultService = new VaultService({
 let manager: SessionManager | null = null
 let remoteController: RemoteController | null = null
 let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
+// The TLDR/Goal stores are built before the workspace file opens; they read
+// the persisted windows through this once it has (see identitiesInUse).
+let reportingWorkspaceWindows: (() => readonly PersistedWindow[]) | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 // The running-app tmux reaper's timer handle, so quit can stop it (#1030).
 let detachedTmuxSweep: DetachedSweepSchedule | null = null
@@ -1216,8 +1220,13 @@ async function startApp(): Promise<void> {
   })
   await externalSettings.initialize()
   assertStartupOpen()
-  const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'))
-  const goalStore = new TldrStore(join(STATE_DIR, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal' })
+  // Which identities the stores may never evict at their cap (#1277 review):
+  // see tldrIdentitiesInUse. Read lazily, only when a new identity arrives at
+  // the cap. Until the workspace file has opened the answer is unknown, and a
+  // store at its cap then refuses new identities for those startup seconds
+  // instead of guessing (steering q40).
+  const identitiesInUse = () => tldrIdentitiesInUse(reportingWorkspaceWindows?.() ?? null)
+  const { tldrStore, goalStore } = createReportingStores(STATE_DIR, identitiesInUse)
   const tldrEnforcement = new TldrEnforcement(tldrStore, undefined, goalStore)
   // Before any session can register: the sweep removes every entry, and each
   // one left by an earlier run holds a bearer that run's host already revoked.
@@ -1391,6 +1400,7 @@ async function startApp(): Promise<void> {
   // renderer, which requires a window.
   const workspaceFileStore = await WorkspaceFileStore.open()
   shutdownWorkspaceStore = workspaceFileStore
+  reportingWorkspaceWindows = () => workspaceFileStore.windows()
   assertStartupOpen()
   // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
   // projection of every window's sessions keyed by native id, so the picker
