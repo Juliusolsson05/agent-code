@@ -351,6 +351,49 @@ describe('a write whose status refresh cannot be saved (#1285)', () => {
     expect(await readFile(statePath, 'utf8')).not.toContain('storageWarning')
   })
 
+  it('keeps reporting an unsaved status when the copy succeeds but the state write fails', async () => {
+    // #1416 verification b: copy blocked, then unblocked, then the state file
+    // itself cannot be written (its path became a directory). copyBlocked is
+    // false by then, so `get` must still report the unsaved status until a
+    // state save really succeeds.
+    const recorded = JSON.parse(await readFile(join(import.meta.dirname,
+      '../../../testing/fixtures/ai-workspace/real-workspaces-2026-09-25.json'), 'utf8')) as {
+      state: { workspaces: Array<Record<string, any>> }
+    }
+    const state = recorded.state
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-ai-workspace-statewrite-'))
+    tempRoots.push(root)
+    const filePath = join(root, 'attached.txt')
+    await writeFile(filePath, 'v1')
+    state.workspaces[0]!.entries[0]!.path = filePath
+    state.workspaces[0]!.entries[0]!.projectRoot = root
+    state.workspaces[1]!.updatedAt = 1789000000
+    const statePath = join(root, 'ai-workspaces.json')
+    const source = JSON.stringify(state)
+    await writeFile(statePath, source)
+    const { createHash } = await import('node:crypto')
+    const { mkdir } = await import('fs/promises')
+    const copyPath = join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`)
+    await mkdir(copyPath)
+    const registry = new AiWorkspaceRegistry(statePath)
+    const workspaceId = state.workspaces[0]!.workspaceId as string
+    expect((await registry.get(workspaceId))?.storageWarning).toBe(AI_WORKSPACE_STORAGE_BLOCKED)
+
+    await rm(copyPath, { recursive: true })
+    await rm(statePath)
+    await mkdir(statePath)
+    const target = await realpath(filePath)
+    const result = await registry.writeFile({ path: target, text: 'v2' })
+    expect(result).toMatchObject({ ok: true, warning: AI_WORKSPACE_STATUS_NOT_SAVED })
+    expect(await readFile(copyPath, 'utf8')).toBe(source)
+    expect((await registry.get(workspaceId))?.storageWarning).toBe(AI_WORKSPACE_STATUS_NOT_SAVED)
+
+    // Once the state file can be written again, a save clears it.
+    await rm(statePath, { recursive: true })
+    await registry.create({ name: 'Now' })
+    expect((await registry.get(workspaceId))?.storageWarning).toBeUndefined()
+  })
+
   it('gives no warning on an ordinary write, and a throwing listener does not fail it', async () => {
     // #1416 review a: a throwing `changed` listener (the production one
     // broadcasts to every window) turned a landed write into `ok: false`,

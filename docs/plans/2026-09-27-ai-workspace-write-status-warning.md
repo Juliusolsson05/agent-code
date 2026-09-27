@@ -42,3 +42,7 @@ Test-strength notes, not defects:
 - The emit on the warning path and the fan-out are now pinned. The two-workspace listener test landed in `d8f1eae6`.
 - Four of the six advice branches (EACCES/EPERM, EROFS, ENOSPC, generic) have no test. They are not reachable portably from a unit test without mocking the filesystem module.
 - The quoted refusal sentence in this plan and the body is corrected to the code's wording, and a test title is fixed.
+
+## Verification b
+- **The owed copy succeeded, then the state write failed.** `copyBlocked` was already false, so `get` reported nothing, and the editor's next load cleared the notice although the status was unsaved. The registry now also tracks `lastSaveFailed`, set by any failed save step and cleared by a successful save. `get` reports `AI_WORKSPACE_STORAGE_BLOCKED` while the copy is blocked, else `AI_WORKSPACE_STATUS_NOT_SAVED` while the last save failed.
+- **Test:** the reviewer's exact sequence on the real recorded state (blocked copy, unblocked, the state path turned into a directory, write, `get`, then a successful save clears it). Red on `2bb9d19c`.

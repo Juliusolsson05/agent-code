@@ -180,6 +180,12 @@ export class AiWorkspaceRegistry extends EventEmitter {
   // written. `get` reports it (see AI_WORKSPACE_STORAGE_BLOCKED): a save is
   // refused exactly while a copy is owed and cannot be made.
   private copyBlocked = false
+  // True after the last state save failed, whatever step failed; false after
+  // one succeeds. WHY in addition to copyBlocked (#1416 verification b): the
+  // owed copy can SUCCEED and the state write then fail. copyBlocked is then
+  // already false, so `get` reported nothing and the editor's next load
+  // cleared the notice although the status was still unsaved.
+  private lastSaveFailed = false
   private saveQueue: Promise<void> = Promise.resolve()
   private readonly knownFilePaths = new Set<string>()
   private readonly gitContextCache = new Map<
@@ -278,7 +284,10 @@ export class AiWorkspaceRegistry extends EventEmitter {
     if (!workspace) return null
     const record = await this.refreshWorkspace(workspaceId)
     // A copy, so the runtime-only field never reaches the persisted record.
-    return this.owedCopy && this.copyBlocked ? { ...record, storageWarning: AI_WORKSPACE_STORAGE_BLOCKED } : record
+    const storageWarning = this.owedCopy && this.copyBlocked
+      ? AI_WORKSPACE_STORAGE_BLOCKED
+      : this.lastSaveFailed ? AI_WORKSPACE_STATUS_NOT_SAVED : undefined
+    return storageWarning ? { ...record, storageWarning } : record
   }
 
   async attachFile(params: AiWorkspaceAttachFileParams): Promise<AiWorkspaceFileEntry> {
@@ -686,8 +695,14 @@ export class AiWorkspaceRegistry extends EventEmitter {
 
   private async save(): Promise<void> {
     const next = this.saveQueue.then(async () => {
-      await this.preserveOwedCopy()
-      await this.writeStateFile()
+      try {
+        await this.preserveOwedCopy()
+        await this.writeStateFile()
+        this.lastSaveFailed = false
+      } catch (err) {
+        this.lastSaveFailed = true
+        throw err
+      }
     })
     this.saveQueue = next.catch(() => undefined)
     await next
