@@ -15,4 +15,9 @@ export const orchestrationApi = {
   resolveOrchestrationRequest: (
     response: OrchestrationRendererResponse,
   ): Promise<boolean> => ipcRenderer.invoke('orchestration:response', response),
+
+  // #1283 item 1: the parent pane `from` now runs as `to`; main's tombstones
+  // of its MCP-closed children follow (see OrchestrationBridge.carryParent).
+  carryOrchestrationParent: (from: string, to: string): Promise<void> =>
+    ipcRenderer.invoke('orchestration:carry-parent', { from, to }),
 }

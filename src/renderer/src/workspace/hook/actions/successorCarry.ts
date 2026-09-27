@@ -32,6 +32,35 @@ export function carryWorkflowRuns(idMap: ReadonlyMap<string, string>): void {
   }
 }
 
+/**
+ * Tell main that each replaced pane's MCP-closed orchestration children now
+ * belong to its successor (#1283 item 1), so the successor still lists, reads
+ * and collects them.
+ *
+ * WHY every site that remaps live children, newConversation included, unlike
+ * carryWorkflowRuns: runs follow the CONVERSATION, but orchestration pointers
+ * follow the PANE (remapSessionsRelationships rewrites every live child's
+ * orchestrationParentId/RootId on every committed swap). Main's tombstones
+ * are the closed half of the same relationship, so they take the same rule.
+ *
+ * WHY not rehydrate: local session ids are stable across a renderer reload
+ * (rehydrate.ts: remapping them duplicated live backends), and a full restart
+ * starts main with no tombstones. There is nothing to carry.
+ *
+ * Fire-and-forget: a failed carry leaves the tombstones under the old id (the
+ * pre-fix behaviour) and never blocks the swap.
+ */
+export function carryOrchestrationParents(idMap: ReadonlyMap<string, string>): void {
+  const carry = window.api?.carryOrchestrationParent
+  if (!carry) return
+  for (const [oldId, newId] of idMap) {
+    if (oldId === newId) continue
+    void carry(oldId, newId).catch(error => {
+      console.warn('[orchestration] carry to the replacement session failed:', error)
+    })
+  }
+}
+
 /** End the loop of each replaced pane that did NOT get it carried (#1287
  *  review A2): its old id is gone from the workspace, so no pane could ever
  *  resume or stop it, and a successor without goal_loop could not complete

@@ -28,9 +28,10 @@ function mount(entry: unknown, makeSpawn: (writer: Writer) => ReturnType<typeof 
   for (const below of older) refs.undoStackRef.current.push(below as never)
   refs.undoStackRef.current.push(entry as never)
   const carryWorkflowRuns = vi.fn(async (_from: string, _to: string) => undefined)
+  const carryOrchestrationParent = vi.fn(async (_from: string, _to: string) => undefined)
   const carryGoalLoop = vi.fn(async (_from: string, _to: string) => null)
   const controlGoalLoop = vi.fn(async (_request: { sessionId: string; action: string }) => null)
-  window.api = { ...originalApi, carryWorkflowRuns, carryGoalLoop, controlGoalLoop, killOwnedSession: vi.fn(async () => true) }
+  window.api = { ...originalApi, carryWorkflowRuns, carryOrchestrationParent, carryGoalLoop, controlGoalLoop, killOwnedSession: vi.fn(async () => true) }
   const spawn = makeSpawn(writer)
   let actions!: ReturnType<typeof useUndoCloseAction>
   function Harness(): React.JSX.Element {
@@ -38,7 +39,7 @@ function mount(entry: unknown, makeSpawn: (writer: Writer) => ReturnType<typeof 
     return <div />
   }
   const mounted = render(<Harness />)
-  return { carryWorkflowRuns, carryGoalLoop, controlGoalLoop, writer, refs, undo: () => actions.undoClose(), unmount: () => mounted.unmount() }
+  return { carryWorkflowRuns, carryOrchestrationParent, carryGoalLoop, controlGoalLoop, writer, refs, undo: () => actions.undoClose(), unmount: () => mounted.unmount() }
 }
 
 it('hands a restored pane the workflow runs of the pane it restores', async () => {
@@ -48,6 +49,8 @@ it('hands a restored pane the workflow runs of the pane it restores', async () =
   }, () => vi.fn().mockResolvedValue('restored-pane'))
   await act(async () => { await harness.undo() })
   expect(harness.carryWorkflowRuns).toHaveBeenCalledWith('closed-pane', 'restored-pane')
+  // #1283 item 1: and the children it closed through the orchestration MCP.
+  expect(harness.carryOrchestrationParent).toHaveBeenCalledWith('closed-pane', 'restored-pane')
   harness.unmount()
 })
 
@@ -135,6 +138,7 @@ it('ends the loop when the restore bails and consumes the entry', async () => {
   await act(async () => { await harness.undo() })
   expect(harness.carryGoalLoop).not.toHaveBeenCalled()
   expect(harness.carryWorkflowRuns).not.toHaveBeenCalled()
+  expect(harness.carryOrchestrationParent).not.toHaveBeenCalled()
   expect(harness.controlGoalLoop.mock.calls).toEqual([[{ sessionId: 'closed-pane', action: 'stop' }]])
   expect(harness.refs.undoStackRef.current.length).toBe(0)
   harness.unmount()
