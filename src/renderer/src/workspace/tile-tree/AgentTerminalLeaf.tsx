@@ -318,23 +318,27 @@ export function AgentTerminalLeaf({
       // Replay-aware, coalescing outgoing path — see terminalInputForwarder.ts
       // (#745) for why replies xterm generates while parsing the replay must
       // never reach the provider and why same-tick chunks share one IPC call.
-      // WHY a refusal is shown (#1114, steering q97): main now says `false`
-      // when a session refused the input rather than taking it, e.g. an
-      // OpenCode terminal whose TUI has not painted yet and whose bounded
-      // pre-paint hold is full. Dropping that silently was the one thing the
-      // bound must not do. The same answer covers the older refusals
-      // (no backend, a prompt delivery holding the composer), which were
-      // silent for keystrokes too. Coalesced: a held key or a burst of
-      // refused chunks is one message, not a stack of them.
+      // WHY a refusal is shown (#1114, steering q97): main says `false` when
+      // the input was not taken: an OpenCode terminal whose TUI has not
+      // painted and whose bounded pre-paint hold is full, no backend, or a
+      // prompt delivery holding the composer. Dropping that silently was the
+      // one thing the bound must not do. The copy names no cause (steering
+      // q100): main answers only a boolean, and any single reason would be
+      // false for the others. Coalesced: a held key or a burst of refused
+      // chunks is one message, not a stack of them. A refusal is final, not
+      // retried: a retry could land after newer keystrokes, out of order.
       let lastRefusalToastAt = 0
-      const forwarder = createTerminalInputForwarder(data => {
+      const sendReportingRefusal = (data: string, refusedMessage: string) => {
         void window.api.sendInput(sessionId, data).then(accepted => {
           if (accepted !== false || disposed) return
           const now = Date.now()
           if (now - lastRefusalToastAt < 3000) return
           lastRefusalToastAt = now
-          showPaneToastRef.current(sessionId, "That input didn't reach the agent. Wait for the terminal to start, then try again.")
+          showPaneToastRef.current(sessionId, refusedMessage)
         }, () => {})
+      }
+      const forwarder = createTerminalInputForwarder(data => {
+        sendReportingRefusal(data, "That input didn't reach the agent.")
       })
       offTextPaste = registerTerminalPasteTarget(sessionId, {
         isActive: () => !disposed && focusedRef.current && dimensionActiveRef.current,
@@ -508,7 +512,11 @@ export function AgentTerminalLeaf({
           }
         }
         if (pendingInput.length > 0) {
-          void window.api.sendInput(sessionId, pendingInput.join(''))
+          // Through the same refusal report (steering q100): this batch is
+          // typically the largest single write the pane makes (up to 256
+          // queued chunks), so it is the one most likely to exceed a bounded
+          // hold, and it used to vanish silently when refused.
+          sendReportingRefusal(pendingInput.join(''), "What you typed while the terminal was attaching didn't reach the agent.")
           pendingInput.length = 0
         }
         if (focusedRef.current) liveTerm.focus()

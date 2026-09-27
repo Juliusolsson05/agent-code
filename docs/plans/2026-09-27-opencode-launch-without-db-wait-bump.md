@@ -28,3 +28,10 @@ Unit and system tests with fake PTYs and the real package. The app is not launch
   - **Refused, never silently dropped:** `OpencodeTerminalSession.write` returns `false`, `AgentSession.write` may return `false`, and `SessionManager.write` reports it. `AgentTerminalLeaf` shows a coalesced pane toast ("That input didn't reach the agent…") when `sendInput` answers `false`. The same toast now covers the older refusals keystrokes were silently dropped for (no backend, a prompt delivery holding the composer).
   - **Cleared on exit** as well as on stop.
   - Tests (each red on the previous head): a 64 KiB paste refused while earlier input is kept; the 257th chunk refused; exit clears the hold; the manager reports a refusal; the leaf toasts once.
+
+## Steering q100: the pre-attach flush and neutral copy
+- **The pre-attach flush ignored `sendInput` → false.** It is the pane's largest single write (up to 256 queued chunks), so it is the one most likely to exceed the bounded pre-paint hold, and it was dropped silently.
+  - It now goes through the same coalesced refusal reporter as the forwarder.
+- **Ruling: a refusal is final, not retried.** A retry could land after newer keystrokes, out of order. The user is told which input failed: "What you typed while the terminal was attaching didn't reach the agent."
+- **The forwarder's copy is neutral:** "That input didn't reach the agent." Main answers only a boolean (no backend, a delivery reservation, a full pre-paint hold), so naming any one cause would be false for the others.
+- **Test:** a Submit queued before attach, with `sendInput` resolving false on flush, shows the flush message. Red with the flush reverted.
