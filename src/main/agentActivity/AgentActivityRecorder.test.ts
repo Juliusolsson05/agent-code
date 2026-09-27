@@ -145,6 +145,21 @@ describe('AgentActivityRecorder', () => {
     expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
   })
 
+  // Rows already written for a named agent are keyed by its name; an agent
+  // that has both keeps that key, so turning #1302's fallback on does not
+  // split a named agent's history in two.
+  it('keeps a named agent keyed by its name when it also has a tldrIdentity', async () => {
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.lead = { ...window.workspace.sessions.lead, tldrIdentity: 'tldr-lead' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('lead', 'thinking')
+    vi.setSystemTime(T0 + HOUR)
+    phase('lead', 'idle')
+    const summary = await recorder.summary('24h')
+    expect(summary.projects[0].topAgents.map(agent => agent.agentKey)).toEqual(['name-1'])
+  })
+
   it('closes an agent removed mid-turn at removal, and counts one still working up to now', async () => {
     const { manager, recorder, phase } = await mount()
     phase('lead', 'thinking')
