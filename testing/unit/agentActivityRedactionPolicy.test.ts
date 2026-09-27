@@ -45,6 +45,8 @@ describe('agent-activity redaction policy', () => {
     expect(out.worktreePath).toMatch(/\/Development\/p0-----\/s0x{5}\/s1x{7}\/s2x{6}$/)
     expect(out.projectDir).not.toMatch(/win-win|simplify|worktrees/)
     expect(out.branch).toBe('x'.repeat('docs/hermes-runtime-architecture'.length))
+    // A text field holding an array keeps its field's rule for every item (review of #1353, c).
+    expect(redact({ branch: ['feat/secret-plan'] })).toEqual({ branch: ['x'.repeat('feat/secret-plan'.length)] })
   })
 
   // Steering q74: `startsWith('agent-code')` exempted any private project that merely shares the
@@ -86,6 +88,11 @@ describe('agent-activity redaction policy', () => {
       projectDir: '/Users/recorder/.claude/projects/-Users-recorder-Desktop-Development-agent-code',
     }))
     expect(() => assertNoForeignHome(right, 'recorder')).not.toThrow()
+    // Steering q76: the placeholder for an 8-character user is `fixture-`; a foreign `/Users/fixture`
+    // (or its dash-encoded form) only shares that prefix and must still refuse.
+    expect(() => assertNoForeignHome('{"p":"/Users/fixture/Desktop/Development/agent-code"}', 'recorder')).toThrow(/still names/)
+    expect(() => assertNoForeignHome('{"p":"/x/-Users-fixture-Desktop-Development-agent-code"}', 'recorder')).toThrow(/still names/)
+    expect(() => assertNoForeignHome('{"p":"/x/-Users-fixture--Desktop-Development-agent-code"}', 'recorder')).not.toThrow()
   })
 
   // Steering q74 regeneration: an x-filled tail made two same-length worktree paths one object key,

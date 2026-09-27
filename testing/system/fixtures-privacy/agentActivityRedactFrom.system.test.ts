@@ -69,6 +69,17 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes -
     expect(await readFile(output, 'utf8')).toBe(SENTINEL)
   }, 60_000)
 
+  // Steering q76: with --home-user recorder the placeholder is `fixture-`, and the first output guard
+  // accepted any home segment that prefix starts with — so a foreign `/Users/fixture/…` was written.
+  it('refuses a foreign home that only shares a prefix with the placeholder', async () => {
+    const { output } = await stage()
+    const input = join(cwd!, 'foreign.json')
+    await writeFile(input, JSON.stringify({ provenance: 'old', records: [{ worktreePath: '/Users/fixture/Desktop/Development/agent-code' }] }))
+    const result = await extract(['--redact-from', input, '--home-user', 'recorder'])
+    expect(result.code).not.toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+  }, 60_000)
+
   it('writes the redacted file with the right --home-user', async () => {
     const { input, output } = await stage()
     expect((await extract(['--redact-from', input, '--home-user', 'recorder'])).code).toBe(0)

@@ -137,10 +137,22 @@ export function requireHomeUser(argv: readonly string[]): string {
 export function assertNoForeignHome(redactedJson: string, homeUser: string): void {
   const allowed = homeUser === '' ? undefined : homePlaceholder(homeUser)
   const foreign = new Set<string>()
-  // `/Users/<name>` and `/home/<name>`, plus Claude's dash-encoded projects dir `-Users-<name>-`.
-  for (const match of redactedJson.matchAll(/(?:\/(?:Users|home)\/([^/"\s]+))|(?:-Users-([^-"\s/]+)-)/g)) {
-    const name = match[1] ?? match[2]!
-    if (name !== allowed && !(allowed?.startsWith(`${name}-`) ?? false)) foreign.add(name)
+  // `/Users/<name>` and `/home/<name>`: the segment must BE the placeholder, exactly.
+  // WHY exact (steering q76): the first version also accepted any name the placeholder merely
+  // starts with, so with a 8-character recorder (placeholder `fixture-`) an unredacted
+  // `/Users/fixture/…` passed.
+  for (const match of redactedJson.matchAll(/\/(?:Users|home)\/([^/"\s]+)/g)) {
+    if (match[1] !== allowed) foreign.add(match[1]!)
+  }
+  // Claude's dash-encoded projects dir, `-Users-<name>-Desktop-…`. A user name can itself contain
+  // dashes (the placeholder does), so it cannot be parsed back out; instead every `-Users-` must be
+  // followed by the whole placeholder and a dash. Anything else is foreign or ambiguous, and both
+  // refuse.
+  let at = redactedJson.indexOf('-Users-')
+  while (at !== -1) {
+    const after = redactedJson.slice(at + '-Users-'.length)
+    if (allowed === undefined || !after.startsWith(`${allowed}-`)) foreign.add(after.split(/[-"\s/]/, 1)[0]!)
+    at = redactedJson.indexOf('-Users-', at + 1)
   }
   if (foreign.size > 0) throw new Error(`redacted output still names ${foreign.size} home director${foreign.size === 1 ? 'y' : 'ies'}; not writing it`)
 }
