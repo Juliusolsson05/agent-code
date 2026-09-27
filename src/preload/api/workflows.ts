@@ -38,6 +38,9 @@ export const workflowsApi = {
   workflowListSessionRuns: (
     request: WorkflowSessionRunsRequest,
   ): Promise<WorkflowSessionRunsResult> => ipcRenderer.invoke('workflows:list-session-runs', request),
+  /** A replaced pane's workflow runs follow its successor (#1280). */
+  carryWorkflowRuns: (from: string, to: string): Promise<void> =>
+    ipcRenderer.invoke('workflows:carry-session', { from, to }),
 
   workflowSetRunInterest: (request: WorkflowRunInterestRequest): void => {
     ipcRenderer.send('workflows:set-run-interest', request)
