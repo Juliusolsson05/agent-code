@@ -77,6 +77,35 @@ type PublishLineage = (lineage: UndoLineage) => void
  * has not landed in this snapshot; production `spawn` writes SessionMeta into
  * workspace state itself, so in the app it is normally present.
  */
+
+/**
+ * Point every live session's cross-session pointers (orchestration parent and
+ * root, linked parent) at the restored ids (#1373).
+ *
+ * WHY every session and not only the restored rows: a pane's LIVE children
+ * (orchestration children, linked panes left open) are not part of its undo
+ * entry, so remapping only the carried rows left them naming the dead id. The
+ * renderer's orchestration visibility gate compares ids, so the restored
+ * parent could not list, read or prompt its own children, and they rendered
+ * as top-level rows. Replace and Reload Agents already remap every session;
+ * this is the same rule on the undo path.
+ *
+ * WHY remapMetaLineage and not remapSessionsRelationships: the latter DROPS a
+ * pointer whose target is not in the record. A child of a different pane that
+ * is still closed (still on the undo stack) would lose its link, and undoing
+ * that pane later could no longer relink it. remapMetaLineage keeps any id the
+ * map does not name, and returns the same object when nothing changed, so
+ * untouched rows keep their identity.
+ */
+function remapLiveLineage(
+  sessions: Record<SessionId, SessionMeta>,
+  idMap: ReadonlyMap<SessionId, SessionId>,
+): Record<SessionId, SessionMeta> {
+  const out: Record<SessionId, SessionMeta> = {}
+  for (const [sessionId, meta] of Object.entries(sessions)) out[sessionId] = remapMetaLineage(meta, idMap)
+  return out
+}
+
 export function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
   // Extension panes skip spawn entirely: all of their metadata is durable UI
   // identity, including the view ID. The process-specific allowlist below is
@@ -261,7 +290,8 @@ export function useUndoCloseAction(
           // files a session has always done.
           activeTabId: projectId,
           sessions: {
-            ...prev.sessions,
+            // Live children of the closed pane follow it to its new id (#1373).
+            ...remapLiveLineage(prev.sessions, new Map([[entry.sessionId, newSessionId]])),
             // carryDurableMeta restores membership too — `projectId` and,
             // critically, `joinedAt`, so the row returns to its old position
             // in the index rather than jumping to the bottom.
@@ -388,7 +418,9 @@ export function useUndoCloseAction(
         const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
         const tabs = [...prev.tabs]
         tabs.splice(insertIdx, 0, restoredTab)
-        const sessions = { ...prev.sessions }
+        // Live children of the restored members, wherever they live, follow
+        // them to their new ids (#1373).
+        const sessions = remapLiveLineage(prev.sessions, idMap)
         for (const [newId, closed] of carried) {
           sessions[newId] = {
             // Relationship pointers follow the restore: a linked child
