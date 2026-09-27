@@ -1,4 +1,5 @@
 import { commandTarget } from '@renderer/features/command-palette/commandTarget'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -775,9 +776,10 @@ export const sessionCommands: CommandDef[] = [
       try {
         await navigator.clipboard.writeText(command)
         workspace.showPaneToast(sessionId, `copied resume command · ${command}`, 5000)
-      } catch (err) {
-        const msg = (err as Error)?.message ?? String(err)
-        workspace.showPaneToast(sessionId, `copy failed: ${msg}`, 4000)
+      } catch {
+        // Fixed words (q22, #1250 row 9): the rejection's message is browser
+        // text, not something written for the user.
+        workspace.showPaneToast(sessionId, CLIPBOARD_WRITE_FAILED, 4000)
       }
     },
     contextMenu: { group: 'copy', order: 10 },
