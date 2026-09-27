@@ -81,3 +81,11 @@ A Codex session's `proxy-events.jsonl` mirror:
 - **Ruling:** a rotation waits until the stream has opened its fd (`!stream.pending`). Why: renaming earlier moves or misses a file the stream has not opened yet, and a startup burst was lost in the mutant. Cost if wrong: during one open the file can overshoot the cap, bounded by the 16 MiB queue.
 - **Ruling:** the bundle reader keeps its old behavior at exactly 5 MiB: the whole file, with no header. It reads `.1` only while the budget is positive. The truncation header's `dropped_bytes` now counts bytes, not UTF-16 units.
 - **Ruling:** the package has no plan file of its own. This plan covers both PRs, and codex-headless#56 links it.
+- **Scope change (steering q54, manager note `temp/manager/notes/proxy-reader-owner-2026-09-26.md`):** this PR owns ONE provider-neutral `readEventsTail(runDir)` for Codex and Claude. W4's #1273 app half builds on it.
+  - It opens each generation once and sizes it by `fstat` on that handle. It never uses the run selection's saved size.
+  - It skips `.1` when it is the same inode as the live handle, because a rotation between the two opens would otherwise duplicate lines.
+  - It honours `bytesRead`.
+  - It cuts both ends to whole lines.
+  - It fills from `.1` only when the live file fit whole.
+
+  Tests run on a recorded Codex chunk line and a recorded Claude `content_block_stop` line (`testing/fixtures/proxy-events-reader/claude-response-chunk.json`). They cover: rotation between selection and read (via a real interleave), a saved size from an old inode, the same-inode case, the two-generation 5 MiB cap, the live-only case, a shrink after `fstat`, and an unfinished last line. Against the same tests, main's reader fails 10, W4's `0905ba83` fails 8, and this PR's first version fails 4. The `bytesRead` mutant is equivalent here: zero-filled bytes are never `\n`, so the trailing line cut removes them. The guard stays anyway.
