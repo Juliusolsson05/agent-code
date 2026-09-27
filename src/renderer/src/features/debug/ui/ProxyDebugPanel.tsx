@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { emptySemanticRuntime } from '@renderer/session-runtime/state'
+import { DebugPanelHeader } from './DebugPanelHeader'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 // ProxyDebugPanel — live inspector for the semantic stream and any
 // provider transport attribution that survives into the shared runtime.
@@ -65,35 +67,12 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
   }, [state.currentTurn])
 
   return (
-    <div className="
-      h-full w-[440px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col
-      overflow-hidden
-      text-[10px] font-code
-    ">
+    <SidePanel label="Proxy debug" className="w-[440px] text-[10px] font-code">
       {/* Header — same chrome as DebugPanel. Kept red title for
           uniformity across debug-family panels (they are all
           diagnostic tools that read session state, not user-facing
           UI). */}
-      <div className="
-        flex items-center justify-between
-        px-3 py-2
-        border-b border-border
-        text-[9px] text-danger uppercase tracking-wider
-        select-none flex-shrink-0
-      ">
-        <span>proxy debug — {kind} semantic stream</span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-muted hover:text-ink text-[14px] leading-none"
-          >
-            ×
-          </button>
-        </div>
-      </div>
+      <DebugPanelHeader title={`proxy debug — ${kind} semantic stream`} closeLabel="Close proxy debug" onClose={onClose} />
 
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-3">
         {/* Flow attribution */}
@@ -251,7 +230,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
           </Pre>
         </Section>
       </div>
-    </div>
+    </SidePanel>
   )
 }
 

@@ -2,6 +2,12 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
 import { afterEach } from 'vitest'
 
+import { installWorkingStorage } from './storage'
+
+// Node 25's half-initialised Web Storage would otherwise shadow happy-dom's
+// (#1212); see installWorkingStorage.
+installWorkingStorage(globalThis)
+
 // WHY this file exists even though today's renderer smoke test barely needs
 // setup:
 //

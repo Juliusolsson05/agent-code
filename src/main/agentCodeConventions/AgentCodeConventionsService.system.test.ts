@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createEmptyAgentCodeConventionsDocument,
@@ -692,3 +692,39 @@ async function writeFileWithParents(path: string, contents: string): Promise<voi
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, contents)
 }
+
+// #1424 review a: the recovery panel shows a reset's result message as it is,
+// and a failed unlink's message carried the state file's absolute path and
+// the OS code. All three resets now answer in fixed words (q22). Real
+// filesystem: an unreadable state file inside a read-only directory.
+describe('recovery reset that cannot remove the state file', () => {
+  it('answers in fixed words, never the path or the OS error', async () => {
+    const root = await temporaryDirectory()
+    const stateDirectory = join(root, 'state')
+    const stateFilePath = join(stateDirectory, 'conventions.json')
+    await writeFileWithParents(stateFilePath, 'not json at all')
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [], unsupportedProviders: [] }),
+    })
+    await service.initialize()
+    expect(await service.getSnapshot()).toMatchObject({ health: 'recovery-required' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await chmod(stateDirectory, 0o500)
+    try {
+      const results = [await service.resetRecovery(), await service.resetCustomSkillsRecovery(), await service.resetInstalledSkillsRecovery()]
+      for (const result of results) {
+        expect(result).toMatchObject({ ok: false, code: 'io-error' })
+        const message = (result as { message: string }).message
+        expect(message).toBe("Couldn't remove the unreadable state file. Check that Agent Code's data folder is writable, then try again.")
+        expect(message).not.toContain(root)
+      }
+      // The raw error is kept for diagnosis.
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      await chmod(stateDirectory, 0o700)
+      warn.mockRestore()
+    }
+  })
+})

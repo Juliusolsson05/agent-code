@@ -14,6 +14,7 @@ import {
 } from '@renderer/features/agent-status/model/formatAgentStatus'
 import type { AgentStatusField } from '@renderer/features/agent-status/model/formatAgentStatus'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 type Props = {
   sessionId: string
@@ -29,12 +30,7 @@ export function AgentStatusPanel({ sessionId, workspace, onClose }: Props) {
   )
 
   return (
-    <aside className="
-      h-full w-[390px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col overflow-hidden
-      text-[11px]
-    ">
+    <SidePanel label="Agent Status" className="w-[390px] text-[11px]">
       {/* The shared side-panel header (UI pass, G-26). */}
       <PanelHeader
         label="Agent Status"
@@ -50,7 +46,7 @@ export function AgentStatusPanel({ sessionId, workspace, onClose }: Props) {
       <div className="flex-1 min-h-0 overflow-y-auto p-3">
         {model ? <AgentStatusContent model={model} /> : <EmptyState />}
       </div>
-    </aside>
+    </SidePanel>
   )
 }
 

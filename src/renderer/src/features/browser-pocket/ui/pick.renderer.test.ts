@@ -63,6 +63,17 @@ describe('pickIntoComposer', () => {
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/copied/i))
   })
 
+  // #1421 review b: a refused write was swallowed and "Element copied" shown
+  // anyway, so the user pasted whatever the clipboard held before.
+  it('without a composer, says a refused copy instead of claiming it', async () => {
+    const writeText = vi.fn(async () => { throw new DOMException('Document is not focused.', 'NotAllowedError') })
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const toast = vi.fn()
+    const { ws } = workspace('claude', '')
+    await pickIntoComposer('p1', 's1' as never, ws, vi.fn(), toast)
+    expect(toast.mock.calls).toEqual([["Couldn't copy to the clipboard. Click into the app and try again."]])
+  })
+
   it('a cancelled pick changes nothing', async () => {
     window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => null) } as unknown as typeof window.api
     composer('s1', 'draft', 5)

@@ -15,6 +15,7 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import { isWorkingAgent } from '@renderer/workspace/agentFollow'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 
 // DELETED with the unified layout (#992) — see RETIRED_COMMAND_IDS in
 // catalog.test.ts for the ledger:
@@ -454,14 +455,23 @@ export const paneCommands: CommandDef[] = [
       // its committed entries, so there is a real last response to copy.
       return sessionHasTranscript(workspace.state.sessions[sessionId])
     },
-    run: ({ workspace, target }) => {
+    run: async ({ workspace, target }) => {
       const sessionId = commandTarget({ workspace, target })
       if (!sessionId) return
       const runtime = workspace.getRuntime(sessionId)
       const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
       const text = extractLastAssistantText(runtime.entries, kind)
       if (text) {
-        void navigator.clipboard.writeText(text)
+        // WHY awaited (#1250 row 9): the write used to be fire-and-forget
+        // with "Copied" shown unconditionally, so a refused write (an
+        // unfocused document) was an unhandled rejection under a toast that
+        // said the opposite.
+        try {
+          await navigator.clipboard.writeText(text)
+        } catch {
+          workspace.showPaneToast(sessionId, CLIPBOARD_WRITE_FAILED)
+          return
+        }
         workspace.showPaneToast(sessionId, 'Copied to clipboard')
         return
       }

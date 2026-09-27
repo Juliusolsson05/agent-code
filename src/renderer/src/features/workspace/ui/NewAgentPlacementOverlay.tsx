@@ -18,6 +18,7 @@ import {
   type AgentProviderChoice,
 } from '@renderer/workspace/providerChoices'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
+import { LAYERS } from '@renderer/ui/layers'
 
 // New Agent… — a kind picker. Pick what to create; it lands in the pool.
 //
@@ -232,7 +233,7 @@ export function NewAgentPlacementOverlay({
       // Read by useKeybinds' placement gate: the store flag alone does not
       // mean this overlay is on screen (#1286 review A).
       data-new-agent-overlay=""
-      className="absolute inset-0 z-40 bg-black/20"
+      className={`absolute inset-0 ${LAYERS.paneOverlay} bg-black/20`}
       // The backdrop is the mouse exit. Only a click on the backdrop ITSELF
       // dismisses: a click that bubbled up from the picker must not.
       onClick={event => {

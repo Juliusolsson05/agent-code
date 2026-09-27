@@ -97,15 +97,55 @@ const DEFAULT_SETUP_STATE: PersistedSetupState = {
   updatedAt: 0,
 }
 
+// WHY saves are UPDATES applied to the last DURABLE state (#1250 rows 6 and
+// 13, #1403 review round 1): the first fix kept a whole next-state per save
+// and restored the previous cache on failure. Reviewers a, b and c showed
+// that cannot be made true, because every save was BUILT from the optimistic
+// cache:
+//   - two queued saves that both fail: the second "restored" the first one's
+//     unwritten state, so main acted on a value no write ever landed;
+//   - a failing save followed by a good one: the good one's snapshot carried
+//     the failed value to disk, while the renderer had just said "Nothing was
+//     changed".
+// So a save is now a function of the state it applies to. At write time it is
+// applied to `durable` (what is known to be on disk), never to another save's
+// unwritten result, and a failed update simply drops out. Readers still see
+// every change at once: `cache` is `durable` with the still-pending updates
+// applied in order, recomputed whenever one settles.
+//
+// Invariant: `cache` === fold(pending, durable) after every settle, and
+// nothing written to disk ever contains an update whose own write failed.
+export type SetupStateUpdate = (state: PersistedSetupState) => PersistedSetupState
+
+let durable: PersistedSetupState | null = null
 let cache: PersistedSetupState | null = null
+const pending: SetupStateUpdate[] = []
 let writeQueue: Promise<void> = Promise.resolve()
+
+function recomputeCache(): PersistedSetupState {
+  const next = pending.reduce<PersistedSetupState>((state, update) => update(state), durable ?? DEFAULT_SETUP_STATE)
+  cache = next
+  return next
+}
+
+// One first read, shared. Two concurrent first loads used to read the file
+// twice; with a durable baseline that matters, because a read that finishes
+// AFTER a save's write would reset `durable` to the pre-write file.
+let loading: Promise<void> | null = null
 
 export async function loadSetupState(): Promise<PersistedSetupState> {
   if (cache) return cache
+  loading ??= readDurable()
+  await loading
+  // Folds in any update queued while the first read was in flight.
+  return recomputeCache()
+}
+
+async function readDurable(): Promise<void> {
   try {
     const raw = await readFile(SETUP_STATE_FILE, 'utf8')
     const parsed = JSON.parse(raw) as Partial<PersistedSetupState>
-    cache = {
+    durable = {
       version: 1,
       toolPaths: parsed.toolPaths ?? {},
       manualToolPaths: parsed.manualToolPaths ?? {},
@@ -129,54 +169,105 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
     }
   } catch {
-    cache = DEFAULT_SETUP_STATE
+    durable = DEFAULT_SETUP_STATE
   }
-  return cache
+  recomputeCache()
 }
 
+/** The state as last written to disk: no pending update included. For a
+ *  reader that PUBLISHES state (#1403 recheck b): provider enablement is
+ *  broadcast to every picker, and a snapshot folded from another save still
+ *  in flight would publish that save even if its write then failed. */
+export async function loadDurableSetupState(): Promise<PersistedSetupState> {
+  await loadSetupState()
+  return durable ?? DEFAULT_SETUP_STATE
+}
+
+/** Apply `update` and persist the result. Rejects when the write fails, and
+ *  then the update is gone: neither the cache nor any later write carries it. */
+export async function updateSetupState(update: SetupStateUpdate): Promise<PersistedSetupState> {
+  // Only the very first save awaits the read. Once loaded, the update is
+  // visible to readers synchronously, as the old whole-state assignment was.
+  if (!cache) await loadSetupState()
+  pending.push(update)
+  // An update that throws must never stay pending (#1403 verification c):
+  // the cache would show forever a change no write could apply.
+  try {
+    recomputeCache()
+  } catch (error) {
+    pending.splice(pending.indexOf(update), 1)
+    recomputeCache()
+    throw error
+  }
+  const write = writeQueue
+    .catch(() => {})
+    .then(async () => {
+      // Settle bookkeeping INSIDE the queue step, so the next queued update
+      // is applied to this one's outcome and never to its unwritten result.
+      const settle = (): void => {
+        pending.splice(pending.indexOf(update), 1)
+        recomputeCache()
+      }
+      let snapshot: PersistedSetupState
+      try {
+        // Inside the try, so a throwing update settles like a failed write.
+        snapshot = {
+          ...update(durable ?? DEFAULT_SETUP_STATE),
+          version: 1,
+          updatedAt: Date.now(),
+        }
+        await mkdir(STATE_DIR, { recursive: true })
+        // WHY setup state uses the same temp+rename discipline as workspace
+        // state even though the single-process lock should prevent concurrent
+        // app mains:
+        //
+        // Setup paths are user-visible configuration. A failed write should not
+        // leave `setup.json` truncated and force the user through tool discovery
+        // again. Temp+rename gives atomic visibility to readers; it is not a full
+        // fsync durability protocol for power-loss recovery, which would be a
+        // separate requirement.
+        const tmp = `${SETUP_STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
+          .toString(36)
+          .slice(2)}.tmp`
+        try {
+          await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf8')
+          await rename(tmp, SETUP_STATE_FILE)
+        } catch (err) {
+          await rm(tmp, { force: true }).catch(() => undefined)
+          throw err
+        }
+      } catch (err) {
+        settle()
+        throw err
+      }
+      durable = snapshot
+      settle()
+    })
+  writeQueue = write
+  await write
+  return recomputeCache()
+}
+
+/** Whole-state replacement. Kept for callers that already hold a complete
+ *  state; prefer `updateSetupState` so the change is applied to what is on
+ *  disk rather than to a state read before other saves settled. */
 export async function saveSetupState(
   next: PersistedSetupState,
 ): Promise<PersistedSetupState> {
-  cache = { ...next, version: 1, updatedAt: Date.now() }
-  const snapshot = cache
-  writeQueue = writeQueue
-    .catch(() => {})
-    .then(async () => {
-      await mkdir(STATE_DIR, { recursive: true })
-      // WHY setup state uses the same temp+rename discipline as workspace
-      // state even though the single-process lock should prevent concurrent
-      // app mains:
-      //
-      // Setup paths are user-visible configuration. A failed write should not
-      // leave `setup.json` truncated and force the user through tool discovery
-      // again. Temp+rename gives atomic visibility to readers; it is not a full
-      // fsync durability protocol for power-loss recovery, which would be a
-      // separate requirement.
-      const tmp = `${SETUP_STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
-        .toString(36)
-        .slice(2)}.tmp`
-      try {
-        await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf8')
-        await rename(tmp, SETUP_STATE_FILE)
-      } catch (err) {
-        await rm(tmp, { force: true }).catch(() => undefined)
-        throw err
-      }
-    })
-  await writeQueue
-  return cache
+  return await updateSetupState(() => next)
 }
 
 export async function updateToolPaths(
   paths: Partial<Record<SetupToolId, string | null>>,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  const toolPaths = { ...state.toolPaths }
-  for (const [tool, path] of Object.entries(paths) as Array<[SetupToolId, string | null]>) {
-    if (path) toolPaths[tool] = path
-    else delete toolPaths[tool]
-  }
-  return await saveSetupState({ ...state, toolPaths })
+  return await updateSetupState(state => {
+    const toolPaths = { ...state.toolPaths }
+    for (const [tool, path] of Object.entries(paths) as Array<[SetupToolId, string | null]>) {
+      if (path) toolPaths[tool] = path
+      else delete toolPaths[tool]
+    }
+    return { ...state, toolPaths }
+  })
 }
 
 // Records a user-supplied override from setup:set-tool-path. Writes BOTH
@@ -191,32 +282,29 @@ export async function setManualToolPath(
   tool: SetupToolId,
   path: string,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({
+  return await updateSetupState(state => ({
     ...state,
     manualToolPaths: { ...state.manualToolPaths, [tool]: path },
     toolPaths: { ...state.toolPaths, [tool]: path },
-  })
+  }))
 }
 
 export async function markOptionalSkipped(
   tool: SetupToolId,
   skipped: boolean,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({
+  return await updateSetupState(state => ({
     ...state,
     skippedOptionalTools: {
       ...state.skippedOptionalTools,
       [tool]: skipped,
     },
-  })
+  }))
 }
 
 /** Records that the user chose to continue with no provider installed. */
 export async function markNoProvidersAcknowledged(): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({ ...state, acknowledgedNoProviders: true })
+  return await updateSetupState(state => ({ ...state, acknowledgedNoProviders: true }))
 }
 
 /** Persist the user's CLI auto-update preference. Written by the setting
@@ -225,26 +313,41 @@ export async function markNoProvidersAcknowledged(): Promise<PersistedSetupState
 export async function setCliUpdateBehavior(
   behavior: CliUpdateBehavior,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({ ...state, cliUpdateBehavior: behavior })
+  return await updateSetupState(state => ({ ...state, cliUpdateBehavior: behavior }))
 }
 
-/** Replace the provider-enablement override map (#1102). Whole-map write:
- *  the caller (main's providerEnablement module) computed the next map from
- *  the state it just loaded, so partial merges here would only re-race it. */
+/** Replace the provider-enablement override map (#1102). Whole-map write,
+ *  for callers that own the entire map; per-provider changes go through
+ *  `setProviderEnablementOverride`. */
 export async function setProviderEnablementOverrides(
   overrides: UserProviderOverrides,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({ ...state, providerEnablementOverrides: overrides })
+  return await updateSetupState(state => ({ ...state, providerEnablementOverrides: overrides }))
+}
+
+/** Set (or with `null`, clear) ONE provider's enablement override. WHY
+ *  per key (#1403 review): the settings row used to compute the whole next
+ *  map from the optimistic cache, so a map built while an earlier toggle's
+ *  write was still pending carried that toggle to disk even when its own
+ *  write failed. Applied at write time to the durable map, a failed toggle
+ *  cannot ride along with a later one. */
+export async function setProviderEnablementOverride(
+  kind: keyof UserProviderOverrides,
+  enabled: boolean | null,
+): Promise<PersistedSetupState> {
+  return await updateSetupState(state => {
+    const overrides = { ...state.providerEnablementOverrides }
+    if (enabled === null) delete overrides[kind]
+    else overrides[kind] = enabled
+    return { ...state, providerEnablementOverrides: overrides }
+  })
 }
 
 /** Persist the selected OpenCode usage source (#1102/#1104). */
 export async function setOpencodeUsageSource(
   opencodeUsageSource: OpencodeUsageSource,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({ ...state, opencodeUsageSource })
+  return await updateSetupState(state => ({ ...state, opencodeUsageSource }))
 }
 
 /** Persist a successful latest-version probe. Called after every non-error
@@ -256,9 +359,8 @@ export async function updateCliUpdateCache(
   cli: CliUpdateKind,
   entry: CliUpdateCacheEntry,
 ): Promise<PersistedSetupState> {
-  const state = await loadSetupState()
-  return await saveSetupState({
+  return await updateSetupState(state => ({
     ...state,
     cliUpdateCache: { ...state.cliUpdateCache, [cli]: entry },
-  })
+  }))
 }

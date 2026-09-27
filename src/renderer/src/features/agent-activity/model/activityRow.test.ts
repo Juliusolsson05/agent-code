@@ -234,6 +234,12 @@ describe('what counts as "needs you" (one field changed on a real idle record)',
     runtime.conditions = { provider: 'claude', ts: 1, conditions: {} } as unknown as ProviderConditionSnapshot
     expect(() => rowFor({ kind: 'terminal' }, runtime)).not.toThrow()
     expect(rowFor({ kind: 'terminal' }, runtime).section).not.toBe('needs-you')
+    // Review of #1353: the empty claude snapshot above throws nothing even
+    // without the terminal guard, so it passed for the wrong reason. A runtime
+    // that WOULD need the user if it were an agent pins the guard itself.
+    runtime.processError = 'shell exited'
+    expect(rowFor({ kind: 'claude' }, runtime).section).toBe('needs-you')
+    expect(rowFor({ kind: 'terminal' }, runtime).section).not.toBe('needs-you')
   })
 })
 
@@ -295,6 +301,9 @@ describe('row names on the owner\'s real fleet: title, then Goal, then folder', 
       goals: { [titled.sessionId]: { text: 'Fix authentication', updatedAt: '', revision: 1 } },
     })
     expect(filterActivityRows(withTitleGoal, 'authentication')).toHaveLength(1)
+    // ...and the title still wins the name when both exist (owner decision:
+    // title, then Goal, then folder) — the fleet otherwise only has title XOR Goal.
+    expect(withTitleGoal[0]).toMatchObject({ name: titled.title.trim(), nameSource: 'title' })
   })
 })
 

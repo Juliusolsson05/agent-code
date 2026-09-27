@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,9 +31,11 @@ describe('PathInput', () => {
       },
     })
     render(<Harness />)
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)) })
+    // Wait for the suggestions themselves, not a 100 ms guess (#1107, review of #1377): the lookup
+    // runs after a 60 ms debounce, so a loaded runner could still be before it when a fixed sleep
+    // ended. findByRole polls until the listbox exists.
+    const listbox = await screen.findByRole('listbox')
     const field = screen.getByRole('combobox')
-    const listbox = screen.getByRole('listbox')
     expect(field).toHaveAttribute('aria-expanded', 'true')
     expect(field).toHaveAttribute('aria-controls', listbox.id)
     expect(field.getAttribute('aria-activedescendant')).toBe(screen.getAllByRole('option')[0]!.id)

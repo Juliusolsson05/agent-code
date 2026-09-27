@@ -35,6 +35,9 @@ export type WorktreeDump = {
    *  when gitUnavailable is true; the two need different copy because
    *  "not a git repository" is actively misleading on a git-less Mac. */
   gitMissing: boolean
+  /** gitUnavailable because git timed out, not because this is not a repo
+   *  (#1250 row 11). */
+  gitTimedOut?: boolean
   activityUnavailable: boolean
 }
 
@@ -70,6 +73,7 @@ export async function loadWorktreeDump(params: {
       indexStatus: null,
       gitUnavailable: true,
       gitMissing: gitResult.gitMissing,
+      gitTimedOut: 'timedOut' in gitResult && gitResult.timedOut === true,
       activityUnavailable: true,
     }
   }

@@ -1,0 +1,317 @@
+{
+ "source": "Owner's ~/.config/agent-code/control-history/events.jsonl, recorded 2026-09-27: every row of 8 real calls, in file order, sequences renumbered 1..n (process-local cursors). Rows carry only ids, times, callers, capability ids, request keys and payload digests; prompts and results live in payloads/, which are NOT included. Calls: 2 unkeyed finished calls from 2026-09-05 (transcripts.page, agents.read); a keyed dispatch.configure call and the keyed duplicate that reuses it; 2 unkeyed calls from 2026-09-27; an unkeyed externalControl.status call from 2026-09-05. The `dispatched` rows of externalControl.status, transcripts.page and the keyed app.windowFocus call name the same payload digest (e5624e8c...; corrected in #1330 review B5).",
+ "rows": [
+  {
+   "sequence": 1,
+   "at": "2026-09-05T08:37:23.199Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95caa49c-eb60-44e2-9b62-938ce2243d11",
+   "kind": "received",
+   "capabilityId": "externalControl.status",
+   "caller": "application:70afc66f-7160-4a3e-83bd-e12eafa58f46",
+   "payload": "b85bb9227778026c8624fa7520197de14e91d19d2fa058c873f7a2a222d47e6c"
+  },
+  {
+   "sequence": 2,
+   "at": "2026-09-05T08:37:23.224Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95caa49c-eb60-44e2-9b62-938ce2243d11",
+   "kind": "dispatched",
+   "capabilityId": "externalControl.status",
+   "caller": "application:70afc66f-7160-4a3e-83bd-e12eafa58f46",
+   "payload": "e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1"
+  },
+  {
+   "sequence": 3,
+   "at": "2026-09-05T08:37:23.245Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95caa49c-eb60-44e2-9b62-938ce2243d11",
+   "kind": "result",
+   "capabilityId": "externalControl.status",
+   "caller": "application:70afc66f-7160-4a3e-83bd-e12eafa58f46",
+   "payload": "c90d856f8ace6e59d84a856413fb065a793fc8411220d20559ef1be67789250e"
+  },
+  {
+   "sequence": 4,
+   "at": "2026-09-05T08:41:06.887Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "5ea10842-a1c8-463c-aee9-5d0e238c56e1",
+   "kind": "received",
+   "capabilityId": "agents.read",
+   "caller": "external:agent-code-control",
+   "payload": "a8164481c57dddb1b3670545a25d58343a9185c69a16f606c2afa269d3b23985"
+  },
+  {
+   "sequence": 5,
+   "at": "2026-09-05T08:41:06.899Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "5ea10842-a1c8-463c-aee9-5d0e238c56e1",
+   "kind": "step",
+   "capabilityId": "agents.read",
+   "caller": "external:agent-code-control",
+   "payload": "7e20e0d386b413a83eb9b6a3a5540ab67087d977559aaf62fed0ff8d8bd55b27"
+  },
+  {
+   "sequence": 6,
+   "at": "2026-09-05T08:41:06.916Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "5ea10842-a1c8-463c-aee9-5d0e238c56e1",
+   "kind": "step",
+   "capabilityId": "agents.read",
+   "caller": "external:agent-code-control",
+   "payload": "3f937dbe08f75c640835b9fd3cbd05f12142e513aba9501373f27aa56df2e86f"
+  },
+  {
+   "sequence": 7,
+   "at": "2026-09-05T08:41:06.924Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "5ea10842-a1c8-463c-aee9-5d0e238c56e1",
+   "kind": "dispatched",
+   "capabilityId": "agents.read",
+   "caller": "external:agent-code-control",
+   "payload": "e0e0aa86c645a2d2df423d40129a06f5798f08ca4bb2bc102c9ba5d0423c3cfd"
+  },
+  {
+   "sequence": 8,
+   "at": "2026-09-05T08:41:06.937Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "37763f2f-c479-49b7-8d79-4c990bc0784c",
+   "kind": "received",
+   "capabilityId": "transcripts.page",
+   "caller": "application:8ba30627-5c41-4986-a325-b4ada30aa5f0",
+   "payload": "f9c28cd48b4c90c71133141e7ea764cf2979bded17bf40ca5d65d305e361d49e"
+  },
+  {
+   "sequence": 9,
+   "at": "2026-09-05T08:41:06.953Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "37763f2f-c479-49b7-8d79-4c990bc0784c",
+   "kind": "dispatched",
+   "capabilityId": "transcripts.page",
+   "caller": "application:8ba30627-5c41-4986-a325-b4ada30aa5f0",
+   "payload": "e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1"
+  },
+  {
+   "sequence": 10,
+   "at": "2026-09-05T08:41:06.982Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "37763f2f-c479-49b7-8d79-4c990bc0784c",
+   "kind": "result",
+   "capabilityId": "transcripts.page",
+   "caller": "application:8ba30627-5c41-4986-a325-b4ada30aa5f0",
+   "payload": "b0eb2d5e316244a96e238c4a339d8307fbbc60cf699f44cbc8e57fda3de05013"
+  },
+  {
+   "sequence": 11,
+   "at": "2026-09-05T08:41:07.010Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "5ea10842-a1c8-463c-aee9-5d0e238c56e1",
+   "kind": "result",
+   "capabilityId": "agents.read",
+   "caller": "external:agent-code-control",
+   "payload": "773a3d7abaa8d0ef41ed43eee632f6ff698aab51d4b72b3fb7cf2abd80604a52"
+  },
+  {
+   "sequence": 12,
+   "at": "2026-09-05T08:42:23.936Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95c97fce-bca0-4bc7-9901-90b45d988d1c",
+   "kind": "received",
+   "capabilityId": "app.windowFocus",
+   "caller": "external:agent-code-control",
+   "requestKey": "focus-second-window-b7-20260905",
+   "payload": "9c6575ffeb71b0f5d7b24c64aab09e601576f6f6db9e0b7b2d0fe274ac0293ae"
+  },
+  {
+   "sequence": 13,
+   "at": "2026-09-05T08:42:23.953Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95c97fce-bca0-4bc7-9901-90b45d988d1c",
+   "kind": "dispatched",
+   "capabilityId": "app.windowFocus",
+   "caller": "external:agent-code-control",
+   "requestKey": "focus-second-window-b7-20260905",
+   "payload": "e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1"
+  },
+  {
+   "sequence": 14,
+   "at": "2026-09-05T08:42:23.958Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95c97fce-bca0-4bc7-9901-90b45d988d1c",
+   "kind": "step",
+   "capabilityId": "app.windowFocus",
+   "caller": "external:agent-code-control",
+   "requestKey": "focus-second-window-b7-20260905",
+   "payload": "f0e8ba44ed2883fbc468b901fb135a2512d8fc67463fe7065d74deab71423cf9"
+  },
+  {
+   "sequence": 15,
+   "at": "2026-09-05T08:42:23.972Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95c97fce-bca0-4bc7-9901-90b45d988d1c",
+   "kind": "step",
+   "capabilityId": "app.windowFocus",
+   "caller": "external:agent-code-control",
+   "requestKey": "focus-second-window-b7-20260905",
+   "payload": "e218174bd8c67b249384bac6851133ad31a843d71a87f81bdec19a35b2b08e9a"
+  },
+  {
+   "sequence": 16,
+   "at": "2026-09-05T08:42:26.500Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "95c97fce-bca0-4bc7-9901-90b45d988d1c",
+   "kind": "result",
+   "capabilityId": "app.windowFocus",
+   "caller": "external:agent-code-control",
+   "requestKey": "focus-second-window-b7-20260905",
+   "payload": "c9f7a3994312373a76266b5cbd233cd4d3b8260c3ed7922f7150bf99f2b275c2"
+  },
+  {
+   "sequence": 17,
+   "at": "2026-09-05T08:44:06.475Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "13e43d53-5120-41ae-88d7-820dc9088728",
+   "kind": "received",
+   "capabilityId": "dispatch.configure",
+   "caller": "external:agent-code-control",
+   "requestKey": "first-window-remove-second-lane-20260905-01",
+   "payload": "81eed339ed998ffe1a616fc2835511785a99c9970b430f2719afeab42620149e"
+  },
+  {
+   "sequence": 18,
+   "at": "2026-09-05T08:44:06.489Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "13e43d53-5120-41ae-88d7-820dc9088728",
+   "kind": "dispatched",
+   "capabilityId": "dispatch.configure",
+   "caller": "external:agent-code-control",
+   "requestKey": "first-window-remove-second-lane-20260905-01",
+   "payload": "e0e0aa86c645a2d2df423d40129a06f5798f08ca4bb2bc102c9ba5d0423c3cfd"
+  },
+  {
+   "sequence": 19,
+   "at": "2026-09-05T08:44:06.496Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "13e43d53-5120-41ae-88d7-820dc9088728",
+   "kind": "step",
+   "capabilityId": "dispatch.configure",
+   "caller": "external:agent-code-control",
+   "requestKey": "first-window-remove-second-lane-20260905-01",
+   "payload": "a23fff8c48378c858ee4277543a5262c0a9a460645b133b78d507d3f9c6e711d"
+  },
+  {
+   "sequence": 20,
+   "at": "2026-09-05T08:44:09.019Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "13e43d53-5120-41ae-88d7-820dc9088728",
+   "kind": "result",
+   "capabilityId": "dispatch.configure",
+   "caller": "external:agent-code-control",
+   "requestKey": "first-window-remove-second-lane-20260905-01",
+   "payload": "06c80c18a1b15f1079552e212e000e643947135db33e883b707f6eaf74a84bf9"
+  },
+  {
+   "sequence": 21,
+   "at": "2026-09-05T08:44:37.088Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "a346f752-9eec-4b37-b7df-145dfaf1aaf5",
+   "kind": "duplicate",
+   "capabilityId": "dispatch.configure",
+   "caller": "external:agent-code-control",
+   "requestKey": "first-window-remove-second-lane-20260905-01",
+   "payload": "81eed339ed998ffe1a616fc2835511785a99c9970b430f2719afeab42620149e",
+   "reusedCallId": "13e43d53-5120-41ae-88d7-820dc9088728"
+  },
+  {
+   "sequence": 22,
+   "at": "2026-09-05T08:44:37.093Z",
+   "instanceId": "1f082cde-f316-42d2-98e0-c1f4b7202d08",
+   "callId": "a346f752-9eec-4b37-b7df-145dfaf1aaf5",
+   "kind": "result",
+   "capabilityId": "dispatch.configure",
+   "caller": "external:agent-code-control",
+   "requestKey": "first-window-remove-second-lane-20260905-01",
+   "payload": "ecc533f4442fc2f5fb9a24d96d93feb3a0e72b4b3f30b2153384efe07c41ce0d"
+  },
+  {
+   "sequence": 23,
+   "at": "2026-09-27T00:02:07.032Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "e8a21d19-b139-4012-8e09-6139b5643bb5",
+   "kind": "received",
+   "capabilityId": "agents.list",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "af735f317f592f86fb71ffd6cbf8f5d4d780221a009b05c531205b4c78aca59c"
+  },
+  {
+   "sequence": 24,
+   "at": "2026-09-27T00:02:07.056Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "e8a21d19-b139-4012-8e09-6139b5643bb5",
+   "kind": "dispatched",
+   "capabilityId": "agents.list",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "d7f3da1d5f8395f12c402917af308af30b5de23a9529e15eb08cee54a4dd8133"
+  },
+  {
+   "sequence": 25,
+   "at": "2026-09-27T00:02:07.070Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "e8a21d19-b139-4012-8e09-6139b5643bb5",
+   "kind": "result",
+   "capabilityId": "agents.list",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "a8d9690673a8b89595dd2c1b3f463cf13744bc76bf0024a22ec9f4f4a3b63f64"
+  },
+  {
+   "sequence": 26,
+   "at": "2026-09-27T00:02:08.746Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "2ebe82c0-c877-4bb6-9877-56ded38d4739",
+   "kind": "received",
+   "capabilityId": "agents.read",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "b3b9b32ad8b423936419c2700b5746a92970e1ba3bc1a62f69d0eb3070ef91d5"
+  },
+  {
+   "sequence": 27,
+   "at": "2026-09-27T00:02:08.762Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "2ebe82c0-c877-4bb6-9877-56ded38d4739",
+   "kind": "step",
+   "capabilityId": "agents.read",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "019f15ae87e4cab8ec60001c72c4c814cc8cd231475c832f2efa3e9d25c1305b"
+  },
+  {
+   "sequence": 28,
+   "at": "2026-09-27T00:02:08.774Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "2ebe82c0-c877-4bb6-9877-56ded38d4739",
+   "kind": "step",
+   "capabilityId": "agents.read",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "7535106cc7f66282492f69db9f8b049d1afb2c5c6800573b09aa70856e384275"
+  },
+  {
+   "sequence": 29,
+   "at": "2026-09-27T00:02:08.790Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "2ebe82c0-c877-4bb6-9877-56ded38d4739",
+   "kind": "dispatched",
+   "capabilityId": "agents.read",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "d7f3da1d5f8395f12c402917af308af30b5de23a9529e15eb08cee54a4dd8133"
+  },
+  {
+   "sequence": 30,
+   "at": "2026-09-27T00:02:08.895Z",
+   "instanceId": "c42a794b-9bf3-4870-9102-bc7989ef7251",
+   "callId": "2ebe82c0-c877-4bb6-9877-56ded38d4739",
+   "kind": "result",
+   "capabilityId": "agents.read",
+   "caller": "agent:3fbf42d1-7ab3-458b-90f0-772b323f6b1d",
+   "payload": "c9be0e86ad3d209892043c29a28f650c0f0dede9795cedee26406ba2d28776f4"
+  }
+ ]
+}

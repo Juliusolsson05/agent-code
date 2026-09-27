@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { RECOVERY_RESET_FAILED, RECOVERY_REVEAL_FAILED, revealMessage, useRecoveryActionGate } from '@renderer/features/settings/lib/recoveryStateActions'
 import { Input } from '@renderer/components/ui/input'
 import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -192,6 +193,8 @@ function AgentCodeCustomSkillsModal({
 
   const dirty = useMemo(() => draft !== null && JSON.stringify(draft) !== JSON.stringify(baseDraft), [baseDraft, draft])
 
+  // One gate for the recovery panel's actions (steering q111).
+  const recoveryActions = useRecoveryActionGate()
   const replaceSnapshot = (next: AgentCodeCustomSkillsSnapshot) => {
     setCurrent(next)
     onSnapshot(next)
@@ -517,7 +520,10 @@ function AgentCodeCustomSkillsModal({
             <div className="rounded-slab flex flex-col gap-2 border border-danger p-2 text-[10px] text-danger">
               <span>{current.recovery.message}</span>
               <div className="flex gap-2">
-                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal State File</Button>
+                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void recoveryActions.run(window.api.revealAgentCodeCustomSkillsRecoveryFile, {
+                  onLatest: result => setError(revealMessage(result)),
+                  onRejected: () => setError(RECOVERY_REVEAL_FAILED),
+                })}>Reveal State File</Button>
                 <Button type="button" variant="destructive-outline" size="xs" onClick={async () => {
                   if (!(await requestConfirm({
                     title: 'Reset all unreadable Agent Code-managed skill state?',
@@ -525,7 +531,12 @@ function AgentCodeCustomSkillsModal({
                     confirmLabel: 'Reset State',
                     tone: 'danger',
                   }))) return
-                  void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult)
+                  void recoveryActions.run(() => window.api.resetAgentCodeCustomSkillsRecovery(), {
+                    onLatest: applyResult,
+                    // A newer action owns the message; the snapshot is still true.
+                    onStale: result => { if ('snapshot' in result) replaceSnapshot(result.snapshot) },
+                    onRejected: () => setError(RECOVERY_RESET_FAILED),
+                  })
                 }}>Reset State</Button>
               </div>
             </div>

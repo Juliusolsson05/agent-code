@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,9 +11,18 @@ import { taskHistoryCapabilities } from '@main/control/history/tasks'
 import { workflowControlCapabilities } from './control'
 // This starts the real isolated workflow worker, so it belongs to the system
 // tier even though the workflow fixture never launches a provider agent.
+//
+// WHY a precondition (#1107): the worker is forked from the BUILT package
+// (packages/workflow-mcp/dist/workflowWorker.js; see workerFilePath in runWorkflow.ts). A fresh git
+// worktree has no dist, the package throws `worker-missing` inside the run, and all this test used
+// to see was an operation that never completed — a 5 s waitFor timeout that looked like load. It
+// now fails at once and says why. It does not build the package itself: a build inside one test is
+// slow and races parallel workers; CI builds it before the suite.
+const BUILT_WORKER = 'packages/workflow-mcp/dist/workflowWorker.js'
 const directories: string[] = [], services: WorkflowService[] = []
 afterEach(async () => { await Promise.all(services.splice(0).map(service => service.quiesce())); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 it('admits a main-host task before source approval and persists external ownership through a real existing workflow run', async () => {
+  expect(existsSync(BUILT_WORKER), `${BUILT_WORKER} is missing: run \`npm run build\` in packages/workflow-mcp (this test forks the built worker)`).toBe(true)
   const cwd = await mkdtemp(join(tmpdir(), 'ac-workflow-operator-')); directories.push(cwd)
   await mkdir(join(cwd, '.claude/workflows'), { recursive: true })
   await copyFile('packages/workflow-mcp/test/fixtures/workflow-corpus/minimal.js', join(cwd, '.claude/workflows/minimal.js'))

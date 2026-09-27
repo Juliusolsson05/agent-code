@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { PANE_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import { cn } from '@renderer/lib/utils'
+import { LAYERS } from '@renderer/ui/layers'
 
 // Pane-scoped dialogs (#713, keyboard-first plan X1).
 //
@@ -55,9 +56,9 @@ import { cn } from '@renderer/lib/utils'
 //     leaves the pane.
 
 /**
- * The pane's stacking levels while a pane dialog is up, as literal Tailwind
- * classes (Tailwind only emits classes it can see spelled out). ONE table so
- * the order cannot drift between files:
+ * The pane's stacking levels while a pane dialog is up. The classes are
+ * spelled in the app-wide layer table (ui/layers.ts, #512); this names the
+ * three a pane dialog uses:
  *   scrim   covers the pane, including the composer it must not let you type into;
  *   content the dialog itself;
  *   feedback  the pane's own status toast. #713's second half was a refusal
@@ -67,9 +68,9 @@ import { cn } from '@renderer/lib/utils'
  *           composer stays covered.
  */
 export const PANE_DIALOG_LAYERS = {
-  scrim: 'z-[60]',
-  content: 'z-[61]',
-  feedback: 'z-[62]',
+  scrim: LAYERS.paneDialogScrim,
+  content: LAYERS.paneDialogContent,
+  feedback: LAYERS.paneDialogFeedback,
 } as const
 
 export type PaneDialogHost = {
