@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const headlessControl = vi.hoisted(() => ({
   exitDuringStart: false,
+  rejectStart: null as Error | null,
   stop: vi.fn(async (): Promise<void> => {}),
   options: [] as Array<Record<string, unknown>>,
 }))
@@ -19,6 +20,7 @@ vi.mock('opencode-headless', async () => {
       readonly semantic = new EventEmitter()
       async start(): Promise<void> {
         if (headlessControl.exitDuringStart) this.emit('exit', { exitCode: 17 })
+        if (headlessControl.rejectStart) throw headlessControl.rejectStart
       }
       async stop(): Promise<void> {
         await headlessControl.stop()
@@ -32,6 +34,7 @@ import { OPENCODE_SERVE_STARTUP_TIMEOUT_MS, OpencodeSession } from './opencodeSe
 describe('OpencodeSession composer readiness', () => {
   beforeEach(() => {
     headlessControl.exitDuringStart = false
+    headlessControl.rejectStart = null
     headlessControl.stop.mockClear()
   })
 
@@ -74,5 +77,20 @@ describe('OpencodeSession composer readiness', () => {
     // constant's comment claims; merely above it (#1367 review a: 44 s passed)
     // would fail the next slightly slower machine.
     expect(OPENCODE_SERVE_STARTUP_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * 43_100)
+    // And at most about four times it (#1367 review c): the wait is also how
+    // long a serve that stays alive but never listens holds the pane on
+    // "starting". A stray zero (1_200_000) would make that twenty minutes.
+    expect(OPENCODE_SERVE_STARTUP_TIMEOUT_MS).toBeLessThanOrEqual(4 * 43_100)
+  })
+
+  // #1367 review c: a start that rejects after the server is already up (a
+  // resume whose history replay fails) must stop the server it spawned. With
+  // the longer wait this rollback is where every rejected start ends, and
+  // without it a live `opencode serve` child outlives the pane that owned it.
+  it('stops the server when startup rejects', async () => {
+    headlessControl.rejectStart = new Error('history replay failed')
+    const session = new OpencodeSession({ cwd: '/tmp/project' })
+    await expect(session.start()).rejects.toThrow('history replay failed')
+    expect(headlessControl.stop).toHaveBeenCalledTimes(1)
   })
 })
