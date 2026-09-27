@@ -1,6 +1,7 @@
-import { readdir, readFile, rm, stat } from 'node:fs/promises'
+import { readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { readWorkflowJournalSnapshots } from 'workflow-mcp'
 import type { WorkflowRunSummary, WorkflowStore } from 'workflow-mcp'
 
 /**
@@ -43,8 +44,9 @@ const TERMINAL = new Set<WorkflowRunSummary['status']>([
   'interrupted',
 ])
 
-// The journal records each agent attempt's provider thread (workflowJournal recordProviderSession).
-const CODEX_SESSION_IN_JOURNAL = /"session":\{"provider":"codex","id":"([0-9a-f-]{36})"\}/g
+// A Codex thread id, the shape its rollout file names carry (ROLLOUT_FILE below). A recorded Codex
+// session whose id is anything else is a shape we do not understand, and fails the pass closed.
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // Codex names rollouts sessions/YYYY/MM/DD/rollout-<timestamp>-<thread id>.jsonl.
 const ROLLOUT_FILE = /^rollout-.+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/
 
@@ -57,6 +59,11 @@ export type WorkflowRetentionResult = {
   rolloutsDeleted: number
   /** Lineages skipped because a delete failed part-way; retried on the next pass. */
   lineagesFailed: number
+  /**
+   * True when rollout pruning was skipped for this whole pass because some kept run's journal
+   * could not be read or understood (steering q64/q66): its references are unknown, not empty.
+   */
+  rolloutsSkipped: boolean
 }
 
 export function workflowRunTtlMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -74,7 +81,7 @@ export async function pruneWorkflowHistory(input: {
 }): Promise<WorkflowRetentionResult> {
   const { store, codexHome, now, ttlMs } = input
   const cutoff = now - ttlMs
-  const result: WorkflowRetentionResult = { runsDeleted: 0, rolloutsDeleted: 0, lineagesFailed: 0 }
+  const result: WorkflowRetentionResult = { runsDeleted: 0, rolloutsDeleted: 0, lineagesFailed: 0, rolloutsSkipped: false }
   if (!store.listRuns || !store.deleteRun) return result
 
   const runs = await allRuns(store)
@@ -110,6 +117,10 @@ export async function pruneWorkflowHistory(input: {
   }
 
   const referenced = await referencedCodexSessions(store, kept)
+  if (referenced === undefined) {
+    result.rolloutsSkipped = true
+    return result
+  }
   result.rolloutsDeleted = await pruneRollouts(join(codexHome, 'sessions'), cutoff, referenced)
   return result
 }
@@ -162,16 +173,43 @@ async function allRuns(store: WorkflowRetentionStore): Promise<WorkflowRunSummar
   return runs
 }
 
-async function referencedCodexSessions(store: WorkflowRetentionStore, kept: WorkflowRunSummary[]): Promise<Set<string>> {
+/**
+ * Every Codex thread a kept run's journal references, or `undefined` when that cannot be known.
+ *
+ * WHY undefined fails the whole rollout pass closed (steering q64/q66): the first version caught
+ * any read error and moved on, so an unreadable kept journal (EACCES, a torn write) counted as
+ * "references nothing", and every old rollout it needed for Resume was deleted. Not knowing a
+ * run's references is not the same as it having none; one unknown journal therefore skips
+ * rollout pruning for the pass, and the next daily pass tries again.
+ *
+ * WHY the package's reader and not a regex over the file: `readWorkflowJournalSnapshots` is the
+ * validation resume itself uses (format, version, sessions shape, size cap), so a journal
+ * retention cannot understand is exactly one resume could not use either. Real journals (the
+ * owner's 133, 2026-09-27) all store sessions as `snapshots[].sessions[].session`
+ * `{provider, id}` — 1,095 of them, all Codex with thread-id-shaped ids. A MISSING journal is
+ * "no references" here, as it is for the package's reader: one real failed run from July never
+ * wrote one.
+ */
+async function referencedCodexSessions(
+  store: WorkflowRetentionStore,
+  kept: WorkflowRunSummary[],
+): Promise<Set<string> | undefined> {
   const ids = new Set<string>()
   for (const run of kept) {
-    let text: string
+    let snapshots: Awaited<ReturnType<typeof readWorkflowJournalSnapshots>>
     try {
-      text = await readFile(store.journalPath(run.runId), 'utf8')
+      snapshots = await readWorkflowJournalSnapshots(store.journalPath(run.runId))
     } catch {
-      continue
+      return undefined
     }
-    for (const match of text.matchAll(CODEX_SESSION_IN_JOURNAL)) ids.add(match[1]!)
+    for (const snapshot of snapshots) {
+      for (const record of snapshot.sessions ?? []) {
+        // Other providers' sessions are not Codex rollouts; they cannot protect or expose one.
+        if (record.session.provider !== 'codex') continue
+        if (!CODEX_THREAD_ID.test(record.session.id)) return undefined
+        ids.add(record.session.id)
+      }
+    }
   }
   return ids
 }

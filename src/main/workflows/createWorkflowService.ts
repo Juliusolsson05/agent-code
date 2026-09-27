@@ -135,8 +135,8 @@ function scheduleWorkflowRetention(store: FileWorkflowStore, workflowCodexHome: 
   const pass = () => {
     void pruneWorkflowHistory({ store, codexHome: workflowCodexHome, now: Date.now(), ttlMs: workflowRunTtlMs() })
       .then(result => {
-        if (result.runsDeleted > 0 || result.rolloutsDeleted > 0 || result.lineagesFailed > 0) {
-          console.info(`[workflows] retention: removed ${result.runsDeleted} run(s) and ${result.rolloutsDeleted} Codex rollout(s); ${result.lineagesFailed} lineage(s) left for the next pass`)
+        if (result.runsDeleted > 0 || result.rolloutsDeleted > 0 || result.lineagesFailed > 0 || result.rolloutsSkipped) {
+          console.info(`[workflows] retention: removed ${result.runsDeleted} run(s) and ${result.rolloutsDeleted} Codex rollout(s); ${result.lineagesFailed} lineage(s) left for the next pass${result.rolloutsSkipped ? '; rollout pruning skipped (a kept run journal could not be read)' : ''}`)
         }
       })
       .catch(error => {

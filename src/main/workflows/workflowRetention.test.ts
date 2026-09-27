@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -183,6 +183,56 @@ describe('workflow run retention (#1275)', () => {
     expect(await exists(referenced)).toBe(true)
     expect(await exists(fresh)).toBe(true)
     expect(await exists(other)).toBe(true)
+  })
+
+  // Steering q64/q66: an unreadable or corrupt KEPT journal means its references are unknown, not
+  // empty. The first version skipped it and deleted the old rollout that run needs for Resume. The
+  // whole rollout pass must fail closed; the journal is damaged through the real file the store
+  // wrote, not a stand-in.
+  it.each([
+    ['unreadable (EACCES)', async (path: string) => { await chmod(path, 0o000) }],
+    ['truncated', async (path: string) => {
+      const text = await readFile(path, 'utf8')
+      await writeFile(path, text.slice(0, Math.floor(text.length / 2)))
+    }],
+  ] as const)('prunes no rollout at all when a kept run journal is %s', async (_label, damage) => {
+    const { store, codexHome } = await fixture()
+    const now = T0 + 9 * DAY
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(now)
+    await terminalRun(store, 'run_kept', 'run.interrupted')
+    const referencedThread = '01a0d58e-15a1-7a82-b1f6-0fbb899414b9'
+    await recordCodexSession(store, 'run_kept', referencedThread)
+    const referenced = await rollout(codexHome, referencedThread, 9, now)
+    const orphan = await rollout(codexHome, '01a0d58e-1d92-7611-9809-14790ab1730a', 9, now)
+    const journal = store.journalPath('run_kept')
+    await damage(journal)
+    try {
+      const result = await pruneWorkflowHistory({ store, codexHome, now, ttlMs: 7 * DAY })
+      expect(result).toMatchObject({ rolloutsDeleted: 0, rolloutsSkipped: true })
+      // Both survive: the referenced one because its reference is unknowable this pass, and the
+      // orphan because nothing can be proven unreferenced while one journal is unknown.
+      expect(await exists(referenced)).toBe(true)
+      expect(await exists(orphan)).toBe(true)
+    } finally {
+      await chmod(journal, 0o600).catch(() => undefined)
+    }
+  })
+
+  // Steering q66: "reject unknown shapes rather than assume an empty set". Every real Codex session
+  // id is a thread id (1,095 of 1,095 in the owner's journals); one that is not is a format this
+  // pass does not understand, so it cannot be matched to a rollout name and fails the pass closed.
+  it('prunes no rollout when a kept journal records a Codex session id of an unknown shape', async () => {
+    const { store, codexHome } = await fixture()
+    const now = T0 + 9 * DAY
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(now)
+    await terminalRun(store, 'run_kept', 'run.interrupted')
+    await recordCodexSession(store, 'run_kept', 'thread:01a0d58e-15a1-7a82-b1f6-0fbb899414b9')
+    const orphan = await rollout(codexHome, '01a0d58e-1d92-7611-9809-14790ab1730a', 9, now)
+    const result = await pruneWorkflowHistory({ store, codexHome, now, ttlMs: 7 * DAY })
+    expect(result).toMatchObject({ rolloutsDeleted: 0, rolloutsSkipped: true })
+    expect(await exists(orphan)).toBe(true)
   })
 
   it('reads the TTL from the environment, defaulting to 7 days', () => {

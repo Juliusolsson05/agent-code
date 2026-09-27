@@ -84,6 +84,24 @@ Nothing deletes any of it:
 
    Reading only the kept runs' journals (13 MB for all 134 today) keeps this cheap. The mtime guard
    covers sessions from runs this process never recorded.
+
+   **Fail closed (steering q64/q66).** A kept run whose journal cannot be read or understood has
+   UNKNOWN references, not none, so the whole rollout pass is skipped (`rolloutsSkipped`) and the next
+   daily pass retries it. The first version skipped such a journal and would have deleted the old
+   rollout that run needs for Resume.
+   - Journals are read through the package's own validated reader (`readWorkflowJournalSnapshots`,
+     exported for this in workflow-mcp#65), not a regex. That covers format, version, session shape
+     and the size cap, the same checks resume applies.
+   - A Codex session id that is not a thread id also fails the pass closed.
+   - Validated on the real corpus (2026-09-27):
+     - 133 journals, format `workflow-mcp-journal` v1 (32) and v2 (101), no malformed file;
+     - 1,095 session records, all at `snapshots[].sessions[].session` = `{provider: "codex", id}`
+       with thread-id-shaped ids;
+     - `providerSession` never appears in a stored journal.
+   - A MISSING journal is "no references", as it is for the package's reader. One real failed run
+     from July never wrote one.
+   - Tests: an EACCES journal, a truncated journal, and an unknown id shape, each with an old
+     referenced rollout and an old orphan; nothing is deleted. Both damage cases fail on `4d541115`.
 5. **When:** once after `WorkflowService` initialization (so startup recovery decisions have already
    been made on the full history), then every 24 h while the app runs (an unref'd timer). It is a
    no-op while any run is non-terminal in the lineage being considered.
