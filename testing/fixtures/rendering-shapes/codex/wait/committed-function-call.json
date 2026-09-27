@@ -1,0 +1,53 @@
+{
+  "evidence": "A real codex-cli 0.157.1 `wait` issued as a plain function_call and its non-empty function_call_output, copied verbatim from a local rollout (2026-09-27). Ids and timings only: no paths, prompts or names. Codex runs `wait` this way 3,232 times in the local corpus; the result maps to the plain tool_result envelope fp2-5b0abcb6 (#645).",
+  "records": [
+    {
+      "timestamp": "2026-09-27T04:48:44.219Z",
+      "ordinal": 258,
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "id": "fc_0beacc76b3647811016ab8a02b41f487d0a0d545eb449909b5",
+        "name": "wait",
+        "arguments": "{\"cell_id\":\"33\",\"yield_time_ms\":20000,\"max_tokens\":900}",
+        "call_id": "call_luMOQz14LPGcISvgSp0SGUDW",
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "01a0e12a-32cd-7041-918b-f079bb48e00f",
+          "create_time": 1790484522.320638
+        }
+      },
+      "metadata": {
+        "client_authored": false,
+        "user_input_order": 5
+      }
+    },
+    {
+      "timestamp": "2026-09-27T04:48:44.346Z",
+      "ordinal": 260,
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "id": "fco_01a0e131-ad39-7252-8386-7f2d50551530",
+        "call_id": "call_luMOQz14LPGcISvgSp0SGUDW",
+        "output": [
+          {
+            "type": "input_text",
+            "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+          },
+          {
+            "type": "input_text",
+            "text": "{\"chunk_id\":\"f49289\",\"wall_time_seconds\":30.026283333,\"session_id\":73581,\"original_token_count\":0,\"output\":\"\"}"
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "01a0e12a-32cd-7041-918b-f079bb48e00f",
+          "create_time": 1790484524.345929
+        }
+      },
+      "metadata": {
+        "client_authored": false,
+        "fallback_token_limit_override": 12000
+      }
+    }
+  ]
+}

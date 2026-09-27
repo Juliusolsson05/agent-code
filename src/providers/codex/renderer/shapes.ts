@@ -497,10 +497,20 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json"], prefixes: [] },
+    fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-shapes/codex/wait/committed-function-call.json"], prefixes: [] },
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Unknown or uncorrelated results remain visibly formatted by the shared result fallback.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      // #645: Codex runs `wait` as a PLAIN function_call most of the time (3,232
+      // in the local corpus, against its custom-output form), so its result
+      // lands in THIS envelope, not only in fp2-8571cc95. The dispatcher
+      // deliberately shows a wait result with visible output as a "Command
+      // continuation" row and absorbs an empty one into the wait row; these
+      // two routes were catalogued for the custom-output sibling only, so every
+      // plain wait result was reported known-misrouted (45 sightings,
+      // 2026-08-26). Pinned by wait.plainResult.evidence.renderer.test.tsx.
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'command.continuation', reason: 'An empty successful wait acknowledgement is represented by its continuation invocation row.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
