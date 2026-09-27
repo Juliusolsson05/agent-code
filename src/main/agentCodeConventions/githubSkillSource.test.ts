@@ -645,4 +645,109 @@ describe('bounded GitHub transport', () => {
       1_024,
     )).rejects.toThrow(/acquisition limit/)
   })
+
+  // Review of #1456 (a): an unclassified git failure and the YAML parser's
+  // wording both reached Add Skill as raw text. A real child-process failure,
+  // with a temporary path in its stderr, drives the fallback.
+  it('answers an unclassified git failure with a fixed sentence, never its stderr or path', async () => {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const failure = await promisify(execFile)(process.execPath, ['-e', "process.stderr.write('fatal: unexpected git failure at /tmp/clone-4f2a'); process.exit(128)"])
+      .then(() => null, (caught: unknown) => caught)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rejected = await new GitHubSkillSource({
+        runGit: vi.fn(async () => { throw failure }),
+        fetchBytes: vi.fn(async () => Buffer.alloc(0)),
+      }).discover(request('https://github.com/example/skills')).then(() => null, (caught: unknown) => caught)
+      expect(rejected).toBeInstanceOf(GitHubSkillSourceError)
+      expect((rejected as GitHubSkillSourceError).message).toBe('Could not inspect the GitHub skill source.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), failure)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('reports invalid YAML frontmatter by line, not in the parser\'s words', () => {
+    const thrown = (() => { try { parseSkillFrontmatter('---\nname: [x\ndescription: y\n---\n# Body\n'); return null } catch (caught) { return caught } })()
+    expect(thrown).toBeInstanceOf(GitHubSkillSourceError)
+    // The line is REQUIRED now (review of #1456, round 2 a and b: it never appeared): `name: [x`
+    // opens a flow sequence on file line 2, and the parser reports it where the next line begins.
+    expect((thrown as Error).message).toBe('SKILL.md contains invalid YAML frontmatter near line 3.')
+  })
+
+  // Review of #1456 (b): a classified git failure replaced git's error with a
+  // fixed sentence and dropped the raw one from the log.
+  it('logs the raw git error behind a classified message', async () => {
+    const failure = Object.assign(new Error('Command failed: git ls-remote'), { code: 128, cmd: 'git ls-remote', stderr: 'fatal: repository does not exist' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rejected = await new GitHubSkillSource({
+        runGit: vi.fn(async () => { throw failure }),
+        fetchBytes: vi.fn(async () => Buffer.alloc(0)),
+      }).discover(request('https://github.com/example/skills')).then(() => null, (caught: unknown) => caught)
+      expect((rejected as Error).message).toBe('The public GitHub repository or ref was not found.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), failure)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // Review of #1456 (b), a surviving mutation: Node's own fetch rejection
+  // (`TypeError('fetch failed', { cause })`) reached the UI as `fetch failed`.
+  it('answers a fetch that cannot connect with a fixed sentence and logs the cause', async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND api.github.com'), { code: 'ENOTFOUND', syscall: 'getaddrinfo' })
+    const rejection = new TypeError('fetch failed', { cause })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw rejection }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rejected = await fetchBoundedGitHubBytes('https://api.github.com/repos/example/skills', 1024).then(() => null, (caught: unknown) => caught)
+      expect(rejected).toBeInstanceOf(GitHubSkillSourceError)
+      expect((rejected as Error).message).toBe('Could not download that skill from GitHub.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), rejection)
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  // Review of #1456, round 2 (c): the 60 s abort and the YAML parser branch
+  // replaced their raw diagnostics with fixed sentences and logged nothing.
+  it('logs the raw error behind a download that times out', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })))
+    })))
+    try {
+      const pending = fetchBoundedGitHubBytes('https://api.github.com/repos/example/skills', 1024).then(() => null, (caught: unknown) => caught)
+      await vi.advanceTimersByTimeAsync(60_000)
+      const rejected = await pending
+      expect((rejected as Error).message).toBe('GitHub content acquisition timed out.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ name: 'AbortError' }))
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
+  it('logs the YAML parser\'s own detail behind the invalid-frontmatter sentence', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => parseSkillFrontmatter('---\nname: [x\ndescription: y\n---\n# Body\n')).toThrow(/invalid YAML frontmatter/)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('names the line of a duplicate key', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => parseSkillFrontmatter('---\nname: x\nname: y\n---\n# Body\n')).toThrow('SKILL.md contains invalid YAML frontmatter near line 3.')
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })

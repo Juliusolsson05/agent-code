@@ -12,6 +12,7 @@ import {
 } from '@shared/types/agentCodeConventions.js'
 import { sha256Text } from './renderSkill.js'
 import type { AgentCodeConventionsTarget } from './targets.js'
+import { userFacingSkillError } from './userFacingError.js'
 
 export type FileInspection =
   | {
@@ -86,7 +87,7 @@ export class SkillPathSafety {
       }
       return this.inspectRegularFile(target.skillFile, file)
     } catch (error) {
-      return this.pathConflict(target.skillFile, safeErrorMessage(error))
+      return this.pathConflict(target.skillFile, userFacingSkillError(error))
     }
   }
 
@@ -98,7 +99,7 @@ export class SkillPathSafety {
     try {
       await this.assertNoSymlinkComponents(dirname(path))
     } catch (error) {
-      return this.pathConflict(path, safeErrorMessage(error))
+      return this.pathConflict(path, userFacingSkillError(error))
     }
     const file = await lstat(path).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -222,8 +223,8 @@ export class SkillPathSafety {
         throw error
       })
       if (!stat) return
-      if (stat.isSymbolicLink()) throw new Error(`Symbolic-link path component is not supported: ${cursor}`)
-      if (!stat.isDirectory()) throw new Error(`Path component is not a directory: ${cursor}`)
+      if (stat.isSymbolicLink()) throw pathComponentError(SYMLINK_COMPONENT, cursor)
+      if (!stat.isDirectory()) throw pathComponentError(FILE_COMPONENT, cursor)
     }
   }
 
@@ -255,7 +256,7 @@ export class SkillPathSafety {
         fingerprint,
         bytes: stat.size,
         executable: (stat.mode & 0o111) !== 0,
-        readError: safeErrorMessage(error),
+        readError: userFacingSkillError(error),
       }
     }
   }
@@ -309,9 +310,9 @@ export class SkillPathSafety {
         stat = await lstat(cursor)
       }
       if (stat.isSymbolicLink()) {
-        throw new Error(`Symbolic-link path component is not supported: ${cursor}`)
+        throw pathComponentError(SYMLINK_COMPONENT, cursor)
       }
-      if (!stat.isDirectory()) throw new Error(`Path component is not a directory: ${cursor}`)
+      if (!stat.isDirectory()) throw pathComponentError(FILE_COMPONENT, cursor)
     }
   }
 
@@ -339,7 +340,14 @@ function sha256Bytes(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
-  return 'Unknown filesystem error'
+// The reason is curated and shown; the offending path rides on `path` for the
+// main log only (#1427; review of #1456, b). The first versions put the path
+// in the message, which was then either shown (a root-level `/tmp`) or thrown
+// away with the reason (the generic sentence). userFacingSkillError keeps
+// this message and logs the error, path included.
+const SYMLINK_COMPONENT = 'A folder on the skill path is a symbolic link, which Agent Code does not follow.'
+const FILE_COMPONENT = 'A file is in the way where a folder on the skill path should be.'
+
+function pathComponentError(message: string, path: string): Error {
+  return Object.assign(new Error(message), { path })
 }
