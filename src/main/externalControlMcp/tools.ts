@@ -139,6 +139,43 @@ export function createOperatorMcpServer(port: ControlOperatorPort): Server {
 // execute, so nothing unvalidated reaches a handler. Output schemas are not
 // republished here: clients inside Agent Code do not consume them, and the
 // envelope is already described in the tool text.
+// WHY re-apply the descriptor's `required` lists after conversion (#1366,
+// steering q84). From zod 4.6 (hoisted into the app with workflow-mcp's
+// Dependabot group), z.fromJSONSchema turns a property that is a recursive
+// `$ref` (every z.json() payload, such as probe.echo's `payload`) into a lazy
+// schema whose input optionality reports "optional". Calls still validate
+// correctly, `{}` is rejected, but when McpServer re-exports the schema for
+// tools/list, `required: ['payload']` silently disappears. The built-in list
+// then advertises a weaker contract than the external Server, which
+// publishes the descriptor as-is. zod 4.4.3 did not do this. The descriptor's
+// JSON Schema is the source of truth, so its required keys are re-imposed on
+// every object it describes. That is a no-op on 4.4.3 and a repair on 4.6.x.
+// The walk follows plain nested `properties` only, not `$ref`s, because only
+// object schemas the descriptor spells out can carry their own `required`.
+function withDeclaredRequiredKeys(schema: z.ZodType, jsonSchema: unknown): z.ZodType {
+  if (!(schema instanceof z.ZodObject) || !isJsonObjectSchema(jsonSchema)) return schema
+  const properties = isJsonObjectSchema(jsonSchema.properties) ? jsonSchema.properties : {}
+  const shape = schema.shape as Record<string, z.ZodType>
+  let result: z.ZodObject = schema
+  const nested: Record<string, z.ZodType> = {}
+  for (const [key, child] of Object.entries(shape)) {
+    const repaired = withDeclaredRequiredKeys(child, properties[key])
+    if (repaired !== child) nested[key] = repaired
+  }
+  if (Object.keys(nested).length > 0) result = result.extend(nested)
+  const required = Array.isArray(jsonSchema.required)
+    ? jsonSchema.required.filter((key): key is string => typeof key === 'string' && key in shape)
+    : []
+  if (required.length > 0) {
+    result = result.required(Object.fromEntries(required.map(key => [key, true])) as Record<string, true>)
+  }
+  return result
+}
+
+function isJsonObjectSchema(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export function registerOperatorControlTools(
   server: McpServer,
   port: ControlOperatorPort,
@@ -152,7 +189,10 @@ export function registerOperatorControlTools(
     let description = definition.description
     let inputSchema: z.ZodType
     try {
-      inputSchema = z.fromJSONSchema(definition.inputSchema as Parameters<typeof z.fromJSONSchema>[0])
+      inputSchema = withDeclaredRequiredKeys(
+        z.fromJSONSchema(definition.inputSchema as Parameters<typeof z.fromJSONSchema>[0]),
+        definition.inputSchema,
+      )
     } catch (error) {
       options.onSchemaFallback?.(descriptor.id, error)
       inputSchema = z.looseObject({})
