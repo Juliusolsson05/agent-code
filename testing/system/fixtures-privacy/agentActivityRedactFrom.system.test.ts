@@ -133,7 +133,7 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (
     await symlink(cwd!, intoRepo)
     const result = await extract([], { TMPDIR: intoRepo })
     expect(result.code).not.toBe(0)
-    expect(result.stderr).toMatch(/inside a git worktree/)
+    expect(result.stderr).toMatch(/inside a git working tree/)
     expect(await readFile(output, 'utf8')).toBe(SENTINEL)
     expect((await readdir(cwd!)).filter(name => name.startsWith('agent-activity-staging-'))).toEqual([])
     // No file in the repository holds the private bytes, except the planted bundle itself.
@@ -142,6 +142,27 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (
       .map(entry => join(entry.parentPath, entry.name))
       .filter(path => !path.includes('/.config/') && !path.includes('/.git/'))
     for (const path of files) expect(await readFile(path, 'utf8'), path).not.toContain('secretproject')
+  }, 60_000)
+
+  // Final check of #1353 (a and c): git's own discovery can be switched off from the environment,
+  // and "git gave no answer" was read as "outside a worktree". GIT_CEILING_DIRECTORIES above a
+  // subdirectory and a bogus GIT_DIR both did it.
+  it.each([
+    ['GIT_CEILING_DIRECTORIES', (repo: string) => ({ GIT_CEILING_DIRECTORIES: repo })],
+    ['a bogus GIT_DIR', (repo: string) => ({ GIT_DIR: join(repo, 'no-such-git-dir') })],
+  ])('refuses a TMPDIR inside a worktree whatever %s says', async (_label, gitEnv) => {
+    const { output } = await stage()
+    execFileSync('git', ['init', '-q'], { cwd: cwd! })
+    await mkdir(join(cwd!, 'sub'))
+    const me = cwd!.split('/').pop()!
+    await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Projects/secretproject/private-task` }, `/Users/${me}/Projects/secretproject/private-task`)
+    stagingParent = await mkdtemp(join(tmpdir(), 'aas-'))
+    const intoRepo = join(stagingParent, 'r')
+    await symlink(join(cwd!, 'sub'), intoRepo)
+    const result = await extract([], { TMPDIR: intoRepo, ...gitEnv(cwd!) })
+    expect(result.code).not.toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+    expect((await readdir(join(cwd!, 'sub'))).filter(name => name.startsWith('agent-activity-staging-'))).toEqual([])
   }, 60_000)
 
   it('refuses --out (or any argument) instead of writing anywhere', async () => {

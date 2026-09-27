@@ -48,12 +48,11 @@
 //   Promotion of a staged live file into testing/fixtures/agent-activity/runtime-states.json is a
 //   MANUAL copy after a key-by-key privacy audit, never a script step.
 
-import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, writeFile, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import process from 'node:process'
 
 import {
@@ -91,19 +90,25 @@ async function stagingFile(root: string): Promise<string> {
  *
  * WHY (steering q81): `os.tmpdir()` follows `$TMPDIR`, so a hostile or careless TMPDIR (the repo
  * itself, or a symlink into it) put the staged, UNAUDITED file inside the working tree, where an
- * ordinary `git add -A` would commit it. The root is realpath'd first (so a symlink into a repo is
- * judged by where it lands), then git is asked whether that directory is in any worktree. Checked
- * before a single bundle is read, so a refusal leaves no bytes anywhere. If git cannot answer
- * (not installed), the run refuses: ambiguity fails closed.
+ * ordinary `git add -A` would commit it. Checked before a single bundle is read, so a refusal
+ * leaves no bytes anywhere.
+ *
+ * WHY a walk for `.git` and not `git rev-parse` (final check of #1353, a and c): the first version
+ * asked git, and git's answer can be switched off from the environment — `GIT_CEILING_DIRECTORIES`
+ * stops discovery above a subdirectory, a bogus `GIT_DIR` makes it fail — and every non-zero exit
+ * was read as "outside a worktree", so the file was staged inside one. A `.git` entry (a directory
+ * in a checkout, a file in a linked worktree or submodule) in the realpath'd root or any ancestor
+ * is what makes a directory part of a working tree, and no environment variable changes whether it
+ * exists. Stricter than git on purpose: any `.git` above the root refuses.
  */
 function stagingRoot(): string {
   const root = realpathSync(tmpdir())
-  const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' })
-  if (probe.error !== undefined) throw new Error('cannot run git to check the temp directory; refusing to stage')
-  if (probe.status === 0) {
-    throw new Error('the temp directory (TMPDIR) is inside a git worktree; point TMPDIR outside any repository')
+  for (let dir = root; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git'))) {
+      throw new Error('the temp directory (TMPDIR) is inside a git working tree; point TMPDIR outside any repository')
+    }
+    if (dirname(dir) === dir) return root
   }
-  return root
 }
 
 /** sha256 of `git show 15e43abe^:testing/fixtures/agent-activity/runtime-states.json` (blob d2653405). */

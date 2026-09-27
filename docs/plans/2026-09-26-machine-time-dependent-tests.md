@@ -117,6 +117,18 @@ that leak developer data. Each item below is taken from the issue, with its curr
          can't answer). A process test with a symlinked TMPDIR into a repo and a private bundle
          refuses, and leaves no private bytes in the repo; it is red on `0d9a02a5` and with the guard
          removed.
+       - **Final check (a, c):** git's own discovery can be switched off from the environment
+         (`GIT_CEILING_DIRECTORIES`, a bogus `GIT_DIR`), and "no answer" was read as "outside". The
+         check is now an ancestor walk for a `.git` entry from the realpath'd root to `/`, with no
+         git process at all. Process tests for both environments are red at `980a78ba`.
+     - **Stated residuals (final-pass cap):**
+       - A concurrent process running as the same user can rename the just-created staging directory
+         and put a symlink in its place between `mkdtemp` and the write, redirecting the write. Binding
+         the write to the directory inode needs `openat`, which Node doesn't expose. An attacker with
+         that access can write anywhere the user can.
+       - The `wx` flag on the staged file is defensive only: in a directory created a moment before,
+         nothing can pre-exist except through that same race, so no deterministic test can tell `wx`
+         from `w`.
      - **Stated residual:** the pattern-based pass itself can't recognise every identifier a new live
        corpus might hold, which is why the staged file needs a person's audit before any copy.
    - The fleet fixtures:
