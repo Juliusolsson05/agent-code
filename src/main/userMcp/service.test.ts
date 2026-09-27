@@ -596,12 +596,48 @@ describe('secrets are bound to their destination (#1304, q113)', () => {
     expect(wrongPair(await pairing(restarted))).toBe(false)
   })
 
-  it('upgrades a secret written before binding to the destination its document names', async () => {
+  // q114: a record written before binding carries no proof of which
+  // destination it was saved for. An old-version crash could leave document B
+  // with the plaintext token T that was entered for A, and an upgrade that
+  // bound legacy records to "the destination the document names" labelled T
+  // as B and launched B/T. Legacy records are therefore never trusted: they
+  // read as not set until the user re-enters them, across every restart.
+  it('never launches a pre-binding secret, even when the document names a destination', async () => {
+    const live = service()
+    expect((await live.save(beeper({ entry: at(NEW_URL), secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), codec.encrypt(TOKEN), { mode: 0o600 })
+    expect(await launchedToken(service(), id)).toBeNull()
+    expect(await launchedToken(service(), id)).toBeNull()
+  })
+
+  // B6 (q114): kept, withheld, and bound only by the user's confirmation.
+  it('keeps a pre-binding secret, withholds it, and binds it only when the user confirms it', async () => {
+    const live = service()
+    expect((await live.save(beeper({ entry: at(NEW_URL), secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const blob = join(dir, 'mcp-secrets', id, 'beeper-authorization.bin')
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(blob, codec.encrypt(TOKEN), { mode: 0o600 })
+    const restarted = service()
+    expect(await launchedToken(restarted, id)).toBeNull()
+    expect((await restarted.snapshot()).servers[0]!.secrets['beeper-authorization']).toMatchObject({ set: false, unconfirmed: true })
+    expect(await readFile(blob, 'utf8')).toBe(`enc:${TOKEN}`)
+    expect((await restarted.confirmSecret(id, 'beeper-authorization')).ok).toBe(true)
+    expect(await launchedToken(service(), id)).toBe(TOKEN)
+  })
+
+  it('tells the user a pre-binding secret must be re-entered, and accepts the re-entry', async () => {
     const live = service()
     expect((await live.save(beeper({ secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
     const id = (await live.snapshot()).servers[0]!.id
     await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
-    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), codec.encrypt(TOKEN))
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), codec.encrypt(TOKEN), { mode: 0o600 })
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.problems.map(problem => problem.message).join(' ')).toMatch(/earlier version.*re-enter/i)
+    expect((await restarted.setSecret(id, 'beeper-authorization', TOKEN)).ok).toBe(true)
     expect(await launchedToken(service(), id)).toBe(TOKEN)
   })
 

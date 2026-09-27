@@ -111,7 +111,10 @@ export type UserMcpProblem =
 
 export type UserMcpSupport = { ok: true } | { ok: false; reason: string }
 
-export type UserMcpSecretState = { set: boolean; hint?: string }
+/** `unconfirmed`: a secret saved by an earlier version (before secrets were
+ *  bound to their destination). It is kept but withheld from launches until
+ *  the user confirms it for the current destination or re-enters it (q114). */
+export type UserMcpSecretState = { set: boolean; hint?: string; unconfirmed?: true }
 
 /** What crosses IPC to the renderer. Never contains a secret value. */
 export type UserMcpServerView = UserMcpServer & {

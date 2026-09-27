@@ -113,14 +113,6 @@ export class UserMcpService {
       this.document = loaded.document
       this.storeProblem = loaded.problem
       this.readFailed = loaded.readFailed === true
-      // One-time upgrade of records saved before destination binding (q113),
-      // bound to the destination the loaded document names. Best effort: a
-      // record that cannot be upgraded stays unbound and reads as not set.
-      if (!this.readFailed) {
-        for (const server of this.document.servers) {
-          await this.secrets.bindLegacy(server.id, server.inputs.map(input => input.id), userMcpDestination(server.entry)).catch(() => {})
-        }
-      }
     })()
     return this.initialized
   }
@@ -279,6 +271,23 @@ export class UserMcpService {
 
   setProvider(id: string, provider: UserMcpProvider, enabled: boolean): Promise<UserMcpMutationResult> {
     return this.update(id, server => ({ ...server, providers: { ...server.providers, [provider]: enabled } }))
+  }
+
+  /**
+   * The USER confirms that a secret saved by an earlier version is for this
+   * server's current destination (q114), which binds it. Deliberately NOT on
+   * the agent tool surface (userMcpTools): an agent confirming an old token
+   * for a destination it just set would be the exfiltration binding prevents.
+   */
+  confirmSecret(id: string, inputId: string): Promise<UserMcpMutationResult> {
+    return this.mutate(async () => {
+      const server = this.document.servers.find(candidate => candidate.id === id)
+      if (!server) return { ok: false, error: 'That server no longer exists.' }
+      if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
+      const confirmed = await this.secrets.confirmUnbound(id, inputId, userMcpDestination(server.entry))
+      if (!confirmed) return { ok: false, error: `Secret "${inputId}" has nothing to confirm.` }
+      return { ok: true }
+    })
   }
 
   setSecret(id: string, inputId: string, value: string): Promise<UserMcpMutationResult> {
@@ -570,7 +579,12 @@ export class UserMcpService {
     const problems = validateServer(server, others)
     for (const inputId of referencedInputIds(server.entry)) {
       if (secrets[inputId] && !secrets[inputId]!.set) {
-        problems.push({ kind: 'secret-missing', message: `Secret "${inputId}" is not set` })
+        problems.push({
+          kind: 'secret-missing',
+          message: secrets[inputId]!.unconfirmed
+            ? `Secret "${inputId}" was saved by an earlier version. Confirm it is for ${summarizeEntry(server.entry)}, or re-enter it`
+            : `Secret "${inputId}" is not set`,
+        })
       }
     }
     if (server.pendingReview) {

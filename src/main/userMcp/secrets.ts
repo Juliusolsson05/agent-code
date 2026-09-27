@@ -43,10 +43,15 @@ import type { UserMcpSecretState } from '@shared/userMcp/types.js'
  * holds whatever state is left on disk: a token only ever reaches the
  * destination it was entered for.
  *
- * Records written before binding existed (plain value, no prefix) are
- * upgraded once at load by `bindLegacy`, to the destination their document
- * names at that moment. That pairing is exactly what the old code launched
- * with. Until upgraded, an unbound record reads as not set (fail closed).
+ * Records written before binding existed (plain value, no prefix) are NEVER
+ * bound automatically (q114). An old version could have crashed between
+ * publishing a new destination and clearing the old token, leaving document B
+ * next to a token entered for A; binding legacy records to "the destination
+ * the document names" would stamp that token as B's and launch it. So an
+ * unbound record is kept on disk (never deleted) but reads as not set, and
+ * Settings asks the user to confirm it for the current destination
+ * (`confirmUnbound`) or re-enter it. That user action is the proof that binds
+ * it. Upgrading users pay a one-time confirmation per stored secret.
  */
 const BOUND_PREFIX = 'agent-code/user-mcp-secret/v1:'
 
@@ -87,17 +92,33 @@ export class UserMcpSecretStore {
     return record.value
   }
 
+  /** True when a record exists but was written before destination binding
+   *  (q114): it cannot prove its destination, so it is withheld. */
+  async isUnbound(serverId: string, inputId: string): Promise<boolean> {
+    const plaintext = await this.decrypted(serverId, inputId)
+    return plaintext !== null && plaintext !== '' && unbindValue(plaintext) === null
+  }
+
+  /** Last four characters of an unbound record, so the user can recognise
+   *  what they are confirming (the same hint rule as a set secret). */
+  async unboundHint(serverId: string, inputId: string): Promise<string | undefined> {
+    const plaintext = await this.decrypted(serverId, inputId)
+    if (plaintext === null || unbindValue(plaintext) !== null || plaintext.length < 12) return undefined
+    return plaintext.slice(-4)
+  }
+
   /**
-   * Upgrade records written before binding to `destination` (once, at load).
-   * Only unbound records are touched; a bound record is never re-bound, so
-   * this cannot move a token to another destination.
+   * Bind an unbound (pre-binding) record to `destination` because the USER
+   * confirmed it is for that destination (q114). Nothing else may bind a
+   * legacy record: an old record carries no proof of its destination, and
+   * the document it sits next to may be exactly the inconsistent state this
+   * binding exists to refuse. Returns false when there is no unbound record.
    */
-  async bindLegacy(serverId: string, inputIds: readonly string[], destination: string): Promise<void> {
-    for (const inputId of inputIds) {
-      const plaintext = await this.decrypted(serverId, inputId)
-      if (plaintext === null || plaintext === '' || unbindValue(plaintext) !== null) continue
-      await this.write(serverId, inputId, bindValue(destination, plaintext))
-    }
+  async confirmUnbound(serverId: string, inputId: string, destination: string): Promise<boolean> {
+    const plaintext = await this.decrypted(serverId, inputId)
+    if (plaintext === null || plaintext === '' || unbindValue(plaintext) !== null) return false
+    await this.write(serverId, inputId, bindValue(destination, plaintext))
+    return true
   }
 
   private async decrypted(serverId: string, inputId: string): Promise<string | null> {
@@ -200,9 +221,17 @@ export class UserMcpSecretStore {
       const value = await this.get(serverId, id, destination)
       // No hint for short values: the last four characters of a six-character
       // PIN are most of the secret.
-      const state: UserMcpSecretState = value === null
-        ? { set: false }
-        : { set: true, ...(value.length >= 12 ? { hint: value.slice(-4) } : {}) }
+      let state: UserMcpSecretState
+      if (value !== null) {
+        state = { set: true, ...(value.length >= 12 ? { hint: value.slice(-4) } : {}) }
+      } else if (await this.isUnbound(serverId, id)) {
+        // Saved by an earlier version: kept, withheld, and shown so the user
+        // can confirm or re-enter it (q114).
+        const hint = await this.unboundHint(serverId, id)
+        state = { set: false, unconfirmed: true, ...(hint ? { hint } : {}) }
+      } else {
+        state = { set: false }
+      }
       return [id, state] as const
     }))
     return Object.fromEntries(entries)
