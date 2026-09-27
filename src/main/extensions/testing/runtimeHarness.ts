@@ -52,12 +52,43 @@ async function until(predicate: () => Promise<boolean>, label: string): Promise<
 
 void (async () => {
   await app.whenReady()
+  // Every request that reaches this server is runtime egress EXCEPT one exact
+  // shape: `GET /` (#1187). When the suite runs inside an Agent Code agent
+  // lane, the host app's browser-pocket LanePortWatcher finds this listener in
+  // the lane's process tree and probes it once with `GET /`
+  // (src/main/browserPocket/lanePortsIo.ts, Node fetch). Under load that probe
+  // landed before the assertion below and failed the run with `['/']`, which
+  // the issue read as a runtime-API race; request logging showed it in every
+  // local run, about 1.6 s after startup, and CI has no watching app.
+  //
+  // WHY ignore exactly `GET /` and not "anything but the probed path" (review
+  // b): a regression that leaked to any other path (`/leak`, an encoded or
+  // query variant) must still fail. Only the watcher's shape is excused, and
+  // the positive control below proves a non-probe path is counted. Residual: a
+  // runtime escape that requests exactly `GET /` would be excused too; the
+  // renderer probes all target EGRESS_PATH, so that would need a new probe.
+  const EGRESS_PATH = '/private-state'
   const hits: string[] = []
-  const server = createServer((request, response) => { hits.push(request.url ?? ''); response.end('unexpected egress') })
+  const ignoredWatcherProbes: string[] = []
+  const server = createServer((request, response) => {
+    const url = request.url ?? ''
+    if (request.method === 'GET' && url === '/') ignoredWatcherProbes.push(`${request.headers['user-agent'] ?? ''}`)
+    else hits.push(url)
+    response.end('unexpected egress')
+  })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
-  const endpoint = `http://127.0.0.1:${address.port}/private-state`
+  const endpoint = `http://127.0.0.1:${address.port}${EGRESS_PATH}`
+  // Positive control: a non-probe path IS counted (review b's surviving
+  // mutation replaced the classifier and the journey stayed green).
+  // Both the path every renderer probe uses and an arbitrary one (review c:
+  // a regression that excused EGRESS_PATH itself kept an /egress-control-only
+  // control green while blinding the real check).
+  await fetch(endpoint).then(response => response.text())
+  await fetch(`http://127.0.0.1:${address.port}/egress-control`).then(response => response.text())
+  assert.deepEqual(hits, [EGRESS_PATH, '/egress-control'], 'the egress server must count the probed path and any other non-watcher path')
+  hits.length = 0
   const statuses: RuntimeStatus[] = []
   const lifecycle: string[] = []
   const projectRoot = join(root!, 'project')
@@ -228,7 +259,7 @@ void (async () => {
     await command('navigate')
     await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(object(await command('snapshot')).activations, 1, 'renderer navigation must be refused')
-    assert.deepEqual(hits, [])
+    assert.deepEqual(hits, [], `runtime egress reached the server (ignored watcher probes: ${ignoredWatcherProbes.length})`)
     console.log('PASS runtime: command errors, host/preload isolation, forged namespaces and direct network/navigation denial')
 
     await views.attach(66, 'update-view', 'engine', revision, 'engine.main')

@@ -35,6 +35,12 @@ import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 // markers so paged response_items get the same ownership metadata as
 // entries that arrived live.
 
+/** What one older-history request did. `failed` means the page could not be
+ *  read (the IPC rejected, or the transcript could not be parsed); `skipped`
+ *  means nothing was asked (no provider session, nothing older, a load
+ *  already running). Only `failed` is worth telling the user about. */
+export type OlderHistoryLoadResult = 'loaded' | 'skipped' | 'failed'
+
 export function useHistoryActions(
   setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
@@ -45,17 +51,17 @@ export function useHistoryActions(
   // and its one caller already holds the feed from context.
   feed: Pick<SessionFeed, 'loadHistory'>,
 ): {
-  loadOlderHistory: (sessionId: SessionId) => Promise<void>
+  loadOlderHistory: (sessionId: SessionId) => Promise<OlderHistoryLoadResult>
 } {
   const loadOlderHistory = useCallback(
-    async (sessionId: SessionId) => {
+    async (sessionId: SessionId): Promise<OlderHistoryLoadResult> => {
       const span = perf.span('workspace.history.loadOlder', { sessionId })
       const currentState = refs.stateRef.current
       const meta = currentState.sessions[sessionId]
       const runtime = refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime()
       if (!meta) {
         span.end({ skipped: 'missing-meta' })
-        return
+        return 'skipped'
       }
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
@@ -65,19 +71,19 @@ export function useHistoryActions(
       // does page it gets the same answer.
       if (!isAgentProviderKind(kind) || !meta.providerSessionId) {
         span.end({ skipped: 'unsupported-or-missing-provider-session', kind })
-        return
+        return 'skipped'
       }
       if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) {
         span.end({
           skipped: runtime.loadingOlderHistory ? 'already-loading' : 'no-older-history',
           kind,
         })
-        return
+        return 'skipped'
       }
       if (!runtime.historyOldestMarker) {
         updateRuntime(sessionId, { hasOlderHistory: false, loadingOlderHistory: false })
         span.end({ skipped: 'missing-marker', kind })
-        return
+        return 'skipped'
       }
 
       updateRuntime(sessionId, { loadingOlderHistory: true })
@@ -246,10 +252,15 @@ export function useHistoryActions(
           prepended: prepend.length,
           hasMore: chunk.hasMore,
         })
+        return 'loaded'
       } catch (err) {
         span.fail(err, { kind })
         console.warn('[history] load older failed', err)
+        // `hasOlderHistory` is left as it was, so the next scroll to the top
+        // retries. The caller is TOLD (#1250 row 12): this used to be the
+        // whole of it, and the feed then looked as if it had nothing older.
         updateRuntime(sessionId, { loadingOlderHistory: false })
+        return 'failed'
       }
     },
     [refs.latestRuntimesRef, refs.seenUuidsRef, refs.stateRef, setRuntimes, updateRuntime, feed],
