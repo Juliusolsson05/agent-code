@@ -225,3 +225,19 @@ it.each(['parent-a', 'parent-b'])('drops %s\'s cached status when the parent is 
     vi.useRealTimers()
   }
 })
+
+// q85: a bootstrap mark is the last step of a delivery that can land long
+// after the create began (a prompt that waited for the child's composer, or a
+// create adopted late, #1370). It is addressed with the parent id the tool
+// call captured; after a replacement that id has no window and owns no
+// children in the renderer, so the mark must go to the successor.
+it('addresses a bootstrap mark from a replaced parent to its successor', async () => {
+  sent.length = 0
+  const bridge = new OrchestrationBridge()
+  bridge.carryParent('parent-a', 'parent-b')
+  const marking = bridge.markBootstrapPromptDelivered({ parentSessionId: 'parent-a', sessionId: 'child-1' })
+  const mark = await next('mark-bootstrap-prompt-delivered')
+  expect(mark.parentSessionId).toBe('parent-b')
+  bridge.resolve({ requestId: mark.requestId, ok: true, type: 'mark-bootstrap-prompt-delivered', agent: agent('child-1', 'parent-b') } as never)
+  expect(await marking).toMatchObject({ sessionId: 'child-1', orchestrationParentId: 'parent-b' })
+})

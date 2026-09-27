@@ -530,17 +530,26 @@ export class OrchestrationBridge {
     parentSessionId: string
     sessionId: string
   }): Promise<OrchestrationAgentRecord> {
+    // WHY resolve (q85): the mark is the LAST step of a bootstrap delivery,
+    // which can land long after the create began: when the prompt waited for
+    // the child's composer, or when a create outlived the 30 s deadline and was
+    // adopted late (#1370). The caller addresses it with the parent id its
+    // tool call captured. If that parent was replaced meanwhile, the retired
+    // id has no window (the request could not be routed) and owns no children
+    // in the renderer (ownership checks compare ids), so the mark was lost and
+    // the child looked never-bootstrapped. The live successor owns both.
+    const parentSessionId = this.currentParentId(params.parentSessionId)
     const response = await this.request({
       requestId: randomUUID(),
       type: 'mark-bootstrap-prompt-delivered',
-      parentSessionId: params.parentSessionId,
+      parentSessionId,
       sessionId: params.sessionId,
     })
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'mark-bootstrap-prompt-delivered') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
     }
-    this.invalidateStatusCache(params.parentSessionId)
+    this.invalidateStatusCache(parentSessionId)
     return this.enrichAgent(response.agent)
   }
 
