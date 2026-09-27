@@ -137,6 +137,13 @@ describe('Settings → Skills grid (#1161)', () => {
     // Inside the recovery panel, beside the button (#1424 review b), not in
     // the grid's footer line below every skill row.
     expect(reveal.closest('[role="alert"]')).toHaveTextContent('No managed skill recovery file exists.')
+    // Steering q111: that refusal belongs to THIS recovery. Recovery clears,
+    // then a new one appears: its panel starts without the old message.
+    act(() => { useSkillsStore.setState({ installed }) })
+    expect(screen.queryByText('No managed skill recovery file exists.')).toBeNull()
+    act(() => { useSkillsStore.setState({ installed: { ...installed, recovery: { message: 'The managed skill state file could not be read.', stateFilePath: '/state/skills-2.json' } } }) })
+    const again = await screen.findByRole('button', { name: 'Reveal State File' })
+    expect(again.closest('[role="alert"]')).not.toHaveTextContent('No managed skill recovery file exists.')
     api.auditAgentCodeInstalledSkills.mockResolvedValue(installed)
     api.getAgentCodeInstalledSkills.mockResolvedValue(installed)
   })

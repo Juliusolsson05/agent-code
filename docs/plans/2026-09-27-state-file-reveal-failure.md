@@ -34,3 +34,10 @@ When an Agent Code-managed skill state file is unreadable, three surfaces show a
 - **b1 (Major): the Skills grid showed a reveal failure below every skill row.** It now shows inside the recovery panel, beside its buttons. The test asserts the placement.
 - **b2 (Major): a late reveal success cleared a newer reset failure.** A success clears only the reveal's own earlier message. Unit-tested.
 - **c (test gaps):** the Custom Skills reset rejection, the helper's reject/fallback/success branches (unit test), and the ordering rule.
+
+## Verification (a, b: FIX-BEFORE-MERGE; c: MERGE-READY) and steering q111
+- **b1 / q111.1: a late reveal FAILURE still replaced a newer reset failure.** The WeakMap compared message text on success only. It is replaced by a per-panel action gate (`useRecoveryActionGate`): every reveal or reset takes a generation, and only the latest completion may speak, for a success and a failure alike. An older reset still applies its snapshot (`onStale`), never its message.
+  - Pinned with deferred real actions through the real Conventions row, both orders. The failure order is red on the previous head.
+  - The gate is unit-tested: both orders, and `invalidate`.
+- **b2 / q111.2: the Skills grid carried a reveal refusal into a later recovery episode.** `useRecoveryEpisode` clears the grid's recovery message and retires in-flight actions when the recovery identity (state path plus message) changes or disappears. Test: refuse, recovery clears, a new recovery shows no old message.
+- **a1 / q111.3: reveal accepted a DIRECTORY at the state-file path.** All three handlers now require a regular file (`lstat().isFile()`). The test covers all three channels with a real directory. The race between that `lstat` and the OS call remains the honest Electron limit: `showItemInFolder` returns nothing.

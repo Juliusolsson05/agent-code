@@ -1,5 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
-import { RECOVERY_RESET_FAILED, revealRecoveryFile } from '@renderer/features/settings/lib/recoveryStateActions'
+import { RECOVERY_RESET_FAILED, RECOVERY_REVEAL_FAILED, revealMessage, useRecoveryActionGate } from '@renderer/features/settings/lib/recoveryStateActions'
 import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -80,6 +80,8 @@ export function AgentCodeConventionsRow() {
     announceAgentCodeManagedSkillsChange({ source: 'conventions', revision: next.revision })
   }, [])
 
+  // One gate for this row's recovery and reveal actions (steering q111).
+  const recoveryActions = useRecoveryActionGate()
   const applyResult = useCallback((result: AgentCodeConventionsMutationResult) => {
     if ('snapshot' in result) acceptSnapshot(result.snapshot)
     setError(resultMessage(result) || null)
@@ -174,7 +176,10 @@ export function AgentCodeConventionsRow() {
                 title={target.message}
                 // Same answer handling as the recovery reveal (#1424 review a):
                 // main says why a target cannot be revealed.
-                onClick={() => void revealRecoveryFile(() => window.api.revealAgentCodeConventionsTarget(target.id), setError, "Couldn't reveal that folder.")}
+                onClick={() => void recoveryActions.run(() => window.api.revealAgentCodeConventionsTarget(target.id), {
+                  onLatest: result => setError(revealMessage(result, "Couldn't reveal that folder.")),
+                  onRejected: () => setError("Couldn't reveal that folder."),
+                })}
                 className="min-w-0 truncate text-right text-control-fg hover:text-ink"
               >
                 {/* The deployment path beside this row's own controls
@@ -200,7 +205,10 @@ export function AgentCodeConventionsRow() {
         <div className="rounded-slab flex flex-col gap-2 border border-danger px-2 py-2 text-[10px] text-danger">
           <span>{snapshot.recovery.message}</span>
           <div className="flex gap-2">
-            <Button type="button" variant="destructive-outline" size="xs" onClick={() => void revealRecoveryFile(window.api.revealAgentCodeConventionsRecoveryFile, setError)}>
+            <Button type="button" variant="destructive-outline" size="xs" onClick={() => void recoveryActions.run(window.api.revealAgentCodeConventionsRecoveryFile, {
+              onLatest: result => setError(revealMessage(result)),
+              onRejected: () => setError(RECOVERY_REVEAL_FAILED),
+            })}>
               Reveal State File
             </Button>
             <Button
@@ -213,7 +221,12 @@ export function AgentCodeConventionsRow() {
                   confirmLabel: 'Reset State',
                   tone: 'danger',
                 }))) return
-                void window.api.resetAgentCodeConventionsRecovery().then(applyResult, () => setError(RECOVERY_RESET_FAILED))
+                void recoveryActions.run(() => window.api.resetAgentCodeConventionsRecovery(), {
+                  onLatest: applyResult,
+                  // A newer action owns the message; the snapshot is still true.
+                  onStale: result => { if ('snapshot' in result) acceptSnapshot(result.snapshot) },
+                  onRejected: () => setError(RECOVERY_RESET_FAILED),
+                })
               }}
             >
               Reset State

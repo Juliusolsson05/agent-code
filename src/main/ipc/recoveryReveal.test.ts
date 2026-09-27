@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -40,6 +40,13 @@ const channels = ['agent-code-conventions:reveal-recovery', 'agent-code-custom-s
 
 describe('recovery-file reveal', () => {
   it.each(channels)('%s refuses a state file that is no longer there', async channel => {
+    expect(await handlers.get(channel)!({})).toEqual({ ok: false, message: 'The state file is no longer there. Refresh to check again.' })
+    expect(shell.showItemInFolder).not.toHaveBeenCalled()
+  })
+
+  // Steering q111: a DIRECTORY at the state-file path is not a state file.
+  it.each(channels)('%s refuses a directory where the state file was', async channel => {
+    await mkdir(statePath)
     expect(await handlers.get(channel)!({})).toEqual({ ok: false, message: 'The state file is no longer there. Refresh to check again.' })
     expect(shell.showItemInFolder).not.toHaveBeenCalled()
   })
