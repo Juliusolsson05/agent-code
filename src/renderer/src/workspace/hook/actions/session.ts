@@ -1,4 +1,5 @@
 import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
+import { carryWorkflowRuns } from '@renderer/workspace/hook/actions/workflowCarry'
 import { hasReportingDomain } from '@shared/types/tldr'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -1453,6 +1454,10 @@ export function useSessionActions(
         // it could never call goal_loop_complete (#1287 review A).
         if (!opts?.newConversation && builtInMcpDomains?.includes('goal_loop')) carryGoalLoops(idMap)
         else stopGoalLoops([oldId])
+        // Workflow runs follow the same conversation into its successor
+        // (#1280). A different conversation swapped into the pane does not
+        // inherit them: they belong to the conversation that started them.
+        if (!opts?.newConversation) carryWorkflowRuns(idMap)
         setRuntimes(prev => {
           // Replacement can await spawn and backend retirement while the user
           // keeps editing. Transfer the latest draft in the same state update
@@ -1725,6 +1730,13 @@ export function useSessionActions(
         // (#1287 review A).
         if (builtInMcpDomains?.includes('goal_loop')) carryGoalLoops(new Map([[oldId, newId]]))
         else stopGoalLoops([oldId])
+        // Its workflow runs follow it too (#1280): this successor continues its
+        // own conversation, and a run needs no tool in the successor. Only
+        // here, after commitSuccessor: a successor killed as an orphan (its
+        // pane closed or its reload superseded mid-spawn, #1326) never
+        // reaches this line, so its predecessor's runs are never handed to a
+        // process that is being killed.
+        carryWorkflowRuns(new Map([[oldId, newId]]))
         if (hasDurableProviderSession(fresh)) {
           void loadInitialHistoryForSession({ sessionId: newId, meta: fresh, refs, setRuntimes })
         }

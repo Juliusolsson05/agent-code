@@ -52,10 +52,11 @@ function replaceHarness(defaults: string[]) {
   refs.defaultBuiltInMcpDomainsRef.current = defaults as never
   refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
   const carryGoalLoop = vi.fn(async (_from: string, _to: string) => null)
+  const carryWorkflowRuns = vi.fn(async (_from: string, _to: string) => undefined)
   const controlGoalLoop = vi.fn(async (_request: { sessionId: string; action: string }) => null)
-  window.api = { ...originalApi, spawnSession: vi.fn(async () => ({ sessionId: 'successor' })), killOwnedSession: vi.fn(async () => true), carryGoalLoop, controlGoalLoop }
+  window.api = { ...originalApi, spawnSession: vi.fn(async () => ({ sessionId: 'successor' })), killOwnedSession: vi.fn(async () => true), carryGoalLoop, carryWorkflowRuns, controlGoalLoop }
   const mounted = renderHook(() => useSessionActions(state, useAppStore.getState().setWorkspaceState, useAppStore.getState().setWorkspaceRuntimes, refs))
-  return { mounted, carryGoalLoop, controlGoalLoop }
+  return { mounted, carryGoalLoop, carryWorkflowRuns, controlGoalLoop }
 }
 
 it('hands the pane\'s goal loop to the successor when the replacement commits', async () => {
@@ -100,10 +101,13 @@ it('Reload Agents hands each capable successor its loop', async () => {
   refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
   const carryGoalLoop = vi.fn(async (_from: string, _to: string) => null)
   let n = 0
-  window.api = { ...originalApi, spawnSession: vi.fn(async () => ({ sessionId: `restarted-${++n}` })), killOwnedSession: vi.fn(async () => true), controlGoalLoop: vi.fn(async () => null), carryGoalLoop }
+  const carryWorkflowRuns = vi.fn(async (_from: string, _to: string) => undefined)
+  window.api = { ...originalApi, spawnSession: vi.fn(async () => ({ sessionId: `restarted-${++n}` })), killOwnedSession: vi.fn(async () => true), controlGoalLoop: vi.fn(async () => null), carryGoalLoop, carryWorkflowRuns }
   const mounted = renderHook(() => useSessionActions(state, useAppStore.getState().setWorkspaceState, useAppStore.getState().setWorkspaceRuntimes, refs))
   await act(async () => { await mounted.result.current.reloadAgentSessions(true) })
   expect(carryGoalLoop.mock.calls.map(call => call[0]).sort()).toEqual(['a', 'b'])
+  // #1280: every reloaded agent's workflow runs follow it too.
+  expect(carryWorkflowRuns.mock.calls.map(call => call[0]).sort()).toEqual(['a', 'b'])
 })
 
 // #1287 round 2 (A1, B1): Reload Agents resolves each successor's domains
@@ -133,3 +137,21 @@ it('Reload Agents carries only to successors that keep Goal Loop tools', async (
   expect(controlGoalLoop).toHaveBeenCalledWith({ sessionId: 'b', action: 'stop' })
 })
 
+// #1280: workflow runs are filed under the session that started them. The
+// same conversation continuing in a successor takes them along, with or
+// without Goal Loop tools; a different conversation swapped in does not.
+it('hands the pane\'s workflow runs to the successor of the same conversation', async () => {
+  const { mounted, carryWorkflowRuns } = replaceHarness([])
+  await act(async () => {
+    await mounted.result.current.replaceSession('/recorded/project', { targetSessionId: 'source', kind: 'claude', resumeSessionId: 'native-source' })
+  })
+  expect(carryWorkflowRuns).toHaveBeenCalledWith('source', 'successor')
+})
+
+it('does not hand workflow runs to a different conversation swapped into the pane', async () => {
+  const { mounted, carryWorkflowRuns } = replaceHarness(['goal_loop'])
+  await act(async () => {
+    await mounted.result.current.replaceSession('/recorded/project', { targetSessionId: 'source', kind: 'claude', resumeSessionId: 'other-conversation', newConversation: true })
+  })
+  expect(carryWorkflowRuns).not.toHaveBeenCalled()
+})

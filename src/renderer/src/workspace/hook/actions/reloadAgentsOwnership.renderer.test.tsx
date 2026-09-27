@@ -66,11 +66,12 @@ function harness(heldKind: 'claude' | 'codex' = 'claude', opts: { heldSpawnRejec
   // Kills resolve immediately unless the test installs a hold for one id.
   const killHolds = new Map<string, Promise<boolean>>()
   const killOwnedSession = vi.fn(async (req: { sessionId: string }) => killHolds.get(req.sessionId) ?? true)
-  window.api = { ...originalApi, spawnSession, killOwnedSession, controlGoalLoop: vi.fn(async () => null), carryGoalLoop: vi.fn(async () => null) }
+  const carryWorkflowRuns = vi.fn(async (_from: string, _to: string) => undefined)
+  window.api = { ...originalApi, spawnSession, killOwnedSession, controlGoalLoop: vi.fn(async () => null), carryGoalLoop: vi.fn(async () => null), carryWorkflowRuns }
   const hook = renderHook(() => useSessionActions(state, writer.setState, setRuntimes, refs))
   // The Claude agent is first in the snapshot, so it is the one in flight.
   const order = Object.keys(recorded.sessions).filter(id => id === claudeLane || id === codexLane)
-  return { hook, writer, refs, spawnSession, killOwnedSession, killHolds, release, claudeLane, codexLane, order }
+  return { hook, writer, refs, spawnSession, killOwnedSession, killHolds, release, claudeLane, codexLane, order, carryWorkflowRuns }
 }
 
 it('does not bring back an agent closed while its respawn was in flight', async () => {
@@ -90,6 +91,26 @@ it('does not bring back an agent closed while its respawn was in flight', async 
   expect(after.sessions[h.claudeLane]).toBeUndefined()
   // Its new process is not left running unowned.
   expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
+})
+
+// Steering q42 (#1325 x #1326): workflow runs follow a reloaded agent to its
+// successor, but only a COMMITTED successor. One killed as an orphan (its
+// agent closed mid-respawn) must never receive the runs: they would be filed
+// under a process that is being killed, and vanish from the pane that still
+// owns them.
+it('carries workflow runs only to committed successors, never to an orphan', async () => {
+  const h = harness()
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  await act(async () => { h.release(); await reload })
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
+  expect(h.carryWorkflowRuns.mock.calls).toEqual([[h.codexLane, 'codex-restarted']])
 })
 
 it('does not double an agent replaced while its respawn was in flight', async () => {
