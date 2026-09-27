@@ -51,6 +51,9 @@ export function carryWorkflowRuns(idMap: ReadonlyMap<string, string>): void {
  * pre-fix behaviour) and never blocks the swap.
  */
 export function carryOrchestrationParents(idMap: ReadonlyMap<string, string>): void {
+  for (const [oldId, newId] of idMap) {
+    if (oldId !== newId) recordOrchestrationSuccessor(oldId, newId)
+  }
   const carry = window.api?.carryOrchestrationParent
   if (!carry) return
   for (const [oldId, newId] of idMap) {
@@ -116,4 +119,48 @@ export function handOverGoalLoops(
   const pairs = [...idMap]
   carryGoalLoops(new Map(pairs.filter(([, newId]) => capable(newId))))
   stopGoalLoops(pairs.filter(([, newId]) => !capable(newId)).map(([oldId]) => oldId))
+}
+
+/**
+ * Replaced pane id -> its successor, as this window committed them (#1369
+ * verification a and b).
+ *
+ * WHY the renderer needs its own copy of main's alias chain: an orchestration
+ * create captures its parent id, then awaits the child's spawn (tens of
+ * seconds under load). A replacement committed meanwhile remaps only the
+ * children already in the store, so the new child was filed under the
+ * retired id, and the successor could not list, read or close it (the
+ * visibility gate compares ids). The filing step resolves through this map.
+ *
+ * WHY module state and not WorkspaceRefs: it is written by the same helper
+ * every committed swap already calls (replace, Reload Agents, Undo Close), and
+ * that helper has no refs. It is per window, which matches ownership: a
+ * pane's swaps and its creates run in the window that owns it. A renderer
+ * reload clears it, which is harmless because local ids are stable across a
+ * reload. Bounded like main's alias map; acyclic for the same reason (a carry
+ * to `to` drops `to`'s own edge).
+ */
+const orchestrationSuccessors = new Map<string, string>()
+const MAX_ORCHESTRATION_SUCCESSORS = 500
+
+function recordOrchestrationSuccessor(from: string, to: string): void {
+  orchestrationSuccessors.delete(to)
+  orchestrationSuccessors.delete(from)
+  orchestrationSuccessors.set(from, to)
+  while (orchestrationSuccessors.size > MAX_ORCHESTRATION_SUCCESSORS) {
+    const oldest = orchestrationSuccessors.keys().next()
+    if (oldest.done) break
+    orchestrationSuccessors.delete(oldest.value)
+  }
+}
+
+/** The live successor of a possibly replaced orchestration parent id. */
+export function currentOrchestrationParent(sessionId: string): string {
+  let current = sessionId
+  for (let hops = 0; hops <= orchestrationSuccessors.size; hops++) {
+    const next = orchestrationSuccessors.get(current)
+    if (!next) return current
+    current = next
+  }
+  return current
 }

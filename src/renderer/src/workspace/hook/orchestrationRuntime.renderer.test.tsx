@@ -109,6 +109,41 @@ describe('renderer orchestration runtime creation', () => {
     expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'pi', providerRuntime: 'terminal', cwd: '/repo/child' }))
   })
 
+  // #1369 verification a and b: a create captures its parent, then awaits the
+  // child's spawn; a replacement committed meanwhile remaps only children
+  // already in the store, so the child was filed under the retired id and the
+  // successor could not list, read or close it. Own ids: the successor map is
+  // per-window module state and must not leak into the other cases.
+  it('files a child whose parent was replaced during its spawn under the successor', async () => {
+    const { carryOrchestrationParents } = await import('./actions/successorCarry')
+    useAppStore.setState(state => ({ workspaceState: { ...state.workspaceState, sessions: {
+      ...state.workspaceState.sessions,
+      'swap-root': { kind: 'claude', cwd: '/repo', projectId: 'project', joinedAt: 2 },
+      'swap-parent': { kind: 'claude', cwd: '/repo', orchestrationParentId: 'swap-root', orchestrationRootId: 'swap-root', projectId: 'project', joinedAt: 3 },
+    } } }))
+    let release!: () => void
+    spawnSession.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ sessionId: 'child' }) }))
+    renderHook(() => useWorkspace())
+    const creating = dispatch({ requestId: 'swap', type: 'create-agent', parentSessionId: 'swap-parent', kind: 'claude', cwd: '/repo/child' })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    // Replacements commit while the spawn is pending (the parent's pane AND
+    // the root's, e.g. Reload Agents), and each committed swap records its
+    // lineage.
+    act(() => {
+      useAppStore.setState(state => {
+        const { 'swap-parent': retired, 'swap-root': retiredRoot, ...rest } = state.workspaceState.sessions
+        return { workspaceState: { ...state.workspaceState, sessions: { ...rest, 'swap-successor': retired!, 'swap-root-next': retiredRoot! } } }
+      })
+      carryOrchestrationParents(new Map([['swap-parent', 'swap-successor'], ['swap-root', 'swap-root-next']]))
+    })
+    release()
+    await creating
+    expect(useAppStore.getState().workspaceState.sessions.child).toMatchObject({ orchestrationParentId: 'swap-successor', orchestrationRootId: 'swap-root-next' })
+    expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'swap', ok: true, agent: expect.objectContaining({ orchestrationParentId: 'swap-successor' }) }))
+    await dispatch({ requestId: 'swap-list', type: 'list-agents', parentSessionId: 'swap-successor' })
+    expect(resolved).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'swap-list', ok: true, agents: [expect.objectContaining({ sessionId: 'child' })] }))
+  })
+
   it('refuses unsupported Claude terminal before spawn even without the main bridge', async () => {
     renderHook(() => useWorkspace())
     await dispatch({ requestId: 'unsupported', type: 'create-agent', parentSessionId: 'parent', kind: 'claude', providerRuntime: 'terminal' })

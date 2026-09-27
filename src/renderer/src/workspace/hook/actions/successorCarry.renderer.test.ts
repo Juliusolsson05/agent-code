@@ -25,3 +25,22 @@ it('carries each replaced id, skips a pane that kept its id, and contains a fail
     process.off('unhandledRejection', unhandled)
   }
 })
+
+// #1369 verification a/b: the renderer's copy of the lineage. Own ids per
+// case: the map is per-window module state.
+it('resolves a parent through its successors, stops at a revived pane, and keeps at most 500', async () => {
+  const { currentOrchestrationParent } = await import('./successorCarry')
+  window.api = { ...originalApi, carryOrchestrationParent: vi.fn(async () => undefined) } as never
+  carryOrchestrationParents(new Map([['lin-a', 'lin-b']]))
+  carryOrchestrationParents(new Map([['lin-b', 'lin-c']]))
+  expect(currentOrchestrationParent('lin-a')).toBe('lin-c')
+  // lin-a comes back as a live pane: its old edge must go (no loop, and a
+  // child created under it now stays with it).
+  carryOrchestrationParents(new Map([['lin-c', 'lin-a']]))
+  expect(currentOrchestrationParent('lin-a')).toBe('lin-a')
+  expect(currentOrchestrationParent('lin-b')).toBe('lin-a')
+
+  for (let i = 0; i < 510; i++) carryOrchestrationParents(new Map([[`cap-${i}`, `cap-${i}-next`]]))
+  expect(currentOrchestrationParent('cap-509')).toBe('cap-509-next')
+  expect(currentOrchestrationParent('cap-0')).toBe('cap-0')
+})
