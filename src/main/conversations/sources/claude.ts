@@ -1,5 +1,5 @@
 import { open, readdir, stat } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
@@ -279,6 +279,7 @@ export class ClaudeConversationSource implements ConversationSource {
     // the redirect stub left where it started, or a plain copy. The largest
     // file is the conversation; a stub is a few hundred bytes.
     const candidates: Array<{ file: string; nativeId: string; exact: boolean }> = []
+    const enumerated = new Set<string>()
     for (const { dir, exact } of dirs) {
       let names: string[]
       try {
@@ -286,12 +287,22 @@ export class ClaudeConversationSource implements ConversationSource {
       } catch {
         continue
       }
+      enumerated.add(join(this.deps.projectsDir, dir))
       for (const name of names) {
         if (!name.endsWith('.jsonl')) continue
         const nativeId = name.slice(0, -6)
         if (!UUID_RE.test(nativeId)) continue
         candidates.push({ file: join(this.deps.projectsDir, dir, name), nativeId, exact })
       }
+    }
+    // Forget summaries of transcripts gone from a directory this discovery
+    // just listed (review of #1417, c). `summaries` is keyed by file and was
+    // never pruned. A scoped discovery cannot judge directories it did not
+    // walk, but for every directory it did list, the listing is the exact set
+    // of files a summary can still belong to. Memory only; nothing on disk.
+    const listed = new Set(candidates.map(candidate => candidate.file))
+    for (const file of this.summaries.keys()) {
+      if (enumerated.has(dirname(file)) && !listed.has(file)) this.summaries.delete(file)
     }
     const summarized = await mapWithConcurrency(candidates, SUMMARY_CONCURRENCY, async candidate => {
       try {

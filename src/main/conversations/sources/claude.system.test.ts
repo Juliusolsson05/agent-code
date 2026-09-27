@@ -1,4 +1,4 @@
-import { mkdir, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -106,5 +106,24 @@ describe('Claude conversation source', () => {
     for (let i = 1; i < prompts.length; i++) {
       expect(prompts[i - 1]!.timestamp ?? 0).toBeGreaterThanOrEqual(prompts[i]!.timestamp ?? 0)
     }
+  })
+
+  // Review of #1417 (c): `summaries` is keyed by file and was never pruned, so
+  // a transcript deleted from a directory that discovery keeps listing kept
+  // its parsed head and user texts for the life of the process. Its own corpus:
+  // this test deletes a file, and the shared one is read-only by convention.
+  it('forgets the summary of a transcript gone from a directory it listed (#1278)', async () => {
+    const own = await setup()
+    const summaries = (own.source as unknown as { summaries: Map<string, unknown> }).summaries
+    const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees: own.listWorktrees })
+    const first = await own.source.discover({ scope: 'repository', family })
+    const gone = first.find(row => row.file && summaries.has(row.file))!.file!
+    const unrelated = [...summaries.keys()].length
+
+    await rm(gone)
+    const second = await own.source.discover({ scope: 'repository', family })
+    expect(second.map(row => row.file)).not.toContain(gone)
+    expect(summaries.has(gone)).toBe(false)
+    expect(summaries.size).toBe(unrelated - 1)
   })
 })

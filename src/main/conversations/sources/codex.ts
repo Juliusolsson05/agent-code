@@ -10,6 +10,7 @@ import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder
 import { findCodexRolloutPathByThreadId } from 'codex-headless'
 import { newestCodexStateDb, openReadOnlySqlite } from './sqlite.js'
 import type { ConversationSource, SourceConversation, SourceScope, PromptReadOptions } from './types.js'
+import { LruMap } from '@shared/lib/lruMap.js'
 
 // Codex keeps its own index at ~/.codex/state_N.sqlite (`threads`,
 // `thread_spawn_edges`), maintained by the CLI and backfilled from rollouts.
@@ -121,8 +122,12 @@ export class CodexConversationSource implements ConversationSource {
   private walk: { at: number; files: Map<string, { mtime: number | null; id: string }> } | null = null
   private readonly heads = new Map<string, { mtime: number; head: RolloutHead }>()
   // Rollout paths learnt at discovery, so a search that reads prompts for a
-  // hundred and fifty rows does not open the index once per row.
-  private readonly rolloutPaths = new Map<string, string>()
+  // hundred and fifty rows does not open the index once per row. LRU-bounded
+  // (review of #1417, c): archived or removed threads stayed here forever. A
+  // miss only costs the existing SQLite/fallback lookup in prompts(), never a
+  // wrong path, and 4096 is twice the recorded store's 2,023 indexed threads,
+  // far above one search's 150 rows.
+  private readonly rolloutPaths = new LruMap<string, string>(4096)
 
   constructor(private readonly deps: { codexHome: string; walkTtlMs?: number }) {}
 
