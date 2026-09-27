@@ -89,3 +89,9 @@ Tests (all mutation-checked; each mutant fails exactly one test):
 Mutants: the store without the lock; the workspace without the lock; no release on cancel; an unawaited pin.
 
 **Invariant, as it now stands:** a record is never deleted while its identity is pinned by a live or registering session, or named by the committed workspace. A pane or session that names an identity only AFTER an eviction chose it starts without that record ("No goal yet").
+
+## Second verification (a, b, c)
+- **A registration that creates no token (a, b, c; Major).** The q56 release covered a cancelled spawn and a throwing `registerSession`, but not a *successful* call that registers nothing. A recovered Claude session with an explicit identity and only the `workflows` domain (which the provider policy filters away) got `[]` and no token. Its pin was then never released: the spawn treated it as registered, and `revokeSession` had no token to release through. **Fix, by ownership:** `registerSession(scope, releasePin)` takes the release. It calls it at once when no registration is created, and otherwise stores it on the registration, which `revokeSession` calls exactly once. `revokeSession` no longer unpins by identity, so every pin has exactly one owner.
+- The q56 lock and the other release paths were verified by all three reviewers: mutations removing either lock, or the cancel, throw or partial releases, went red, and no cyclic wait was found.
+
+Test: through the real host and a capped Goal store, a policy-filtered registration returns `[]` and the sole candidate is free again (red on `62d52c98`).

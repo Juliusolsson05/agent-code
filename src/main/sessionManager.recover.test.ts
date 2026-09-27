@@ -521,7 +521,7 @@ describe('SessionManager recover', () => {
       cwd: '/tmp/project',
       providerKind: 'claude',
       domains: ['orchestration'],
-    })
+    }, expect.any(Function))
     expect(sessionDomains).toHaveBeenCalledWith('mcp-session')
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
       builtInMcpServers: [serverConfig],

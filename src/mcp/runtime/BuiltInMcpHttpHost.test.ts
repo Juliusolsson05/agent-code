@@ -292,8 +292,7 @@ it('pins the identity a session will report as, and releases it on revoke', asyn
     const fallback = { sessionId: 'no-explicit-identity', cwd: '/tmp/project', providerKind: 'codex' as const, domains: ['goal' as const] }
     const none = { sessionId: 'no-reporting', cwd: '/tmp/project', providerKind: 'codex' as const, domains: ['ping' as const] }
     for (const scope of [explicit, fallback, none]) {
-      await host.pinReportingIdentity(scope)
-      host.registerSession(scope)
+      host.registerSession(scope, await host.pinReportingIdentity(scope))
     }
     expect(calls).toEqual(['tldr.pin identity-running', 'goal.pin identity-running', 'tldr.pin no-explicit-identity', 'goal.pin no-explicit-identity'])
     calls.length = 0

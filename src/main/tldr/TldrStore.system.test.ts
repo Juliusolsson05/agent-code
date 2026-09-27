@@ -757,6 +757,24 @@ describe('a store at its record cap (#1277)', () => {
     await expect(store.update('new-agent', 'Starting work.', () => true)).resolves.toMatchObject({ revision: 1 })
   })
 
+  // #1328 second verification (a, b, c): a recovered Claude session with an
+  // explicit identity whose only domain (`workflows`) the provider policy
+  // filters away. registerSession returns [] and creates no token; the pin
+  // it was handed must be released right there, or nothing ever can.
+  it('releases the pin when policy leaves nothing to register', async () => {
+    const document = fullDocument(realRecords.goal.records as never)
+    const workspace = new Set(Object.keys(document.records).filter(id => id !== 'identity-0'))
+    const { store } = await storeAtCap('goal.json', document, { ...GOAL, inUse: () => workspace })
+    const host = new BuiltInMcpHttpHost()
+    host.setDependencies({ goalStore: store } as never)
+    await host.start()
+    try {
+      const scope = { sessionId: 's', tldrIdentity: 'identity-0', cwd: '/tmp/project', providerKind: 'claude' as const, domains: ['workflows' as const] }
+      expect(host.registerSession(scope, await host.pinReportingIdentity(scope))).toEqual([])
+      await expect(store.update('new-agent', 'Starting work.', () => true)).resolves.toMatchObject({ revision: 1 })
+    } finally { await host.stop() }
+  })
+
   it('releases the pin that succeeded when the other store’s pin fails', async () => {
     const document = fullDocument(realRecords.goal.records as never)
     const workspace = new Set(Object.keys(document.records).filter(id => id !== 'identity-0'))

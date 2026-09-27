@@ -3034,7 +3034,9 @@ export class SessionManager extends EventEmitter {
         const releasePin = await this.builtInMcpHost.pinReportingIdentity(mcpScope)
         try {
           this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
-          builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope)
+          // The registration owns the pin from here: it releases it on revoke,
+          // or at once if policy leaves no domain to register.
+          builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope, releasePin)
         } catch (error) {
           // Not registered, so revokeSession will never release this pin;
           // left, it would protect the identity forever (#1328 q56).

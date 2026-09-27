@@ -65,6 +65,9 @@ type SessionRegistration = {
   token: string
   scope: McpSessionScope
   revoked: boolean
+  /** The reporting pin taken for this registration (#1328), released
+   *  exactly once when the registration is revoked. */
+  releasePin?: () => void
 }
 
 type BuiltInMcpServerFactory = (
@@ -296,7 +299,16 @@ export class BuiltInMcpHttpHost {
     cwd: string
     providerKind: AgentProviderKind
     domains: readonly BuiltInMcpDomain[] | undefined
-  }): BuiltInMcpServerConfig[] {
+  },
+  // The release pinReportingIdentity returned for this spawn. WHY the
+  // registration takes it (#1328 second verification, all three): a pin
+  // needs exactly one owner. Released by identity on revoke, a pin whose
+  // registration was never created had none: a recovered session whose only
+  // domains the provider policy filters away returns `[]`, no token exists,
+  // and its identity stayed protected forever. Now the pin is released right
+  // here when no registration is created, and otherwise by revokeSession.
+  releasePin?: () => void,
+  ): BuiltInMcpServerConfig[] {
     // WHY provider filtering is repeated at this main-owned boundary even
     // though the renderer resolves the same policy: session metadata and IPC
     // payloads are inputs, not authority. In particular, stale persisted data
@@ -323,6 +335,7 @@ export class BuiltInMcpHttpHost {
       // revoke any token left under that id rather than letting the stale
       // registration outlive the now-capability-free replacement.
       this.revokeSession(scope.sessionId)
+      releasePin?.()
       return []
     }
     if (!this.server || this.port === null) {
@@ -344,6 +357,7 @@ export class BuiltInMcpHttpHost {
       token,
       scope: mcpScope,
       revoked: false,
+      ...(releasePin ? { releasePin } : {}),
     })
     this.tokensBySession.set(scope.sessionId, token)
 
@@ -404,11 +418,7 @@ export class BuiltInMcpHttpHost {
     // Release the pin pinReportingIdentity took for this registration. The
     // stores count pins, so a replacement's successor (registered before its
     // predecessor is revoked, same identity) stays protected.
-    const identity = registration?.scope.tldrIdentity
-    if (identity) {
-      void this.dependencies.tldrStore?.unpin?.(identity).catch(() => {})
-      void this.dependencies.goalStore?.unpin?.(identity).catch(() => {})
-    }
+    registration?.releasePin?.()
   }
 
   private serverConfig(token: string): BuiltInMcpServerConfig {
