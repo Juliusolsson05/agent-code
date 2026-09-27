@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -62,11 +62,11 @@ async function stage(): Promise<{ input: string; output: string }> {
   return { input, output }
 }
 
-async function extract(args: string[]): Promise<{ code: number; stderr: string }> {
+async function extract(args: string[], env: Record<string, string> = {}): Promise<{ code: number; stderr: string }> {
   try {
-    // HOME is the temp cwd: if a mistake ever reached the live extraction, it would find no
-    // bundles instead of reading (and fixture-ising) this machine's real ones.
-    await run(TSX, ['--tsconfig', join(REPO, 'tsconfig.node.json'), SCRIPT, ...args], { cwd, env: { ...process.env, HOME: cwd } })
+    // HOME is the temp cwd: a live extraction reads only the bundles this test planted there,
+    // never this machine's real ones.
+    await run(TSX, ['--tsconfig', join(REPO, 'tsconfig.node.json'), SCRIPT, ...args], { cwd, env: { ...process.env, HOME: cwd, ...env } })
     return { code: 0, stderr: '' }
   } catch (error) {
     const failed = error as { code?: number; stderr?: string }
@@ -83,58 +83,57 @@ async function liveBundle(snapshot: Record<string, unknown>, projectDir: string)
   await writeFile(join(dir, 'state-snapshot.json'), JSON.stringify(snapshot))
 }
 
-// Review of #1353, final round a (a valid blocker, steering q79): a no-argument LIVE run wrote a
-// private project outside Development/ into the tracked fixture. Live output is now an explicit,
-// git-ignored staging path; the tracked file is never a live output.
-const STAGED = 'temp/fixture-staging/runtime-states.json'
-const staged = () => join(cwd!, STAGED)
+// Review of #1353 (steering q79/q80): a no-argument LIVE run wrote a private project outside
+// Development/ into the tracked fixture, and then an `--out` staging path could be a symlink back to
+// it. Live mode now takes no arguments and writes only into a fresh temp directory it creates.
+// The child's TMPDIR is a short temp directory of the test's own, so its staging directory is found
+// (and cleaned) here, never mixed into the machine's shared temp dir. Short on purpose: tsx puts
+// an IPC socket under TMPDIR, and socket paths are length-limited.
+let stagingParent: string | undefined
+afterEach(async () => {
+  if (stagingParent) await rm(stagingParent, { recursive: true, force: true })
+  stagingParent = undefined
+})
+async function stagedFiles(): Promise<string[]> {
+  const dirs = (await readdir(stagingParent!)).filter(name => name.startsWith('agent-activity-staging-'))
+  return dirs.map(dir => join(stagingParent!, dir, 'runtime-states.json'))
+}
+async function live(args: string[] = []) {
+  stagingParent = await mkdtemp(join(tmpdir(), 'aas-'))
+  return extract(args, { TMPDIR: stagingParent })
+}
 
 describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (live)', () => {
-  // The A reproduction itself: a private project outside Development/, run with no arguments.
-  it('refuses a no-argument run and leaves the tracked fixture unchanged', async () => {
+  // The A reproduction (a private project outside Development/) plus the q80 one: a symlink planted
+  // at the OLD staging path, pointing at the tracked fixture. Neither can reach the tracked file.
+  it('stages into a fresh temp directory and never touches the tracked fixture, even through a planted symlink', async () => {
     const { output } = await stage()
     const me = cwd!.split('/').pop()!
     await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Projects/secretproject/private-task` }, `/Users/${me}/Projects/secretproject/private-task`)
-    const result = await extract([])
-    expect(result.code).not.toBe(0)
-    expect(result.stderr).toMatch(/needs exactly --out/)
+    await mkdir(join(cwd!, 'temp/fixture-staging'), { recursive: true })
+    await symlink(output, join(cwd!, 'temp/fixture-staging/runtime-states.json'))
+    const result = await live()
+    expect(result.code).toBe(0)
     expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+    const staged = await stagedFiles()
+    expect(staged).toHaveLength(1)
+    expect(await readFile(staged[0]!, 'utf8')).not.toContain(me)
   }, 60_000)
 
-  it('refuses --out pointing at the tracked fixture', async () => {
+  it('refuses --out (or any argument) instead of writing anywhere', async () => {
     const { output } = await stage()
-    const me = cwd!.split('/').pop()!
-    await liveBundle({ provider: 'claude' }, `/Users/${me}/Desktop/x`)
-    const result = await extract(['--out', 'testing/fixtures/agent-activity/runtime-states.json'])
+    const result = await live(['--out', 'testing/fixtures/agent-activity/runtime-states.json'])
     expect(result.code).not.toBe(0)
+    expect(result.stderr).toMatch(/takes no arguments/)
     expect(await readFile(output, 'utf8')).toBe(SENTINEL)
-  }, 60_000)
-
-  it('refuses an --out inside a repository that git would commit', async () => {
-    await stage()
-    execFileSync('git', ['init', '-q'], { cwd: cwd! })
-    const result = await extract(['--out', 'testing/fixtures/agent-activity/elsewhere.json'])
-    expect(result.code).not.toBe(0)
-    expect(result.stderr).toMatch(/not git-ignored/)
-  }, 60_000)
-
-  it('stages to an ignored path without touching the tracked fixture', async () => {
-    const { output } = await stage()
-    execFileSync('git', ['init', '-q'], { cwd: cwd! })
-    await writeFile(join(cwd!, '.gitignore'), '/temp/\n')
-    const me = cwd!.split('/').pop()!
-    await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Desktop/Development/agent-code` }, `/Users/${me}/Desktop/x`)
-    expect((await extract(['--out', STAGED])).code).toBe(0)
-    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
-    expect(await readFile(staged(), 'utf8')).not.toContain(me)
+    expect(await stagedFiles()).toEqual([])
   }, 60_000)
 
   it('refuses a bundle whose homes are not this machine user\'s', async () => {
     await stage()
     await liveBundle({ provider: 'claude', worktreePath: '/Users/someoneelse/Desktop/Development/agent-code' }, '/Users/someoneelse/x')
-    const result = await extract(['--out', STAGED])
-    expect(result.code).not.toBe(0)
-    await expect(readFile(staged(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await live()).code).not.toBe(0)
+    expect(await stagedFiles()).toEqual([])
   }, 60_000)
 
   // Only the SOURCE check can catch this one: a foreign user named exactly like this machine user's
@@ -143,17 +142,15 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (
     await stage()
     const me = cwd!.split('/').pop()!
     await liveBundle({ provider: 'claude', worktreePath: `/Users/${homePlaceholder(me)}/Desktop/Development/secret` }, `/Users/${me}/Desktop/x`)
-    const result = await extract(['--out', STAGED])
-    expect(result.code).not.toBe(0)
-    await expect(readFile(staged(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await live()).code).not.toBe(0)
+    expect(await stagedFiles()).toEqual([])
   }, 60_000)
 
   it('refuses a bundle with a home spelling the pass does not rewrite', async () => {
     await stage()
     await liveBundle({ provider: 'claude', note: '%2FUsers%2Fsomeoneelse%2Fsecret' }, '')
-    const result = await extract(['--out', STAGED])
-    expect(result.code).not.toBe(0)
-    await expect(readFile(staged(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await live()).code).not.toBe(0)
+    expect(await stagedFiles()).toEqual([])
   }, 60_000)
 })
 

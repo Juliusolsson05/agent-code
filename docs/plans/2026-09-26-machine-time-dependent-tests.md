@@ -95,16 +95,22 @@ that leak developer data. Each item below is taken from the issue, with its curr
        not to redact arbitrary corpora.
        - A process test reproduces the committed file byte for byte from the blob. It is skipped on a
          shallow checkout.
-     - **Live mode never writes the tracked fixture** (final round a, a valid blocker; steering q79).
-       A no-argument live run wrote a private project outside `Development/` straight into the
-       tracked `runtime-states.json`.
-       - The live extraction now needs `--out <path>`. It refuses the tracked fixture, and it refuses
-         any path inside the repository that git would commit. `temp/fixture-staging/` is ignored.
-       - The tracked fixture changes only through `--redact-from` (the pinned corpus) or a MANUAL
-         copy of a staged file after a key-by-key privacy audit.
-       - Process tests: the A reproduction, where a no-argument run is refused and the tracked file is
-         unchanged (red on `6b042b7b`); the tracked `--out`; a non-ignored `--out`; a staged run; and
-         three foreign-home bundles. Removing any one live guard turns a test red.
+     - **Live mode never writes the tracked fixture** (steering q79/q80). A no-argument live run wrote a
+       private project outside `Development/` straight into the tracked file (q79). The first fix, an
+       `--out` staging path validated with `git check-ignore`, was bypassed by a symlink at or above
+       that path (q80). So the surface was cut:
+       - Live mode takes no arguments. It writes only into a fresh `mkdtemp(os.tmpdir(),
+         "agent-activity-staging-")` directory it creates itself, prints the path, and exits.
+       - The path-validation code is deleted; nothing is left to validate.
+       - The tracked fixture changes only through `--redact-from` (the pinned corpus) or a MANUAL copy
+         of a staged file after a key-by-key privacy audit.
+       - Process tests:
+         - a live run with a private project and a symlink planted at the old staging path: the
+           tracked file is unchanged and the output lands in the fresh directory;
+         - `--out` is refused;
+         - three foreign-home bundles refuse without staging anything.
+       - Mutations killed: staging at the old fixed path, arguments not refused, and the source check
+         removed.
      - **Stated residual:** the pattern-based pass itself can't recognise every identifier a new live
        corpus might hold, which is why the staged file needs a person's audit before any copy.
    - The fleet fixtures:

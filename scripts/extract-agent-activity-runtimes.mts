@@ -41,19 +41,17 @@
 // smooth over.
 //
 // Usage (steering q79 — the tracked fixture is never a live output):
-//   Stage a live extraction (git-ignored path; a person audits it before any copy):
-//     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts --out temp/fixture-staging/runtime-states.json
+//   Stage a live extraction (into a fresh temp directory it prints; a person audits it before any copy):
+//     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts
 //   Reproduce the committed fixture from the one recorded corpus (the only writer of the tracked file):
 //     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts --redact-from <15e43abe^ blob> --home-user <recorder>
 //   Promotion of a staged live file into testing/fixtures/agent-activity/runtime-states.json is a
 //   MANUAL copy after a key-by-key privacy audit, never a script step.
 
-import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { mkdtemp, readdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import process from 'node:process'
 
 import {
@@ -71,40 +69,19 @@ const BUNDLE_ROOTS = [
 ]
 const OUT = join(process.cwd(), 'testing/fixtures/agent-activity/runtime-states.json')
 /**
- * Where a LIVE extraction may write: an explicit `--out`, never the tracked fixture, and never a
- * path the repository would commit.
+ * Where a LIVE extraction writes: a fresh directory it creates itself under the system temp dir,
+ * never an existing path and never the repository.
  *
- * WHY (review of #1353, final round a — a valid blocker per the manager, steering q79): the
- * pattern-based pass cannot recognise every private identifier a new corpus might hold (a project
- * outside `Development/`, `/Users/<me>/Projects/secret/task`, a bare `{ "user": … }`), and the live
- * run used to write straight into the tracked `runtime-states.json`. It was proven correct only for
- * the one recorded corpus. So the live run stages its output somewhere git ignores
- * (`temp/fixture-staging/…` or outside the repo). The tracked fixture changes only through
- * `--redact-from` (the pinned corpus) or a manual copy of a staged file after a person's key-by-key
- * privacy audit, as the committed corpus had.
+ * WHY no output path at all (review of #1353; steering q79/q80 — a scope NARROWING after two
+ * rounds of path validation each had a bypass): the live run wrote the tracked fixture directly,
+ * then an `--out` staging path could be a symlink (or sit under one) that points back at it. A
+ * directory `mkdtemp` has just created cannot already contain a link, and nothing about it needs
+ * checking. The tracked `runtime-states.json` changes ONLY through `--redact-from` (the one
+ * recorded corpus) or a person copying a staged file in after a key-by-key privacy audit.
  */
-function liveOutputPath(argv: readonly string[]): string {
-  const index = argv.indexOf('--out')
-  const value = index === -1 ? undefined : argv[index + 1]
-  if (value === undefined || value.startsWith('--') || argv.length !== 2) {
-    throw new Error('a live extraction needs exactly --out <path>, a git-ignored staging file (e.g. temp/fixture-staging/runtime-states.json)')
-  }
-  const out = resolve(value)
-  if (out === resolve(OUT)) throw new Error('a live extraction never writes the tracked fixture; stage it, audit it, then copy it')
-  // Inside a git work tree the path must be ignored, so the staged, un-audited file cannot be
-  // committed by accident. `git check-ignore` exits 0 when ignored, 1 when not, 128 when the path
-  // is outside any repository (then nothing can commit it from here, and it is allowed).
-  const ignored = spawnSync('git', ['check-ignore', '-q', out], { cwd: existingDirectory(out) })
-  if (ignored.status === 1) throw new Error('--out is inside the repository and not git-ignored; use temp/fixture-staging/ or a path outside the repo')
-  if (ignored.status !== 0 && ignored.status !== 128) throw new Error('could not check --out against git; refusing to write')
-  return out
-}
-
-/** The nearest existing ancestor directory of a path (git needs a real cwd). */
-function existingDirectory(path: string): string {
-  let dir = dirname(path)
-  while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir)
-  return dir
+async function stagingFile(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-activity-staging-'))
+  return join(dir, 'runtime-states.json')
 }
 
 /** sha256 of `git show 15e43abe^:testing/fixtures/agent-activity/runtime-states.json` (blob d2653405). */
@@ -194,7 +171,7 @@ async function readJson(path: string): Promise<Record<string, unknown> | null> {
   }
 }
 
-async function main(out: string): Promise<void> {
+async function main(): Promise<void> {
   const records: unknown[] = []
   const seen = new Set<string>()
 
@@ -276,8 +253,9 @@ async function main(out: string): Promise<void> {
   assertHomesBelongTo(JSON.stringify(fixture), homeUser)
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
   assertNoForeignHome(redacted, homeUser)
-  await mkdir(dirname(out), { recursive: true })
-  await writeFile(out, redacted, 'utf8')
+  const out = await stagingFile()
+  // 'wx': the file is new in a directory made a moment ago; anything already there is refused.
+  await writeFile(out, redacted, { encoding: 'utf8', flag: 'wx' })
   console.log(`staged ${records.length} runtime states in ${out}: audit every key and string before copying it over ${OUT}`)
   console.log(fixture.totals)
 }
@@ -344,11 +322,14 @@ if (argv.includes('--redact-from')) {
     console.error((error as Error).message)
     process.exit(2)
   }
+} else if (argv.length > 0) {
+  // A live extraction takes no arguments (steering q80): `--out`, or anything else, is refused
+  // rather than guessed at.
+  console.error(`a live extraction takes no arguments (got ${argv.length}); it stages into a fresh temp directory`)
+  process.exit(2)
 } else {
-  // Live extraction. No arguments is NOT a live run any more (steering q79): the output path is
-  // required and validated before any bundle is read.
   try {
-    await main(liveOutputPath(argv))
+    await main()
   } catch (error) {
     console.error((error as Error).message)
     process.exit(2)
