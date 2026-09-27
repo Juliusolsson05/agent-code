@@ -51,7 +51,7 @@ async function settle() {
 }
 
 describe('boot prune gate (#775)', () => {
-  it('holds every early request until a minute after the workspace recovers, then prunes once', async () => {
+  it('holds every early request until the recovery delay after the workspace recovers, then prunes once', async () => {
     retention.holdDebugStoragePruneUntilRecovered()
     retention.scheduleDebugStoragePrune('incident-run-start')
     retention.scheduleDebugStoragePrune('startup')

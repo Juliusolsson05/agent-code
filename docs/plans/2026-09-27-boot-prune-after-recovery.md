@@ -4,7 +4,7 @@ Refs #775. That issue has two halves. This branch covers the **retention prune o
 
 ## Evidence (verified 2026-09-27, do not re-derive)
 The owner's app-run journals, `~/.config/agent-code/incidents/runs/*/events.jsonl` (50 runs; 32 with a journaled prune):
-- **The boot prune always runs before the workspace has recovered.** Every one of the 30 journaled `incident-run-start` prunes completed before its run's first `rehydrate.complete`. Those prunes completed 0.3–41 s after run start (most under 4 s). First `rehydrate.complete` reports landed 2.2–70.5 s after start in 45 runs; 5 runs never reported one. The largest journaled boot prune freed **1.98 GiB at 25.4 s** (its `rehydrate.complete` came at 60.5 s). The median is about 5 MB and p90 about 81 MB. (Corrected in review c. The first version said "0–274 MB" and gave narrower ranges. The issue's "5.8 GB at 38 s" is a pre-journal report.)
+- **The boot prune runs during recovery, not after it.** Of the 30 journaled `incident-run-start` prunes, 27 completed before their run's first `rehydrate.complete`. 1 completed 1.8 s after it (run `2026-08-30T23-41-21`, 13 KB, still inside the rehydration burst). 2 were in runs that never reported one. Measured from `app.run.started`, the prunes completed 0.3–38 s after start (24 of 30 under 4 s). First `rehydrate.complete` reports landed 2.2–70.5 s after start in 44 runs; 5 runs never reported one. Excluded from both ranges is one run that slept mid-boot (`2026-09-24T09-35-53`: 192 s and 208 s monotonic, about 11.5 h wall clock). The largest journaled boot prune freed **1.98 GiB at 25.4 s** (its `rehydrate.complete` came at 60.5 s). The median is about 0.75 MB and p90 about 25 MB (nearest rank). Corrected twice in review c; the first version said "0–274 MB", and round 1's "every one before", "median 5 MB / p90 81 MB" and "0.3–41 s" did not reproduce. The issue's "5.8 GB at 38 s" is a pre-journal report.
 - **Session wakes after recovery:** 225 wake events fall within 60 s of the first `rehydrate.complete`. 102 more fall between 60 and 300 s, in 19 of 45 runs; that tail may be user-initiated.
 - **The multi-GB prunes also happen mid-session**, from `feed-debug-append` (6.61 GiB at 601 s, 3.43 GiB at 1,872 s). That is the cooldown path, not boot, and is out of scope here.
 - Code:
@@ -23,7 +23,7 @@ The owner's app-run journals, `~/.config/agent-code/incidents/runs/*/events.json
 4. A disk-full emergency is not special-cased. The gate delays by at most 5 minutes, and the 3% budget already leaves headroom.
 
 ## Tests
-- `debugRetention.test.ts`: with the gate closed, requests do not prune. `rehydrate.complete` + 60 s runs exactly one prune, carrying the first reason. The fallback fires at 5 minutes when no window reports. An ungated call still prunes immediately.
+- `debugRetention.test.ts`: with the gate closed, requests do not prune. `rehydrate.complete` + `DEBUG_PRUNE_AFTER_RECOVERY_MS` (120 s) runs exactly one prune, carrying the first reason. The fallback fires at 5 minutes when no window reports. An ungated call still prunes immediately.
 - `ipc/lifecycle.test.ts` (or the nearest existing file): a renderer `rehydrate.complete` report arms the open.
 - `AppRunJournal` test: start() closes the gate before its prune request, so the request is pending, not run.
 

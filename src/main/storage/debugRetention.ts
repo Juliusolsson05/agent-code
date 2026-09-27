@@ -161,10 +161,11 @@ function ttlHours(): number {
 // WHY: the first prune of every run used to start about 1 s after launch
 // (AppRunJournal.start), while the first window's workspace was still
 // rehydrating, so its statfs, directory walk and rm -rf competed with the
-// session herd coming back. In the owner's 50 journaled runs every
-// run-start prune landed before that run's first `rehydrate.complete`
-// (reported 2.2-70.5 s after start); the largest journaled one freed
-// 1.98 GiB at 25.4 s. Nothing about retention is urgent at boot: the budget
+// session herd coming back. In the owner's 50 journaled runs, 27 of the 30
+// run-start prunes landed before that run's first `rehydrate.complete`
+// (reported 2.2-70.5 s after start, excluding one run that slept mid-boot)
+// and one landed 1.8 s after it, still inside the burst; the largest
+// journaled one freed 1.98 GiB at 25.4 s. Nothing about retention is urgent at boot: the budget
 // is 3% of the disk and the TTL is days, so waiting past recovery costs
 // nothing.
 //
