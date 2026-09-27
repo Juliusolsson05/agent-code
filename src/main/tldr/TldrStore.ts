@@ -332,6 +332,16 @@ export class TldrStore extends EventEmitter {
       const needed = records[identity] ? 0 : Object.keys(records).length + 1 - TLDR_MAX_RECORDS
       const evicted = needed > 0 ? leastRecentlyWritten(records, needed, this.inUse()) : []
       if (evicted.length < needed) throw new Error(`${this.label} storage is full.`)
+      // The in-use answer above was taken before the commit's disk I/O; a
+      // workspace save or a session registering meanwhile can name an
+      // evictee (#1328 round 2 a/b). commit() asks again at the rename, and
+      // refuses rather than evict something now in use. The agent's retry
+      // then chooses afresh. What is left is the rename syscall itself.
+      const stillEvictable = () => {
+        if (evicted.length === 0) return true
+        const inUse = this.inUse()
+        return inUse !== null && evicted.every(id => !inUse.has(id))
+      }
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
       // (#1182). The agent sets a new goal exactly when it is given new work.
@@ -340,7 +350,7 @@ export class TldrStore extends EventEmitter {
       // Same atomic write as the new record: a crash between two writes must
       // not leave the file over the cap, which load() refuses as damage.
       const evictedRevisions = evicted.map(id => [id, records[id]!.revision] as const)
-      await this.commit(identity, records, record, authorized, evicted)
+      await this.commit(identity, records, record, authorized, evicted, stillEvictable)
       // Only once the eviction is durable: a refused write evicted nothing.
       for (const [id, revision] of evictedRevisions) this.setAsideRevisions.set(id, revision)
       // The current record is already durable and acknowledged. History is the
@@ -405,6 +415,7 @@ export class TldrStore extends EventEmitter {
     // No change event either: TldrUpdate has no removal shape, and only
     // identities no workspace names are evicted, so no view holds one.
     evict: readonly string[] = [],
+    stillEvictable: () => boolean = () => true,
   ): Promise<void> {
     // Writing now would drop set-aside records whose bytes are not yet
     // preserved anywhere; the copy is retried, and the write refused if it
@@ -422,6 +433,7 @@ export class TldrStore extends EventEmitter {
       // Recheck after disk I/O: a queued old-provider request may outlive a
       // reload. Revocation is the boundary, not possession of an old token.
       if (!authorized()) throw new Error(`This ${this.label} session is no longer active.`)
+      if (!stillEvictable()) throw new Error(`${this.label} storage is busy; try again.`)
       await rename(temporary, this.file)
     } finally {
       await unlink(temporary).catch(() => {})

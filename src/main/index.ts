@@ -7,7 +7,6 @@ import { mainOperations } from '@main/performance/operations.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
 import { performanceTraceController } from '@main/performance/PerformanceTraceController.js'
-import { TldrStore } from '@main/tldr/TldrStore.js'
 import { registerGoalIpc, registerTldrIpc } from '@main/tldr/ipc.js'
 import { BrowserPocketController, type GuestLike } from '@main/browserPocket/controller/BrowserPocketController.js'
 import { LanePortWatcher } from '@main/browserPocket/LanePortWatcher.js'
@@ -124,6 +123,7 @@ import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
 import { tldrIdentitiesInUse } from '@main/tldr/identitiesInUse.js'
+import { createReportingStores } from '@main/tldr/reportingStores.js'
 import { getUsageSnapshot } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
@@ -1225,8 +1225,7 @@ async function startApp(): Promise<void> {
   // store at its cap then refuses new identities for those startup seconds
   // instead of guessing (steering q40).
   const identitiesInUse = () => tldrIdentitiesInUse(reportingWorkspaceWindows?.() ?? null, builtInMcpHost.liveTldrIdentities())
-  const tldrStore = new TldrStore(join(STATE_DIR, 'tldr.json'), undefined, { inUse: identitiesInUse })
-  const goalStore = new TldrStore(join(STATE_DIR, 'goal.json'), undefined, { historyDirectoryName: 'goal-history', label: 'Goal', inUse: identitiesInUse })
+  const { tldrStore, goalStore } = createReportingStores(STATE_DIR, identitiesInUse)
   const tldrEnforcement = new TldrEnforcement(tldrStore, undefined, goalStore)
   // Before any session can register: the sweep removes every entry, and each
   // one left by an earlier run holds a bearer that run's host already revoked.

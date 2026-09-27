@@ -25,6 +25,14 @@ export function tldrIdentitiesInUse(
   const inUse = new Set(liveIdentities)
   for (const placement of projectWorkspace(windows).sessions.values()) {
     if (placement.tldrIdentity) inUse.add(placement.tldrIdentity)
+    // WHY the session id as well, for every session (#1328 round 2, all
+    // three reviewers): the renderer reads a session with no explicit
+    // `tldrIdentity` under its SESSION ID when TLDR or Goal is enabled
+    // (tldrIdentityForSession, for main-created and older agents), and the
+    // peek, Agent Activity and Close Completed Agents all use that fallback.
+    // Protecting every persisted session id is a superset of that rule, so
+    // it cannot drift from it; the cost is a few extra ids never evicted.
+    inUse.add(placement.sessionId)
   }
   return inUse
 }

@@ -39,3 +39,11 @@ All three reviewers (and steering q45) found that age alone can evict a goal tha
 - one atomic write under an injected rename fault (a two-write implementation is killed);
 - history is kept for the evicted identity and written for the new one;
 - the host lists unrevoked identities only.
+
+## Review round 2 (#1328): the in-use set was incomplete and could go stale
+- **Session-id fallback (a, b, c, Major).** The renderer reads a session that has TLDR or Goal enabled but no explicit `tldrIdentity` under its session id (`tldrIdentityForSession`). The in-use set had only explicit identities, so such a parked goal could be evicted. **Every persisted session id is now protected as well.** That is a superset of the renderer rule, so it cannot drift from it.
+- **Stale in-use during the write (a, b).** In-use was sampled before the commit's disk I/O. `commit()` now asks again right before the rename. If an evictee has come into use, it refuses (`<label> storage is busy; try again.`) and writes nothing; the agent's retry then chooses afresh. What is left is the rename syscall itself.
+- **TLDR protection unpinned (a).** The workspace test now runs for both stores.
+- **Main wiring unpinned (c).** The stores are built by `createReportingStores(stateDir, inUse)`, where `inUse` is required, and a test drives both stores through it.
+- **Declined: remember revisions before the commit (b's survivor).** b found no user-visible effect, and neither do I: after a refused write the record is still in memory, and its own revision wins.
+- **Residual:** a pane added in the renderer is not in the persisted workspace until its autosave, up to 400 ms later. If it also has no live MCP registration in that window, its identity is unprotected. A new agent's pane has a live registration, so that needs an agent that spawned and exited within 400 ms, while the store is at the cap.
