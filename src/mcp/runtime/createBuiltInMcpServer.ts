@@ -1353,7 +1353,7 @@ function orchestrationCreateAgentCallKey(
           // mid-turn answers not-ready too, and for it the prompt lands after
           // the current turn, not after a startup — a parent reading
           // "starting" would misjudge how long it waits.
-          message: `The agent cannot take a prompt yet (${delivery.message}), so the prompt is waiting: it will be delivered as soon as the agent can accept it — after it finishes starting, after a dialog is answered, or after its current turn if it is busy. Do not send it again. orchestration_wait_agents treats the agent as working until the prompt lands and it answers; orchestration_read_agent shows promptSubmitted once it lands. Sending another prompt to this agent before then REPLACES this one.`,
+          message: `The agent cannot take a prompt yet (${delivery.message}), so the prompt is waiting: it will be delivered as soon as the agent can accept it — after it finishes starting, after a dialog is answered, after its current turn if it is busy, or after someone clears a draft left in the agent's own composer (that one waits for a human). Do not send it again. orchestration_wait_agents treats the agent as working until the prompt lands and it answers; orchestration_read_agent shows promptSubmitted once it lands. Sending another prompt to this agent before then REPLACES this one.`,
         })
       }
       if (!delivery.ok) {
