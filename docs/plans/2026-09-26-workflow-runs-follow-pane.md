@@ -1,0 +1,38 @@
+# Workflow runs follow their pane across replacement (refs #1280)
+
+## Evidence
+- The owner's workflow store (`~/Library/Application Support/agent-code/workflows`) holds 134 runs. All 106 that name an owning session name one that is not live in `workspace.json` now (closed or replaced; the store cannot tell which).
+- `WorkflowBridge.runsBySession` and each run's durable `clientId` are the session id at start. After `replaceSession` (P → P'), `getSessionRuns({ sessionId: P' })` is empty and the pane's workflow cards and Active navigation vanish.
+- After a restart the bridge rebuilds from `clientId = P`, so the loss is permanent. A resume from the UI registers the resumed run under the dead P too.
+- workflow-mcp uses `clientId` for attribution only (its `scope-forbidden` is path-based), so no package change is needed.
+
+## Change (app only)
+- **`WorkflowBridge.carrySession(from, to)`:** moves the pane's runs to the successor id, republishes both ids, and persists `from → to` in a small alias file beside the store.
+- **At start:** stored `clientId`s are resolved through the alias chain, so a restart finds the runs under the live id. A resume registers under the live id.
+- **IPC `workflows:carry-session`,** with the same trust level as `goal-loop:carry`.
+- **The renderer calls it** where it carries goal loops (#1287): same-conversation replacements (reload, provider switch, rewind, MCP toggle) and Reload Agents. Not for `newConversation` swaps: those runs belong to the previous conversation. Undo Close (a pane or a whole project) calls it too, because it resumes the same conversation under a fresh id.
+
+## Round 1 review decisions
+- **Every carry records its edge,** even when the pane has no runs yet: a run the pane's MCP started just before the swap registers after it. `registerRun` (so also Resume and the MCP `onRunStarted` callback) resolves the alias chain, so a late registration never recreates the dead slot.
+- **Pruning at start:** every replacement now adds an edge, so `start()` drops the loaded edges that no stored run's clientId reaches, and saves if it dropped any. Edges added while start is running are kept.
+- **Saves are serialized.** Each queued write snapshots the map when it runs, and temp names carry a counter, so an older snapshot can never rename last.
+- **A carry never deletes the successor's runs.** Same cwd: the slots merge and go through the same lineage collapse as `upsertRun` (a helper both use). Different cwd: the carry is skipped and no edge is recorded.
+- **An edge out of the target is dropped** when the target becomes live again, which also rules out a cycle from ordinary carries. The resolver still stops at a cycle read from a corrupt file.
+- **Declined (round 1):** the crash window between the alias save and the workspace autosave (review A, suspicion). It needs a crash in that gap, and the runs stay in the workflow store either way.
+
+## Tests
+Bridge tests: a carry moves the runs and clears the old view; aliases survive a restart, including chains; a resume after a carry registers under the successor. Round 1 adds: a late registration after the carry (with and without runs at carry time, and across a restart); a resume that returns after a carry; two concurrent saves with a delayed rename; merging into a successor that already has runs, including a lineage collapse; a successor in another cwd; a malformed alias file; a cyclic alias file; pruning; and dropping an edge out of a live pane. Renderer tests: a committed replacement calls the carry, and Undo Close carries for a pane and for a project. All red on main, apart from the malformed-file, cycle and clear tests, which pin surviving mutants.
+
+## Round 2 review decisions
+- **A late run never displaces a successor's other-cwd slot** (review A1, steering q46). An edge made when the replaced pane had no runs was never cwd-checked. One rule, `ownerFor`, is used by `registerRun` and at start: a run reaching a slot in another cwd through an alias stays under the id that started it. At start, runs a pane owns directly are filed before aliased ones, so storage order cannot undo that.
+- **One hop per edge** (review c3): a carry rewrites X→from to X→to, and pruning then keeps only edges whose key is a stored clientId (it still walks, for chains written by the round-1 build). After a restart the file holds at most one edge per distinct clientId in the store.
+- **The alias file lives in `workflows/session-aliases.json`** (review c4), beside `source-approvals.json`, so it moves with the run store. `FileWorkflowStore` only scans `workflows/runs`. `aliasFile` is now a required bridge option, so dropping it from `index.ts` is a type error, and `workflowSessionAliasFile()` has a path test.
+- **The cross-cwd skip comment** now says what it costs (review c2): the source's runs stay under the replaced id, out of sight but intact in the store.
+- **Tests** (review B, and A's surviving mutant): the concurrent-save test uses a rename handshake instead of sleeps, and a delayed unserialized writer now fails it. New tests cover the temp-file write, a failed write that neither rejects nor wedges the queue, and an edge made during start's inventory.
+- **Scope narrowed to `Refs #1280`** (review c1, steering q46): runs whose pane was replaced BEFORE this change have no recorded edge. Manifests hold `clientId` and cwd but no replacement chain, and 76 of the owner's dead-owner runs share a cwd with a live session, so an owner could only be guessed. That recovery stays open on #1280.
+- **Declined:** the temp-name counter has no dedicated test. Writes are serialized within a process, and the pid separates processes; the counter is defence in depth.
+
+## Round 3 verification decisions
+- **a and c: MERGE-READY.** c noted that the edge count still rises within one uninterrupted process (one edge per replaced id) until the next restart prunes it. Accepted: each edge is one short line, and a restart bounds the file by stored clientIds.
+- **b: a late aliased run was lost when the successor's own run arrived second, in another cwd.** Round 2's guard (`ownerFor`) and two-pass start covered the other orders. They are replaced by one home rule in `upsertRun`. Every run remembers its home: the clientId, or for a Resume, its parent's home. An aliased run never takes a slot in another cwd, and a pane's own run in a new cwd sends the aliased runs it displaces home instead of dropping them. Tests: the live order b reproduced, and a Resume of an aliased run that goes home with its parent. Both are red on `41d6d2ef`.
+- **b (round 4): at restart a resumed aliased run's home came from its own clientId** (the alias target, because Resume registers under the pane that shows the parent). Startup now computes each stored run's home from its lineage root's clientId across the whole inventory before filing, the same answer the live path gets from the parent's home. Both storage orders b probed are tested and red on `4d94ec71`. In the owner's store, 4 parent–child pairs have different clientIds; all share a cwd, and their visible result is unchanged.
