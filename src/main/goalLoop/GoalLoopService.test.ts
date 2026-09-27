@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { GoalLoopState } from '@shared/types/goalLoop.js'
 import { buildGoalLoopContinuationPrompt } from '@mcp/shared/goalLoopPrompt.js'
 import {
   GOAL_LOOP_ACTIVITY_GRACE_MS, GOAL_LOOP_BACKGROUND_WORK_LIMIT_MS, GOAL_LOOP_HOLD_LIMIT_MS, GOAL_LOOP_HOLD_STALL_MS, GOAL_LOOP_QUIET_TURN_MS, GoalLoopService,
@@ -18,7 +19,17 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, {
 
 type Deliver = SessionManager['deliverPromptToAgent']
 type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver; getProcessStateSnapshot: () => { active: boolean } }
-async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult))) {
+/** Persistence that completes at once, so real disk latency cannot hide an
+ *  ordering a slow disk happens to mask (#1314). */
+const instantStore = () => {
+  let saved: Record<string, GoalLoopState> = {}
+  return {
+    read: async () => saved,
+    write: async (states: Record<string, GoalLoopState>) => { saved = states },
+  } as unknown as GoalLoopStore
+}
+
+async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as PromptDeliveryResult)), store?: GoalLoopStore) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
   directories.push(directory)
   // The provider's activity level, mutable so a test can put the agent back
@@ -26,7 +37,7 @@ async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as Pro
   // boundary, not about #1033's delivery hold.
   const processState = { active: false }
   const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver, getProcessStateSnapshot: () => processState }) as FakeManager
-  const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') })
+  const svc = new GoalLoopService({ manager, store: store ?? new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') })
   await svc.start()
   return { svc, manager, deliver, processState, storePath: join(directory, 'goal-loop.json') }
 }
@@ -378,22 +389,38 @@ describe('GoalLoopService', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('unrelated traffic cannot renew the screen grace (#1033 round 4)', async () => {
+  // #1314: this case once asserted "exactly one delivery in 120 s" while its own
+  // traffic carried a second, legitimate turn boundary (the pair at 60 s ends
+  // the turn our 45 s delivery started). Whether the resulting second
+  // continuation landed inside the window depended only on how long the first
+  // delivery's REAL `persist()` took relative to fake time — slow disk: 1,
+  // prompt disk: 2 — so it failed on a loaded CI runner. An instant store
+  // reproduced it 3/3. The case now asserts only its claim — traffic during
+  // the hold does not renew the grace, so the first delivery lands at exactly
+  // 45 s — and runs against both stores so persistence latency cannot decide it.
+  it.each([
+    ['the file store', undefined],
+    ['an instant store', instantStore],
+  ] as const)('unrelated traffic cannot renew the screen grace (#1033 round 4), with %s', async (_label, makeStore) => {
     // The screen is the signal that latches on a stale row, so the time it is
     // allowed to hold a delivery must be a real bound — not one any passing
     // event can renew. With a latched active screen and an idle phase, turn
     // metadata arriving every 30 s held a continuation forever.
-    const { svc, manager, deliver, processState } = await service()
+    const { svc, manager, deliver, processState } = await service(undefined, makeStore?.())
     vi.useFakeTimers()
     try {
       await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
       processState.active = true
       idleTurn(manager)
-      for (let tick = 0; tick < 4; tick += 1) {
+      for (let tick = 0; tick < 2; tick += 1) {
         manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_started', turnId: `t${tick}` } })
         manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed', turnId: `t${tick}` } })
-        await vi.advanceTimersByTimeAsync(30_000)
+        await vi.advanceTimersByTimeAsync(tick === 0 ? 30_000 : 14_999)
       }
+      // 44.999 s: the 30 s traffic did not restart the 45 s grace, and it has
+      // not expired yet either.
+      expect(deliver).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_001)
       expect(deliver).toHaveBeenCalledTimes(1)
     } finally { vi.useRealTimers() }
   })
