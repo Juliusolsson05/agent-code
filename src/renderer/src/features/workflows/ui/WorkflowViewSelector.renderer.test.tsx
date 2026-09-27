@@ -347,7 +347,7 @@ describe('WorkflowViewSelector', () => {
       const client: WorkflowClient = {
         ...unavailableWorkflowClient,
         available: true,
-        getSnapshot: vi.fn(async ({ runId }) => {
+        getSnapshot: vi.fn<WorkflowClient['getSnapshot']>(async ({ runId }) => {
           calls.push(runId)
           if (runId === 'run-a' && calls.filter(id => id === 'run-a').length > 1) throw new Error('IPC unavailable')
           if (runId === 'run-a') return null
@@ -367,7 +367,7 @@ describe('WorkflowViewSelector', () => {
       const client: WorkflowClient = {
         ...unavailableWorkflowClient,
         available: true,
-        getSnapshot: vi.fn(({ runId }) => runId === 'run-slow' ? new Promise(() => {}) : Promise.resolve(null)),
+        getSnapshot: vi.fn<WorkflowClient['getSnapshot']>(({ runId }) => runId === 'run-slow' ? new Promise(() => {}) : Promise.resolve(null)),
       }
       render(mount(client, [ref('run-slow'), ref('run-gone')]))
       await waitFor(() => expect(tab('run-gone')).toHaveAttribute('data-workflow-activity', 'inactive'))
