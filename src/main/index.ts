@@ -160,7 +160,7 @@ import {
   PREVIOUS_RUN_CLASSIFIER_VERSION,
 } from '@main/incident/previousRunClassifier.js'
 import { getBuildInfo } from '@main/buildInfo.js'
-import { createWorkflowService } from '@main/workflows/createWorkflowService.js'
+import { createWorkflowService, workflowSessionAliasFile } from '@main/workflows/createWorkflowService.js'
 import { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import { WorkflowServiceError, type WorkflowService } from 'workflow-mcp'
 
@@ -884,7 +884,8 @@ async function startApp(): Promise<void> {
       onCreated: service => { workflowService = service },
     })
     assertStartupOpen()
-    workflowBridge = new WorkflowBridge(workflowService)
+    // Replaced panes' workflow runs (#1280); see workflowSessionAliasFile.
+    workflowBridge = new WorkflowBridge(workflowService, { aliasFile: workflowSessionAliasFile() })
     // Recovery successors may be created during service.initialize(), before the bridge exists.
     // Await rehydration so the first renderer query sees the durable lineage owner instead of a
     // stale parent with a misleading Resume action.
@@ -1420,6 +1421,7 @@ async function startApp(): Promise<void> {
     // The first worktree entry is the main checkout, so every worktree of one
     // repository folds into it (the conversations picker's family rule).
     resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+    identityOf: sessionId => builtInMcpHost.sessionTldrIdentity(sessionId),
   })
   const projectActivity = (windows: readonly PersistedWindow[]) => {
     void readAgentNameAssignments(AGENT_NAMES_FILE)

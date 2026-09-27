@@ -190,3 +190,62 @@ describe('composer Escape while the provider composer is occupied', () => {
     expect(ready.send).toHaveBeenCalledWith('\x1b')
   })
 })
+
+// #1319 review C: a Codex submit is one raw PTY write, not a gated delivery,
+// so while the agent's own composer held a draft (composer-occupied), Enter
+// here pasted the prompt after that draft and Codex submitted both.
+describe('composer submit while the agent composer is occupied', () => {
+  it('keeps the draft and writes nothing on Enter', async () => {
+    const { hook, send, setInputText, showPaneToast, feed } = setup({
+      provider: 'codex',
+      input: 'Status?',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Enter')) })
+    expect(send).not.toHaveBeenCalled()
+    expect(feed.calls.filter(call => call.method === 'sendInput')).toHaveLength(0)
+    expect(setInputText).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
+  })
+
+  // Round 2 C: the guard is provider-neutral on purpose. Claude publishes
+  // composer-occupied too (the Escape tests above), and its submit is also a
+  // raw write, so a Codex-only guard would reopen the same paste there.
+  it('refuses for every provider that reports an occupied composer, not only Codex', async () => {
+    const { hook, send, showPaneToast } = setup({
+      provider: 'claude',
+      input: 'Status?',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Enter')) })
+    expect(send).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
+  })
+
+  // Round 2 B: a draft of only an image is still a send, and must refuse too.
+  it('keeps an image-only draft and writes nothing on Enter', async () => {
+    const image = { id: 'img', mediaType: 'image/png', base64Data: 'AA==', previewUrl: 'blob:x', filename: 'x.png' }
+    const { hook, send, showPaneToast } = setup({
+      provider: 'codex',
+      input: '',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied', draftImages: [image] },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Enter')) })
+    expect(send).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
+  })
+
+  // The 0.157 recording clears a draft with Ctrl+C; it must reach the agent.
+  // Round 2 B: and it must not also delete the follow-up the user typed here
+  // to send once that draft is gone (the refusal toast told them to press it).
+  it('lets Ctrl+C through to clear the agent\'s draft, keeping ours', async () => {
+    const { hook, send, setInputText } = setup({
+      provider: 'codex',
+      input: 'Status?',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('c', { ctrlKey: true })) })
+    expect(send).toHaveBeenCalledWith('\x03')
+    expect(setInputText).not.toHaveBeenCalled()
+  })
+})

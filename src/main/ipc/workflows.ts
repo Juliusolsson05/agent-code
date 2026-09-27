@@ -40,6 +40,14 @@ export function registerWorkflowIpc(bridge: WorkflowBridge): void {
     'workflows:list-session-runs',
     (_event, request: WorkflowSessionRunsRequest) => bridge.getSessionRuns(request),
   )
+  // #1280: the renderer commits every replacement (old pane id -> new), so it
+  // is the one that can say whose runs follow which pane. Same trust as
+  // goal-loop:carry: an application window may already cancel or resume any
+  // run it can see.
+  ipcMain.handle(
+    'workflows:carry-session',
+    (_event, request: { from: string; to: string }) => bridge.carrySession(request?.from, request?.to),
+  )
   ipcMain.on(
     'workflows:set-run-interest',
     (event, request: WorkflowRunInterestRequest) => {
