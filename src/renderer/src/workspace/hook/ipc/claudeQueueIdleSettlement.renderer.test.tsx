@@ -223,3 +223,27 @@ it('counts stale items when deciding whether the debt covers the queue', () => {
   expect(runtime().bootstrapping).toBe(false)
   expect(visible(runtime())).toContain('N')
 })
+
+// q101 (review a, round 2): the same `dequeue` record delivered twice (queue
+// operations have no uuid, #1402) opens a phantom debt unit, and bootstrap
+// spends it on N2, a prompt Claude still holds. KNOWN FAILURE, pinned with
+// it.fails: nothing observable at bootstrap tells this apart from the
+// recorded fixture (both are `debt >= pending`), so #1396 is parked behind
+// #1402. When #1402 makes departures countable once, flip this to `it`; it
+// must then pass before #1396 can merge.
+it.fails('does not retire a still-queued prompt at bootstrap when a dequeue is redelivered (#1402)', () => {
+  const { fake, sessionId, runtime } = mount({ bootstrapping: true })
+  act(() => {
+    fake.emitJsonlEntries({ sessionId, entries: [
+      op('r1', 'enqueue', FIRST, 1),
+      op('r2', 'enqueue', SECOND, 2),
+      op('r3', 'dequeue', undefined, 3),
+      { file: '/s/claude.jsonl', entry: { type: 'user', uuid: 'r-user', message: { role: 'user', content: FIRST }, timestamp: '2026-09-27T00:00:04.000Z' } as never },
+    ] })
+  })
+  // The redelivery: the identical dequeue record again.
+  act(() => { fake.emitJsonlEntries({ sessionId, entries: [op('r3', 'dequeue', undefined, 3)] }) })
+  act(() => { vi.advanceTimersByTime(1_000) })
+  expect(runtime().bootstrapping).toBe(false)
+  expect(visible(runtime())).toEqual([SECOND])
+})
