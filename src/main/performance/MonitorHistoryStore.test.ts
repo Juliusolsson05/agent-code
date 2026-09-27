@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -180,4 +180,53 @@ describe('a run this store never examined', () => {
     await restarted.settled()
     await expect(readFile(join(foreign, 'incidents.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
+
+  // #1455 review a (1): an incident file that cannot be read (or parse) at
+  // indexing is UNKNOWN; the run was "examined" but its contents are not
+  // known, so retention must keep it.
+  it('keeps a run whose incidents could not be read at indexing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    let now = 20_000
+    const foreign = join(root, 'runs', 'run-a')
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([incident]))
+    await chmod(join(foreign, 'incidents.json'), 0o000)
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    try {
+      await store.settled()
+    } finally {
+      await chmod(join(foreign, 'incidents.json'), 0o600)
+    }
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+  })
+
+  // #1455 review a (2): `examinedRuns` named a run, not what this store saw.
+  // After retention deletes a run, a live store can recreate that name with
+  // fresh data; the recreated run was never examined and must be kept.
+  it('does not treat a run recreated after its deletion as examined', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
+    roots.push(root)
+    const DAY = 24 * 60 * 60_000
+    let now = 20_000
+    const foreign = join(root, 'runs', 'run-a')
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([incident]))
+    const store = new MonitorHistoryStore(root, 'run-b', () => now)
+    await store.settled()
+    now += 8 * DAY
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    await expect(readFile(join(foreign, 'incidents.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    // The other store recreates run-a with a fresh incident.
+    await mkdir(foreign, { recursive: true })
+    await writeFile(join(foreign, 'incidents.json'), JSON.stringify([{ ...incident, at: now }]))
+    now += 2 * 60_000
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+    expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
+  })
 })
+

@@ -382,6 +382,10 @@ export class MonitorHistoryStore {
         }
         const file = join(this.root, RUNS_DIR, run, 'incidents.json')
         const stored = await this.readIncidentFile(file)
+        if (stored === null) {
+          this.unindexedRuns.add(run)
+          continue
+        }
         // Every retained run is repaired, not only the current one. A crash or
         // force-quit in ANY earlier run left its last capture as "capturing"
         // forever, and only a helper restart within the same run fixed it.
@@ -554,6 +558,9 @@ export class MonitorHistoryStore {
     if (this.indexed) for (const run of await this.runNames()) {
       if (run === this.runId || !this.examinedRuns.has(run) || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
+      // Examined means THIS contents (#1455 review a): once deleted, the name
+      // may come back with fresh data from another store, unexamined.
+      this.examinedRuns.delete(run)
     }
     this.bytes = await this.diskBytes()
     await this.pruneRuns(DATA_BUDGET)
@@ -698,17 +705,24 @@ export class MonitorHistoryStore {
     } catch { return null }
   }
 
-  private async readIncidentFile(file: string): Promise<MonitorIncident[]> {
+  /**
+   * The run's incidents, [] when it has no incident file, or null when the
+   * file exists but could not be read or trusted (#1455 review a). Null is
+   * UNKNOWN, not empty: the caller keeps the run out of retention's reach
+   * (unindexedRuns), because a run whose contents are unknown is not "empty".
+   */
+  private async readIncidentFile(file: string): Promise<MonitorIncident[] | null> {
     try {
-      if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; return [] }
+      if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; return null }
       const value: unknown = JSON.parse(await readFile(file, 'utf8'))
-      if (!Array.isArray(value) || value.length > INCIDENT_LIMIT) { this.degraded = true; return [] }
+      if (!Array.isArray(value) || value.length > INCIDENT_LIMIT) { this.degraded = true; return null }
       const parsed = value.map(parseMonitorIncident)
-      if (parsed.some(incident => incident === null)) { this.degraded = true; return [] }
+      if (parsed.some(incident => incident === null)) { this.degraded = true; return null }
       return parsed as MonitorIncident[]
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.degraded = true
-      return []
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      this.degraded = true
+      return null
     }
   }
 
@@ -761,6 +775,7 @@ export class MonitorHistoryStore {
       for (const [file, entry] of [...this.index]) if (entry.run === run) { this.index.delete(file); this.repairedTails.delete(file) }
       this.incidentRuns.delete(run)
       this.unindexedRuns.delete(run)
+      this.examinedRuns.delete(run)
       total = Math.max(0, total - size); this.shortened = true
     }
     this.bytes = total

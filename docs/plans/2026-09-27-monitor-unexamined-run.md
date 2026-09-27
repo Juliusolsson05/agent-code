@@ -20,3 +20,8 @@
 - It survives two of B's maintenance passes. This is red before the fix (ENOENT on the first pass).
 - A restarted store examines it and keeps its in-retention incident.
 - Past retention, it is deleted as before, so the protection is not permanent.
+
+## Review a (round 1), fixed
+- **An unreadable or untrusted incident file:** at indexing, an `incidents.json` that exists but cannot be read, parsed or trusted now makes the run UNKNOWN (`unindexedRuns`). It used to read as `[]`, so an examined run was deleted.
+- **`examinedRuns` is forgotten when the run is deleted** (retention or capacity), so a name another store recreates with fresh data is unexamined again and kept.
+- **Tests:** real files. An incident file at mode 000 during indexing survives maintenance once readable; a run recreated after its retention deletion survives. Both were red before, and both mutations fail.
