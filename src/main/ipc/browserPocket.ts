@@ -4,7 +4,7 @@ import { attachGuestContextMenu, showPocketMenu } from '@main/browserPocket/nati
 import { attachGuestInput } from '@main/browserPocket/guestPolicies.js'
 import { mayRegisterGuest } from '@main/browserPocket/guestRegistration.js'
 import { clearPocketStorage, configurePocketSession, partitionFor } from '@main/browserPocket/partition.js'
-import type { PocketFlags, PocketPickResult, PortWatchSession, PocketMenuState } from '@shared/browserPocket/types.js'
+import type { PocketFlags, PocketPickOutcome, PortWatchSession, PocketMenuState } from '@shared/browserPocket/types.js'
 
 /**
  * What the IPC layer needs from the controller (src/main/browserPocket/
@@ -20,7 +20,7 @@ export type BrowserPocketIpcDeps = {
   resume(pocketId: string): void
   setFlags(flags: PocketFlags): void
   thumbnail(pocketId: string): Promise<string | null>
-  pick(pocketId: string): Promise<PocketPickResult | null>
+  pick(pocketId: string): Promise<PocketPickOutcome>
   cancelPick(pocketId: string): void
   applyEmulation(pocketId: string, emulation: { viewport?: { width: number; height: number; mobile: boolean } | null; colorScheme?: 'light' | 'dark' | null; zoom?: number }): Promise<void>
   setWatchedSessions(sessions: PortWatchSession[]): void
