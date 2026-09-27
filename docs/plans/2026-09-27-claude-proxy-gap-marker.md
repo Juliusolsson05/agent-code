@@ -120,8 +120,9 @@ the surviving chunks as one continuous answer.
        conversations (least recently recorded evicted).
      - Lost on an app (main process) restart, per the approved answer
        above (#1445).
-   - Ruling: the span is app-clock time, from `since` (when the tail was
-     last caught up, i.e. the previous poll that completed) to `until`
+   - Ruling: the span is app-clock time, from `since` (when the tail's
+     previous poll STARTED reading; its finish time was the first version,
+     corrected in claude-code-headless#69 review a) to `until`
      (when the gap was detected). Wire events carry no timestamp, and the
      lost events were written inside that window. Cost if wrong: the
      window is wider than the true loss, never narrower.
@@ -315,3 +316,14 @@ Residual surfaces outside this PR, filed:
 - **Suspicions left as stated:**
   - a `history-boundary` reset keeps `transportGaps`; no path was found where a Claude pane switches conversation in place and gets that reset;
   - a gap before the first committed entry is keyed by the resume id when there is one, and is otherwise live-only. The 1 GiB threshold makes it unreachable in practice, and b's 215-fixture count found no counterexample.
+
+## Review round 1, reviewer c (FIX-BEFORE-MERGE), each fixed fail-first
+- **Major: the IPC delivery of the rows was untested.** `session:load-initial-history`'s `transportGaps` attach is the one link from main to a rebuilt feed. `session.test.ts` now drives it through the real preload call, with a real `TransportGapLedger`: the chunk carries the conversation's rows, and a conversation that lost nothing gets the chunk with no key. Returning the plain chunk: 1 red.
+- **Minor: the notice-cache invalidation on the gaps slice.** A reused adapter (one per pane, as `useLedgerFeedItems` keeps it) must paint a gap that arrives alone. Dropping the gaps identity check: 1 red.
+- **Minor: the real row was never rendered.** `Feed.transportGap.renderer.test.tsx` renders the real `Feed` with the ledger's items and finds the sentence. `return null` for the row: 1 red.
+- **Minor: stale `since` docs.** `TransportGapRecord`'s doc and decision 5 now say the previous poll's START.
+- **Already fixed in 5d4502d2 (review b):** the tap flush pin and the shared renderer cap.
+- **Residuals, stated:**
+  - `mergeTransportGaps`' sort: a near-equivalent mutant, because the feed re-derives order from timestamps;
+  - the package's forgotten no-turn flow (P7): a package test gap in merged claude-code-headless#69, not this PR's code;
+  - c's three suspicions, which c did not rank above notes.

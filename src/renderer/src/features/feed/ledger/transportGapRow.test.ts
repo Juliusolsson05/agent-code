@@ -115,6 +115,25 @@ describe('a lost proxy span in the Claude feed (#1381)', () => {
     expect(live.at(-1)!.id).toBe(`gap-${TRANSPORT_GAPS_PER_CONVERSATION + 3}`)
   })
 
+  // #1442 review c: the pane keeps ONE adapter across renders (useLedgerFeedItems), and its notice
+  // cache is keyed on slice identities. A gap that arrives while nothing else changes (the sealed
+  // turn was the conversation's last) must still paint at once, not at the next entry or reload.
+  it('paints a gap that arrives alone on a pane whose adapter is reused', () => {
+    const adapter = createLedgerInputAdapter()
+    const ledger = createSessionLedger()
+    const runtime: SessionRuntime = { ...emptyRuntime(), entries: [userEntry('u1', T, 'hi')] }
+    const slicesOf = (r: SessionRuntime): RuntimeLedgerSlices => ({
+      provider: 'claude', sessionId: 's1', entries: r.entries,
+      semanticCurrent: r.semantic.currentTurn, semanticHistory: r.semantic.history,
+      transportGaps: r.transportGaps, ghosts: r.ghosts, streamPhase: r.streamPhase, lastJsonlEntryAtMs: r.lastJsonlEntryAt,
+    })
+    const paint = (r: SessionRuntime) => ledgerToFeedItems(ledger(adapter(slicesOf(r)).input), ledgerFeedContextFromRuntime(r, 'claude')).items
+    expect(paint(runtime).some(item => item.type === 'transport-gap')).toBe(false)
+    // Only the gaps slice moves; entries and semantic state keep their identity.
+    const withGap: SessionRuntime = { ...runtime, transportGaps: mergeTransportGaps(runtime.transportGaps, [GAP]) }
+    expect(paint(withGap).some(item => item.type === 'transport-gap')).toBe(true)
+  })
+
   it('a runtime with no gaps paints no row', () => {
     const runtime: SessionRuntime = { ...emptyRuntime(), entries: [userEntry('u1', T, 'hi')] }
     expect(shape(runtime)).toEqual(['entry:u1'])

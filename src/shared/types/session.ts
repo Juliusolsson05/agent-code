@@ -816,9 +816,11 @@ export type SessionHistoryChunk = {
  * (main/sessions/transportGapLedger) and hands them out with the initial
  * history chunk (`SessionHistoryChunk.transportGaps`).
  *
- * `since`..`until` is app-clock milliseconds: `since` is when main's tail was
- * last caught up (null if the loss came before its first poll), `until` is when
- * the loss was detected. The proxy's events carry no timestamps, so this is
+ * `since`..`until` is app-clock milliseconds: `since` is when the proxy
+ * tail's previous poll STARTED reading (null if the loss came before its first
+ * poll; claude-code-headless#69 review a: that poll's finish time could
+ * postdate a loss that landed while it read), `until` is when the loss was
+ * detected. The proxy's events carry no timestamps, so this is
  * the tightest honest bound — possibly wider than the loss, never narrower.
  * `id` is unique per record for the app's lifetime; the renderer de-duplicates
  * a reseed against it.
