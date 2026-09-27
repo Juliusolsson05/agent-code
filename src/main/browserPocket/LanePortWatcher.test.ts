@@ -41,14 +41,22 @@ function harness(agents: Record<string, number>) {
   // `advance` plays wall time passing between scans, which is what the settle
   // window (#1409) measures; `now()` alone only ticks 5 ms per read.
   const advance = (ms: number) => { t += ms }
-  return { watcher: new LanePortWatcher(deps), timers, listListeners, listTmuxPanes, probe, broadcast, advance }
+  // One scan to discover the listeners, then one once they have settled
+  // (#1409). The attribution tests below assert on what a settled scan shows.
+  const settledScan = async (watcher: LanePortWatcher) => {
+    await watcher.scan()
+    advance(PROBE_SETTLE_MS)
+    await watcher.scan()
+  }
+  const h = { watcher: new LanePortWatcher(deps), timers, listListeners, listTmuxPanes, probe, broadcast, advance }
+  return { ...h, settle: () => settledScan(h.watcher) }
 }
 
 describe('LanePortWatcher on the recorded machine', () => {
   it('reports each lane its own dev server and nothing of its neighbour\'s', async () => {
     const h = harness({ a: ancestorClaude(4173), b: ancestorClaude(5292) })
     h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }, { sessionId: 'b', tmuxNames: [], terminalSessionIds: [] }])
-    await h.watcher.scan()
+    await h.settle()
     const out = h.broadcast.mock.calls.at(-1)![0]
     const ports = (id: string) => (out[id] ?? []).map((p: { port: number }) => p.port)
     expect(ports('a')).toContain(4173)
@@ -62,7 +70,7 @@ describe('LanePortWatcher on the recorded machine', () => {
   it('finds a tmux terminal\'s server through its pane, attributed to the lane that owns the terminal', async () => {
     const h = harness({ a: ancestorClaude(4173) })
     h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [recTmux[0]], terminalSessionIds: [] }])
-    await h.watcher.scan()
+    await h.settle()
     const ports = h.broadcast.mock.calls.at(-1)![0].a.map((p: { port: number }) => p.port)
     expect(ports).toContain(listeners.find(l => l.pid === recTmux[1])!.port)
     expect(ports).toContain(4173)
@@ -80,7 +88,7 @@ describe('LanePortWatcher on the recorded machine', () => {
   it('probes only owned listeners, and each pid:port once across scans', async () => {
     const h = harness({ a: ancestorClaude(4173) })
     h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
-    await h.watcher.scan()
+    await h.settle()
     await h.watcher.scan()
     expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173])
   })
@@ -113,9 +121,11 @@ describe('scheduling and cost', () => {
   it('unchanged results are not re-broadcast', async () => {
     const h = harness({ a: ancestorClaude(4173) })
     h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    // Unsettled scan broadcasts no chips; the settled one broadcasts 4173.
+    await h.settle()
+    expect(h.broadcast).toHaveBeenCalledTimes(2)
     await h.watcher.scan()
-    await h.watcher.scan()
-    expect(h.broadcast).toHaveBeenCalledTimes(1)
+    expect(h.broadcast).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -123,11 +133,16 @@ describe('review A #8 / surviving mutations', () => {
   it('a server that went away and came back on the same pid:port is probed again', async () => {
     const h = harness({ a: ancestorClaude(4173) })
     h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
-    await h.watcher.scan()
+    await h.settle()
     const listen = h.listListeners.getMockImplementation()!
     h.listListeners.mockImplementation(async () => [])
     await h.watcher.scan()
     h.listListeners.mockImplementation(listen)
+    // The returning server settles afresh: its predecessor's age must not
+    // carry over (it could be a test server reusing a freed port).
+    await h.watcher.scan()
+    expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173])
+    h.advance(PROBE_SETTLE_MS)
     await h.watcher.scan()
     expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173, 4173])
   })
@@ -213,5 +228,16 @@ describe('#1409: short-lived listeners are never contacted', () => {
     const next = timers.at(-1)!
     expect(next).toBeGreaterThanOrEqual(SCAN_FLOOR_MS)
     expect(next).toBeLessThanOrEqual(PROBE_SETTLE_MS)
+  })
+
+  it('pulling the next scan in for a settling listener never goes below the floor', async () => {
+    const h = harness({ a: ancestorClaude(4173) })
+    h.watcher.setSessions([{ sessionId: 'a', tmuxNames: [], terminalSessionIds: [] }])
+    await h.watcher.scan()
+    // About 1 s left in the window: the rescan still waits the floor.
+    h.advance(PROBE_SETTLE_MS - 1000)
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+    expect(h.timers.at(-1)!.ms).toBe(SCAN_FLOOR_MS)
   })
 })

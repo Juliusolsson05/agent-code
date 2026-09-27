@@ -35,6 +35,20 @@ export async function listListeners(pids: number[]): Promise<Listener[]> {
 }
 
 /**
+ * The User-Agent every lane port probe sends (#1409).
+ *
+ * WHY name ourselves: the probe lands in a developer's own server. A log line
+ * that says `AgentCode-LanePortProbe` explains itself; Node's default `node`
+ * does not. It is also the one exact thing a long-lived test that counts
+ * requests can excuse. The settle window (PROBE_SETTLE_MS in
+ * LanePortWatcher.ts) keeps short tests from ever seeing the probe, but a
+ * harness that outlives the window still can. Excusing "any `GET /`" (#1406)
+ * would also excuse a real regression that requests `/`. Keep this stable:
+ * tests match it verbatim.
+ */
+export const LANE_PORT_PROBE_USER_AGENT = 'AgentCode-LanePortProbe/1'
+
+/**
  * One `GET /` on loopback. Only ever called for listeners inside a watched
  * lane's own process tree; `redirect: 'manual'` so a redirect is classified,
  * not followed; one second, because a dev server that cannot answer that fast
@@ -42,7 +56,7 @@ export async function listListeners(pids: number[]): Promise<Listener[]> {
  */
 export async function probe(port: number): Promise<ProbeResult> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual', signal: AbortSignal.timeout(1000) })
+    const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual', headers: { 'user-agent': LANE_PORT_PROBE_USER_AGENT }, signal: AbortSignal.timeout(1000) })
     await res.body?.cancel().catch(() => {})
     return { status: res.status, contentType: res.headers.get('content-type') }
   } catch {
