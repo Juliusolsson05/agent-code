@@ -49,5 +49,26 @@
         "fallback_token_limit_override": 12000
       }
     }
+  ],
+  "casesEvidence": "The curated carrier form read by the catalog coverage gate (sweepCuratedShapeFixture): exactly what mapCodexRolloutToFeedEntries produces from `records`. wait.plainResult.evidence.renderer.test.tsx asserts that equality, so this copy cannot drift from the recording.",
+  "cases": [
+    {
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_luMOQz14LPGcISvgSp0SGUDW",
+        "name": "wait",
+        "input": {
+          "cell_id": "33",
+          "yield_time_ms": 20000,
+          "max_tokens": 900
+        }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "call_luMOQz14LPGcISvgSp0SGUDW",
+        "content": "Script completed\nWall time 0.0 seconds\nOutput:\n\n{\"chunk_id\":\"f49289\",\"wall_time_seconds\":30.026283333,\"session_id\":73581,\"original_token_count\":0,\"output\":\"\"}",
+        "is_error": false
+      }
+    }
   ]
 }

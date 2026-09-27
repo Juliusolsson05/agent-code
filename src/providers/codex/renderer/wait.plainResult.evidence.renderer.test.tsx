@@ -54,6 +54,13 @@ function classify(result: ToolResultBlock, outcome: { rendererId: string; protoc
 }
 
 describe('Codex wait with a plain function_call_output (#645)', () => {
+  it('keeps the curated carrier identical to what the mapper produces from the recording', () => {
+    // The catalog coverage gate reads `cases` (sweepCuratedShapeFixture), while
+    // these tests read `records` through the real mapper. Pinning them equal
+    // means the gate and the tests can never be looking at different shapes.
+    expect(fixture.cases).toEqual([blocksFromRecording()])
+  })
+
   it('renders the recorded result as a command continuation, and the catalog permits it', () => {
     const { toolUse, toolResult } = blocksFromRecording()
     expect(toolUse.name).toBe('wait')
