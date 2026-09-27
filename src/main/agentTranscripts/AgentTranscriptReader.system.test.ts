@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -90,6 +90,65 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
     const outputs = await readAgentTranscriptFile({ path, projection: 'tool_reads', include: { rawToolOutputs: true } })
     expect(outputs.ok && outputs.items).toEqual([
       { kind: 'tool_read', timestamp: Date.parse('2026-09-11T10:00:09.000Z'), tool: 'function_call_output', excerpt: '12 passing' },
+    ])
+  })
+
+  // #1362: since code mode (0.144+), Codex runs shell commands and patches
+  // through `custom_tool_call(name="exec")`, whose input is a JavaScript
+  // program calling `tools.exec_command(...)` / `tools.apply_patch(...)`. The
+  // reader only knew `function_call`, so a modern Codex child's timeline held
+  // its messages and nothing it did. The fixture is a slice of a recorded
+  // 0.157.1 rollout (see the fixture's README entry): one script per shape
+  // the corpus census found.
+  it('reads Codex code-mode scripts: commands, patches, other scripts, and their outputs', async () => {
+    const path = jsonl('codex-0.157.jsonl', readFileSync(join(import.meta.dirname,
+      '../../../testing/fixtures/agent-transcripts/codex-0.157-custom-calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)))
+    const at = (iso: string) => Date.parse(iso)
+    const worktree = '/Users/xxxxxxxxxxxx/Desktop/Development/agent-code/.worktrees/review-cxh55-b'
+    const records = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { payload: { input?: string } })
+    const computedScript = records[3]!.payload.input!
+    const otherScript = records[2]!.payload.input!
+    const result = await readAgentTranscriptFile({ path, projection: 'timeline' })
+    expect(result).toMatchObject({ ok: true, provider: 'codex' })
+    expect(result.ok && result.items.slice(2, -1)).toEqual([
+      // A script that calls no command or patch still records that it ran.
+      { kind: 'tool_read', timestamp: at('2026-09-27T00:26:39.779Z'), tool: 'exec', excerpt: otherScript },
+      // A computed argument (`{cmd, ...}` over a mapped array) cannot be read
+      // without running the script: the script itself is the command.
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:26:52.324Z'), command: computedScript },
+      { kind: 'patch', timestamp: at('2026-09-27T00:27:16.483Z'), files: [`${worktree}/src/CodexHeadless.ts`], summary: `apply_patch: ${worktree}/src/CodexHeadless.ts` },
+      // Two decodable calls in one script: two commands, in order.
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:27:26.627Z'), command: 'git checkout -- src/CodexHeadless.ts', cwd: worktree },
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:27:26.627Z'), command: "rg -n 'snapshotPlain\\(' src/terminal/HeadlessTerminal.ts", cwd: worktree },
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:30:39.279Z'), command: 'rm node_modules', cwd: worktree },
+    ])
+    const shell = await readAgentTranscriptFile({ path, projection: 'shell_commands' })
+    expect(shell.ok && shell.items.map(item => item.kind === 'shell_command' && item.command)).toEqual([
+      computedScript, 'git checkout -- src/CodexHeadless.ts', "rg -n 'snapshotPlain\\(' src/terminal/HeadlessTerminal.ts", 'rm node_modules',
+    ])
+    const outputs = await readAgentTranscriptFile({ path, projection: 'tool_reads', include: { rawToolOutputs: true } })
+    expect(outputs.ok && outputs.items.filter(item => item.kind === 'tool_read' && item.tool === 'function_call_output').map(item => item.timestamp)).toEqual([
+      at('2026-09-27T00:27:16.554Z'), at('2026-09-27T00:27:26.908Z'), at('2026-09-27T00:30:39.877Z'),
+    ])
+    expect(outputs.ok && outputs.items.find(item => item.timestamp === at('2026-09-27T00:30:39.877Z'))).toMatchObject({
+      excerpt: expect.stringContaining('"exit_code":0'),
+    })
+    const inspect = await inspectAgentTranscriptFile({ path })
+    expect(inspect).toMatchObject({ ok: true, stats: { shellCommands: 4, userMessages: 1, assistantMessages: 2 } })
+  })
+
+  // #1362: the two patch forms the 0.157 slice does not hold, both recorded.
+  // A template-literal argument cannot be decoded lexically, so its files come
+  // from the headers in the script text; the older top-level `apply_patch`
+  // custom call carries the patch as its whole input.
+  it('names the files of a template-literal patch script and of a top-level apply_patch call', async () => {
+    const path = jsonl('codex-patch-forms.jsonl', readFileSync(join(import.meta.dirname,
+      '../../../testing/fixtures/agent-transcripts/codex-custom-call-patch-forms.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)))
+    const edited = '/Users/xxxxxxxxxxxx/Desktop/Development/agent-code/.worktrees/review-1326-c/src/renderer/src/workspace/hook/actions/session.ts'
+    const result = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'file_changes' })
+    expect(result.ok && result.items).toEqual([
+      { kind: 'patch', timestamp: Date.parse('2026-09-27T01:27:05.044Z'), files: [edited], summary: `apply_patch: ${edited}` },
+      { kind: 'patch', timestamp: Date.parse('2026-05-19T07:15:19.499Z'), files: ['src/app/page.tsx'], summary: 'apply_patch: src/app/page.tsx' },
     ])
   })
 

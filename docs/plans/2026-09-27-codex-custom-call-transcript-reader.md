@@ -45,3 +45,9 @@ The reader runs in main over files, so the tests exercise the real entry point. 
 ## Out of scope
 - Pairing outputs to calls by `call_id`: the reader never paired `function_call_output` either.
 - `write_stdin` and MCP calls inside scripts, beyond naming them in the `tool_read` target.
+
+## Execution notes
+- **Second fixture:** `codex-custom-call-patch-forms.jsonl` holds the two patch forms the 0.157 slice lacks, both recorded: a template-literal `tools.apply_patch` script (0.157, 2026-09-26) and a top-level `apply_patch` custom call (2026-05-19).
+- **Fixture outputs:** the computed and non-command scripts' outputs are left out whole. One echoes MCP tool descriptions (provider text), and both run to 33–41 KB. Their calls are kept verbatim.
+- **Ruling: no separate grammar unit tests.** `codexExecScriptCalls` is exercised through the reader's real entry point by both fixtures. The moved helpers are pinned by the renderer suites, which pass unchanged. A unit test over the same scripts would only repeat those assertions. Cost if wrong: a grammar edge that neither fixture holds.
+- **Ruling: the recorded variable-argument patch** (`const patch = "…"; tools.apply_patch(patch)`) is not in a fixture, because its file name looks like a private project. It takes the same script-text path as the template form, which is covered.

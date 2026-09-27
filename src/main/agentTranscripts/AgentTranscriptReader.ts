@@ -5,6 +5,7 @@ import { parseOpencodeTranscriptFile, type OpencodeStore } from 'opencode-termin
 import { readPiBranch } from 'pi-terminal-headless'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
+import { codexExecScriptCalls, decodeDoubleQuotedLiteral, parseExecCommandArgument } from '@shared/codex/execScript.js'
 import {
   asRecord as asSharedRecord,
   parseJsonRecord,
@@ -817,7 +818,7 @@ function extractCodexItems(raw: JsonRecord, timestamp: number | undefined): Agen
       return text ? [{ kind: 'assistant_message', timestamp, text, final: phase === 'final_answer' }] : []
     }
   }
-  if (type === 'message' || type === 'function_call' || type === 'function_call_output') {
+  if (type === 'message' || type === 'function_call' || type === 'function_call_output' || type === 'custom_tool_call' || type === 'custom_tool_call_output') {
     return extractCodexResponseItem(raw, timestamp, stringField(raw, 'phase'))
   }
   return []
@@ -855,7 +856,116 @@ function extractCodexResponseItem(
     }]
   }
 
+  // Code mode (#1362). Since Codex 0.144 almost every tool call is a
+  // `custom_tool_call`: 98,327 `exec` scripts and 7,538 top-level
+  // `apply_patch` calls in the owner's corpus, against 691 `function_call`s
+  // in the 0.157 rollouts. Skipping them left a Codex child's timeline with
+  // its messages and nothing it did.
+  if (itemType === 'custom_tool_call') {
+    const name = stringField(item, 'name') ?? 'custom_tool_call'
+    const input = stringField(item, 'input') ?? ''
+    if (name === 'exec') return extractCodexExecScript(input, timestamp)
+    if (name === 'apply_patch') {
+      // The older top-level form: the input IS the patch text.
+      const files = patchHeaderFiles(input)
+      return [{ kind: 'patch', timestamp, files, summary: files.length > 0 ? `apply_patch: ${files.join(', ')}` : 'apply_patch' }]
+    }
+    return [classifyToolCall(name, parseMaybeJsonObject(input), timestamp)]
+  }
+
+  // Same raw-output item as `function_call_output`, so one flag
+  // (`include.rawToolOutputs`) still governs every tool output. Code-mode
+  // outputs are arrays of `input_text` blocks (13,085 of 13,154 in the
+  // September rollouts), occasionally with an image, which has no text to
+  // carry and is dropped here like every other non-text block.
+  if (itemType === 'custom_tool_call_output') {
+    const output = flattenTextContent(item.output, ['input_text', 'output_text', 'text'])
+    if (!output) return []
+    return [{
+      kind: 'tool_read',
+      timestamp,
+      tool: RAW_TOOL_OUTPUT,
+      excerpt: output,
+    }]
+  }
+
   return []
+}
+
+/**
+ * What one Codex `exec` script did, in the reader's vocabulary.
+ *
+ * The script is JavaScript we never run, read with the grammar the renderer
+ * uses (`@shared/codex/execScript`). Its calls map, in source order:
+ *
+ * - `tools.exec_command(...)`: one `shell_command` per call, when EVERY such
+ *   call's argument decodes (92% of calls in the corpus). If even one is
+ *   computed (`{cmd, workdir}` over a mapped array, string concatenation, a
+ *   template), the whole script becomes ONE `shell_command`.
+ *   WHY not the decodable subset plus a guess: a partial list would silently
+ *   drop the commands we could not read, which is the bug being fixed, and a
+ *   guessed command is worse than none. The script's own bytes are the
+ *   evidence of what ran, and per-item truncation still bounds them.
+ * - `tools.apply_patch(...)`: one `patch` item naming the files from the
+ *   patch headers. A double-quoted argument is decoded first. Anything else
+ *   (a variable, a template: 8,652 of 10,786 calls) is read from the script
+ *   text, where the headers are literal in every form.
+ * - no command and no patch (MCP tools, `web__run`, `ALL_TOOLS` queries):
+ *   one `tool_read` so the timeline still shows that a script ran, targeted
+ *   at the tools it called.
+ */
+function extractCodexExecScript(script: string, timestamp: number | undefined): AgentTranscriptItem[] {
+  const calls = codexExecScriptCalls(script)
+  const commandCalls = calls.filter(call => call.tool === 'exec_command')
+  const decoded = commandCalls.map(call => call.argument === null ? null : parseExecCommandArgument(call.argument))
+  const everyCommandDecoded = decoded.every(command => command !== null)
+  const patchCalls = calls.filter(call => call.tool === 'apply_patch')
+
+  const items: AgentTranscriptItem[] = []
+  let commandIndex = 0
+  let patchEmitted = false
+  for (const call of calls) {
+    if (call.tool === 'exec_command') {
+      if (everyCommandDecoded) {
+        const command = decoded[commandIndex]!
+        const shellItem: AgentTranscriptItem = { kind: 'shell_command', timestamp, command: command.command }
+        if (command.workdir) shellItem.cwd = command.workdir
+        items.push(shellItem)
+      } else if (commandIndex === 0) {
+        items.push({ kind: 'shell_command', timestamp, command: script })
+      }
+      commandIndex += 1
+    } else if (call.tool === 'apply_patch' && !patchEmitted) {
+      patchEmitted = true
+      const files = execScriptPatchFiles(script, patchCalls)
+      items.push({ kind: 'patch', timestamp, files, summary: files.length > 0 ? `apply_patch: ${files.join(', ')}` : 'apply_patch' })
+    }
+  }
+  if (items.length > 0) return items
+
+  const tools = [...new Set(calls.map(call => call.tool))]
+  const scriptItem: AgentTranscriptItem = { kind: 'tool_read', timestamp, tool: 'exec', excerpt: script }
+  if (tools.length > 0) scriptItem.target = tools.join(', ')
+  return [scriptItem]
+}
+
+function execScriptPatchFiles(script: string, patchCalls: Array<{ argument: string | null }>): string[] {
+  const files: string[] = []
+  let undecoded = false
+  for (const call of patchCalls) {
+    const patch = call.argument === null ? null : decodeDoubleQuotedLiteral(call.argument)
+    if (patch === null) undecoded = true
+    else files.push(...patchHeaderFiles(patch))
+  }
+  if (undecoded) {
+    // Inside a JavaScript string the patch's newlines are the two characters
+    // `\n`, inside a template they are real newlines; a header ends at
+    // either, or at the string's closing quote.
+    for (const match of script.matchAll(/\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)(?=\\n|\n|["'`]|$)/g)) {
+      if (match[1]?.trim()) files.push(match[1].trim())
+    }
+  }
+  return [...new Set(files)]
 }
 
 // Pi rows are the session file's own JSON (pi-terminal-headless
@@ -1066,7 +1176,12 @@ function applyPatchFiles(input: JsonRecord | undefined, metadata: JsonRecord | u
   if (reported.length > 0) {
     return reported.flatMap(file => [stringField(file, 'filePath'), stringField(file, 'movePath')].filter((path): path is string => path !== undefined))
   }
-  const patchText = stringField(input, 'patchText') ?? ''
+  return patchHeaderFiles(stringField(input, 'patchText') ?? '')
+}
+
+// The files a patch's own headers name. Shared by OpenCode's `patchText` and
+// Codex's `apply_patch` (top-level, or decoded from an `exec` script).
+function patchHeaderFiles(patchText: string): string[] {
   const files: string[] = []
   for (const line of patchText.split(/\r?\n/)) {
     const match = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/.exec(line.trim())
