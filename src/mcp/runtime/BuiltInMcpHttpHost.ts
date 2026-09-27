@@ -1,6 +1,7 @@
 import type { BrowserPocketsPort } from '@mcp/runtime/browserTools.js'
 import type { UserMcpToolDependencies } from '@mcp/runtime/userMcpTools.js'
 import type { SkillsToolDependencies } from '@mcp/runtime/skillsTools.js'
+import type { UsageToolDependencies } from '@mcp/runtime/usageTools.js'
 import type { TldrStore } from '@main/tldr/TldrStore.js'
 import { hasReportingDomain } from '@shared/types/tldr.js'
 import { TLDR_HOOK_EVENTS } from '@main/tldr/enforcement.js'
@@ -72,7 +73,7 @@ type BuiltInMcpServerFactory = (
   dependencies: BuiltInMcpDependencies,
 ) => McpServer
 
-export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDependencies & {
+export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDependencies & UsageToolDependencies & {
   tldrStore?: Pick<TldrStore, 'update'>
   goalStore?: Pick<TldrStore, 'update' | 'complete'>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>

@@ -123,7 +123,7 @@ import { createConversationService } from '@main/conversations/service.js'
 import { listWorktreesForCwd } from '@main/ipc/git.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
-import { getUsageSnapshot } from '@main/usage/usageService.js'
+import { getUsageSnapshot, readUsageSnapshotForTools } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -1296,6 +1296,9 @@ async function startApp(): Promise<void> {
   })
   builtInMcpHost.setDependencies({
     browserPockets,
+    // #1339: the `usage` domain reads through the same cached, sanitized
+    // reader as root management's usage.read, never with `force`.
+    readUsageSnapshot: () => readUsageSnapshotForTools(),
     tldrStore,
     goalStore,
     tldrEnforcement,
