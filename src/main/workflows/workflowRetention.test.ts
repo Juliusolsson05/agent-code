@@ -82,7 +82,8 @@ describe('workflow run retention (#1275)', () => {
   it('prunes an old, fully terminal lineage and keeps fresh and live runs', async () => {
     const { store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(T0)
+    // This lineage is resumable (interrupted -> cancelled), so it expires after 30 days, not 7.
+    vi.setSystemTime(T0 - 22 * DAY)
     await terminalRun(store, 'run_old_first', 'run.interrupted')
     await terminalRun(store, 'run_old_second', 'run.cancelled', { resumedFromRunId: 'run_old_first', lineageId: 'run_old_first' })
     // Old but never finished: not terminal, so never a candidate, however stale.
@@ -113,6 +114,50 @@ describe('workflow run retention (#1275)', () => {
 
     expect(result.runsDeleted).toBe(0)
     expect(await ids(store)).toEqual(['run_fresh_successor', 'run_old_interrupted'])
+  })
+
+  // Review of workflow-mcp#65: failed/cancelled/interrupted runs stay in history with a Resume
+  // action, so a resumable lineage is kept for 30 days; a completed-only one for 7.
+  it('keeps a resumable lineage longer than a completed one', async () => {
+    const { store, codexHome } = await fixture()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    await terminalRun(store, 'run_resumable', 'run.cancelled')
+    await store.createRun({ runId: 'run_completed', cwd: tmpdir(), workflow: workflow() })
+    await store.appendEvent('run_completed', event('run_completed', 1, 'run.started', { workflow: { name: 'retained', description: 'Retention fixture' } }))
+    // The production completion path: persist the result, then publish run.completed naming it.
+    const result = await store.persistResult('run_completed', {
+      serializedContent: '"ok"',
+      reference: { preview: '"ok"', content: '"ok"', mediaType: 'application/json', lineCount: 1, truncated: false },
+    })
+    await store.appendEvent('run_completed', event('run_completed', 2, 'run.completed', { result }))
+
+    const pruned = await pruneWorkflowHistory({ store, codexHome, now: T0 + 9 * DAY, ttlMs: 7 * DAY })
+
+    expect(await ids(store)).toEqual(['run_resumable'])
+    expect(pruned.runsDeleted).toBe(1)
+  })
+
+  // Review of workflow-mcp#65: createdAt is wall-clock; a clock step backwards must not make the
+  // successor go first (a crash in between would leave an un-continued interrupted predecessor).
+  it('deletes predecessors before successors even when the clock stepped backwards', async () => {
+    const { store, codexHome } = await fixture()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0 - 40 * DAY)
+    await terminalRun(store, 'run_parent', 'run.interrupted')
+    vi.setSystemTime(T0 - 40 * DAY - 60_000)
+    await terminalRun(store, 'run_child', 'run.cancelled', { resumedFromRunId: 'run_parent', lineageId: 'run_parent' })
+    const order: string[] = []
+    const deleteRun = store.deleteRun.bind(store)
+    const spied = Object.assign(Object.create(store) as FileWorkflowStore, {
+      deleteRun: async (runId: string) => { order.push(runId); await deleteRun(runId) },
+      listRuns: store.listRuns.bind(store),
+      journalPath: store.journalPath.bind(store),
+    })
+
+    await pruneWorkflowHistory({ store: spied, codexHome, now: T0, ttlMs: 7 * DAY })
+
+    expect(order).toEqual(['run_parent', 'run_child'])
   })
 
   it('deletes an old unreferenced rollout, and keeps one a kept run references or one that is fresh', async () => {

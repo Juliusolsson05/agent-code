@@ -18,9 +18,22 @@ import type { WorkflowRunSummary, WorkflowStore } from 'workflow-mcp'
  * Plan: docs/plans/2026-09-26-workflow-run-retention.md.
  */
 
-/** UNCONFIRMED default (owner may override): a week bounds the owner's rate to about 1 GB and
- *  leaves time to resume a failed run. `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS` overrides it. */
+/** UNCONFIRMED default (owner may override): a week bounds the owner's rate to about 1 GB.
+ *  `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS` overrides it. Applies to lineages whose runs all completed. */
 export const DEFAULT_WORKFLOW_RUN_TTL_DAYS = 7
+
+/**
+ * UNCONFIRMED default: lineages the user can still RESUME are kept longer.
+ *
+ * WHY (review of workflow-mcp#65): a failed, cancelled, interrupted or completed-with-errors run
+ * stays visible in workflow history with a Resume action; once its manifest, journal and source are
+ * deleted, Resume fails with run-not-found and nothing warned the user. On the owner's corpus 38 of
+ * 134 runs were resumable. Thirty days keeps a month to act on them while still bounding growth;
+ * the UI's handling of an expired run is follow-up #1348.
+ */
+export const RESUMABLE_TTL_MULTIPLIER = 30 / 7
+
+const RESUMABLE = new Set<WorkflowRunSummary['status']>(['completed_with_errors', 'failed', 'cancelled', 'interrupted'])
 
 const TERMINAL = new Set<WorkflowRunSummary['status']>([
   'completed',
@@ -74,14 +87,15 @@ export async function pruneWorkflowHistory(input: {
     // successor as un-continued and may AUTO-RECOVER it. Deleting a successor while its
     // interrupted predecessor stays could make an old workflow re-run on its own. So a lineage is
     // pruned only when every member is terminal and every member is past the cutoff.
-    const prunable = members.every(run => TERMINAL.has(run.status) && Date.parse(run.updatedAt) < cutoff)
+    const lineageCutoff = members.some(run => RESUMABLE.has(run.status)) ? now - ttlMs * RESUMABLE_TTL_MULTIPLIER : cutoff
+    const prunable = members.every(run => TERMINAL.has(run.status) && Date.parse(run.updatedAt) < lineageCutoff)
     if (!prunable) {
       kept.push(...members)
       continue
     }
-    // Oldest first: a crash part-way leaves a successor whose predecessor is gone (harmless),
+    // Predecessors first: a crash part-way leaves a successor whose predecessor is gone (harmless),
     // never an interrupted predecessor without its successor (auto-recovered).
-    const ordered = [...members].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    const ordered = ancestryOrder(members)
     for (let index = 0; index < ordered.length; index += 1) {
       try {
         await store.deleteRun(ordered[index]!.runId)
@@ -98,6 +112,43 @@ export async function pruneWorkflowHistory(input: {
   const referenced = await referencedCodexSessions(store, kept)
   result.rolloutsDeleted = await pruneRollouts(join(codexHome, 'sessions'), cutoff, referenced)
   return result
+}
+
+/**
+ * Members ordered so every run comes after the run it resumed.
+ *
+ * WHY ancestry and not `createdAt` (review of workflow-mcp#65): createdAt is wall-clock time. A
+ * clock step backwards, or equal timestamps with the (createdAt, runId) tie-break, could put a
+ * successor first; a crash after deleting it would leave the interrupted predecessor looking
+ * un-continued, which startup may auto-recover. `resumedFromRunId` is the edge startup itself
+ * reads. A member whose predecessor is not in the lineage (already gone) counts as a root.
+ */
+function ancestryOrder(members: WorkflowRunSummary[]): WorkflowRunSummary[] {
+  const byId = new Map(members.map(run => [run.runId, run]))
+  const children = new Map<string, WorkflowRunSummary[]>()
+  const roots: WorkflowRunSummary[] = []
+  for (const run of members) {
+    const parent = run.resumedFromRunId
+    if (parent !== undefined && byId.has(parent) && parent !== run.runId) {
+      children.set(parent, [...(children.get(parent) ?? []), run])
+    } else {
+      roots.push(run)
+    }
+  }
+  const byAge = (left: WorkflowRunSummary, right: WorkflowRunSummary) => left.createdAt.localeCompare(right.createdAt)
+  const ordered: WorkflowRunSummary[] = []
+  const seen = new Set<string>()
+  const queue = [...roots].sort(byAge)
+  while (queue.length > 0) {
+    const run = queue.shift()!
+    if (seen.has(run.runId)) continue
+    seen.add(run.runId)
+    ordered.push(run)
+    queue.push(...(children.get(run.runId) ?? []).sort(byAge))
+  }
+  // A cycle (corrupt data) leaves members unvisited; they go last rather than being dropped.
+  for (const run of members) if (!seen.has(run.runId)) ordered.push(run)
+  return ordered
 }
 
 async function allRuns(store: WorkflowRetentionStore): Promise<WorkflowRunSummary[]> {

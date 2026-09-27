@@ -70,10 +70,14 @@ Nothing deletes any of it:
    cutoff. Members are deleted oldest first (predecessor before successor). A crash mid-lineage then
    leaves a successor whose predecessor is gone, which is harmless. The reverse order would leave an
    interrupted predecessor without a successor, which auto-recovers.
-3. **TTL: 7 days after a run's last update**, overridable with `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS`.
-   *UNCONFIRMED default.* Seven days bounds the owner's current rate to about 1 GB and keeps a week
-   for resuming a failed run. A lineage the user is still resuming keeps a fresh `updatedAt`, so it
-   is never prunable.
+3. **TTL: 7 days after a run's last update for lineages whose runs all completed, and 30 days for a
+   lineage with any resumable run** (failed, cancelled, interrupted, completed_with_errors).
+   *UNCONFIRMED defaults.* Resumable runs stay in workflow history with a Resume action (review of
+   workflow-mcp#65; 38 of 134 runs on the owner's corpus), and Resume fails once the run is deleted.
+   The UI's handling of an expired run is follow-up issue #1348. `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS`
+   scales both.
+   Seven days bounds the owner's current completed-run rate to about 1 GB. A lineage the user is
+   still resuming keeps a fresh `updatedAt`, so it is never prunable.
 4. **Codex rollouts:** after pruning runs, delete a rollout in the **workflow** Codex home only when
    - its mtime is older than the same cutoff, **and**
    - its session id is not recorded in the journal of any run that is kept.
