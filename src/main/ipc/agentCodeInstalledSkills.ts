@@ -140,6 +140,10 @@ export function registerAgentCodeInstalledSkillsIpc(service: AgentCodeConvention
   ipcMain.handle('agent-code-installed-skills:reveal-recovery', async () => {
     const path = await service.resolveRecoveryFile()
     if (!path) return { ok: false, message: 'No managed skill recovery file exists.' }
+    // WHY checked (#1424 review a): the recovery snapshot keeps the path it
+    // found at load, and showItemInFolder answers nothing, so a file removed
+    // since then used to report ok with nothing revealed.
+    if (!(await lstat(path).catch(() => null))) return { ok: false, message: 'The state file is no longer there. Refresh to check again.' }
     shell.showItemInFolder(path)
     return { ok: true }
   })

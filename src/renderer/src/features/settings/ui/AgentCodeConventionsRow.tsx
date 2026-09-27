@@ -172,7 +172,9 @@ export function AgentCodeConventionsRow() {
               <button
                 type="button"
                 title={target.message}
-                onClick={() => void window.api.revealAgentCodeConventionsTarget(target.id)}
+                // Same answer handling as the recovery reveal (#1424 review a):
+                // main says why a target cannot be revealed.
+                onClick={() => void revealRecoveryFile(() => window.api.revealAgentCodeConventionsTarget(target.id), setError, "Couldn't reveal that folder.")}
                 className="min-w-0 truncate text-right text-control-fg hover:text-ink"
               >
                 {/* The deployment path beside this row's own controls

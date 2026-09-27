@@ -23,3 +23,14 @@ When an Agent Code-managed skill state file is unreadable, three surfaces show a
 ## Out of scope
 - #1250's other rows.
 - The existing `cause.message` displays elsewhere in these rows (a separate q22 sweep).
+
+## Review round 1 (a, b, c: FIX-BEFORE-MERGE)
+- **a1 (Major): a reset whose unlink failed answered `io-error` with the raw Node message** (an absolute path and an OS code), and the panel showed it. All three resets now answer "Couldn't remove the unreadable state file. Check that Agent Code's data folder is writable, then try again." and warn the raw error in main.
+  - The plan's claim that main's messages are "fixed, curated strings" was true for reveal, not for reset; corrected here.
+  - The same raw pass-through elsewhere in the service is split into #1427.
+  - Real-filesystem system test (a read-only state directory), red on the previous head.
+- **a2 (Major): reveal answered ok for a file removed since load.** `showItemInFolder` answers nothing, so all three handlers now `lstat` first and refuse a missing file. Test covering all three channels, red on the previous head.
+- **a3 (Minor): the Conventions TARGET reveal dropped its answer.** It uses the same helper, with "Couldn't reveal that folder." as its fallback.
+- **b1 (Major): the Skills grid showed a reveal failure below every skill row.** It now shows inside the recovery panel, beside its buttons. The test asserts the placement.
+- **b2 (Major): a late reveal success cleared a newer reset failure.** A success clears only the reveal's own earlier message. Unit-tested.
+- **c (test gaps):** the Custom Skills reset rejection, the helper's reject/fallback/success branches (unit test), and the ordering rule.

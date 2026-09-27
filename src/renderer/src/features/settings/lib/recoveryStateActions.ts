@@ -11,14 +11,32 @@
 export const RECOVERY_REVEAL_FAILED = "Couldn't reveal the state file."
 export const RECOVERY_RESET_FAILED = "Couldn't reset the state. Try again."
 
+type ErrorSetter = (next: string | null | ((current: string | null) => string | null)) => void
+
+// The last message a reveal put on each row. WHY (#1424 review b): a reveal
+// that SUCCEEDS used to clear the row's error unconditionally, so a slow
+// reveal resolving after a failed Reset wiped the more important reset
+// failure. A success now clears only the reveal's own earlier message.
+const lastRevealMessage = new WeakMap<ErrorSetter, string>()
+
 export async function revealRecoveryFile(
   reveal: () => Promise<{ ok: boolean; message?: string }>,
-  setError: (message: string | null) => void,
+  setError: ErrorSetter,
+  fallback: string = RECOVERY_REVEAL_FAILED,
 ): Promise<void> {
+  let message: string | null
   try {
     const result = await reveal()
-    setError(result.ok ? null : result.message ?? RECOVERY_REVEAL_FAILED)
+    message = result.ok ? null : result.message ?? fallback
   } catch {
-    setError(RECOVERY_REVEAL_FAILED)
+    message = fallback
   }
+  if (message !== null) {
+    lastRevealMessage.set(setError, message)
+    setError(message)
+    return
+  }
+  const mine = lastRevealMessage.get(setError)
+  lastRevealMessage.delete(setError)
+  if (mine !== undefined) setError(current => (current === mine ? null : current))
 }

@@ -131,8 +131,12 @@ describe('Settings → Skills grid (#1161)', () => {
     useSkillsStore.setState({ installed: recovering })
     Object.assign(window, { api: { ...window.api, revealAgentCodeInstalledSkillsRecoveryFile: vi.fn(async () => ({ ok: false, message: 'No managed skill recovery file exists.' })) } })
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Reveal State File' }))
+    const reveal = await screen.findByRole('button', { name: 'Reveal State File' })
+    fireEvent.click(reveal)
     expect(await screen.findByText('No managed skill recovery file exists.')).toBeTruthy()
+    // Inside the recovery panel, beside the button (#1424 review b), not in
+    // the grid's footer line below every skill row.
+    expect(reveal.closest('[role="alert"]')).toHaveTextContent('No managed skill recovery file exists.')
     api.auditAgentCodeInstalledSkills.mockResolvedValue(installed)
     api.getAgentCodeInstalledSkills.mockResolvedValue(installed)
   })

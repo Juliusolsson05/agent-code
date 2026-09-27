@@ -83,6 +83,7 @@ export function SkillsGrid({ settings, onChange }: Props) {
   const supported = useSupportedSkillProviders()
   const [filter, setFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [externalOpen, setExternalOpen] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
@@ -263,8 +264,12 @@ export function SkillsGrid({ settings, onChange }: Props) {
       {installed?.recovery ? (
         <div role="alert" className="flex flex-col gap-2 border-b border-danger px-3 py-2 text-[10px] text-danger">
           <span>{installed.recovery.message}</span>
+          {/* Beside the controls that produced it (#1424 review b): the
+              grid's own error line is below every skill row, out of view on
+              a long list. */}
+          {recoveryError ? <span data-testid="recovery-action-error">{recoveryError}</span> : null}
           <div className="flex flex-wrap gap-2">
-            <Button size="xs" variant="outline" onClick={() => void revealRecoveryFile(window.api.revealAgentCodeInstalledSkillsRecoveryFile, setError)}>Reveal State File</Button>
+            <Button size="xs" variant="outline" onClick={() => void revealRecoveryFile(window.api.revealAgentCodeInstalledSkillsRecoveryFile, setRecoveryError)}>Reveal State File</Button>
             <Button size="xs" variant="outline" onClick={async () => {
               if (!(await requestConfirm({
                 title: 'Reset all Agent Code-managed skill state?',
