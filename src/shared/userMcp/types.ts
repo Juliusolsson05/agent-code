@@ -111,7 +111,16 @@ export type UserMcpProblem =
 
 export type UserMcpSupport = { ok: true } | { ok: false; reason: string }
 
-export type UserMcpSecretState = { set: boolean; hint?: string }
+/** `unconfirmed`: a secret saved by an earlier version (before secrets were
+ *  bound to their destination). It is kept but withheld from launches until
+ *  the user confirms it for the current destination or re-enters it (q114). */
+/**
+ * `unconfirmed`: a stored secret that is kept but withheld until the user
+ * confirms it (#1420): `legacy` = saved by an earlier version (q114);
+ * `inputs-changed` = an agent or an import changed another input of this
+ * server since it was saved (B6 R3, q127). A user's own edit rebinds instead.
+ */
+export type UserMcpSecretState = { set: boolean; hint?: string; unconfirmed?: 'legacy' | 'inputs-changed' }
 
 /** What crosses IPC to the renderer. Never contains a secret value. */
 export type UserMcpServerView = UserMcpServer & {

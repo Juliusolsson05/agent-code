@@ -219,6 +219,7 @@ function makeRefs(state: WorkspaceState, runtimes: Record<SessionId, SessionRunt
     pendingAdoptionWindowIdsRef: ref([]),
     saveTimerRef: ref(null),
     bootRef: ref(false),
+    worktreeReconcilerRef: ref(null),
   } as unknown as WorkspaceRefs
 }
 

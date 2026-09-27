@@ -199,6 +199,21 @@ describe('SessionManager lifecycle journal', () => {
     // the failure is silent in exactly the way that made #683 take a full
     // journal dig to diagnose.
 
+    // #1114: a session may refuse input (OpenCode Terminal's bounded pre-paint
+    // hold). The refusal reaches the caller as `false`, like a missing backend,
+    // so the renderer can say so.
+    it('reports a session\'s refusal to the caller', async () => {
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+      const entry = (manager as unknown as { sessions: Map<string, { session: { write: (data: string) => unknown } }> }).sessions.get('s1')!
+      entry.session.write = () => false
+      expect(manager.write('s1', 'refused')).toBe(false)
+      entry.session.write = () => undefined
+      expect(manager.write('s1', 'accepted')).toBe(true)
+    })
+
     it('defaults an unlabelled write to renderer rather than inventing an origin', async () => {
       const { SessionManager } = await import('./sessionManager')
       const spy = journalSpy()
