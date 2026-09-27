@@ -1,6 +1,6 @@
 # Debug-storage pruning waits until the workspace has recovered (#775, prune half)
 
-Refs #775. That issue has two halves. This branch covers the **retention prune on the boot critical path**. The other half, starting the workflow service after window creation, edits the same `index.ts` block as W2's open #1325, and turns a service captured once at startup into one the MCP host, IPC and control host must wait for. It is left to the workflows lane, per the manager.
+Refs #775. That issue has two halves. This branch covers the **retention prune on the boot critical path**. The other half, starting the workflow service after window creation, edits the same `index.ts` block as W2's open #1325, and turns a service captured once at startup into one the MCP host, IPC and control host must wait for. It is not in this branch; who takes it is the manager's call (asked in W3's status, 2026-09-27).
 
 ## Evidence (verified 2026-09-27, do not re-derive)
 The owner's app-run journals, `~/.config/agent-code/incidents/runs/*/events.jsonl` (50 runs; 32 with a journaled prune):
