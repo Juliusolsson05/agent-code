@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, statSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, renameSync, statSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -247,6 +247,12 @@ describe('removeEmptyProxyParents (#1278)', () => {
     await removeEmptyProxyParents(prunedSibling, proxyRoot)
 
     expect(existsSync(join(proxyRoot, 'project-a'))).toBe(false)
+    // Review of #1417 (a), a surviving mutation: `startsWith(root)` without the
+    // separator. A sibling root sharing the prefix must never be walked into.
+    const sibling = join(root, 'proxy-old', 'empty-project', 'session')
+    mkdirSync(sibling, { recursive: true })
+    await removeEmptyProxyParents(join(sibling, 'gone-run'), proxyRoot)
+    expect(existsSync(sibling)).toBe(true)
     expect(existsSync(join(proxyRoot, 'project-b', 'session-3'))).toBe(false)
     expect(existsSync(keptRun)).toBe(true)
     expect(existsSync(proxyRoot)).toBe(true)
@@ -308,6 +314,29 @@ describe('legacy ledger classification fails closed (steering q109)', () => {
     expect(await cachedManualLegacyBundlePaths(ledger, load)).toEqual(new Set(['/b/1']))
     expect(load).toHaveBeenCalledTimes(2)
   })
+
+  // Review of #1417 (a): the ledger renamed away between the stat and the
+  // read. The loader sees ENOENT and says "no ledger"; that empty answer must
+  // not classify the manual bundle as deletable, nor be cached, whether the
+  // file is still away or already back.
+  for (const back of [false, true]) {
+    it(`does not trust a load that raced a rename of the ledger (${back ? 'renamed back' : 'still away'})`, async () => {
+      const ledger = join(root, 'saved-debug-bundles.jsonl')
+      const manualBundle = join(root, '2026-01-01T00-00-00')
+      writeFileSync(ledger, manualRow(manualBundle))
+      const raced = vi.fn(async (file: string) => {
+        renameSync(file, `${file}.away`)
+        if (back) renameSync(`${file}.away`, file)
+        return new Set<string>()
+      })
+      const first = await cachedManualLegacyBundlePaths(ledger, raced)
+      expect(first).toBe('unknown')
+      expect(legacyDebugBundleBucketForPath(manualBundle, first)).toBe('debug-bundles-manual')
+      if (!back) renameSync(`${ledger}.away`, ledger)
+      const settled = await cachedManualLegacyBundlePaths(ledger)
+      expect(legacyDebugBundleBucketForPath(manualBundle, settled)).toBe('debug-bundles-manual')
+    })
+  }
 
   // An operator edit with the same size that also restores the old mtime.
   it('re-parses a same-size edit whose mtime was set back', async () => {

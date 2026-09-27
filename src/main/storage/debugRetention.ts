@@ -485,23 +485,33 @@ export async function cachedManualLegacyBundlePaths(
   file: string = DEBUG_BUNDLE_LOG_FILE,
   load: (file: string) => Promise<ManualLegacyBundlePaths> = loadManualLegacyBundlePaths,
 ): Promise<ManualLegacyBundlePaths> {
-  let identity: string
-  try {
-    const info = await stat(file)
-    identity = `${info.ino}:${info.ctimeMs}:${info.mtimeMs}:${info.size}`
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'unknown'
-    identity = 'missing'
-  }
+  const identity = await ledgerIdentity(file)
+  if (identity === 'unknown') return 'unknown'
   const key = `${file}\0${identity}`
   if (legacyLedgerCache?.key === key) return legacyLedgerCache.paths
   const paths = await load(file)
-  if (paths === 'unknown') {
+  // WHY a second stat (review of #1417, a): the load is a separate operation.
+  // A ledger renamed away between the stat and the read made readFile hit
+  // ENOENT, which the loader rightly calls "no ledger", and that empty set was
+  // then cached under the identity of the file that WAS there, so a manual
+  // bundle became deletable. The parse is trusted only if the file it read is
+  // the file the stat saw, before and after; any change (gone, replaced,
+  // edited mid-read) is 'unknown': protective for this prune, never cached.
+  if (paths === 'unknown' || (await ledgerIdentity(file)) !== identity) {
     legacyLedgerCache = null
-    return paths
+    return 'unknown'
   }
   legacyLedgerCache = { key, paths }
   return paths
+}
+
+async function ledgerIdentity(file: string): Promise<string> {
+  try {
+    const info = await stat(file)
+    return `${info.ino}:${info.ctimeMs}:${info.mtimeMs}:${info.size}`
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unknown'
+  }
 }
 
 async function collectArtifacts(): Promise<Artifact[]> {
