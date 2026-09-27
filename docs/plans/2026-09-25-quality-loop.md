@@ -543,6 +543,17 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (17:35) — **Switched to manager plus four Claude workers** (owner decision). The goal loop is replaced by a 5-minute manager tick.
+  - **Setup:** the plan, worker rules, claim formula (`next-issue.sh`, atomic `mkdir` claims) and transcript audit (`audit.py`) are in `temp/manager/`. B32 is restarted as the watcher (`temp/steering-loop/BRIEF-v2.md`).
+  - **In flight:**
+    - W1: #1319 plus codex-headless#55, round 2.
+    - W2: #1325 round 2; #1320.
+    - W3: #1326 round 2; #1328 (Fixes #1277) round 1; #1274.
+    - W4: #1295 via workflow-mcp#63 and agent-transcript-parser#37 (round 1); #1273.
+  - **#1324:** the lifecycle test is fixed (q42). It merges alone once exact-head CI is green.
+  - **Merge order:** #1324 → #1326 → #1325, because the three share the reload path (q42).
+  - **q43:** workflow-mcp#63 must clean up its temp root when setup fails; the image-contract pin is fixed in a separate PR.
+
 - 2026-09-26 (17:55) — **New #1326** (#1282, C2): Reload Agents re-checks ownership (a skip before each kill; a commit-time re-check that kills orphaned successors), and the live draft, images and unread marker carry over. Five fail-first tests on the recorded workspace. A post-spawn check was redundant with the commit check (its mutant survived) and was removed. Three reviewers are running. In flight: #1319 and #1324 (round 2), #1325 (round 1).
 
 - 2026-09-26 (17:30) — **Round-1 findings fixed; round 2 is out.**
