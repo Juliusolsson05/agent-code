@@ -12,15 +12,32 @@ import { createWorkflowState } from 'workflow-mcp/state'
 // covered in windowRegistry.routing.test.ts.
 // #1325 review B: alias writes can overlap, and the lost-edge order needs the
 // first write's rename to finish last. A test sets `renameGate.hold` to make
-// the next rename wait; every other rename is the real one.
-const renameGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }))
+// the next rename wait, and `renameGate.reached` fires when that rename has
+// been called: by then its writer has snapshotted and written its temp file,
+// which is the handshake the round-2 review asked for instead of sleeps.
+// `failNext` makes the next rename throw like a full disk. Every rename is
+// recorded, so a test can see that writes go through a temp file.
+const renameGate = vi.hoisted(() => ({
+  hold: null as Promise<void> | null,
+  reached: null as (() => void) | null,
+  failNext: false,
+  calls: [] as Array<[string, string]>,
+}))
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
     rename: async (from: string, to: string) => {
+      renameGate.calls.push([from, to])
+      if (renameGate.failNext) {
+        renameGate.failNext = false
+        throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+      }
       const hold = renameGate.hold
+      const reached = renameGate.reached
       renameGate.hold = null
+      renameGate.reached = null
+      reached?.()
       if (hold) await hold
       return actual.rename(from, to)
     },
@@ -100,7 +117,7 @@ describe('WorkflowBridge', () => {
       ])),
       cancel: vi.fn(async () => undefined),
     } as unknown as WorkflowService
-    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send: vi.fn() })
 
     await bridge.start()
 
@@ -133,7 +150,7 @@ describe('WorkflowBridge', () => {
         { ...base, runId: 'run-second', resumedFromRunId: 'run-first' },
       ])),
     } as unknown as WorkflowService
-    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send: vi.fn() })
 
     await bridge.start()
 
@@ -151,7 +168,7 @@ describe('WorkflowBridge', () => {
       }),
     } as unknown as WorkflowService
     const send = vi.fn()
-    const bridge = new WorkflowBridge(service, { send })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send })
 
     await bridge.start()
     bridge.registerRun('session-1', '/repo', {
@@ -217,7 +234,7 @@ describe('WorkflowBridge', () => {
       }),
       listStoredRunReferences: vi.fn(() => inventory),
     } as unknown as WorkflowService
-    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send: vi.fn() })
 
     const started = bridge.start()
     // This ordering is the recorded service behavior: subscription is live while the bridge waits
@@ -268,7 +285,7 @@ describe('WorkflowBridge', () => {
       })),
     } as unknown as WorkflowService
     const send = vi.fn()
-    const bridge = new WorkflowBridge(service, { send, batchWindowMs: 16 })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send, batchWindowMs: 16 })
 
     bridge.start()
     bridge.start()
@@ -344,7 +361,7 @@ describe('WorkflowBridge', () => {
         resumedFromRunId: 'run-a',
       })),
     } as unknown as WorkflowService
-    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send: vi.fn() })
 
     await expect(bridge.getSnapshot({ cwd: '/repo', runId: 'run-a' })).resolves.toEqual({
       cwd: '/repo',
@@ -382,7 +399,7 @@ describe('WorkflowBridge', () => {
       subscribe: () => () => undefined,
       readEvents: vi.fn(),
     } as unknown as WorkflowService
-    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send: vi.fn() })
 
     await expect(bridge.readEvents({
       cwd: '/repo',
@@ -407,6 +424,7 @@ describe('WorkflowBridge', () => {
       })),
     } as unknown as WorkflowService
     const bridge = new WorkflowBridge(service, {
+      aliasFile: null,
       send: vi.fn(),
       maxBatchBytes: 512,
     })
@@ -426,7 +444,7 @@ describe('WorkflowBridge', () => {
         hasMore: false,
       })),
     } as unknown as WorkflowService
-    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send: vi.fn() })
 
     await bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 0, limit: 500 })
 
@@ -454,7 +472,7 @@ describe('WorkflowBridge', () => {
       })),
     } as unknown as WorkflowService
     const send = vi.fn()
-    const bridge = new WorkflowBridge(service, { send, batchWindowMs: 1 })
+    const bridge = new WorkflowBridge(service, { aliasFile: null, send, batchWindowMs: 1 })
     bridge.start()
     bridge.setRunInterest(9, { cwd: '/repo', runId: 'run-a', interested: true })
     await bridge.getSnapshot({ cwd: '/repo', runId: 'run-a' }, 9)
@@ -605,20 +623,54 @@ describe('WorkflowBridge session carry (#1280)', () => {
     expect(runIds(bridge, 'pane-old')).toEqual([])
   })
 
-  // Review B: Reload Agents carries every pane without awaiting.
+  // Review B: Reload Agents carries every pane without awaiting. The lost
+  // edge needs this order: the first writer snapshots {a:b} and reaches its
+  // rename (the `reached` handshake, not a sleep), the second carry then runs
+  // while that rename is held, and the first rename lands last. A serialized
+  // writer cannot start the second write before the release, so the window
+  // below times out and the file ends with both edges. An unserialized one
+  // renames {a:b,x:y} inside the window and is overwritten by {a:b}. The
+  // window only bounds how long the test gives a broken writer to finish; a
+  // correct writer passes whatever its length.
   it('keeps every edge on disk when two carries save at once', async () => {
     const file = aliasFile()
     const bridge = new WorkflowBridge(service([reference('run-a', 'a'), reference('run-x', 'x')]), { send: vi.fn(), aliasFile: file })
     await bridge.start()
     let release!: () => void
     renameGate.hold = new Promise(resolve => { release = resolve })
+    const reached = new Promise<void>(resolve => { renameGate.reached = resolve })
     const first = bridge.carrySession('a', 'b')
-    // Let the first write reach its held rename before the second starts.
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await reached
     const second = bridge.carrySession('x', 'y')
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await Promise.race([second, new Promise(resolve => setTimeout(resolve, 200))])
     release()
     await Promise.all([first, second])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ a: 'b', x: 'y' })
+  })
+
+  it('writes the alias file through a temp file, never in place', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-old')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    renameGate.calls.length = 0
+    await bridge.carrySession('pane-old', 'pane-new')
+    expect(renameGate.calls).toHaveLength(1)
+    const [from, to] = renameGate.calls[0]!
+    expect(to).toBe(file)
+    expect(from).not.toBe(file)
+  })
+
+  // Round-2 review A (surviving mutant): a failed write must neither reject
+  // the carry (the move already happened in memory) nor wedge the queue, so
+  // the next carry writes every edge, including the one that failed.
+  it('survives a failed alias write, and the next write carries every edge', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([reference('run-a', 'a'), reference('run-x', 'x')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    renameGate.failNext = true
+    await expect(bridge.carrySession('a', 'b')).resolves.toBeUndefined()
+    expect(runIds(bridge, 'b')).toEqual(['run-a'])
+    await bridge.carrySession('x', 'y')
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ a: 'b', x: 'y' })
   })
 
@@ -689,5 +741,65 @@ describe('WorkflowBridge session carry (#1280)', () => {
     await bridge.carrySession('pane-b', 'pane-a')
     expect(runIds(bridge, 'pane-a')).toEqual(['run-1'])
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ 'pane-b': 'pane-a' })
+  })
+
+  // Round-2 review A1 (steering q46): an edge is recorded when the replaced
+  // pane has no runs yet, so its cwd was never checked. A run that then
+  // registers late through it must not take the slot of a successor that
+  // shows runs in another cwd; it stays under the id that started it.
+  it('never lets a late run through an empty carry hide the successor\'s runs in another cwd', async () => {
+    const bridge = new WorkflowBridge(service([reference('target-run', 'target', { cwd: '/second' })]), { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('source', 'target')
+    bridge.registerRun('source', '/first', run('source-run'))
+    expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
+    expect(runIds(bridge, 'source', '/first')).toEqual(['source-run'])
+  })
+
+  // The same rule at restart, in the storage order that would otherwise lose
+  // it: the aliased run is listed before the successor's own run.
+  it('keeps both runs apart at restart whatever order storage lists them in', async () => {
+    const file = aliasFile()
+    writeFileSync(file, JSON.stringify({ source: 'target' }))
+    const bridge = new WorkflowBridge(service([
+      reference('source-run', 'source', { cwd: '/first' }),
+      reference('target-run', 'target', { cwd: '/second' }),
+    ]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
+    expect(runIds(bridge, 'source', '/first')).toEqual(['source-run'])
+  })
+
+  // Round-2 review c3: each reload of a pane with one stored run used to add
+  // a hop, all of it reachable from the run's clientId.
+  it('keeps one edge per replaced id, and one per stored clientId after a restart', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    await bridge.carrySession('pane-a', 'pane-b')
+    await bridge.carrySession('pane-b', 'pane-c')
+    await bridge.carrySession('pane-c', 'pane-d')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ 'pane-a': 'pane-d', 'pane-b': 'pane-d', 'pane-c': 'pane-d' })
+    const restarted = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await restarted.start()
+    expect(runIds(restarted, 'pane-d')).toEqual(['run-1'])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ 'pane-a': 'pane-d' })
+  })
+
+  // Round-2 review B (surviving mutant): pruning may only drop what the file
+  // held. A carry landed while the inventory is read is live state: no
+  // stored run names its source yet, but a late registration may.
+  it('keeps an edge made while start is reading the store', async () => {
+    const file = aliasFile()
+    let list!: (references: unknown[]) => void
+    const svc = service([])
+    ;(svc.listStoredRunReferences as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(resolve => { list = resolve }))
+    const bridge = new WorkflowBridge(svc, { send: vi.fn(), aliasFile: file })
+    const starting = bridge.start()
+    await vi.waitFor(() => expect(list).toBeTypeOf('function'))
+    await bridge.carrySession('pane-old', 'pane-new')
+    list([])
+    await starting
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ 'pane-old': 'pane-new' })
   })
 })
