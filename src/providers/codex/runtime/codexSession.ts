@@ -34,7 +34,7 @@ import type {
   PromptGateState,
   PromptReadinessOutcome,
 } from '@shared/types/session.js'
-import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
+import { isCodexNativeComposerEmpty, isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { addCodexUserMcpLaunchConfig, type CodexShellPolicyStyle } from '@providers/shared/runtime/userMcpLaunch.js'
 import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
@@ -236,6 +236,9 @@ export class CodexSession extends EventEmitter {
   private tldrHooks: PrivateCodexTldrHooks | null = null
   private exited = false
   private composerReady = false
+  /** The native-composer readiness last published after the startup latch
+   *  (#800, q40). `ready` is what markComposerReady itself publishes. */
+  private nativeComposerPublished: 'ready' | 'occupied' | 'unverified' = 'ready'
 
   private readonly cwd: string
   private readonly cols: number
@@ -329,6 +332,7 @@ export class CodexSession extends EventEmitter {
     }
     this.exited = false
     this.composerReady = false
+    this.nativeComposerPublished = 'ready'
     this.emit('input-readiness', {
       ready: false,
       reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
@@ -554,6 +558,7 @@ export class CodexSession extends EventEmitter {
       // Forward screen snapshots.
       this.headless.on('screen', snap => {
         this.markComposerReady(snap.plain)
+        this.publishNativeComposer()
         this.emit('screen', {
           plain: snap.plain,
           markdown: snap.markdown,
@@ -642,6 +647,7 @@ export class CodexSession extends EventEmitter {
       this.headless.on('exit', ({ exitCode, signal }) => {
         this.exited = true
         this.composerReady = false
+        this.nativeComposerPublished = 'ready'
         this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
         this.emit('exit', { exitCode, signal })
       })
@@ -824,6 +830,9 @@ export class CodexSession extends EventEmitter {
     if (this.exited) return { kind: 'terminal', reason: 'exited' }
 
     return await new Promise(resolve => {
+      // Consecutive polls on which only the TEXT proved the composer empty
+      // (#1319 review A2); see the use below.
+      let textOnlyEmptyPolls = 0
       const tick = (): void => {
         if (this.exited) {
           resolve({ kind: 'terminal', reason: 'exited' })
@@ -869,8 +878,63 @@ export class CodexSession extends EventEmitter {
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
           this.markComposerReady(screen)
-          resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
-          return
+          // #800: the screen check above passes for ANY `›` row, including a
+          // human's draft, and a paste would then append to that draft and
+          // submit both. The package's attribute-aware reading decides:
+          // `drafted` is occupied, `empty` is ready, and `unknown` needs the
+          // text proof below.
+          const composer = this.nativeComposerState()
+          if (composer === 'drafted') {
+            resolve({ kind: 'occupied', reason: 'human-draft' })
+            return
+          }
+          // `unknown` is NOT ready (steering q40): a draft longer than the
+          // package's composer bound reads `unknown` while this screen check
+          // still passes, and the paste landed in the human's draft. Ready
+          // needs a proof of empty: the package's reading (Codex's own
+          // empty hint), or the old text proof of a bare `›` above the
+          // status row, which is the only proof 0.149.1 and narrow 0.157
+          // panes (no hint row) can give.
+          if (composer === 'empty') {
+            resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+            return
+          }
+          // The text proof must come from a PARSED frame (#1319 review A2).
+          // `screen` above is the plain buffer as it stands, which shows the
+          // previous paint while PTY bytes are still queued in the parser;
+          // that is exactly when the cell reading says `unknown`. A human
+          // who had just started typing would then get the prompt pasted
+          // into the draft. Round 1 required two polls in a row, but elapsed
+          // time proves nothing: the parser can stay behind for a long time
+          // under synchronized output (HeadlessTerminal's known issue). So
+          // the proof reads the settled screen, which is null while anything
+          // is unparsed; null neither consents nor refuses, it waits. The
+          // two-poll rule stays as a second guard against a frame Codex
+          // repaints between polls.
+          if (isCodexNativeComposerEmpty(screen)) {
+            const settled = this.settledScreen()
+            if (settled !== null && isCodexNativeComposerEmpty(settled)) {
+              textOnlyEmptyPolls += 1
+              if (textOnlyEmptyPolls >= 2) {
+                resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+                return
+              }
+            } else {
+              textOnlyEmptyPolls = 0
+            }
+          } else {
+            // Text in the composer that nothing proves is a placeholder:
+            // refuse AT ONCE as a human's to resolve (retry-after-resolve).
+            // Polling to the deadline instead held the delivery reservation
+            // for 15 s and answered retry-same-session, the wrong instruction
+            // for a draft. Only this write gate says occupied; readiness
+            // publication says provider-not-ready for the same frame, so
+            // nothing latches.
+            resolve({ kind: 'occupied', reason: 'human-draft' })
+            return
+          }
+        } else {
+          textOnlyEmptyPolls = 0
         }
         if (Date.now() >= deadlineAt) {
           resolve({
@@ -943,6 +1007,44 @@ export class CodexSession extends EventEmitter {
     return null
   }
 
+  /**
+   * The native composer as codex-headless reads it from the live buffer and
+   * its cell attributes (#800, #1313): `empty` only with Codex's own
+   * empty-composer hint, `drafted` for plain typed cells, an attachment or the
+   * queue hint, `unknown` for everything else. `unknown` is neither ready nor
+   * occupied; callers must not map it to either.
+   */
+  nativeComposerState(): 'empty' | 'drafted' | 'unknown' {
+    const headless = this.headless as { getComposerState?: () => 'empty' | 'drafted' | 'unknown' } | null
+    return headless?.getComposerState?.() ?? 'unknown'
+  }
+
+  /**
+   * Publish a native draft as `composer-occupied`, and its clearing as
+   * `ready` (#800). Before this, readiness latched once at startup, so a
+   * draft typed into the TUI was invisible: the pane offered to send, and a
+   * send appended to the draft. Only after the startup latch (an unpainted
+   * composer is still `provider-not-ready`).
+   */
+  private publishNativeComposer(): void {
+    if (!this.composerReady || this.exited) return
+    // Same rule as the write gate: `drafted` is occupied, a proof of empty is
+    // ready, and anything else withdraws ready without claiming a draft
+    // (steering q40), so a pane never offers to send into a composer we
+    // cannot read, and never latches occupied either.
+    const composer = this.nativeComposerState()
+    const next = composer === 'drafted'
+      ? 'occupied'
+      : composer === 'empty' || isCodexNativeComposerEmpty(this.settledScreen() ?? '')
+        ? 'ready'
+        : 'unverified'
+    if (next === this.nativeComposerPublished) return
+    this.nativeComposerPublished = next
+    this.emit('input-readiness', next === 'ready'
+      ? { ready: true, reason: 'ready' }
+      : { ready: false, reason: next === 'occupied' ? 'composer-occupied' : 'provider-not-ready' })
+  }
+
   private markComposerReady(screen: string): void {
     if (this.composerReady || this.exited || !isCodexReadyForPromptScreen(screen)) return
     // WHY this latches instead of mirroring every screen: the composer
@@ -959,6 +1061,18 @@ export class CodexSession extends EventEmitter {
 
   snapshotScreen(): string {
     return this.headless?.getScreen() ?? ''
+  }
+
+  /**
+   * The plain screen from a fully parsed frame, or null while PTY bytes are
+   * still being parsed (#1319 review A2). Every TEXT proof that the native
+   * composer is empty reads this, never `snapshotScreen()`, which can show
+   * the paint from before the human's latest keystrokes. A headless without
+   * the method (an older package) gives null, so the text proof fails closed.
+   */
+  settledScreen(): string | null {
+    const headless = this.headless as { getSettledScreen?: () => string | null } | null
+    return headless?.getSettledScreen?.() ?? null
   }
 
   snapshotScreenAsMarkdown(): string {

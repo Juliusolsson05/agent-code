@@ -221,15 +221,6 @@ export function registerSessionIpc(
     return manager.getSessionKind(sessionId)
   })
 
-  // Terminal attach/replay. Called once by TerminalLeaf on mount.
-  // Returns the full buffered output of the session so far AND flips
-  // the manager's "attached" flag so subsequent PTY data events
-  // broadcast live. See SessionManager.terminalBuffers for the race
-  // being fixed.
-  ipcMain.handle('session:terminal-attach', (_evt, sessionId: string) => {
-    return manager.attachTerminal(sessionId)
-  })
-
   // Snapshot for a renderer that restored after the last change event. The
   // monitor emits on change only, so without this a reload would show every
   // busy shell idle until its foreground moved again. Filtered to the caller's
@@ -243,29 +234,56 @@ export function registerSessionIpc(
     )
   })
 
-  // Agent PTY attach/replay. DebugPanel uses this for Claude
-  // and Codex panes when the user asks to see the raw underlying TUI
-  // as an xterm terminal. Kept separate from terminal-attach because
-  // plain terminal panes and agent panes have different primary
-  // renderers and different live IPC channels.
+  // Raw views (agent PTY xterms and plain-terminal leaves) are OWNED by the
+  // calling renderer page (#1311 review for agents, #1283 item 3 for
+  // terminals), the same lifecycle as the screen leases below. Main's attach
+  // counts outlive the process (a same-id wake keeps a mounted view live,
+  // #1281), so a renderer that reloads or crashes without running its leaf
+  // cleanup would otherwise pin a count forever: bytes forwarded to nobody,
+  // and for agents a restore size applied to some later process. Each
+  // renderer's outstanding attaches are released when it is destroyed or
+  // loads a new document.
   //
-  // Attaches are OWNED by the calling renderer page (#1311 review), the same
-  // lifecycle as the screen leases below. The attach count now outlives the
-  // provider process (a same-id wake keeps a mounted view live), so a
-  // renderer that reloads or crashes without running its leaf cleanup would
-  // otherwise pin a count forever: raw PTY bytes forwarded to nobody, and a
-  // restore size applied to some later process. Each renderer's outstanding
-  // attaches are released when it is destroyed or loads a new document.
-  const agentPtyAttaches = new Map<number, Map<string, number>>()
-  // Each renderer's current page document, so only a real reload releases.
-  const agentPtyDocuments = new Map<number, string>()
-  const releaseAgentPtyAttaches = (owner: number): void => {
-    const owned = agentPtyAttaches.get(owner)
-    if (!owned) return
-    agentPtyAttaches.delete(owner)
-    for (const [sessionId, count] of owned) {
-      for (let i = 0; i < count; i += 1) manager.detachAgentPty(sessionId)
+  // WHY one table per view type from one factory, rather than the agent-only
+  // table this used to be plus a copy for terminals: the terminal half of
+  // #1281 needs exactly the same take / give-back-only-what-you-hold /
+  // release-on-reload rules, and two hand-written copies are how one of them
+  // drifts. `detach` is the manager call one reference is worth.
+  const rawViewOwnership = (detach: (sessionId: string) => void) => {
+    const byOwner = new Map<number, Map<string, number>>()
+    return {
+      take(owner: number, sessionId: string): void {
+        const owned = byOwner.get(owner) ?? new Map<string, number>()
+        owned.set(sessionId, (owned.get(sessionId) ?? 0) + 1)
+        byOwner.set(owner, owned)
+      },
+      /** Give back one reference this owner holds; one it does not hold is ignored. */
+      give(owner: number, sessionId: string): void {
+        const owned = byOwner.get(owner)
+        const count = owned?.get(sessionId) ?? 0
+        if (count === 0) return
+        if (count === 1) owned!.delete(sessionId)
+        else owned!.set(sessionId, count - 1)
+        if (owned!.size === 0) byOwner.delete(owner)
+        detach(sessionId)
+      },
+      releaseOwner(owner: number): void {
+        const owned = byOwner.get(owner)
+        if (!owned) return
+        byOwner.delete(owner)
+        for (const [sessionId, count] of owned) {
+          for (let i = 0; i < count; i += 1) detach(sessionId)
+        }
+      },
     }
+  }
+  const agentPtyViews = rawViewOwnership(sessionId => manager.detachAgentPty(sessionId))
+  const terminalViews = rawViewOwnership(sessionId => manager.detachTerminal(sessionId))
+  // Each renderer's current page document, so only a real reload releases.
+  const rawViewDocuments = new Map<number, string>()
+  const releaseRawViews = (owner: number): void => {
+    agentPtyViews.releaseOwner(owner)
+    terminalViews.releaseOwner(owner)
   }
   // Is this call from the renderer's CURRENT page? #1311 round 2 (review A):
   // a reload can keep the webContents id, so the sender alone cannot tell
@@ -275,39 +293,61 @@ export function registerSessionIpc(
   // once per load, the same token the screen leases carry). A renderer that
   // has not announced yet adopts the caller's document, which its own
   // announcement then confirms.
-  const isCurrentAgentPtyDocument = (owner: number, document: string): boolean => {
-    const current = agentPtyDocuments.get(owner)
+  const isCurrentRawViewDocument = (owner: number, document: string): boolean => {
+    const current = rawViewDocuments.get(owner)
     if (current === undefined) {
-      agentPtyDocuments.set(owner, document)
+      rawViewDocuments.set(owner, document)
       return true
     }
     return current === document
   }
+
+  // Agent PTY attach/replay. DebugPanel uses this for Claude
+  // and Codex panes when the user asks to see the raw underlying TUI
+  // as an xterm terminal. Kept separate from terminal-attach because
+  // plain terminal panes and agent panes have different primary
+  // renderers and different live IPC channels.
   ipcMain.handle('session:agent-pty-attach', (evt, sessionId: string, document: string) => {
     const owner = watchLeaseOwner(evt.sender)
     // A dead page's attach must take no reference: nothing would release it,
     // because that page's release already ran.
-    if (!isCurrentAgentPtyDocument(owner, document)) return null
+    if (!isCurrentRawViewDocument(owner, document)) return null
     const buffer = manager.attachAgentPty(sessionId)
     // null = no backend, and main took no reference; nothing to own.
     if (buffer === null) return buffer
-    const owned = agentPtyAttaches.get(owner) ?? new Map<string, number>()
-    owned.set(sessionId, (owned.get(sessionId) ?? 0) + 1)
-    agentPtyAttaches.set(owner, owned)
+    agentPtyViews.take(owner, sessionId)
     return buffer
   })
 
   ipcMain.handle('session:agent-pty-detach', (evt, sessionId: string, document: string) => {
     // Only a reference the CURRENT page holds. After a reload released the
     // old page's references, its late detach must not take the new page's.
-    if (agentPtyDocuments.get(evt.sender.id) !== document) return
-    const owned = agentPtyAttaches.get(evt.sender.id)
-    const count = owned?.get(sessionId) ?? 0
-    if (count === 0) return
-    if (count === 1) owned!.delete(sessionId)
-    else owned!.set(sessionId, count - 1)
-    if (owned!.size === 0) agentPtyAttaches.delete(evt.sender.id)
-    manager.detachAgentPty(sessionId)
+    if (rawViewDocuments.get(evt.sender.id) !== document) return
+    agentPtyViews.give(evt.sender.id, sessionId)
+  })
+
+  // Terminal attach/replay. Called once by TerminalLeaf per session id.
+  // Returns the full buffered output of the session so far AND takes a view
+  // reference so subsequent PTY data events broadcast live. See
+  // SessionManager.terminalBuffers for the race being fixed. Same page
+  // ownership as the agent PTY above (#1283 item 3): the reference used to be
+  // a manager flag no renderer could release, cleared only by the shell's
+  // exit, which is what froze a mounted leaf across a same-id respawn (#1281).
+  ipcMain.handle('session:terminal-attach', (evt, sessionId: string, document: string) => {
+    const owner = watchLeaseOwner(evt.sender)
+    // A dead page gets the replay for nothing: no reference, since nothing
+    // would release it. '' keeps the renderer contract a plain string.
+    if (!isCurrentRawViewDocument(owner, document)) return ''
+    const buffer = manager.attachTerminal(sessionId)
+    // null = not a terminal: main took no reference, so there is none to own.
+    if (buffer === null) return ''
+    terminalViews.take(owner, sessionId)
+    return buffer
+  })
+
+  ipcMain.handle('session:terminal-detach', (evt, sessionId: string, document: string) => {
+    if (rawViewDocuments.get(evt.sender.id) !== document) return
+    terminalViews.give(evt.sender.id, sessionId)
   })
 
   // #762. Live `session:screen` frames are forwarded only while a renderer
@@ -327,8 +367,8 @@ export function registerSessionIpc(
       leaseOwnersWatched.add(owner)
       sender.once('destroyed', () => {
         screenInterest.dropOwner(owner)
-        releaseAgentPtyAttaches(owner)
-        agentPtyDocuments.delete(owner)
+        releaseRawViews(owner)
+        rawViewDocuments.delete(owner)
         leaseOwnersWatched.delete(owner)
       })
     }
@@ -339,11 +379,12 @@ export function registerSessionIpc(
   ipcMain.handle('session:screen-document', (evt, document: string): void => {
     const owner = watchLeaseOwner(evt.sender)
     screenInterest.enterDocument(owner, document)
-    // A NEW document is a page load: the previous page's raw PTY attaches
-    // died with it. A re-announce of the live document changes nothing.
-    const previous = agentPtyDocuments.get(owner)
-    agentPtyDocuments.set(owner, document)
-    if (previous !== undefined && previous !== document) releaseAgentPtyAttaches(owner)
+    // A NEW document is a page load: the previous page's raw views (agent
+    // PTY and terminal attaches) died with it. A re-announce of the live
+    // document changes nothing.
+    const previous = rawViewDocuments.get(owner)
+    rawViewDocuments.set(owner, document)
+    if (previous !== undefined && previous !== document) releaseRawViews(owner)
   })
   ipcMain.handle('session:screen-lease', (evt, sessionId: string, document: string): void => {
     screenInterest.acquire(watchLeaseOwner(evt.sender), sessionId, document)
