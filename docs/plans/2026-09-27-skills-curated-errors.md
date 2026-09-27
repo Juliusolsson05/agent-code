@@ -61,3 +61,12 @@ The raw error always goes to the main log whenever the text is rewritten (q22).
 | **c3, minor:** the per-code table was only partly pinned (EDQUOT → the network sentence passed) | valid | All 18 codes are pinned to their exact sentences; the mutant is red. |
 
 c also confirmed both #1427 system tests fail on origin/main for the stated reason.
+
+## Review round 2 (the final round), c (codex at `a037caff`): FIX-BEFORE-MERGE
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **c1, major:** a period before an absolute path (`failed./var/…`) was kept, because `.` and `-` counted as word characters | valid | `PATH_LIKE` is blunt: a `/`, `./` or `../` after anything that is not a letter, digit or `_` is a path start, whatever follows (`/]` too). A spaced ` / ` in prose is rewritten, which fails closed; no curated message has one. Red at `a037caff`. |
+| **c2, minor:** the 60 s fetch abort logged nothing | valid | The AbortError is logged before the fixed sentence. Fake-timer test, red at `a037caff`. |
+| **c3, minor:** the YAML parser branch logged nothing | valid | The parser's first error is logged. Red at `a037caff`. |
+| **c4, minor:** the file-in-the-way reason had no test | valid | A real-filesystem test (a file where `.agents` should be); the path-in-message mutant is red. |

@@ -49,6 +49,10 @@ describe('userFacingSkillError', () => {
       'failed </tmp>',
       'failed a,/tmp',
       'failed x;/tmp',
+      // Review of #1456, round 2 (c): a period before the slash, and an odd first character after it.
+      'Provider failed./var/folders/x/private',
+      'Failed to open /]private',
+      'failed-/tmp',
       'first line\nsecond line',
       'x'.repeat(301),
     ]) {

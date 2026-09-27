@@ -867,6 +867,8 @@ export function parseSkillFrontmatter(text: string): {
     // The parser's own wording is raw library text (review of #1456, a); the
     // line number is what a user needs to find the mistake.
     const line = document.errors[0]!.linePos?.[0]?.line
+    // The parser's own detail goes to the log (review of #1456, round 2 c).
+    console.warn('[github-skill-source] invalid SKILL.md frontmatter:', document.errors[0])
     throw new GitHubSkillSourceError(
       'validation',
       `SKILL.md contains invalid YAML frontmatter${typeof line === 'number' ? ` near line ${line + 1}` : ''}.`,
@@ -1218,6 +1220,8 @@ export async function fetchBoundedGitHubBytes(url: string, maxBytes: number): Pr
   } catch (error) {
     if (error instanceof GitHubSkillSourceError) throw error
     if (controller.signal.aborted) {
+      // The fixed sentence replaces fetch's AbortError; log it (review of #1456, round 2 c).
+      console.warn('[github-skill-source] download timed out:', error)
       throw new GitHubSkillSourceError('network', 'GitHub content acquisition timed out.')
     }
     // fetch's own error is transport text (`fetch failed`, undici causes):

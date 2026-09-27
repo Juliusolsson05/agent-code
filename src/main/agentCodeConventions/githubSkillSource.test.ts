@@ -708,4 +708,35 @@ describe('bounded GitHub transport', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  // Review of #1456, round 2 (c): the 60 s abort and the YAML parser branch
+  // replaced their raw diagnostics with fixed sentences and logged nothing.
+  it('logs the raw error behind a download that times out', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })))
+    })))
+    try {
+      const pending = fetchBoundedGitHubBytes('https://api.github.com/repos/example/skills', 1024).then(() => null, (caught: unknown) => caught)
+      await vi.advanceTimersByTimeAsync(60_000)
+      const rejected = await pending
+      expect((rejected as Error).message).toBe('GitHub content acquisition timed out.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ name: 'AbortError' }))
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
+  it('logs the YAML parser\'s own detail behind the invalid-frontmatter sentence', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => parseSkillFrontmatter('---\nname: [x\ndescription: y\n---\n# Body\n')).toThrow(/invalid YAML frontmatter/)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })

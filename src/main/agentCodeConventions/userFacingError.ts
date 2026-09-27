@@ -49,13 +49,15 @@ const SENTENCES: Record<string, string> = {
 }
 export const GENERIC_SKILL_ERROR = 'Agent Code could not read or write the files it needs.'
 const MAX_KEPT_MESSAGE = 300
-// Anything that starts like a path: `/x`, `~/`, `./`, `../`, a UNC `\\\\host`,
-// a drive letter or `file://`, at the start or after ANY character that is not
-// part of a word (letters, digits, `_`, `.`, `-`). The first version listed the
-// allowed delimiters and missed `[`, so `Provider failed [/Users/…]` was kept
-// (review of #1456, c). Prose like `and/or` or `file/folder` has a letter
-// before the slash and is not a path.
-const PATH_LIKE = /(^|[^\w.\-])(?:\/[^\s'"`\])}>,;]|~[\/\\]|\.{1,2}[\/\\]|\\\\|[A-Za-z]:[\/\\])|file:\/\//
+// Anything that starts like a path. The rule is deliberately blunt (review of
+// #1456, rounds 1 and 2 c): a `/` or `./` / `../` at the start or after ANY
+// character that is not a letter, digit or `_` is a path start, whatever
+// follows it; so is `~/`, a UNC `\\\\`, a drive letter and `file://`. Listing
+// delimiters missed `[` in round 1; excluding `.` and `-` missed `failed./var`
+// in round 2. Prose with a letter before the slash (`and/or`, `file/folder`,
+// a package-relative `scripts/a.sh`) stays readable; a spaced ` / ` in prose
+// is treated as a path and rewritten, which fails closed.
+const PATH_LIKE = /(^|[^\w])\.{0,2}\/|~[\/\\]|\\\\|[A-Za-z]:[\/\\]|file:\/\//
 const OWN_ERROR_NAMES = new Set(['Error', 'GitHubSkillSourceError', 'GitHubSkillDiscoveryLimitError'])
 
 function systemCode(error: unknown): string | null {

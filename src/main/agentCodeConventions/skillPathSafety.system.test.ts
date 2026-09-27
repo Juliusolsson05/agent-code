@@ -116,4 +116,19 @@ describe('SkillPathSafety', () => {
       warn.mockRestore()
     }
   })
+
+  // Review of #1456, round 2 (c): the file-in-the-way reason had no test, so a
+  // path slipping back into its message survived.
+  it('names a file in the way of a skill folder without showing the path', async () => {
+    const { root, target, safety } = await fixture()
+    await writeFile(join(root, '.agents'), 'a file where a folder should be')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const inspected = await safety.inspectTarget(target) as { message?: string }
+      expect(inspected.message).toBe('A file is in the way where a folder on the skill path should be.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ path: join(root, '.agents') }))
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
