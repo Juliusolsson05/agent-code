@@ -690,23 +690,26 @@ describe('a store at its record cap (#1277)', () => {
     expect((await store.complete(sessionId, 'Delivered.', () => true)).completionNote).toBe('Delivered.')
   })
 
-  // #1328 round 2 (a, b): in-use was sampled before the write's disk I/O; a
-  // workspace save or a registration landing meanwhile was still evicted.
-  it('refuses, keeping the record, when an evictee comes into use during the write', async () => {
+  // #1328 round 2 (a, b) and steering q51: in-use is sampled before the
+  // write, and a registration can land during the awaited rename itself,
+  // after every sample. The rename hook below makes `identity-0` live at
+  // exactly that point; its record must still be there once the store's
+  // operation completes, and a record nothing uses goes instead.
+  it('gives a record back when its identity registers during the eviction’s rename', async () => {
     const live = new Set<string>()
     const { file, store } = await storeAtCap('goal.json', fullDocument(realRecords.goal.records as never), { ...GOAL, inUse: () => live })
-    const before = await readFile(file, 'utf8')
-    let checks = 0
-    // authorized() runs once before the write and once after the temp file:
-    // the second call is inside the I/O window.
-    const authorized = () => { if (++checks === 2) live.add('identity-0'); return true }
-    await expect(store.update('new-agent', 'Starting work.', authorized)).rejects.toThrow('Goal storage is busy; try again.')
-    expect(await readFile(file, 'utf8')).toBe(before)
-    // The retry chooses afresh and evicts the next record nothing uses.
+    let hooked = 0
+    renameFault.current = to => { if (to === file && ++hooked === 1) live.add('identity-0'); return false }
     await store.update('new-agent', 'Starting work.', () => true)
+    // The same store, and a fresh one reading the file: nobody sees the gap.
+    expect(Object.keys(await store.read(['identity-0', 'new-agent'])).sort()).toEqual(['identity-0', 'new-agent'])
     const records = await onDisk(file)
+    expect(Object.keys(records)).toHaveLength(TLDR_MAX_RECORDS)
     expect(records).toHaveProperty('identity-0')
     expect(records).not.toHaveProperty('identity-1')
+    // Its goal can still be completed, and its revision did not restart.
+    const done = await store.complete('identity-0', 'Delivered.', () => true)
+    expect(done.revision).toBe((fullDocument(realRecords.goal.records as never).records['identity-0']!.revision) + 1)
   })
 
   // #1328 round 2 (c): the app's stores are built by createReportingStores;

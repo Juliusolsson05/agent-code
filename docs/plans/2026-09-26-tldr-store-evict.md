@@ -47,3 +47,12 @@ All three reviewers (and steering q45) found that age alone can evict a goal tha
 - **Main wiring unpinned (c).** The stores are built by `createReportingStores(stateDir, inUse)`, where `inUse` is required, and a test drives both stores through it.
 - **Declined: remember revisions before the commit (b's survivor).** b found no user-visible effect, and neither do I: after a refused write the record is still in memory, and its own revision wins.
 - **Residual:** a pane added in the renderer is not in the persisted workspace until its autosave, up to 400 ms later. If it also has no live MCP registration in that window, its identity is unprotected. A new agent's pane has a live registration, so that needs an agent that spawned and exited within 400 ms, while the store is at the cap.
+
+## Steering q51: registration during the rename
+The round-2 recheck sampled in-use just BEFORE the awaited rename. `registerSession` is synchronous and can land during that await, after every sample, and the rename then published a file without that live agent's goal.
+
+A lock was not possible: registration cannot wait on the store's queue. The fix closes the window from the store's side. Once the eviction's rename has landed, `restoreEvicteesNowInUse` asks in-use again, which now includes every registration that happened before or during the rename. Any evictee now in use gets its record back, displacing the next record nothing uses, in one write that keeps the file at the cap. This runs inside the same serialized store operation, so no read, `goal_complete` or update queued behind it can observe the gap. The restore write has its own rename, so it loops for up to 3 passes. This replaces the round-2 "busy" refusal: one mechanism, not two.
+
+Residuals, stated concretely:
+- **A crash (app kill or power loss) between the eviction's rename and the restore write**, a few milliseconds, while a registration for the evictee landed during that rename. The record is then gone from disk. The agent's process dies with the app, but its workspace row survives, so after restart that agent shows "No goal yet" and its `goal_complete` fails until it sets a goal again.
+- **Three consecutive registrations** each naming a fresh evictee during three successive restore renames. The third evictee then stays evicted.
