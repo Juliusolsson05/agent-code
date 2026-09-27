@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
+import { Terminal } from '@xterm/headless'
 import { expect, it, vi } from 'vitest'
+
+import { SessionManager } from './sessionManager'
 
 // #843 / #1041 review: the SHELL attach path (attachTerminal) must replay the
 // modes its evicted bytes set, like the agent path. Reverting it to read()
@@ -26,9 +29,11 @@ vi.mock('@main/performance/PerformanceService.js', () => ({
 }))
 vi.mock('@main/storage/feedDebugLog.js', () => ({ forgetFeedDebugSession: vi.fn() }))
 
+// WHY static imports (#1107): the dynamic import()s that stood here loaded SessionManager's whole
+// module graph INSIDE the test body, against the 5 s test budget, so the test passed alone and
+// timed out under full-suite parallelism. vi.mock is hoisted above these imports, so the mocks
+// still apply; the load now happens at collection, outside any test's budget.
 it('a remounted shell terminal gets the alternate screen and mouse mode its evicted bytes set', async () => {
-  const { Terminal } = await import('@xterm/headless')
-  const { SessionManager } = await import('./sessionManager')
   // No tmux: a direct PTY terminal, the case every machine without tmux runs.
   const manager = new SessionManager({ isAvailable: () => false, getBinary: () => null } as never)
   const { sessionId } = await manager.spawn({ kind: 'terminal', cwd: '/tmp/project' })
