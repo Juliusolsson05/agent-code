@@ -370,6 +370,48 @@ describe('review round 2 (review A)', () => {
     expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
   })
 
+  // #1431 review a: a pick ended by the lifecycle (the feature switched off
+  // while it waited in the queue) is not the user's cancel.
+  it('says a queued pick ended by the feature switching off as unavailable', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    hold.release()
+    expect(await picking).toEqual({ kind: 'failed', reason: 'unavailable' })
+  })
+
+  // #1431 review a: with DevTools opened after a pick armed, a second pick
+  // settles the first instead of leaving it to its 60 s wait.
+  it('settles an armed pick when a second pick finds DevTools open', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const first = c.pick('p1')
+    await vi.waitFor(() => expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(true))
+    g.openDevTools()
+    expect(await c.pick('p1')).toEqual({ kind: 'failed', reason: 'devtools-open' })
+    expect(await first).toEqual({ kind: 'failed', reason: 'devtools-open' })
+  })
+
+  // #1431 review a: a pick cancelled while still queued left its abort handle
+  // behind, so later cancels and resets called a stale closure.
+  it('clears the abort handle of a pick cancelled in the queue', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.cancelPick('p1')
+    hold.release()
+    expect(await picking).toEqual({ kind: 'cancelled' })
+    expect((c as unknown as { pockets: Map<string, { pickAbort: unknown }> }).pockets.get('p1')!.pickAbort).toBeNull()
+  })
+
   // #1305: every pick failure used to answer null, which the renderer reads
   // as the user's own cancel. Each now says what happened.
   it('answers why a pick failed instead of a cancel-shaped null', async () => {

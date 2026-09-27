@@ -35,3 +35,9 @@ Pressing Pick in a lane's browser pocket either picks an element, is cancelled b
 
 ## Out of scope
 - The pick timeout length. The clipboard branch of `pick.ts` is fixed separately in #1421 (same file, different lines).
+
+## Review round 1, reviewer a (FIX-BEFORE-MERGE)
+- **a1: a pick ended by the lifecycle read as the user's cancel.** Examples: the feature switched off while it waited in the queue, a reset, or the guest going away. The abort now carries a failure reason; `detach` passes `unavailable`, and only a reasonless abort (the user's cancel, or a second pick replacing the first) is `cancelled`.
+- **a2: the DevTools precheck left an earlier armed pick pending for its 60 s.** The precheck now settles it first, with `devtools-open`.
+- **a3: a pick cancelled in the queue kept its abort handle.** The early return now sits inside the `try`, so the `finally` clears it.
+- Each is pinned by a test that fails on the previous head.
