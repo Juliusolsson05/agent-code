@@ -255,6 +255,21 @@ export class OrchestrationBridge {
   private readonly createCallsInFlight = new Map<string, Promise<unknown>>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private readonly parentSessionByChildSession = new Map<string, string>()
+  /**
+   * Replaced parent id -> its successor (#1283 item 1). The renderer remaps a
+   * LIVE child's orchestrationParentId/RootId when its parent pane gets a new
+   * session id (reload, provider switch, resume, rewind, Reload Agents,
+   * rehydrate), but tombstones live only here, so carryParent is how main
+   * hears about it.
+   *
+   * WHY an alias map on top of rewriting the tombstones in carryParent: a
+   * rewrite only reaches tombstones that already exist. closeAgent reads the
+   * child BEFORE the renderer closes it, so a replacement landing between the
+   * two hands noteClosed a record that still names the old parent; noteClosed
+   * resolves it through these edges. Bounded by the tombstones' own TTL and
+   * cap: an alias older than every tombstone it could still serve is useless.
+   */
+  private readonly replacedParents = new Map<string, { to: string; at: number }>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
   private readonly readRunOutputsCache = new Map<string, CachedValue<OrchestrationAgentOutput[]>>()
   private lastPrunedAt = 0
@@ -947,10 +962,70 @@ export class OrchestrationBridge {
     }
   }
 
+  /**
+   * The parent pane `from` now runs as session `to` (#1283 item 1): closed
+   * children filed under `from` belong to `to`. Called by the renderer at the
+   * same commit points where it remaps live children (see replacedParents).
+   *
+   * WHY not piggyback on workflows:carry-session: workflow runs follow the
+   * CONVERSATION and are deliberately not carried when a different
+   * conversation is swapped into the pane; orchestration pointers follow the
+   * PANE, and the renderer remaps live children in both cases. One channel
+   * cannot honour both rules.
+   */
+  carryParent(from: unknown, to: unknown): void {
+    // Clone-boundary input from the renderer; a malformed carry must be a
+    // no-op, never an alias keyed by `undefined`.
+    if (typeof from !== 'string' || typeof to !== 'string' || !from || !to || from === to) return
+    // `to` is a live pane again (it may itself have been replaced earlier and
+    // come back, e.g. Undo Close). An edge OUT of it would now send its new
+    // children elsewhere, and dropping it is also what keeps the edges acyclic:
+    // after this, `to` reaches nothing, so `from -> to` cannot close a loop.
+    this.replacedParents.delete(to)
+    this.replacedParents.delete(from)
+    this.replacedParents.set(from, { to, at: Date.now() })
+    for (const record of this.closedAgents.values()) {
+      const agent = record.output.agent
+      if (agent.orchestrationParentId !== from && agent.orchestrationRootId !== from) continue
+      record.output = {
+        ...record.output,
+        agent: {
+          ...agent,
+          orchestrationParentId: agent.orchestrationParentId === from ? to : agent.orchestrationParentId,
+          orchestrationRootId: agent.orchestrationRootId === from ? to : agent.orchestrationRootId,
+        },
+      }
+    }
+    // The prompt-boundary hint: a child of `from` changing state must
+    // invalidate `to`'s status cache, the one its parent now polls.
+    for (const [child, parent] of this.parentSessionByChildSession) {
+      if (parent === from) this.parentSessionByChildSession.set(child, to)
+    }
+    this.invalidateStatusCache(from)
+    this.invalidateStatusCache(to)
+    this.pruneCoordinationMetadata()
+  }
+
+  /** The live successor of a possibly replaced parent id (see replacedParents). */
+  private currentParentId(sessionId: string): string {
+    let current = sessionId
+    // carryParent keeps the edges acyclic; the cap is a backstop so a future
+    // edit that breaks that can never hang main.
+    for (let hops = 0; hops <= this.replacedParents.size; hops++) {
+      const next = this.replacedParents.get(current)
+      if (!next) return current
+      current = next.to
+    }
+    return current
+  }
+
   private noteClosed(output: OrchestrationAgentOutput): void {
     const closedAt = Date.now()
     const agent: OrchestrationAgentRecord = {
       ...this.enrichAgent(output.agent),
+      // The read may predate a replacement of the parent (see replacedParents).
+      orchestrationParentId: this.currentParentId(output.agent.orchestrationParentId),
+      orchestrationRootId: this.currentParentId(output.agent.orchestrationRootId),
       lifecycleState: 'closed',
       completedAt: output.agent.completedAt ?? output.agent.lastActivityAt,
       lastActivityAt: closedAt,
@@ -1150,7 +1225,8 @@ export class OrchestrationBridge {
     if (
       now - this.lastPrunedAt < PRUNE_INTERVAL_MS &&
       this.promptDeliveries.size <= MAX_PROMPT_DELIVERIES &&
-      this.closedAgents.size <= MAX_CLOSED_AGENTS
+      this.closedAgents.size <= MAX_CLOSED_AGENTS &&
+      this.replacedParents.size <= MAX_CLOSED_AGENTS
     ) {
       return
     }
@@ -1184,6 +1260,11 @@ export class OrchestrationBridge {
       }
     }
     trimMapToNewest(this.closedAgents, MAX_CLOSED_AGENTS)
+    // Same lifetime as the tombstones they serve (see replacedParents).
+    for (const [from, edge] of this.replacedParents) {
+      if (now - edge.at > ORCHESTRATION_METADATA_TTL_MS) this.replacedParents.delete(from)
+    }
+    trimMapToNewest(this.replacedParents, MAX_CLOSED_AGENTS)
   }
 }
 
