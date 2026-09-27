@@ -504,12 +504,27 @@ export async function assembleAndSaveDebugBundle(params: {
   // every minute-level autosave was one of the multipliers behind the 108 GB
   // debug-bundles directory; autosave should preserve orientation, not create
   // a second archive of already-persisted wire logs.
-  const proxySection = cwd && includeProxyPayload
-    ? await window.api.readProxyEvents({
-        cwd,
-        sessionKey: proxySessionKey,
-      }).catch(() => null)
-    : null
+  //
+  // WHY a second, exact key (#1336, codex-headless#70 review a): the proxy
+  // writers choose the run's session segment ONCE, at process start:
+  // `resume-<id>` only when the process was launched to resume a known
+  // conversation, else `shell-<sessionId>` (Codex: codexSession.ts
+  // allocateProxyEventsFile; Claude's createProxyServer does the same). A
+  // FRESH session learns its providerSessionId from its first turn, after the
+  // run dir already exists under `shell-<sessionId>`, and nothing renames it.
+  // So every manual bundle of a fresh session that had taken a turn asked
+  // only for `resume-<id>`, got `match: 'none'`, and carried no proxy
+  // section at all (no events tail, no latest request body). Both keys name
+  // THIS pane's own runs, so the fallback keeps the reader's exact-provenance
+  // rule: never another session's run. `resume-` is tried first because a
+  // resumed process writes there, and its run is the current one.
+  const readProxy = (sessionKey: string) => window.api.readProxyEvents({ cwd: cwd!, sessionKey }).catch(() => null)
+  const shellSessionKey = `shell-${sessionId}`
+  let proxySection = cwd && includeProxyPayload ? await readProxy(proxySessionKey) : null
+  if (cwd && includeProxyPayload && proxySessionKey !== shellSessionKey && (!proxySection || proxySection.match === 'none')) {
+    const fresh = await readProxy(shellSessionKey)
+    if (fresh && fresh.match !== 'none') proxySection = fresh
+  }
 
   const files: BundleFile[] = [
     {
