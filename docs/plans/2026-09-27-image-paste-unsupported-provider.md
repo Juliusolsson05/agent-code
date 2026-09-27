@@ -23,3 +23,12 @@ New `useClaudeImagePaste.renderer.test.tsx` renders the real hook, with a real P
 ## Out of scope
 - #1250's other rows.
 - Image support for other providers.
+
+## Review round 1 (a, b: FIX-BEFORE-MERGE)
+- **b1: an image FILE plus text dropped the image silently** ("see attached" with no attachment). The text still pastes, and the toast says "…only the text was pasted." A file item is strong evidence; only an HTML `<img>` beside text (a web-page copy) stays silent.
+- **a2 / b2: an image arriving only as a data-URL `<img>` in text/html, with no text, was silent.** It now counts.
+- **a3: an image only the async clipboard API shows was silent.** With nothing else in the event (no text, no HTML, no items), `readImagesFromClipboard` is probed. Paste-to-focus's documented miss of this shape is unchanged (it never calls the hook for it).
+- **b3: the wording blamed the provider.** Grok's own TUI attaches clipboard images. The sentence is now about this composer: "Pasted images can't be sent to <Provider> from this composer."
+- **a1 (terminal view): declined.** There the paste goes to the provider's own TUI, which owns image handling (Grok's attaches images); the app's capability flag is about its composer.
+- **a4: every provider's wording is tested** (Codex, OpenCode, Grok, Pi).
+- `parseImagesFromHtml` uses `querySelectorAll('img')` instead of `doc.images`. It is identical in a browser, and the happy-dom test DOM lacks `images` on a parsed document.

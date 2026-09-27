@@ -99,17 +99,37 @@ export function useClaudeImagePaste({
       // routes the clipboard's text instead.
       const capabilities = getRendererProviderCapabilities(provider)
       if (!capabilities.supportsImageAttachments) {
-        // WHY say so (#1250 row 7): an image-only paste (a screenshot) into
-        // a Codex/OpenCode/Grok/Pi composer inserted nothing and said
-        // nothing. Only an image FILE with no text counts: a web-page copy
-        // carries <img> in text/html beside its text, and that text paste
-        // must stay silent. Read synchronously; the event's data is only
+        // WHY say so (#1250 row 7): an image pasted into a Codex, OpenCode,
+        // Grok or Pi composer was dropped with nothing said. The wording is
+        // about THIS composer, not the provider (#1426 review b): Grok's own
+        // TUI attaches clipboard images in Terminal view, where a paste goes
+        // to the TUI and this hook never runs.
+        //
+        // What counts as an image (#1426 review a, b):
+        //   - an image FILE item, with or without text. A mixed paste pastes
+        //     its text and says the image was left out ("see attached" with
+        //     no attachment is the silent loss);
+        //   - a data-URL <img> in text/html with NO text. A web-page copy
+        //     carries <img> beside its text, and that text paste stays silent;
+        //   - with nothing else at all, an image only the async clipboard API
+        //     shows (an Electron/macOS shape claudeImages.ts documents).
+        // Everything is read synchronously first; the event's data is only
         // reliable during dispatch.
         const data = e.clipboardData
-        const imageOnly = Boolean(data)
-          && Array.from(data!.items).some(item => item.kind === 'file' && item.type.startsWith('image/'))
-          && !data!.getData('text/plain')
-        if (imageOnly) showToast(`${capabilities.shortLabel} can't take pasted images.`)
+        if (!data) return { handledImages: false }
+        const text = data.getData('text/plain')
+        const hasImageFile = Array.from(data.items).some(item => item.kind === 'file' && item.type.startsWith('image/'))
+        const html = data.getData('text/html')
+        const hasHtmlImage = parseImagesFromHtml(html).length > 0
+        const where = `${capabilities.shortLabel} from this composer`
+        if (hasImageFile && text) {
+          showToast(`Pasted images can't be sent to ${where}; only the text was pasted.`)
+        } else if (hasImageFile || (hasHtmlImage && !text)) {
+          showToast(`Pasted images can't be sent to ${where}.`)
+        } else if (!text && !html && data.items.length === 0) {
+          const asyncImages = await readImagesFromClipboard().catch(() => [])
+          if (asyncImages.length > 0) showToast(`Pasted images can't be sent to ${where}.`)
+        }
         return { handledImages: false }
       }
       const clipboardData = e.clipboardData
