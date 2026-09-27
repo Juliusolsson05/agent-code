@@ -1,6 +1,8 @@
 import { useState } from 'react'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
+import { useWorkflowClient } from '../client/WorkflowClientContext'
+import { MISSING_RUN, useMissingRunIds } from '../model/missingRun'
 import { workflowRunActivity, workflowRunStatusLabel } from '../model/workflowRunStatus'
 import { WorkflowHistoryDialog } from './WorkflowHistoryDialog'
 
@@ -26,6 +28,7 @@ export function WorkflowViewSelector({
   onSelect: (runId: string | null) => void
 }): React.JSX.Element | null {
   const [historyOpen, setHistoryOpen] = useState(false)
+  const missing = useMissingRunIds(useWorkflowClient(), references, cwd)
   if (references.length === 0) return null
 
   // Vertical tablist keys (plan K5, ledger N7), the SettingsSidebar shape:
@@ -100,7 +103,9 @@ export function WorkflowViewSelector({
 
         {references.map(reference => {
           const selected = selectedRunId === reference.runId
-          const activity = workflowRunActivity(reference.status)
+          // A run whose data is gone is not running, whatever it launched as.
+          const expired = missing.has(reference.runId)
+          const activity = expired ? 'inactive' : workflowRunActivity(reference.status)
           const activityLabel = activity === 'active'
             ? 'Active'
             : activity === 'inactive'
@@ -134,7 +139,7 @@ export function WorkflowViewSelector({
               </span>
               <span className="min-w-0 truncate">{workflowLabel(reference)}</span>
               <span
-                aria-label={`Status: ${activityLabel} (${workflowRunStatusLabel(reference.status)})`}
+                aria-label={`Status: ${activityLabel} (${expired ? MISSING_RUN.label : workflowRunStatusLabel(reference.status)})`}
                 className={`rounded-chip ml-auto shrink-0 border px-1.5 py-0.5 text-[10px] leading-none ${
                   activity === 'active'
                     ? 'border-accent/35 text-accent'

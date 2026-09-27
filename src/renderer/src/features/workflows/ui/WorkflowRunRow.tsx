@@ -5,6 +5,7 @@ import { Button } from '@renderer/components/ui/button'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
+import { MISSING_RUN } from '../model/missingRun'
 import { mergeWorkflowLineage } from '../model/workflowLineage'
 import { useWorkflowRun } from '../model/workflowRunStore'
 import { WorkflowPhaseSection } from './WorkflowPhaseSection'
@@ -76,7 +77,16 @@ export function WorkflowRunView({
   const status = view.phase !== 'ready' && view.cursor === 0
     ? reference.status ?? snapshot.status
     : snapshot.status
-  const active = status === 'pending' || status === 'running' || status === 'cancellation_requested'
+  // A run the store reports missing has no live status, and the reference's
+  // launch-time `failed` would keep offering Resume, which can only fail with
+  // run-not-found (#1348). Its label replaces the status; nothing is active.
+  const missing = view.phase === 'missing' ? MISSING_RUN : null
+  // No action until the store has answered (#1440 review a): while loading,
+  // the header shows the reference's launch-time status, and a Resume or
+  // Cancel clicked then on a run that turns out to be gone failed with
+  // run-not-found.
+  const answered = view.phase !== 'loading'
+  const active = answered && !missing && (status === 'pending' || status === 'running' || status === 'cancellation_requested')
   const now = useRunClock(active)
   const elapsed = elapsedLabel(snapshot.startedAt, snapshot.completedAt, now)
   const workflow = snapshot.workflow ?? reference.workflow
@@ -145,7 +155,7 @@ export function WorkflowRunView({
   }
 
   const unassigned = agentsByPhase.get('__unassigned__') ?? []
-  const canResume = ['failed', 'cancelled', 'interrupted'].includes(status)
+  const canResume = answered && !missing && ['failed', 'cancelled', 'interrupted'].includes(status)
 
   return (
     <div
@@ -165,7 +175,7 @@ export function WorkflowRunView({
                 {withVisibleControls(workflow?.title ?? workflow?.name ?? 'Workflow')}
               </span>
               <span className="text-[10px] uppercase tracking-wider text-muted">
-                {runStatusLabel(status)}
+                {missing ? missing.label : runStatusLabel(status)}
               </span>
             </div>
             {workflow?.description ? (
@@ -230,6 +240,9 @@ export function WorkflowRunView({
           <div className="mt-3 text-[11px] text-muted">
             Live workflow details are unavailable in this client.
           </div>
+        ) : null}
+        {missing ? (
+          <div className="mt-3 text-[11px] text-muted">{missing.detail}</div>
         ) : null}
         {view.phase === 'error' ? (
           <div className="mt-3 flex items-center gap-2 text-[11px] text-danger">
