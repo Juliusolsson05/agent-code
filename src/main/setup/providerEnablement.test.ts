@@ -16,7 +16,8 @@ const paths = vi.hoisted(() => ({ STATE_DIR: '' }))
 vi.mock('@main/storage/paths.js', () => paths)
 const probe = vi.hoisted(() => ({ checkPrerequisites: vi.fn() }))
 vi.mock('@main/setup/prerequisites.js', () => probe)
-vi.mock('@main/usage/zaiUsage.js', () => ({ probeZaiCredential: async () => false }))
+const zai = vi.hoisted(() => ({ probeZaiCredential: vi.fn(async () => false) }))
+vi.mock('@main/usage/zaiUsage.js', () => zai)
 vi.mock('@main/usage/usageService.js', () => ({ invalidateUsageSnapshotCache: () => {} }))
 
 let dir: string
@@ -25,6 +26,8 @@ beforeEach(async () => {
   paths.STATE_DIR = dir
   probe.checkPrerequisites.mockReset()
   probe.checkPrerequisites.mockResolvedValue({ usableProviders: ['claude', 'codex'] })
+  zai.probeZaiCredential.mockReset()
+  zai.probeZaiCredential.mockResolvedValue(false)
   vi.resetModules()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -71,4 +74,40 @@ it('rejects a toggle whose write fails, and changes nothing', async () => {
   await expect(enablement.setProviderEnabled('codex', false)).rejects.toThrow()
   const snapshot = await enablement.getProviderEnablementSnapshot()
   expect(snapshot.entries.find(entry => entry.kind === 'codex')).toMatchObject({ enabled: true, because: 'user' })
+})
+
+// #1403 verification a (survivor): the fallback is the last detection that
+// SUCCEEDED, not "everything installed". Only Claude was detected here, so a
+// reset Codex whose re-probe fails is shown as not installed, and so off.
+it('shows a reset against the last good detection, not against everything', async () => {
+  probe.checkPrerequisites.mockResolvedValue({ usableProviders: ['claude'] })
+  const enablement = await import('./providerEnablement.js')
+  await enablement.setProviderEnabled('codex', true)
+  probe.checkPrerequisites.mockRejectedValue(new Error('login shell timed out'))
+  const snapshot = await enablement.resetProviderEnablement('codex')
+  expect(snapshot.entries.find(entry => entry.kind === 'codex')).toMatchObject({ enabled: false, installed: false })
+})
+
+// #1403 verification a: two rows write at once. The first row's refresh
+// pauses in the credential probe; the second row's refresh finishes first.
+// The first must not then overwrite, and broadcast, a snapshot read before
+// the second write: the disk says Claude is off, so every reader must too.
+it('never lets an older refresh overwrite a newer one', async () => {
+  const enablement = await import('./providerEnablement.js')
+  await enablement.getProviderEnablementSnapshot()
+  let releaseFirst!: () => void
+  zai.probeZaiCredential.mockImplementationOnce(() => new Promise<boolean>(resolve => { releaseFirst = () => resolve(false) }))
+  const broadcasts: boolean[] = []
+  enablement.onProviderEnablementChanged(snapshot => {
+    broadcasts.push(snapshot.entries.find(entry => entry.kind === 'claude')!.enabled)
+  })
+  const first = enablement.setProviderEnabled('codex', false)
+  await vi.waitFor(() => expect(releaseFirst).toBeTypeOf('function'))
+  await enablement.setProviderEnabled('claude', false)
+  releaseFirst()
+  await first
+  expect(await overridesOnDisk()).toEqual({ codex: false, claude: false })
+  expect(enablement.getCachedProviderEnablement()!.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(false)
+  // The last broadcast is what subscribers keep.
+  expect(broadcasts.at(-1)).toBe(false)
 })

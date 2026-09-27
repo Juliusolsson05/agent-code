@@ -55,17 +55,31 @@ function detectInstalledKinds(): Promise<ReadonlySet<AgentProviderKind>> {
   return inFlightDetection
 }
 
+// WHY refreshes are ordered (#1403 verification a): a refresh reads setup
+// state, then awaits detection and the credential probe. Two rows can write
+// at once (each disables only its own switch), so an OLDER refresh could
+// finish last and overwrite, and broadcast, a snapshot built before the newer
+// write: the user disables Claude, disk says disabled, and pickers show it
+// enabled until some later refresh. Only a refresh started after the one
+// already applied may replace it; a stale one answers with the newer snapshot.
+let refreshesStarted = 0
+let appliedRefresh = 0
+
 async function resolveAndCache(
   detection: () => Promise<ReadonlySet<AgentProviderKind>> = detectInstalledKinds,
 ): Promise<ProviderEnablementSnapshot> {
+  const refresh = ++refreshesStarted
   const state = await loadSetupState()
   const detected = await detection()
-  cachedSnapshot = {
+  const next: ProviderEnablementSnapshot = {
     entries: resolveProviderEnablement(state.providerEnablementOverrides, detected),
     opencodeUsageSource: state.opencodeUsageSource,
     zaiCredentialPresent: await probeZaiCredential(),
   }
-  return cachedSnapshot
+  if (refresh < appliedRefresh && cachedSnapshot) return cachedSnapshot
+  appliedRefresh = refresh
+  cachedSnapshot = next
+  return next
 }
 
 /** Fail-open before the first resolve: hiding a user's providers because a

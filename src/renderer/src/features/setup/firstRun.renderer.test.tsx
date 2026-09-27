@@ -221,6 +221,26 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     expect(JSON.stringify(showToast.mock.calls)).not.toContain('ENOSPC')
   })
 
+  it('says an install failed in fixed words, never the raw IPC error', async () => {
+    // #1403 verification b (q22): Install's IPC rejects when the follow-up
+    // check fails, and its message can carry the state file's path; the
+    // dialog rendered it verbatim.
+    const check = withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))
+    const installable: SetupCheckResult = {
+      ...check,
+      tools: { ...check.tools, mitmdump: { ...check.tools.mitmdump, found: false, path: null, source: undefined, installable: true, skipped: false } },
+    }
+    const { api } = mountMachine([installable])
+    Object.assign(api, {
+      setupInstall: vi.fn(async () => { throw new Error("EACCES: permission denied, open '/Users/someone/Library/Application Support/agent-code/setup.json'") }),
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    expect(await screen.findByText('Could not install mitmproxy.')).toBeTruthy()
+    expect(screen.queryByText(/EACCES|setup\.json/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a Terminal' }))
+    await waitFor(() => expect(projects()).toBe(1))
+  })
+
   it('says a manual path was not saved in fixed words, never the raw write error', async () => {
     // #1403 review b (q22): a failed setup.json write rejects the IPC with a
     // message that can carry the state directory's path; it was rendered

@@ -181,7 +181,15 @@ export async function updateSetupState(update: SetupStateUpdate): Promise<Persis
   // visible to readers synchronously, as the old whole-state assignment was.
   if (!cache) await loadSetupState()
   pending.push(update)
-  recomputeCache()
+  // An update that throws must never stay pending (#1403 verification c):
+  // the cache would show forever a change no write could apply.
+  try {
+    recomputeCache()
+  } catch (error) {
+    pending.splice(pending.indexOf(update), 1)
+    recomputeCache()
+    throw error
+  }
   const write = writeQueue
     .catch(() => {})
     .then(async () => {
@@ -191,12 +199,14 @@ export async function updateSetupState(update: SetupStateUpdate): Promise<Persis
         pending.splice(pending.indexOf(update), 1)
         recomputeCache()
       }
-      const snapshot: PersistedSetupState = {
-        ...update(durable ?? DEFAULT_SETUP_STATE),
-        version: 1,
-        updatedAt: Date.now(),
-      }
+      let snapshot: PersistedSetupState
       try {
+        // Inside the try, so a throwing update settles like a failed write.
+        snapshot = {
+          ...update(durable ?? DEFAULT_SETUP_STATE),
+          version: 1,
+          updatedAt: Date.now(),
+        }
         await mkdir(STATE_DIR, { recursive: true })
         // WHY setup state uses the same temp+rename discipline as workspace
         // state even though the single-process lock should prevent concurrent

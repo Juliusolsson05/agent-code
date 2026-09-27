@@ -106,8 +106,11 @@ export function SetupGate() {
       const result = await window.api.setupInstall(target)
       useSetupStore.getState().setCheck(result.check)
       if (!result.ok) setActionError(result.output || `Could not install ${target}.`)
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err))
+    } catch {
+      // Fixed words (q22, #1403 verification b): a rejection here is an IPC
+      // or filesystem error, whose message can carry the state file's path.
+      // `result.output` above is the installer's own report.
+      setActionError(`Could not install ${target}.`)
     } finally {
       setBusy(null)
     }

@@ -21,10 +21,19 @@ vi.mock('@main/storage/paths.js', () => paths)
 // queued writes races the queue; the ordered cases below need "this write
 // fails, the next one lands" exactly.
 const renameFaults = vi.hoisted(() => ({ failNext: 0 }))
+// Holds the NEXT read of setup.json until released: the first-load race.
+const readGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }))
 vi.mock('fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('fs/promises')>()
   return {
     ...actual,
+    readFile: (async (...args: Parameters<typeof actual.readFile>) => {
+      const hold = readGate.hold
+      readGate.hold = null
+      const result = actual.readFile(...args)
+      if (hold) await hold
+      return await result
+    }) as typeof actual.readFile,
     rename: async (from: string, to: string) => {
       if (renameFaults.failNext > 0) {
         renameFaults.failNext -= 1
@@ -40,6 +49,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'setup-state-'))
   paths.STATE_DIR = dir
   renameFaults.failNext = 0
+  readGate.hold = null
   vi.resetModules()
 })
 afterEach(async () => {
@@ -140,4 +150,38 @@ it('does not persist a failed provider toggle with a later one', async () => {
   expect(results.map(result => result.status)).toEqual(['rejected', 'fulfilled'])
   expect((await onDisk()).providerEnablementOverrides).toEqual({ claude: false })
   expect((await setup.loadSetupState()).providerEnablementOverrides).toEqual({ claude: false })
+})
+
+// #1403 verification b (survivor): two first loads share ONE read. A second
+// read that started later but finished after a save's write would reset the
+// durable baseline to the file as it was before that write, and the next
+// save would then drop the saved change.
+it('shares the first read, so a slow read cannot undo a save made meanwhile', async () => {
+  const seed = await import('./setupState.js')
+  await seed.setCliUpdateBehavior('notify')
+  vi.resetModules()
+  const setup = await import('./setupState.js')
+  let release!: () => void
+  readGate.hold = new Promise<void>(resolve => { release = resolve })
+  // The first read reads the file NOW ('notify') and is then held.
+  const slowLoad = setup.loadSetupState()
+  // A save started meanwhile. With a second read of its own it would land
+  // while the first read is still held; sharing the read, it waits for it.
+  const save = setup.setCliUpdateBehavior('off')
+  await Promise.race([save, new Promise(resolve => setTimeout(resolve, 300))])
+  // Only now does the first read finish, with the contents it read before.
+  release()
+  await Promise.all([slowLoad, save])
+  await setup.setOpencodeUsageSource('zai')
+  expect(await onDisk()).toMatchObject({ cliUpdateBehavior: 'off', opencodeUsageSource: 'zai' })
+})
+
+// #1403 verification c (suspicion): an update that throws is not left
+// pending, where the cache would show it forever.
+it('drops an update that throws, leaving the state as it was', async () => {
+  const setup = await import('./setupState.js')
+  await setup.setCliUpdateBehavior('notify')
+  await expect(setup.updateSetupState(() => { throw new Error('bad update') })).rejects.toThrow('bad update')
+  await setup.setOpencodeUsageSource('zai')
+  expect(await setup.loadSetupState()).toMatchObject({ cliUpdateBehavior: 'notify', opencodeUsageSource: 'zai' })
 })

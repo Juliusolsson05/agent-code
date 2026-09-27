@@ -63,3 +63,16 @@ Tests, each red on `6707e7cf` (verified by swapping in that file):
 - `providerEnablement.test.ts` (new): a reset with a failing re-probe, and the stuck in-flight probe.
 - `firstRun.renderer.test.tsx`: the skip toast and the manual path.
 - The row tests kill b's four surviving mutations.
+
+## Verification (a, b: FIX-BEFORE-MERGE)
+- **b (Major): a saved setup answer reported as unsaved.** Every setup IPC saves the answer, then runs `checkPrerequisites`, whose tool-path write-back hits the same file. When only the write-back failed, the IPC rejected, and SetupGate said the answer was not saved.
+  - **Ruling:** the write-back is best effort (warned). It persists a cache of the probe, and the result returned is the probe's own answer.
+  - **Cost:** the toolchain keeps its last persisted paths until a later write-back lands.
+  - This also stops Install and a provider reset from rejecting after their own work succeeded.
+  - Test: `src/main/ipc/setup.test.ts`, with the real handlers, real setup state and real check. Skip, acknowledgment and manual path each resolve with the answer on disk; a failing answer write still rejects. Red with the old `prerequisites.ts`.
+- **b (Major): Install rendered the raw rejection.** It now shows "Could not install <target>." The installer's own output on a non-ok result is unchanged. Test in `firstRun.renderer.test.tsx`, red on the old SetupGate.
+- **a (Major): an older provider refresh could overwrite and broadcast a newer one** (a pre-existing race in the touched path). Refreshes are numbered; only one started after the applied refresh may replace it. Test: the first row's credential probe is held while the second row's refresh finishes; the cache and the last broadcast keep Claude off. It fails without the ordering.
+- **Survivors, each pinned:**
+  - the shared first read: a held first read that finishes after a save no longer resets the durable baseline;
+  - the fallback uses the last good detection, not "all installed".
+- **c (MERGE-READY):** its two survivors are the two pinned above. Its suspicion, an update that throws staying pending forever, is closed: the update leaves `pending` on every path. Test added.
