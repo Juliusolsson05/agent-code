@@ -161,6 +161,15 @@ export function useComposerKeybinds({
       workspace.showPaneToast(sessionId, 'Wait for the provider switch to finish before sending a prompt')
       return
     }
+    // The agent's own composer holds text (#1319 review C). Claude's submit
+    // goes through the delivery gate, which refuses this, but Codex's is one
+    // raw PTY write: sending now pasted the prompt after the native draft and
+    // Codex submitted both. Refuse for every provider, keep this draft, and
+    // say how to clear the other one.
+    if (composerOccupied && (input.trim().length > 0 || runtime.draftImages.length > 0)) {
+      workspace.showPaneToast(sessionId, "Clear the draft in the agent's own composer first (Esc or Ctrl+C clears it)")
+      return
+    }
     const draftImages = runtime.draftImages
     // A send already in flight owns the draft (#1181). The key handler and the
     // in-flight ref normally stop a second submit, but the ref is per mount:
@@ -705,12 +714,21 @@ export function useComposerKeybinds({
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'c') {
       e.preventDefault()
-      if (!backendReady) {
+      // Composer-occupied is the one not-ready state where Ctrl+C must reach
+      // the agent (#1319 review C): it is how Codex 0.157 clears a native
+      // draft (recorded: ctrl-c-1 restores the placeholder), and during a
+      // turn with a queued draft it is the interrupt.
+      if (!backendReady && !composerOccupied) {
         blockBackendWrite()
         return
       }
       await send('\x03')
-      setInputText('')
+      // While the agent's composer is occupied, Ctrl+C clears THAT draft, and
+      // the toast that refused Enter told the user to press it. Clearing ours
+      // too would delete the follow-up they typed to send once the agent's
+      // draft is gone (#1319 review round 2 B). Otherwise Ctrl+C keeps its
+      // terminal meaning of "abandon this line".
+      if (!composerOccupied) setInputText('')
       return
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'd') {
