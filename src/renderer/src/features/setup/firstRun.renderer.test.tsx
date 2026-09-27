@@ -13,6 +13,8 @@ import {
 import type { SessionSpawnOptions } from '@preload/api/types'
 import type { SetupCheckResult } from '@shared/types/setup'
 import type { CommandContext } from '@renderer/features/command-palette/types'
+import { GlobalToastContext } from '@renderer/ui/GlobalToastContext'
+import { SETUP_ANSWER_NOT_SAVED, SETUP_WRITE_FAILED } from '@renderer/features/settings/setupWriteFailed'
 
 // The first run, end to end in the renderer (#995 stage 6): the REAL
 // workspace hook with its REAL bootstrap, the REAL SetupGate and the setup
@@ -32,9 +34,15 @@ vi.mock('@renderer/performance/client', () => ({
   measure: <T,>(_name: string, fn: () => T | Promise<T>) => fn(),
 }))
 
+// What the desktop's GlobalToastProvider would have been asked to show.
+const showToast = vi.fn()
+
 const originalStore = useAppStore.getState()
 const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
-beforeEach(() => resetSetupStoreForTests())
+beforeEach(() => {
+  resetSetupStoreForTests()
+  showToast.mockReset()
+})
 afterEach(() => {
   cleanup()
   resetSetupStoreForTests()
@@ -78,7 +86,7 @@ function mountMachine(checks: SetupCheckResult[], options: { failKinds?: string[
     appendFeedDebugLog: async () => undefined,
   } })
   const hook = renderHook(() => useWorkspace())
-  render(<SetupGate />)
+  render(<GlobalToastContext.Provider value={{ showToast }}><SetupGate /></GlobalToastContext.Provider>)
   return { hook, spawnSession, setupCheck, api: window.api }
 }
 
@@ -206,6 +214,30 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with a Terminal' }))
     await waitFor(() => expect(projects()).toBe(1))
     expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
+    // #1403 review b: the error used to land in the panel's alert just as the
+    // panel closed, so nobody saw that the answer was not saved. Said after
+    // the close, in fixed words (the raw error names a device or a path).
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(SETUP_ANSWER_NOT_SAVED))
+    expect(JSON.stringify(showToast.mock.calls)).not.toContain('ENOSPC')
+  })
+
+  it('says a manual path was not saved in fixed words, never the raw write error', async () => {
+    // #1403 review b (q22): a failed setup.json write rejects the IPC with a
+    // message that can carry the state directory's path; it was rendered
+    // verbatim under the path field.
+    const { api } = mountMachine([withoutMachineWideInstalls(loadFirstRunCheck('clean-machine'))])
+    Object.assign(api, {
+      setupSetToolPath: vi.fn(async () => { throw new Error("EACCES: permission denied, open '/Users/someone/Library/Application Support/agent-code/setup.json'") }),
+    })
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Enter Path Manually…' }))[0]!)
+    const [field] = screen.getAllByRole('textbox')
+    fireEvent.change(field!, { target: { value: '/opt/bin/claude' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Set' }))
+    expect(await screen.findByText(SETUP_WRITE_FAILED)).toBeTruthy()
+    expect(screen.queryByText(/EACCES|setup\.json/)).toBeNull()
+    // Answer the panel so the parked bootstrap does not leak into the next test.
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with a Terminal' }))
+    await waitFor(() => expect(projects()).toBe(1))
   })
 
   it('records the provider-less answer, so the panel stops opening by itself', async () => {

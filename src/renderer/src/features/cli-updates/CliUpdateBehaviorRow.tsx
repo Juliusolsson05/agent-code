@@ -48,7 +48,8 @@ export function CliUpdateBehaviorRow() {
   const behavior = useCliUpdateStore(state => state.snapshot.behavior)
   // #1250 row 13: a failed write is said here, in the same fixed words as the
   // provider rows (setup.json is the same file). The cards keep showing
-  // main's value, which main restored when the write failed.
+  // main's value: a save whose write failed never becomes main's state
+  // (`updateSetupState`). A later choice clears the message.
   const [failed, setFailed] = useState(false)
   const choose = (next: CliUpdateBehavior) => {
     setFailed(false)

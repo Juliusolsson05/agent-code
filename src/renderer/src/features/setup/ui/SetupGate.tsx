@@ -13,6 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { SETUP_ANSWER_NOT_SAVED, SETUP_WRITE_FAILED } from '@renderer/features/settings/setupWriteFailed'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { Button } from '@renderer/components/ui/button'
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { Input } from '@renderer/components/ui/input'
@@ -50,6 +52,7 @@ export function SetupGate() {
   const panelRef = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<SetupInstallTarget | 'check' | null>('check')
   const [actionError, setActionError] = useState<string | null>(null)
+  const { showToast } = useGlobalToast()
 
   const refresh = useCallback(async () => {
     setBusy('check')
@@ -123,8 +126,11 @@ export function SetupGate() {
       if (!result.ok) return result.reason
       useSetupStore.getState().setCheck(result.check)
       return null
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err)
+    } catch {
+      // A rejection here is main failing to record the path (its setup.json
+      // write), and its message can carry a filesystem path (q22, #1403
+      // review b). `result.reason` above is main's own curated refusal.
+      return SETUP_WRITE_FAILED
     } finally {
       setBusy(null)
     }
@@ -152,6 +158,7 @@ export function SetupGate() {
       ? missingOptional.filter(tool => tool.installable && !tool.skipped)
       : []
     setBusy('check')
+    let answerNotSaved = false
     try {
       for (const tool of skippedTools) {
         useSetupStore.getState().setCheck(await window.api.setupSkipOptional(tool.id))
@@ -161,13 +168,18 @@ export function SetupGate() {
       if (automatic && noProvider) {
         useSetupStore.getState().setCheck(await window.api.setupAcknowledgeNoProviders())
       }
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err))
+    } catch {
+      // WHY a toast (#1403 review b): the error used to go into the panel's
+      // own alert, and the `finally` below closed the panel in the same
+      // tick, so nobody ever saw that the answer was not saved. The close
+      // must stay (see above); the message goes where it survives it.
+      answerNotSaved = true
     } finally {
       setBusy(null)
       useSetupStore.getState().close()
     }
-  }, [automatic, missingOptional, noProvider])
+    if (answerNotSaved) showToast(SETUP_ANSWER_NOT_SAVED)
+  }, [automatic, missingOptional, noProvider, showToast])
 
   if (!shouldShow || !check) return null
 

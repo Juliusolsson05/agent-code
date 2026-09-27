@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CliUpdateBehaviorRow } from './CliUpdateBehaviorRow'
@@ -38,5 +38,10 @@ describe('CliUpdateBehaviorRow', () => {
     expect(document.body.textContent).not.toContain('EACCES')
     const checked = within(group).getAllByRole('radio').find(radio => radio.getAttribute('aria-checked') === 'true')!
     expect(checked.textContent).toContain('Notify Only')
+
+    // A later choice that saves clears the message (#1403 review b).
+    setBehavior.mockImplementation(async () => ({ ...useCliUpdateStore.getState().snapshot, behavior: 'off' }) as never)
+    fireEvent.click(off)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
   })
 })

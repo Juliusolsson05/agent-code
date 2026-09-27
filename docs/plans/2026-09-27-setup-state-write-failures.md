@@ -35,3 +35,31 @@ Changing a provider's enablement (row 6), the OpenCode usage source, or the CLI 
 ## Out of scope
 - #1250 rows 7–12, 14 and 15.
 - Row 15 needs `src/main/index.ts`, which open PR #1216 also edits; it is raised with the manager.
+
+## Review round 1 (a, b: FIX-BEFORE-MERGE; c: MERGE-READY with minors)
+- **The restore design was wrong (a, b, c).** Every save was built from the optimistic cache:
+  - two queued failures made the second "restore" the first one's unwritten state;
+  - a failure followed by a good save carried the failed value to disk while the row said "Nothing was changed".
+  The `cache === snapshot` ruling above is **withdrawn**.
+  - **Ruling:** a save is an UPDATE function (`updateSetupState(update)`). At write time it is applied to `durable` (the last state known on disk), never to another save's unwritten result. `cache` is `durable` plus the still-pending updates, recomputed as each one settles, so a failed update drops out of memory and out of every later write.
+  - Readers still see a change synchronously once the state is loaded.
+  - `saveSetupState(next)` stays as a whole-state update.
+  - The first read is shared, so a late duplicate read cannot reset `durable`.
+  - **Cost if wrong:** none known. Updates are pure functions of the state.
+- **Provider toggles build per key** (`setProviderEnablementOverride(kind, enabled | null)`), not from a whole map computed off the optimistic cache.
+- **Reset persisted, then rejected (a, b).**
+  - `mutate` rejects only when the write fails.
+  - A refresh failure after a landed write resolves: the saved state is shown against the last detection that succeeded, or fails open to "all installed", the same as `enabledAgentProviderKindsSync`.
+  - Found on the way: a rejected detection probe stayed "in flight" for the process lifetime. It is now cleared in `finally`.
+- **SetupGate (b), in scope because it writes the same file:**
+  - a failed manual path shows the fixed sentence, not the raw IPC error;
+  - a failed skip or acknowledgment (the panel still closes, per #1047) is said after the close as a toast;
+  - a failed check stores a fixed sentence (the raw error goes to the console).
+- **Test gaps (b, c):** the reset alert is tested on its own render; clearing after a later success is pinned for all three rows; each ordered queue case has a real-filesystem test with a one-shot rename fault.
+- **c (minor):** the body's test count is corrected.
+
+Tests, each red on `6707e7cf` (verified by swapping in that file):
+- `setupState.test.ts`: 4 queue cases.
+- `providerEnablement.test.ts` (new): a reset with a failing re-probe, and the stuck in-flight probe.
+- `firstRun.renderer.test.tsx`: the skip toast and the manual path.
+- The row tests kill b's four surviving mutations.
