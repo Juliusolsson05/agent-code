@@ -123,3 +123,20 @@ describe('UndoCloseStack', () => {
     expect(stack.pop()).toBeNull()
   })
 })
+
+// #1379: what a waiting entry could bring back, for replace/Reload Agents'
+// relationship remap.
+describe('UndoCloseStack.restorableSessionIds', () => {
+  it('collects session, project and group members, and skips expired entries', () => {
+    let now = 1_000_000
+    const stack = new UndoCloseStack(() => now)
+    const meta = { cwd: '/p', kind: 'claude', projectId: 't', joinedAt: 0 } as never
+    stack.push({ type: 'session', closedAt: now - UNDO_CLOSE_RETENTION_MS - 1, sessionId: 'old' as never, sessionMeta: meta } as never)
+    stack.push({ type: 'session', closedAt: now, sessionId: 'single' as never, sessionMeta: meta } as never)
+    stack.push({ type: 'tab', closedAt: now, tab: { id: 't', title: 't' }, tabIndex: 0, sessions: [{ sessionId: 'tab-a' as never, meta }] } as never)
+    stack.push({ type: 'group', closedAt: now, entries: [{ type: 'session', closedAt: now, sessionId: 'grouped' as never, sessionMeta: meta }] } as never)
+    expect([...stack.restorableSessionIds()].sort()).toEqual(['grouped', 'single', 'tab-a'])
+    now += UNDO_CLOSE_RETENTION_MS + 1
+    expect(stack.restorableSessionIds().size).toBe(0)
+  })
+})

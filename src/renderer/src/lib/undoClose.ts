@@ -265,6 +265,30 @@ export class UndoCloseStack {
     return this.entries.length
   }
 
+  /**
+   * Every session id a waiting entry could bring back (#1379). Pruned first,
+   * exactly as `pop()` would be, so an expired entry never counts.
+   *
+   * WHY the stack answers this: replace and Reload Agents drop any
+   * relationship pointer whose target is neither live nor in their idMap. A
+   * parent that is closed but still restorable is neither, so reloading its
+   * live child erased the child's link, and undoing the parent later had
+   * nothing to relink. The swap passes these ids as "still known".
+   */
+  restorableSessionIds(): Set<SessionId> {
+    this.prune()
+    const ids = new Set<SessionId>()
+    const add = (entry: SingleClosedEntry): void => {
+      if (entry.type === 'session') ids.add(entry.sessionId)
+      else for (const member of entry.sessions) ids.add(member.sessionId)
+    }
+    for (const entry of this.entries) {
+      if (entry.type === 'group') entry.entries.forEach(add)
+      else add(entry)
+    }
+    return ids
+  }
+
   /** Rewrite every waiting entry's anchors after a successful restore. See
    *  `UndoLineage` for why this runs on restore and never on merge. */
   remapLineage(lineage: UndoLineage): void {
