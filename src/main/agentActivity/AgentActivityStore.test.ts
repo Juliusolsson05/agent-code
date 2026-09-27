@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -255,5 +255,49 @@ describe('an unreadable open-interval snapshot', () => {
     expect((await readdir(dir)).filter(name => name.startsWith('open.json.unrecovered-'))).toEqual([])
     const read = await new AgentActivityStore(dir).readIntervals(start, start + 12 * HOUR)
     expect(read.map(interval => [interval.startedAt, interval.endedAt])).toEqual([[start, lastTouch]])
+  })
+})
+
+// #1414 review c: a recovery that fails PARTWAY (the second entry's append
+// fails) set the whole snapshot aside, so the next start re-appended the
+// entry already recovered. Only the entries not yet recovered are set aside.
+describe('a recovery that fails partway', () => {
+  it('sets aside only what was not recovered, so nothing is counted twice', async () => {
+    const start = Date.parse('2026-09-01T09:00:00Z')
+    const lastTouch = start + 2 * HOUR
+    const a = { ...context, agentKey: 'A', label: 'A' }
+    const b = { ...context, agentKey: 'B', label: 'B' }
+    await new AgentActivityStore(dir).writeOpen([
+      { sessionId: 'session-a', context: a, startedAt: start },
+      { sessionId: 'session-b', context: b, startedAt: start + HOUR },
+    ], lastTouch)
+    const store = new AgentActivityStore(dir)
+    const internal = store as unknown as { appendLines: (file: string, lines: string[]) => Promise<void> }
+    const realAppend = internal.appendLines.bind(store)
+    let calls = 0
+    internal.appendLines = async (file, lines) => {
+      calls += 1
+      if (calls === 2) throw Object.assign(new Error('no space left'), { code: 'ENOSPC' })
+      return realAppend(file, lines)
+    }
+    expect(await store.recoverOpenIntervals(start + 10 * HOUR)).toBe(1)
+    expect(await new AgentActivityStore(dir).recoverOpenIntervals(start + 11 * HOUR)).toBe(1)
+    const read = await new AgentActivityStore(dir).readIntervals(start, start + 12 * HOUR)
+    expect(read.map(interval => interval.context.agentKey).sort()).toEqual(['A', 'B'])
+  })
+
+  // #1414 review c (test gap): a set-aside copy that still cannot be read is
+  // KEPT for a later start, never deleted.
+  it('keeps a set-aside copy that still cannot be read', async () => {
+    const aside = join(dir, 'open.json.unrecovered-1000')
+    await mkdir(dir, { recursive: true })
+    await writeFile(aside, '{"aliveAt":1,"open":[]}')
+    await chmod(aside, 0o200)
+    try {
+      await new AgentActivityStore(dir).recoverOpenIntervals(Date.parse('2026-09-01T12:00:00Z'))
+      expect((await readdir(dir)).filter(name => name.startsWith('open.json.unrecovered-'))).toEqual(['open.json.unrecovered-1000'])
+    } finally {
+      await chmod(aside, 0o600)
+    }
   })
 })

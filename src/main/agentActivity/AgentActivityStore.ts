@@ -107,6 +107,16 @@ function parseJsonLines(text: string): Record<string, unknown>[] {
   return out
 }
 
+type SetAsideSnapshot = { aliveAt: number | null; open: unknown[] }
+
+/** An open-interval snapshot recovered only partway: `remaining` starts at
+ *  the entry whose append failed (#1414 review c). */
+class PartialRecovery extends Error {
+  constructor(readonly recovered: number, readonly remaining: SetAsideSnapshot) {
+    super('open-interval recovery stopped partway')
+  }
+}
+
 export class AgentActivityStore {
   private tail: Promise<void> = Promise.resolve()
   /** aliases.jsonl in memory, loaded on first use. */
@@ -175,7 +185,10 @@ export class AgentActivityStore {
       let id = ids.get(key)
       const isNewContext = id === undefined
       if (id === undefined) {
-        id = this.monthNextId.get(month) ?? ids.size + 1
+        // contextsFor always sets the month's next id. No `ids.size + 1`
+        // fallback: counting contexts reissues an id after any gap (#1414
+        // review c; the gap test pins it).
+        id = this.monthNextId.get(month)!
         this.monthNextId.set(month, id + 1)
         const contextLine: ContextLine = { t: 'c', c: id, ...interval.context }
         lines.push(JSON.stringify(contextLine))
@@ -356,7 +369,19 @@ export class AgentActivityStore {
     try {
       recovered += await this.recoverSnapshot(path)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') await rename(path, `${path}.unrecovered-${now}`)
+      if (error instanceof PartialRecovery) {
+        // Only what was NOT recovered goes aside (#1414 review c): setting the
+        // whole snapshot aside made the next start re-append the entries
+        // already written, counting that time twice.
+        recovered += error.recovered
+        try {
+          await this.writeSetAside(`${path}.unrecovered-${now}`, error.remaining)
+        } catch {
+          await rename(path, `${path}.unrecovered-${now}`)
+        }
+      } else if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        await rename(path, `${path}.unrecovered-${now}`)
+      }
     }
     await this.writeOpen([], now)
     return recovered
@@ -373,24 +398,40 @@ export class AgentActivityStore {
     }
     let recovered = 0
     for (const name of names) {
+      const path = join(this.dir, name)
       try {
-        recovered += await this.recoverSnapshot(join(this.dir, name))
-      } catch {
+        recovered += await this.recoverSnapshot(path)
+      } catch (error) {
+        // Partly recovered: keep only the remainder, so a later start never
+        // re-appends what this one wrote. Unreadable: keep it as it is.
+        if (error instanceof PartialRecovery) {
+          recovered += error.recovered
+          await this.writeSetAside(path, error.remaining).catch(() => {})
+        }
         continue
       }
-      await rm(join(this.dir, name), { force: true })
+      await rm(path, { force: true })
     }
     return recovered
   }
 
-  /** Append the intervals a snapshot left open. Throws on ANY read, parse or
-   *  append failure, so the caller never treats the snapshot as recovered. */
+  private async writeSetAside(path: string, remaining: SetAsideSnapshot): Promise<void> {
+    const temp = `${path}.${process.pid}.tmp`
+    await writeFile(temp, JSON.stringify(remaining))
+    await rename(temp, path)
+  }
+
+  /** Append the intervals a snapshot left open. Throws on a read or parse
+   *  failure, and PartialRecovery (with what is left) when an append fails
+   *  partway, so the caller never treats the snapshot as recovered. */
   private async recoverSnapshot(path: string): Promise<number> {
     const json: unknown = JSON.parse(await readFile(path, 'utf8'))
     const record = json && typeof json === 'object' ? (json as Record<string, unknown>) : {}
     const aliveAt = isNumber(record.aliveAt) ? record.aliveAt : null
+    const entries = Array.isArray(record.open) ? record.open : []
     let recovered = 0
-    for (const raw of Array.isArray(record.open) ? record.open : []) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const raw: unknown = entries[index]
       if (!raw || typeof raw !== 'object') continue
       const entry = raw as Record<string, unknown>
       const context = entry.context && typeof entry.context === 'object'
@@ -398,7 +439,11 @@ export class AgentActivityStore {
         : null
       if (!context || !isNumber(entry.startedAt) || aliveAt === null) continue
       if (aliveAt > entry.startedAt) {
-        await this.appendInterval({ context, startedAt: entry.startedAt, endedAt: aliveAt })
+        try {
+          await this.appendInterval({ context, startedAt: entry.startedAt, endedAt: aliveAt })
+        } catch {
+          throw new PartialRecovery(recovered, { aliveAt, open: entries.slice(index) })
+        }
         recovered += 1
       }
     }
