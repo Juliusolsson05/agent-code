@@ -75,7 +75,7 @@
     "conditions-core:sync": "node scripts/sync-conditions-core.mjs",
     "conditions-core:check": "node scripts/sync-conditions-core.mjs --check",
     "runtime:prepare:mac": "npm run runtime:fetch:mitmproxy -- --all && npm run runtime:fetch:tmux -- --all && node scripts/runtime-tools/verify-mitmproxy.mjs --strict && node scripts/runtime-tools/verify-tmux.mjs --strict && npm run runtime:fetch:cloudflared -- --all && node scripts/runtime-tools/verify-cloudflared.mjs --strict && npm run runtime:fetch:opencode -- --all && node scripts/runtime-tools/verify-opencode.mjs --strict",
-    "postinstall": "node scripts/patch-xterm.mjs && electron-rebuild -f -w node-pty"
+    "postinstall": "node scripts/patch-xterm.mjs && node scripts/patch-node-pty.mjs && electron-rebuild -f -w node-pty"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
@@ -104,7 +104,7 @@
     "fzstd": "^0.1.1",
     "highlight.js": "^11.12.0",
     "monaco-editor": "^0.52.2",
-    "node-pty": "^1.0.0",
+    "node-pty": "1.1.0",
     "pidtree": "^0.6.1",
     "pidusage": "^4.0.1",
     "playwright-core": "1.63.0",

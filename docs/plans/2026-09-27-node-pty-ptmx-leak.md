@@ -72,12 +72,15 @@ app never reaches `kern.tty.ptmx_max` (511) and never fails every spawn with
 
 ## Tests
 
-- `scripts/patch-node-pty.test.ts` runs against a copy of the real 1.1.0
-  `pty.cc` (the file in `node_modules`, the shipped source). It checks that
+- `testing/unit/patchNodePty.test.ts` runs against the real 1.1.0 `pty.cc`,
+  committed byte-exact under `testing/fixtures/node-pty-1.1.0/` (with the
+  package's LICENSE and a `-text` gitattribute). After postinstall, the
+  `node_modules` copy is the patched one, so it cannot serve as the input. It checks that
   the patched output closes `low_fds[0]` and `slave`; that a second run is a
   no-op; and that a wrong version or a missing anchor throws. It fails before
   the fix because the script does not exist.
-- The fd-leak regression test ports #882's own test. It spawns 20
+- `testing/system/nodePtyPtmxLeak.test.ts` (fd-leak regression) ports #882's
+  own test. It spawns 20
   `/bin/sh -c true` PTYs through node-pty, one at a time, and asserts that
   main's `/dev/ptmx` count (via `lsof -p`) does not grow. It is darwin only.
   Pre-fix it must fail by ~20. **Gated:** it needs free PTYs, and q117
@@ -101,3 +104,23 @@ app never reaches `kern.tty.ptmx_max` (511) and never fails every spawn with
 - node-pty's unrelated `spawn_helper` title tweak in #882 (`unixTerminal.ts`).
 - `packages/claude-code-headless/node_modules/node-pty` (a dev copy, not
   shipped).
+
+## Execution notes
+
+- Ruling: tests live in `testing/unit` and `testing/system`, not
+  `scripts/`. Vitest collects neither `scripts/**`, and
+  `verifySubmoduleCheckouts.test.ts` already tests a `scripts/*.mjs` this
+  way. Cost if wrong: none; this is placement only.
+- Ruling: the cleanup loop is bounded by `i < 3`, a deliberate difference
+  from #882. #882's `i <= count` reads `low_fds[3]` when all three opens
+  land below fd 2. Cost if wrong: none; the bound only removes an
+  out-of-bounds read.
+- Ruling: the thrown message keeps the `posix_spawnp failed` prefix and adds
+  the cause. #882 throws the cause alone. Nothing in the app matches on the
+  text; the prefix keeps earlier reports searchable.
+- Verified: the patched source compiles with node-gyp against Node 24, in
+  an isolated copy under the scratchpad. The only warnings are two
+  pre-existing ones (1.1.0's kqueue initialisers), and the shared
+  `node_modules` was untouched. Unit test 7/7. Restoring the countdown
+  loop turns 2 tests red.
+- Not yet run: the system test. It is gated on q117 capacity.
