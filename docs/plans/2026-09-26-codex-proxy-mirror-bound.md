@@ -105,3 +105,8 @@ A Codex session's `proxy-events.jsonl` mirror:
   - **Routed elsewhere:**
     - the Claude sidecar appended past the 5 MiB budget (A3) is pre-existing Claude wiring, so it goes to W4 (#1273);
     - a Codex prompt body can fall outside a 5 MiB tail (C1) is pre-existing policy, so it goes to a follow-up issue.
+- **Review round 2** (verification only; the review cap is reached):
+  - **Package:** B MERGE-READY; A and C FIX-BEFORE-MERGE.
+    - Fixed in `3e7e35e`: every fit decision is made before rotating, so a line that fits no file never evicts kept events (C1); markers count against the queue (A2).
+    - Pinned: per-stream accounting with a synchronous failure (A1), and the marker in the cap check (A3).
+  - **Reader:** B and C MERGE-READY. A's "retry hides a lost generation" is declined: after the retry the bundle equals a race-free read a moment later, and rotated-away generations are the designed bound, marked in-file by the writer's `mirror-rotated` counter. Its surviving mutant (the exhausted-retry header) is now pinned.

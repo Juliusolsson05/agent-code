@@ -181,8 +181,13 @@ for (const provider of ['codex', 'claude'] as const) {
     it('does not duplicate lines when .1 is the same file as the live one', async () => {
       const run = await runWith(provider, { live: [1, 4] })
       await link(join(run.dir, 'proxy-events.jsonl'), join(run.dir, 'proxy-events.1.jsonl'))
-      const { ids } = await bundle(run)
+      const { lines, ids } = await bundle(run)
       expect(ids).toEqual([1, 2, 3, 4])
+      // Every retry sees the same collision, so after the last attempt the
+      // bundle must SAY older traffic was lost rather than look complete
+      // (#1332 round-2 review A: that path was unpinned).
+      expect(lines[0]).toMatchObject({ kind: 'truncated' })
+      expect(String(lines[0]!.reason)).toContain('rotated away during the read')
     })
 
     // The live tail was cut, so `.1` is not adjacent to it: even when the cut
