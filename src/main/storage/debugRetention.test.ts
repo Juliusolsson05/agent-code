@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { collectSessionRecordingDirs, runPrunePasses } from './debugRetention.js'
+import { collectProxyRunDirs, collectSessionRecordingDirs, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -226,3 +226,20 @@ describe('runPrunePasses', () => {
     expect(result).toEqual({ removed: 0, bytesFreed: 0, remainingBytes: 500 })
   })
 })
+
+// Review of #1376 (a): claude-code-headless#64 rotates proxy-events.jsonl to proxy-events.1.jsonl
+// before creating the next live file. A run left holding only `.1` (the creation failed, or the
+// addon died in between) was invisible to every retention pass.
+describe('collectProxyRunDirs', () => {
+  it('counts a run that holds only the rotated generation', async () => {
+    const live = join(root, 'project', 'session', 'run-live')
+    const rotated = join(root, 'project', 'session', 'run-rotated')
+    mkdirSync(live, { recursive: true })
+    mkdirSync(rotated, { recursive: true })
+    writeFileSync(join(live, 'proxy-events.jsonl'), '{}\n')
+    writeFileSync(join(rotated, 'proxy-events.1.jsonl'), '{}\n')
+    const runs = (await collectProxyRunDirs(root)).map(artifact => artifact.path).sort()
+    expect(runs).toEqual([live, rotated])
+  })
+})
+

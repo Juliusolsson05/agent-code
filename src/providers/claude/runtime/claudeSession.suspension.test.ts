@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { ClaudeSession } from './claudeSession.js'
@@ -51,3 +53,46 @@ describe('ClaudeSession.readComposer', () => {
     expect(session.readComposer()).toEqual({ screen: '❯ typed', attributes })
   })
 })
+
+// Review of #1376 (a, b, c): the app subscribed to the proxy's `event` channel only, so the
+// `transport-gap` claude-code-headless#64 reports (generations rotated away unread) never left the
+// package — and deleting even the `event` subscription passed every Claude runtime test.
+describe('ClaudeSession proxy wiring', () => {
+  function wired() {
+    const session = new ClaudeSession()
+    const proxy = new EventEmitter()
+    const handleProxyTransportEvent = vi.fn()
+    const internals = session as unknown as {
+      proxyServer: unknown
+      headless: unknown
+      attachProxyServer(): void
+      detachProxyServer(): void
+    }
+    internals.proxyServer = proxy
+    internals.headless = { handleProxyTransportEvent }
+    internals.attachProxyServer()
+    return { session, proxy, handleProxyTransportEvent, detach: () => internals.detachProxyServer() }
+  }
+
+  it('forwards every proxy event to the adapter', () => {
+    const { proxy, handleProxyTransportEvent } = wired()
+    const chunk = { kind: 'response-chunk', flow_id: 'f1', chunk_b64: 'eA==' }
+    proxy.emit('event', chunk)
+    expect(handleProxyTransportEvent).toHaveBeenCalledWith(chunk)
+  })
+
+  it('surfaces a transport gap as a session event', () => {
+    const { session, proxy } = wired()
+    const gaps: unknown[] = []
+    session.on('proxy-transport-gap', gap => { gaps.push(gap) })
+    proxy.emit('transport-gap', { lostGenerations: 2 })
+    expect(gaps).toEqual([{ lostGenerations: 2 }])
+  })
+
+  it('detaches both channels', () => {
+    const { proxy, detach } = wired()
+    detach()
+    expect(proxy.listenerCount('event') + proxy.listenerCount('transport-gap')).toBe(0)
+  })
+})
+

@@ -97,6 +97,7 @@ export type ClaudeSessionEvents = {
   // Declared for the provider-neutral AgentSession contract. Claude currently
   // emits no transcript-discovery diagnostics, so this event never fires.
   'transcript-diagnostic': [unknown]
+  'proxy-transport-gap': [{ lostGenerations: number }]
   // Optional status: the spinner verb ("Cogitating…", "Cascading…",
   // …) so the renderer can label its activity indicator with what CC
   // is actually doing rather than a generic "thinking…" placeholder.
@@ -168,6 +169,7 @@ export class ClaudeSession extends EventEmitter {
   // proxy shutdown path drop the emitter isn't enough — the closure
   // captures `this.headless` and delays GC of the session object.
   private proxyEventHandler: ((ev: unknown) => void) | null = null
+  private proxyGapHandler: ((gap: { lostGenerations: number }) => void) | null = null
   private exited = false
   /** Gate for the committed `tool_result` bridge. False until the
    *  JSONL tailer's initial replay has quiesced (250 ms without a new
@@ -512,16 +514,7 @@ export class ClaudeSession extends EventEmitter {
     // the EventEmitter keeps a reference to the closure (which closes
     // over `this.headless`) even after teardown, preventing GC of
     // the session object until the proxy process itself is collected.
-    if (this.proxyServer) {
-      this.proxyEventHandler = ev => {
-        this.headless?.handleProxyTransportEvent(
-          ev as Parameters<
-            NonNullable<typeof this.headless>['handleProxyTransportEvent']
-          >[0],
-        )
-      }
-      this.proxyServer.on('event', this.proxyEventHandler)
-    }
+    this.attachProxyServer()
 
     this.pty.onData((data: string) => this.emit('pty-data', data))
 
@@ -1165,12 +1158,47 @@ export class ClaudeSession extends EventEmitter {
   // a leak-relevance (a live mitmdump keeps its port bound), and two
   // hand-maintained copies of it is exactly how the rollback path missed
   // it in the first place (#495 A9).
-  private async teardownProxy(): Promise<void> {
+  /**
+   * Subscribe to the proxy's two channels. Only when useProxy was set (`proxyServer` is otherwise
+   * null), and AFTER headless exists, so the adapter is there before any chunk arrives.
+   *
+   * WHY `transport-gap` too (review of #1376, a/b/c): claude-code-headless#64 rotates the events file
+   * and, when the poller stalls through rotations, reports generations deleted unread as
+   * `transport-gap`. The app listened to `event` only, so a whole span of chunks could vanish with
+   * nothing but a main-process console line — the "every event exactly once, or an explicit gap"
+   * contract stopped at the package boundary. The gap is re-emitted as `proxy-transport-gap`, which
+   * SessionManager records as an always-on incident for this session.
+   */
+  private attachProxyServer(): void {
+    if (!this.proxyServer) return
+    this.proxyEventHandler = ev => {
+      this.headless?.handleProxyTransportEvent(
+        ev as Parameters<
+          NonNullable<typeof this.headless>['handleProxyTransportEvent']
+        >[0],
+      )
+    }
+    this.proxyGapHandler = gap => { this.emit('proxy-transport-gap', gap) }
+    this.proxyServer.on('event', this.proxyEventHandler)
+    this.proxyServer.on('transport-gap', this.proxyGapHandler)
+  }
+
+  /** Detach both proxy channels; see attachProxyServer. */
+  private detachProxyServer(): void {
     if (!this.proxyServer) return
     if (this.proxyEventHandler) {
       this.proxyServer.off('event', this.proxyEventHandler)
       this.proxyEventHandler = null
     }
+    if (this.proxyGapHandler) {
+      this.proxyServer.off('transport-gap', this.proxyGapHandler)
+      this.proxyGapHandler = null
+    }
+  }
+
+  private async teardownProxy(): Promise<void> {
+    if (!this.proxyServer) return
+    this.detachProxyServer()
     try {
       // WHY a deadline around the package's stop(): ProxyServer.stop()
       // awaits `child.once('exit')` after SIGTERM/SIGKILL, and that promise
