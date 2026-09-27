@@ -79,3 +79,9 @@ The reader runs in main over files, so the tests exercise the real entry point. 
   - search returns long items head-truncated (predates this PR);
   - an `exec` call with empty input yields an empty `tool_read` (no recorded case);
   - `Move to` headers, spaced `tools . x (` forms and `cmd`/`command` precedence are not covered by any recording.
+
+## Verification pass
+- **b (major): a regex literal after `if (…)` still fooled the lexer.** Its `/` reads as division after `)`, which invents a patch or opens a phantom string that loses a real call. No lexer heuristic settles `)` both ways: `(x) / tools.apply_patch(y) / 2` is division.
+  - **Ruling:** find calls with a real parse. `acorn` is already a runtime dependency; the renderer's embedded-operation adapter parses these same scripts. The lexer stays only as the fallback for scripts that do not parse; those never ran as written.
+  - Corpus (99,256 scripts): 98 do not parse. The parser and the lexer disagree on 5, all recorded `tools["name"](…)` bracket calls the lexer never saw. Parsing everything took 4.2 s in total, 36 ms at worst.
+  - Unit tests (`src/shared/codex/execScript.test.ts`): b's two reproductions and the recorded bracket form fail with the lexer alone. The division case and the parse fallback pass either way.

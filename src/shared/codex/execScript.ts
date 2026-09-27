@@ -1,3 +1,5 @@
+import { parse } from 'acorn'
+
 // The grammar of Codex's code-mode `exec` tool, as far as we read it without
 // executing anything.
 //
@@ -19,10 +21,11 @@
 // in the renderer adapter, because they are about rendering, not about what
 // the agent did.
 //
-// WHY no JavaScript parser: we never evaluate generated code. Anything whose
-// boundary or bytes cannot be proven lexically (backtick templates, which
-// may interpolate, and computed arguments) is reported as unreadable rather
-// than guessed. Callers decide what an unreadable call means for them.
+// We never evaluate generated code. Finding the calls uses a parser
+// (`codexExecScriptCalls`), but DECODING an argument stays lexical: anything
+// whose bytes are not a plain literal (a template, which may interpolate, or a
+// computed value) is reported as unreadable rather than guessed. Callers
+// decide what an unreadable call means for them.
 
 /** One decoded `tools.exec_command(...)` argument. */
 export type CodexExecCommandArgument = {
@@ -40,7 +43,67 @@ export type CodexExecScriptCall = {
   argument: string | null
 }
 
-/** Every `tools.<name>(` call in source order, found only in CODE.
+/** Every `tools.<name>(…)` call in source order.
+ *
+ * WHY a real parser first (#1368 verification b): the script is JavaScript,
+ * and whether `/` starts a regex or divides depends on grammar a lexer cannot
+ * see. `if (ready) /tools.apply_patch(x)/.test(s)` is a regex after `)`,
+ * while `(x) / tools.apply_patch(y) / 2` is division. A heuristic lexer
+ * misreads one of them either way, and inventing a patch or command that
+ * never ran is the failure this reader exists to avoid. `acorn` is already a
+ * runtime dependency (the renderer's embedded-operation adapter parses the
+ * same scripts), and a parse reports exactly the calls that exist, including
+ * calls inside template interpolations.
+ *
+ * A script that does not parse (malformed, or cut off) falls back to
+ * `codexExecScriptCallsLexical`. Such a script never ran as written, so its
+ * lexical reading is a best effort over text the model produced, not over
+ * code that executed. */
+export function codexExecScriptCalls(script: string): CodexExecScriptCall[] {
+  let program: unknown
+  try {
+    program = parse(script, { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true })
+  } catch {
+    return codexExecScriptCallsLexical(script)
+  }
+  const found: Array<{ start: number; call: CodexExecScriptCall }> = []
+  const stack: unknown[] = [program]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (Array.isArray(node)) {
+      stack.push(...node)
+      continue
+    }
+    if (!node || typeof node !== 'object') continue
+    const record = node as Record<string, unknown>
+    if (typeof record.type !== 'string') continue
+    if (record.type === 'CallExpression') {
+      const tool = toolsMemberName(record.callee)
+      if (tool !== null) {
+        const args = Array.isArray(record.arguments) ? record.arguments as Array<{ start: number; end: number }> : []
+        const argument = args.length === 0 ? '' : script.slice(args[0]!.start, args[args.length - 1]!.end).trim()
+        found.push({ start: record.start as number, call: { tool, argument } })
+      }
+    }
+    for (const [key, value] of Object.entries(record)) {
+      if (key !== 'type' && value && typeof value === 'object') stack.push(value)
+    }
+  }
+  return found.sort((a, b) => a.start - b.start).map(entry => entry.call)
+}
+
+// `tools.name` or `tools["name"]`; any other callee (including a computed
+// `tools[name]`, whose tool cannot be known) is not a recognised call.
+function toolsMemberName(callee: unknown): string | null {
+  const member = callee as { type?: string; object?: { type?: string; name?: string }; property?: { type?: string; name?: string; value?: unknown }; computed?: boolean } | null
+  if (member?.type !== 'MemberExpression' || member.object?.type !== 'Identifier' || member.object.name !== 'tools') return null
+  if (!member.computed && member.property?.type === 'Identifier') return member.property.name ?? null
+  if (member.computed && member.property?.type === 'Literal' && typeof member.property.value === 'string') return member.property.value
+  return null
+}
+
+/** The fallback for a script acorn cannot parse: every `tools.<name>(` call
+ * in source order, found only in CODE by a lexical scan.
  *
  * WHY a lexical scan and not a regex over the whole script (#1368 review c):
  * a regex also matches `tools.exec_command(...)` inside a `//` comment or a
@@ -63,7 +126,7 @@ export type CodexExecScriptCall = {
  * After a proven call the scan resumes past its closing parenthesis, so text
  * inside the argument is never counted as a second call. After an unproven
  * one it resumes just past the opening parenthesis. */
-export function codexExecScriptCalls(script: string): CodexExecScriptCall[] {
+export function codexExecScriptCallsLexical(script: string): CodexExecScriptCall[] {
   const calls: CodexExecScriptCall[] = []
   const callAt = /tools\.([A-Za-z_$][\w$]*)\s*\(/y
   for (let i = 0; i < script.length; i += 1) {
