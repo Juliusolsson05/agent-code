@@ -201,13 +201,15 @@ export class UserMcpService {
       // not be rolled back, so a failed destination edit used to lose the
       // server's token for good.
       await this.persist()
-      if (destinationChanged) await this.secrets.clearServer(server.id)
-      for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
-        if (server.inputs.some(candidate => candidate.id === inputId)) {
-          await this.secrets.set(server.id, inputId, value)
+      await this.withSecretRollback(server.id, async () => {
+        if (destinationChanged) await this.secrets.clearServer(server.id)
+        for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
+          if (server.inputs.some(candidate => candidate.id === inputId)) {
+            await this.secrets.set(server.id, inputId, value)
+          }
         }
-      }
-      await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
+        await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
+      })
       return {
         ok: true,
         id: server.id,
@@ -222,7 +224,7 @@ export class UserMcpService {
       if (!this.document.servers.some(server => server.id === id)) return { ok: false, error: 'That server no longer exists.' }
       this.document = { version: 1, servers: this.document.servers.filter(server => server.id !== id) }
       await this.persist()
-      await this.secrets.clearServer(id)
+      await this.withSecretRollback(id, () => this.secrets.clearServer(id))
       return { ok: true }
     })
   }
@@ -455,6 +457,29 @@ export class UserMcpService {
     })
     this.tail = run.catch(() => {})
     return run
+  }
+
+  /**
+   * Run a secret step so that a failure leaves the server's secrets exactly as
+   * they were (#1304, q108). mutate() rolls the DOCUMENT back when an
+   * operation throws, and without this the step could already have erased the
+   * old secrets: a destination change clears them before setting new ones, so
+   * a failed set brought the old server back without its token, and a delete
+   * whose clear failed partway kept the server but lost some blobs. The
+   * snapshot is ciphertext bytes (see UserMcpSecretStore.snapshotServer).
+   *
+   * Residual: if restoring the snapshot itself fails (the same disk that
+   * refused the step), the original error is still reported and the
+   * secrets may be partly gone; there is nowhere left to put them.
+   */
+  private async withSecretRollback(serverId: string, step: () => Promise<void>): Promise<void> {
+    const snapshot = await this.secrets.snapshotServer(serverId)
+    try {
+      await step()
+    } catch (error) {
+      await this.secrets.restoreServer(serverId, snapshot).catch(() => {})
+      throw error
+    }
   }
 
   /** Set by persist() during the current mutate() operation (#1304). */

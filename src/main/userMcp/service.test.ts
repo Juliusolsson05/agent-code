@@ -354,3 +354,48 @@ describe('a secret step that fails after the document was written (#1304)', () =
     expect((await service().snapshot()).servers.map(server => server.id)).toEqual([id])
   })
 })
+
+// q108: rolling the document back is not enough if the secret step already
+// erased the old secret. A destination change clears the server's blobs, then
+// sets the new ones; if a set fails after the clear, the old server came back
+// (document rolled back) WITHOUT its token.
+describe('a secret step that fails midway keeps the previous secret (#1304, q108)', () => {
+  type Store = {
+    get: (serverId: string, inputId: string) => Promise<string | null>
+    set: (serverId: string, inputId: string, value: string) => Promise<void>
+    clearServer: (serverId: string) => Promise<void>
+  }
+  const storeOf = (svc: UserMcpService) => (svc as unknown as { secrets: Store }).secrets
+
+  it('a destination change whose new secret fails to write keeps the old destination AND its token', async () => {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const store = storeOf(live)
+    store.set = async () => { throw new Error('secure storage unavailable') }
+    const moved = await live.save(beeper({
+      id,
+      entry: { type: 'http', url: 'http://localhost:9999/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } },
+      secrets: { 'beeper-authorization': 'bpr_live_new_token_0000' },
+    } as Partial<UserMcpSaveInput>))
+    expect(moved.ok).toBe(false)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server?.id).toBe(id)
+    expect(JSON.stringify(server)).toContain('localhost:23373')
+    expect(await storeOf(restarted).get(id, 'beeper-authorization')).toBe(TOKEN)
+  })
+
+  it('a delete whose clear fails after removing some blobs keeps the server AND its token', async () => {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const store = storeOf(live)
+    const realClear = store.clearServer.bind(store)
+    store.clearServer = async serverId => { await realClear(serverId); throw new Error('EACCES') }
+    expect((await live.delete(id)).ok).toBe(false)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers.map(server => server.id)).toEqual([id])
+    expect(await storeOf(restarted).get(id, 'beeper-authorization')).toBe(TOKEN)
+  })
+})

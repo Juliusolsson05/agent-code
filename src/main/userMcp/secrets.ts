@@ -95,6 +95,37 @@ export class UserMcpSecretStore {
       rm(join(this.dir, serverId, file), { force: true })))
   }
 
+  /**
+   * The server's encrypted blobs as raw bytes, for a mutation to put back if
+   * its secret step fails midway (#1304, q108). Ciphertext only: nothing is
+   * decrypted, so this works even when secure storage is unavailable.
+   */
+  async snapshotServer(serverId: string): Promise<Map<string, Buffer>> {
+    const snapshot = new Map<string, Buffer>()
+    let files: string[]
+    try {
+      files = await readdir(join(this.dir, serverId))
+    } catch {
+      return snapshot
+    }
+    for (const file of files) {
+      if (!file.endsWith('.bin')) continue
+      snapshot.set(file, await readFile(join(this.dir, serverId, file)))
+    }
+    return snapshot
+  }
+
+  /** Make the server's blobs exactly `snapshot` again (see snapshotServer). */
+  async restoreServer(serverId: string, snapshot: ReadonlyMap<string, Buffer>): Promise<void> {
+    const directory = join(this.dir, serverId)
+    await rm(directory, { recursive: true, force: true })
+    if (snapshot.size === 0) return
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    for (const [file, ciphertext] of snapshot) {
+      await writeFile(join(directory, file), ciphertext, { mode: 0o600 })
+    }
+  }
+
   /** Presence and a last-4 hint only. The renderer never receives a value. */
   async state(serverId: string, inputIds: readonly string[]): Promise<Record<string, UserMcpSecretState>> {
     const entries = await Promise.all(inputIds.map(async id => {
