@@ -26,3 +26,9 @@ That is the support-disposal wave beside control and caffeinate.
 
 ## Overlap
 W3's #1430 work (`.worktrees/worktree-timeout-consumers`) also edits `src/main/index.ts`, in different hunks (`resolveRepoRoot` / conversation setup). Merge order is the manager's call; the two changes do not interact.
+
+## Review a finding (fixed)
+`dispose()` waited only for work the service TRACKED. The public mutators (`goal_loop_start` / `goal_loop_complete` over MCP) awaited `persist()` without tracking it, so quit could still cut off their write, and the next launch turned a completed loop into paused(interrupted). `persist()` now tracks every write, awaited or not. Fail-first: complete and startLoop parked on a gated write keep `dispose()` pending; both are red without the tracking.
+
+## Residual
+The `index.ts` wiring (`disposeGoalLoop: () => disposeGoalLoop?.()`) is not unit-tested: `index.ts` has no composition test for any inventory entry. Review a's mutation that disconnects it survives. Adding one is out of scope under the freeze.
