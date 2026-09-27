@@ -1,4 +1,4 @@
-import { hasInputReference, inputReferences, USER_MCP_INPUT_ID_PATTERN } from './inputs.js'
+import { hasInputReference, inputReferences, maskInputReferences, USER_MCP_INPUT_ID_PATTERN } from './inputs.js'
 import {
   RESERVED_USER_MCP_NAMES,
   USER_MCP_PROVIDERS,
@@ -230,7 +230,9 @@ export function providerSupportForEntry(entry: unknown): Record<UserMcpProvider,
  * `NODE_OPTIONS=--require ./evil.js` or a `PATH` that finds a fake `npx`, and
  * the unchanged command runs attacker code with the token in its env. The
  * only change that must NOT forget secrets is editing which `${input:…}` a
- * value references, so those values are masked and everything else counts.
+ * value references, so only the references themselves are masked. The literal
+ * text AROUND a reference (an endpoint in `MCP_ENDPOINT=…?key=${input:t}`, the
+ * `Bearer ` scheme) is where the secret goes, so it counts (#1420 reviews a+b).
  */
 export function userMcpDestination(entry: unknown): string {
   if (!isPlainObject(entry)) return 'invalid'
@@ -238,7 +240,7 @@ export function userMcpDestination(entry: unknown): string {
   for (const field of ['env', 'headers'] as const) {
     if (!isStringRecord(entry[field])) continue
     masked[field] = Object.fromEntries(Object.entries(entry[field] as Record<string, string>)
-      .map(([key, value]) => [key, hasInputReference(value) ? '<secret>' : value])
+      .map(([key, value]) => [key, maskInputReferences(value)])
       .sort(([a], [b]) => (a as string).localeCompare(b as string)))
   }
   return JSON.stringify(Object.keys(masked).sort().map(key => [key, masked[key]]))

@@ -208,4 +208,18 @@ describe('review round 2 model rules', () => {
     expect(userMcpDestination(base)).toBe(userMcpDestination({ command: 'npx', env: { T: '${input:b}' } }))
     expect(userMcpDestination(base)).not.toBe(userMcpDestination({ command: 'npx', env: { T: '${input:a}', NODE_OPTIONS: '--require x' } }))
   })
+
+  // #1420 reviews a+b: masking the WHOLE value that contains a reference let
+  // the literal around it (the endpoint) change without changing the
+  // identity, so the token went to a host it was not saved for.
+  it('counts the literal text around a secret reference as part of the destination', () => {
+    const at = (url: string) => ({ command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: url } })
+    expect(userMcpDestination(at('https://trusted.example/mcp?key=${input:t}')))
+      .not.toBe(userMcpDestination(at('https://evil.example/mcp?key=${input:t}')))
+    const header = (auth: string) => ({ type: 'http', url: 'https://api.example/mcp', headers: { Authorization: auth } })
+    expect(userMcpDestination(header('Bearer ${input:t}'))).not.toBe(userMcpDestination(header('Basic ${input:t}')))
+    // Which input a value references is still not a destination.
+    expect(userMcpDestination(at('https://trusted.example/mcp?key=${input:t}')))
+      .toBe(userMcpDestination(at('https://trusted.example/mcp?key=${input:other}')))
+  })
 })

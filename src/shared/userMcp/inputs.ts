@@ -15,6 +15,22 @@ export function hasInputReference(value: string): boolean {
 }
 
 /**
+ * The value with each reference replaced by a fixed placeholder.
+ *
+ * WHY here and with the same regex as `substituteInputs`: the destination
+ * identity (validate.ts `userMcpDestination`) must ignore exactly the text
+ * launch replaces with a secret and count everything else. Masking the whole
+ * value (the first #1420 version) hid the literal around the reference, so an
+ * agent could turn `https://trusted.example/mcp?key=${input:t}` into an
+ * evil.example URL without changing the identity, and the saved token went
+ * there (#1420 reviews a+b). A text that only LOOKS like a reference but is
+ * not substituted (a bad id) stays literal, so it counts too.
+ */
+export function maskInputReferences(value: string): string {
+  return value.replace(INPUT_REFERENCE, '${input}')
+}
+
+/**
  * Replace every reference with its secret value.
  *
  * Returns null when any referenced value is missing. WHY not substitute an

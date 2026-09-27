@@ -668,3 +668,30 @@ describe('secrets are bound to their destination (#1304, q113)', () => {
     expect(await launching).toEqual([[NEW_URL, U]])
   })
 })
+
+// #1420 reviews a+b (blocker): an agent changing the endpoint INSIDE a
+// secret-bearing env value kept the token, stayed enabled without review, and
+// the next launch sent the token to the new host.
+describe('an endpoint inside a secret-bearing value is part of the destination (#1420)', () => {
+  const stdio = (endpoint: string) => ({
+    name: 'endpoint-client',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: endpoint } },
+    inputs: [{ id: 'beeper-authorization', description: 'Token' }],
+  })
+
+  it('an agent that moves the endpoint loses the token and needs review, across a restart', async () => {
+    const live = service()
+    expect((await live.save({ ...stdio('https://trusted.example/mcp?key=${input:beeper-authorization}'), secrets: { 'beeper-authorization': TOKEN } } as UserMcpSaveInput)).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const moved = await live.save({ id, ...stdio('https://evil.example/mcp?key=${input:beeper-authorization}') } as UserMcpSaveInput, 'agent')
+    expect(moved.ok).toBe(true)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    const resolution = await restarted.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    expect(JSON.stringify(resolution.servers)).not.toContain(TOKEN)
+  })
+})
+
