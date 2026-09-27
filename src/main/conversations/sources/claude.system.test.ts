@@ -1,5 +1,5 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { resolveFamily } from '../family.js'
@@ -125,5 +125,24 @@ describe('Claude conversation source', () => {
     expect(second.map(row => row.file)).not.toContain(gone)
     expect(summaries.has(gone)).toBe(false)
     expect(summaries.size).toBe(unrelated - 1)
+  })
+
+  // Review of #1417, round 2 (a): a whole project directory removed (a pruned
+  // worktree's transcripts) never reached the per-directory sweep.
+  it('forgets the summaries of a project directory that is gone (#1278)', async () => {
+    const own = await setup()
+    const summaries = (own.source as unknown as { summaries: Map<string, unknown> }).summaries
+    const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees: own.listWorktrees })
+    await own.source.discover({ scope: 'repository', family })
+    const counts = new Map<string, number>()
+    for (const file of summaries.keys()) counts.set(dirname(file), (counts.get(dirname(file)) ?? 0) + 1)
+    const [goneDir, goneCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]!
+    expect(counts.size).toBeGreaterThan(1)
+
+    await rm(goneDir, { recursive: true })
+    const before = summaries.size
+    await own.source.discover({ scope: 'repository', family })
+    expect([...summaries.keys()].some(file => dirname(file) === goneDir)).toBe(false)
+    expect(summaries.size).toBe(before - goneCount)
   })
 })

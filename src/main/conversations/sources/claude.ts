@@ -1,5 +1,5 @@
 import { open, readdir, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
@@ -219,13 +219,19 @@ export class ClaudeConversationSource implements ConversationSource {
 
   constructor(private readonly deps: { projectsDir: string; history: ClaudeHistoryIndex }) {}
 
+  // Every project directory the last root listing saw, or null when that
+  // listing failed (unknown); see the summaries sweep in discover().
+  private projectNames: Set<string> | null = null
+
   private async candidateDirs(scope: SourceScope): Promise<Array<{ dir: string; exact: boolean }>> {
     let names: string[]
     try {
       names = (await readdir(this.deps.projectsDir, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name)
     } catch {
+      this.projectNames = null
       return []
     }
+    this.projectNames = new Set(names)
     if (scope.scope === 'everywhere') return names.map(dir => ({ dir, exact: false }))
     // Folded like the family folds cwds: darwin and win32 name a directory
     // for a lowercased cwd that the canonical cwd would not match otherwise.
@@ -280,11 +286,15 @@ export class ClaudeConversationSource implements ConversationSource {
     // file is the conversation; a stub is a few hundred bytes.
     const candidates: Array<{ file: string; nativeId: string; exact: boolean }> = []
     const enumerated = new Set<string>()
+    const vanished = new Set<string>()
     for (const { dir, exact } of dirs) {
       let names: string[]
       try {
         names = await readdir(join(this.deps.projectsDir, dir))
-      } catch {
+      } catch (error) {
+        // Gone between the root listing and this one: as good as unlisted.
+        // Any other failure is unknown, and its summaries are kept.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') vanished.add(join(this.deps.projectsDir, dir))
         continue
       }
       enumerated.add(join(this.deps.projectsDir, dir))
@@ -300,9 +310,20 @@ export class ClaudeConversationSource implements ConversationSource {
     // never pruned. A scoped discovery cannot judge directories it did not
     // walk, but for every directory it did list, the listing is the exact set
     // of files a summary can still belong to. Memory only; nothing on disk.
+    //
+    // A whole project directory can disappear too (review of #1417, round 2,
+    // a): it then never reaches `enumerated`, so its summaries stayed forever.
+    // The root listing (projectNames) names every project directory whatever
+    // the scope, so a summary whose directory is not in it, or vanished while
+    // being listed, belongs to nothing. A failed root listing is unknown and
+    // sweeps nothing on that account.
     const listed = new Set(candidates.map(candidate => candidate.file))
+    const projectNames = this.projectNames
     for (const file of this.summaries.keys()) {
-      if (enumerated.has(dirname(file)) && !listed.has(file)) this.summaries.delete(file)
+      const projectDir = dirname(file)
+      const dirGone = vanished.has(projectDir)
+        || (projectNames !== null && dirname(projectDir) === this.deps.projectsDir && !projectNames.has(basename(projectDir)))
+      if (dirGone || (enumerated.has(projectDir) && !listed.has(file))) this.summaries.delete(file)
     }
     const summarized = await mapWithConcurrency(candidates, SUMMARY_CONCURRENCY, async candidate => {
       try {
