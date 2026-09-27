@@ -33,3 +33,12 @@ Consequences, all in tests:
 - **Manager listeners outlived dispose (b, c).** A late `removed` paused the loop and wrote into a removed directory. **Fixed:** `start` keeps the listeners and `dispose` detaches them (`off` added to the manager port; `SessionManager` and the test fakes are EventEmitters).
 - **Surviving mutations (a, b, c):** `control()`'s persist was untracked, and `dispose` didn't clear timers. Both are now pinned.
 
+## Review of #1371 (round 2, the cap: a, b and c FIX-BEFORE-MERGE)
+- **A delivery in flight when `dispose` began retried** (and could schedule a backoff). The retry is now skipped once disposed, and `defer` creates no timer after dispose. The in-flight delivery's own outcome is still recorded.
+- **`start()` racing `dispose()`** attached listeners and persisted after it. It now stops after its read if disposal began.
+- **Public entry points after `dispose`:**
+  - `startLoop`, `complete` and `carry` reject ("shut down");
+  - `control` returns null;
+  - `observeProviderHook` is ignored.
+- Mutations killed: the retry ignoring dispose, `start` ignoring dispose, `defer` scheduling after dispose, the public mutators accepting after dispose, `control` after dispose.
+

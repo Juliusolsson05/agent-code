@@ -72,6 +72,11 @@ describe('GoalLoopService drain (#1341)', () => {
       this.writes += 1
       return super.write(...args)
     }
+    readGate = Promise.resolve()
+    override async read(...args: Parameters<GoalLoopStore['read']>) {
+      await this.readGate
+      return super.read(...args)
+    }
   }
 
   it('dispose waits for an in-flight persist, then starts nothing new', async () => {
@@ -194,6 +199,70 @@ describe('GoalLoopService drain (#1341)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // #1371 review round 2 (a, b, c): the entry guard stopped NEW continuations, but one suspended in
+  // its delivery resumed after dispose() began and retried — a second prompt, then a backoff timer.
+  it('a delivery in flight when dispose begins neither retries nor schedules a backoff', async () => {
+    let release!: (result: PromptDeliveryResult) => void
+    const deliver = vi.fn(() => new Promise<PromptDeliveryResult>(resolve => { release = resolve }))
+    const { svc, manager } = await service(deliver as unknown as Deliver)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const disposing = svc.dispose()
+      release({ ok: false, retrySafe: true, message: 'not ready', disposition: 'retry-same-session' } as PromptDeliveryResult)
+      await disposing
+      expect(deliver).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #1371 review round 2 (b): start() awaiting its read while dispose() finished attached the
+  // manager listeners and persisted afterwards.
+  it('a start still reading when dispose finishes attaches nothing and writes nothing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    let open!: () => void
+    store.readGate = new Promise(resolve => { open = resolve })
+    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) })
+    const svc = tracked(new GoalLoopService({ manager, store }))
+    const starting = svc.start()
+    await svc.dispose()
+    open()
+    await starting
+    expect(manager.listenerCount('removed') + manager.listenerCount('semantic-event')).toBe(0)
+    expect(store.writes).toBe(0)
+  })
+
+  // #1371 review round 2 (a, b, c): the public entry points still wrote or scheduled after dispose.
+  it('refuses public mutations after dispose', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await svc.dispose()
+    const writes = store.writes
+    await expect(svc.startLoop('s2', { goal: 'G.', loopPrompt: 'P.' })).rejects.toThrow(/shut down/)
+    await expect(svc.complete('s1', 'done', 'x')).rejects.toThrow(/shut down/)
+    await expect(svc.carry('s1', 's3')).rejects.toThrow(/shut down/)
+    expect(svc.control('s1', { action: 'pause' })).toBeNull()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+    await svc.whenSettled()
+    expect(store.writes).toBe(writes)
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
   })
 
   it('whenSettled waits for a zero-delay continuation check before resolving', async () => {
