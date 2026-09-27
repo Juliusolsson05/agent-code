@@ -410,11 +410,24 @@ describe('dictation outcome codes (#243)', () => {
   let journal: Array<{ layer: string; event: string; data?: Record<string, unknown> }> = []
   const outcomes = () => journal.filter(row => row.layer === 'OUTCOME')
   const mount = () => render(<SessionFeedProvider value={createFakeSessionFeed()}><Harness /></SessionFeedProvider>)
+  let streamStarts: ReturnType<typeof vi.fn>
   beforeEach(() => {
     journal = []
-    ;(window as unknown as { api: { recordDictationDebugEvent: unknown } }).api.recordDictationDebugEvent =
+    const api = (window as unknown as { api: { recordDictationDebugEvent: unknown; startDictationStream: (...args: unknown[]) => unknown } }).api
+    api.recordDictationDebugEvent =
       (_id: string, row: { layer: string; event: string; data?: Record<string, unknown> }) => { journal.push(row) }
+    // Counted, so a test can release only once the stream has really been
+    // asked to start. A fixed delay raced the hook's 180 ms accidental-tap
+    // timer under load and ended the recording as too-short instead.
+    const start = api.startDictationStream
+    streamStarts = vi.fn((...args: unknown[]) => start(...args))
+    api.startDictationStream = streamStarts
   })
+  /** Emit one chunk and wait until the hook has asked main to start the stream. */
+  const speak = async () => {
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)) })
+    await act(async () => { await vi.waitFor(() => expect(streamStarts).toHaveBeenCalled(), { timeout: 3_000 }); await wait(20) })
+  }
   afterEach(() => { vi.useRealTimers() })
   const slowMicrophone = (ms: number) => {
     const real = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation()!
@@ -485,14 +498,14 @@ describe('dictation outcome codes (#243)', () => {
   // answers (main's keychain read hangs) must end the recording, not leave a
   // pill that never resolves.
   it('ends a recording whose stream never starts within the connect deadline', async () => {
-    ;(window as unknown as { api: { startDictationStream: unknown } }).api.startDictationStream = () => new Promise(() => {})
+    streamStarts.mockImplementation(() => new Promise(() => {}))
     // Fake timers that still follow real time, so the recorder and chunk
     // plumbing run as usual and only the 10 s deadline is fast-forwarded.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
     mount()
     await act(async () => {})
     await act(async () => { controller?.toggle() })
-    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await speak()
     await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
     expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'connect.timeout' }) })])
     expect(onMessage).toHaveBeenCalledWith('Dictation could not start in time. Try again.')
@@ -505,7 +518,7 @@ describe('dictation outcome codes (#243)', () => {
     mount()
     await act(async () => {})
     await act(async () => { controller?.toggle() })
-    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await speak()
     await act(async () => { controller?.toggle(); await wait(20) })
     expect(onMessage).toHaveBeenCalledWith('Deepgram could not process this recording. Try again.')
     expect(onMessage).not.toHaveBeenCalledWith('Deepgram transcription failed')
@@ -558,12 +571,12 @@ describe('dictation outcome codes (#243)', () => {
   // #1340 review A4: released while the stream start is pending, then the
   // connect deadline fires. One ending, one sentence.
   it('ends a recording once when the connect deadline fires during a stop', async () => {
-    ;(window as unknown as { api: { startDictationStream: unknown } }).api.startDictationStream = () => new Promise(() => {})
+    streamStarts.mockImplementation(() => new Promise(() => {}))
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
     mount()
     await act(async () => {})
     await act(async () => { controller?.toggle() })
-    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await speak()
     await act(async () => { controller?.toggle(); await wait(10) })
     await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
     expect(onMessage.mock.calls.map(call => call[0])).toEqual(['Dictation could not start in time. Try again.'])
@@ -577,7 +590,7 @@ describe('dictation outcome codes (#243)', () => {
     mount()
     await act(async () => {})
     await act(async () => { controller?.toggle() })
-    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await speak()
     await act(async () => { controller?.toggle(); await wait(20) })
     expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'unknown' }) })])
     expect(onMessage).toHaveBeenCalledWith('Dictation failed.')
@@ -591,7 +604,7 @@ describe('dictation outcome codes (#243)', () => {
     mount()
     await act(async () => {})
     await act(async () => { controller?.toggle() })
-    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await speak()
     await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 2)); await wait(20) })
     await act(async () => { controller?.toggle(); await wait(10) })
     await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
@@ -613,7 +626,7 @@ describe('dictation outcome codes (#243)', () => {
     render(<SessionFeedProvider value={feed}><Harness terminal /></SessionFeedProvider>)
     await act(async () => {})
     await act(async () => { controller?.toggle() })
-    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await speak()
     await act(async () => { controller?.toggle(); await wait(30) })
     expect(journal.some(row => row.layer === 'TRANSCRIPT' && row.event === 'committed')).toBe(false)
     expect(journal).toContainEqual(expect.objectContaining({ layer: 'TRANSCRIPT', event: 'delivery:failed', data: { code: 'delivery.failed' } }))
