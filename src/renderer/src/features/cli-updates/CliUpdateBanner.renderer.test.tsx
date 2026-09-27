@@ -121,7 +121,12 @@ describe('CliUpdateBanner: an update that could not start', () => {
     expect(screen.queryByRole('button', { name: 'View Log' })).toBeNull()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update now' })) })
     expect(updateNow).toHaveBeenCalledWith('claude')
+    // A request that resolves says nothing (#1447 review c: the success half
+    // of the action was unpinned).
+    expect(screen.queryByRole('alert')).toBeNull()
     expect(describeState('claude', couldNotStart)?.undismissable).not.toBe(true)
+    // The hint is user-visible copy too: fixed words, no OS text (q22).
+    expect(describeState('claude', couldNotStart)?.hint).toBe('Check that the disk has free space and that the Agent Code data folder is writable, then choose Update now.')
   })
 
   it('keys each attempt separately, so a dismissed failure does not hide the next click\'s', () => {
