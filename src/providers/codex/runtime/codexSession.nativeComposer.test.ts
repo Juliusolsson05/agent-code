@@ -21,11 +21,13 @@ const at = (label: string) => recording.events.find(event => event.label === lab
 const headlesses: CodexHeadless[] = []
 afterEach(() => { headlesses.splice(0) })
 
-async function sessionWith(bytes: string[]): Promise<{ session: CodexSession; headless: CodexHeadless }> {
+type Replayed = { session: CodexSession; headless: CodexHeadless; feed(chunks: string[]): Promise<void> }
+
+async function sessionWith(bytes: string[]): Promise<Replayed> {
   return sessionAt(Number.POSITIVE_INFINITY, bytes)
 }
 
-async function sessionAt(until: number, bytes?: string[]): Promise<{ session: CodexSession; headless: CodexHeadless }> {
+async function sessionAt(until: number, bytes?: string[]): Promise<Replayed> {
   const listeners = new Set<(data: string) => void>()
   const pty = {
     pid: 1, process: 'codex', cols: recording.cols, rows: recording.rows, handleFlowControl: false,
@@ -38,14 +40,22 @@ async function sessionAt(until: number, bytes?: string[]): Promise<{ session: Co
   const terminal = (headless as unknown as { terminal: { attach(): void; snapshotComposerCells(): unknown } }).terminal
   terminal.attach()
   const chunks = bytes ?? recording.events.filter(event => event.dir === 'out' && event.t < until).map(event => event.data!)
-  for (const chunk of chunks) for (const listener of listeners) listener(chunk)
-  // Wait for xterm to parse everything fed (#1343 review B). A 2 s wall-clock
-  // deadline returned a half-painted frame under load (the tall draft stopped
-  // at line 10 or 18); draining is the real completion signal.
-  while ((terminal as unknown as { pendingWrites: number }).pendingWrites !== 0) await new Promise(resolve => setTimeout(resolve, 5))
+  // One recorded chunk at a time, draining between them, as a PTY delivers
+  // them (#1343 reviews A and B). A synchronous burst of ~630 events plus a
+  // 2 s wall-clock wait returned a half-painted frame under load (the tall
+  // draft stopped at line 10 or 18), and could leave pendingWrites stuck
+  // (HeadlessTerminal's documented write-callback stall).
+  const pending = () => (terminal as unknown as { pendingWrites: number }).pendingWrites
+  const feed = async (more: string[]) => {
+    for (const chunk of more) {
+      for (const listener of listeners) listener(chunk)
+      while (pending() !== 0) await new Promise(resolve => setImmediate(resolve))
+    }
+  }
+  await feed(chunks)
   const session = new CodexSession()
   ;(session as unknown as { headless: unknown }).headless = headless
-  return { session, headless }
+  return { session, headless, feed }
 }
 
 describe('Codex native composer (0.157 recording)', () => {
@@ -204,7 +214,7 @@ describe('Codex native composer (0.157 recording)', () => {
     const tall = JSON.parse(readFileSync(join(import.meta.dirname,
       '../../../../packages/codex-headless/testing/fixtures/composer-0157/tall-draft-ctrlc.json'), 'utf8')) as Recording
     const typed = tall.events.find(event => event.label === 'draft-typed')!.t + 800
-    const { session, headless } = await sessionWith(tall.events.filter(event => event.dir === 'out' && event.t < typed).map(event => event.data!))
+    const { session, headless, feed } = await sessionWith(tall.events.filter(event => event.dir === 'out' && event.t < typed).map(event => event.data!))
     expect(headless.getScreen()).toContain('  long draft line 20 with a few words')
     expect(headless.getComposerState()).toBe('drafted')
     const readiness: Array<{ ready: boolean; reason?: string }> = []
@@ -216,5 +226,14 @@ describe('Codex native composer (0.157 recording)', () => {
     expect(await deliverCodexPrompt({ session, sessionId: 'agent', prompt: 'Status?', write } as never))
       .toMatchObject({ ok: false, stage: 'before-write', disposition: 'retry-after-resolve', promptWritten: false })
     expect(write).not.toHaveBeenCalled()
+
+    // #1343 review A: and once the human clears it (the recorded Ctrl+C), the
+    // pane is ready again; occupied never latches.
+    // The same pane, fed on to just after the recorded Ctrl+C.
+    const cleared = tall.events.find(event => event.label === 'ctrl-c-1')!.t + 800
+    await feed(tall.events.filter(event => event.dir === 'out' && event.t >= typed && event.t < cleared).map(event => event.data!))
+    expect(headless.getComposerState()).toBe('empty')
+    ;(session as unknown as { publishNativeComposer(): void }).publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 })
