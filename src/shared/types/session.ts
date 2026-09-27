@@ -811,7 +811,8 @@ export type SessionHistoryChunk = {
  * (claude-code-headless#64 `transport-gap`). The feed shows one durable row per
  * record — the owner-approved call (B6 proxy, 2026-09-27) is that lost data is
  * never hidden, so the row stays after later turns and comes back whenever the
- * conversation's feed is rebuilt: main holds the records per CONVERSATION
+ * conversation's feed is rebuilt within this app run (not across an app
+ * restart: #1445). Main holds the records per CONVERSATION
  * (main/sessions/transportGapLedger) and hands them out with the initial
  * history chunk (`SessionHistoryChunk.transportGaps`).
  *

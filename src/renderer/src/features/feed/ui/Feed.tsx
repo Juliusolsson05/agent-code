@@ -1036,7 +1036,8 @@ function FeedImpl({
         // #1381, option B (OWNER-APPROVED, B6 proxy 2026-09-27): a span of live
         // output never reached the app. A durable row in the conversation, not
         // a work-slot marker, because lost data is never hidden — it stays
-        // after later turns and comes back when the feed is rebuilt. The
+        // after later turns and comes back when the feed is rebuilt in this
+        // app run (an app restart loses it: #1445, the owner's call). The
         // existing muted MarkerRow: no new UI surface.
         return (
           <MarkerRow key={item.key} marker="" tone="muted">

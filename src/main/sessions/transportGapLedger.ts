@@ -4,18 +4,20 @@ import type { TransportGapRecord } from '@shared/types/session.js'
  * Where main keeps the proxy-transport gaps a session's feed must show (#1381).
  *
  * WHY main holds them at all: the owner-approved call (B6 proxy, 2026-09-27,
- * option B) is a DURABLE feed-history row — "data loss is never hidden". The
+ * option B) is a feed-HISTORY row — "data loss is never hidden" — bounded to
+ * the main-process lifetime (q119/q120; restart durability is #1445). The
  * renderer's semantic state is rebuilt on every window reload, and the gap is
  * not in the transcript (the JSONL is Claude's own file and never saw our
  * transport), so the only process that outlives a renderer reload and saw the
  * gap is main. It hands them out with the conversation's initial history chunk
  * (`session:load-initial-history`), which every feed rebuild goes through.
  *
- * WHY in memory and not on disk: the owner removed on-disk feed rows once
- * already (the #1235 ghost log) and asked to be consulted before any come
- * back. The always-on `claude.proxy_transport_gap` incident in the journal is
- * the on-disk record; after an app restart the row is gone, the incident is
- * not.
+ * WHY in memory and not on disk: the approved lifetime is this app run.
+ * Surviving a restart needs a dedicated store, which is an owner decision
+ * (#1445, related to the #1235 ghost-log removal). The always-on
+ * `claude.proxy_transport_gap` incident is a DIAGNOSTIC copy only — B6 (q120)
+ * ruled it must not be used to reseed rows (forensic, lossy, no conversation
+ * id).
  *
  * WHY keyed by the provider CONVERSATION id (Claude's session id), not the
  * pane: a gap is a fact about what we saw of that conversation. Keyed so, the
