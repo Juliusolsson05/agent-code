@@ -11,7 +11,7 @@
 - Handle `compacted` before the `payload.type` guard.
 - The boundary carries the line's timestamp, so it sorts where compaction happened.
 - `replacement_history` is never mapped. The summary entry is emitted only when `message` is non-empty (older CLIs).
-- `compactMetadata` keeps only the scalar identity fields (`window_number`, `window_id`, `previous_window_id`, `first_window_id`, `compaction_response_id`), not the retained history.
+- **No `compactMetadata`.** Nothing in the app reads it for Codex, and a varying metadata object also made every boundary a different rendering shape.
 - Catalog: add Codex durable shapes for the boundary and the summary. They are the same shared.compaction dispositions Claude's entries have, pinned by curated fixtures.
 
 ## Tests
@@ -19,6 +19,6 @@ Two real `compacted` lines: a 0.157.0 one (empty message, `compaction` item) and
 - Both map to a timestamped boundary.
 - Only the older one also maps to a summary.
 - No replacement-history entry is emitted.
-- `compactMetadata` holds only the identity fields.
+- The boundary carries no retained history.
 - Red on main, where both map to `[]`.
 - The dispatcher renders the boundary through `shared.compaction`, and the catalog classifies it `known-claimed`.
