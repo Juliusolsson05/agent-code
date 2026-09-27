@@ -1017,25 +1017,14 @@ function orchestrationCreateAgentCallKey(
       return await bridge.createAgentCallOnce(
         orchestrationCreateAgentCallKey(scope.sessionId, args),
         async () => {
-        const agent = await bridge.createAgent({
-          parentSessionId: scope.sessionId,
-          kind: args.kind as OrchestrationAgentKind,
-          ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
-          cwd: args.cwd,
-          title: args.title,
-          role: args.role,
-          runId: args.runId,
-          // WHY force clean children even if an older tool caller passes true:
-          // the inheritance implementation is intentionally disabled in this PR.
-          // Keeping the schema field avoids breaking stale provider tool caches,
-          // but honoring it would re-enable the broken clone/translate path.
-          inheritParentContext: false,
-          builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
-        })
-
-        if (args.prompt && args.prompt.trim().length > 0) {
+        // The bootstrap delivery, shared by a punctual create and a late-adopted one (#1370): a create
+        // that outlived the 30 s bridge deadline is adopted when the renderer finally answers, and
+        // gets exactly this delivery then, through `onLateCreate`. For the late path the returned
+        // tool result has no reader; every failure branch below also records an incident, which is
+        // where a late outcome is seen.
+        const deliverBootstrap = async (agent: OrchestrationAgentRecord, task: string) => {
           const prompt = buildOrchestrationBootstrapPrompt({
-            task: args.prompt,
+            task,
           })
           const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
           // A child that is not ready YET is not a failed child (#854).
@@ -1182,6 +1171,27 @@ function orchestrationCreateAgentCallKey(
             })
           }
         }
+        const agent = await bridge.createAgent({
+          parentSessionId: scope.sessionId,
+          kind: args.kind as OrchestrationAgentKind,
+          ...(args.providerRuntime ? { providerRuntime: args.providerRuntime } : {}),
+          cwd: args.cwd,
+          title: args.title,
+          role: args.role,
+          runId: args.runId,
+          // WHY force clean children even if an older tool caller passes true:
+          // the inheritance implementation is intentionally disabled in this PR.
+          // Keeping the schema field avoids breaking stale provider tool caches,
+          // but honoring it would re-enable the broken clone/translate path.
+          inheritParentContext: false,
+          builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
+          ...(args.prompt && args.prompt.trim().length > 0
+            ? { onLateCreate: async (late: OrchestrationAgentRecord) => { await deliverBootstrap(late, args.prompt!) } }
+            : {}),
+        })
+
+        const task = args.prompt && args.prompt.trim().length > 0 ? args.prompt : undefined
+        if (task) return await deliverBootstrap(agent, task)
 
         return toolText({
           ok: true,

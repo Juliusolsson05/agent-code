@@ -96,10 +96,13 @@ export class OrchestrationOutcomeUnknownError extends Error {
     readonly requestId: string,
     readonly requestType: OrchestrationRendererRequest['type'],
     readonly parentSessionId: string,
+    /** Appended to the message when the caller must also be told what happens next (#1370). */
+    note?: string,
   ) {
     super(
       `The renderer did not answer ${requestType} in time. It may still complete, so the outcome is UNKNOWN: `
-      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`,
+      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`
+      + (note ? ` ${note}` : ''),
     )
     this.name = 'OrchestrationOutcomeUnknownError'
   }
@@ -253,6 +256,18 @@ export class OrchestrationBridge {
    * every POST — a map owned by the server would never see the duplicate.
    */
   private readonly createCallsInFlight = new Map<string, Promise<unknown>>()
+  /**
+   * What to do with a child whose create answered AFTER the caller gave up, keyed by requestId
+   * (#1370). The tool handler registers its bootstrap delivery here; `adoptLateResponse` runs it.
+   *
+   * WHY: a healthy provider can take longer than the 30 s bridge deadline to start (OpenCode took
+   * 43 s under load). The caller then got "outcome unknown — do not repeat", the handler returned
+   * without delivering the prompt, and the late child was adopted idle, with no brief, and nothing
+   * told the parent. Running the same delivery the punctual path runs, at adoption time, keeps the
+   * promise the create made. An entry lives only while its request is outstanding: it is removed
+   * when the create answers in time, fails outright, or is adopted.
+   */
+  private readonly lateCreates = new Map<string, (agent: OrchestrationAgentRecord) => Promise<void>>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private readonly parentSessionByChildSession = new Map<string, string>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
@@ -276,6 +291,8 @@ export class OrchestrationBridge {
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
     inheritParentContext?: boolean
+    /** Runs if this create times out and the renderer's answer is adopted late (#1370). */
+    onLateCreate?: (agent: OrchestrationAgentRecord) => Promise<void>
   }): Promise<OrchestrationAgentRecord> {
     // WHY validate before sending a renderer request: an unsupported launch
     // must fail before a child or ownership record can exist. The factory is
@@ -285,12 +302,34 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
+    // The continuation is main-side only: a function cannot cross into the renderer.
+    const { onLateCreate, ...requestParams } = params
     const attempt: OrchestrationRendererRequest = {
       requestId: randomUUID(),
       type: 'create-agent',
-      ...params,
+      ...requestParams,
     }
-    const response = await this.request(attempt)
+    if (onLateCreate) this.lateCreates.set(attempt.requestId, onLateCreate)
+    let response: OrchestrationRendererResponse
+    try {
+      response = await this.request(attempt)
+    } catch (error) {
+      if (!(error instanceof OrchestrationOutcomeUnknownError)) {
+        this.lateCreates.delete(attempt.requestId)
+        throw error
+      }
+      // Still outstanding: keep the continuation for a late answer, and tell the caller about it,
+      // or its natural next move — sending the brief once list_agents shows the child — would
+      // deliver it twice.
+      if (!onLateCreate) throw error
+      throw new OrchestrationOutcomeUnknownError(
+        error.requestId,
+        error.requestType,
+        error.parentSessionId,
+        'If the child is created late, its bootstrap prompt is delivered to it automatically: do not send it again.',
+      )
+    }
+    this.lateCreates.delete(attempt.requestId)
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'create-agent') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
@@ -584,6 +623,8 @@ export class OrchestrationBridge {
    * status cache keeps a stale answer.
    */
   private adoptLateResponse(response: OrchestrationRendererResponse): void {
+    const onLateCreate = this.lateCreates.get(response.requestId)
+    this.lateCreates.delete(response.requestId)
     if (!response.ok || response.type !== 'create-agent') return
     const parentSessionId = response.agent.orchestrationParentId
     this.promptDeliveries.set(response.agent.sessionId, {
@@ -605,7 +646,19 @@ export class OrchestrationBridge {
         // running work nobody is waiting on. Worth an incident even though
         // recovery succeeded.
         bootstrapPromptDelivered: false,
+        // Whether the create's own bootstrap delivery now runs for it (#1370).
+        bootstrapFollows: onLateCreate !== undefined,
       },
+    })
+    if (!onLateCreate) return
+    const agent = this.enrichAgent(response.agent)
+    void onLateCreate(agent).catch((error: unknown) => {
+      this.journal?.recordIncident({
+        kind: 'orchestration.prompt_delivery_failed',
+        severity: 'error',
+        reason: 'create_agent_late_bootstrap',
+        context: { sessionId: agent.sessionId, message: error instanceof Error ? error.message : 'unknown error' },
+      })
     })
   }
 
