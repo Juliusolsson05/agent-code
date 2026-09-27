@@ -308,3 +308,10 @@ Residual surfaces outside this PR, filed:
   - an id built from `until`;
   - no teardown clear.
 - The spawn-time clear I added first was redundant with teardown (its mutation survived), so it was removed.
+
+## Review round 1, reviewer b (MERGE-READY), minors fixed fail-first
+- **The live feed had no cap; main keeps 50.** An open pane painted every gap, while the same pane after a reload painted main's newest 50. `TRANSPORT_GAPS_PER_CONVERSATION` now lives in `@shared/types/session`; the ledger and `mergeTransportGaps` both keep the newest that many. Removing the renderer cap: 1 red.
+- **Survivor: the tap's flush before a transport-gap row.** Now pinned in `sessionFeedTap.test.ts`: a buffered semantic event reaches every sink before the row. Removing the flush: 1 red.
+- **Suspicions left as stated:**
+  - a `history-boundary` reset keeps `transportGaps`; no path was found where a Claude pane switches conversation in place and gets that reset;
+  - a gap before the first committed entry is keyed by the resume id when there is one, and is otherwise live-only. The 1 GiB threshold makes it unreachable in practice, and b's 215-fixture count found no counterexample.

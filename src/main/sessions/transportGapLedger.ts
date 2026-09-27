@@ -1,4 +1,4 @@
-import type { TransportGapRecord } from '@shared/types/session.js'
+import { TRANSPORT_GAPS_PER_CONVERSATION, type TransportGapRecord } from '@shared/types/session.js'
 
 /**
  * Where main keeps the proxy-transport gaps a session's feed must show (#1381).
@@ -34,7 +34,8 @@ import type { TransportGapRecord } from '@shared/types/session.js'
  * beyond a real conversation), and CONVERSATION_CAP conversations, evicting the one
  * that recorded least recently.
  */
-export const PER_CONVERSATION_CAP = 50
+// Shared with the renderer's merge so a live and a rebuilt feed paint the same rows.
+export const PER_CONVERSATION_CAP = TRANSPORT_GAPS_PER_CONVERSATION
 export const CONVERSATION_CAP = 500
 
 export class TransportGapLedger {

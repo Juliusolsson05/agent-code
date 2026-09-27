@@ -830,3 +830,12 @@ export type TransportGapRecord = {
   lostGenerations: number
 }
 
+/**
+ * The most gap rows one conversation keeps: main's TransportGapLedger and the renderer's
+ * mergeTransportGaps both keep the NEWEST this many (#1442 review b). Shared so the live feed and a
+ * rebuilt one agree: with only main capped, an open pane painted every gap and the same pane after
+ * a reload painted the newest 50. A gap needs >= 1 GiB of proxy traffic, so this is far beyond any
+ * real conversation; it bounds memory, not normal use.
+ */
+export const TRANSPORT_GAPS_PER_CONVERSATION = 50
+

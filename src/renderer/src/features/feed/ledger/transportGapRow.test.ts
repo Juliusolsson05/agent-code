@@ -8,6 +8,7 @@ import { ledgerToFeedItems } from '@renderer/features/feed/ledger/ledgerFeedItem
 import { ledgerFeedContextFromRuntime } from '@renderer/features/feed/ledger/ledgerFeedItems'
 import { transportGapSentence } from '@renderer/features/feed/lib/transportGapText'
 import { emptyRuntime, mergeTransportGaps, type SessionRuntime } from '@renderer/session-runtime/state'
+import { TRANSPORT_GAPS_PER_CONVERSATION } from '@shared/types/session'
 import { chunk, messageStart, mountClaudePane, request, thinkingDelta, thinkingStart } from '@renderer/session-runtime/semantic/testing/proxyPaneDrivers'
 
 // #1381, option B (OWNER-APPROVED, B6 proxy 2026-09-27): when the proxy events
@@ -100,6 +101,18 @@ describe('a lost proxy span in the Claude feed (#1381)', () => {
     expect(mergeTransportGaps(live, [GAP])).toBe(live)
     const both = mergeTransportGaps(live, [GAP, { ...GAP, id: 'gap-2', since: T + 90_000, until: T + 95_000 }])
     expect(both.map(gap => gap.id)).toEqual(['gap-1', 'gap-2'])
+  })
+
+  // #1442 review b: main keeps the newest 50 per conversation, so the live feed must too, or an
+  // open pane and the same pane after a reload paint different rows.
+  it('keeps the newest gaps up to the same cap as main, live and rebuilt alike', () => {
+    let live = emptyRuntime().transportGaps
+    for (let i = 1; i <= TRANSPORT_GAPS_PER_CONVERSATION + 3; i += 1) {
+      live = mergeTransportGaps(live, [{ id: `gap-${i}`, since: T + i * 1_000, until: T + i * 1_000 + 500, lostGenerations: 1 }])
+    }
+    expect(live).toHaveLength(TRANSPORT_GAPS_PER_CONVERSATION)
+    expect(live[0]!.id).toBe('gap-4')
+    expect(live.at(-1)!.id).toBe(`gap-${TRANSPORT_GAPS_PER_CONVERSATION + 3}`)
   })
 
   it('a runtime with no gaps paints no row', () => {

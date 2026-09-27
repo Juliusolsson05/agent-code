@@ -1,5 +1,5 @@
 import type { SessionRoutingGap } from '@shared/types/sessionRouting'
-import type { TransportGapRecord } from '@shared/types/session'
+import { TRANSPORT_GAPS_PER_CONVERSATION, type TransportGapRecord } from '@shared/types/session'
 // -----------------------------------------------------------------------------
 // session-runtime/state.ts — the INGEST layer's clean object (#493).
 //
@@ -977,5 +977,9 @@ export function mergeTransportGaps(
   const known = new Set(current.map(gap => gap.id))
   const added = incoming.filter(gap => !known.has(gap.id))
   if (added.length === 0) return current
-  return [...current, ...added].sort((a, b) => (a.since ?? a.until) - (b.since ?? b.until))
+  // The newest TRANSPORT_GAPS_PER_CONVERSATION, like main's ledger (#1442 review b): otherwise
+  // an open feed kept every gap it ever saw while a rebuilt one got main's capped list.
+  return [...current, ...added]
+    .sort((a, b) => (a.since ?? a.until) - (b.since ?? b.until))
+    .slice(-TRANSPORT_GAPS_PER_CONVERSATION)
 }
