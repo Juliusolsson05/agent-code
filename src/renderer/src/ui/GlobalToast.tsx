@@ -142,7 +142,10 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
           (it never takes focus itself, so it cannot steal the user's place)
           and dismissable with Enter/Space, where it was a click-only div.
           text-accent-fg, not text-white: the accent's own foreground token,
-          which is what keeps it readable on light themes and custom accents. */}
+          which is what keeps it readable on light themes and custom accents.
+          The focus ring's offset gap is what makes it visible on the accent
+          fill, because the built-in focus ring IS the accent (Claude review
+          of #1221, reviewer C F1). */}
       <div role="status" aria-live="polite" data-global-toast="" className="fixed top-3 right-3 z-[1200]">
         {toast && (
           <button
@@ -158,7 +161,7 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
               px-4 py-2
               max-w-[420px]
               text-[12px] font-code text-accent-fg font-semibold
-              outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
+              outline-none focus-visible:ring-1 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-surface
             "
           >
             {toast}

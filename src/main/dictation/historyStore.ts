@@ -311,6 +311,12 @@ export type AppendHistoryInput = {
   audioBytes: number
   chunkCount: number
   sttMs: number
+  /** The row's id, when the caller must be able to find THIS row again.
+   *  main's stop handler stamps it before the (un-awaited) append so the
+   *  renderer can later ask History "is this dictation's row there?" by
+   *  identity (steering q71). Matching by text cannot answer that: an older
+   *  dictation with the same words would claim a failed append as saved. */
+  id?: string
 }
 
 export function appendEntry(
@@ -320,7 +326,7 @@ export function appendEntry(
     const file = await read()
     const words = countWords(input.text)
     const entry: DictationHistoryEntry = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       ts: Date.now(),
       text: input.text,
       words,

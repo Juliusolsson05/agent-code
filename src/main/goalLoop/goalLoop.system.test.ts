@@ -15,8 +15,11 @@ vi.mock('@main/performance/PerformanceService.js', () => ({ performanceService: 
 
 const directories: string[] = []
 const clients: Array<{ close(): Promise<void> }> = []
+const services: GoalLoopService[] = []
 afterEach(async () => {
   await Promise.all(clients.splice(0).map(client => client.close()))
+  // Drained before the directory goes (#1341): a late persist otherwise renames into a removed dir.
+  await Promise.all(services.splice(0).map(service => service.dispose()))
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })))
 })
 
@@ -26,6 +29,7 @@ async function makeService() {
   const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(async () => ({ ok: true } as PromptDeliveryResult)), getProcessStateSnapshot: () => ({ active: false }) })
   const service = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
   await service.start()
+  services.push(service)
   return { service, manager }
 }
 
@@ -45,7 +49,7 @@ async function setup(sessionId: string, shared?: Awaited<ReturnType<typeof makeS
 
 describe('Goal Loop MCP', () => {
   it('starts, continues on idle, and completes over the real tool surface', async () => {
-    const { client, manager } = await setup('s1')
+    const { client, manager, service } = await setup('s1')
     const tools = (await client.listTools()).tools
     expect(tools.map(tool => tool.name).sort()).toEqual(['goal_loop_complete', 'goal_loop_start'])
     expect(client.getInstructions()).toContain(GOAL_LOOP_INSTRUCTIONS)
@@ -56,7 +60,8 @@ describe('Goal Loop MCP', () => {
     const completed = await client.callTool({ name: 'goal_loop_complete', arguments: { outcome: 'done', summary: 'Every test migrated and passing.' } })
     expect(completed.isError).not.toBe(true)
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed' } })
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // #1296 item 7: a 50 ms sleep here passed whether or not the turn was still being processed.
+    await service.whenSettled()
     expect(manager.deliverPromptToAgent).toHaveBeenCalledTimes(1)
   })
   it('cannot end or replace another session\'s loop through the tool surface', async () => {

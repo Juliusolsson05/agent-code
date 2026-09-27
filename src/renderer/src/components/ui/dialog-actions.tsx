@@ -29,8 +29,12 @@ import { Kbd } from '@renderer/components/ui/kbd'
 // and then strand you with no way to commit it.
 //
 // WHY the house rules below are fixed rather than props:
-//   - Cancel is always literally "Cancel". "Skip" and "Esc" were describing
-//     the KEY, not the action; a mouse user does not care what key it maps to.
+//   - Cancel names the ACTION, never the key: "Esc" described the key, and a
+//     mouse user does not care what key it maps to. The default is
+//     "Cancel", and `cancelLabel` exists for a real action word ("Deny",
+//     "Close", "Skip"). (This used to claim the label was always literally
+//     "Cancel", which live callers had long stopped being; Claude review of
+//     #1221, reviewer C F8.)
 //   - Cancel is always `ghost` and sits LEFT of confirm. Consistent position
 //     matters more than any individual dialog's preference, because muscle
 //     memory is the thing that makes a mouse-driven UI fast.

@@ -2,6 +2,7 @@ import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type {
   DictationHistoryEntry,
   DictationHistorySnapshot,
+  DictationOutcomeReason,
   DictationProvider,
   DictationStats,
 } from '@shared/types/dictation.js'
@@ -104,13 +105,16 @@ export type {
 export type {
   DictationHistoryEntry,
   DictationHistorySnapshot,
+  DictationOutcomeReason,
   DictationProvider,
   DictationStats,
 }
 
+// `reason` (#243) is what the renderer shows (through dictationReasonMessage)
+// and journals; `message` is kept for diagnostics only and is never shown.
 export type DictationStartResult =
   | { kind: 'started'; id: string }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; reason: DictationOutcomeReason; message: string }
 
 export type DictationStopResult =
   | {
@@ -121,9 +125,13 @@ export type DictationStopResult =
       audioBytes: number
       chunkCount: number
       sttMs: number
+      /** Id of the History row main enqueued for this transcript. The row
+       *  may still fail to write; this only lets the renderer look for THIS
+       *  row rather than for matching text (steering q71). */
+      historyId: string
     }
-  | { kind: 'no-speech' }
-  | { kind: 'error'; message: string }
+  | { kind: 'no-speech'; reason: DictationOutcomeReason }
+  | { kind: 'error'; reason: DictationOutcomeReason; message: string }
 
 export type DictationHotkeyConfigureResult =
   | { ok: true; binding: string; native: boolean }

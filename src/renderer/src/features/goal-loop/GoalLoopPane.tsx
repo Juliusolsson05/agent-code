@@ -73,6 +73,10 @@ function GoalLoopOverlay({ children, takeFocus }: { children: ReactNode; takeFoc
     onBlur={event => { holdsFocus.current = ref.current?.contains(event.relatedTarget as Node | null) ?? false }}
     data-agent-code-interaction-owner="app"
     data-goal-loop-overlay=""
+    // Which pane's overlay the keyboard belongs to: the latch is app-wide, so
+    // every visible pane mounts one. The router's Tab recovery below targets
+    // this one (Claude review of #1221, reviewer A F4).
+    data-goal-loop-active={takeFocus ? '' : undefined}
     role="dialog"
     aria-label="Agent goal loop"
     className="absolute inset-0 z-50 bg-canvas text-ink"

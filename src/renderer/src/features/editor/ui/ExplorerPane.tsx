@@ -683,7 +683,7 @@ export function ExplorerPane({
       {mutationError && (
         <div
           role="alert"
-          className="flex items-start gap-2 border-b border-border bg-danger/10 px-2 py-1 text-[10px] text-danger"
+          className="flex items-start gap-2 border-b border-border bg-danger-soft px-2 py-1 text-[10px] text-danger"
         >
           <span className="min-w-0 flex-1 break-words">{mutationError}</span>
           <button

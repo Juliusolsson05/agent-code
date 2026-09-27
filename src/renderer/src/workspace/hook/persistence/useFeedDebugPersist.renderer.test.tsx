@@ -5,12 +5,18 @@ import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
+
 import { useFeedDebugPersist } from './useFeedDebugPersist'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 const append = vi.fn<(input: Parameters<Window['api']['appendFeedDebugLog']>[0]) => Promise<void>>()
 
 beforeEach(() => {
+  // The cadence tests below are about HOW persistence works once it is on
+  // (#767 made it opt-in; the gate has its own describe at the end).
+  useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false })
   vi.useFakeTimers()
   append.mockReset().mockResolvedValue(undefined)
   Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append } })
@@ -270,5 +276,56 @@ describe('feed debug persistence cadence and durability', () => {
     expect(refs.inFlightFeedDebugIdRef.current.a).toBe(2)
     await advance(3000)
     expect(append).toHaveBeenCalledTimes(2)
+  })
+})
+
+// #767 item 1: disk persistence is opt-in. The ring keeps recording either way —
+// debug bundles read the ring, not the file.
+describe('feed debug persistence gate', () => {
+  function setAggressive(value: boolean): void {
+    useAppStore.setState(state => ({ settings: { ...state.settings, aggressiveDebugPersistence: value } }))
+  }
+
+  it('makes no append IPC when neither dev-debug nor aggressive persistence is on, while the ring still records', async () => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(false)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(5_000)
+    expect(append).not.toHaveBeenCalled()
+    expect(refs.latestRuntimesRef.current.a!.feedDebugLog).toHaveLength(1)
+  })
+
+  // Review of #1349: turning persistence off used to write one last batch from the
+  // effect cleanup.
+  it('writes nothing after persistence is switched off', async () => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(true)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'first') })
+    const { rerender } = renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    refs.latestRuntimesRef.current = { a: add(refs.latestRuntimesRef.current.a!, 'after the flush') }
+    act(() => { setAggressive(false) })
+    rerender()
+    await advance(5_000)
+    expect(append).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['dev-debug', () => { useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false }); setAggressive(false) }],
+    ['aggressive debug persistence', () => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }); setAggressive(true) }],
+  ])('persists when %s is on, including the tail recorded before it was switched on', async (_label, enable) => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(false)
+    const refs = makeRefs({ a: add(add(emptyRuntime(), 'before'), 'also before') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(2_000)
+    expect(append).not.toHaveBeenCalled()
+    act(() => { enable() })
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    expect(append.mock.calls[0]![0].entries.map(entry => entry.summary)).toEqual(['before', 'also before'])
+    setAggressive(false)
   })
 })
