@@ -250,7 +250,18 @@ export class AgentActivityRecorder {
       provider: placement?.kind ?? entry.kind ?? 'unknown',
       tabId: placement?.tabId ?? null,
       tabTitle: placement?.tabTitle ?? null,
-      repoRoot: cwd ? await this.deps.resolveRepoRoot(cwd).catch(() => cwd) : '',
+      // #1430 / steering q126: a rejection means the repository is UNKNOWN (git
+      // timed out twice). It is recorded as '' — the store's existing "no
+      // repository" value, which the summary labels Unknown — and NEVER as the
+      // cwd. The cwd used to be persisted as this interval's repository: the
+      // store keeps it, summarize groups by it, so a worktree folder became a
+      // repository of its own that no later, correctly resolved interval could
+      // fold back. `cwd` below still names the worktree row, and the next
+      // interval asks git again.
+      repoRoot: cwd ? await this.deps.resolveRepoRoot(cwd).catch((error: unknown) => {
+        console.warn('[agent-activity] repository unknown for this interval (recorded as Unknown):', error instanceof Error ? error.message : error)
+        return ''
+      }) : '',
       cwd,
     }
   }

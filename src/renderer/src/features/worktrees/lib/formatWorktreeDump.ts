@@ -45,7 +45,7 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
   lines.push(`- Patch-equivalent: ${countRows(dump.rows, row => row.category === 'patch-equivalent')}`)
   lines.push(`- Cleanup/merged: ${countRows(dump.rows, row => row.category === 'cleanup-merged')}`)
   lines.push(`- Detached: ${countRows(dump.rows, row => row.detached)}`)
-  lines.push(`- Agent activity: ${dump.activityUnavailable ? 'unavailable' : 'available'}`)
+  lines.push(`- Agent activity: ${activityLabel(dump)}`)
   if (dump.indexStatus?.lastIndexedAt) {
     // Same #495 A15 rationale as the Generated line above.
     lines.push(`- Activity index updated: ${new Date(dump.indexStatus.lastIndexedAt).toISOString()}`)
@@ -142,4 +142,10 @@ export function providerLabel(kind: SessionKind): string {
 
 function formatLiveAgent(agent: WorktreeDumpRow['liveAgents'][number]): string {
   return `${providerLabel(agent.kind)} ${agent.live ? 'active' : 'open'} in "${agent.tabTitle}"`
+}
+
+/** #1430: a git timeout is said as one, never as a missing activity index. */
+function activityLabel(dump: WorktreeDump): string {
+  if (!dump.activityUnavailable) return 'available'
+  return dump.activityTimedOut ? 'unavailable (Git timed out)' : 'unavailable'
 }

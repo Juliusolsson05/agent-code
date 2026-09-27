@@ -119,7 +119,8 @@ import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import { ConversationLedger, readAgentNameAssignments } from '@main/conversations/ledger/ledger.js'
 import { createConversationService } from '@main/conversations/service.js'
-import { listWorktreesForCwd } from '@main/ipc/git.js'
+import { listWorktreesForCwdDetailed } from '@main/ipc/git.js'
+import { resolveRepoRootAfterGit } from '@main/agentActivity/resolveRepoRoot.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
 import { tldrIdentitiesInUse } from '@main/tldr/identitiesInUse.js'
@@ -1442,7 +1443,8 @@ async function startApp(): Promise<void> {
     store: new AgentActivityStore(AGENT_ACTIVITY_DIR),
     // The first worktree entry is the main checkout, so every worktree of one
     // repository folds into it (the conversations picker's family rule).
-    resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+    // #1430: a timed-out list is retried once, then thrown (see resolveRepoRootAfterGit).
+    resolveRepoRoot: cwd => resolveRepoRootAfterGit(listWorktreesForCwdDetailed, cwd),
     identityOf: sessionId => builtInMcpHost.sessionTldrIdentity(sessionId),
   })
   const projectActivity = (windows: readonly PersistedWindow[]) => {
@@ -1559,7 +1561,8 @@ async function startApp(): Promise<void> {
   // the ledger, so it is constructed after the ledger. The control host above
   // was built before the workspace store opened and holds a getter for it;
   // its handlers only run on requests, long after this line.
-  const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
+  // The detailed lister (#1430): a timed-out list is a family the service must not cache.
+  const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwdDetailed })
   registerAllIpc({
     manager,
     sessionFeedTap: feedTap,

@@ -39,6 +39,9 @@ export type WorktreeDump = {
    *  (#1250 row 11). */
   gitTimedOut?: boolean
   activityUnavailable: boolean
+  /** activityUnavailable because git timed out while the activity index asked
+   *  for this repository's worktrees (#1430), not because there is no index. */
+  activityTimedOut?: boolean
 }
 
 export async function loadWorktreeDump(params: {
@@ -92,6 +95,7 @@ export async function loadWorktreeDump(params: {
     gitUnavailable: false,
     gitMissing: false,
     activityUnavailable: !activityResult.ok,
+    activityTimedOut: !activityResult.ok && 'timedOut' in activityResult && activityResult.timedOut === true,
   }
 }
 

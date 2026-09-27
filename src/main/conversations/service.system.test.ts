@@ -139,3 +139,44 @@ describe('ConversationService', () => {
   })
 })
 
+// #1430 (found by #1429 review b): `git worktree list` timing out answered `[]`,
+// resolveFamily fell back to the cwd alone, and the service cached that guess
+// for DISCOVERY_FRESH_MS. From a linked checkout the main checkout's
+// conversations dropped out of the repository picker and nothing said so.
+describe('ConversationService when git times out listing worktrees', () => {
+  it('says the family is incomplete, does not cache it, and recovers when git answers', async () => {
+    const porcelain = await corpusWorktreesPorcelain()
+    const worktrees = porcelain.split('\n').filter(l => l.startsWith('worktree ')).map(l => ({ path: l.slice('worktree '.length) }))
+    let timedOut = true
+    const calls: string[] = []
+    const claudeHistory = new ClaudeHistoryIndex(join(corpus.claudeConfigDir, 'history.jsonl'))
+    const s = new ConversationService({
+      sources: [
+        new ClaudeConversationSource({ projectsDir: join(corpus.claudeConfigDir, 'projects'), history: claudeHistory }),
+        new CodexConversationSource({ codexHome: corpus.codexHome }),
+        new OpencodeConversationSource({ dataDir: corpus.opencodeDataDir }),
+      ],
+      ledger: null,
+      // The shape main's listWorktreesForCwdDetailed answers.
+      listWorktrees: async cwd => {
+        calls.push(cwd)
+        return timedOut ? { worktrees: [], timedOut: true } : { worktrees, timedOut: false }
+      },
+      claudeHistory,
+    })
+    const cwd = '/fixture/repo/.worktrees/extension-platform'
+
+    const slow = await s.list({ cwd, scope: 'repository', limit: 500 })
+    expect(slow.family.gitTimedOut).toBe(true)
+    // Asked again at once: a guessed family is never served from the cache.
+    await s.list({ cwd, scope: 'repository', limit: 500 })
+    expect(calls).toHaveLength(2)
+
+    timedOut = false
+    const answered = await s.list({ cwd, scope: 'repository', limit: 500 })
+    expect(answered.family.gitTimedOut).toBeUndefined()
+    expect(answered.family.repoRoot).toBe('/fixture/repo')
+    // The main checkout's rows are back: the guessed family was missing some.
+    expect(answered.total).toBeGreaterThan(slow.total)
+  })
+})
