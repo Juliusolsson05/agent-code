@@ -208,6 +208,20 @@ describe('composer submit while the agent composer is occupied', () => {
     expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
   })
 
+  // Round 2 C: the guard is provider-neutral on purpose. Claude publishes
+  // composer-occupied too (the Escape tests above), and its submit is also a
+  // raw write, so a Codex-only guard would reopen the same paste there.
+  it('refuses for every provider that reports an occupied composer, not only Codex', async () => {
+    const { hook, send, showPaneToast } = setup({
+      provider: 'claude',
+      input: 'Status?',
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Enter')) })
+    expect(send).not.toHaveBeenCalled()
+    expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clear'))
+  })
+
   // Round 2 B: a draft of only an image is still a send, and must refuse too.
   it('keeps an image-only draft and writes nothing on Enter', async () => {
     const image = { id: 'img', mediaType: 'image/png', base64Data: 'AA==', previewUrl: 'blob:x', filename: 'x.png' }
