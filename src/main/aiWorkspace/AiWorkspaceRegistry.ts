@@ -413,7 +413,20 @@ export class AiWorkspaceRegistry extends EventEmitter {
             conflictKind: result.conflictKind,
           }
         }
-        await this.refreshEntriesForPath(target)
+        // WHY a failed status refresh does not fail the write (#1285): the
+        // user's file is already replaced on disk by this point. The refresh
+        // saves registry state, and a save can be refused (a preservation
+        // copy it owes is blocked; see preserveOwedCopy). Returning
+        // `ok: false` then told an agent its edit had not landed, so it
+        // retried or reported a failure that never happened. The write is
+        // reported as done, and the stale status is a warning.
+        let warning: string | undefined
+        try {
+          await this.refreshEntriesForPath(target)
+        } catch (err) {
+          warning = `The file was saved, but its AI Workspace status could not be updated: ${errorMessage(err)}`
+          console.warn('[ai-workspace] status refresh after a write failed:', err)
+        }
         // One physical file can be curated into several workspaces. Every
         // visible consumer needs the write signal; choosing an arbitrary first
         // workspace would leave the others showing stale buffer metadata.
@@ -431,6 +444,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
           mtimeMs: result.stat.mtimeMs,
           size: result.stat.size,
           version: result.version,
+          ...(warning ? { warning } : {}),
         }
       })
     } catch (err) {
@@ -605,7 +619,18 @@ export class AiWorkspaceRegistry extends EventEmitter {
   private async preserveOwedCopy(): Promise<void> {
     if (!this.owedCopy) return
     const { text, setAside } = this.owedCopy
-    const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text)
+    // WHY the error is rewritten (#1285): the raw errno text ("is a
+    // directory") told the user nothing about why every save was refused or
+    // how to unblock it. Saves stay refused until the copy exists, because
+    // the next save drops the unreadable rows.
+    const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text).catch(err => {
+      const code = (err as NodeJS.ErrnoException).code
+      throw new Error(
+        `AI Workspace storage needs attention: ${setAside} unreadable row(s) must be copied aside before saving, ` +
+        `and the copy next to ${this.stateFile} could not be written${code ? ` (${code})` : ''}. ` +
+        'Clear whatever occupies that copy path to continue.',
+      )
+    })
     this.owedCopy = null
     console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
   }

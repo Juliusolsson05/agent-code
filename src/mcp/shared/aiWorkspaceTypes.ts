@@ -100,7 +100,17 @@ export type AiWorkspaceWriteFileParams = {
 }
 
 export type AiWorkspaceWriteFileResult =
-  | { ok: true; path: string; mtimeMs: number; size: number; version: string }
+  | {
+      ok: true
+      path: string
+      mtimeMs: number
+      size: number
+      version: string
+      /** The file IS written, but a follow-up step failed: today, saving the
+       *  refreshed file status (#1285). Never set when the write itself
+       *  failed; a caller must not retry the write because of it. */
+      warning?: string
+    }
   | {
       ok: false
       error: string
