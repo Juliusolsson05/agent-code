@@ -30,7 +30,7 @@ export type SurfaceEntry = {
    * before — every first-party entry omits `layer` and keeps its documented
    * position. The field exists so a NON-first-party surface (an extension one,
    * WS7) can be given a distinct band it cannot escape: it can never tie-break
-   * into the first-party z-50 stack and silently reorder it, which is the exact
+   * into the first-party modal band (LAYERS.dialog) and silently reorder it, which is the exact
    * class of bug PR #505 hit. First-party entries should not set it.
    */
   layer?: number

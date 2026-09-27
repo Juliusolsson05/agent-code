@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { managedSkillsUnavailableMessage } from '@shared/types/tldr'
 import { GlobalToastContext } from '@renderer/ui/GlobalToastContext'
+import { LAYERS } from '@renderer/ui/layers'
 
 // GlobalToast — app-wide toast system rendered in the top-right corner.
 //
@@ -146,7 +147,7 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
           The focus ring's offset gap is what makes it visible on the accent
           fill, because the built-in focus ring IS the accent (Claude review
           of #1221, reviewer C F1). */}
-      <div role="status" aria-live="polite" data-global-toast="" className="fixed top-3 right-3 z-[1200]">
+      <div role="status" aria-live="polite" data-global-toast="" className={`fixed top-3 right-3 ${LAYERS.toast}`}>
         {toast && (
           <button
             type="button"

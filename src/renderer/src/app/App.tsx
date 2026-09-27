@@ -143,11 +143,12 @@ export default function App() {
             RetainedWorkspaceSurface: a <webview> that is ever detached from
             the DOM is destroyed, so no layout change or takeover may own it.
             Each guest is its own fixed element at z-index 20 — above the lanes
-            it overlays, below every z-50 overlay and modal after this line. */}
+            it overlays, below every pane overlay and app layer
+            (ui/layers.ts). */}
         <BrowserPocketHost workspace={workspace} />
-        {/* Mount order here IS the z-order contract: overlays and modals
-            are fixed-position siblings and mostly share z-50, so DOM
-            order is the paint-order tiebreaker. Overlays render first
+        {/* Mount order here IS the tie-break contract: the modals share one
+            named layer (LAYERS.dialog, ui/layers.ts), so mount order decides
+            which of them paints on top. Overlays render first
             (paint under); anything that must sit at a specific height
             within the modal stack lives in modalSurfaces at an explicit
             index — see app/surfaces/registry.tsx. Do not swap these. */}

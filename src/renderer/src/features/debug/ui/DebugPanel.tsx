@@ -5,6 +5,8 @@ import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 import { AgentInlineTerminal } from '@renderer/features/debug/ui/AgentInlineTerminal'
 import { useScreenLease } from '@renderer/features/debug/useScreenLease'
+import { DebugPanelHeader } from './DebugPanelHeader'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 // DebugPanel — inline diagnostic overlay showing the raw state of the
 // focused pane. Toggled via "Toggle Debug Panel" in the command palette.
@@ -66,30 +68,9 @@ export function DebugPanel({
   }, [runtime.entries])
 
   return (
-    <div className="
-      h-full w-[380px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col
-      overflow-hidden
-      text-[10px] font-code
-    ">
+    <SidePanel label="Debug panel" className="w-[380px] text-[10px] font-code">
       {/* Header */}
-      <div className="
-        flex items-center justify-between
-        px-3 py-2
-        border-b border-border
-        text-[9px] text-danger uppercase tracking-wider
-        select-none flex-shrink-0
-      ">
-        <span>debug — {kind} session</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-muted hover:text-ink text-[14px] leading-none"
-        >
-          ×
-        </button>
-      </div>
+      <DebugPanelHeader title={`debug — ${kind} session`} closeLabel="Close debug panel" onClose={onClose} />
 
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-3">
         {/* State flags */}
@@ -185,7 +166,7 @@ export function DebugPanel({
           <Pre>{runtime.projectDir ?? '(none)'}</Pre>
         </Section>
       </div>
-    </div>
+    </SidePanel>
   )
 }
 

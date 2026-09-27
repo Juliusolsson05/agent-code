@@ -46,12 +46,14 @@ import { AgentMcpServersSurface } from '@renderer/features/mcp/surfaces/AgentMcp
 //
 // ORDER MATTERS within each array, AND the mount order of the groups in
 // App.tsx (overlays → modals) is part of the same contract: together they
-// define the DOM sibling order at the app root, which IS the paint order
-// whenever z-indexes tie. Most of these surfaces are `position: fixed`
-// z-50, so "which array, at which index" decides what covers what. The
-// order below is the exact order App.tsx rendered these surfaces before
-// the extraction — keep new entries at the END unless you have a stacking
-// reason and write it down.
+// define the render order at the app root, which IS the paint order
+// whenever layers tie. The layers themselves are named in ui/layers.ts
+// (#512): every modal here is the shared Radix Dialog at LAYERS.dialog,
+// portaled into <body>, so within that one band the dialog mounted LATER
+// paints on top, and surfaces that mount in the same commit mount in the
+// order of these arrays. The order below is the exact order App.tsx
+// rendered these surfaces before the extraction — keep new entries at the
+// END unless you have a stacking reason and write it down.
 
 /** Rendered at the app root, after the overlays. */
 export const modalSurfaces: SurfaceEntry[] = [
@@ -60,8 +62,10 @@ export const modalSurfaces: SurfaceEntry[] = [
   // ⚠ Two non-modal surfaces interleaved into the modal stack ON PURPOSE.
   // Pre-refactor App.tsx rendered them exactly here — after the palette
   // and path picker, before the tile-tabs..usage modals — and that DOM
-  // position is load-bearing because all three of palette / dispatch-count
-  // / toast are fixed z-50, so sibling order is the only tiebreaker:
+  // position is load-bearing because palette and dispatch-count are both
+  // dialogs in the same layer (LAYERS.dialog), so order is the only
+  // tiebreaker (the caffeinate entry now forwards to the app toast, which
+  // has its own higher layer):
   //   - tiled-dispatch-count must paint ABOVE the command palette. Tiled
   //     dispatch can fire while the palette is open (native menu; the
   //     palette deliberately stays open for keepPaletteOpen-style flows),
@@ -93,8 +97,9 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
   { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
-  // New modals append so their z-50 sibling order cannot accidentally move an
-  // established surface below one it used to cover; see the registry contract.
+  // New modals append so their order within the dialog layer cannot
+  // accidentally move an established surface below one it used to cover; see
+  // the registry contract.
   { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
   { id: 'key-vault', Component: KeyVaultModalSurface },
   // Appended per the contract above. It is only opened from a command, which
@@ -139,16 +144,21 @@ export const modalSurfaces: SurfaceEntry[] = [
   // whichever surface asked. It renders nothing until requestConfirm queues
   // a request.
   { id: 'confirm-dialog', Component: ConfirmHost },
+  // #512: RemotePanel renders a centred Radix Dialog, but was registered as a
+  // side panel, so it mounted inside the main row and only painted as a modal
+  // because DialogContent portals out. It is a modal; it lives here, appended
+  // per the contract above (its portal stacks by open order either way).
+  { id: 'remote-panel', Component: RemotePanelSurface },
 ]
 
 /**
  * Rendered at the app root, after the main row, BEFORE the modals — so
  * everything in this array paints UNDER the modal stack when z-indexes
- * tie. Only surfaces that must never cover a modal belong here (voice
- * dictation is z-40, below the z-50 stack regardless). A z-50 surface
- * that needs a specific position relative to the modals goes into
- * modalSurfaces at an explicit index instead — see the interleaved
- * entries there for why.
+ * tie. Voice dictation's chip is in LAYERS.toast, above every dialog on
+ * purpose (dictating into a dialog must stay visible), so its position here
+ * no longer decides its stacking. A surface that needs a specific position
+ * relative to the modals goes into modalSurfaces at an explicit index
+ * instead — see the interleaved entries there for why.
  */
 export const overlaySurfaces: SurfaceEntry[] = [
   { id: 'voice-dictation', Component: VoiceDictationSurface },
@@ -159,6 +169,5 @@ export const sidePanelSurfaces: SurfaceEntry[] = [
   { id: 'git-bar', Component: GitBarSurface },
   { id: 'worktrees-bar', Component: WorktreesBarSurface },
   { id: 'agent-status-panel', Component: AgentStatusPanelSurface },
-  { id: 'remote-panel', Component: RemotePanelSurface },
   { id: 'debug-surfaces', Component: DebugSurfaces },
 ]
