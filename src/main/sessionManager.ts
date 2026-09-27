@@ -808,7 +808,13 @@ export class SessionManager extends EventEmitter {
   // cappedTextBuffer.ts — the string version copied the whole cap on every
   // chunk and retained sliced-string parents (#726).
   private readonly terminalBuffers = new Map<string, TerminalReplayBuffer>()
-  private readonly terminalAttached = new Set<string>()
+  // How many renderer views of each shell are attached. A count, not a flag,
+  // because two lanes (or two windows) can show one shell and one closing must
+  // not cut the other off; and it describes the VIEWS, not the process, so
+  // process cleanup leaves it alone (#1281, see cleanupSessionState).
+  // detachTerminal is the only release, and the IPC layer releases a
+  // renderer page's references when it reloads or is destroyed (#1283).
+  private readonly terminalAttachCounts = new Map<string, number>()
 
   // Shell activity producer (#865). Emits on a channel of its own, NOT
   // 'process-state': the remote tap and the recorder subscribe to
@@ -1093,7 +1099,14 @@ export class SessionManager extends EventEmitter {
     this.sessionSizes.delete(sessionId)
     if (kind === 'terminal') {
       this.terminalBuffers.delete(sessionId)
-      this.terminalAttached.delete(sessionId)
+      // NOT terminalAttachCounts (#1281, terminal half): a TerminalLeaf stays
+      // mounted while its shell exits and is respawned under the SAME id (a
+      // delivery, a control call or a wake goes through recover without
+      // remounting it), and it attaches only once per id. Deleting the count
+      // here stopped forwarding to it: the xterm stayed on the dead shell
+      // while keystrokes reached the new one unseen. The agent PTY count
+      // below is kept for the same reason. The leaf's own detachTerminal (on
+      // unmount, pane close included) is the release.
       this.terminalForeground.untrack(sessionId)
     } else {
       this.agentPtyBuffers.delete(sessionId)
@@ -3585,7 +3598,7 @@ export class SessionManager extends EventEmitter {
       // replayed when the renderer calls attachTerminal. See the
       // block comment on terminalBuffers for why this is
       // race-free.
-      if (this.terminalAttached.has(sessionId)) {
+      if ((this.terminalAttachCounts.get(sessionId) ?? 0) > 0) {
         this.emit('terminal-data', { sessionId, data })
       }
     })
@@ -3731,16 +3744,17 @@ export class SessionManager extends EventEmitter {
    *      see the queue logic in TerminalLeaf.
    *   3. Subsequent live events write directly to xterm.
    *
-   * Returns '' if the session doesn't exist or isn't a terminal —
-   * silently safe so a stale attach call on a dead session doesn't
-   * error.
+   * Returns the replay buffer and takes one view reference, or NULL when no
+   * reference was taken (the id is not a terminal). A session that does not
+   * exist right now DOES take a reference and returns '': a TerminalLeaf can
+   * mount while its shell is down, and a later respawn under the same id must
+   * forward to it (#1281). The IPC layer records only references main took,
+   * so a renderer's detach can never release one it does not hold.
    */
-  attachTerminal(sessionId: string): string {
+  attachTerminal(sessionId: string): string | null {
     const entry = this.sessions.get(sessionId)
     if (!entry) {
-      // Caller is asking to attach to a session that's already gone.
-      // Silent empty-string is fine here; any TerminalLeaf that mounts
-      // for a dead session will simply see an empty xterm.
+      this.terminalAttachCounts.set(sessionId, (this.terminalAttachCounts.get(sessionId) ?? 0) + 1)
       return ''
     }
     if (entry.kind !== 'terminal') {
@@ -3755,15 +3769,28 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] attachTerminal called on non-terminal session`,
         { sessionId, kind: entry.kind },
       )
-      return ''
+      return null
     }
     // replay(), not read(): the modes the evicted bytes set come first (#843).
     const buffer = this.terminalBuffers.get(sessionId)?.replay() ?? ''
-    // Flip the attach flag in the SAME synchronous block as reading
+    // Take the reference in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
     // can only happen on a later tick, so nothing can sneak in.
-    this.terminalAttached.add(sessionId)
+    this.terminalAttachCounts.set(sessionId, (this.terminalAttachCounts.get(sessionId) ?? 0) + 1)
     return buffer
+  }
+
+  /**
+   * Release one terminal view reference (a TerminalLeaf unmounting, or the
+   * IPC layer releasing a reloaded or destroyed renderer's references). The
+   * last one stops live forwarding; the buffer keeps accumulating for the
+   * next attach's replay. Works whether or not a shell exists right now,
+   * because the reference outlives the process (#1281).
+   */
+  detachTerminal(sessionId: string): void {
+    const attachCount = this.terminalAttachCounts.get(sessionId) ?? 0
+    if (attachCount > 1) this.terminalAttachCounts.set(sessionId, attachCount - 1)
+    else this.terminalAttachCounts.delete(sessionId)
   }
 
   /**
