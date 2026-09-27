@@ -97,3 +97,78 @@ it('reports our own stranded write to input inspection', async () => {
   expect(nativeDraft).toMatchObject({ state: 'occupied', strandedDelivery: true })
   expect(nativeDraft.reason).toContain('earlier Agent Code prompt')
 })
+
+// Steering q75 / #1358 review a (blocker) and c: the mark belongs to the
+// PROCESS whose composer holds the bytes. Sequence: a delivery writes to
+// process A; A exits and B takes the same session id; a human drafts in B;
+// A's delivery then fails. The late failure must neither mark B nor let the
+// next delivery clear B's composer.
+it('never lets a late failure of a replaced process clear the new process\'s human draft', async () => {
+  vi.useFakeTimers()
+  const { manager } = claudeLike()
+  const sessions = (manager as unknown as { sessions: Map<string, unknown> }).sessions
+  const first = manager.deliverPromptToAgent('s1', 'an earlier prompt that painted late')
+  await vi.advanceTimersByTimeAsync(100)
+  // A exits (the manager's own cleanup) and B, same id, holds a human draft.
+  ;(manager as unknown as { cleanupSessionState(id: string, kind: string): void }).cleanupSessionState('s1', 'claude')
+  const bWrites: string[] = []
+  const humanDraft = { screen: composer('❯ a human typed this'), attributes: { dim: 0, inverse: 1, plain: 18 } }
+  sessions.set('s1', { kind: 'claude', session: {
+    isExited: () => false,
+    write: (data: string) => { bWrites.push(data) },
+    snapshotScreen: () => humanDraft.screen,
+    readComposer: () => humanDraft,
+    awaitReadyForPrompt: async () => ({ kind: 'occupied' as const, reason: 'human-draft' as const, waitedMs: 0 }),
+    armPromptAcceptance: () => ({ promise: new Promise(() => {}), cancel: vi.fn() }),
+  } })
+  await vi.advanceTimersByTimeAsync(8_000)
+  await first
+  vi.useRealTimers()
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
+
+  const next = await manager.deliverPromptToAgent('s1', 'the next task')
+  expect(next).toMatchObject({ ok: false, code: 'not-ready', promptWritten: false })
+  expect(bWrites).toEqual([])
+})
+
+// #1358 review c: the recorded paint lag is 0.7-3.8 s after the failure. A
+// delivery that starts inside it sees an empty, ready composer; writing then
+// would put its prompt after (or before) our late-painting bytes, and one
+// Enter could submit both. While the mark stands it waits for the late paint
+// (bounded), then reclaims.
+it('waits for the stranded text to paint before writing, then clears it', async () => {
+  const { manager, session, writes } = claudeLike()
+  await strand(manager)
+  vi.useFakeTimers()
+  const next = manager.deliverPromptToAgent('s1', 'the next task')
+  await vi.advanceTimersByTimeAsync(2_000)
+  session.paintLate()
+  await vi.advanceTimersByTimeAsync(10_000)
+  await expect(next).resolves.toMatchObject({ ok: true })
+  expect(writes.slice(1)).toEqual(['\x15', 'the next task', '\r'])
+})
+
+// #1358 reviews a and c: whether Ctrl+U removes an image pill is not
+// established, so an image delivery's leftovers are never reclaimed.
+it('does not mark an image delivery that stranded', async () => {
+  const { manager } = claudeLike()
+  vi.useFakeTimers()
+  const first = manager.deliverPromptToAgent('s1', '', ['/tmp/screenshot.png'])
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect(await first).toMatchObject({ ok: false, promptWritten: true, enterWritten: false })
+  vi.useRealTimers()
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
+})
+
+// #1358 review a (surviving mutant): a write that throws after bytes may have
+// crossed is stranded too; review c (surviving mutant): process exit clears it.
+it('marks a delivery whose write threw, and forgets it when the process exits', async () => {
+  const { manager, session } = claudeLike()
+  const write = session.write
+  session.write = (data: string) => { if (data === 'an earlier prompt that painted late') throw new Error('EPIPE'); write(data) }
+  const result = await manager.deliverPromptToAgent('s1', 'an earlier prompt that painted late')
+  expect(result).toMatchObject({ ok: false, code: 'transport-failed', promptWritten: true })
+  expect(manager.hasStrandedDelivery('s1')).toBe(true)
+  ;(manager as unknown as { cleanupSessionState(id: string, kind: string): void }).cleanupSessionState('s1', 'claude')
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
+})

@@ -37,3 +37,12 @@ In all three, the composer turned occupied 0.7–3.8 s after the delivery gave u
   - A raw `write()` in between clears it, as does exit.
   - `inputInspect` reports it.
 - All red on main.
+
+## Round 1 review decisions (#1358)
+- **a (blocker, steering q75) and c: the mark was keyed by session id only.** A delivery to process A that failed after A exited, and B had taken the same id, marked B. The next delivery then cleared B's composer, possibly a human draft. The mark now names the registry entry the delivery captured. It is set only while that entry still owns the id, and honoured only for that same entry. Test: A exits, B holds a human draft, A fails late. B gets no mark and no kill. Red on `c41614b4`.
+- **c: a delivery inside the paint lag skipped the reclaim.** The recorded paint lag is 0.7–3.8 s after the failure. A delivery starting inside it saw an empty, ready composer and wrote next to the late-painting bytes. While the mark stands, the delivery now polls, still holding its reservation, for up to 8 s after the strand. If the text appears it is reclaimed; otherwise nothing of ours is there. Test: the text paints 2 s into the next delivery and is cleared first. Red on `c41614b4`.
+- **a and c: image deliveries.** Whether Ctrl+U removes an image pill is unobserved, so an image delivery that strands is not marked and never reclaimed. Test added. #1350 is narrowed to text strands; the image path is a linked follow-up issue.
+- **Surviving mutants:** a thrown write that strands, and the exit clearing the mark, now have a test.
+- **Suspicions kept as residuals:**
+  - headless-internal writers (trust, resume, permission) that bypass `recordInputWrite`: no app consumer was found;
+  - a mark set after a throw before any bytes crossed: harmless, since the next gate reads ready and nothing is killed.

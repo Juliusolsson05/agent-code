@@ -604,7 +604,19 @@ export class SessionManager extends EventEmitter {
    * .strandedComposer). A text comparison could not prove this: the screen is
    * clipped and wrap-lossy, and pastes collapse to `[Pasted text #N]`.
    */
-  private readonly strandedDeliveries = new Set<string>()
+  //
+  // WHY keyed to the PROCESS (the registry entry), not just the session id
+  // (steering q75, #1358 review a): a session id outlives its process. A
+  // delivery can write to process A, A can exit and B take the same id, and
+  // A's delivery can fail only afterwards. Recording that failure against the
+  // id would hand B a mark for bytes B never received, and the next delivery
+  // would clear B's composer, which may be a human's draft. The mark
+  // therefore names the entry the delivery captured, is only set while that
+  // entry still owns the id, and is only honoured for that same entry.
+  //
+  // `at` is when the strand was recorded; the next delivery waits a bounded
+  // window from it for the late paint (see PromptDeliveryIo.strandedComposer).
+  private readonly strandedDeliveries = new Map<string, { entry: RegistryEntry; at: number }>()
   /**
    * Prompts waiting for a session that is not ready for one YET (#854).
    *
@@ -4083,18 +4095,35 @@ export class SessionManager extends EventEmitter {
   /** See strandedDeliveries (#1350). */
   private noteStrandedDelivery(
     sessionId: string,
+    entry: RegistryEntry,
     delivery: { ok: boolean; promptWritten?: boolean; enterWritten?: boolean },
+    hadImages: boolean,
   ): void {
-    if (delivery.ok) this.strandedDeliveries.delete(sessionId)
-    else if (delivery.promptWritten && !delivery.enterWritten) this.strandedDeliveries.add(sessionId)
+    // The process this delivery wrote to is gone (exited, replaced under the
+    // same id): nothing it did says anything about the current composer.
+    if (this.sessions.get(sessionId) !== entry) return
+    if (delivery.ok) {
+      this.strandedDeliveries.delete(sessionId)
+      return
+    }
     // A failure that wrote nothing (refused before write) changes nothing:
     // whatever the composer held before still holds, ours or not.
+    if (!delivery.promptWritten || delivery.enterWritten) return
+    // WHY an image delivery is never marked (#1358 reviews a and c): its
+    // leftovers include image pills, and whether Ctrl+U removes a pill has
+    // not been observed on a real composer (promptDelivery.ts says the same
+    // for its own rollback). A reclaim could strip the text and leave pills,
+    // or read a pill-only composer wrongly. Such a session stays as before:
+    // occupied until someone clears it.
+    if (hadImages) return
+    this.strandedDeliveries.set(sessionId, { entry, at: Date.now() })
   }
 
   /** Whether the session's composer can only hold our own stranded write
    *  (#1350); reported by sessions.inputInspect. */
   hasStrandedDelivery(sessionId: string): boolean {
-    return this.strandedDeliveries.has(sessionId)
+    const mark = this.strandedDeliveries.get(sessionId)
+    return Boolean(mark && this.sessions.get(sessionId) === mark.entry)
   }
 
   getSessionKind(sessionId: string): SessionKind | null {
@@ -4993,9 +5022,13 @@ export class SessionManager extends EventEmitter {
         imagePaths,
         record,
         ...(options?.requireEmptyNativeComposer ? { requireEmptyNativeComposer: true } : {}),
-        ...(this.strandedDeliveries.has(sessionId) ? { strandedComposer: true } : {}),
+        ...(() => {
+          // Only for the process the strand happened in (see strandedDeliveries).
+          const mark = this.strandedDeliveries.get(sessionId)
+          return mark && mark.entry === entry ? { strandedComposer: { strandedAt: mark.at } } : {}
+        })(),
       })
-      this.noteStrandedDelivery(sessionId, delivery)
+      this.noteStrandedDelivery(sessionId, entry, delivery, Boolean(imagePaths?.length))
       finishDelivery(delivery.ok ? 'success' : 'error')
       // Instrumentation must never change a delivery outcome. `acceptance` is
       // read defensively because a provider result without it made
@@ -5010,7 +5043,7 @@ export class SessionManager extends EventEmitter {
       finishDelivery('error')
       this.monitorResponses.cancel(sessionId)
       record?.('uncertain', { reason: 'provider-threw' })
-      this.noteStrandedDelivery(sessionId, { ok: false, promptWritten, enterWritten })
+      this.noteStrandedDelivery(sessionId, entry, { ok: false, promptWritten, enterWritten }, Boolean(imagePaths?.length))
       return {
         ok: false,
         stage: enterWritten ? 'after-enter' : promptWritten ? 'absorption' : 'before-write',

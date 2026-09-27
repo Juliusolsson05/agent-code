@@ -30,7 +30,7 @@ function harness(opts: { strandedComposer?: boolean; killClears?: boolean }) {
   const io = {
     sessionId: 's1',
     prompt: 'send the next task',
-    ...(opts.strandedComposer ? { strandedComposer: true } : {}),
+    ...(opts.strandedComposer ? { strandedComposer: { strandedAt: 0 } } : {}),
     write: (data: string) => {
       writes.push(data)
       if (data === '\x15' && opts.killClears !== false) state = 'empty'

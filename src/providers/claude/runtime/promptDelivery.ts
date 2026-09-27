@@ -74,6 +74,22 @@ export async function deliverClaudePrompt(
       deadlineAt: Math.min(deliveryDeadlineAt, Date.now() + READY_BUDGET_MS),
     })
     let ready = await awaitReady()
+    if (ready.kind === 'ready' && io.strandedComposer) {
+      // #1358 review c: our stranded bytes may not have painted yet. In the
+      // three recorded incidents they painted 0.7-3.8 s after the earlier
+      // delivery gave up. Writing now would put this prompt next to them in
+      // the composer, and one Enter could submit both. So, still holding the
+      // reservation (nobody else can type), give them a bounded window to
+      // appear; if they do, the gate reads occupied and they are reclaimed
+      // below. If they never paint, they were consumed or never landed, and
+      // there is nothing of ours to clear.
+      const windowEndsAt = Math.min(deliveryDeadlineAt, io.strandedComposer.strandedAt + STRANDED_PAINT_WINDOW_MS)
+      while (Date.now() < windowEndsAt) {
+        if (classifyRollbackComposer(io.session.readComposer?.() ?? null, io.session.snapshotScreen?.() ?? '') === 'drafted') break
+        await sleep(CONFIRM_POLL_INTERVAL_MS * 10)
+      }
+      ready = await awaitReady()
+    }
     if (ready.kind === 'occupied' && io.strandedComposer) {
       // The "human draft" is our own earlier write (#1350): an earlier
       // delivery's bytes painted after its rollback stopped watching, and no
@@ -445,6 +461,11 @@ const KILL_KEYSTROKE_GAP_MS = 25
 // cannot see it. Bounded well under the delivery deadline: this runs after a
 // failure, and a slow answer here delays the error the user is waiting for.
 const ROLLBACK_OBSERVE_ATTEMPTS = 40
+// How long after an earlier delivery stranded its bytes the next delivery
+// waits for them to paint before writing its own (#1358 review c). The
+// recorded late paints landed 0.7-3.8 s after the failure; this is about 2x
+// the worst, and only a delivery that starts inside it ever waits.
+const STRANDED_PAINT_WINDOW_MS = 8_000
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => { setTimeout(resolve, ms) })
