@@ -9,6 +9,7 @@ import { OpencodeConversationSource } from './sources/opencode.js'
 import { ConversationService } from './service.js'
 import { ConversationPromptsUnreadable } from './sources/types.js'
 import { sanitizePath } from '@shared/runtime/projectDir.js'
+import { setMainOperationSink } from '@main/performance/operations.js'
 import { corpusWorktreesPorcelain, installConversationCorpus, type InstalledCorpus } from '../../../testing/support/conversations/installCorpus.js'
 
 // One corpus install per file: the install copies 450 files and costs more
@@ -97,4 +98,44 @@ describe('ConversationService', () => {
     expect(second.rows.map(r => r.nativeId)).toEqual(first.rows.map(r => r.nativeId))
     expect(s.discoveriesForTests()).toBe(1)
   })
+
+  // #769 (measure first): the catalog's discovery, search and per-file prompt
+  // extraction had no monitor boundary, so nothing could tell whether they
+  // are what stalls main. Driven on the recorded corpus.
+  it('records discovery, search and prompt extraction as monitor operations', async () => {
+    const operations: Array<{ name: string; outcome: string }> = []
+    setMainOperationSink(record => { operations.push(record) })
+    try {
+      const s = service()
+      const all = await s.list({ cwd: '/fixture/repo', scope: 'repository', includeChildren: true, limit: 5000 })
+      const codex = all.rows.find(r => r.provider === 'codex' && r.cwd)!
+      // #1352 review b: the extraction measured must be a real one.
+      expect((await s.prompts({ provider: 'codex', nativeId: codex.nativeId, cwd: codex.cwd! })).length).toBeGreaterThan(0)
+      await s.list({ cwd: '/fixture/repo', scope: 'repository', query: 'the', limit: 50 })
+    } finally {
+      setMainOperationSink(() => {})
+    }
+    const names = new Set(operations.map(op => op.name))
+    expect(names).toContain('conversations.discover')
+    expect(names).toContain('conversations.search')
+    expect(names).toContain('conversations.extract')
+  })
+
+  // #1352 review a: a discovery that rejects closes its span as an error,
+  // instead of leaving it pending until the sweep reports a timeout.
+  it('closes a failed discovery as an error, not a pending span', async () => {
+    const { mainOperations } = await import('@main/performance/operations.js')
+    const operations: Array<{ name: string; outcome: string }> = []
+    setMainOperationSink(record => { operations.push(record) })
+    const pendingBefore = mainOperations.size
+    try {
+      const failing = new ConversationService({ sources: [], ledger: null, listWorktrees: async () => [], claudeHistory: null })
+      await expect(failing.list({ cwd: null, scope: 'repository', limit: 1 } as never)).rejects.toThrow()
+    } finally {
+      setMainOperationSink(() => {})
+    }
+    expect(operations.filter(op => op.name === 'conversations.discover').map(op => op.outcome)).toEqual(['error'])
+    expect(mainOperations.size).toBe(pendingBefore)
+  })
 })
+

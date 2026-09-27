@@ -144,7 +144,7 @@
     "electron-updater": "^6.8.9",
     "electron-vite": "^5.0.0",
     "esbuild": "0.25.12",
-    "happy-dom": "^20.9.0",
+    "happy-dom": "^20.14.5",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.23.15",
     "typescript": "^5.5.0",

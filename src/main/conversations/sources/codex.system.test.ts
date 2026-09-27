@@ -1,4 +1,4 @@
-import { rename } from 'node:fs/promises'
+import { chmod, readdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -88,6 +88,65 @@ describe('Codex conversation source', () => {
     }
     const everywhere = await source.discover({ scope: 'everywhere', family: await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees }) })
     expect(everywhere.filter(r => r.origin === 'scan')).toHaveLength(counts.codex.unindexedSampled)
+  })
+
+  it('skips an unreadable rollout instead of failing the whole Codex list (#1251 row 8)', async () => {
+    // readline's async iterator rethrows a stream error (EACCES here, EIO on a
+    // failing disk), and nothing between readRolloutHead and discover() caught
+    // it, so one rollout the app cannot open emptied the Codex column.
+    const { corpus, source, listWorktrees } = await setup()
+    const counts = corpus.manifest.counts as { codex: { inFamily: number; unindexedSampled: number } }
+    const rollouts = (await readdir(join(corpus.codexHome, 'sessions'), { recursive: true }))
+      .filter(name => /rollout-.*\.jsonl$/.test(name)).map(name => join(corpus.codexHome, 'sessions', name))
+    expect(rollouts.length).toBeGreaterThan(1)
+    for (const file of rollouts) await chmod(file, 0o000)
+    // unshift: permissions come back before the corpus cleanup removes the tree.
+    cleanups.unshift(async () => { for (const file of rollouts) await chmod(file, 0o600) })
+    const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
+
+    // Index path: the indexed rows never open a rollout and must all survive;
+    // the unindexed union is what reads heads, and it now skips what it cannot.
+    const indexed = await source.discover({ scope: 'everywhere', family })
+    expect(indexed.filter(r => r.origin === 'index').length).toBeGreaterThanOrEqual(counts.codex.inFamily)
+    expect(indexed.filter(r => r.origin === 'scan')).toHaveLength(0)
+    // Review of #1411 (c): the skip must not look like a complete result.
+    expect(counts.codex.unindexedSampled).toBeGreaterThan(0)
+    expect(source.lastDowngradeReason()).toMatch(/skipped \d+ unreadable rollout/)
+
+    // Fallback path: one readable rollout still lists beside unreadable ones.
+    await chmod(rollouts[0]!, 0o600)
+    await rename(join(corpus.codexHome, 'state_5.sqlite'), join(corpus.codexHome, 'state_5.sqlite.away'))
+    const fresh = new CodexConversationSource({ codexHome: corpus.codexHome })
+    const scanned = await fresh.discover({ scope: 'everywhere', family })
+    expect(scanned.map(r => r.file)).toEqual([rollouts[0]])
+    expect(fresh.lastDowngradeReason()).toMatch(/no state_N\.sqlite.*; skipped \d+ unreadable rollout/)
+  })
+
+  // Review of #1411 (b): SQLite keeps any value in any column, so one thread
+  // whose title is a BLOB made `.trim()` throw and rejected the whole index.
+  it('lists every indexed thread when one row holds a value of the wrong type (#1251 row 8)', async () => {
+    const { corpus, source, listWorktrees } = await setup()
+    const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
+    const before = await source.discover({ scope: 'everywhere', family })
+    const db = new DatabaseSync(join(corpus.codexHome, 'state_5.sqlite'))
+    const [victim, second] = (db.prepare('select id from threads where archived = 0 limit 2').all() as Array<{ id: string }>).map(row => row.id)
+    // Every string column the row projects, not only the title (review of
+    // #1411, round 2: guards on `source` and the others survived mutation).
+    db.prepare(`update threads set title = x'00', preview = x'00', name = x'00', source = x'00', thread_source = x'00',
+      agent_role = x'00', git_branch = x'00', originator = x'00', cwd = x'00', rollout_path = x'00',
+      created_at_ms = x'00', updated_at_ms = x'00', first_user_message = 'fallback label' where id = ?`).run(victim)
+    // The fallback chain itself: an empty title falls to a BLOB first message,
+    // which must fall through to the preview rather than throw.
+    db.prepare("update threads set title = '', first_user_message = x'00', preview = 'preview label' where id = ?").run(second)
+    db.close()
+
+    const after = await new CodexConversationSource({ codexHome: corpus.codexHome }).discover({ scope: 'everywhere', family })
+    expect(after).toHaveLength(before.length)
+    const victimRow = after.find(r => r.nativeId === victim)
+    expect(victimRow?.userTexts).toEqual(['fallback label'])
+    expect(victimRow?.cwd).toBeNull()
+    expect(victimRow?.gitBranch).toBeNull()
+    expect(after.find(r => r.nativeId === second)?.userTexts).toEqual(['preview label'])
   })
 
   it('falls back to the rollout scan when the index is missing and reports why', async () => {

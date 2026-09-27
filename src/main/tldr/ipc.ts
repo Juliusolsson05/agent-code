@@ -16,8 +16,26 @@ function assertApplicationWindow(event: Electron.IpcMainInvokeEvent): void {
   }
 }
 
-const identityList = z.array(z.string().refine(validTldrIdentity)).max(10_000)
-const singleIdentity = z.string().refine(validTldrIdentity)
+// WHY invalid identities are dropped from a batch instead of failing it
+// (#1251 row 12): Agent Activity reads every visible agent's TLDR and goal in
+// ONE batch, and a single identity outside the alphabet used to reject the
+// whole parse and blank every row. Dropping is exact, not lenient: TldrStore
+// only ever writes under identities that pass validTldrIdentity, so an invalid
+// one has no record, and "absent from the result" is the answer the store
+// would give it anyway. The shape stays strict (a bounded array of bounded
+// strings), so a malformed payload is still refused outright. The 256-char
+// element cap only bounds what zod copies; the predicate's own limit is 128.
+const identityList = z.array(z.string().max(256)).max(10_000)
+  .transform(identities => identities.filter(validTldrIdentity))
+const singleIdentity = z.string().max(256)
+// History answers an invalid identity the way the batch reads do (review of
+// #1411, b): it cannot have a record, so its history is empty, not an error
+// that puts the history modal into its failure state. A non-string or
+// oversized payload is still refused by the parse.
+const historyFor = (store: TldrStore, raw: unknown) => {
+  const identity = singleIdentity.parse(raw)
+  return validTldrIdentity(identity) ? store.history(identity) : Promise.resolve([])
+}
 
 /**
  * Record an unobservable hold ONCE per app run.
@@ -141,14 +159,13 @@ export function registerTldrIpc(
     if (hold && hold.token === token) hold.cancel()
   })
   const identities = identityList
-  const identity = singleIdentity
   ipcMain.handle('tldr:read', (event, raw: unknown) => {
     assertApplicationWindow(event)
     return store.read(identities.parse(raw))
   })
   ipcMain.handle('tldr:history', (event, raw: unknown) => {
     assertApplicationWindow(event)
-    return store.history(identity.parse(raw))
+    return historyFor(store, raw)
   })
   // Read-only, like every renderer TLDR API: whether this identity's provider
   // hooks have reached main. The renderer uses it to say when enforcement is not
@@ -174,7 +191,7 @@ export function registerGoalIpc(store: TldrStore): void {
   })
   ipcMain.handle('goal:history', (event, raw: unknown) => {
     assertApplicationWindow(event)
-    return store.history(singleIdentity.parse(raw))
+    return historyFor(store, raw)
   })
   store.on('changed', (update: TldrUpdate) => broadcastToWindows('goal:changed', update))
 }

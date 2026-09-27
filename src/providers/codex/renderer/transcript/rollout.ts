@@ -9,7 +9,8 @@ import {
   codexToolResultEntry,
   codexToolUseEntry,
   codexOutputText,
-  isCodexExecWrapperOutput,
+  codexExecWrapperExitCode,
+  isCodexExecWrapperRunning,
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
@@ -400,6 +401,14 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
       // its result was persisted. The provider renderer absorbs this empty
       // result after it has updated the command card, so retaining terminal
       // evidence does not reintroduce a blank standalone row.
+      //
+      // WHERE this event comes from (#1321): almost never a rollout. Current
+      // codex-rs treats `ExecCommandEnd` as transient, and 0 of 2,541 local
+      // rollouts contain one. rust-v0.107.0 through v0.136.0 persisted it in
+      // extended-history mode (app-server `persist_extended_history`), next to
+      // the always-durable wrapped `function_call_output` below, which is
+      // stamped with this same metadata. createCodexTranscriptEntryMapper
+      // prefers the wrapper, the fuller carrier (#1395 reviews a, b).
       return [
         codexToolResultEntry(
           uuid,
@@ -483,9 +492,42 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
       return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured)]
     }
     const output = stripCodexExecWrapper(structured)
-    if (!output.trim() || isCodexExecWrapperOutput(structured)) {
-      return []
+    const exitCode = codexExecWrapperExitCode(structured)
+    if (exitCode !== null) {
+      // A finished exec: the wrapper is the durable carrier of the result AND
+      // its exit status (#1321; see codexExecWrapperExitCode for why nothing
+      // else in the rollout carries them). It is stamped with the same
+      // `exec_command_end` metadata the live event produced, so the command
+      // card reads it as the native transport it is: bytes are the command's
+      // own, is_error and exitCode come from the real exit line. An EMPTY
+      // successful result is kept on purpose, exactly as for the event: it is
+      // the only proof the command finished rather than being interrupted,
+      // and the row dispatcher absorbs it once the card has its status.
+      return [
+        codexToolResultEntry(uuid, timestamp, payload.call_id, output, exitCode !== 0, {
+          kind: 'exec_command_end',
+          parsedCmd: [],
+          command: [],
+          cwd: null,
+          exitCode,
+        }),
+      ]
     }
+    if (isCodexExecWrapperRunning(structured)) {
+      // A partial chunk of a command still running (#1395 review a, P1). Its
+      // bytes are real output; its outcome is not known yet, so it is marked
+      // for the command adapter, which then shows "unknown" instead of success.
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, output, false, { kind: 'exec_command_running' })]
+    }
+    if (structured.startsWith('Chunk ID:')) {
+      // A wrapper whose header we could not parse (no LF `Output:` marker, a
+      // CRLF header, an unknown status line). None of 95,251 local wrappers
+      // has such a shape, but if one appears its outcome is unknown, not a
+      // success (#1395 review b): the bytes are kept whole, since there is no
+      // proven header/body boundary to strip at.
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured, false, { kind: 'exec_command_unparsed' })]
+    }
+    if (!output.trim()) return []
     return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]
   }
 

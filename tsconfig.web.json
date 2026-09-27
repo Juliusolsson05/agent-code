@@ -57,6 +57,7 @@
     // tests read the real pasted-prompt row rather than an invented one.
     "testing/fixtures/prompt-acceptance/*.json",
     "testing/fixtures/transcript-disconnect/*.json",
+    "testing/fixtures/codex-exec-output/*.json",
     "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived
@@ -64,6 +65,7 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
+    "testing/setup/storage.ts",
     // These fixture exporters import canonical renderer/shared boundaries on
     // purpose: recorded corpora must be minimized by the same privacy and
     // identity rules the app uses. Keep them in the web project so callback
