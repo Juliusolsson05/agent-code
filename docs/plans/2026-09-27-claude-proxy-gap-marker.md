@@ -90,6 +90,24 @@ the surviving chunks as one continuous answer.
    phase. Same trade as #1040. UNCONFIRMED.
 4. **Where the gap is placed:** at its true position in the line order,
    with a package change. We don't approximate it app-side.
+5. **How long the marker stays:** #963 and #1040's markers are WORK-SLOT
+   lifecycle candidates (`collectLifecycleCandidates`). They show only
+   while the pane is idle and the sealed turn is the newest semantic turn,
+   and they give way to the work chip as soon as the agent works again. For
+   an Esc (#1040) the turn is over, so the marker stays. A gap usually hits
+   mid-turn, and the next tool round-trip starts a new message within
+   seconds, so a work-slot marker may only flash.
+   - **Default (A):** the work-slot marker, the #1040 template. It is
+     cheap, consistent, and visible whenever the gap ends the visible
+     activity. The always-on `claude.proxy_transport_gap` incident is the
+     durable record.
+   - **Alternative (B):** a row anchored in the feed history at the sealed
+     turn, which survives later turns. The ledger would then need to
+     render interruption markers for archived turns, not only the newest.
+     That is a larger change to how archived semantic turns give way to
+     JSONL rows.
+   - A is UNCONFIRMED and asked of the manager. B is a follow-up if
+     wanted.
 
 ## Change
 

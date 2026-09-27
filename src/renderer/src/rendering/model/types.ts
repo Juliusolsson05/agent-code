@@ -74,6 +74,11 @@ export type RenderContentKind =
    *  an Esc interrupt, a proxy timeout, an upstream failure. The provider
    *  cannot tell those apart, so the row says only that it was cut off. */
   | 'transport-interruption'
+  /** The same marker for a turn the proxy adapter sealed because the events
+   *  transport LOST a span of its chunks (#1381, claude-code-headless#64
+   *  `transport-gap`). The live text on screen skipped part of the answer; the
+   *  saved transcript is a separate file and is not implied to be incomplete. */
+  | 'gap-interruption'
   | 'empty'
   | 'unknown'
 

@@ -45,6 +45,7 @@ function isLifecycleRow(row: RenderRow): boolean {
   // toggles with the same phase edge, so it is lifecycle, not content.
   return kind === 'work' || kind === 'empty'
     || kind === 'sleep-interruption' || kind === 'transport-interruption'
+    || kind === 'gap-interruption'
 }
 
 export type InvariantKind =

@@ -295,8 +295,11 @@ export type SemanticLiveTurn = {
    *  `system-suspended`: the machine slept mid-stream (#963).
    *  `transport-error`: the stream's socket died before the message ended —
    *  an Esc interrupt, a proxy timeout, an upstream failure (#1040). The
-   *  provider cannot tell those apart, so neither does this. */
-  interruption?: 'system-suspended' | 'transport-error'
+   *  provider cannot tell those apart, so neither does this.
+   *  `transport-gap`: the proxy events transport LOST a span of this turn's
+   *  chunks (claude-code-headless#64 rotated them away unread), so what the
+   *  live view assembled is not the whole answer (#1381). */
+  interruption?: 'system-suspended' | 'transport-error' | 'transport-gap'
 }
 
 export type SemanticFlow = {

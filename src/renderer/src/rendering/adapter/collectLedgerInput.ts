@@ -66,8 +66,8 @@ export type RuntimeSemanticTurn = {
   startedAt: number
   endedAt: number | null
   isCompactionSynthesis?: boolean
-  /** #963: the adapter sealed this turn because the machine slept. */
-  interruption?: 'system-suspended' | 'transport-error'
+  /** #963/#1040/#1381: why the adapter sealed this turn (see SemanticTurn). */
+  interruption?: 'system-suspended' | 'transport-error' | 'transport-gap'
   /** Runtime lookup snapshot — tool-call status by id. Optional because
    *  hand-written fixtures omit it. `toTurnLike` reads
    *  lookups.toolCallsById[toolUseId].status to stamp lookupStatus onto
@@ -193,6 +193,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
     streamPhaseIdle: boolean
     sleepInterruptedTurnId: string | null
     transportInterruptedTurnId: string | null
+    gapInterruptedTurnId: string | null
     provider: AgentProviderKind
     candidates: readonly RenderCandidate[]
   } | null = null
@@ -382,17 +383,25 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       newestTurn?.interruption === 'transport-error' && newestTurn.endedAt !== null
         ? newestTurn.turnId
         : null
+    // #1381: and for a turn sealed because the proxy events transport lost a
+    // span of its chunks. Its own key for the same reasons as the two above.
+    const gapInterruptedTurnId =
+      newestTurn?.interruption === 'transport-gap' && newestTurn.endedAt !== null
+        ? newestTurn.turnId
+        : null
     if (
       !staticsCache ||
       staticsCache.streamPhaseIdle !== streamPhaseIdle ||
       staticsCache.sleepInterruptedTurnId !== sleepInterruptedTurnId ||
       staticsCache.transportInterruptedTurnId !== transportInterruptedTurnId ||
+      staticsCache.gapInterruptedTurnId !== gapInterruptedTurnId ||
       staticsCache.provider !== provider
     ) {
       staticsCache = {
         streamPhaseIdle,
         sleepInterruptedTurnId,
         transportInterruptedTurnId,
+        gapInterruptedTurnId,
         provider,
         candidates: collectLifecycleCandidates({
           provider,
@@ -400,6 +409,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
           streamPhaseIdle,
           sleepInterruptedTurnId,
           transportInterruptedTurnId,
+          gapInterruptedTurnId,
         }),
       }
     }
