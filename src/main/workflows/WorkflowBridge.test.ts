@@ -786,6 +786,26 @@ describe('WorkflowBridge session carry (#1280)', () => {
     expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
   })
 
+  // Round-4 review B: at restart the Resume child's stored clientId names the
+  // alias target (Resume registers under the pane that shows the parent),
+  // but it belongs with its parent. Both storage orders the reviewer probed.
+  it.each([
+    ['parent, child, successor run', ['source-run', 'child-run', 'target-run']],
+    ['parent, successor run, child', ['source-run', 'target-run', 'child-run']],
+  ])('restores a resumed aliased run home with its parent at restart (%s)', async (_order, runIdsInOrder) => {
+    const file = aliasFile()
+    writeFileSync(file, JSON.stringify({ source: 'target' }))
+    const stored: Record<string, ReturnType<typeof reference>> = {
+      'source-run': reference('source-run', 'source', { cwd: '/first' }),
+      'child-run': reference('child-run', 'target', { cwd: '/first', resumedFromRunId: 'source-run', lineageId: 'source-run' }),
+      'target-run': reference('target-run', 'target', { cwd: '/second' }),
+    }
+    const bridge = new WorkflowBridge(service(runIdsInOrder.map(id => stored[id])), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    expect(runIds(bridge, 'source', '/first')).toEqual(['child-run'])
+    expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
+  })
+
   // The same rule at restart, in the storage order that would otherwise lose
   // it: the aliased run is listed before the successor's own run.
   it('keeps both runs apart at restart whatever order storage lists them in', async () => {
