@@ -131,15 +131,41 @@ const lastWrittenFeedDebugEpoch = new Map<string, number>()
  * `feedDebugWriteQueues`, so they stayed for the life of the process (a few
  * numbers per closed session, unbounded). An append that finds its token gone
  * once it has run belongs to a forgotten session and deletes that state again.
- * The token map is cleared by the same forget, so it stays bounded too.
+ * The token map is cleared by the same forget.
+ *
+ * The token alone is NOT a bound (#1392 review a). An append that ARRIVES
+ * after the forget (the renderer's flush timer and teardown flush run
+ * independently of the process exit that triggers the forget, and the IPC
+ * handler accepts any id) mints a fresh token and keeps its state, and no
+ * second forget ever comes. Main has no liveness oracle here short of
+ * coupling this storage module to the session manager, so the map is also a
+ * RECENCY list capped at MAX_REMEMBERED_FEED_DEBUG_SESSIONS: every queued
+ * append moves its session to the end (same token object, so identity checks
+ * still hold), and past the cap the least recently appended session is
+ * forgotten exactly as forgetFeedDebugSession would. That makes the leak
+ * bounded whatever the interleaving: at most the cap's worth of a few
+ * numbers, not "zero", for late appends.
+ *
+ * Evicting a session that is in fact still live is harmless in practice:
+ * the cap state re-primes from the file on disk (the fail-closed stat
+ * path), the epoch simply re-registers, and the only thing lost is the
+ * de-dup cursor, so a double send racing that exact moment could write a
+ * duplicate debug row. 256 is far above the number of agents anyone runs
+ * at once, so this only trims closed sessions.
  */
 const feedDebugSessionTokens = new Map<string, object>()
+const MAX_REMEMBERED_FEED_DEBUG_SESSIONS = 256
 
 function feedDebugSessionToken(sessionId: string): object {
-  let token = feedDebugSessionTokens.get(sessionId)
-  if (!token) {
-    token = {}
-    feedDebugSessionTokens.set(sessionId, token)
+  const token = feedDebugSessionTokens.get(sessionId) ?? {}
+  // delete + set moves the id to the end of the Map's insertion order.
+  feedDebugSessionTokens.delete(sessionId)
+  feedDebugSessionTokens.set(sessionId, token)
+  for (const oldest of feedDebugSessionTokens.keys()) {
+    if (feedDebugSessionTokens.size <= MAX_REMEMBERED_FEED_DEBUG_SESSIONS) break
+    // An append of the evicted session still in its queue will see its token
+    // gone when it settles and drop what it wrote, as after a forget.
+    forgetFeedDebugSession(oldest)
   }
   return token
 }
@@ -421,9 +447,13 @@ export function queueFeedDebugAppend(
   return next
 }
 
-/** Sizes of the per-session maps, for the #1207 leak test only. */
-export function feedDebugSessionStateSizesForTest(): { ids: number; epochs: number; caps: number; tokens: number } {
-  return { ids: lastWrittenFeedDebugId.size, epochs: lastWrittenFeedDebugEpoch.size, caps: feedDebugCapState.size, tokens: feedDebugSessionTokens.size }
+/** Sizes of the per-session maps (or, given an id, whether each map holds
+ *  it), for the #1207/#1392 leak tests only. The per-id form exists because
+ *  whole-map sizes stop being comparable once the recency cap starts
+ *  evicting other tests' sessions. */
+export function feedDebugSessionStateSizesForTest(sessionId?: string): { ids: number; epochs: number; caps: number; tokens: number } {
+  const count = (map: Map<string, unknown>) => (sessionId === undefined ? map.size : Number(map.has(sessionId)))
+  return { ids: count(lastWrittenFeedDebugId), epochs: count(lastWrittenFeedDebugEpoch), caps: count(feedDebugCapState), tokens: count(feedDebugSessionTokens) }
 }
 
 /** Drop in-memory bookkeeping for a session that has ended. The

@@ -174,3 +174,50 @@ describe('forget racing a queued append (#1207)', () => {
     expect(feedDebugSessionStateSizesForTest()).toEqual(before)
   })
 })
+
+// #1392 review a: an append that ARRIVES after the forget (late renderer
+// flush, or any id the IPC handler accepts) mints a new token and keeps its
+// state; no second forget comes. The recency cap is what bounds that.
+describe('late appends after forget (#1392)', () => {
+  it('keeps per-session state bounded for 300 sessions that append after their forget', async () => {
+    for (let i = 0; i < 300; i++) {
+      const sessionId = `late-${i}`
+      forgetFeedDebugSession(sessionId)
+      await queueFeedDebugAppend(sessionId, [entry(1)], 1_789_000_000_000)
+    }
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    const sizes = feedDebugSessionStateSizesForTest()
+    for (const size of Object.values(sizes)) expect(size).toBeLessThanOrEqual(256)
+  })
+})
+
+// #1392 reviews a+b: the committed probe only covered successful writes.
+describe('forget racing a queued append, other interleavings (#1392)', () => {
+  it('drops state after a forgotten append fails its size check', async () => {
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    statResult = { mode: 'throw', code: 'EACCES' }
+    const write = queueFeedDebugAppend('forget-fail', [entry(1)], 1_789_000_000_000)
+    forgetFeedDebugSession('forget-fail')
+    await expect(write).rejects.toThrow()
+    expect(feedDebugSessionStateSizesForTest('forget-fail')).toEqual({ ids: 0, epochs: 0, caps: 0, tokens: 0 })
+  })
+
+  it('lets a re-registered id write its first row after an old append of the same id', async () => {
+    // Same id, same epoch: if the old append's cleanup only checked that SOME
+    // token exists, it would keep its cursor and the new generation's id 1
+    // would be filtered as already written.
+    const first = queueFeedDebugAppend('reregistered', [entry(1)], 7_000)
+    forgetFeedDebugSession('reregistered')
+    const second = queueFeedDebugAppend('reregistered', [entry(1)], 7_000)
+    await Promise.all([first, second])
+    const lines = (await readFile(logPath('reregistered'), 'utf8')).trim().split('\n')
+    expect(lines).toHaveLength(2)
+  })
+
+  it('keeps rejecting while the size stays unknown', async () => {
+    forgetFeedDebugSession('still-unknown')
+    statResult = { mode: 'throw', code: 'EACCES' }
+    await expect(queueFeedDebugAppend('still-unknown', [entry(1)], 1_000)).rejects.toThrow()
+    await expect(queueFeedDebugAppend('still-unknown', [entry(2)], 1_000)).rejects.toThrow()
+  })
+})
