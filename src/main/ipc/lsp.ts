@@ -1,16 +1,85 @@
 import { ipcMain, type WebContents } from 'electron'
-import { lstat } from 'fs/promises'
-import { relative } from 'path'
+import { lstat, realpath } from 'fs/promises'
+import { join, relative } from 'path'
 
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { resolveInsideRoot, validateExistingTarget } from '@main/ipc/editorFs.js'
 import type { EditorFsRootRegistry } from '@main/ipc/editorFsRootRegistry.js'
+import { LSP_VIRTUAL_DIR, lspVirtualDocumentName } from '@main/lspManager.js'
 import type { LspManager } from '@main/lspManager.js'
 import type {
   LspCompletionContext,
   LspDocumentAuthorization,
   LspPosition,
 } from '@shared/types/lsp.js'
+
+/**
+ * The manager re-runs the physical check that authorizeContext ran, at the
+ * moment of use, after server startup (#1268): the path must still resolve,
+ * without symlinks, to a regular file inside the root.
+ *
+ * WHY no "same relative path" check (review a of #1412): on a case-
+ * insensitive filesystem a case-only rename still resolves, and realpath
+ * returns the new spelling, so an exact comparison refused a legitimate open.
+ * Containment is the property that matters.
+ *
+ * A pathless (virtual) document still names a file to the server:
+ * `root/.agent-code-lsp/virtual-<hash>.<ext>` (makeVirtualServerUri). That
+ * directory must not be a symlink out of the root.
+ */
+/**
+ * The authorized root must still BE the root (#1412 review b): renamed away and
+ * replaced by a symlink out, every lexical path under it names outside
+ * content. `workspaceRoot` is the canonical path `roots.authorize` returned,
+ * so it must still resolve to exactly itself.
+ */
+async function assertRootUnchanged(workspaceRoot: string): Promise<void> {
+  if ((await realpath(workspaceRoot)) !== workspaceRoot) throw new Error('LSP workspace root no longer resolves to the authorized root')
+}
+
+export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null; virtualName?: string }): () => Promise<void> {
+  const { workspaceRoot, filePath, virtualName } = context
+  if (filePath === null) {
+    return async () => {
+      // The leaf name is required (#1412 review c): without it the check
+      // cannot see what didOpen will name, so the open is refused.
+      if (!virtualName) throw new Error('LSP virtual document has no leaf name to check')
+      // Checked FIRST: a missing virtual directory below proves nothing about
+      // where the root now points (review b, finding 2).
+      await assertRootUnchanged(workspaceRoot)
+      const directory = join(workspaceRoot, LSP_VIRTUAL_DIR)
+      let entry
+      try {
+        entry = await lstat(directory)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+      if (entry.isSymbolicLink()) throw new Error('LSP virtual document directory is a symbolic link')
+      await validateExistingTarget(workspaceRoot, directory)
+      // The LEAF didOpen names (#1412 review c): a symlink created there in
+      // advance (its hash is steerable through the renderer's clientUri)
+      // resolved outside the root with no timing window at all. It must be
+      // absent, or a regular file inside the root.
+      const leaf = join(directory, virtualName)
+      let leafEntry
+      try {
+        leafEntry = await lstat(leaf)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+      if (leafEntry.isSymbolicLink() || !leafEntry.isFile()) throw new Error('LSP virtual document path is not a regular file')
+      await validateExistingTarget(workspaceRoot, leaf)
+    }
+  }
+  return async () => {
+    await assertRootUnchanged(workspaceRoot)
+    const requested = resolveInsideRoot(workspaceRoot, filePath)
+    const physical = await validateExistingTarget(workspaceRoot, requested)
+    if (!(await lstat(physical)).isFile()) throw new Error('LSP document is not a file')
+  }
+}
 
 // LSP-backed code intelligence for Monaco surfaces.
 //
@@ -287,6 +356,7 @@ export function registerLspIpc(
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
+              assertPhysicalTarget: lspPhysicalTargetAssertion({ ...context, virtualName: lspVirtualDocumentName(params.clientUri, params.language) }),
             })
             // A page that left meanwhile does not get the marker back: clear()
             // dropped it, and the close clear() queued behind this entry will
@@ -402,6 +472,7 @@ export function registerLspIpc(
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
+              assertPhysicalTarget: lspPhysicalTargetAssertion({ ...context, virtualName: lspVirtualDocumentName(params.clientUri, params.language) }),
             })
             if (!ok) break
           }
