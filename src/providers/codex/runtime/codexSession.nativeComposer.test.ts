@@ -109,6 +109,31 @@ describe('Codex native composer (0.157 recording)', () => {
     expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 
+  // #1319 review round 2 B: 0.149.1 and narrow 0.157 panes show no shortcuts
+  // hint, so the package says `unknown` even for an empty composer. Once a
+  // draft there is cleared, the settled bare-marker text proof is what brings
+  // the pane back to ready; without it the pane would wait forever. A settled
+  // read of null (bytes unparsed) must not.
+  it('publishes ready from a settled bare marker on a pane without the hint, and not while unsettled', async () => {
+    const readiness: Array<{ ready: boolean; reason?: string }> = []
+    const session = new CodexSession()
+    let settled: string | null = null
+    const internal = session as unknown as { composerReady: boolean; headless: unknown; publishNativeComposer(): void }
+    internal.headless = {
+      getScreen: () => '› \n\n  gpt-5.6-sol high · /tmp/x',
+      getSettledScreen: () => settled,
+      getComposerState: () => 'unknown',
+      getConditionSnapshot: () => ({ provider: 'codex', conditions: {}, ts: Date.now() }),
+    }
+    session.on('input-readiness', state => readiness.push(state))
+    internal.composerReady = true
+    internal.publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: false, reason: 'provider-not-ready' })
+    settled = '› \n\n  gpt-5.6-sol high · /tmp/x'
+    internal.publishNativeComposer()
+    expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
+  })
+
   // #1319 review A2: the text-only proof of empty reads the plain screen,
   // which can lag PTY bytes still being parsed (the cell reading is then
   // `unknown`). A single stale bare-marker read must not consent: a human who
