@@ -129,13 +129,24 @@ describe('Codex conversation source', () => {
     const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
     const before = await source.discover({ scope: 'everywhere', family })
     const db = new DatabaseSync(join(corpus.codexHome, 'state_5.sqlite'))
-    const victim = (db.prepare('select id from threads where archived = 0 limit 1').get() as { id: string }).id
-    db.prepare("update threads set title = x'00', first_user_message = 'fallback label' where id = ?").run(victim)
+    const [victim, second] = (db.prepare('select id from threads where archived = 0 limit 2').all() as Array<{ id: string }>).map(row => row.id)
+    // Every string column the row projects, not only the title (review of
+    // #1411, round 2: guards on `source` and the others survived mutation).
+    db.prepare(`update threads set title = x'00', preview = x'00', name = x'00', source = x'00', thread_source = x'00',
+      agent_role = x'00', git_branch = x'00', originator = x'00', cwd = x'00', rollout_path = x'00',
+      created_at_ms = x'00', updated_at_ms = x'00', first_user_message = 'fallback label' where id = ?`).run(victim)
+    // The fallback chain itself: an empty title falls to a BLOB first message,
+    // which must fall through to the preview rather than throw.
+    db.prepare("update threads set title = '', first_user_message = x'00', preview = 'preview label' where id = ?").run(second)
     db.close()
 
     const after = await new CodexConversationSource({ codexHome: corpus.codexHome }).discover({ scope: 'everywhere', family })
     expect(after).toHaveLength(before.length)
-    expect(after.find(r => r.nativeId === victim)?.userTexts).toEqual(['fallback label'])
+    const victimRow = after.find(r => r.nativeId === victim)
+    expect(victimRow?.userTexts).toEqual(['fallback label'])
+    expect(victimRow?.cwd).toBeNull()
+    expect(victimRow?.gitBranch).toBeNull()
+    expect(after.find(r => r.nativeId === second)?.userTexts).toEqual(['preview label'])
   })
 
   it('falls back to the rollout scan when the index is missing and reports why', async () => {
