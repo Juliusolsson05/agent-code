@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { open, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
@@ -70,6 +70,8 @@ type RolloutHead = {
   source: string | null
   userTexts: string[]
   lastUserAt: number | null
+  /** The head hit its record bound with no user text (as for Claude and Pi). */
+  headTruncated?: boolean
 }
 
 function isSubagentSource(row: IndexRow): boolean {
@@ -89,7 +91,51 @@ function isSubagentSource(row: IndexRow): boolean {
  *  contract for a fallback path is not worth a cross-repository change. */
 async function readRolloutHead(file: string): Promise<RolloutHead> {
   const out: RolloutHead = { cwd: null, gitBranch: null, createdAt: null, originator: null, source: null, userTexts: [], lastUserAt: null }
+  // Two carriers of a user prompt (#1363). Codex up to 0.14x wrote
+  // `event_msg:user_message`; 0.157 writes none, and a prompt is
+  // `event_msg:item_completed` with `item.type: 'UserMessage'` (414 of 416
+  // local 0.157 files; the other two are native subagents with no prompt).
+  // These are exactly the two carriers Codex's own index reads for
+  // `first_user_message` (rust-v0.157.1 state/src/extract.rs); it ignores the
+  // role-user response_item, which also carries injected context. WHY both are
+  // read and merged, not "legacy wins" (#1407 reviews a and b): a file with
+  // both carriers (a session resumed across writer versions) could then lose
+  // a prompt only the items hold. The same prompt written by both carriers is
+  // counted once: see the pairing rule below (the immediately previous user
+  // record, the other carrier, within 4 records and 5 s).
+  // What older CLIs put in UserMessage items (sometimes injected context or a
+  // command wrapper) is what the index lists too; firstUnwrappedPrompt and
+  // classify decide what is a label, as for every other source.
+  // WHY a pair is matched only within a few records (#1407 verification a):
+  // matching identical text anywhere in the head collapsed a prompt the user
+  // really repeated in a later turn. Codex writes the two carriers of ONE
+  // prompt back to back, so the other carrier's record must be close.
+  // Both a record window AND a time window (#1407 verification a, round 2):
+  // records alone let the same text typed two days later, two records on,
+  // pass for the other carrier. One prompt's carriers share its instant.
+  const PAIR_WINDOW_RECORDS = 4
+  const PAIR_WINDOW_MS = 5_000
+  let lastUser: { carrier: 'legacy' | 'item'; text: string; at: number; ts: number; paired: boolean } | null = null
+  const noteUser = (carrier: 'legacy' | 'item', text: string, timestamp: unknown, recordIndex: number) => {
+    const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
+    // ...and never across another user prompt (#1407 verification b): the
+    // other carrier must be the IMMEDIATELY previous user record, so
+    // `repeat, different, repeat` inside a few seconds keeps both repeats.
+    const previous = lastUser
+    const pairs = previous !== null && previous.carrier !== carrier && !previous.paired &&
+      previous.text === text &&
+      recordIndex - previous.at <= PAIR_WINDOW_RECORDS &&
+      Number.isFinite(ts) && Number.isFinite(previous.ts) && Math.abs(ts - previous.ts) <= PAIR_WINDOW_MS
+    if (pairs) {
+      previous.paired = true
+    } else {
+      lastUser = { carrier, text, at: recordIndex, ts, paired: false }
+      if (out.userTexts.length < 6) out.userTexts.push(text)
+    }
+    if (Number.isFinite(ts)) out.lastUserAt = Math.max(out.lastUserAt ?? ts, ts)
+  }
   let records = 0
+  let truncated = false
   for await (const record of streamJsonl<Record<string, unknown>>(file)) {
     if (!record) continue
     records++
@@ -101,18 +147,132 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
       out.createdAt = typeof payload.timestamp === 'string' && Number.isFinite(Date.parse(payload.timestamp)) ? Date.parse(payload.timestamp) : null
       out.originator = typeof payload.originator === 'string' ? payload.originator : null
       out.source = typeof payload.source === 'string' ? payload.source : payload.source ? JSON.stringify(payload.source) : null
-    } else if (record.type === 'event_msg' && payload?.type === 'user_message' && typeof payload.message === 'string') {
-      if (out.userTexts.length < 6) out.userTexts.push(payload.message)
-      const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
-      if (Number.isFinite(ts)) out.lastUserAt = ts
+    } else {
+      const user = userPromptOf(record, payload)
+      if (user !== null) noteUser(user.carrier, user.text, record.timestamp, records)
     }
     // WHY the limit is unconditional: a rollout whose first two hundred
     // records hold no user event (exec runs, synthesized transcripts) has
     // nothing further up the file the head can label it by, and reading such
     // files to the end made discovery cost the size of the store.
-    if (records >= HEAD_RECORD_LIMIT) break
+    if (records >= HEAD_RECORD_LIMIT) {
+      truncated = true
+      break
+    }
+  }
+  if (truncated) {
+    // WHY a tail pass (#1407 reviews a and b): the listing sorts by user
+    // activity, and a head-bounded read reported the last prompt within the
+    // first 200 records. In 33 of 61 local 0.157.0 files a later prompt lay
+    // beyond them (one 46.8 hours later), so a live session sorted days too
+    // old. The newest prompt is near the end of the file, so reading a
+    // bounded tail finds it at a fixed cost; the head keeps the labels.
+    const tailAt = await newestUserTimestampInTail(file)
+    if (tailAt !== null) out.lastUserAt = Math.max(out.lastUserAt ?? tailAt, tailAt)
+    out.headTruncated = out.userTexts.length === 0
   }
   return out
+}
+
+// The newest user timestamp is found by reading the rollout BACKWARD in
+// chunks until a user record appears (#1407 verification a). A fixed 512 KiB
+// tail missed it in 10 of 46 local 0.157 files whose latest prompt was past
+// the head (a long agent turn can write megabytes after one prompt), and it
+// dropped a record straddling the window's start. Reading back in chunks,
+// carrying the partial line across each boundary, finds the newest one wherever
+// it is. The scan is bounded: a file with no user record in its last
+// TAIL_ACTIVITY_MAX_BYTES keeps the head's time, which is at worst the old
+// behaviour. It runs only for heads that hit their record bound, and the
+// result is cached by mtime with the head. WHY a bound at all, knowing it
+// misses (1 of 452 local 0.157 files had its newest prompt 55.8 MB from the
+// end, #1407 verification a): this is the degraded no-index path, rollouts
+// reach gigabytes, and an unbounded scan per discovery is the store-sized
+// cost the head limit above exists to prevent.
+const TAIL_ACTIVITY_CHUNK_BYTES = 512 * 1024
+const TAIL_ACTIVITY_MAX_BYTES = 32 * 1024 * 1024
+
+async function newestUserTimestampInTail(file: string): Promise<number | null> {
+  let handle
+  try {
+    handle = await open(file, 'r')
+    const { size } = await handle.stat()
+    let end = size
+    // Bytes of the line that starts before the current chunk and was cut off.
+    let carry = Buffer.alloc(0)
+    while (end > 0 && size - end < TAIL_ACTIVITY_MAX_BYTES) {
+      const start = Math.max(0, end - TAIL_ACTIVITY_CHUNK_BYTES)
+      const chunk = Buffer.alloc(end - start)
+      await handle.read(chunk, 0, chunk.length, start)
+      const window = Buffer.concat([chunk, carry])
+      // Unless this chunk starts the file, its first line is incomplete: keep
+      // its bytes for the next (earlier) chunk rather than dropping it. A
+      // window with NO newline is all one line longer than a chunk: carry the
+      // whole of it (#1407 verification a, round 2), never parse or drop it.
+      const firstBreak = window.indexOf(0x0a)
+      if (start > 0 && firstBreak < 0) {
+        carry = window
+        end = start
+        continue
+      }
+      const complete = start > 0 ? window.subarray(firstBreak + 1).toString('utf8') : window.toString('utf8')
+      carry = start > 0 ? window.subarray(0, firstBreak) : Buffer.alloc(0)
+      const newest = newestUserTimestampIn(complete.split('\n'))
+      if (newest !== null) return newest
+      if (start === 0) break
+      end = start
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
+function newestUserTimestampIn(lines: string[]): number | null {
+  let newest: number | null = null
+  for (const line of lines) {
+    if (!line.includes('"user_message"') && !line.includes('"UserMessage"')) continue
+    let record: Record<string, unknown>
+    try {
+      record = JSON.parse(line) as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (userPromptOf(record, asRecord(record.payload)) === null) continue
+    const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
+    if (Number.isFinite(ts)) newest = Math.max(newest ?? ts, ts)
+  }
+  return newest
+}
+
+/** The user prompt a rollout record carries, and through which carrier. */
+function userPromptOf(record: Record<string, unknown>, payload: Record<string, unknown> | null): { carrier: 'legacy' | 'item'; text: string } | null {
+  if (record.type !== 'event_msg' || !payload) return null
+  if (payload.type === 'user_message' && typeof payload.message === 'string') return { carrier: 'legacy', text: payload.message }
+  if (payload.type === 'item_completed') {
+    const text = userMessageItemText(payload.item)
+    if (text !== null) return { carrier: 'item', text }
+  }
+  return null
+}
+
+/** The text of a 0.157 `UserMessage` turn item (`{type, id, content: [{type:
+ *  'text', text, text_elements}]}`), or null for any other item. Text parts
+ *  are joined with no separator, as Codex's own UserMessageItem::message()
+ *  does (protocol/src/items.rs). A message of only images reads `[Image]`,
+ *  Codex's own preview text (protocol.rs user_message_preview), so an
+ *  image-only prompt is still a prompt (#1407 review b). */
+function userMessageItemText(value: unknown): string | null {
+  const item = asRecord(value)
+  if (item?.type !== 'UserMessage' || !Array.isArray(item.content)) return null
+  const parts = item.content.map(part => asRecord(part)).filter(part => part !== null)
+  const text = parts
+    .filter(part => part!.type === 'text' && typeof part!.text === 'string')
+    .map(part => part!.text as string)
+    .join('')
+  if (text.length > 0) return text
+  return parts.some(part => part!.type !== 'text') ? '[Image]' : null
 }
 
 export class CodexConversationSource implements ConversationSource {
@@ -182,6 +342,7 @@ export class CodexConversationSource implements ConversationSource {
       userTexts: head.userTexts,
       createdAt: head.createdAt,
       lastUserActivityAt: head.lastUserAt,
+      ...(head.headTruncated ? { headTruncated: true } : {}),
       activitySource: head.lastUserAt !== null ? 'tail' : null,
       mtime,
       promptCount: null,
