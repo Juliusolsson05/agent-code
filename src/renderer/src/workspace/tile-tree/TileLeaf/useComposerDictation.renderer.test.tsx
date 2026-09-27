@@ -67,6 +67,11 @@ class FakeMediaRecorder {
     for (const handler of this.listeners.get('stop') ?? []) handler({})
   }
 
+  /** The recorder failing mid-capture (MediaRecorder's `error` event). */
+  fail(name: string): void {
+    for (const handler of this.listeners.get('error') ?? []) handler({ error: { name } })
+  }
+
   /**
    * Emit one timeslice.
    *
@@ -709,6 +714,21 @@ describe('dictation outcome codes (#243)', () => {
     vi.setSystemTime(new Date(Date.parse('2026-09-20T10:00:00.000Z') + at('tap-while-starting', 'stop:called').tMs))
     await act(async () => { endDictationHold(); await wait(10) })
     expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'cancelled.short-press' }) })])
+    expect(cancel).toHaveBeenCalledWith({ id: 'stream-1' })
+  })
+
+  // #1340 verification 2 (a and c): the renderer-decided failure exit must
+  // release main's stream too; no committed test asserted it.
+  it('cancels main’s stream when the recorder fails after the stream started', async () => {
+    const api = window as unknown as { api: { cancelDictationStream: unknown } }
+    const cancel = vi.fn(async () => ({ kind: 'ok' }))
+    api.api.cancelDictationStream = cancel
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await speak()
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.fail('UnknownError'); await wait(10) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'recorder.error' }) })])
     expect(cancel).toHaveBeenCalledWith({ id: 'stream-1' })
   })
 
