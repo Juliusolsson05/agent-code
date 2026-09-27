@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -47,11 +47,19 @@ it('keeps a run whose listing failed at startup, with its set-aside bytes intact
   const refused = JSON.stringify({ version: 2, incidents: ['evidence'] })
   await writeFile(join(runOld, aside), refused)
 
+  // Real clock, and the run aged past retention (#1455 review c, B6 check
+  // 2110): maintenance keeps any run touched within the window, so with a
+  // 1970 snapshot the unindexed mark was never what kept this run.
+  const now = Date.now()
+  const old = new Date(now - 30 * 24 * 60 * 60_000)
+  await utimes(join(runOld, aside), old, old)
+  await utimes(runOld, old, old)
+
   failOnce.path = runOld
   const store = new MonitorHistoryStore(root, 'run-now')
   await store.settled()
   expect(failOnce.path).toBeNull()
-  store.record(snapshot(90_000), null, [], 0, 0)
+  store.record(snapshot(now), null, [], 0, 0)
   await store.settled()
 
   expect(await readdir(runOld)).toContain(aside)
