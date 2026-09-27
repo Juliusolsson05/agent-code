@@ -211,49 +211,68 @@ describe('what an older-history request reports', () => {
 // untested. A page read while `git worktree list` timed out must reach the live
 // reconciler (so a recovered catalog replays it), and must NOT be attributed
 // against a null family (ingestWorktreeRawEvent would throw on it).
+async function loadOlderPageWhileGitTimesOut(initial: Partial<SessionRuntime> = {}) {
+  let runtimes: Record<string, SessionRuntime> = {
+    session: { ...emptyRuntime(), hasOlderHistory: true, historyOldestMarker: 'anchor', ...initial },
+  }
+  const observed: unknown[][] = []
+  const refresh = vi.fn(async () => 'failed' as const)
+  const refs = {
+    stateRef: ref({ sessions: { session: { kind: 'claude', cwd: '/tmp/project', providerSessionId: 'provider-session' } } }),
+    latestRuntimesRef: ref(runtimes),
+    seenUuidsRef: ref({}),
+    worktreeReconcilerRef: ref({
+      observe: (_s: string, _c: string, entries: Array<{ entry: unknown }>, projection: unknown) => { observed.push(entries.map(e => e.entry)); return projection },
+      refresh,
+      replayCachedCatalog: vi.fn(),
+    }),
+  } as unknown as WorkspaceRefs
+  const setRuntimes: WorkspaceSetRuntimes = next => {
+    runtimes = typeof next === 'function' ? next(runtimes) : next
+    refs.latestRuntimesRef.current = runtimes
+  }
+  const updateRuntime = (id: string, patch: Partial<SessionRuntime>) => {
+    setRuntimes(prev => ({ ...prev, [id]: { ...prev[id]!, ...patch } }))
+  }
+  const older = {
+    type: 'assistant',
+    uuid: 'older-1',
+    timestamp: '2026-09-20T09:05:00.000Z',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Write', input: { file_path: '/tmp/project/.worktrees/x/a.ts' } }] },
+  }
+  Object.defineProperty(window, 'api', { configurable: true, value: {
+    loadOlderHistory: vi.fn().mockResolvedValue({ entries: [{ entries: [older], historyMarker: 'older-1' }], hasMore: false }),
+    gitWorktrees: vi.fn(async () => ({ ok: false, gitMissing: false, timedOut: true })),
+  } })
+  const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
+  let outcome: unknown
+  await act(async () => { outcome = await result.current.loadOlderHistory('session') })
+  return { outcome, observed, refresh, older, runtime: () => runtimes.session }
+}
+
 describe('an older page read while git timed out (#1430)', () => {
   it('hands the page to the reconciler, asks it to refresh, and attributes nothing', async () => {
-    let runtimes: Record<string, SessionRuntime> = {
-      session: { ...emptyRuntime(), hasOlderHistory: true, historyOldestMarker: 'anchor' },
-    }
-    const observed: unknown[][] = []
-    const refresh = vi.fn(async () => 'failed' as const)
-    const refs = {
-      stateRef: ref({ sessions: { session: { kind: 'claude', cwd: '/tmp/project', providerSessionId: 'provider-session' } } }),
-      latestRuntimesRef: ref(runtimes),
-      seenUuidsRef: ref({}),
-      worktreeReconcilerRef: ref({
-        observe: (_s: string, _c: string, entries: Array<{ entry: unknown }>, projection: unknown) => { observed.push(entries.map(e => e.entry)); return projection },
-        refresh,
-      }),
-    } as unknown as WorkspaceRefs
-    const setRuntimes: WorkspaceSetRuntimes = next => {
-      runtimes = typeof next === 'function' ? next(runtimes) : next
-      refs.latestRuntimesRef.current = runtimes
-    }
-    const updateRuntime = (id: string, patch: Partial<SessionRuntime>) => {
-      setRuntimes(prev => ({ ...prev, [id]: { ...prev[id]!, ...patch } }))
-    }
-    const older = {
-      type: 'assistant',
-      uuid: 'older-1',
-      timestamp: '2026-09-20T09:05:00.000Z',
-      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Write', input: { file_path: '/tmp/project/.worktrees/x/a.ts' } }] },
-    }
-    Object.defineProperty(window, 'api', { configurable: true, value: {
-      loadOlderHistory: vi.fn().mockResolvedValue({ entries: [{ entries: [older], historyMarker: 'older-1' }], hasMore: false }),
-      gitWorktrees: vi.fn(async () => ({ ok: false, gitMissing: false, timedOut: true })),
-    } })
-    const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
-    let outcome: unknown
-    await act(async () => { outcome = await result.current.loadOlderHistory('session') })
+    const { outcome, observed, refresh, older, runtime } = await loadOlderPageWhileGitTimesOut()
 
     expect(outcome).not.toBe('failed')
     expect(observed).toEqual([[{ entries: [older], historyMarker: 'older-1' }]])
     expect(refresh).toHaveBeenCalledWith('/tmp/project')
     // Nothing was attributed against the unknown family: no activity folded
     // from the page, no work context derived from it.
-    expect(runtimes.session?.workActivity).toBeNull()
-    expect(runtimes.session?.workContext).toBeNull()
+    expect(runtime()?.workActivity).toBeNull()
+    expect(runtime()?.workContext).toBeNull()
+  })
+
+  it('never hands an older page over when the pane already knows a newer context (#1450 verification b)', async () => {
+    // The answered-git path backfills only an UNKNOWN context: older records
+    // must never replace fresher evidence. Handing the page to the reconciler
+    // appended it as if it were the newest evidence, so a recovered catalog
+    // moved the pane back to the older worktree.
+    const known = { worktreePath: '/tmp/project/.worktrees/newer' } as unknown as SessionRuntime['workContext']
+    const { observed, refresh, runtime } = await loadOlderPageWhileGitTimesOut({ workContext: known })
+
+    expect(observed).toEqual([])
+    expect(refresh).not.toHaveBeenCalled()
+    expect(runtime()?.workContext).toBe(known)
   })
 })

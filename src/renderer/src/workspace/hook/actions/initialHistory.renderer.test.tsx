@@ -111,6 +111,7 @@ describe('the initial-history loader when git times out (#1430)', () => {
     pane.refs.worktreeReconcilerRef.current = {
       observe: (_sessionId, _cwd, entries, projection) => { observed.push(entries.map(e => e.entry)); return projection },
       refresh,
+      replayCachedCatalog: vi.fn(),
     }
     scope.extendApi({
       gitWorktrees: async () => ({ ok: false, gitMissing: false, timedOut: true }),
@@ -129,7 +130,7 @@ describe('the initial-history loader when git times out (#1430)', () => {
     const { history } = emptySession()
     const pane = rehydratedPane()
     const observe = vi.fn()
-    pane.refs.worktreeReconcilerRef.current = { observe, refresh: vi.fn() }
+    pane.refs.worktreeReconcilerRef.current = { observe, refresh: vi.fn(), replayCachedCatalog: vi.fn() }
     scope.extendApi({
       gitWorktrees: async () => ({ ok: true, worktrees: [] }),
       loadInitialHistory: async (request: { cwd: string; providerSessionId: string; limit: number }) => {

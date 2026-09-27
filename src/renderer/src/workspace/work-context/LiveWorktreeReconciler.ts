@@ -198,6 +198,25 @@ export class LiveWorktreeReconciler {
     return next
   }
 
+  /**
+   * Replay retained evidence against the catalog already cached for `cwd`.
+   *
+   * WHY (#1450 verification a): refresh() notifies only when git ANSWERS. A
+   * history chunk handed over while its own gitWorktrees call timed out can
+   * land after a live event already cached a fresh catalog; refresh() then
+   * answers 'cached' and never notifies, so the chunk sat in the window and
+   * the pane stayed on the launch folder until an unrelated event. Only with
+   * a real catalog (refreshedAt > 0): the placeholder an in-flight probe
+   * writes is empty, and replaying against it is the wrong-family read #1430
+   * removes.
+   */
+  replayCachedCatalog(cwd: string): void {
+    if (this.disposed) return
+    const cached = this.cache.get(cwd)
+    if (!cached || cached.refreshedAt <= 0) return
+    this.onCatalogReady(cwd)
+  }
+
   forgetSession(sessionId: SessionId): void {
     this.evidenceBySession.delete(sessionId)
   }

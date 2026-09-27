@@ -616,5 +616,11 @@ export function handHistoryToReconciler(
   const reconciler = refs.worktreeReconcilerRef.current
   if (!reconciler || entries.length === 0) return
   reconciler.observe(sessionId, cwd, entries.map(entry => ({ entry })), refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime())
-  void reconciler.refresh(cwd)
+  // 'cached' means a fresh catalog was already there, so no onCatalogReady is
+  // coming: replay now or the chunk waits for an unrelated event (#1450
+  // verification a). 'ready' already replayed; 'failed' is retried by the
+  // next refresh, which notifies when git answers.
+  void reconciler.refresh(cwd).then(outcome => {
+    if (outcome === 'cached') reconciler.replayCachedCatalog(cwd)
+  })
 }

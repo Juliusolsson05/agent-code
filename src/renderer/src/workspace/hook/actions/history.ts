@@ -114,8 +114,14 @@ export function useHistoryActions(
         // #1430: null = git timed out, family unknown → skip attribution (see
         // worktreesForAttribution), and hand the page to the reconciler so a
         // recovered catalog can still attribute it (handHistoryToReconciler).
+        //
+        // Only while the context is still UNKNOWN, the same recency rule as
+        // the answered-git backfill below (#1450 verification b): the
+        // reconciler appends what it observes as the NEWEST evidence, so an
+        // older page handed over while the pane already knew a newer
+        // worktree moved it back to the older one once git recovered.
         const worktrees = worktreesForAttribution(worktreesResult)
-        if (worktrees === null) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries)
+        if (worktrees === null && !runtime.workContext) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries)
         let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker

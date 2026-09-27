@@ -53,6 +53,31 @@ describe('history read while git timed out (#1430 review a/b)', () => {
     expect(runtime.workContext?.worktreePath).toBe(codex.git.ui?.path)
   })
 
+  it('repaints at once when the reconciler already holds a fresh catalog (#1450 verification a)', async () => {
+    // A live event loaded the catalog before this pane's history arrived; only
+    // the history's own gitWorktrees call timed out. refresh() then answers
+    // 'cached' and never calls onCatalogReady, so without a replay the chunk
+    // sat in the window and the pane stayed on the launch folder.
+    let runtime: SessionRuntime = emptyRuntime()
+    let reconciler!: LiveWorktreeReconciler
+    reconciler = new LiveWorktreeReconciler({
+      loadWorktrees: async () => ({ ok: true, worktrees: catalog }),
+      onCatalogReady: cwd => {
+        const projection = reconciler.project({ sessionId: 'resumed', cwd, projection: runtime })
+        runtime = { ...runtime, ...projection }
+      },
+    })
+    expect(await reconciler.refresh(codex.git.main.path)).toBe('ready')
+    expect(runtime.workContext?.worktreePath).not.toBe(codex.git.ui?.path)
+    const refs = { worktreeReconcilerRef: { current: reconciler }, latestRuntimesRef: { current: { resumed: runtime } } }
+
+    handHistoryToReconciler(refs as never, 'resumed', codex.git.main.path, codex.records)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(runtime.workContext?.worktreePath).toBe(codex.git.ui?.path)
+  })
+
   it('does nothing without a reconciler or without records', () => {
     expect(() => handHistoryToReconciler({ worktreeReconcilerRef: { current: null }, latestRuntimesRef: { current: {} } } as never, 's', '/x', [{}])).not.toThrow()
   })

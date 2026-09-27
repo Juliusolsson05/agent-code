@@ -131,3 +131,27 @@ says it or stays unknown, and none caches or records the wrong family.
   - Residual, accepted: the production publish of `worktreeReconcilerRef`
     in `useIpcSubscriptions` is unasserted, because mounting that hook is
     heavy. Every loader and reconciler test injects the ref.
+
+## Verification pass (a, b: FIX-BEFORE-MERGE), each fix fail-first
+
+Both findings are gaps in the round-1 hand-off.
+
+- **a (major): a fresh cached catalog never repainted.** A live event had
+  already cached the catalog, and only the history's own `gitWorktrees`
+  call timed out. `refresh()` answered `cached` and never called
+  `onCatalogReady`, so the handed-over chunk sat in the window.
+  - Fix: `LiveWorktreeReconciler.replayCachedCatalog(cwd)` replays the
+    retained evidence against a real cached catalog. It does nothing for
+    the empty placeholder an in-flight probe writes.
+    `handHistoryToReconciler` calls it when `refresh` answers `cached`.
+  - Pinned: the recorded `codex-0151` window, with the catalog loaded
+    first, reaches `worktree-2`. Before the fix it stayed on the main
+    checkout.
+- **b (major): an older page could replace a newer context.** The
+  reconciler appends what it observes as the newest evidence.
+  - Fix: the older-history loader hands a page over only while
+    `workContext` is unknown. This is the same recency rule as its
+    answered-git backfill.
+  - Pinned: a pane with a known context hands nothing over and keeps it.
+  - Ruling: initial history needs no such guard. It is the transcript's
+    tail, the newest evidence there is.

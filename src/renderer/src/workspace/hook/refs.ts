@@ -49,7 +49,7 @@ export type WorkspaceRefs = {
    *  lost its worktree evidence for good. The loaders hand such a chunk to
    *  the reconciler instead, whose bounded window replays it when the
    *  catalog answers. */
-  worktreeReconcilerRef: MutableRefObject<Pick<LiveWorktreeReconciler, 'observe' | 'refresh'> | null>
+  worktreeReconcilerRef: MutableRefObject<Pick<LiveWorktreeReconciler, 'observe' | 'refresh' | 'replayCachedCatalog'> | null>
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
   persistedFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
@@ -112,7 +112,7 @@ export function useWorkspaceRefs(
   const seenUuidsRef = useRef<Record<SessionId, Set<string>>>({})
   const historyWindowsRef = useRef<Record<SessionId, HistoryWindow>>({})
   const historyAwaitingTurnStartRef = useRef<Set<SessionId>>(new Set())
-  const worktreeReconcilerRef = useRef<Pick<LiveWorktreeReconciler, 'observe' | 'refresh'> | null>(null)
+  const worktreeReconcilerRef = useRef<Pick<LiveWorktreeReconciler, 'observe' | 'refresh' | 'replayCachedCatalog'> | null>(null)
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
   const pendingAdoptionWindowIdsRef = useRef<string[]>([])
