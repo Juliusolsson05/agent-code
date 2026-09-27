@@ -258,6 +258,14 @@ export class GoalLoopService extends EventEmitter {
   private readonly progressSince = new Map<string, number>()
   /** The re-evaluation timer for each held session; see holdUntilQuiet. */
   private readonly holdPolls = new Map<string, ReturnType<typeof setTimeout>>()
+  /**
+   * Work this service started without awaiting it: persists, continuations, and zero-delay
+   * deferrals until they have run. `whenSettled` waits for this to empty (#1341).
+   */
+  private readonly inflight = new Set<Promise<unknown>>()
+  /** Every timer this service owns, with the settle hook of a zero-delay one; `dispose` clears them. */
+  private readonly timers = new Map<ReturnType<typeof setTimeout>, (() => void) | undefined>()
+  private disposed = false
   /** Sessions whose last continuation was QUEUED by the provider rather than
    * started as a turn, and has not been seen to start yet.
    *
@@ -420,8 +428,7 @@ export class GoalLoopService extends EventEmitter {
     // Deferred one macrotask so the Stop hook's HTTP answer reaches the
     // provider first. Delivering inside the hook request would race the
     // provider's own turn close.
-    const timer = setTimeout(() => this.requestContinue(sessionId), 0)
-    timer.unref?.()
+    this.defer(() => this.requestContinue(sessionId), 0)
   }
 
   /**
@@ -512,7 +519,7 @@ export class GoalLoopService extends EventEmitter {
       // stay visible for as long as it can still prompt the agent.
       if (loop.phase !== 'ended') return { ...loop }
       this.loops.delete(sessionId)
-      void this.persist()
+      this.track(this.persist())
       return null
     }
     // A loop that is pausing, stopping or being dismissed will not type, so a
@@ -600,7 +607,7 @@ export class GoalLoopService extends EventEmitter {
     // that is still justified simply stays.
     if (command.action === 'resume') this.requestContinue(sessionId)
     const next = this.loops.get(sessionId)!
-    void this.persist()
+    this.track(this.persist())
     return { ...next }
   }
 
@@ -666,7 +673,7 @@ export class GoalLoopService extends EventEmitter {
    * settled state. */
   private scheduleContinueCheck(sessionId: string): void {
     if (this.continueCheckTimers.has(sessionId)) return
-    const timer = setTimeout(() => {
+    const timer = this.defer(() => {
       this.continueCheckTimers.delete(sessionId)
       const tracked = this.working.get(sessionId)
       // Same two safety lines as maybeContinue's entry check, evaluated AFTER
@@ -676,7 +683,6 @@ export class GoalLoopService extends EventEmitter {
       if (tracked && (isWorking(tracked) || tracked.pendingTools.length > 0)) return
       this.requestContinue(sessionId)
     }, 0)
-    timer.unref?.()
     this.continueCheckTimers.set(sessionId, timer)
   }
 
@@ -700,7 +706,7 @@ export class GoalLoopService extends EventEmitter {
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
-    void this.persist()
+    this.track(this.persist())
   }
 
   /** The agent is about to run (or is running) a turn the loop must see the
@@ -741,8 +747,10 @@ export class GoalLoopService extends EventEmitter {
   /** Every trigger (turn boundary, resume, backoff retry) funnels through
    * here so none of them can be lost to the re-entrancy guard. */
   private requestContinue(sessionId: string): void {
+    // A disposed service starts nothing new; whatever was already running is drained by dispose.
+    if (this.disposed) return
     if (this.continuing.has(sessionId)) this.pendingContinue.add(sessionId)
-    else void this.maybeContinue(sessionId)
+    else this.track(this.maybeContinue(sessionId))
   }
 
   /**
@@ -890,7 +898,7 @@ export class GoalLoopService extends EventEmitter {
       return
     }
     if (this.holdPolls.has(sessionId)) return
-    const timer = setTimeout(() => {
+    const timer = this.defer(() => {
       this.holdPolls.delete(sessionId)
       // The loop may have been paused, stopped or completed while we waited;
       // releasing here is what stops the poll from outliving it.
@@ -900,7 +908,6 @@ export class GoalLoopService extends EventEmitter {
       }
       this.requestContinue(sessionId)
     }, HOLD_POLL_MS)
-    timer.unref?.()
     this.holdPolls.set(sessionId, timer)
   }
 
@@ -908,7 +915,7 @@ export class GoalLoopService extends EventEmitter {
     this.heldSince.delete(sessionId)
     this.progressSince.delete(sessionId)
     const timer = this.holdPolls.get(sessionId)
-    if (timer) clearTimeout(timer)
+    if (timer) this.cancel(timer)
     this.holdPolls.delete(sessionId)
   }
 
@@ -936,7 +943,7 @@ export class GoalLoopService extends EventEmitter {
     if (!loop || loop.phase !== 'active') return
     console.warn(`[goal-loop] ${sessionId}: held on "${reason}" after its turn ended; pausing instead of typing into it`)
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'error', updatedAt: this.now().toISOString() })
-    void this.persist()
+    this.track(this.persist())
   }
 
   private async maybeContinue(sessionId: string): Promise<void> {
@@ -1012,8 +1019,7 @@ export class GoalLoopService extends EventEmitter {
         // below settles, and on a slow disk a direct call would hit that
         // guard and drop the only trigger this loop has left.
         if (!pause) {
-          const retry = setTimeout(() => this.requestContinue(sessionId), DELIVERY_RETRY_DELAY_MS)
-          retry.unref?.()
+          this.defer(() => this.requestContinue(sessionId), DELIVERY_RETRY_DELAY_MS)
         }
       }
       await this.persist()
@@ -1021,8 +1027,67 @@ export class GoalLoopService extends EventEmitter {
       console.warn('[goal-loop] continuation failed unexpectedly:', error)
     } finally {
       this.continuing.delete(sessionId)
-      if (this.pendingContinue.delete(sessionId)) void this.maybeContinue(sessionId)
+      if (this.pendingContinue.delete(sessionId)) this.track(this.maybeContinue(sessionId))
     }
+  }
+
+  /**
+   * Resolves once nothing this service started is still running (#1341).
+   *
+   * WHY: persists, continuations and zero-delay deferrals were all fire-and-forget, so nothing could
+   * wait for them. Tests slept a guessed 10 ms–1.5 s and then asserted "not delivered" (a negative
+   * that passes whenever the work simply had not run yet), and `afterEach` removed a temp dir under
+   * a still-running write, logging ENOENT (13 times on main CI run 36156560842). Loops because
+   * settling work can start more: a continuation's finally re-requests a pending one.
+   *
+   * NOT included: the 1 s hold poll and the delivery-retry backoff. Those are scheduled FUTURE work
+   * (fake timers drive them in tests), and waiting for them would wait for a hold to end.
+   */
+  async whenSettled(): Promise<void> {
+    while (this.inflight.size > 0) await Promise.allSettled([...this.inflight])
+  }
+
+  /**
+   * Stop starting work, cancel every timer, and wait for what is already running (#1341).
+   * After this the service delivers nothing; a new event is ignored.
+   */
+  async dispose(): Promise<void> {
+    this.disposed = true
+    for (const timer of [...this.timers.keys()]) this.cancel(timer)
+    this.continueCheckTimers.clear()
+    this.holdPolls.clear()
+    await this.whenSettled()
+  }
+
+  private track(work: Promise<unknown>): void {
+    this.inflight.add(work)
+    const done = () => { this.inflight.delete(work) }
+    work.then(done, done)
+  }
+
+  /** A timer this service owns. A zero-delay one counts as in flight until it has run. */
+  private defer(run: () => void, ms: number): ReturnType<typeof setTimeout> {
+    let settle: (() => void) | undefined
+    if (ms === 0) this.track(new Promise<void>(resolve => { settle = resolve }))
+    const timer = setTimeout(() => {
+      this.timers.delete(timer)
+      try {
+        if (!this.disposed) run()
+      } finally {
+        settle?.()
+      }
+    }, ms)
+    timer.unref?.()
+    this.timers.set(timer, settle)
+    return timer
+  }
+
+  /** Clear a timer and release its in-flight hold, if it had one. */
+  private cancel(timer: ReturnType<typeof setTimeout>): void {
+    clearTimeout(timer)
+    const settle = this.timers.get(timer)
+    this.timers.delete(timer)
+    settle?.()
   }
 
   private async persist(): Promise<void> {
