@@ -95,9 +95,23 @@ export function useClaudeImagePaste({
 
   const handlePaste = useCallback(
     async (e: ClipboardLike): Promise<ImagePasteResult> => {
-      // Codex has no inline-image content — fall through so the
-      // caller routes the clipboard's text instead.
-      if (!getRendererProviderCapabilities(provider).supportsImageAttachments) return { handledImages: false }
+      // Providers without inline-image content fall through, so the caller
+      // routes the clipboard's text instead.
+      const capabilities = getRendererProviderCapabilities(provider)
+      if (!capabilities.supportsImageAttachments) {
+        // WHY say so (#1250 row 7): an image-only paste (a screenshot) into
+        // a Codex/OpenCode/Grok/Pi composer inserted nothing and said
+        // nothing. Only an image FILE with no text counts: a web-page copy
+        // carries <img> in text/html beside its text, and that text paste
+        // must stay silent. Read synchronously; the event's data is only
+        // reliable during dispatch.
+        const data = e.clipboardData
+        const imageOnly = Boolean(data)
+          && Array.from(data!.items).some(item => item.kind === 'file' && item.type.startsWith('image/'))
+          && !data!.getData('text/plain')
+        if (imageOnly) showToast(`${capabilities.shortLabel} can't take pasted images.`)
+        return { handledImages: false }
+      }
       const clipboardData = e.clipboardData
       if (!clipboardData) return { handledImages: false }
 
