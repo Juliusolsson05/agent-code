@@ -158,3 +158,57 @@ it.each([
   expect(row.task.inProgressToolUseIds).toEqual([])
   expect(row.task.activeToolNames).toEqual([])
 })
+
+// Round 5 (review a) / steering q95: a tool result is ONE unit taken from the
+// copy with the later resultAt (the replay on a tie). Field by field, an
+// archived error followed by a corrected result kept resultIsError (OR) and
+// the `error` lookup status beside the corrected text: a success painted red.
+function resultTurn(result: { content: string; isError: boolean; at: number }, endedAt: number) {
+  const t = turn('', [{
+    kind: 'tool_use', toolName: 'Bash', toolUseId: 'r1', inputJson: '{}', status: undefined, finalized: true,
+    resultContent: result.content, resultIsError: result.isError, resultAt: result.at,
+  }], endedAt) as unknown as SemanticLiveTurn
+  return {
+    ...t,
+    lookups: {
+      toolCallsById: { r1: { toolUseId: 'r1', blockIndex: 0, kind: 'tool_use', toolName: 'Bash', status: result.isError ? 'error' : 'completed', inputJson: '{}', resultContent: result.content } },
+      toolUseIdsInOrder: ['r1'],
+      resolvedToolUseIds: result.isError ? [] : ['r1'],
+      erroredToolUseIds: result.isError ? ['r1'] : [],
+    },
+  } as SemanticLiveTurn
+}
+const resultOf = (history: ReturnType<typeof archiveReplayedTurn>) => {
+  const row = history[0] as unknown as SemanticLiveTurn
+  const block = row.blocks[0]!
+  return {
+    content: block.resultContent, isError: block.resultIsError, at: block.resultAt,
+    status: row.lookups.toolCallsById.r1?.status,
+    errored: row.lookups.erroredToolUseIds.includes('r1'),
+    resolved: row.lookups.resolvedToolUseIds.includes('r1'),
+  }
+}
+
+it('takes a corrected result the replay received later as one unit (review a round 5)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(resultTurn({ content: 'error', isError: true, at: 2 }, 2))],
+    resultTurn({ content: 'error corrected', isError: false, at: 3 }, 3),
+  )
+  expect(resultOf(history)).toEqual({ content: 'error corrected', isError: false, at: 3, status: 'completed', errored: false, resolved: true })
+})
+
+it('keeps the archived result when it is the later one', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(resultTurn({ content: 'fixed', isError: false, at: 5 }, 5))],
+    resultTurn({ content: 'fixed, but failed earlier', isError: true, at: 3 }, 6),
+  )
+  expect(resultOf(history)).toEqual({ content: 'fixed', isError: false, at: 5, status: 'completed', errored: false, resolved: true })
+})
+
+it('takes the replay result on a tie', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(resultTurn({ content: 'ok', isError: false, at: 4 }, 4))],
+    resultTurn({ content: 'failed', isError: true, at: 4 }, 5),
+  )
+  expect(resultOf(history)).toEqual({ content: 'failed', isError: true, at: 4, status: 'error', errored: true, resolved: false })
+})

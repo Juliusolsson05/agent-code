@@ -161,14 +161,25 @@ export function appendSemanticHistory(
  *   - LIFECYCLE fields take the more advanced value, whichever copy has it
  *     (#1391 review a, round 4): a `status` (block, tool lookup, image/shell
  *     call) ranks pending < in_progress < terminal; `messagePhase` ranks
- *     commentary < final_answer; booleans OR (`finalized`, `inputJsonValid`,
- *     `resultIsError` only ever become true as evidence arrives). The round-3
+ *     commentary < final_answer; booleans OR (`finalized`, `inputJsonValid`
+ *     only ever become true as evidence arrives). The round-3
  *     rule kept the ARCHIVED lifecycle value, which protected a completed
  *     archive from a reopened replay but also blocked the opposite and
  *     equally real case: an archive cut while a block or tool was still
  *     pending, completed by the replay. That merged row had no text ownership
  *     key (double-rendered beside JSONL) and painted a resolved tool as
  *     running;
+ *   - a TOOL RESULT is one unit, not separate fields (#1391 review a round
+ *     5, steering q95): `resultContent`, `resultIsError`, `resultAt` and the
+ *     tool's lookup state (`toolCallsById[id]` and its membership in
+ *     `resolvedToolUseIds` / `erroredToolUseIds`) all come from the copy
+ *     with the LATER `resultAt`, and from the replay on a tie. Merged field
+ *     by field, an archived error followed by a corrected result kept
+ *     `resultIsError` (OR) and the error lookup status (equal terminal rank)
+ *     next to the corrected text, so a success painted red. The live reducer
+ *     lets a later result clear the error (foldEvent.ts's tool_result
+ *     paths), so no single field of a result is monotonic; only the tuple's
+ *     time is;
  *   - `task.inProgressToolUseIds` is DERIVED, so it is recomputed after the
  *     merge (the union of both copies minus every id either copy resolved or
  *     errored), and `activeToolNames` keeps only names both copies agree are
@@ -198,7 +209,9 @@ export function archiveReplayedTurn(
   turn: SemanticLiveTurn,
 ): SemanticRuntimeState['history'] {
   const archived = history.find(existing => existing.turnId === turn.turnId)
-  const merged = archived ? withDerivedTask(mergeMonotonic(archived, turn) as SemanticLiveTurn, archived, turn) : turn
+  const merged = archived
+    ? withDerivedTask(withToolResultUnits(mergeMonotonic(archived, turn) as SemanticLiveTurn, archived, turn), archived, turn)
+    : turn
   return appendSemanticHistory(history, merged)
 }
 
@@ -237,6 +250,43 @@ function mergeMonotonic(archived: unknown, replay: unknown, key?: string): unkno
     return out
   }
   return archived
+}
+
+function withToolResultUnits(merged: SemanticLiveTurn, archived: SemanticLiveTurn, replay: SemanticLiveTurn): SemanticLiveTurn {
+  const blocks = { ...merged.blocks }
+  const lookups = {
+    ...merged.lookups,
+    toolCallsById: { ...merged.lookups.toolCallsById },
+    resolvedToolUseIds: [...merged.lookups.resolvedToolUseIds],
+    erroredToolUseIds: [...merged.lookups.erroredToolUseIds],
+  }
+  for (const key of Object.keys(blocks)) {
+    const index = Number(key)
+    const a = archived.blocks[index]
+    const r = replay.blocks[index]
+    if (!a || !r || (a.resultAt === undefined && r.resultAt === undefined)) continue
+    // Later result wins; the replay on a tie or when only it has a time.
+    const source = a.resultAt !== undefined && (r.resultAt === undefined || a.resultAt > r.resultAt) ? a : r
+    const sourceTurn = source === a ? archived : replay
+    blocks[index] = {
+      ...blocks[index]!,
+      resultContent: source.resultContent,
+      resultIsError: source.resultIsError,
+      resultAt: source.resultAt,
+    }
+    const id = blocks[index]!.toolUseId ?? blocks[index]!.callId
+    if (id === undefined) continue
+    const call = sourceTurn.lookups.toolCallsById[id]
+    if (call) lookups.toolCallsById[id] = call
+    const setMembership = (list: string[], member: boolean) => {
+      const at = list.indexOf(id)
+      if (member && at < 0) list.push(id)
+      if (!member && at >= 0) list.splice(at, 1)
+    }
+    setMembership(lookups.resolvedToolUseIds, sourceTurn.lookups.resolvedToolUseIds.includes(id))
+    setMembership(lookups.erroredToolUseIds, sourceTurn.lookups.erroredToolUseIds.includes(id))
+  }
+  return { ...merged, blocks, lookups }
 }
 
 function withDerivedTask(merged: SemanticLiveTurn, archived: SemanticLiveTurn, replay: SemanticLiveTurn): SemanticLiveTurn {
