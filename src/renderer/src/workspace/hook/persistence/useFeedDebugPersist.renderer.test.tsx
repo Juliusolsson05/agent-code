@@ -296,6 +296,22 @@ describe('feed debug persistence gate', () => {
     expect(refs.latestRuntimesRef.current.a!.feedDebugLog).toHaveLength(1)
   })
 
+  // Review of #1349: turning persistence off used to write one last batch from the
+  // effect cleanup.
+  it('writes nothing after persistence is switched off', async () => {
+    useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false })
+    setAggressive(true)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'first') })
+    const { rerender } = renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    refs.latestRuntimesRef.current = { a: add(refs.latestRuntimesRef.current.a!, 'after the flush') }
+    act(() => { setAggressive(false) })
+    rerender()
+    await advance(5_000)
+    expect(append).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['dev-debug', () => { useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false }); setAggressive(false) }],
     ['aggressive debug persistence', () => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }); setAggressive(true) }],

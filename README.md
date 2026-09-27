@@ -207,7 +207,7 @@ read from the environment or a git-ignored `.env` at the repository root, at lau
 |---|---|---|---|
 | `AGENT_CODE_DEV_DEBUG=1` | env | off | Dev Debug panel and recording commands. It also writes each session's feed-debug ring to `~/.config/agent-code/feed-debug/` once a second (up to 128 MiB per session). |
 | `AGENT_CODE_SESSION_RECORD=1` | env (needs `DEV_DEBUG`) | off | Auto-records every session from launch (screen frames and IPC), for unattended soak runs. It is the heaviest diagnostic: roughly 1 MB/s of serialization on the main process. |
-| `AGENT_CODE_PERF=1` | env | off | Performance spans and the Performance Monitor's data. `AGENT_CODE_PERF_VERBOSE` and `AGENT_CODE_PERF_SLOW_MS` tune it. |
+| `AGENT_CODE_PERF=1` | env | off | Extra performance spans and traces (`PerformanceService`). `AGENT_CODE_PERF_VERBOSE` and `AGENT_CODE_PERF_SLOW_MS` tune it. The Performance Monitor's baseline history runs regardless. |
 | Persistent Aggressive Debug Logs | Settings → Experimental | off | Autosaves a debug bundle per active pane every minute, and also persists the feed-debug ring, like `DEV_DEBUG`. |
 
 "Save Debug Logs" works with everything off: it reads the in-memory feed-debug ring, not the files.

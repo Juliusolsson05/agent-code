@@ -96,6 +96,47 @@ describe('WorktreeActivityIndex refresh persistence (#767)', () => {
     expect(Object.keys(after.transcripts)).toHaveLength(candidates.length)
   })
 
+  // Review of #1349: B leaves discovery, C appears and leaves again, B returns
+  // unchanged from the LRU. Same count, nothing parsed — the swap must still persist.
+  it('persists a same-count swap of transcript paths', async () => {
+    await addRollout('one', '/fixture/project')
+    await addRollout('two', '/fixture/other')
+    const index = new WorktreeActivityIndex()
+    await index.getSummary({ worktrees, refresh: true })
+    const two = candidates.pop()!
+    await index.getSummary({ worktrees, refresh: true })
+    await addRollout('three', '/fixture/third')
+    await index.getSummary({ worktrees, refresh: true })
+    candidates.pop()
+    candidates.push(two)
+    const { status } = await index.getSummary({ worktrees, refresh: true })
+    expect(status.parsedFiles).toBe(0)
+    const keys = Object.keys((JSON.parse(await readFile(indexFile, 'utf8')) as { transcripts: Record<string, unknown> }).transcripts)
+    expect(keys.map(key => key.slice(key.lastIndexOf('/') + 1)).sort()).toEqual(['one.jsonl', 'two.jsonl'])
+  })
+
+  // Review of #1349: the summary cache is keyed on the in-memory content generation;
+  // a content change must reach the summaries the Worktrees bar shows.
+  it('serves fresh summaries after a transcript moves to another worktree', async () => {
+    await addRollout('one', '/fixture/project')
+    const index = new WorktreeActivityIndex()
+    const before = await index.getSummary({ worktrees, refresh: true })
+    expect(JSON.stringify(before.summaries)).toContain('one')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await addRollout('one', '/fixture/elsewhere')
+    const after = await index.getSummary({ worktrees, refresh: true })
+    expect(JSON.stringify(after.summaries)).not.toContain('one')
+  })
+
+  it('re-parses a transcript whose provider session changed at the same path, mtime and size', async () => {
+    await addRollout('one', '/fixture/project')
+    const index = new WorktreeActivityIndex()
+    await index.getSummary({ worktrees, refresh: true })
+    candidates[0] = { ...candidates[0]!, providerSessionId: 'another-session' }
+    const { status } = await index.getSummary({ worktrees, refresh: true })
+    expect(status.parsedFiles).toBe(1)
+  })
+
   it('stores the same content generation on disk that it keeps in memory', async () => {
     await addRollout('one', '/fixture/project')
     const index = new WorktreeActivityIndex()

@@ -94,6 +94,13 @@ export class WorktreeActivityIndex {
     IN_MEMORY_MAX_ENTRIES,
   )
   private totalOnDisk = 0
+  /**
+   * The transcript paths the on-disk index holds, as bare strings (a few thousand paths, not the
+   * entries). WHY (review of #1349): "nothing was parsed and the count is the same" was not
+   * "nothing changed" — one transcript leaving discovery while another returned from the LRU with
+   * its old mtime/size kept the count and parsed nothing, so the swap was never persisted.
+   */
+  private onDiskKeys = new Set<string>()
   private summaryCache:
     | {
         key: string
@@ -148,6 +155,7 @@ export class WorktreeActivityIndex {
       // — the parsed object is already in scope from the load above
       // and will go out of scope after this function returns.
       this.totalOnDisk = Object.keys(file.transcripts).length
+      this.onDiskKeys = new Set(Object.keys(file.transcripts))
       const sortedByRecency = Object.entries(file.transcripts).sort(
         // Higher indexedAt = more recent. Insert oldest first so the
         // newest end up at the LRU's most-recently-used end.
@@ -297,15 +305,17 @@ export class WorktreeActivityIndex {
       // new `updatedAt` also keyed `collectSummaries`' cache, so it threw
       // away the very cache that stops a 10 s UI poll from re-reading the
       // index. Content changed only if something was (re)parsed, a parse
-      // failed (that entry drops out), or the entry count moved (a deleted
-      // transcript). Otherwise this was a re-check: record WHEN we checked
+      // failed (that entry drops out), or the SET of transcript paths moved (a
+      // deleted, added or swapped transcript). Otherwise this was a re-check: record WHEN we checked
       // (`lastIndexedAt`, shown as "Activity index updated") and keep the
       // content generation (`updatedAt`) as it was.
-      const nextCount = Object.keys(nextTranscripts).length
+      const nextKeys = Object.keys(nextTranscripts)
+      const nextCount = nextKeys.length
       const contentChanged =
         this.status.parsedFiles > 0 ||
         this.status.skippedFiles > 0 ||
-        nextCount !== this.totalOnDisk
+        nextCount !== this.onDiskKeys.size ||
+        nextKeys.some(key => !this.onDiskKeys.has(key))
       if (contentChanged) {
         const indexFile: WorktreeActivityIndexFile = {
           version: WORKTREE_ACTIVITY_INDEX_VERSION,
@@ -314,6 +324,7 @@ export class WorktreeActivityIndex {
         }
         await saveWorktreeActivityIndex(indexFile)
         this.updatedAt = checkedAt
+        this.onDiskKeys = new Set(nextKeys)
       }
       this.totalOnDisk = nextCount
       // Repopulate the LRU from the just-saved set. We don't clear

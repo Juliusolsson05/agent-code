@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -90,6 +90,11 @@ export function useFeedDebugPersistenceEnabled(): boolean {
 
 export function useFeedDebugPersist(refs: WorkspaceRefs): void {
   const enabled = useFeedDebugPersistenceEnabled()
+  // The CURRENT switch, read by the cleanup below. The cleanup runs both on unmount and when
+  // `enabled` flips to false; only the first may flush (review of #1349: turning persistence off
+  // still wrote one last batch to disk).
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
   useEffect(() => {
     if (!enabled) return
     const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
@@ -171,7 +176,9 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       window.clearInterval(timer)
       // Best effort for ordinary workspace teardown. Existing in-flight writes
       // retain their cursor reservation; never race them with a final batch.
-      flush()
+      // Not when persistence was just switched off: the user asked for no
+      // more disk writes.
+      if (enabledRef.current) flush()
     }
   }, [
     enabled,
