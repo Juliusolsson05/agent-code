@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { appendFile, chmod, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -230,5 +230,30 @@ describe('an id gap left by a failed write', () => {
     await restarted.appendInterval({ context: b, startedAt: start + 3 * HOUR, endedAt: start + 4 * HOUR })
     const read = await new AgentActivityStore(dir).readIntervals(start, start + 5 * HOUR)
     expect(read.map(interval => interval.context.agentKey)).toEqual(['B', 'C', 'B'])
+  })
+})
+
+// #1414 review a round 3 (q115): recovery treated an UNREADABLE open.json as
+// "no open file" and overwrote it with an empty snapshot, so the pending
+// interval was lost for good. Now an unreadable (or corrupt) snapshot is moved
+// aside, bytes intact, and a later start recovers it once it can be read.
+describe('an unreadable open-interval snapshot', () => {
+  it('is set aside instead of overwritten, and recovered once readable', async () => {
+    const start = Date.parse('2026-09-01T09:00:00Z')
+    const lastTouch = start + 2 * HOUR
+    await new AgentActivityStore(dir).writeOpen([{ sessionId: 'session-1', context, startedAt: start }], lastTouch)
+    const file = join(dir, 'open.json')
+    const before = await readFile(file)
+    await chmod(file, 0o200)
+    expect(await new AgentActivityStore(dir).recoverOpenIntervals(start + 10 * HOUR)).toBe(0)
+    const aside = (await readdir(dir)).filter(name => name.startsWith('open.json.unrecovered-'))
+    expect(aside).toHaveLength(1)
+    await chmod(join(dir, aside[0]!), 0o600)
+    expect(await readFile(join(dir, aside[0]!))).toEqual(before)
+    // Readable again: the next start recovers it and removes the set-aside copy.
+    expect(await new AgentActivityStore(dir).recoverOpenIntervals(start + 11 * HOUR)).toBe(1)
+    expect((await readdir(dir)).filter(name => name.startsWith('open.json.unrecovered-'))).toEqual([])
+    const read = await new AgentActivityStore(dir).readIntervals(start, start + 12 * HOUR)
+    expect(read.map(interval => [interval.startedAt, interval.endedAt])).toEqual([[start, lastTouch]])
   })
 })

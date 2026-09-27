@@ -1,4 +1,4 @@
-import { appendFile, mkdir, open, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { SystemSuspension } from '@shared/types/systemSuspension.js'
@@ -339,29 +339,69 @@ export class AgentActivityStore {
 
   /** Close every interval a previous run left open at that run's last touch.
    *  An unclean shutdown therefore contributes at most one touch period of time
-   *  that was not observed, never the hours until the next launch. */
+   *  that was not observed, never the hours until the next launch.
+   *
+   *  "Unknown is never empty" (#1414 review a round 3, q115): recovery used to
+   *  treat ANY failure (unreadable, corrupt, a failed append midway) as "no
+   *  open file" and then overwrite open.json with an empty snapshot, losing the
+   *  pending interval for good. Now only a missing file (ENOENT) is empty.
+   *  Anything else is moved aside to `open.json.unrecovered-<time>` (a rename
+   *  needs no read permission), so its bytes survive the fresh snapshot this
+   *  run must write, and every later start retries each set-aside copy it can
+   *  read, removing it once recovered. If even the move fails, nothing is
+   *  overwritten and the error propagates. */
   async recoverOpenIntervals(now: number): Promise<number> {
-    let recovered = 0
+    let recovered = await this.recoverSetAside()
+    const path = join(this.dir, 'open.json')
     try {
-      const json: unknown = JSON.parse(await readFile(join(this.dir, 'open.json'), 'utf8'))
-      const record = json && typeof json === 'object' ? (json as Record<string, unknown>) : {}
-      const aliveAt = isNumber(record.aliveAt) ? record.aliveAt : null
-      for (const raw of Array.isArray(record.open) ? record.open : []) {
-        if (!raw || typeof raw !== 'object') continue
-        const entry = raw as Record<string, unknown>
-        const context = entry.context && typeof entry.context === 'object'
-          ? parseContext(entry.context as Record<string, unknown>)
-          : null
-        if (!context || !isNumber(entry.startedAt) || aliveAt === null) continue
-        if (aliveAt > entry.startedAt) {
-          await this.appendInterval({ context, startedAt: entry.startedAt, endedAt: aliveAt })
-          recovered += 1
-        }
-      }
-    } catch {
-      // No open file: a clean first run.
+      recovered += await this.recoverSnapshot(path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') await rename(path, `${path}.unrecovered-${now}`)
     }
     await this.writeOpen([], now)
+    return recovered
+  }
+
+  /** Recover set-aside snapshots that can be read now; keep the rest. */
+  private async recoverSetAside(): Promise<number> {
+    let names: string[]
+    try {
+      names = (await readdir(this.dir)).filter(name => name.startsWith('open.json.unrecovered-')).sort()
+    } catch {
+      // No directory yet, or unlistable: nothing is removed, so nothing is lost.
+      return 0
+    }
+    let recovered = 0
+    for (const name of names) {
+      try {
+        recovered += await this.recoverSnapshot(join(this.dir, name))
+      } catch {
+        continue
+      }
+      await rm(join(this.dir, name), { force: true })
+    }
+    return recovered
+  }
+
+  /** Append the intervals a snapshot left open. Throws on ANY read, parse or
+   *  append failure, so the caller never treats the snapshot as recovered. */
+  private async recoverSnapshot(path: string): Promise<number> {
+    const json: unknown = JSON.parse(await readFile(path, 'utf8'))
+    const record = json && typeof json === 'object' ? (json as Record<string, unknown>) : {}
+    const aliveAt = isNumber(record.aliveAt) ? record.aliveAt : null
+    let recovered = 0
+    for (const raw of Array.isArray(record.open) ? record.open : []) {
+      if (!raw || typeof raw !== 'object') continue
+      const entry = raw as Record<string, unknown>
+      const context = entry.context && typeof entry.context === 'object'
+        ? parseContext(entry.context as Record<string, unknown>)
+        : null
+      if (!context || !isNumber(entry.startedAt) || aliveAt === null) continue
+      if (aliveAt > entry.startedAt) {
+        await this.appendInterval({ context, startedAt: entry.startedAt, endedAt: aliveAt })
+        recovered += 1
+      }
+    }
     return recovered
   }
 
