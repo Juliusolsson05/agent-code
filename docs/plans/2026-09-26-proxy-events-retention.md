@@ -27,8 +27,10 @@ issue still has open:
 - **Rotate in the addon, keep one previous generation.** When the events file reaches
   `PROXY_EVENTS_ROTATE_BYTES` (default 512 MiB), the addon renames it to `proxy-events.1.jsonl`
   (atomically replacing the older generation) and the next write starts a fresh
-  `proxy-events.jsonl`. A live run therefore holds at most ~2 × 512 MiB (+ the 16 MiB latest-body
-  sidecar), instead of growing for the life of the session. Rotation failure is non-fatal: the addon
+  `proxy-events.jsonl`. The **events file** therefore holds at most ~2 × 512 MiB instead of growing
+  for the life of the session. The run directory is NOT fully bounded by this change: the latest-body
+  sidecar is ~21.3 MiB on disk (16 MiB raw, base64; briefly twice that during its atomic replace), and
+  `sslkeylog.log` still grows without bound (#1380). See the review outcome under Delivery. Rotation failure is non-fatal: the addon
   keeps appending (forensics must never disturb the proxy).
   - WHY 512 MiB and one generation: the body budget (256 MiB) still applies per file, so each
     generation keeps ~100 turns of bodies plus a long stretch of body-less traffic; the debug bundle
@@ -64,8 +66,10 @@ issue still has open:
   change was reverted (`0a462fad`). #1332 makes one provider-neutral, rotation-safe reader: one
   handle, `bytesRead` honoured, filling from `.1`. This branch merges main after #1332 and keeps only
   Claude-specific wiring, if any is still needed.
-- **Retention unchanged.** With rotation, a live run is bounded, so the 10-minute grace no longer
-  lets one session fill the disk; old oversized files from before this change age out normally.
+- **Retention: one change.** Run detection now also counts a directory holding only
+  `proxy-events.1.jsonl` (found in review). With rotation the events file is bounded, so the 10-minute
+  grace no longer lets one session's events fill the disk (`sslkeylog.log` is #1380); old oversized
+  files from before this change age out normally.
 
 ## Tests
 
@@ -78,11 +82,16 @@ issue still has open:
   events written between the last poll and the rename are lost (asserted by name).
 - Poll ordering: rename observed while the new file is still absent, and a rotation that happens
   while the old generation ended mid-poll — both orders pinned.
-- App: none on this branch; the bundle reader's tests live in W1's #1332 (q54).
+- App (added after the #1376 review): `claudeSession.suspension.test.ts` pins that both the `event`
+  and `transport-gap` channels are forwarded and detached; `sessionManager.proxyGap.test.ts` pins the
+  `claude.proxy_transport_gap` incident, its re-emit, and that a replaced session's late gap is
+  ignored; `debugRetention.test.ts` pins that a run holding only `proxy-events.1.jsonl` is counted.
+  The bundle reader's own tests live in W1's #1332 (q54).
 
 ## Delivery
 
-claude-code-headless#64 (addon + tailer): three reviews, verification, and a final round 3, MERGED (`f52fc82`). This agent-code PR only bumps the pointer. #1332 (W1's rotation-safe bundle reader) is already on main.
+claude-code-headless#64 (addon + tailer): three reviews, verification, and a final round 3, MERGED (`f52fc82`). This agent-code PR bumps the pointer and, after its review, adds the app-side
+wiring below (gap forwarding and incident, `.1`-only retention); it `Refs #1273` rather than fixing it. #1332 (W1's rotation-safe bundle reader) is already on main.
 - **No lockfile resync is needed.** The app consumes claude-code-headless from source (tsconfig and Vite aliases), not as a `file:` dependency, and its runtime dependencies (`chokidar`, `@xterm/headless`) are already root dependencies. The bump changes only the package's own devDependencies; `npm install --package-lock-only` leaves `package-lock.json` unchanged.
 - **The generation header** is one more JSON line with an unknown `kind` to the app's only direct reader (the bundle reader, which ships raw bytes). The addon recreates `proxy-events.jsonl` immediately, so `debugRetention`'s run detection is unaffected.
 - **Review of #1376 (a, b, c):**

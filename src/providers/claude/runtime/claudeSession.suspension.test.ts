@@ -95,4 +95,3 @@ describe('ClaudeSession proxy wiring', () => {
     expect(proxy.listenerCount('event') + proxy.listenerCount('transport-gap')).toBe(0)
   })
 })
-

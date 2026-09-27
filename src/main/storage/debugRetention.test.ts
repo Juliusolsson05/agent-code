@@ -242,4 +242,3 @@ describe('collectProxyRunDirs', () => {
     expect(runs).toEqual([live, rotated])
   })
 })
-

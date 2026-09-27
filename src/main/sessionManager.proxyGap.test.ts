@@ -109,4 +109,3 @@ describe('a Claude proxy transport gap', () => {
     expect(incidents.filter(incident => incident.kind === 'claude.proxy_transport_gap')).toEqual([])
   })
 })
-
