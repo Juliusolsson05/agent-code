@@ -55,9 +55,14 @@
 // build/Release over prebuilds/. So the patched source is what every build
 // and every packaged app runs.
 //
-// The error message keeps the "posix_spawnp failed" prefix on purpose: it is
-// what users and earlier issues (#1437, the node-pty x64 rebuild trap) search
-// for. Nothing in the app matches on the text (checked with grep).
+// The error message keeps the "posix_spawnp failed" prefix on purpose, and it
+// is LOAD-BEARING: src/main/ipc/session.ts classifySpawnFailure keys the
+// `posix-spawnp` failure signature on it (#1324), and a spawn failure without
+// it would fall through to enoent/unclassified in every recorded incident.
+// It is also what users and earlier issues search for. #882 throws the cause
+// alone; do not "match upstream" here. (The first version of this comment
+// claimed nothing matched on the text — wrong, caught by #1439 review c; the
+// classifier's test now pins the patched message shape.)
 //
 // HOW IT IS GUARDED
 //

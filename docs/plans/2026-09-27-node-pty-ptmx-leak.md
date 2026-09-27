@@ -116,8 +116,11 @@ app never reaches `kern.tty.ptmx_max` (511) and never fails every spawn with
   land below fd 2. Cost if wrong: none; the bound only removes an
   out-of-bounds read.
 - Ruling: the thrown message keeps the `posix_spawnp failed` prefix and adds
-  the cause. #882 throws the cause alone. Nothing in the app matches on the
-  text; the prefix keeps earlier reports searchable.
+  the cause. #882 throws the cause alone. The prefix is LOAD-BEARING:
+  `src/main/ipc/session.ts` `classifySpawnFailure` keys the `posix-spawnp`
+  signature on it (#1324). The first version of this note said nothing
+  matched on the text, which was wrong (#1439 review c). The classifier's
+  test now pins the patched message shape.
 - Verified: the patched source compiles with node-gyp against Node 24, in
   an isolated copy under the scratchpad. The only warnings are two
   pre-existing ones (1.1.0's kqueue initialisers), and the shared
