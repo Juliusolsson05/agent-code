@@ -59,3 +59,184 @@ export type DictationHistorySnapshot = {
   stats: DictationStats
   entries: DictationHistoryEntry[]
 }
+
+// ── How a dictation ended (#243) ──────────────────────────────────────────
+//
+// WHY one closed union shared by main and renderer: a dictation ends in main
+// (the provider answered) or in the renderer (the microphone never opened,
+// the press was a tap, the pane went away), and before this each side wrote
+// free text. In the owner's recorded journals, 56 of 148 sessions had NO
+// terminal row at all, and all 24 recorded errors read either "Deepgram
+// transcription failed" or "fetch failed", while the provider had in fact
+// answered 400, 408 or nothing. A code says which of those it was, it is
+// countable across journals, and the user-facing sentence is chosen from it
+// (never from provider or IPC text, which can carry env values or URLs: q22).
+//
+// Grouped by the phase that failed, so "which phase" is the prefix.
+export type DictationOutcomeReason =
+  | 'success'
+  | 'no-speech.too-short'
+  | 'no-speech.provider-empty'
+  | 'no-speech.provider-rejected-short'
+  | 'cancelled.short-press'
+  | 'cancelled.hidden'
+  | 'cancelled.unmount'
+  | 'cancelled.shutdown'
+  | 'mic.unavailable'
+  | 'mic.error'
+  | 'mic.opened-late'
+  | 'recorder.error'
+  | 'recorder.no-audio'
+  | 'config.missing-api-key'
+  | 'config.unsupported-provider'
+  | 'provider.bad-audio'
+  | 'provider.auth'
+  | 'provider.rate-limited'
+  | 'provider.timeout'
+  | 'provider.unavailable'
+  | 'provider.rejected'
+  | 'network'
+  | 'connect.timeout'
+  | 'final.timeout'
+  | 'delivery.hidden-terminal'
+  | 'delivery.abandoned'
+  | 'delivery.failed'
+  | 'unknown'
+
+/**
+ * The phase deadlines (#243), set against the longest the owner's recorded
+ * journals show (148 sessions, 2026-09-27). Named here so main and renderer
+ * tests read the same numbers. Recorded p50 / p95 / max, in ms, and margin:
+ * - connect (stream-start request → result): 4 / 19 / 55; 10 s is 180×.
+ *   The unbounded part is the keychain read inside it.
+ * - first audio (recorder started → first non-empty chunk): 177 / 245 / 626;
+ *   2 s is 3.2×. A muted microphone still encodes silence, so only a capture
+ *   that produces NOTHING trips this.
+ * - drain (release → every queued chunk pushed to main): local IPC like
+ *   connect, so the same 10 s. It bounds the stretch before main's final
+ *   timer exists (#1340 review C: a hung push stranded "stopping").
+ * - final (batch transcription): 450 / 1,646 / 14,316; 30 s is 2.1× the
+ *   longest recorded, chosen as the longest a user will watch a pill.
+ * - insertion into a TERMINAL (an async session write): 5 s. The composer
+ *   sink is a synchronous draft write (3 / 11 / 21 ms recorded) that cannot
+ *   hang. Terminal delivery was never journaled before this, so its bound is
+ *   a judgment, not a measurement.
+ */
+export const DICTATION_DEADLINES_MS = {
+  connect: 10_000,
+  firstAudio: 2_000,
+  drain: 10_000,
+  final: 30_000,
+  terminalInsertion: 5_000,
+} as const
+
+/**
+ * What a provider HTTP failure was, from its status alone (#243). The
+ * recorded 400s are Deepgram's "failed to process audio" (a clip it could
+ * not decode), not a request we built wrong; a failure with no status is the
+ * network layer (`fetch failed`).
+ */
+export function classifyProviderFailure(status: number | undefined): DictationOutcomeReason {
+  if (status === undefined) return 'network'
+  if (status === 400) return 'provider.bad-audio'
+  if (status === 401 || status === 403) return 'provider.auth'
+  if (status === 408) return 'provider.timeout'
+  if (status === 429) return 'provider.rate-limited'
+  if (status >= 500) return 'provider.unavailable'
+  return 'provider.rejected'
+}
+
+/**
+ * The one sentence a user sees for a reason, or null when nothing should be
+ * said (a success, a tap the user meant to abandon, a pane that is gone).
+ *
+ * WHY a fixed table and not the error's text (q22, q39): provider and IPC
+ * errors can carry request URLs, headers or environment values, and a curated
+ * prefix followed by unbounded provider text still leaks. `detail` is only
+ * ever a number this module formats itself.
+ */
+/**
+ * What is KNOWN about a transcript's History row after its terminal paste
+ * failed (steering q71). Three states, not a boolean, because "we could not
+ * read History" is not "the row is missing": telling the user the transcript
+ * "could not be saved" when only the READ failed is the same unchecked claim
+ * q67 removed in the other direction.
+ *
+ * - `saved`: History was read and holds the row with this append's id.
+ * - `absent`: History was read (serialised behind the append) and has no row
+ *   with that id, so the write failed (or the row was deleted meanwhile —
+ *   either way it is not there).
+ * - `unknown`: the read failed, or there is no id to look for.
+ */
+export type DictationHistorySave = 'saved' | 'absent' | 'unknown'
+
+export function dictationReasonMessage(reason: DictationOutcomeReason, detail: { micOpenMs?: number; previous?: boolean; history?: DictationHistorySave } = {}): string | null {
+  switch (reason) {
+    case 'success':
+    case 'cancelled.short-press':
+    case 'cancelled.unmount':
+    case 'cancelled.shutdown':
+    case 'delivery.abandoned':
+      return null
+    case 'no-speech.too-short':
+    case 'no-speech.provider-empty':
+    case 'no-speech.provider-rejected-short':
+      return 'No speech detected'
+    case 'cancelled.hidden':
+      return 'Dictation stopped: too short to transcribe.'
+    case 'mic.unavailable':
+      return 'The selected microphone is unavailable. Reconnect it or choose another in Settings → Dictation → Audio Input Device.'
+    case 'mic.error':
+      return 'The microphone could not be opened. Check microphone access for Agent Code in System Settings → Privacy & Security.'
+    case 'mic.opened-late': {
+      // Bounded: a formatted number of seconds, one decimal.
+      const seconds = detail.micOpenMs !== undefined && Number.isFinite(detail.micOpenMs)
+        ? ` — the microphone took ${(Math.min(detail.micOpenMs, 600_000) / 1000).toFixed(1)} s to open`
+        : ''
+      return `Nothing was recorded${seconds}. Hold the key until the indicator shows listening.`
+    }
+    case 'recorder.error':
+      return 'Dictation recording failed. Try again.'
+    case 'recorder.no-audio':
+      return 'The microphone produced no audio. Check the input device in Settings → Dictation.'
+    case 'config.missing-api-key':
+      return 'No Deepgram API key configured. Open Settings → Dictation and paste a key.'
+    case 'config.unsupported-provider':
+      return 'Only Deepgram dictation is available in this version of Agent Code.'
+    case 'provider.bad-audio':
+      return 'Deepgram could not process this recording. Try again.'
+    case 'provider.auth':
+      return 'Deepgram rejected the API key. Check it in Settings → Dictation.'
+    case 'provider.rate-limited':
+      return 'Deepgram is rate-limiting requests. Wait a moment and try again.'
+    case 'provider.timeout':
+    case 'final.timeout':
+      return 'Deepgram took too long to transcribe. Try again.'
+    case 'provider.unavailable':
+      return 'Deepgram is unavailable right now. Try again shortly.'
+    case 'provider.rejected':
+      return 'Deepgram rejected the request. Try again.'
+    case 'network':
+      return 'Could not reach Deepgram. Check the network connection.'
+    case 'connect.timeout':
+      return 'Dictation could not start in time. Try again.'
+    case 'delivery.hidden-terminal':
+      return 'Dictation stopped: the terminal pane was hidden, so the transcript was not sent.'
+    case 'delivery.failed':
+      // "It is in History" only when the caller found this append's row
+      // (steering q67), "could not be saved" only when History was read and
+      // the row is not there, and a bounded "could not be confirmed" when the
+      // read itself failed (q71). A missing `history` is treated as unknown:
+      // the affirmative sentences need evidence, the hedge does not.
+      {
+        const lead = `The ${detail.previous ? 'previous ' : ''}transcript could not be sent to the terminal`
+        switch (detail.history) {
+          case 'saved': return `${lead}. It is in Settings → Dictation → History.`
+          case 'absent': return `${lead}, and it could not be saved to History either.`
+          default: return `${lead}. Check Settings → Dictation → History; it could not be confirmed there.`
+        }
+      }
+    case 'unknown':
+      return 'Dictation failed.'
+  }
+}
