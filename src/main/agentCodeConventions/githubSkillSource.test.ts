@@ -645,4 +645,32 @@ describe('bounded GitHub transport', () => {
       1_024,
     )).rejects.toThrow(/acquisition limit/)
   })
+
+  // Review of #1456 (a): an unclassified git failure and the YAML parser's
+  // wording both reached Add Skill as raw text. A real child-process failure,
+  // with a temporary path in its stderr, drives the fallback.
+  it('answers an unclassified git failure with a fixed sentence, never its stderr or path', async () => {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const failure = await promisify(execFile)(process.execPath, ['-e', "process.stderr.write('fatal: unexpected git failure at /tmp/clone-4f2a'); process.exit(128)"])
+      .then(() => null, (caught: unknown) => caught)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const rejected = await new GitHubSkillSource({
+        runGit: vi.fn(async () => { throw failure }),
+        fetchBytes: vi.fn(async () => Buffer.alloc(0)),
+      }).discover(request('https://github.com/example/skills')).then(() => null, (caught: unknown) => caught)
+      expect(rejected).toBeInstanceOf(GitHubSkillSourceError)
+      expect((rejected as GitHubSkillSourceError).message).toBe('Could not inspect the GitHub skill source.')
+      expect(warn).toHaveBeenCalledWith(expect.any(String), failure)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('reports invalid YAML frontmatter by line, not in the parser\'s words', () => {
+    const thrown = (() => { try { parseSkillFrontmatter('---\nname: [x\ndescription: y\n---\n# Body\n'); return null } catch (caught) { return caught } })()
+    expect(thrown).toBeInstanceOf(GitHubSkillSourceError)
+    expect((thrown as Error).message).toMatch(/^SKILL\.md contains invalid YAML frontmatter( near line \d+)?\.$/)
+  })
 })

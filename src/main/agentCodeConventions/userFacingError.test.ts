@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { GENERIC_SKILL_ERROR, userFacingSkillError } from './userFacingError.js'
+import { GENERIC_SKILL_ERROR, REVEAL_FAILED, revealFailureMessage, userFacingSkillError } from './userFacingError.js'
 
 const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 afterEach(() => warn.mockClear())
@@ -30,13 +30,50 @@ describe('userFacingSkillError', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('replaces text that carries an absolute path, or runs long, with the generic sentence', () => {
+  it('replaces text that carries any path spelling, spans lines, or runs long, and logs what it replaced', () => {
     for (const text of [
       "could not open '/Users/someone/.claude/skills/x/SKILL.md'",
       'failed at /private/var/folders/tv/T/clone-1/SKILL.md',
       'C:\\Users\\someone\\skills',
+      // Review of #1456 (a): these five passed the first path filter.
+      'Failed at /tmp',
+      'Failed at ~/skills',
+      'Failed at ../skills',
+      "Failed at '/tmp'",
+      'Failed at \\\\server\\share',
+      'C:/Users/Ann',
+      'file:///tmp/x',
+      'first line\nsecond line',
       'x'.repeat(301),
-    ]) expect(userFacingSkillError(new Error(text))).toBe(GENERIC_SKILL_ERROR)
+    ]) {
+      warn.mockClear()
+      const raw = new Error(text)
+      expect(userFacingSkillError(raw)).toBe(GENERIC_SKILL_ERROR)
+      // Review of #1456 (a), a surviving mutation: logging only for system
+      // errors left these rewrites with no diagnostic trail.
+      expect(warn).toHaveBeenCalledWith(expect.any(String), raw)
+    }
+  })
+
+  it('never keeps a child-process error or a library error, even without a path', async () => {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    // A real child-process failure: its `code` is the exit number, so the
+    // errno rule misses it, and its message is `Command failed: …` + stderr.
+    const child = await promisify(execFile)(process.execPath, ['-e', "process.stderr.write('fatal: unexpected git failure'); process.exit(128)"])
+      .then(() => null, (caught: unknown) => caught)
+    expect(userFacingSkillError(child)).toBe(GENERIC_SKILL_ERROR)
+    // The same shape with empty stderr is ONE line and path-free (`Command
+    // failed: git ls-remote`); only the child-process rule refuses it.
+    const quiet = Object.assign(new Error('Command failed: git ls-remote'), { cmd: 'git ls-remote', code: 128, stderr: '' })
+    expect(userFacingSkillError(quiet)).toBe(GENERIC_SKILL_ERROR)
+    expect(userFacingSkillError(new TypeError('fetch failed'))).toBe(GENERIC_SKILL_ERROR)
+    expect(userFacingSkillError(new SyntaxError('Unexpected token } in JSON at position 5'))).toBe(GENERIC_SKILL_ERROR)
+  })
+
+  it('answers a failed Reveal with a fixed sentence and logs Electron\'s text', () => {
+    expect(revealFailureMessage('Failed to open /Users/Alice/.claude/skills', 'test')).toBe(REVEAL_FAILED)
+    expect(warn).toHaveBeenCalledWith(expect.any(String), 'Failed to open /Users/Alice/.claude/skills')
   })
 
   it('maps an unknown errno and a non-Error value to the generic sentence', () => {

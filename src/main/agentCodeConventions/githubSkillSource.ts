@@ -20,7 +20,6 @@ import {
   type AgentCodeInstalledSkillCandidate,
 } from '@shared/types/agentCodeInstalledSkills.js'
 import type { SkillInstallGitHubSource } from '@shared/skills/installSource.js'
-import { userFacingSkillError } from './userFacingError.js'
 
 const MAX_GIT_TEXT_BYTES = 4 * 1024 * 1024
 const PORTABLE_FRONTMATTER_FIELDS = new Set([
@@ -865,9 +864,12 @@ export function parseSkillFrontmatter(text: string): {
     uniqueKeys: true,
   })
   if (document.errors.length > 0) {
+    // The parser's own wording is raw library text (review of #1456, a); the
+    // line number is what a user needs to find the mistake.
+    const line = document.errors[0]!.linePos?.[0]?.line
     throw new GitHubSkillSourceError(
       'validation',
-      `SKILL.md contains invalid YAML frontmatter: ${document.errors[0]!.message}`,
+      `SKILL.md contains invalid YAML frontmatter${typeof line === 'number' ? ` near line ${line + 1}` : ''}.`,
     )
   }
   let frontmatter: unknown
@@ -878,9 +880,13 @@ export function parseSkillFrontmatter(text: string): {
     // Codex rejects. Map output also avoids object-prototype key hazards.
     frontmatter = document.toJS({ mapAsMap: true, maxAliasCount: 0 })
   } catch (error) {
+    // toJS refuses aliases (maxAliasCount: 0) and values it cannot convert;
+    // its wording is library text, so the user gets the category and the log
+    // gets the detail (review of #1456, a).
+    console.warn('[github-skill-source] frontmatter conversion failed:', error)
     throw new GitHubSkillSourceError(
       'validation',
-      `SKILL.md contains unsafe YAML frontmatter: ${userFacingSkillError(error)}`,
+      'SKILL.md contains unsafe YAML frontmatter, such as aliases or values Agent Code cannot read.',
     )
   }
   if (!(frontmatter instanceof Map)) {
@@ -1143,11 +1149,11 @@ function classifyGitHubSkillSourceError(error: unknown): GitHubSkillSourceError 
   if (typeof detail === 'string' && /could not resolve|failed to connect|timed out|network/i.test(detail)) {
     return new GitHubSkillSourceError('network', 'Could not reach GitHub to inspect that skill source.')
   }
-  return new GitHubSkillSourceError(
-    'io-error',
-    // git's own message can carry the clone's temporary path (#1427).
-    error instanceof Error && error.message ? userFacingSkillError(error, 'github-skill-source') : 'Could not inspect the GitHub skill source.',
-  )
+  // An unclassified git failure is raw process output (`Command failed: git
+  // …` plus stderr, sometimes the clone's temporary path): a fixed sentence,
+  // the raw error in the main log (#1427; review of #1456, a).
+  console.warn('[github-skill-source] git failed:', error)
+  return new GitHubSkillSourceError('io-error', 'Could not inspect the GitHub skill source.')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1211,7 +1217,10 @@ export async function fetchBoundedGitHubBytes(url: string, maxBytes: number): Pr
     if (controller.signal.aborted) {
       throw new GitHubSkillSourceError('network', 'GitHub content acquisition timed out.')
     }
-    throw new GitHubSkillSourceError('network', userFacingSkillError(error))
+    // fetch's own error is transport text (`fetch failed`, undici causes):
+    // a fixed sentence, the raw error in the main log (review of #1456, a).
+    console.warn('[github-skill-source] download failed:', error)
+    throw new GitHubSkillSourceError('network', 'Could not download that skill from GitHub.')
   } finally {
     clearTimeout(timeout)
   }
