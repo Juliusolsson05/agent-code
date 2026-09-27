@@ -121,8 +121,7 @@ export async function readProxyEventsForBundle(opts: {
     const latest = await findLatestRun(projectDir, selection.segments)
     if (!latest) return empty
 
-    const eventsPath = join(latest.runDir, 'proxy-events.jsonl')
-    const tail = await readEventsTail(eventsPath, latest.size)
+    const tail = await readEventsTail(latest.runDir, latest.size)
     const newestBody = await readLatestRequestBody(latest.runDir)
     const proxyEvents = tail === null ? newestBody : newestBody ? `${tail.replace(/\n?$/, '\n')}${newestBody}` : tail
     const sessionMeta = await readSessionMeta(join(latest.runDir, 'session-meta.json'))
@@ -221,37 +220,62 @@ async function findLatestRun(
 }
 
 
-async function readEventsTail(path: string, size: number): Promise<string | null> {
+// The previous generation of a rotated Claude events file (agent-code #1273).
+// claude-code-headless's mitm addon renames proxy-events.jsonl to this name at
+// 512 MiB and starts a fresh file; the name must match its `_rotated_path()`.
+// Codex proxy runs never rotate, so for them this file simply does not exist.
+const ROTATED_EVENTS_FILE = 'proxy-events.1.jsonl'
+
+/**
+ * The last PROXY_EVENTS_BUNDLE_MAX_BYTES of the run's wire log, read across a
+ * rotation as if the previous generation and the live file were one file.
+ *
+ * WHY across the rotation: right after a rotation the live file holds a few
+ * lines, so a bundle made then would carry almost none of the recent traffic
+ * a bug report is about. When the live file is under the cap, the remainder is
+ * filled from the end of the previous generation.
+ */
+async function readEventsTail(runDir: string, size: number): Promise<string | null> {
   try {
-    if (size <= PROXY_EVENTS_BUNDLE_MAX_BYTES) {
-      return await readFile(path, 'utf-8')
-    }
-    // Read the trailing PROXY_EVENTS_BUNDLE_MAX_BYTES bytes. We can't
-    // use readFile with a position arg (no slice option in fs.promises
-    // readFile), so open + read directly.
-    const { open } = await import('node:fs/promises')
-    const handle = await open(path, 'r')
-    try {
-      const start = size - PROXY_EVENTS_BUNDLE_MAX_BYTES
-      const buf = Buffer.alloc(PROXY_EVENTS_BUNDLE_MAX_BYTES)
-      await handle.read(buf, 0, PROXY_EVENTS_BUNDLE_MAX_BYTES, start)
-      // Drop the first partial line so consumers always see a clean
-      // JSONL boundary at byte 0 of the captured content.
-      const content = buf.toString('utf-8')
-      const firstNewline = content.indexOf('\n')
-      const trimmed = firstNewline >= 0 ? content.slice(firstNewline + 1) : content
-      const droppedBytes = size - trimmed.length
-      const header = JSON.stringify({
-        kind: 'truncated',
-        reason: `proxy-events.jsonl exceeded ${PROXY_EVENTS_BUNDLE_MAX_BYTES} bytes; only the trailing portion is included in this bundle. Full log on disk: ${path}`,
-        dropped_bytes: droppedBytes,
-      })
-      return `${header}\n${trimmed}`
-    } finally {
-      await handle.close()
-    }
+    const livePath = join(runDir, 'proxy-events.jsonl')
+    const live = await readTail(livePath, size, PROXY_EVENTS_BUNDLE_MAX_BYTES)
+    const room = PROXY_EVENTS_BUNDLE_MAX_BYTES - live.text.length
+    const rotatedPath = join(runDir, ROTATED_EVENTS_FILE)
+    const rotatedSize = room > 0 && live.droppedBytes === 0
+      ? await stat(rotatedPath).then(st => st.size, () => null)
+      : null
+    const older = rotatedSize ? await readTail(rotatedPath, rotatedSize, room) : null
+    const text = `${older?.text ?? ''}${live.text}`
+    const droppedBytes = live.droppedBytes + (older?.droppedBytes ?? 0)
+    if (droppedBytes === 0) return text
+    const header = JSON.stringify({
+      kind: 'truncated',
+      reason: `proxy-events.jsonl exceeded ${PROXY_EVENTS_BUNDLE_MAX_BYTES} bytes; only the trailing portion is included in this bundle. Full log on disk: ${older ? `${rotatedPath} + ${livePath}` : livePath}`,
+      dropped_bytes: droppedBytes,
+    })
+    return `${header}\n${text}`
   } catch {
     return null
+  }
+}
+
+/** The last `maxBytes` of a JSONL file, cut at a line boundary. */
+async function readTail(path: string, size: number, maxBytes: number): Promise<{ text: string; droppedBytes: number }> {
+  if (size <= maxBytes) return { text: await readFile(path, 'utf-8'), droppedBytes: 0 }
+  // readFile has no position/slice option, so open + read the tail directly.
+  const { open } = await import('node:fs/promises')
+  const handle = await open(path, 'r')
+  try {
+    const buf = Buffer.alloc(maxBytes)
+    await handle.read(buf, 0, maxBytes, size - maxBytes)
+    // Drop the first partial line so consumers always see a clean JSONL
+    // boundary at byte 0 of the captured content.
+    const content = buf.toString('utf-8')
+    const firstNewline = content.indexOf('\n')
+    const text = firstNewline >= 0 ? content.slice(firstNewline + 1) : content
+    return { text, droppedBytes: size - text.length }
+  } finally {
+    await handle.close()
   }
 }
 

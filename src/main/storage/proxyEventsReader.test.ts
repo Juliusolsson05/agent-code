@@ -36,3 +36,37 @@ it('is unchanged for a run that never passed its budget', async () => {
   const section = await readProxyEventsForBundle({ cwd, sessionKey: 'session-b' })
   expect(section.proxyEvents).toBe(`${request}\n`)
 })
+
+// #1273 residual: the Claude addon rotates proxy-events.jsonl into
+// proxy-events.1.jsonl at 512 MiB. A bundle made just after a rotation must
+// still carry the recent traffic, which now sits at the end of the previous
+// generation.
+it('fills the bundle from the previous generation when the live file is small', async () => {
+  const older = [1, 2, 3].map(n => JSON.stringify({ kind: 'response-chunk', seq: n }))
+  const live = JSON.stringify({ kind: 'response-chunk', seq: 4 })
+  const cwd = await runDir('session-rotated', {
+    'proxy-events.1.jsonl': `${older.join('\n')}\n`,
+    'proxy-events.jsonl': `${live}\n`,
+  })
+  const section = await readProxyEventsForBundle({ cwd, sessionKey: 'session-rotated' })
+  expect(section.proxyEvents?.trim().split('\n')).toEqual([...older, live])
+})
+
+it('keeps the bundle within its cap across a rotation, newest traffic last', async () => {
+  const cap = 5 * 1024 * 1024
+  const filler = JSON.stringify({ kind: 'response-chunk', pad: 'x'.repeat(1000) })
+  const lines = Array.from({ length: Math.ceil(cap / filler.length) + 50 }, (_, n) => filler.replace('"pad"', `"seq":${n},"pad"`))
+  const live = JSON.stringify({ kind: 'response-end', seq: 'live' })
+  const cwd = await runDir('session-rotated-big', {
+    'proxy-events.1.jsonl': `${lines.join('\n')}\n`,
+    'proxy-events.jsonl': `${live}\n`,
+  })
+  const section = await readProxyEventsForBundle({ cwd, sessionKey: 'session-rotated-big' })
+  const out = section.proxyEvents!.trim().split('\n')
+  expect(JSON.parse(out[0]!)).toMatchObject({ kind: 'truncated' })
+  expect(out.at(-1)).toBe(live)
+  expect(out.at(-2)).toBe(lines.at(-1))
+  // Every kept line is whole, and the payload (minus the header) fits the cap.
+  for (const line of out) expect(() => JSON.parse(line)).not.toThrow()
+  expect(out.slice(1).join('\n').length).toBeLessThanOrEqual(cap)
+})
