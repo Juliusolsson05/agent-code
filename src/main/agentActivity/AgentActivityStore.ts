@@ -204,11 +204,14 @@ export class AgentActivityStore {
       const fresh = edges.filter(([from, to]) => from && to && from !== to && aliases.get(from) !== to)
       if (fresh.length === 0) return
       await mkdir(this.dir, { recursive: true })
-      for (const [from, to] of fresh) aliases.set(from, to)
       await appendFile(
         join(this.dir, 'aliases.jsonl'),
         `${fresh.map(([from, to]) => JSON.stringify({ f: from, t: to })).join('\n')}\n`,
       )
+      // Only after the append: the in-memory map is what later calls dedupe
+      // against, so an edge set before a failed write would never be retried
+      // (steering q63).
+      for (const [from, to] of fresh) aliases.set(from, to)
     })
   }
 

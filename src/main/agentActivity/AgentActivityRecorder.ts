@@ -120,8 +120,16 @@ export class AgentActivityRecorder {
       if (placement.agentNameId && placement.tldrIdentity) edges.push([placement.tldrIdentity, placement.agentNameId])
     }
     const fresh = edges.filter(([from, to]) => this.aliasesSent.get(from) !== to)
-    for (const [from, to] of fresh) this.aliasesSent.set(from, to)
-    if (fresh.length > 0) this.track(this.deps.store.appendAliases(fresh))
+    if (fresh.length > 0) {
+      // Remembered as sent only once the store has it on disk (steering q63):
+      // marking it first meant a failed append (full or read-only disk) was
+      // never retried, and after a restart the old session-id row split
+      // again. Until then, every autosave offers the edge once more; the
+      // store drops the ones it already wrote.
+      this.track(this.deps.store.appendAliases(fresh)
+        .then(() => { for (const [from, to] of fresh) this.aliasesSent.set(from, to) })
+        .catch(error => console.warn('[agent-activity] failed to record an alias:', error)))
+    }
   }
 
   noteSuspension(suspension: SystemSuspension): void {

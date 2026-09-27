@@ -194,6 +194,44 @@ describe('AgentActivityRecorder', () => {
     expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
   })
 
+  // Steering q63: an alias edge counts as written only once it is on disk.
+  // A failed append (full or read-only disk) must leave it retryable on the
+  // next projection; acknowledging it first meant a restart lost it and the
+  // old session-id row split again.
+  it('retries an alias whose append failed, so it survives a restart', async () => {
+    const { mkdir, rmdir } = await import('node:fs/promises')
+    const store = new AgentActivityStore(dir)
+    await store.appendInterval({
+      context: { agentKey: 'child', label: 'Reviewer', role: 'orchestration', provider: 'codex', tabId: 'tab-1', tabTitle: 'agent-code', repoRoot: '/dev/agent-code', cwd: '/dev/agent-code/.worktrees/fix' },
+      startedAt: T0 - 2 * HOUR,
+      endedAt: T0 - HOUR,
+    })
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+    // A directory where the file should be makes every append fail.
+    await mkdir(join(dir, 'aliases.jsonl'))
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    await recorder.flush()
+    await rmdir(join(dir, 'aliases.jsonl'))
+    // The next autosave projects the same workspace; the edge goes again.
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    phase('child', 'idle')
+    await recorder.flush()
+
+    // A restart reads only what is on disk.
+    const restarted = new AgentActivityRecorder({
+      manager: new EventEmitter() as unknown as Pick<SessionManager, 'on'>,
+      store: new AgentActivityStore(dir),
+      resolveRepoRoot: async cwd => cwd.split('/.worktrees/')[0],
+    })
+    recorders.push(restarted)
+    const summary = await restarted.summary('24h')
+    expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
+  })
+
   // An agent that gets a name later: its tldrIdentity rows join the name.
   it('joins an agent\'s earlier rows when it gets a name', async () => {
     const { recorder, phase } = await mount()
