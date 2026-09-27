@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
@@ -26,6 +26,71 @@ import type { UserMcpSecretState } from '@shared/userMcp/types.js'
  * ids and input ids are both validated to `[A-Za-z0-9_-]`, so they are safe
  * path segments by construction.
  */
+/**
+ * Every record is BOUND to the destination it was saved for (#1304, q113).
+ *
+ * The plaintext that gets encrypted is `BOUND_PREFIX + JSON({ d, v })`: `d` is
+ * the server's destination identity (`userMcpDestination` of its entry) at the
+ * moment the secret was saved, `v` the secret. A read supplies the server's
+ * CURRENT destination and gets the value only if `d` matches; anything else
+ * reads as "not set", so launch refuses to attach the server.
+ *
+ * WHY at read time and not by write order: a destination change is several
+ * writes (the document, then each blob), and a crash or a failed rollback or
+ * restore can stop between any two. Two reviews found such a window in each
+ * direction: the NEW address with the OLD token, then the OLD address with
+ * the NEW token. Any ordering leaves one open. A binding check at every read
+ * holds whatever state is left on disk: a token only ever reaches the
+ * destination it was entered for.
+ *
+ * Records written before binding existed (plain value, no prefix) are NEVER
+ * bound automatically (q114). An old version could have crashed between
+ * publishing a new destination and clearing the old token, leaving document B
+ * next to a token entered for A; binding legacy records to "the destination
+ * the document names" would stamp that token as B's and launch it. So an
+ * unbound record is kept on disk (never deleted) but reads as not set, and
+ * Settings asks the user to confirm it for the current destination
+ * (`confirm`) or re-enter it. That user action is the proof that binds
+ * it. Upgrading users pay a one-time confirmation per stored secret.
+ */
+const BOUND_PREFIX = 'agent-code/user-mcp-secret/v1:'
+
+/**
+ * What a record is bound to (B6 R3 at 4d5c79ab). `destination` alone was not
+ * enough: the entry text can stay identical while the VALUE of another input
+ * moves the request (`API_BASE_URL=${input:svc-API_BASE_URL}`, or the host in
+ * `https://${input:host}/mcp?key=${input:tok}`), and an agent can set such a
+ * value with mcp_servers_set_secret. So a record also carries `inputs`, a
+ * digest of the values of EVERY other input the entry references (q127: no
+ * classifier; a key's name does not prove its role). See service.ts
+ * bindingsFor. A record's own value is never in its digest, so the record for
+ * a rotated token stays bound; the user's edit rebinds its siblings
+ * (service.ts writeValues).
+ */
+export type SecretBinding = { destination: string; inputs: string }
+
+function bindValue(binding: SecretBinding, value: string): string {
+  return BOUND_PREFIX + JSON.stringify({ d: binding.destination, x: binding.inputs, v: value })
+}
+
+type SecretRecord =
+  | { kind: 'unbound'; value: string }
+  // `inputs` is absent on records written before B6 R3 (never merged, so only
+  // dev data); it then matches nothing and the record needs confirmation.
+  | { kind: 'bound'; destination: string; inputs: string | undefined; value: string }
+
+function parseRecord(plaintext: string): SecretRecord | null {
+  if (plaintext === '') return null
+  if (!plaintext.startsWith(BOUND_PREFIX)) return { kind: 'unbound', value: plaintext }
+  try {
+    const record = JSON.parse(plaintext.slice(BOUND_PREFIX.length)) as { d?: unknown; x?: unknown; v?: unknown }
+    if (typeof record.d !== 'string' || typeof record.v !== 'string') return null
+    return { kind: 'bound', destination: record.d, inputs: typeof record.x === 'string' ? record.x : undefined, value: record.v }
+  } catch {
+    return null
+  }
+}
+
 export class UserMcpSecretStore {
   constructor(
     private readonly dir: string,
@@ -40,7 +105,83 @@ export class UserMcpSecretStore {
     }
   }
 
-  async get(serverId: string, inputId: string): Promise<string | null> {
+  private async record(serverId: string, inputId: string): Promise<SecretRecord | null> {
+    const plaintext = await this.decrypted(serverId, inputId)
+    return plaintext === null ? null : parseRecord(plaintext)
+  }
+
+  /** The secret, only if it was saved for exactly `binding` (see BOUND_PREFIX). */
+  async get(serverId: string, inputId: string, binding: SecretBinding): Promise<string | null> {
+    const record = await this.record(serverId, inputId)
+    if (record?.kind !== 'bound' || record.value === '') return null
+    return record.destination === binding.destination && record.inputs === binding.inputs ? record.value : null
+  }
+
+  /**
+   * Whether a blob EXISTS for this input, decryptable or not (q130). Only a
+   * verified-absent file (ENOENT) is "no secret". Any other failure throws,
+   * so a caller deciding whether it may overwrite or delete fails closed. A
+   * present blob that cannot be decrypted (a key mismatch, a corrupt file)
+   * still holds the user's secret and must not be treated as empty.
+   */
+  async present(serverId: string, inputId: string): Promise<boolean> {
+    try {
+      await stat(this.path(serverId, inputId))
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    }
+  }
+
+  /**
+   * The input ids that have a blob on disk for this server, whether or not the
+   * server still defines them (r3 round 3: an agent edit that drops an input
+   * keeps its blob). Strict like snapshotServer: only a missing directory
+   * means none; any other failure throws, so a guard built on it fails closed.
+   */
+  async storedInputIds(serverId: string): Promise<string[]> {
+    let files: string[]
+    try {
+      files = await readdir(join(this.dir, serverId))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    return files.filter(file => file.endsWith('.bin')).map(file => file.slice(0, -'.bin'.length))
+  }
+
+  /**
+   * The stored value whatever it is bound to, ONLY for computing other
+   * records' bindings (service.ts bindingFor): the digest has to see the value
+   * the next launch would substitute. Never handed to a launch.
+   */
+  async storedValue(serverId: string, inputId: string): Promise<string | null> {
+    const record = await this.record(serverId, inputId)
+    return record ? record.value : null
+  }
+
+  /**
+   * Bind a withheld record to `binding` because the USER confirmed it
+   * (q114, B6 R3). Two cases only:
+   *   - an unbound record from an earlier version: it carries no proof of its
+   *     destination, and the user's confirmation is that proof;
+   *   - a record for the SAME destination whose other input values changed
+   *     (an agent set a new base URL): the user confirms it may go there.
+   * A record bound to a DIFFERENT destination is never confirmable: that is
+   * the q113 crash window (a token next to a document it was not saved for),
+   * and only re-entering it may bind it. Returns false when there is nothing
+   * to confirm, leaving the bytes untouched.
+   */
+  async confirm(serverId: string, inputId: string, binding: SecretBinding): Promise<boolean> {
+    const record = await this.record(serverId, inputId)
+    if (!record || record.value === '') return false
+    if (record.kind === 'bound' && (record.destination !== binding.destination || record.inputs === binding.inputs)) return false
+    await this.write(serverId, inputId, bindValue(binding, record.value))
+    return true
+  }
+
+  private async decrypted(serverId: string, inputId: string): Promise<string | null> {
     if (!this.available()) return null
     let ciphertext: Buffer
     try {
@@ -49,19 +190,23 @@ export class UserMcpSecretStore {
       return null
     }
     try {
-      const value = this.codec.decrypt(ciphertext)
-      return value === '' ? null : value
+      return this.codec.decrypt(ciphertext)
     } catch {
       // Left in place on purpose: if the keyring comes back, so does the value.
       return null
     }
   }
 
-  async set(serverId: string, inputId: string, value: string): Promise<void> {
+  /** Save `value` bound to `binding`, what it is for. */
+  async set(serverId: string, inputId: string, value: string, binding: SecretBinding): Promise<void> {
     if (value === '') {
       await this.clear(serverId, inputId)
       return
     }
+    await this.write(serverId, inputId, bindValue(binding, value))
+  }
+
+  private async write(serverId: string, inputId: string, plaintext: string): Promise<void> {
     if (!this.available()) {
       throw new Error('Secure storage is not available on this system, so the secret cannot be saved.')
     }
@@ -69,7 +214,7 @@ export class UserMcpSecretStore {
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const target = this.path(serverId, inputId)
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
-    await writeFile(temporary, this.codec.encrypt(value), { mode: 0o600 })
+    await writeFile(temporary, this.codec.encrypt(plaintext), { mode: 0o600 })
     await rename(temporary, target)
   }
 
@@ -95,15 +240,68 @@ export class UserMcpSecretStore {
       rm(join(this.dir, serverId, file), { force: true })))
   }
 
-  /** Presence and a last-4 hint only. The renderer never receives a value. */
-  async state(serverId: string, inputIds: readonly string[]): Promise<Record<string, UserMcpSecretState>> {
-    const entries = await Promise.all(inputIds.map(async id => {
-      const value = await this.get(serverId, id)
+  /**
+   * The server's encrypted blobs as raw bytes, for a mutation to put back if
+   * its secret step fails midway (#1304, q108). Ciphertext only: nothing is
+   * decrypted, so this works even when secure storage is unavailable.
+   */
+  async snapshotServer(serverId: string): Promise<Map<string, Buffer>> {
+    const snapshot = new Map<string, Buffer>()
+    let files: string[]
+    try {
+      files = await readdir(join(this.dir, serverId))
+    } catch (error) {
+      // Only a missing directory means "no secrets" (q110, review a): an
+      // EACCES/EIO/EMFILE here returned an empty snapshot, so a failed step
+      // then "restored" nothing and the server lost its token for good.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return snapshot
+      throw error
+    }
+    for (const file of files) {
+      if (!file.endsWith('.bin')) continue
+      snapshot.set(file, await readFile(join(this.dir, serverId, file)))
+    }
+    return snapshot
+  }
+
+  /** Make the server's blobs exactly `snapshot` again (see snapshotServer). */
+  async restoreServer(serverId: string, snapshot: ReadonlyMap<string, Buffer>): Promise<void> {
+    const directory = join(this.dir, serverId)
+    await rm(directory, { recursive: true, force: true })
+    if (snapshot.size === 0) return
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    for (const [file, ciphertext] of snapshot) {
+      await writeFile(join(directory, file), ciphertext, { mode: 0o600 })
+    }
+  }
+
+  /**
+   * Presence and a last-4 hint only; the renderer never receives a value.
+   * `unconfirmed` marks a record that is kept but withheld and that the user
+   * can confirm (see confirm): `legacy` from an earlier version, or
+   * `inputs-changed` when another input's value changed (by an agent or an
+   * import) since it was bound.
+   * A record bound to another destination shows as plainly not set, because
+   * only re-entering it may bind it.
+   */
+  async state(serverId: string, bindings: Readonly<Record<string, SecretBinding>>): Promise<Record<string, UserMcpSecretState>> {
+    const entries = await Promise.all(Object.entries(bindings).map(async ([id, binding]) => {
+      const record = await this.record(serverId, id)
       // No hint for short values: the last four characters of a six-character
       // PIN are most of the secret.
-      const state: UserMcpSecretState = value === null
-        ? { set: false }
-        : { set: true, ...(value.length >= 12 ? { hint: value.slice(-4) } : {}) }
+      const hint = record && record.value.length >= 12 ? { hint: record.value.slice(-4) } : {}
+      let state: UserMcpSecretState
+      if (!record || record.value === '') {
+        state = { set: false }
+      } else if (record.kind === 'unbound') {
+        state = { set: false, unconfirmed: 'legacy', ...hint }
+      } else if (record.destination !== binding.destination) {
+        state = { set: false }
+      } else if (record.inputs !== binding.inputs) {
+        state = { set: false, unconfirmed: 'inputs-changed', ...hint }
+      } else {
+        state = { set: true, ...hint }
+      }
       return [id, state] as const
     }))
     return Object.fromEntries(entries)

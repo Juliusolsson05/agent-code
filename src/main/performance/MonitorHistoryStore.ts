@@ -1,14 +1,15 @@
 import { createReadStream, createWriteStream } from 'node:fs'
-import { appendFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { finished } from 'node:stream/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
 import { parseMonitorIncident } from '@shared/performance/parseMonitorIncident.js'
 import { parseMonitorHistoryPoint } from '@shared/performance/parseMonitorHistory.js'
 import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
-import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
+import { MAX_MONITOR_OPERATION_PAIRS, MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import type {
   MonitorHistoryPage, MonitorHistoryPoint, MonitorHistoryResolution,
   MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult,
@@ -26,6 +27,7 @@ const INCIDENT_BUDGET = 8 * 1024 * 1024
 const OPERATIONS_BUDGET = 1024 * 1024
 const REPORT_BUDGET = 8 * 1024 * 1024
 const LINE_LIMIT = 16 * 1024
+const REFUSED_INCIDENTS_PREFIX = 'incidents.refused-'
 const INCIDENT_LIMIT = MONITOR_POLICY.incidentCount
 // About seven minutes of rolled-up points (67 per minute across tiers). A disk
 // that stalls longer sheds new points as "shortened" coverage instead of
@@ -64,6 +66,37 @@ export class MonitorHistoryStore {
   private exporting = false
   private index = new Map<string, FileStat>()
   private incidentRuns = new Map<string, MonitorIncident[]>()
+  // Rows of a run's incidents.json that this build cannot parse, kept
+  // verbatim per run (#1251 row 9). WHY they are carried instead of dropped:
+  // the owner moves between the Preview and stable channels, so a newer build
+  // can leave an incident rule this one does not know. Hiding the run's whole
+  // list for one such row lost the readable evidence, and every rewrite of the
+  // file (a helper restart's persistIncidents, capture repair, expiry,
+  // eviction) then replaced it with only the rows this build understood,
+  // deleting the rest. Invariant: every write of a run's incident file goes
+  // through incidentFileBody, which re-appends these rows. They never enter
+  // incidentRuns, so queries, exports and the 50-incident eviction only ever
+  // see rows this build can vouch for; the rows leave disk only with the run
+  // directory itself (budget pruning, retention, clear).
+  private foreignIncidents = new Map<string, unknown[]>()
+  // Runs whose incidents.json was refused WHOLE (not an array, over the row
+  // limit, oversized, malformed, unreadable) — review of #1411 (a, b, c).
+  // Unlike a foreign row, such a file cannot be carried row by row, and the
+  // first version kept no marker at all: the run then looked like it had no
+  // incidents, so the current run's next persistIncidents replaced the file
+  // with only the new rows and maintenance expired a prior run as empty.
+  // Invariant: a refused file is never written over. The current run sets it
+  // aside (setRefusedIncidentsAside) before its first write; a prior run is
+  // kept by maintenance and leaves disk only with its directory (budget
+  // pruning, clear), like foreign rows.
+  private refusedIncidentRuns = new Set<string>()
+  // Runs that HOLD a set-aside `incidents.refused-*.json` (review of #1411,
+  // round 2). Setting a refused file aside clears refusedIncidentRuns, so the
+  // run then looked empty again once its readable incidents expired, and
+  // maintenance deleted the directory with the set-aside bytes in it. Found by
+  // listing each run at startup and added on every set-aside; maintenance
+  // never expires such a run. Only budget pruning and clear() remove it.
+  private refusedAsideRuns = new Set<string>()
   private repairedTails = new Set<string>()
   // False until startup indexing completes. Retention deletes any run the
   // index does not know about, so a partial index (EPERM, ENOSPC or an I/O
@@ -121,7 +154,7 @@ export class MonitorHistoryStore {
     // fingerprint; stringifying up to fifty full evidence sets here every
     // second cost ~1 MiB of JSON per second of helper CPU for no new data.
     if (incidents) this.pendingIncidents = incidents.slice(-INCIDENT_LIMIT)
-    const operationJson = JSON.stringify(snapshot.operations.slice(0, 100))
+    const operationJson = JSON.stringify(snapshot.operations.slice(0, MAX_MONITOR_OPERATION_PAIRS))
     if (operationJson !== this.operationFingerprint) {
       this.operationFingerprint = operationJson
       this.pendingOperations = operationJson
@@ -296,7 +329,7 @@ export class MonitorHistoryStore {
     try {
       await rm(join(this.root, RUNS_DIR), { recursive: true, force: true })
       await mkdir(this.runDir, { recursive: true })
-      this.index.clear(); this.incidentRuns.clear(); this.repairedTails.clear(); this.indexed = true
+      this.index.clear(); this.incidentRuns.clear(); this.foreignIncidents.clear(); this.refusedIncidentRuns.clear(); this.refusedAsideRuns.clear(); this.repairedTails.clear(); this.indexed = true
       this.bytes = 0; this.shortened = false; this.degraded = false
       this.operationFingerprint = ''; this.unindexedRuns.clear()
       this.lastMaintenanceAt = -Infinity
@@ -352,6 +385,21 @@ export class MonitorHistoryStore {
     try {
       await this.cleanupTemps()
       for (const run of await this.runNames()) {
+        // A failed listing is UNKNOWN, not empty (steering q115): read as "no
+        // set-aside file", a prior run holding only one had no marker left and
+        // the next maintenance deleted it with the refused bytes. Such a run is
+        // marked unindexed, which maintenance never expires, and the store is
+        // degraded. Only ENOENT (the run is already gone) means nothing to find.
+        // Budget pruning (pruneRuns) stays the only way this run leaves disk.
+        try {
+          const entries = await readdir(join(this.root, RUNS_DIR, run))
+          if (entries.some(name => name.startsWith(REFUSED_INCIDENTS_PREFIX))) this.refusedAsideRuns.add(run)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            this.degraded = true
+            this.unindexedRuns.add(run)
+          }
+        }
         for (const resolution of TIERS) {
           const file = join(this.root, RUNS_DIR, run, `${resolution}.jsonl`)
           try {
@@ -374,13 +422,13 @@ export class MonitorHistoryStore {
           }
         }
         const file = join(this.root, RUNS_DIR, run, 'incidents.json')
-        const stored = await this.readIncidentFile(file)
+        const stored = await this.readIncidentFile(file, run)
         // Every retained run is repaired, not only the current one. A crash or
         // force-quit in ANY earlier run left its last capture as "capturing"
         // forever, and only a helper restart within the same run fixed it.
         const repaired = stored.map(incident => incident.state === 'capturing' ? { ...incident, state: 'interrupted' as const } : incident)
         if (repaired.some((incident, position) => incident !== stored[position])) {
-          await this.replaceBounded(file, JSON.stringify(repaired), INCIDENT_BUDGET).catch(() => { this.degraded = true })
+          await this.replaceBounded(file, this.incidentFileBody(run, repaired), INCIDENT_BUDGET).catch(() => { this.degraded = true })
         }
         if (repaired.length) this.incidentRuns.set(run, repaired)
       }
@@ -405,10 +453,20 @@ export class MonitorHistoryStore {
     const existing = this.incidentRuns.get(this.runId) ?? []
     const merged = new Map(existing.map(incident => [`${incident.at}:${incident.id}`, incident]))
     for (const incident of current) merged.set(`${incident.at}:${incident.id}`, incident)
-    const rows = [...merged.values()].sort((a, b) => a.at - b.at).slice(-INCIDENT_LIMIT)
+    // Room is left for this run's carried foreign rows, or the rewritten file
+    // would exceed INCIDENT_LIMIT and the next launch would reject all of it.
+    const room = Math.max(0, INCIDENT_LIMIT - (this.foreignIncidents.get(this.runId)?.length ?? 0))
+    const rows = room ? [...merged.values()].sort((a, b) => a.at - b.at).slice(-room) : []
+    // Carried rows are kept over new ones (the owner's "do not delete stuff"),
+    // but a readable incident that found no room is missing evidence, so say
+    // so (review of #1411, a). Trimming to INCIDENT_LIMIT itself is the normal
+    // cap and is not a shortfall.
+    if (rows.length < Math.min(merged.size, INCIDENT_LIMIT)) this.shortened = true
+    const file = join(this.runDir, 'incidents.json')
+    if (this.refusedIncidentRuns.has(this.runId) && !(await this.setRefusedIncidentsAside(file))) return
     // Memory mirrors disk: a capacity-shortened write keeps the previous rows,
     // which is what status, queries and the next launch will actually find.
-    if (!(await this.replaceBounded(join(this.runDir, 'incidents.json'), JSON.stringify(rows), INCIDENT_BUDGET))) return
+    if (!(await this.replaceBounded(file, this.incidentFileBody(this.runId, rows), INCIDENT_BUDGET))) return
     this.incidentRuns.set(this.runId, rows)
     await this.enforceIncidentLimit()
   }
@@ -545,7 +603,7 @@ export class MonitorHistoryStore {
     // with no remaining points or incidents holds only an unattributable
     // operations snapshot, so it is retention-expired, not capacity-pruned.
     if (this.indexed) for (const run of await this.runNames()) {
-      if (run === this.runId || this.incidentRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
+      if (run === this.runId || this.incidentRuns.has(run) || this.foreignIncidents.has(run) || this.refusedIncidentRuns.has(run) || this.refusedAsideRuns.has(run) || this.unindexedRuns.has(run) || [...this.index.values()].some(entry => entry.run === run)) continue
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
     }
     this.bytes = await this.diskBytes()
@@ -580,11 +638,12 @@ export class MonitorHistoryStore {
 
   private async writeRunIncidents(run: string, rows: MonitorIncident[]): Promise<void> {
     const file = join(this.root, RUNS_DIR, run, 'incidents.json')
-    if (rows.length) {
-      if (await this.replaceBounded(file, JSON.stringify(rows), INCIDENT_BUDGET)) this.incidentRuns.set(run, rows)
-    } else {
+    if (!rows.length && !this.foreignIncidents.has(run)) {
       await rm(file, { force: true })
       this.incidentRuns.delete(run)
+    } else if (await this.replaceBounded(file, this.incidentFileBody(run, rows), INCIDENT_BUDGET)) {
+      if (rows.length) this.incidentRuns.set(run, rows)
+      else this.incidentRuns.delete(run)
     }
   }
 
@@ -691,16 +750,51 @@ export class MonitorHistoryStore {
     } catch { return null }
   }
 
-  private async readIncidentFile(file: string): Promise<MonitorIncident[]> {
+  private incidentFileBody(run: string, rows: MonitorIncident[]): string {
+    return JSON.stringify([...rows, ...(this.foreignIncidents.get(run) ?? [])])
+  }
+
+  /**
+   * Moves a refused incidents.json to `incidents.refused-<ms>-<uuid>.json` in the same
+   * run directory, keeping its bytes (and counting them in the budget), so the
+   * run can record new incidents. False, and nothing is written, when the
+   * move fails: losing the new rows beats overwriting the refused ones.
+   */
+  private async setRefusedIncidentsAside(file: string): Promise<boolean> {
     try {
-      if ((await stat(file)).size > INCIDENT_BUDGET) { this.degraded = true; return [] }
-      const value: unknown = JSON.parse(await readFile(file, 'utf8'))
-      if (!Array.isArray(value) || value.length > INCIDENT_LIMIT) { this.degraded = true; return [] }
-      const parsed = value.map(parseMonitorIncident)
-      if (parsed.some(incident => incident === null)) { this.degraded = true; return [] }
-      return parsed as MonitorIncident[]
+      // A UUID, not only the time (review of #1411, round 2): rename replaces an
+      // existing destination, so a second refusal in the same millisecond, or
+      // after the clock stepped back, overwrote the first set-aside file.
+      await rename(file, join(dirname(file), `${REFUSED_INCIDENTS_PREFIX}${Date.now()}-${randomUUID()}.json`))
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.degraded = true
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { this.degraded = true; this.shortened = true; return false }
+    }
+    this.refusedIncidentRuns.delete(this.runId)
+    this.refusedAsideRuns.add(this.runId)
+    return true
+  }
+
+  private async readIncidentFile(file: string, run: string): Promise<MonitorIncident[]> {
+    // Whole-file refusals stay whole-file: an oversized, non-array, over-limit,
+    // malformed or unreadable file is not "one row this build does not know"
+    // but a file it cannot trust at all. It is marked refused, never rewritten;
+    // see refusedIncidentRuns.
+    const refuse = (): MonitorIncident[] => { this.degraded = true; this.refusedIncidentRuns.add(run); return [] }
+    try {
+      if ((await stat(file)).size > INCIDENT_BUDGET) return refuse()
+      const value: unknown = JSON.parse(await readFile(file, 'utf8'))
+      if (!Array.isArray(value) || value.length > INCIDENT_LIMIT) return refuse()
+      const rows: MonitorIncident[] = []
+      const foreign: unknown[] = []
+      for (const row of value) {
+        const incident = parseMonitorIncident(row)
+        if (incident) rows.push(incident)
+        else foreign.push(row)
+      }
+      if (foreign.length) { this.degraded = true; this.foreignIncidents.set(run, foreign) }
+      return rows
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return refuse()
       return []
     }
   }
@@ -753,6 +847,9 @@ export class MonitorHistoryStore {
       await rm(join(this.root, RUNS_DIR, run), { recursive: true, force: true })
       for (const [file, entry] of [...this.index]) if (entry.run === run) { this.index.delete(file); this.repairedTails.delete(file) }
       this.incidentRuns.delete(run)
+      this.foreignIncidents.delete(run)
+      this.refusedIncidentRuns.delete(run)
+      this.refusedAsideRuns.delete(run)
       this.unindexedRuns.delete(run)
       total = Math.max(0, total - size); this.shortened = true
     }

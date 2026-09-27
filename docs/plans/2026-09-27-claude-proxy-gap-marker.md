@@ -327,3 +327,9 @@ Residual surfaces outside this PR, filed:
   - `mergeTransportGaps`' sort: a near-equivalent mutant, because the feed re-derives order from timestamps;
   - the package's forgotten no-turn flow (P7): a package test gap in merged claude-code-headless#69, not this PR's code;
   - c's three suspicions, which c did not rank above notes.
+
+## Merge of origin/main after #1450 (a real conflict)
+- `initialHistory.ts`: both branches changed the same import line (`mergeTransportGaps` here, `worktreesForAttribution` from #1450). Both kept.
+- `initialHistory.renderer.test.tsx`: both added a `describe` block at the end. Both kept.
+- Main's `claude-code-headless` is `1cfa8c92` (#68's merge), an ancestor of this PR's `0928344e`, so the bump is a fast-forward.
+- `npx tsc -b` clean. The workspace, feed, session-runtime, rendering, main-session and Claude suites pass 2315/2315.

@@ -21,6 +21,8 @@ import { mkdirSync, writeFileSync, createWriteStream, readFileSync, existsSync }
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
+import { LANE_PORT_PROBE_USER_AGENT } from '../src/main/browserPocket/lanePortsIo.ts'
+
 const prompt = process.argv[2] ?? 'say hi in three words'
 
 const ts = new Date().toISOString().replace(/[:.]/g, '-')
@@ -50,6 +52,21 @@ console.error(`[harness] auth_mode=${authMode}, upstream=${upstreamBase}`)
 let requestCount = 0
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  // The harness runs for as long as Codex does, usually well past the lane
+  // port watcher's settle window. When an agent runs it inside an Agent Code
+  // lane, this proxy is in the lane's process tree and receives the watcher's
+  // one `GET /` (#1409). Counting it made `runCodex()` report that Codex
+  // reached the proxy when only the watcher had. Only the probe's exact shape
+  // is excused: `GET /` AND its User-Agent. Anything else still counts,
+  // including a bare `GET /` and, above all, a `POST /responses` that somehow
+  // carried that User-Agent (#1452 review b), which must be counted and
+  // forwarded.
+  if (req.method === 'GET' && req.url === '/' && req.headers['user-agent'] === LANE_PORT_PROBE_USER_AGENT) {
+    res.statusCode = 404
+    res.end()
+    console.error(`[harness] ignored the Agent Code lane port probe: ${req.method} ${req.url}`)
+    return
+  }
   const startedAt = Date.now()
   const reqId = ++requestCount
   console.error(`[proxy#${reqId}] ${req.method} ${req.url}`)

@@ -35,7 +35,13 @@ export type WorktreeDump = {
    *  when gitUnavailable is true; the two need different copy because
    *  "not a git repository" is actively misleading on a git-less Mac. */
   gitMissing: boolean
+  /** gitUnavailable because git timed out, not because this is not a repo
+   *  (#1250 row 11). */
+  gitTimedOut?: boolean
   activityUnavailable: boolean
+  /** activityUnavailable because git timed out while the activity index asked
+   *  for this repository's worktrees (#1430), not because there is no index. */
+  activityTimedOut?: boolean
 }
 
 export async function loadWorktreeDump(params: {
@@ -70,6 +76,7 @@ export async function loadWorktreeDump(params: {
       indexStatus: null,
       gitUnavailable: true,
       gitMissing: gitResult.gitMissing,
+      gitTimedOut: 'timedOut' in gitResult && gitResult.timedOut === true,
       activityUnavailable: true,
     }
   }
@@ -88,6 +95,7 @@ export async function loadWorktreeDump(params: {
     gitUnavailable: false,
     gitMissing: false,
     activityUnavailable: !activityResult.ok,
+    activityTimedOut: !activityResult.ok && 'timedOut' in activityResult && activityResult.timedOut === true,
   }
 }
 

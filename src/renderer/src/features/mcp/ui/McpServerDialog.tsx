@@ -22,7 +22,7 @@ import type {
   UserMcpServerEntry,
   UserMcpServerView,
 } from '@shared/userMcp/types'
-import { USER_MCP_PROVIDERS } from '@shared/userMcp/types'
+import { USER_MCP_PROVIDERS, type UserMcpSecretState } from '@shared/userMcp/types'
 import { providerSupportForEntry, transportOf, userMcpDestination } from '@shared/userMcp/validate'
 
 const PROVIDER_LABEL: Record<UserMcpProvider, string> = { claude: 'Claude', codex: 'Codex' }
@@ -486,6 +486,11 @@ function EditServer({ server, onDone, onCancel, onDirty, onSaving }: { server: U
             values={secretEdits}
             states={secretStates}
             onChange={setSecretEdits}
+            onConfirm={destinationChanged ? undefined : async inputId => {
+              setError(null)
+              const result = await window.api.userMcpConfirmSecret(server.id, inputId)
+              if (!result.ok) setError(result.error)
+            }}
           />
         ) : null}
         {destinationChanged && inputs.length > 0 ? (
@@ -531,11 +536,14 @@ function SecretFields({
   values,
   states,
   onChange,
+  onConfirm,
 }: {
   inputs: UserMcpInput[]
   values: Record<string, string>
-  states: Record<string, { set: boolean; hint?: string }>
+  states: Record<string, UserMcpSecretState>
   onChange: (values: Record<string, string>) => void
+  /** Confirm a withheld secret for this server as it is now (q114, #1420 B6 R3). */
+  onConfirm?: (inputId: string) => void
 }) {
   return (
     <div className="mt-2 flex flex-col gap-1.5">
@@ -545,6 +553,8 @@ function SecretFields({
         const edited = values[input.id]
         const placeholder = edited === ''
           ? 'cleared on save'
+          : state?.unconfirmed
+          ? `${state.unconfirmed === 'legacy' ? 'saved by an earlier version' : 'withheld: an agent changed another value'}${state.hint ? ` (…${state.hint})` : ''}: confirm or re-enter`
           : state?.set
           ? `set${state.hint ? ` (…${state.hint})` : ''} — type to replace`
           : 'not set'
@@ -568,6 +578,9 @@ function SecretFields({
               className="h-7 flex-1"
               aria-label={`Secret ${input.id}`}
             />
+            {state?.unconfirmed && edited === undefined && onConfirm ? (
+              <Button size="xs" variant="ghost" onClick={() => onConfirm(input.id)}>Confirm for this server</Button>
+            ) : null}
             {state?.set && edited === undefined ? (
               <Button size="xs" variant="ghost" onClick={() => onChange({ ...values, [input.id]: '' })}>Clear</Button>
             ) : null}

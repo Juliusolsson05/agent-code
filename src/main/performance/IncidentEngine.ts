@@ -8,6 +8,12 @@ const operationThresholds: Partial<Record<MonitorOperationName, number>> = {
   'transcript.read': 1000, 'transcript.parse': 100, 'transcript.fold': 100,
   'transcript.commit': 100, 'terminal.write': 250, 'persistence.serialize': 100,
   'persistence.write': 2000, 'worktree.refresh': 5000,
+  // One file's synchronous extraction, then a search's prompt gathering and a
+  // full discovery pass (#769). Search and discovery sit AT the main-stall
+  // band (loopMax >= 1000 ms), not above it (#1352 review c): above it, a
+  // discovery that stalled main for 1.5 s raised a main-stall with no named
+  // operation incident, which is the attribution this vocabulary exists for.
+  'conversations.extract': 250, 'conversations.search': 1000, 'conversations.discover': 1000,
 }
 // Each capture retains at most 160 evidence points. Eight simultaneous scopes
 // bound post-trigger memory to ~1.3k points even during an app-wide storm,

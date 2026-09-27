@@ -28,6 +28,8 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 
 import { duplicateSession } from './duplicateSession.js'
 import { projectGrokNativeResume } from 'agent-transcript-parser'
+import { losslessProjection } from './testing/losslessProjection.js'
+import { summarizeProjectionReport } from './projectionFidelity.js'
 
 const conversation = {
   schemaVersion: 1 as const,
@@ -46,7 +48,7 @@ describe('duplicateSession neutral integration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.read.mockResolvedValue(conversation)
-    mocks.project.mockResolvedValue({ values: [{ sessionId: 'new-session' }] })
+    mocks.project.mockResolvedValue(losslessProjection([{ sessionId: 'new-session' }]))
     mocks.sessionId.mockReturnValue('new-session')
     mocks.write.mockResolvedValue('/target/new-session.jsonl')
   })
@@ -68,11 +70,12 @@ describe('duplicateSession neutral integration', () => {
         targetSessionId: '00000000-0000-4000-8000-000000000098',
       }),
     )
-    expect(mocks.write).toHaveBeenCalledWith('/target', { values: [{ sessionId: 'new-session' }] })
+    expect(mocks.write).toHaveBeenCalledWith('/target', losslessProjection([{ sessionId: 'new-session' }]))
     expect(result).toEqual({
       provider: 'claude',
       newProviderSessionId: 'new-session',
       newFilePath: '/target/new-session.jsonl',
+      projectionFidelity: summarizeProjectionReport(losslessProjection([{ sessionId: 'new-session' }])),
     })
   })
 
@@ -128,7 +131,7 @@ describe('duplicate keeps the source conversation\'s own model', () => {
     // Call history from the suites above would otherwise be inspected here.
     for (const mock of Object.values(mocks)) mock.mockReset()
     mocks.read.mockResolvedValue({ entries: [{ kind: 'message', role: 'user' }], sourceSessionIds: ['ses_source'] })
-    mocks.project.mockResolvedValue({ values: [{}] })
+    mocks.project.mockResolvedValue(losslessProjection([{}]))
     mocks.write.mockResolvedValue('/fixture/new.json')
     mocks.sessionId.mockReturnValue('ses_new')
   })

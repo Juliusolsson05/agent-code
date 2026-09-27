@@ -11,6 +11,7 @@ import { AGENT_PROVIDER_KINDS, effectiveProviderRuntime, isAgentProviderKind, pr
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { startControlTask } from './startTask'
+import type { NativeProjectionFidelity } from '@shared/types/projectionFidelity'
 
 const target = z.object({ sessionId: z.string().min(1).describe('Exact Agent Code sessionId from agents.search; not the native transcript ID.') }).strict()
 const revision = z.string().describe('Revision from agents.lifecycleRead. Refresh it after any lifecycle or draft change.')
@@ -48,10 +49,19 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
     if (current.revision !== input.revision) throw new ControlError('stale_cursor', 'Agent lifecycle or draft changed; read agents.lifecycleRead again')
     return current
   }
-  const result = (value: { status: string; reason?: string; message?: string; newSessionId?: string }, sourceSessionId: string) => {
+  // `projectionFidelity` is relayed when the operation re-projected a
+  // transcript (switch, rewind; #927). Before, this helper kept only the IDs,
+  // so a control caller that switched or rewound an agent had no way to see
+  // what the projector dropped or demoted; the UI toast was the only record.
+  const result = (value: { status: string; reason?: string; message?: string; newSessionId?: string; projectionFidelity?: NativeProjectionFidelity | null }, sourceSessionId: string) => {
     if (value.status === 'skipped') throw new ControlError('unavailable', value.reason ?? 'Operation declined')
     if (value.status === 'failed' || !value.newSessionId) throw new ControlError('failed', value.message ?? 'Replacement was not observed', 'unknown')
-    return { sourceSessionId, newSessionId: value.newSessionId, status: value.status }
+    return {
+      sourceSessionId,
+      newSessionId: value.newSessionId,
+      status: value.status,
+      ...(value.projectionFidelity ? { projectionFidelity: value.projectionFidelity } : {}),
+    }
   }
   return [
     defineCapability({ id: 'agents.resume', title: 'Resume a native session in a project', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'project', field: 'tabId' },
@@ -73,8 +83,8 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
         })
       },
     }),
-    defineCapability({ id: 'agents.duplicate', title: 'Branch an exact agent conversation', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
-      description: 'Copy an idle native conversation to a new native identity and create an agent in the chosen project. Preserves provider/runtime and enabled built-in domain names; leaves the source and its draft intact. Requires a fresh lifecycle revision and an explicit target project/anchor in the same window. Use operations.read for both new IDs, then agents.show to put the copy in a lane. It fills the captured focused lane only when that lane is empty (selectCreated:false never places it). A failed placement can leave a native transcript copy; do not blindly retry unknown outcomes.',
+    defineCapability({ id: 'agents.duplicate', title: 'Branch an agent conversation', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
+      description: 'Copy an idle native conversation to a new native identity and create an agent in the chosen project. Preserves provider/runtime and enabled built-in domain names; leaves the source and its draft intact. Requires a fresh lifecycle revision and an explicit target project/anchor in the same window. Use operations.read for both new IDs and the projectionFidelity of the copy (what re-projecting the transcript preserved, dropped or demoted; a copy is not byte-exact), then agents.show to put the copy in a lane. It fills the captured focused lane only when that lane is empty (selectCreated:false never places it). A failed placement can leave a native transcript copy; do not blindly retry unknown outcomes.',
       input: target.extend({ revision, tabId: z.string(), anchorSessionId: z.string(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }), output: accepted,
       handler: (input, context) => {
         const check = () => {
@@ -96,7 +106,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
           const newSessionId = await getWorkspace().createDetachedSession({ kind: value.provider, providerRuntime: meta.providerRuntime },
             { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: value.cwd, resumeSessionId: clone.newProviderSessionId, builtInMcpOverrides: clonedMcpOverrides(meta) }, { selectCreated: input.selectCreated })
           if (!newSessionId) throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but no placement was committed`, 'unknown')
-          return { sourceSessionId: input.sessionId, newSessionId, nativeSessionId: clone.newProviderSessionId }
+          return { sourceSessionId: input.sessionId, newSessionId, nativeSessionId: clone.newProviderSessionId, projectionFidelity: clone.projectionFidelity }
         })
       },
     }),
@@ -107,7 +117,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       handler: ({ sessionId }) => inspect(sessionId),
     }),
     defineCapability({ id: 'agents.switchProvider', title: 'Switch an exact agent provider', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
-      description: 'Move an observed agent to one of agents.lifecycleRead switchChoices through the normal translation, capacity/compaction and replacement transaction. May open a confirmation or take minutes. Returns a task callId; use operations.read for the new Agent Code session ID or failure. Draft and supported internal MCP-domain continuity follow the ordinary UI operation. Never assume the source ID remains valid.',
+      description: 'Move an observed agent to one of agents.lifecycleRead switchChoices through the normal translation, capacity/compaction and replacement transaction. May open a confirmation or take minutes. Returns a task callId; use operations.read for the new Agent Code session ID, the projectionFidelity summary (what the projector preserved, dropped or demoted), or failure. Draft and supported internal MCP-domain continuity follow the ordinary UI operation. Never assume the source ID remains valid.',
       input: target.extend({ revision, provider: z.enum(AGENT_PROVIDER_KINDS), runtime: z.enum(['terminal']).optional().describe('Supply only when the chosen switchChoices entry declares this runtime; omit for structured rendering.') }), output: accepted,
       handler: (input, context) => {
         const current = guard(input)
@@ -125,7 +135,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({ id: 'agents.rewind', title: 'Rewind an exact agent to a native prompt', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
-      description: 'Create a new native transcript ending before an exact prompt address from nativeHistory.prompts, and replace this idle agent in place. The original transcript remains intact. The selected historical prompt becomes the new unsent draft, replacing the current draft; undoRewind can restore the prior conversation/draft until the next submission. First read agents.lifecycleRead. Use operations.read for the final newSessionId; acceptance alone is not completion.',
+      description: 'Create a new native transcript ending before an exact prompt address from nativeHistory.prompts, and replace this idle agent in place. The original transcript remains intact. The selected historical prompt becomes the new unsent draft, replacing the current draft; undoRewind can restore the prior conversation/draft until the next submission. First read agents.lifecycleRead. Use operations.read for the final newSessionId and the projectionFidelity of the rewound copy; acceptance alone is not completion.',
       input: target.extend({ revision, address: address.describe('Exact address from nativeHistory.prompts for this native session; never infer line numbers from rendered feed rows.') }), output: accepted,
       handler: (input, context) => {
         const check = () => { const value = guard(input); if (!value.nativeSessionId || value.processActive) throw new ControlError('unavailable', 'Rewind requires an idle resumable agent')

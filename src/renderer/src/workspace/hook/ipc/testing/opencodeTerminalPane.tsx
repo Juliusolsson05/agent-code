@@ -89,18 +89,14 @@ import { makeWorkspaceRefsForTest } from './workspaceRefsForTest'
 const USERNAME = 'opencode'
 const PASSWORD = 'renderer-replay'
 
-/** A caller-owned PTY that can also paint, like the TUI's first frame. */
+/** A caller-owned PTY that can also paint, like the TUI's first frame. The
+ *  data subscription is the package's own `FakePty` one since
+ *  opencode-terminal-headless#10; this used to duplicate it. */
 export class AdapterPty extends FakePty {
   readonly kill = vi.fn(() => this.exit(0, 15))
-  private readonly dataListeners = new Set<(data: string) => void>()
-
-  onData(listener: (data: string) => void): { dispose(): void } {
-    this.dataListeners.add(listener)
-    return { dispose: () => { this.dataListeners.delete(listener) } }
-  }
 
   paint(data: string): void {
-    for (const listener of [...this.dataListeners]) listener(data)
+    this.output(data)
   }
 }
 
@@ -232,7 +228,12 @@ export type RecordedPaneOptions = {
    * Where the durable channel reads. Omitted: a fresh database the replay
    * writes into. A string: that file as it is (a database the store refuses,
    * say). `{ error }`: OpenCode could not tell the launch where its database
-   * is, which is how `prepareOpencodeTerminalLaunch` reports it.
+   * is, as a host-built launch reports it (`dbPath: null` + `dbPathError`).
+   * NOTE: since opencode-terminal-headless#10 (#1114) the real
+   * `prepareOpencodeTerminalLaunch` never sets `dbPathError`; it returns the
+   * lookup as `dbPathPending` and a failure is that promise's rejection. This
+   * harness builds its own launch, so it keeps the older shape, which the
+   * package still honours for host-built launches.
    */
   database?: string | { error: string }
   /**
@@ -251,6 +252,9 @@ export type RecordedPaneOptions = {
    * Launch DARK and let the path turn up later (#1114, #1117): the launch
    * could not resolve OpenCode's database path, so the durable channel starts
    * closed and the package retries `resolveOpencodeDbPath` on this ladder.
+   * (Modelled as the pre-#10 launch shape: a known failure rather than a
+   * pending lookup. The package runs the same ladder after a pending lookup
+   * rejects.)
    * The fresh database is still created and written by the replay, exactly as
    * the TUI keeps committing to it while the pane cannot read it. The test
    * controls when the resolver starts answering (it mocks the package's

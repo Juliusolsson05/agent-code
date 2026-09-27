@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
 import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
+import { currentOrchestrationParent } from '@renderer/workspace/hook/actions/successorCarry'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -1383,13 +1384,18 @@ export function usePaneActions(
         builtInMcpDomains: params.builtInMcpDomains,
       })
 
+      // The parent may have been replaced while the spawn was awaited (#1369
+      // verification a/b): file the child under the live ids, as the swap's
+      // remap did for the children that already existed.
+      const parentId = currentOrchestrationParent(params.parentId)
+      const rootId = currentOrchestrationParent(rootParentId)
       const agent: OrchestrationAgentRecord = {
         sessionId,
         kind: params.kind,
         cwd,
         ...(params.title ? { title: params.title } : {}),
-        orchestrationParentId: params.parentId,
-        orchestrationRootId: rootParentId,
+        orchestrationParentId: parentId,
+        orchestrationRootId: rootId,
         ...(params.runId ? { orchestrationRunId: params.runId } : {}),
         ...(params.role ? { orchestrationRole: params.role } : {}),
       }
@@ -1408,8 +1414,8 @@ export function usePaneActions(
               cwd,
               kind: params.kind,
               ...(params.title ? { title: params.title } : {}),
-              orchestrationParentId: params.parentId,
-              orchestrationRootId: rootParentId,
+              orchestrationParentId: parentId,
+              orchestrationRootId: rootId,
               ...(params.runId ? { orchestrationRunId: params.runId } : {}),
               ...(params.role ? { orchestrationRole: params.role } : {}),
               // Filed in the root parent's project; see createLinkedAgent.

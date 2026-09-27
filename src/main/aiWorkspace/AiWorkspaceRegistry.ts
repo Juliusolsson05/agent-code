@@ -161,11 +161,31 @@ export interface AiWorkspaceRegistry {
   emit(event: 'changed', payload: AiWorkspaceChangeEvent): boolean
 }
 
+/** The fixed warning a write returns when the file is written but the
+ *  registry could not save its status (#1285). Exported so the editor and
+ *  tests read one sentence. */
+export const AI_WORKSPACE_STATUS_NOT_SAVED =
+  'The file was saved, but AI Workspace could not save its status. Other AI Workspace changes will fail until its storage is fixed.'
+
+/** The fixed notice `get` carries while saves are blocked by an owed copy. */
+export const AI_WORKSPACE_STORAGE_BLOCKED =
+  'AI Workspace cannot save changes until its storage is fixed: rows it could not read must be copied aside first, and that copy cannot be written.'
+
 export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
   /** The loaded file while set-aside rows are not yet preserved; see load(). */
   private owedCopy: { text: string; setAside: number } | null = null
+  // True after the owed copy last FAILED to be written, false once it is
+  // written. `get` reports it (see AI_WORKSPACE_STORAGE_BLOCKED): a save is
+  // refused exactly while a copy is owed and cannot be made.
+  private copyBlocked = false
+  // True after the last state save failed, whatever step failed; false after
+  // one succeeds. WHY in addition to copyBlocked (#1416 verification b): the
+  // owed copy can SUCCEED and the state write then fail. copyBlocked is then
+  // already false, so `get` reported nothing and the editor's next load
+  // cleared the notice although the status was still unsaved.
+  private lastSaveFailed = false
   private saveQueue: Promise<void> = Promise.resolve()
   private readonly knownFilePaths = new Set<string>()
   private readonly gitContextCache = new Map<
@@ -262,7 +282,12 @@ export class AiWorkspaceRegistry extends EventEmitter {
     await this.ensureLoaded()
     const workspace = this.workspaces.get(workspaceId)
     if (!workspace) return null
-    return await this.refreshWorkspace(workspaceId)
+    const record = await this.refreshWorkspace(workspaceId)
+    // A copy, so the runtime-only field never reaches the persisted record.
+    const storageWarning = this.owedCopy && this.copyBlocked
+      ? AI_WORKSPACE_STORAGE_BLOCKED
+      : this.lastSaveFailed ? AI_WORKSPACE_STATUS_NOT_SAVED : undefined
+    return storageWarning ? { ...record, storageWarning } : record
   }
 
   async attachFile(params: AiWorkspaceAttachFileParams): Promise<AiWorkspaceFileEntry> {
@@ -413,16 +438,42 @@ export class AiWorkspaceRegistry extends EventEmitter {
             conflictKind: result.conflictKind,
           }
         }
-        await this.refreshEntriesForPath(target)
+        // WHY a failed status refresh does not fail the write (#1285): the
+        // user's file is already replaced on disk by this point. The refresh
+        // saves registry state, and a save can be refused (a preservation
+        // copy it owes is blocked; see preserveOwedCopy). Returning
+        // `ok: false` then told an agent its edit had not landed, so it
+        // retried or reported a failure that never happened. The write is
+        // reported as done, and the stale status is a warning.
+        //
+        // The warning is a FIXED sentence (#1416 review a): the editor shows
+        // it, and a raw filesystem message never belongs on a user-visible
+        // surface. The cause goes to the log.
+        let warning: string | undefined
+        try {
+          await this.refreshEntriesForPath(target)
+        } catch (err) {
+          warning = AI_WORKSPACE_STATUS_NOT_SAVED
+          console.warn('[ai-workspace] status refresh after a write failed:', err)
+        }
         // One physical file can be curated into several workspaces. Every
         // visible consumer needs the write signal; choosing an arbitrary first
         // workspace would leave the others showing stale buffer metadata.
+        //
+        // Each emit is guarded (#1416 review a): a listener that throws (the
+        // production one broadcasts to every window) must neither turn this
+        // landed write into `ok: false`, the #1285 failure on another step,
+        // nor stop the remaining workspaces from hearing about it.
         for (const workspace of this.workspaces.values()) {
           if (workspace.entries.some(entry => entry.path === target)) {
-            this.emit('changed', {
-              workspaceId: workspace.workspaceId,
-              kind: 'file-written',
-            })
+            try {
+              this.emit('changed', {
+                workspaceId: workspace.workspaceId,
+                kind: 'file-written',
+              })
+            } catch (err) {
+              console.warn('[ai-workspace] a file-written listener failed:', err)
+            }
           }
         }
         return {
@@ -431,6 +482,7 @@ export class AiWorkspaceRegistry extends EventEmitter {
           mtimeMs: result.stat.mtimeMs,
           size: result.stat.size,
           version: result.version,
+          ...(warning ? { warning } : {}),
         }
       })
     } catch (err) {
@@ -605,15 +657,52 @@ export class AiWorkspaceRegistry extends EventEmitter {
   private async preserveOwedCopy(): Promise<void> {
     if (!this.owedCopy) return
     const { text, setAside } = this.owedCopy
-    const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text)
+    // WHY the error is rewritten (#1285): the raw errno text ("is a
+    // directory") told the user nothing about why every save was refused or
+    // how to unblock it. Saves stay refused until the copy exists, because
+    // the next save drops the unreadable rows.
+    const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text).catch(err => {
+      this.copyBlocked = true
+      const code = (err as NodeJS.ErrnoException).code
+      // WHY the advice depends on the code (#1416 review a): "clear what
+      // occupies the path" is only true when something occupies it. A
+      // missing directory, a permission or read-only refusal and a full disk
+      // each need a different fix, and advice for the wrong one sends the
+      // user looking for an occupant that does not exist.
+      // ENOTDIR is NOT an occupant (#1416 review b): it means a component of
+      // the folder path is a file, so it falls to the generic advice. A
+      // read-only volume cannot be fixed by permissions.
+      const advice = code === 'EISDIR' || code === 'EEXIST'
+        ? `Something already occupies the copy path next to ${this.stateFile}; move it away to continue.`
+        : code === 'ENOENT'
+          ? `The folder holding ${this.stateFile} is missing; restore it to continue.`
+          : code === 'EACCES' || code === 'EPERM'
+            ? `The folder holding ${this.stateFile} is not writable; fix its permissions to continue.`
+            : code === 'EROFS'
+              ? `The folder holding ${this.stateFile} is on a read-only volume; AI Workspace cannot save there.`
+              : code === 'ENOSPC'
+                ? 'The disk is full; free some space to continue.'
+                : `Check that the folder holding ${this.stateFile} exists and is writable to continue.`
+      throw new Error(
+        `AI Workspace storage needs attention: ${setAside} unreadable row(s) must be copied aside before saving, ` +
+        `and the copy could not be written${code ? ` (${code})` : ''}. ${advice}`,
+      )
+    })
     this.owedCopy = null
+    this.copyBlocked = false
     console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
   }
 
   private async save(): Promise<void> {
     const next = this.saveQueue.then(async () => {
-      await this.preserveOwedCopy()
-      await this.writeStateFile()
+      try {
+        await this.preserveOwedCopy()
+        await this.writeStateFile()
+        this.lastSaveFailed = false
+      } catch (err) {
+        this.lastSaveFailed = true
+        throw err
+      }
     })
     this.saveQueue = next.catch(() => undefined)
     await next

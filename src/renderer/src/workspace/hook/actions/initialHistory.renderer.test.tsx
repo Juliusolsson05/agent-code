@@ -122,3 +122,48 @@ describe('the initial-history loader and transport gaps (#1381)', () => {
     expect(fresh.runtime().transportGaps).toEqual([GAP])
   })
 })
+
+// #1430 review a/b: when `git worktree list` times out during the initial
+// load, the chunk is not attributed against an empty family — and it is not
+// dropped either: the loader hands its records to the live reconciler, whose
+// window replays them once git answers (handHistoryToReconciler).
+describe('the initial-history loader when git times out (#1430)', () => {
+  it('hands the chunk to the worktree reconciler and asks it to refresh', async () => {
+    const { history } = emptySession()
+    const pane = rehydratedPane()
+    const observed: unknown[][] = []
+    const refresh = vi.fn(async () => 'failed' as const)
+    pane.refs.worktreeReconcilerRef.current = {
+      observe: (_sessionId, _cwd, entries, projection) => { observed.push(entries.map(e => e.entry)); return projection },
+      refresh,
+      replayCachedCatalog: vi.fn(),
+    }
+    scope.extendApi({
+      gitWorktrees: async () => ({ ok: false, gitMissing: false, timedOut: true }),
+      loadInitialHistory: async (request: { cwd: string; providerSessionId: string; limit: number }) => {
+        const chunk = await history.loadInitialHistory(request)
+        return { ...chunk, entries: [{ type: 'recorded-row', n: 1 }, ...chunk.entries] }
+      },
+    })
+    await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
+    expect(observed).toHaveLength(1)
+    expect(observed[0]![0]).toEqual({ type: 'recorded-row', n: 1 })
+    expect(refresh).toHaveBeenCalledWith(pane.meta.cwd)
+  })
+
+  it('does not hand anything over when git answered', async () => {
+    const { history } = emptySession()
+    const pane = rehydratedPane()
+    const observe = vi.fn()
+    pane.refs.worktreeReconcilerRef.current = { observe, refresh: vi.fn(), replayCachedCatalog: vi.fn() }
+    scope.extendApi({
+      gitWorktrees: async () => ({ ok: true, worktrees: [] }),
+      loadInitialHistory: async (request: { cwd: string; providerSessionId: string; limit: number }) => {
+        const chunk = await history.loadInitialHistory(request)
+        return { ...chunk, entries: [{ type: 'recorded-row', n: 1 }, ...chunk.entries] }
+      },
+    })
+    await loadInitialHistoryForSession({ sessionId: SESSION_ID, meta: pane.meta, refs: pane.refs, setRuntimes: pane.setRuntimes })
+    expect(observe).not.toHaveBeenCalled()
+  })
+})

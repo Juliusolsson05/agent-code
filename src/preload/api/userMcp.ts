@@ -26,6 +26,8 @@ export const userMcpApi = {
     ipcRenderer.invoke('user-mcp:set-provider', id, provider, enabled),
   userMcpSetSecret: (id: string, inputId: string, value: string): Promise<UserMcpMutationResult> =>
     ipcRenderer.invoke('user-mcp:set-secret', id, inputId, value),
+  userMcpConfirmSecret: (id: string, inputId: string): Promise<UserMcpMutationResult> =>
+    ipcRenderer.invoke('user-mcp:confirm-secret', id, inputId),
   userMcpImport: (text: string, fallbackName?: string): Promise<UserMcpImportResult> =>
     ipcRenderer.invoke('user-mcp:import', text, fallbackName),
   userMcpCopyNative: (provider: UserMcpProvider, name: string): Promise<UserMcpMutationResult> =>

@@ -67,7 +67,7 @@ export function buildListing(input: BuildListingInput): ConversationListResponse
     total,
     hiddenChildren,
     nextCursor: start + limit < visible.length && last ? encodeCursor(last) : null,
-    family: { repoRoot: family.root, roots: family.roots },
+    family: { repoRoot: family.root, roots: family.roots, ...(family.gitTimedOut ? { gitTimedOut: true as const } : {}) },
     timing: { ms: Math.max(0, Date.now() - input.startedAt) },
   }
 }

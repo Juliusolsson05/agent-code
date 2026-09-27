@@ -28,11 +28,38 @@ export async function listListeners(pids: number[]): Promise<Listener[]> {
     const { stdout } = await run('/usr/sbin/lsof', ['-nP', '-a', '-iTCP', '-sTCP:LISTEN', '-F', 'pcn', '-p', pids.join(',')], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 })
     return parseLsofListen(stdout)
   } catch (error) {
-    // Exit status 1 with empty output is lsof's "nothing matched" (recorded),
-    // not a failure.
-    return parseLsofListen((error as { stdout?: string }).stdout ?? '')
+    return listenersFromLsofError(error)
   }
 }
+
+/**
+ * Exit status 1 is lsof's "nothing matched" (recorded), not a failure, and
+ * its stdout is still the answer. Anything else is a failed observation: a
+ * timeout (execFile kills the child, so `killed`/`signal` is set and `code`
+ * is null), a signal, or a missing binary (`code: 'ENOENT'`). Those throw.
+ * Before #1452 they became `[]`, which LanePortWatcher read as "every server
+ * stopped". That pruned a settled dev server, and with the settle window its
+ * chip then stayed hidden for another 5 s after lsof recovered (review A).
+ */
+export function listenersFromLsofError(error: unknown): Listener[] {
+  const e = error as { code?: unknown; killed?: boolean; signal?: unknown; stdout?: string }
+  if (e.code === 1 && !e.killed && !e.signal) return parseLsofListen(e.stdout ?? '')
+  throw error
+}
+
+/**
+ * The User-Agent every lane port probe sends (#1409).
+ *
+ * WHY name ourselves: the probe lands in a developer's own server. A log line
+ * that says `AgentCode-LanePortProbe` explains itself; Node's default `node`
+ * does not. It is also the one exact thing a long-lived test that counts
+ * requests can excuse. The settle window (PROBE_SETTLE_MS in
+ * LanePortWatcher.ts) keeps short tests from ever seeing the probe, but a
+ * harness that outlives the window still can. Excusing "any `GET /`" (#1406)
+ * would also excuse a real regression that requests `/`. Keep this stable:
+ * tests match it verbatim.
+ */
+export const LANE_PORT_PROBE_USER_AGENT = 'AgentCode-LanePortProbe/1'
 
 /**
  * One `GET /` on loopback. Only ever called for listeners inside a watched
@@ -42,7 +69,7 @@ export async function listListeners(pids: number[]): Promise<Listener[]> {
  */
 export async function probe(port: number): Promise<ProbeResult> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual', signal: AbortSignal.timeout(1000) })
+    const res = await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual', headers: { 'user-agent': LANE_PORT_PROBE_USER_AGENT }, signal: AbortSignal.timeout(1000) })
     await res.body?.cancel().catch(() => {})
     return { status: res.status, contentType: res.headers.get('content-type') }
   } catch {

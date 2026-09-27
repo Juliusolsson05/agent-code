@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // `.then` advances the cursor and never resends. The comment described an
 // intention the code did not implement, and nothing was watching.
 
-let statResult: { mode: 'real' } | { mode: 'throw'; code: string } = { mode: 'real' }
+let statResult: { mode: 'real' } | { mode: 'throw'; code: string } | { mode: 'hold'; gate: Promise<void>; reached: () => void } = { mode: 'real' }
 let stateDir = ''
 
 vi.mock('node:fs/promises', async () => {
@@ -19,6 +19,11 @@ vi.mock('node:fs/promises', async () => {
     ...real,
     default: real,
     stat: async (path: Parameters<typeof real.stat>[0]) => {
+      if (statResult.mode === 'hold') {
+        const held = statResult
+        held.reached()
+        await held.gate
+      }
       if (statResult.mode === 'throw') {
         const err = new Error('stat refused') as NodeJS.ErrnoException
         err.code = statResult.code
@@ -153,5 +158,201 @@ describe('#770 — a reload does not re-open a capped log', () => {
     } finally {
       await handle.close()
     }
+  })
+})
+
+// #1207 (the #1111 reviewer's probe, real queue ordering): an append queued
+// BEFORE forgetFeedDebugSession, and not started yet, used to run afterwards
+// and write the per-session maps back. Nothing removed them again: a few
+// numbers per closed session, forever.
+describe('forget racing a queued append (#1207)', () => {
+  it('leaves no per-session state behind for 100 sessions forgotten right after an append', async () => {
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    const before = feedDebugSessionStateSizesForTest()
+    const writes: Array<Promise<void>> = []
+    for (let i = 0; i < 100; i++) {
+      const sessionId = `forget-race-${i}`
+      writes.push(queueFeedDebugAppend(sessionId, [entry(1)], 1_789_000_000_000).catch(() => undefined))
+      forgetFeedDebugSession(sessionId)
+    }
+    await Promise.all(writes)
+    expect(feedDebugSessionStateSizesForTest()).toEqual(before)
+  })
+})
+
+// #1392 reviews a+b: the committed probe only covered successful writes.
+describe('forget racing a queued append, other interleavings (#1392)', () => {
+  it('drops state after a forgotten append fails its size check', async () => {
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    statResult = { mode: 'throw', code: 'EACCES' }
+    const write = queueFeedDebugAppend('forget-fail', [entry(1)], 1_789_000_000_000)
+    forgetFeedDebugSession('forget-fail')
+    await expect(write).rejects.toThrow()
+    expect(feedDebugSessionStateSizesForTest('forget-fail')).toEqual({ ids: 0, epochs: 0, caps: 0, tokens: 0 })
+  })
+
+  it('lets a re-registered id write its first row after an old append of the same id', async () => {
+    // Same id, same epoch: if the old append's cleanup only checked that SOME
+    // token exists, it would keep its cursor and the new generation's id 1
+    // would be filtered as already written.
+    const first = queueFeedDebugAppend('reregistered', [entry(1)], 7_000)
+    forgetFeedDebugSession('reregistered')
+    const second = queueFeedDebugAppend('reregistered', [entry(1)], 7_000)
+    await Promise.all([first, second])
+    const lines = (await readFile(logPath('reregistered'), 'utf8')).trim().split('\n')
+    expect(lines).toHaveLength(2)
+  })
+
+  it('keeps rejecting while the size stays unknown', async () => {
+    forgetFeedDebugSession('still-unknown')
+    statResult = { mode: 'throw', code: 'EACCES' }
+    await expect(queueFeedDebugAppend('still-unknown', [entry(1)], 1_000)).rejects.toThrow()
+    await expect(queueFeedDebugAppend('still-unknown', [entry(2)], 1_000)).rejects.toThrow()
+  })
+})
+
+// #1392 review a, round 3: process exit forgets the session while the pane
+// (and its log) stay live. A forget landing during the first `stat` used to
+// drop the batch and RESOLVE, so the renderer advanced its cursor past rows
+// that were never written.
+describe('a forget during the first size check (#1392)', () => {
+  it('still writes the batch, then leaves no state behind', async () => {
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    let release!: () => void
+    let reached!: () => void
+    const atStat = new Promise<void>(resolve => { reached = resolve })
+    statResult = { mode: 'hold', gate: new Promise<void>(resolve => { release = resolve }), reached }
+    const write = queueFeedDebugAppend('exit-during-stat', [entry(1)], 1_000)
+    await atStat
+    forgetFeedDebugSession('exit-during-stat')
+    statResult = { mode: 'real' }
+    release()
+    await write
+    expect(await readFile(logPath('exit-during-stat'), 'utf8')).toContain('"id":1')
+    expect(feedDebugSessionStateSizesForTest('exit-during-stat')).toEqual({ ids: 0, epochs: 0, caps: 0, tokens: 0 })
+  })
+})
+
+// #1392 review a, round 4: cap state is rebuilt whenever a session is
+// forgotten and appends again. A rebuilt state started its drop count at 0,
+// so its tombstone reported 1 drop after an earlier row had reported 1,000.
+describe('a rebuilt cap state keeps the file\'s drop count', () => {
+  async function cappedFileWithMarker(sessionId: string, drops: number) {
+    await mkdir(join(stateDir, 'feed-debug'), { recursive: true })
+    await writeFile(logPath(sessionId), '')
+    await truncate(logPath(sessionId), 128 * 1024 * 1024)
+    await writeFile(logPath(sessionId), JSON.stringify({ sessionId, __feedDebugCapped: true, droppedEntriesSoFar: drops }) + '\n', { flag: 'a' })
+  }
+  async function lastMarkerDrops(sessionId: string): Promise<number> {
+    const handle = await open(logPath(sessionId), 'r')
+    try {
+      const size = (await handle.stat()).size
+      const tail = Buffer.alloc(4096)
+      await handle.read(tail, 0, 4096, size - 4096)
+      const tailSize = Math.min(size, 16_384)
+      const wide = Buffer.alloc(tailSize)
+      await handle.read(wide, 0, tailSize, size - tailSize)
+      const markers = wide.toString('utf8').split('\n').flatMap(row => {
+        try {
+          const parsed = JSON.parse(row.slice(row.indexOf('{'))) as { __feedDebugCapped?: unknown; droppedEntriesSoFar?: number }
+          return parsed.__feedDebugCapped === true ? [parsed.droppedEntriesSoFar ?? 0] : []
+        } catch { return [] }
+      })
+      void tail
+      return markers.at(-1) ?? -1
+    } finally {
+      await handle.close()
+    }
+  }
+
+  it('after a forget and a new append', async () => {
+    await cappedFileWithMarker('capped-rebuilt', 1_000)
+    forgetFeedDebugSession('capped-rebuilt')
+    await queueFeedDebugAppend('capped-rebuilt', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('capped-rebuilt')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  // Review b, round 5: drops are only persisted at a doubling, so a forget
+  // discarded up to half of them. Three forget cycles of 1 + 999 drops each
+  // on a file marked at 1,000 used to leave a last marker of 1,003 for 4,000
+  // true drops.
+  it('across repeated forgets, the last marker stays within 2x of the true drops', async () => {
+    await cappedFileWithMarker('capped-cycles', 1_000)
+    let id = 0
+    for (let cycle = 0; cycle < 3; cycle++) {
+      forgetFeedDebugSession('capped-cycles')
+      await queueFeedDebugAppend('capped-cycles', [entry(++id)], 1_000)
+      await queueFeedDebugAppend('capped-cycles', Array.from({ length: 999 }, () => entry(++id)), 1_000)
+    }
+    forgetFeedDebugSession('capped-cycles')
+    await queueFeedDebugAppend('capped-cycles', [], 1_000)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(await lastMarkerDrops('capped-cycles')).toBeGreaterThanOrEqual(4_000)
+  })
+
+  // Round-5 review a: the tail reader's three blind spots.
+  it('below the cap: a marker written by an oversized entry keeps its count', async () => {
+    await mkdir(join(stateDir, 'feed-debug'), { recursive: true })
+    await writeFile(logPath('below-cap'), '')
+    await truncate(logPath('below-cap'), 128 * 1024 * 1024 - 500)
+    await writeFile(logPath('below-cap'), '\n', { flag: 'a' })
+    const big = (id: number) => ({ ...entry(id), summary: 'x'.repeat(1_000) })
+    await queueFeedDebugAppend('below-cap', [big(1)], 1_000)
+    forgetFeedDebugSession('below-cap')
+    await queueFeedDebugAppend('below-cap', [big(2)], 1_000)
+    expect(await lastMarkerDrops('below-cap')).toBeGreaterThanOrEqual(2)
+  })
+
+  it('an ordinary row carrying the marker text in its data does not hide the real marker', async () => {
+    await cappedFileWithMarker('marker-in-data', 1_000)
+    await writeFile(logPath('marker-in-data'), JSON.stringify({ sessionId: 'marker-in-data', id: 9, data: { __feedDebugCapped: true, note: 'ordinary entry' } }) + '\n', { flag: 'a' })
+    forgetFeedDebugSession('marker-in-data')
+    await queueFeedDebugAppend('marker-in-data', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('marker-in-data')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  it('a torn final row neither hides the earlier marker nor swallows the next row', async () => {
+    await cappedFileWithMarker('torn-tail', 1_000)
+    await writeFile(logPath('torn-tail'), '{"sessionId":"torn-tail","__feedDebugCapped":true,"droppedEntriesSoFar":20', { flag: 'a' })
+    forgetFeedDebugSession('torn-tail')
+    await queueFeedDebugAppend('torn-tail', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('torn-tail')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  it('finds a marker behind several KiB of later rows', async () => {
+    await cappedFileWithMarker('rows-after-marker', 1_000)
+    const rows = Array.from({ length: 80 }, (_, i) => JSON.stringify({ sessionId: 'rows-after-marker', id: 100 + i, summary: 'y'.repeat(100) }) + '\n').join('')
+    await writeFile(logPath('rows-after-marker'), rows, { flag: 'a' })
+    forgetFeedDebugSession('rows-after-marker')
+    await queueFeedDebugAppend('rows-after-marker', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('rows-after-marker')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  // #1392 review c, round 2: a release sent while persistence is OFF must not
+  // write the final drop marker either. Persistence off means no disk writes.
+  it('a forget told not to persist drops writes nothing', async () => {
+    await cappedFileWithMarker('no-write-forget', 1_000)
+    await queueFeedDebugAppend('no-write-forget', [entry(1)], 1_000)
+    await queueFeedDebugAppend('no-write-forget', [entry(2)], 1_000)
+    const before = await lastMarkerDrops('no-write-forget')
+    ;(forgetFeedDebugSession as (id: string, options?: { persistUnmarkedDrops?: boolean }) => void)('no-write-forget', { persistUnmarkedDrops: false })
+    await queueFeedDebugAppend('no-write-forget', [], 1_000)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(await lastMarkerDrops('no-write-forget')).toBe(before)
+  })
+
+  it('after a forget during the first size check', async () => {
+    await cappedFileWithMarker('capped-during-stat', 1_000)
+    let release!: () => void
+    let reached!: () => void
+    const atStat = new Promise<void>(resolve => { reached = resolve })
+    statResult = { mode: 'hold', gate: new Promise<void>(resolve => { release = resolve }), reached }
+    const write = queueFeedDebugAppend('capped-during-stat', [entry(1)], 1_000)
+    await atStat
+    forgetFeedDebugSession('capped-during-stat')
+    statResult = { mode: 'real' }
+    release()
+    await write
+    expect(await lastMarkerDrops('capped-during-stat')).toBeGreaterThanOrEqual(1_001)
   })
 })

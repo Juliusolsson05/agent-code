@@ -13,7 +13,12 @@ import type {
 } from '../client/WorkflowClient'
 
 export type WorkflowRunView = {
-  phase: 'loading' | 'ready' | 'unavailable' | 'error'
+  /**
+   * `missing`: main answered that this run does not exist in its scope (#1348;
+   * see model/missingRun.ts). Distinct from `error`, which is a failed read that
+   * proves nothing about the run and keeps Retry.
+   */
+  phase: 'loading' | 'ready' | 'unavailable' | 'error' | 'missing'
   snapshot: WorkflowState
   /** Oldest-to-newest immutable ancestors; `snapshot` remains the live run authority. */
   history: WorkflowState[]
@@ -149,11 +154,10 @@ export class WorkflowRunStore {
       if (generation !== this.generation) return
       if (!envelope) {
         this.setView({
-          phase: 'error',
+          phase: 'missing',
           snapshot: this.view.snapshot,
           history: this.view.history,
           cursor: this.view.cursor,
-          error: 'Workflow run was not found in this project.',
         })
         return
       }

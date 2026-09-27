@@ -8,7 +8,7 @@ import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { extractPromptsFromFile } from '@main/conversations/prompts/promptFolder.js'
 import type { ClaudeHistoryIndex } from './claudeHistory.js'
-import type { ConversationSource, SourceConversation, SourceScope, PromptReadOptions } from './types.js'
+import { ConversationPromptsUnreadable, isMissingFileError, type ConversationSource, type SourceConversation, type SourceScope, type PromptReadOptions } from './types.js'
 
 // Claude Code stores one directory per cwd under ~/.claude/projects, named by
 // sanitizePath(cwd), and one `<uuid>.jsonl` per session inside it. There is
@@ -343,29 +343,44 @@ export class ClaudeConversationSource implements ConversationSource {
   async prompts(nativeId: string, cwd: string, options: PromptReadOptions = {}): Promise<ConversationPrompt[]> {
     const direct = join(this.deps.projectsDir, sanitizePath(cwd), `${nativeId}.jsonl`)
     let file: string | null = null
+    // WHY only ENOENT/ENOTDIR mean "not here" (#1306, steering q116): every
+    // other stat or readdir failure (EACCES, EIO) is UNKNOWN, and answering
+    // [] for it is the "no prompts" this issue is about.
+    const notHere = (error: unknown): boolean => {
+      if (isMissingFileError(error)) return true
+      throw new ConversationPromptsUnreadable('claude', error)
+    }
     try {
       await stat(direct)
       file = direct
-    } catch {
+    } catch (error) {
+      notHere(error)
       // A conversation listed from a worktree dir is asked for with its own
       // cwd, so the direct path is the common case; the walk is the rare one.
+      let dirs: string[] = []
       try {
-        for (const dir of await readdir(this.deps.projectsDir)) {
-          const candidate = join(this.deps.projectsDir, dir, `${nativeId}.jsonl`)
-          try {
-            await stat(candidate)
-            file = candidate
-            break
-          } catch {
-            // keep looking
-          }
+        dirs = await readdir(this.deps.projectsDir)
+      } catch (listError) {
+        notHere(listError)
+      }
+      for (const dir of dirs) {
+        const candidate = join(this.deps.projectsDir, dir, `${nativeId}.jsonl`)
+        try {
+          await stat(candidate)
+          file = candidate
+          break
+        } catch (candidateError) {
+          notHere(candidateError)
         }
-      } catch {
-        file = null
       }
     }
     if (!file) return []
+    // #1306: a found file that cannot be read is said, typed, not raw.
     const { prompts } = await extractPromptsFromFile('claude', nativeId, file, options.need ?? 'all', { maxBytes: options.maxBytes })
+      .catch((error: unknown) => {
+        if (isMissingFileError(error)) return { prompts: [] }
+        throw new ConversationPromptsUnreadable('claude', error)
+      })
     return prompts.map(p => ({ text: p.text, timestamp: p.ts }))
   }
 }

@@ -1,6 +1,8 @@
 import type { ConversationPrompt, ConversationScope } from '@shared/conversations/types.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { RepositoryFamily } from '@main/conversations/family.js'
+import { readdir, stat } from 'fs/promises'
+import { join } from 'path'
 
 // Raw, provider-shaped ingredients. No label, no kind, no order: the catalog
 // decides those (docs/decomposition/conversations.md §4). An adapter reports
@@ -46,6 +48,85 @@ export type SourceScope = {
 export type PromptReadOptions = {
   need?: number | 'all'
   maxBytes?: number
+}
+
+/**
+ * A conversation whose transcript or store EXISTS but cannot be read (#1306).
+ * Sources used to answer `[]` for it, so View Prompts said "no prompts" for a
+ * damaged file. The rule every source follows:
+ *   - no file (yet): `[]`. A freshly started session has no transcript, and
+ *     View Prompts then shows the live feed's prompts; that is not a failure;
+ *   - a file or store that is there but unreadable: throw this.
+ * Search catches it per conversation (label-only search for that row); View
+ * Prompts surfaces it. The cause stays on the error for the main-side log; the
+ * message is fixed, because it crosses IPC to the UI (q22).
+ */
+export class ConversationPromptsUnreadable extends Error {
+  constructor(readonly provider: string, readonly cause: unknown) {
+    super('The conversation file could not be read')
+    this.name = 'ConversationPromptsUnreadable'
+  }
+}
+
+/** True for the "no such file" family: a missing transcript is not a failure. */
+export function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+/**
+ * Whether a path is there, telling ABSENT from UNKNOWN (#1434 round 1, a/b).
+ *
+ * WHY not existsSync: it answers false for EACCES too, so an inaccessible
+ * database or rollout read as "absent" and the prompts as `[]` — the exact
+ * #1306 failure, one level up. Absence (ENOENT/ENOTDIR) is false; anything
+ * else is unknown and throws the typed error, never "no prompts".
+ */
+export async function isPresent(provider: AgentProviderKind, path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch (error) {
+    if (isMissingFileError(error)) return false
+    throw new ConversationPromptsUnreadable(provider, error)
+  }
+}
+
+/**
+ * List every directory under `root`, `depth` levels down, and throw the typed
+ * error on the first one that cannot be listed (#1434 round 1, a/b).
+ *
+ * WHY: the providers' own walks (codex-headless's rollout locator) swallow
+ * every readdir error below their root, so a locked `sessions/2026/01/01`
+ * made a known conversation read as "not here". This runs only on the MISS
+ * path — after the walk found nothing — so its cost is paid only when the
+ * answer would otherwise be the unsafe "no prompts". An absent root is fine.
+ */
+export async function assertTreeListable(
+  provider: AgentProviderKind,
+  root: string,
+  depth: number,
+  /** A file this conversation would be stored in. #1434 verification a: the
+   *  locator also skips a FILE it cannot open, so a listable tree holding the
+   *  conversation's own file under an unreadable mode read as "absent". A name
+   *  that matches here means the file is present and the walk could not read
+   *  it: unknown, never "no prompts". */
+  namesThisConversation?: (name: string) => boolean,
+): Promise<void> {
+  let entries
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch (error) {
+    if (isMissingFileError(error)) return
+    throw new ConversationPromptsUnreadable(provider, error)
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (depth > 0) await assertTreeListable(provider, join(root, entry.name), depth - 1, namesThisConversation)
+    } else if (namesThisConversation?.(entry.name)) {
+      throw new ConversationPromptsUnreadable(provider, new Error('the conversation file is present but the provider walk could not read it'))
+    }
+  }
 }
 
 export interface ConversationSource {

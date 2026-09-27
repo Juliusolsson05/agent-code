@@ -14,6 +14,19 @@ vi.mock('node-pty', () => ({ spawn: ptyState.spawn }))
 vi.mock('./opencodeCliSessions.js', () => ({
   createEmptyOpencodeSession: ptyState.createEmptySession,
 }))
+// The REAL headless, subclassed only to record what the adapter hands it
+// (#1114: the `tuiOutputSeen` latch). Behaviour is unchanged.
+const headlessState = vi.hoisted(() => ({ options: [] as Array<{ tuiOutputSeen?: () => boolean }> }))
+vi.mock('opencode-terminal-headless', async importOriginal => {
+  const actual = await importOriginal<typeof import('opencode-terminal-headless')>()
+  class RecordingHeadless extends actual.OpencodeTerminalHeadless {
+    constructor(options: ConstructorParameters<typeof actual.OpencodeTerminalHeadless>[0]) {
+      headlessState.options.push(options)
+      super(options)
+    }
+  }
+  return { ...actual, OpencodeTerminalHeadless: RecordingHeadless }
+})
 
 import { OpencodeTerminalSession } from './opencodeTerminalSession.js'
 
@@ -139,6 +152,131 @@ describe('OpencodeTerminalSession', () => {
     // UI readiness never writes a prompt; HTTP receipt is covered with the
     // real replay server in the prompt system tests.
     expect(pty.write).not.toHaveBeenCalled()
+  })
+
+  // #1114 / opencode-terminal-headless#10 (recheck2 a/b): the package can
+  // prove that nothing was committed behind its reader's starting head only if
+  // the host (1) latches the TUI's first output from spawn and passes it as
+  // `tuiOutputSeen`, and (2) lets nothing commit-capable reach the PTY before
+  // that output. Both are pinned here.
+  it('hands the headless a first-output latch that is false until the TUI paints', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    const latch = headlessState.options.at(-1)?.tuiOutputSeen
+    expect(latch).toBeTypeOf('function')
+    expect(latch?.()).toBe(false)
+    pty.emitData('\x1b[?1049h')
+    expect(latch?.()).toBe(true)
+  })
+
+  it('holds terminal input written before the TUI paints, then writes it in order', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    session.write('hel')
+    session.write('lo\r')
+    // Nothing reaches the TUI while it cannot have painted.
+    expect(pty.write).not.toHaveBeenCalled()
+    pty.emitData('\x1b[?1049h')
+    expect(pty.write.mock.calls.map(call => call[0])).toEqual(['hel', 'lo\r'])
+    // After the first output, input passes straight through.
+    session.write('x')
+    expect(pty.write.mock.calls.map(call => call[0])).toEqual(['hel', 'lo\r', 'x'])
+  })
+
+  it('drops input held for a TUI that never painted when the pane stops', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    session.write('typed early')
+    await session.stop()
+    pty.emitData('late paint')
+    expect(pty.write).not.toHaveBeenCalled()
+  })
+
+  // Steering q97: the pre-paint hold is bounded, and what it cannot hold is
+  // REFUSED (write returns false, which main reports), never silently dropped.
+  it('refuses a paste larger than the pre-paint hold, and keeps what it already held', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    expect(session.write('typed')).toBe(true)
+    expect(session.write('x'.repeat(64 * 1024))).toBe(false)
+    pty.emitData('\x1b[?1049h')
+    expect(pty.write.mock.calls.map(call => call[0])).toEqual(['typed'])
+  })
+
+  it('refuses the 257th held chunk', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    for (let i = 0; i < 256; i += 1) expect(session.write('k')).toBe(true)
+    expect(session.write('k')).toBe(false)
+  })
+
+  // #1397 review a (survivors A3-A5): `start()` after `stop()` is allowed, so
+  // the hold must start over per spawn. A latch left `true` from the first
+  // TUI would let input reach an unpainted second TUI; input held for the
+  // first would be flushed into the second; a late paint from the dead first
+  // PTY would latch and flush the second's hold.
+  it('starts the hold over for a restarted TUI and ignores the old PTY', async () => {
+    const first = fakePty()
+    ptyState.spawn.mockReturnValue(first)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    first.emitData('\x1b[?1049h')
+    await session.stop()
+    const firstOnData = first.onData.mock.calls[0]?.[0] as (data: string) => void
+    const second = fakePty()
+    ptyState.spawn.mockReturnValue(second)
+    await session.start()
+    // Held input from a previous generation must not survive into this one.
+    session.write('for the second TUI')
+    expect(second.write).not.toHaveBeenCalled()
+    expect(headlessState.options.at(-1)?.tuiOutputSeen?.()).toBe(false)
+    // The dead first PTY's listener firing late must not release the hold.
+    firstOnData('late paint from the first TUI')
+    expect(second.write).not.toHaveBeenCalled()
+    second.emitData('\x1b[?1049h')
+    expect(second.write.mock.calls.map(call => call[0])).toEqual(['for the second TUI'])
+  })
+
+  // #1397 review a (survivor A4): stop clears the hold itself, not only the
+  // PTY subscription. The per-spawn reset also covers a restart, so the
+  // stop-time clear is pinned directly: a stopped pane must not keep up to
+  // 64 KiB of typed text alive for its lifetime.
+  it('clears input held before a stop, and never replays it into a restarted TUI', async () => {
+    const first = fakePty()
+    ptyState.spawn.mockReturnValue(first)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    session.write('meant for the first TUI')
+    await session.stop()
+    expect((session as unknown as { heldInput: string[] }).heldInput).toEqual([])
+    const second = fakePty()
+    ptyState.spawn.mockReturnValue(second)
+    await session.start()
+    second.emitData('\x1b[?1049h')
+    expect(second.write).not.toHaveBeenCalled()
+  })
+
+  it('clears held input when the TUI exits before painting', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    session.write('x'.repeat(1024))
+    pty.emitExit({ exitCode: 1, signal: 0 })
+    await vi.waitFor(() => expect(session.isExited()).toBe(true))
+    expect((session as unknown as { heldInput: string[] }).heldInput).toEqual([])
+    // No backend any more: refused, not held.
+    expect(session.write('after exit')).toBe(false)
   })
 
   it('reports a degraded durable channel instead of failing the pane', async () => {

@@ -21,21 +21,34 @@ import { attachTerminalWheelBoundary } from './terminalWheelBoundary'
 // and scroll dimension is 0 (PR #792 review round 1 stopped there). The shims
 // below supply only that missing browser environment:
 // 1. A 2D context exposing the two members WidthCache touches (`font` and
-//    `measureText().width`). It returns a constant glyph width.
+//    `measureText().width`). It returns a constant glyph width. It goes on
+//    BOTH `HTMLCanvasElement` and `OffscreenCanvas`. happy-dom 20.10 added a
+//    global `OffscreenCanvas` whose `getContext` returns null when no canvas
+//    adapter is configured, and WidthCache prefers `new OffscreenCanvas(1, 1)`
+//    over `<canvas>` whenever that global exists. With only the `<canvas>`
+//    shim, `open()` threw `value must not be falsy` again on 20.14.5 (#1365).
+//    We shim rather than delete the global: Chromium has OffscreenCanvas, so
+//    production xterm takes the OffscreenCanvas branch as well.
 // 2. A fixed size for xterm's `.xterm-char-measure-element` span, which
-//    CharSizeService's DOM strategy reads. happy-dom has no OffscreenCanvas,
-//    so the DOM strategy is the one xterm picks.
-// 3. Explicit 0px left/top padding on `.xterm-screen`, which a browser
-//    computes from xterm.css. happy-dom's computed style returns '' for unset
-//    padding, and MouseCoordsService parseInt()s it into NaN.
+//    CharSizeService's DOM strategy reads. CharSizeService first tries a
+//    TextMetrics strategy on `new OffscreenCanvas(100, 100)`. It needs
+//    `fontBoundingBoxAscent`/`Descent`, which the fake context deliberately
+//    lacks, so that constructor throws and xterm's own try/catch falls back to
+//    the DOM strategy that this shim sizes. If the fake ever gains those
+//    fields, xterm switches strategies and this shim becomes dead.
+// 3. Explicit 0px left/top padding on `.xterm-screen`. A browser computes
+//    0px from the CSS initial value: xterm.css has no padding rule for
+//    `.xterm-screen`, and neither does our styles.css. happy-dom's computed
+//    style returns '' for unset padding, and MouseCoordsService parseInt()s it
+//    into NaN.
 // Separately, happy-dom's WheelEvent extends UIEvent rather than MouseEvent,
 // so it lacks the modifier and clientX/clientY fields every browser WheelEvent
 // carries; `wheel()` below sets them explicitly. Either gap yields
 // `ESC[<64;NaN;NaNM` instead of a real report, a happy-dom artifact rather
 // than an xterm bug. The first real run had both gaps, and a run with only the
-// padding shim still got NaN from the missing clientX. That unset padding alone
-// also yields NaN comes from reading happy-dom's computed style (it has no
-// default padding) and was not observed on its own.
+// padding shim still got NaN from the missing clientX. A run with clientX set
+// but without the padding shim (#1446 review c) produced exactly the same bytes,
+// so each gap alone is enough to break the report.
 // Everything asserted is computed by xterm itself from real WheelEvents:
 // - StandardWheelEvent delta normalization;
 // - the `fastScrollSensitivity` Alt multiplier;
@@ -75,6 +88,18 @@ function installBrowserShims(): void {
     return contextId === '2d' ? fakeContext : originalGetContext.call(this, contextId as '2d')
   } as unknown as typeof canvasPrototype.getContext
   restoreShims.push(() => { canvasPrototype.getContext = originalGetContext })
+
+  // A `typeof` guard, not an assertion. Without the global, xterm falls back
+  // to `<canvas>`, which the shim above already covers, so its absence is
+  // not a failure.
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const offscreenPrototype = OffscreenCanvas.prototype
+    const originalOffscreenGetContext = offscreenPrototype.getContext
+    offscreenPrototype.getContext = function (this: OffscreenCanvas, contextId: string) {
+      return contextId === '2d' ? fakeContext : originalOffscreenGetContext.call(this, contextId as '2d')
+    } as unknown as typeof offscreenPrototype.getContext
+    restoreShims.push(() => { offscreenPrototype.getContext = originalOffscreenGetContext })
+  }
 
   const sizes = [['offsetWidth', GLYPH_WIDTH_PX * MEASURE_SPAN_REPEAT], ['offsetHeight', GLYPH_HEIGHT_PX]] as const
   for (const [property, size] of sizes) {

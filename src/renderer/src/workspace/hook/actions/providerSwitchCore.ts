@@ -13,6 +13,7 @@ import {
   enabledProviderSwitchChoices,
 } from '@renderer/workspace/providerChoices'
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
+import type { NativeProjectionFidelity } from '@shared/types/projectionFidelity'
 
 // Single-agent provider switch — the shared core.
 //
@@ -48,6 +49,9 @@ export type SwitchAgentProviderResult =
       strategy: SwitchStrategy
       /** One human-readable line describing what `shrunk` cost, else null. */
       shrinkSummary: string | null
+      /** The projector's report, summarized (#927); null when nothing was
+       *  projected (an empty source is replaced without a transcript). */
+      projectionFidelity: NativeProjectionFidelity | null
     }
   | { status: 'skipped'; reason: string }
   | { status: 'failed'; message: string }
@@ -221,7 +225,7 @@ export async function switchAgentProvider(params: {
     // `native` is the honest strategy for an empty source: no transcript was
     // translated, so nothing could be lost. Reporting null instead would make
     // the batch tally under-count agents that switched perfectly well.
-    return { status: 'switched', newSessionId, targetKind, strategy: 'native', shrinkSummary: null }
+    return { status: 'switched', newSessionId, targetKind, strategy: 'native', shrinkSummary: null, projectionFidelity: null }
   }
 
   const sourceRuntime = refs.latestRuntimesRef.current[sessionId]
@@ -446,6 +450,7 @@ export async function switchAgentProvider(params: {
       targetKind: result.targetKind,
       strategy: result.strategy,
       shrinkSummary: result.shrinkSummary,
+      projectionFidelity: result.projectionFidelity,
     }
   } catch (err) {
     const message =

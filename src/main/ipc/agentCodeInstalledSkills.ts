@@ -11,6 +11,7 @@ import {
   type SetAgentCodeInstalledSkillEnabledRequest,
   type SetAgentCodeInstalledSkillProvidersRequest,
 } from '@shared/types/agentCodeInstalledSkills.js'
+import { revealFailureMessage } from '@main/agentCodeConventions/userFacingError.js'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -127,7 +128,7 @@ export function registerAgentCodeInstalledSkillsIpc(service: AgentCodeConvention
       const stat = await lstat(path).catch(() => null)
       if (!stat?.isDirectory()) return { ok: false, message: 'Installed skill target no longer exists.' }
       const error = await shell.openPath(path)
-      return error ? { ok: false, message: error } : { ok: true }
+      return error ? { ok: false, message: revealFailureMessage(error, 'agent-code-installed-skills') } : { ok: true }
     },
   )
   ipcMain.handle('agent-code-installed-skills:reveal-source', async (_event, skillId: unknown) => {
@@ -135,7 +136,7 @@ export function registerAgentCodeInstalledSkillsIpc(service: AgentCodeConvention
     const path = await service.resolveInstalledSkillSource(skillId)
     if (!path) return { ok: false, message: 'Installed skill source snapshot is unavailable.' }
     const error = await shell.openPath(path)
-    return error ? { ok: false, message: error } : { ok: true }
+    return error ? { ok: false, message: revealFailureMessage(error, 'agent-code-installed-skills') } : { ok: true }
   })
   ipcMain.handle('agent-code-installed-skills:reveal-recovery', async () => {
     const path = await service.resolveRecoveryFile()

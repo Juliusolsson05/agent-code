@@ -223,25 +223,40 @@ export function providerSupportForEntry(entry: unknown): Record<UserMcpProvider,
 }
 
 /**
- * Everything about an entry except the secret references themselves.
+ * Where an entry's secrets go: the WHOLE entry, reference ids included.
  *
  * WHY the whole entry and not just url/command/args (review round 2): a secret
- * can be exfiltrated without moving it to a new host — add a literal
+ * can be exfiltrated without moving it to a new host. Add a literal
  * `NODE_OPTIONS=--require ./evil.js` or a `PATH` that finds a fake `npx`, and
- * the unchanged command runs attacker code with the token in its env. The
- * only change that must NOT forget secrets is editing which `${input:…}` a
- * value references, so those values are masked and everything else counts.
+ * the unchanged command runs attacker code with the token in its env.
+ *
+ * WHY nothing is masked, not even the `${input:…}` references (q118): every
+ * masking tried let an agent change where a token goes without a review.
+ *   - Masking a whole value that held a reference hid the literal around it,
+ *     so `MCP_ENDPOINT=https://trusted.example/mcp?key=${input:t}` could move
+ *     to evil.example (#1420 reviews a+b).
+ *   - Masking only the reference hid WHICH input a value uses. An endpoint
+ *     built as `https://${input:trusted-host}/…?key=${input:t}` was re-pointed
+ *     at a new `${input:evil-host}` the agent then set itself, and T went
+ *     there (round-2 review a). The marker `${input}` also collided with that
+ *     same literal text, which substitution leaves alone.
+ * The stored values hold reference ids, never secret values (those live in
+ * the secret store), so the raw strings are safe to compare. The cost: renaming
+ * an input a value references is a destination change, so its secrets are
+ * cleared (and an agent's edit needs review). Renames are rare; a silent
+ * redirect of a token is not an acceptable trade for keeping them.
+ *
+ * Key order inside env/headers is normalised, because it is not a destination.
  */
 export function userMcpDestination(entry: unknown): string {
   if (!isPlainObject(entry)) return 'invalid'
-  const masked: Record<string, unknown> = { ...entry, type: transportOf(entry) }
+  const canonical: Record<string, unknown> = { ...entry, type: transportOf(entry) }
   for (const field of ['env', 'headers'] as const) {
     if (!isStringRecord(entry[field])) continue
-    masked[field] = Object.fromEntries(Object.entries(entry[field] as Record<string, string>)
-      .map(([key, value]) => [key, hasInputReference(value) ? '<secret>' : value])
-      .sort(([a], [b]) => (a as string).localeCompare(b as string)))
+    canonical[field] = Object.fromEntries(Object.entries(entry[field] as Record<string, string>)
+      .sort(([a], [b]) => a.localeCompare(b)))
   }
-  return JSON.stringify(Object.keys(masked).sort().map(key => [key, masked[key]]))
+  return JSON.stringify(Object.keys(canonical).sort().map(key => [key, canonical[key]]))
 }
 
 /**

@@ -1,4 +1,5 @@
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { dismissGoalLoop, useGoalLoopView } from '@renderer/features/goal-loop/viewState'
 import { useEffect, useMemo, useRef } from 'react'
@@ -867,7 +868,8 @@ export function useKeybinds(
           } else {
             void navigator.clipboard.writeText(code).then(
               () => workspace.showPaneToast(focusedSessionId, 'Copied code block'),
-              () => workspace.showPaneToast(focusedSessionId, 'Clipboard write failed'),
+              // The shared sentence (#1421 review c).
+              () => workspace.showPaneToast(focusedSessionId, CLIPBOARD_WRITE_FAILED),
             )
           }
           return

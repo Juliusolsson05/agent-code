@@ -119,12 +119,13 @@ import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import { ConversationLedger, readAgentNameAssignments } from '@main/conversations/ledger/ledger.js'
 import { createConversationService } from '@main/conversations/service.js'
-import { listWorktreesForCwd } from '@main/ipc/git.js'
+import { listWorktreesForCwdDetailed } from '@main/ipc/git.js'
+import { resolveRepoRootAfterGit } from '@main/agentActivity/resolveRepoRoot.js'
 import { AGENT_NAMES_FILE } from '@main/agentNames/ipc.js'
 import { RemoteWorkspaceProjection } from '@main/remote/workspaceProjection.js'
 import { tldrIdentitiesInUse } from '@main/tldr/identitiesInUse.js'
 import { createReportingStores } from '@main/tldr/reportingStores.js'
-import { getUsageSnapshot } from '@main/usage/usageService.js'
+import { getUsageSnapshot, readUsageSnapshotForTools } from '@main/usage/usageService.js'
 import { CONVERSATIONS_LEDGER_FILE } from '@main/storage/paths.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -315,6 +316,9 @@ let disposeExternalControl: (() => Promise<void>) | null = null
 // actually buys is catching a future `disposeControl: () => { dispose() }`
 // that drops the promise on the floor at the CALL SITE.
 let disposeControlHost: (() => Promise<void>) | null = null
+// Published by startup once the service exists (#1372). Null means startup
+// never got that far, so there is nothing to drain.
+let disposeGoalLoop: (() => Promise<void>) | null = null
 let shutdownWorkspaceStore: WorkspaceFileStore | null = null
 
 class StartupInterruptedByQuit extends Error {}
@@ -1243,6 +1247,7 @@ async function startApp(): Promise<void> {
   const goalLoopStore = new GoalLoopStore(join(STATE_DIR, 'goal-loop.json'))
   const goalLoopService = new GoalLoopService({ manager, store: goalLoopStore })
   await goalLoopService.start()
+  disposeGoalLoop = () => goalLoopService.dispose()
   registerGoalLoopIpc(goalLoopService)
   // Lane browser pocket (#1142). One controller for the app: it owns live CDP
   // sessions and per-pocket queues that must outlive the per-request MCP
@@ -1306,6 +1311,14 @@ async function startApp(): Promise<void> {
   })
   builtInMcpHost.setDependencies({
     browserPockets,
+    // #1339: the `usage` domain reads through the same cached, sanitized
+    // reader as root management's usage.read, never with `force`. Passed as
+    // the function itself, not a wrapper: usage_read calls it with no
+    // argument (pinned in usageTools.test.ts) and the reader's no-force
+    // default is pinned in usageSnapshotForTools.test.ts, so there is no
+    // unpinned lambda here where a `{ force: true }` could slip in (#1451
+    // review c).
+    readUsageSnapshot: readUsageSnapshotForTools,
     tldrStore,
     goalStore,
     tldrEnforcement,
@@ -1430,7 +1443,8 @@ async function startApp(): Promise<void> {
     store: new AgentActivityStore(AGENT_ACTIVITY_DIR),
     // The first worktree entry is the main checkout, so every worktree of one
     // repository folds into it (the conversations picker's family rule).
-    resolveRepoRoot: cwd => listWorktreesForCwd(cwd).then(worktrees => worktrees[0]?.path ?? cwd),
+    // #1430: a timed-out list is retried once, then thrown (see resolveRepoRootAfterGit).
+    resolveRepoRoot: cwd => resolveRepoRootAfterGit(listWorktreesForCwdDetailed, cwd),
     identityOf: sessionId => builtInMcpHost.sessionTldrIdentity(sessionId),
   })
   const projectActivity = (windows: readonly PersistedWindow[]) => {
@@ -1547,7 +1561,8 @@ async function startApp(): Promise<void> {
   // the ledger, so it is constructed after the ledger. The control host above
   // was built before the workspace store opened and holds a getter for it;
   // its handlers only run on requests, long after this line.
-  const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwd })
+  // The detailed lister (#1430): a timed-out list is a family the service must not cache.
+  const conversationService = createConversationService({ ledger: conversationLedger, listWorktrees: listWorktreesForCwdDetailed })
   registerAllIpc({
     manager,
     sessionFeedTap: feedTap,
@@ -1729,6 +1744,7 @@ const sessionShutdownGate = installApplicationShutdown({
     disposeControl: () => disposeControlHost?.(),
     disposeWorkflowBridge: () => workflowBridge?.dispose(),
     disposeCaffeinate: () => caffeinateController.dispose(),
+    disposeGoalLoop: () => disposeGoalLoop?.(),
     stopHeapWatchdog: stopMainHeapWatchdog,
     stopDetachedTmuxSweep: () => { detachedTmuxSweep?.stop(); detachedTmuxSweep = null },
     drainWorkspace: () => shutdownWorkspaceStore?.drainAdmittedWrites(),
