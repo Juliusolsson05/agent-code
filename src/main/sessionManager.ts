@@ -1638,8 +1638,17 @@ export class SessionManager extends EventEmitter {
   /**
    * Advance successful handoffs only after the renderer's ownership map is on
    * disk. The workspace IPC calls this after its atomic rename, never before.
+   *
+   * Returns the predecessor ids this call committed, each exactly once. WHY
+   * (#1283 item 2): the renderer skips killOwnedSession for a predecessor
+   * main already handed off, and that call was the only release of the
+   * predecessor's window lease, so it leaked for the app run. Until this
+   * commit the lease must stay (compensation can restore the predecessor);
+   * from here on nothing displays it, so the caller releases it. The manager
+   * itself never touches the window registry.
    */
-  acknowledgePersistedSessionOwnership(sessionIds: ReadonlySet<string>): void {
+  acknowledgePersistedSessionOwnership(sessionIds: ReadonlySet<string>): string[] {
+    const committed: string[] = []
     for (const reservation of this.codexReplacements.reservations()) {
       const predecessorSessionId = reservation.predecessorSessionId
       if (reservation.spawnOutcome !== 'successor-live') continue
@@ -1683,7 +1692,9 @@ export class SessionManager extends EventEmitter {
         ok: true,
         reason: 'workspace-persisted',
       })
+      committed.push(predecessorSessionId)
     }
+    return committed
   }
 
   /**
