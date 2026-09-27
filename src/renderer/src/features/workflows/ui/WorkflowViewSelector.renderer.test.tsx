@@ -328,4 +328,51 @@ describe('WorkflowViewSelector', () => {
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(16))
     expect(maxActive).toBe(8)
   })
+
+  // #1440 round-2 review b: the tab check must hold each run's answer on its
+  // own. Batching every visible tab through one Promise.all let a later
+  // transient failure clear a tab already proven Expired, and let one slow
+  // read hold back another tab's answer.
+  describe('selector expiry check', () => {
+    const ref = (runId: string): WorkflowRunReference => ({ runId, cwd: '/repo', status: 'running', workflow: { name: runId } })
+    const tab = (name: string) => screen.getByRole('tab', { name: new RegExp(name) })
+    const mount = (client: WorkflowClient, references: WorkflowRunReference[]) => (
+      <WorkflowClientProvider value={client}>
+        <WorkflowViewSelector references={references} cwd="/repo" selectedRunId={null} onSelect={vi.fn()} />
+      </WorkflowClientProvider>
+    )
+
+    it('keeps a proven Expired tab when a later check of it would fail, and asks each run once', async () => {
+      const calls: string[] = []
+      const client: WorkflowClient = {
+        ...unavailableWorkflowClient,
+        available: true,
+        getSnapshot: vi.fn(async ({ runId }) => {
+          calls.push(runId)
+          if (runId === 'run-a' && calls.filter(id => id === 'run-a').length > 1) throw new Error('IPC unavailable')
+          if (runId === 'run-a') return null
+          return { runId, cwd: '/repo', cursor: 0, state: createWorkflowState(runId) }
+        }),
+      }
+      const { rerender } = render(mount(client, [ref('run-a')]))
+      await waitFor(() => expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'inactive'))
+      rerender(mount(client, [ref('run-a'), ref('run-b')]))
+      await waitFor(() => expect(calls).toContain('run-b'))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'inactive')
+      expect(calls.filter(id => id === 'run-a')).toHaveLength(1)
+    })
+
+    it('shows one tab expired while another tab\'s read is still pending', async () => {
+      const client: WorkflowClient = {
+        ...unavailableWorkflowClient,
+        available: true,
+        getSnapshot: vi.fn(({ runId }) => runId === 'run-slow' ? new Promise(() => {}) : Promise.resolve(null)),
+      }
+      render(mount(client, [ref('run-slow'), ref('run-gone')]))
+      await waitFor(() => expect(tab('run-gone')).toHaveAttribute('data-workflow-activity', 'inactive'))
+      expect(tab('run-slow')).toHaveAttribute('data-workflow-activity', 'active')
+    })
+  })
 })
+

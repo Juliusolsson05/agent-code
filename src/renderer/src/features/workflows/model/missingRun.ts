@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { WorkflowClient, WorkflowRunReference } from '../client/WorkflowClient'
 import { workflowRunActivity } from './workflowRunStatus'
@@ -39,9 +39,18 @@ export const MISSING_RUN = {
  * The run ids among `references` whose runs are gone, for the selector's tabs
  * (#1440 reviews a+b). A tab labels a run Active from its launch-time
  * reference status, so an expired `queued` run stayed Active beside a dialog
- * that said Expired. Only references that CLAIM to be active are checked,
- * once each: the selector shows at most three, and an inactive claim needs no
- * correction. A failed read proves nothing and leaves the reference as is.
+ * that said Expired. Only references that CLAIM to be active are checked: the
+ * selector shows at most three, and an inactive claim needs no correction.
+ *
+ * WHY per run and not one batch (round-2 review b): the first version re-read
+ * every visible tab through one Promise.all whenever the set changed. A later
+ * transient failure on a tab already proven Expired then cleared it back to
+ * Active, and one slow read held back another tab's answer. Now:
+ *   - each run is asked ONCE, and its answer lands as soon as it arrives;
+ *   - "missing" is never taken back (a failed read proves nothing);
+ *   - a failed read is forgotten, so the run may be asked again on a later
+ *     change of the visible set;
+ *   - a result arriving after unmount is dropped.
  */
 export function useMissingRunIds(
   client: WorkflowClient,
@@ -49,25 +58,34 @@ export function useMissingRunIds(
   cwd: string | null,
 ): ReadonlySet<string> {
   const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set())
+  const asked = useRef(new Set<string>())
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const claimsActive = references
     .filter(reference => workflowRunActivity(reference.status) === 'active' && (reference.cwd ?? cwd))
     .map(reference => `${reference.runId}\u0000${reference.cwd ?? cwd}`)
   const key = claimsActive.join('\u0001')
+  // Answers belong to the client that gave them: a new client (rare) starts over.
+  const answeredBy = useRef(client)
   useEffect(() => {
-    if (!client.available || claimsActive.length === 0) return
-    let cancelled = false
-    void Promise.all(claimsActive.map(async entry => {
+    if (answeredBy.current !== client) {
+      answeredBy.current = client
+      asked.current = new Set()
+      setMissing(new Set())
+    }
+    if (!client.available) return
+    for (const entry of claimsActive) {
+      if (asked.current.has(entry)) continue
+      asked.current.add(entry)
       const [runId, scopeCwd] = entry.split('\u0000') as [string, string]
-      try {
-        return (await client.getSnapshot({ cwd: scopeCwd, runId })) === null ? runId : null
-      } catch {
-        return null
-      }
-    })).then(results => {
-      if (cancelled) return
-      setMissing(new Set(results.filter((runId): runId is string => runId !== null)))
-    })
-    return () => { cancelled = true }
+      client.getSnapshot({ cwd: scopeCwd, runId }).then(snapshot => {
+        if (snapshot !== null || !mounted.current || answeredBy.current !== client) return
+        setMissing(previous => previous.has(runId) ? previous : new Set(previous).add(runId))
+      }, () => { asked.current.delete(entry) })
+    }
     // `key` is the content of claimsActive; the array itself is new each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, key])
