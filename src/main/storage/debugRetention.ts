@@ -456,14 +456,23 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 
 /**
  * Which legacy root-level bundles were saved by hand, or 'unknown' when the
- * ledger exists but could not be read (steering q109).
+ * ledger cannot be read OR is absent (steering q109; review of #1417 round 2).
  *
  * WHY 'unknown' instead of an empty set: the manual/legacy split is what keeps
  * a hand-saved bundle out of the deletable `debug-bundles-legacy` bucket. An
  * empty set on a transient read failure (EACCES, EMFILE) classified every
  * manual bundle as deletable for that prune; with the cache below it would
  * have stayed that way until the file changed. 'unknown' makes every legacy
- * bundle protected for that prune instead. Only ENOENT is a real "no ledger".
+ * bundle protected for that prune instead.
+ *
+ * WHY an ABSENT ledger is 'unknown' too (review of #1417, round 2, a): a
+ * ledger moved aside before a prune and back after it is indistinguishable,
+ * from inside the prune, from one that never existed, and treating absence as
+ * "no manual bundles" made every hand-saved legacy bundle deletable for that
+ * prune. The ledger is the only record of which root-level bundles were
+ * manual, so without it none can be proven disposable. Stated cost: with no
+ * ledger at all, pre-split legacy bundles are never aged out; that is the
+ * owner's "do not delete stuff often" applied to evidence we cannot classify.
  */
 export type ManualLegacyBundlePaths = Set<string> | 'unknown'
 
@@ -509,8 +518,10 @@ async function ledgerIdentity(file: string): Promise<string> {
   try {
     const info = await stat(file)
     return `${info.ino}:${info.ctimeMs}:${info.mtimeMs}:${info.size}`
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unknown'
+  } catch {
+    // ENOENT included: an absent ledger classifies nothing (see
+    // ManualLegacyBundlePaths), so it is never cached as an answer.
+    return 'unknown'
   }
 }
 
@@ -690,10 +701,10 @@ async function loadManualLegacyBundlePaths(file: string = DEBUG_BUNDLE_LOG_FILE)
   let raw: string
   try {
     raw = await readFile(file, 'utf8')
-  } catch (error) {
-    // Only a missing ledger means "no manual bundles"; any other failure is
-    // unknown and fails closed (steering q109).
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? new Set<string>() : 'unknown'
+  } catch {
+    // Every failure, including ENOENT, is unknown and fails closed (steering
+    // q109, review of #1417 round 2); see ManualLegacyBundlePaths.
+    return 'unknown'
   }
   return parseManualLegacyBundlePaths(raw)
 }

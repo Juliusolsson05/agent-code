@@ -338,6 +338,22 @@ describe('legacy ledger classification fails closed (steering q109)', () => {
     })
   }
 
+  // Review of #1417, round 2 (a): a ledger moved aside BEFORE the prune and
+  // back after it. Both stats see ENOENT, so no identity check can notice;
+  // an absent ledger must itself protect every legacy bundle.
+  it('protects every legacy bundle while the ledger is absent, and classifies again once it is back', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    const manualBundle = join(root, '2026-01-01T00-00-00')
+    writeFileSync(`${ledger}.away`, manualRow(manualBundle))
+    const absent = await cachedManualLegacyBundlePaths(ledger)
+    expect(absent).toBe('unknown')
+    expect(legacyDebugBundleBucketForPath(manualBundle, absent)).toBe('debug-bundles-manual')
+    renameSync(`${ledger}.away`, ledger)
+    const back = await cachedManualLegacyBundlePaths(ledger)
+    expect(legacyDebugBundleBucketForPath(manualBundle, back)).toBe('debug-bundles-manual')
+    expect(legacyDebugBundleBucketForPath(join(root, '2026-01-02T00-00-00'), back)).toBe('debug-bundles-legacy')
+  })
+
   // An operator edit with the same size that also restores the old mtime.
   it('re-parses a same-size edit whose mtime was set back', async () => {
     const ledger = join(root, 'saved-debug-bundles.jsonl')
