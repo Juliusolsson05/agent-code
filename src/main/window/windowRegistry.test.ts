@@ -241,19 +241,31 @@ describe('window registry routing', () => {
     expect(registry.windowIdForWebContentsId(webContentsId)).toBe(window)
   })
 
-  it('keeps a bounded tombstone: the newest closed windows still resolve, the oldest are forgotten (#1278)', () => {
+  it('keeps a tombstone while a late save can still arrive, however many windows close, and forgets it after ten minutes (#1278)', () => {
     // One tombstone per closed window was kept for the life of the process.
-    // Only a save dequeued moments after `closed` needs one, so the oldest
-    // can go once 256 newer windows have closed.
-    for (let i = 0; i < 300; i++) {
+    // A count cap (review of #1417, b) could drop a still-queued final save
+    // during a mass close, so the bound is age: a mass close keeps them all,
+    // and a later close sweeps the ones past ten minutes.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(0)
+      for (let i = 0; i < 300; i++) {
+        registry.createAppWindow()
+        built[i]?.hooks.onClosed()
+      }
+      // The fake assigns webContents.id from creation order, starting at 1.
+      expect(registry.windowIdForWebContentsId(1)).not.toBeNull()
+      expect(registry.windowIdForWebContentsId(300)).not.toBeNull()
+
+      vi.setSystemTime(10 * 60_000)
       registry.createAppWindow()
-      built[i]?.hooks.onClosed()
+      built[300]?.hooks.onClosed()
+      expect(registry.windowIdForWebContentsId(1)).toBeNull()
+      expect(registry.windowIdForWebContentsId(300)).toBeNull()
+      expect(registry.windowIdForWebContentsId(301)).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
     }
-    // The fake assigns webContents.id from creation order, starting at 1.
-    expect(registry.windowIdForWebContentsId(300)).not.toBeNull()
-    expect(registry.windowIdForWebContentsId(300 - 255)).not.toBeNull()
-    expect(registry.windowIdForWebContentsId(300 - 256)).toBeNull()
-    expect(registry.windowIdForWebContentsId(1)).toBeNull()
   })
 
   it('broadcasts app-wide state to every live window', () => {
