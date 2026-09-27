@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CliUpdateBanner, describeState } from './CliUpdateBanner'
@@ -33,5 +33,27 @@ describe('CliUpdateBanner deferred state (#1243)', () => {
     expect(dismissKey('claude', first)).not.toBe(dismissKey('claude', second))
     // The same click re-emitted keeps its dismissal.
     expect(dismissKey('claude', first)).toBe(dismissKey('claude', { ...first }))
+  })
+})
+
+// #1250 row 10: View Log did nothing visible when the log could not be opened
+// (retention prunes old logs; the OS shows no dialog). The row says so now,
+// in fixed words, and only when main answers that it did not open.
+describe('CliUpdateBanner View Log', () => {
+  const failed = { kind: 'failed' as const, cli: 'claude' as const, from: '2.1.281', wantedLatest: '2.1.282', installMethod: 'npm' as const, reason: 'command-failed' as const, logPath: '/logs/claude-update.log', finishedAt: 1 }
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])('when opening the log answers %s, the row shows the failure: %s', async (opened, shown) => {
+    const openLog = vi.fn(async () => opened)
+    Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesOpenLog: openLog } })
+    useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: failed }, dismissed: new Set() })
+    render(<CliUpdateBanner />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'View Log' })) })
+    expect(openLog).toHaveBeenCalledWith('/logs/claude-update.log')
+    const alert = screen.queryByRole('alert')
+    if (shown) expect(alert).toHaveTextContent("Couldn't open the update log. It may have been cleaned up; the next failed update writes a new one.")
+    else expect(alert).toBeNull()
   })
 })

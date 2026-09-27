@@ -32,7 +32,9 @@ import { dismissKey, useCliUpdateStore } from '@renderer/features/cli-updates/st
 type BannerEntry = {
   tone: 'info' | 'warning' | 'success'
   text: string
-  action?: { label: string; onClick: () => void }
+  /** `onClick` may answer whether it worked; a `false` shows `failureText`
+   *  on the row (#1250 row 10: View Log failed with nothing on screen). */
+  action?: { label: string; onClick: () => void | Promise<boolean | void>; failureText?: string }
   // Rendered next to the action as a tiny info button. When present,
   // the banner shows an expandable diagnostic hint. Only failed states
   // set this today; other states don't need the extra context.
@@ -43,6 +45,9 @@ type BannerEntry = {
   // the banner is still rendered.
   undismissable?: boolean
 }
+
+// Fixed words (q22): the OS failure text stays in main's diagnostic log.
+export const CLI_UPDATE_LOG_NOT_OPENED = "Couldn't open the update log. It may have been cleaned up; the next failed update writes a new one."
 
 export function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry | null {
   const label = cli === 'claude' ? 'Claude Code' : 'Codex'
@@ -101,9 +106,8 @@ export function describeState(cli: CliUpdateKind, state: CliUpdateState): Banner
         text: `${label} auto-update failed${methodHint} — ${reasonHint}. Wanted ${state.wantedLatest}, still at ${state.from}.`,
         action: {
           label: 'View Log',
-          onClick: () => {
-            void window.api.cliUpdatesOpenLog(state.logPath)
-          },
+          onClick: () => window.api.cliUpdatesOpenLog(state.logPath),
+          failureText: CLI_UPDATE_LOG_NOT_OPENED,
         },
         hint,
       }
@@ -190,6 +194,14 @@ function BannerRow({
   onDismiss: (key: string) => void
 }) {
   const [hintOpen, setHintOpen] = useState(false)
+  const [actionFailed, setActionFailed] = useState(false)
+  const runAction = async () => {
+    const action = entry.action
+    if (!action) return
+    setActionFailed(false)
+    const worked = await Promise.resolve(action.onClick()).catch(() => false as const)
+    if (worked === false && action.failureText) setActionFailed(true)
+  }
   const toneClasses =
     // Uses the semantic tokens from #520 (warning-*, info-*, success-*)
     // so custom-appearance JSON overrides theme correctly.
@@ -223,7 +235,7 @@ function BannerRow({
         {entry.action && (
           <button
             type="button"
-            onClick={entry.action.onClick}
+            onClick={() => void runAction()}
             className="rounded-control border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
           >
             {entry.action.label}
@@ -253,6 +265,11 @@ function BannerRow({
         // colored container so it looks attached, not floating.
         <div className="border-t border-current/30 px-3 py-2 text-[10px] leading-relaxed text-ink/80">
           {entry.hint}
+        </div>
+      )}
+      {actionFailed && entry.action?.failureText && (
+        <div role="alert" className="border-t border-current/30 px-3 py-2 text-[10px] leading-relaxed text-danger">
+          {entry.action.failureText}
         </div>
       )}
     </div>

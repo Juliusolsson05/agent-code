@@ -66,15 +66,22 @@ export function registerCliUpdatesIpc(orchestrator: CliUpdateOrchestrator): void
     return orchestrator.getSnapshot()
   })
 
-  ipcMain.handle('cli-updates:open-log', async (_evt, logPath: string) => {
-    // shell.openPath returns '' on success, an error string on failure.
-    // We don't propagate the string — the caller only needs to know the
-    // click "did something". If the file is missing (log path predates a
-    // debug-retention prune) the OS shell surfaces its own error dialog.
+  ipcMain.handle('cli-updates:open-log', async (_evt, logPath: string): Promise<boolean> => {
+    // shell.openPath RESOLVES with '' on success and an error string on
+    // failure. WHY the answer is returned (#1250 row 10): this used to discard
+    // the string on the belief that "the OS shell surfaces its own error
+    // dialog". It does not: a log removed by the debug-retention prune gives
+    // back "Failed to open path" and nothing appears, so View Log looked
+    // broken. Only a boolean crosses to the renderer, which shows its own
+    // fixed words; the OS text stays in this diagnostic log (q22).
     try {
-      await shell.openPath(logPath)
+      const error = await shell.openPath(logPath)
+      if (error === '') return true
+      console.warn('[cli-updates] failed to open log:', error)
+      return false
     } catch (err) {
       console.warn('[cli-updates] failed to open log:', err)
+      return false
     }
   })
 }
