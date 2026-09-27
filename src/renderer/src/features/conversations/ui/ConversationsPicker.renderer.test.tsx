@@ -429,3 +429,38 @@ describe('ConversationsPicker when git timed out', () => {
     expect(screen.queryByText(/Git didn't answer in time/)).toBeNull()
   })
 })
+
+// #1430 review a/b.
+describe('ConversationsPicker paging across a git timeout (#1430)', () => {
+  it('starts over from page 1 when git recovers between pages, instead of appending a page from another family', async () => {
+    const timedOut = { repoRoot: '/fixture/repo/.worktrees/extension-platform', roots: ['/fixture/repo/.worktrees/extension-platform'], gitTimedOut: true as const }
+    const recovered = { repoRoot: '/fixture/repo', roots: ['/fixture/repo', '/fixture/repo/.worktrees/extension-platform'] }
+    const worktreeRow = row({ nativeId: 'feature-first', label: 'feature first', cwd: '/fixture/repo/.worktrees/extension-platform' })
+    const mainNewest = row({ nativeId: 'main-newest', label: 'main newest' })
+    const list = vi.fn(async (request: { cursor?: string | null }) => {
+      if (list.mock.calls.length === 1) return response({ rows: [worktreeRow], total: 1, hiddenChildren: 0, nextCursor: 'after-feature', family: timedOut })
+      if (request.cursor) return response({ rows: [row({ nativeId: 'main-second', label: 'main second' })], total: 3, hiddenChildren: 0, nextCursor: null, family: recovered })
+      return response({ rows: [mainNewest, worktreeRow], total: 2, hiddenChildren: 0, nextCursor: null, family: recovered })
+    })
+    install(list)
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    // Page 1 (built while git timed out) is on screen; moving down pages in.
+    expect(await screen.findByText('feature first')).toBeInTheDocument()
+    expect(screen.getByText(/Git didn't answer in time/)).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    // The recovered page 1 replaces the timed-out one; the row page 1 missed is there.
+    expect(await screen.findByText('main newest')).toBeInTheDocument()
+    expect(list.mock.calls.map(c => c[0].cursor ?? null)).toEqual([null, 'after-feature', null])
+    await waitFor(() => expect(list.mock.calls.at(-1)?.[0]).toMatchObject({ cursor: null }))
+    expect(screen.queryByText('main second')).toBeNull()
+    expect(screen.queryByText(/Git didn't answer in time/)).toBeNull()
+  })
+
+  it('says nothing about missing worktrees in Everywhere, where the family removes no rows', async () => {
+    install(vi.fn(async () => response({ family: { repoRoot: null, roots: [], gitTimedOut: true } })))
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('Project context bootstrapping')
+    fireEvent.click(screen.getByRole('button', { name: 'Everywhere' }))
+    await waitFor(() => expect(screen.queryByText(/Git didn't answer in time/)).toBeNull())
+  })
+})

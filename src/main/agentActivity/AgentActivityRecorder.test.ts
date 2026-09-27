@@ -515,6 +515,9 @@ describe('AgentActivityRecorder when git times out resolving the repository', ()
       vi.setSystemTime(T0 + 4 * HOUR)
       await vi.waitFor(async () => expect((await recorder.summary('24h')).totals.agentMs).toBe(2 * HOUR))
 
+      // The unknown interval is said once in main's log, not silently filed
+      // (review a: the warning was not asserted).
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('repository unknown for this interval'), expect.anything())
       const [project] = (await recorder.summary('24h')).projects
       const repositories = project!.repositories.map(r => [r.repoRoot, r.label, r.agentMs, r.worktrees.map(w => w.cwd)])
       expect(repositories).toEqual(expect.arrayContaining([

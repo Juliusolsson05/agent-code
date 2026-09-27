@@ -308,6 +308,7 @@ export async function loadInitialHistoryForSession({
       span.end({ fetched: chunk.entries.length, hasMore: chunk.hasMore, superseded: true })
       return settleSuperseded()
     }
+    if (worktrees === null) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries)
 
     setRuntimes(prev => {
       const current = prev[sessionId]
@@ -590,4 +591,30 @@ export function reconcileStuckTranscriptLoads({
     void loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
   }
   return reKicked
+}
+
+/**
+ * A history chunk read while `git worktree list` timed out (#1430 review a/b).
+ *
+ * WHY hand it to the live reconciler instead of skipping it: skipping avoided
+ * a wrong attribution (against an empty family) but threw the chunk's worktree
+ * evidence away for good — the reconciler only replays what it observed, so a
+ * quiet session whose writes were in a linked worktree stayed on the launch
+ * folder after git recovered. observe() keeps the chunk's RELEVANT records in
+ * its bounded window (deferred while no catalog is cached) and refresh() asks
+ * git again; when the catalog lands, onCatalogReady replays the window against
+ * it and repaints the pane. Outside any setState updater, because observe is
+ * a side effect and an updater may run twice. The current runtime is the
+ * baseline, as for a live batch.
+ */
+export function handHistoryToReconciler(
+  refs: Pick<WorkspaceRefs, 'worktreeReconcilerRef' | 'latestRuntimesRef'>,
+  sessionId: SessionId,
+  cwd: string,
+  entries: readonly unknown[],
+): void {
+  const reconciler = refs.worktreeReconcilerRef.current
+  if (!reconciler || entries.length === 0) return
+  reconciler.observe(sessionId, cwd, entries.map(entry => ({ entry })), refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime())
+  void reconciler.refresh(cwd)
 }

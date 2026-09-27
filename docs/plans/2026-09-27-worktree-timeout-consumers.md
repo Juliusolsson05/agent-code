@@ -94,3 +94,31 @@ says it or stays unknown, and none caches or records the wrong family.
 
 `listWorktreesForCwd`'s other callers (MCP read paths) already go through
 #1429's surfaces.
+
+## Review round 1 (a, b: FIX-BEFORE-MERGE), each fix fail-first
+
+- **a (major): pages from two families.** Page 1 was built while git timed
+  out (the cwd alone), and page 2 after git recovered (the whole
+  repository). Appending lost the rows the recovered order puts before the
+  cursor, and page 2's family cleared the warning.
+  - Fix: `useConversationList` compares the page's family (root, roots,
+    `gitTimedOut`) with what it appends to. On a change it discards the page
+    and reloads page 1.
+  - Pinned: a picker test drives ArrowDown paging across recovery.
+- **a + b (major): skipped history lost its worktree evidence.** Skipping
+  attribution on a timeout meant the reconciler, which replays only what it
+  observed, never saw the chunk. A quiet session stayed on the launch folder
+  after git recovered.
+  - Fix: `WorkspaceRefs.worktreeReconcilerRef` publishes the live
+    reconciler. Both history loaders hand a timed-out chunk to it
+    (`handHistoryToReconciler`: `observe` plus `refresh`), and its bounded
+    window replays the chunk when a later refresh gets the catalog. Failed
+    probes are not cached, so the next refresh retries.
+  - Pinned: the real reconciler with the recorded `codex-0151` window
+    reaches `.../worktree-2` after git recovers, and a loader-level test
+    shows the timed-out chunk is handed over. Removing that call turns it
+    red.
+- **b (minor): the note showed in Everywhere,** where the family removes no
+  rows. It now shows only in Repository scope. Pinned.
+- **a (surviving mutation): the repository-unknown warning.** It is now
+  asserted.

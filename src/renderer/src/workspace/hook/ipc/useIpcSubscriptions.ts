@@ -616,6 +616,10 @@ export function useIpcSubscriptions(
         refs.seenUuidsRef.current,
       )
     }, MEMORY_GAUGE_INTERVAL_MS)
+    // Published for the history loaders (#1430 review a/b): a chunk read while
+    // git timed out is handed here instead of being dropped. See
+    // WorkspaceRefs.worktreeReconcilerRef.
+    refs.worktreeReconcilerRef.current = worktreeReconciler
     const refreshWorktrees = (cwd: string | null | undefined): void => {
       // The reconciler owns failure/retry/coalescing. This listener intentionally
       // does not await decorative Git metadata and therefore cannot delay a
@@ -2830,6 +2834,7 @@ export function useIpcSubscriptions(
     })
 
     return () => {
+      if (refs.worktreeReconcilerRef.current === worktreeReconciler) refs.worktreeReconcilerRef.current = null
       worktreeReconciler.dispose()
       window.clearInterval(orphanSweepTimer)
       window.clearInterval(memoryGaugeTimer)

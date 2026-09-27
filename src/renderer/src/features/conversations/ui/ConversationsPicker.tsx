@@ -37,8 +37,9 @@ const SCOPES: Array<{ id: ConversationScope; label: string }> = [
   { id: 'everywhere', label: 'Everywhere' },
 ]
 
-// Fixed words (#1430). Only outside 'cwd' scope: there siblings are not
-// wanted anyway, so a timed-out sibling list changes nothing.
+// Fixed words (#1430). Only in 'repository' scope (review b): 'cwd' never
+// wants siblings, and 'everywhere' matches every folder, so a timed-out
+// sibling list cannot remove a row from either.
 export const GIT_TIMED_OUT_NOTE = "Git didn't answer in time. Conversations from this repository's other worktrees may be missing."
 
 export function ConversationsPicker({ open, focusSearch, workspace, onClose }: Props) {
@@ -290,7 +291,7 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
             list was built from this folder alone (and main did not cache it).
             Said, because rows are MISSING, not absent: a muted status line,
             not an error, since the next open asks git again. */}
-        {response?.family.gitTimedOut && scope !== 'cwd' && (
+        {response?.family.gitTimedOut && scope === 'repository' && (
           <div role="status" className="border-b border-border px-4 py-1.5 text-[11px] text-muted">
             {GIT_TIMED_OUT_NOTE}
           </div>

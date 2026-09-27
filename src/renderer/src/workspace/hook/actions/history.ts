@@ -27,6 +27,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import { worktreesForAttribution } from '@renderer/workspace/work-context/worktreesForAttribution'
+import { handHistoryToReconciler } from '@renderer/workspace/hook/actions/initialHistory'
 
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.
@@ -111,8 +112,10 @@ export function useHistoryActions(
         const prepend: Entry[] = []
         const worktreesResult = await window.api.gitWorktrees(meta.cwd)
         // #1430: null = git timed out, family unknown → skip attribution (see
-        // worktreesForAttribution).
+        // worktreesForAttribution), and hand the page to the reconciler so a
+        // recovered catalog can still attribute it (handHistoryToReconciler).
         const worktrees = worktreesForAttribution(worktreesResult)
+        if (worktrees === null) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries)
         let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
