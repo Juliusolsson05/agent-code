@@ -124,6 +124,12 @@ function deliverSessionLease(lease: SessionWindowLease, channel: string, args: u
  * RETIRED_WEB_CONTENTS_TTL_MS is dropped whenever another window closes.
  * webContents ids are never reused within a process, so a forgotten id
  * cannot be confused with a live window's.
+ *
+ * WHY a monotonic clock (review of #1417, round 2): with Date.now(), a wall
+ * clock stepped back and then corrected made a one-second-old tombstone look
+ * twenty minutes old, dropping a queued final save, and a future-dated
+ * tombstone at the front stopped the sweep from reaching expired ones behind
+ * it. performance.now() only moves forward, so insertion order is age order.
  */
 const RETIRED_WEB_CONTENTS_TTL_MS = 10 * 60_000
 const retiredWebContentsIds = new Map<number, { windowId: WindowId; closedAt: number }>()
@@ -433,8 +439,9 @@ export function createAppWindow(options?: {
       onClosed: () => {
         const closing = windows.get(id)
         if (closing && !closing.window.isDestroyed()) {
-          const now = Date.now()
-          // Insertion order is close order, so the expired ones are a prefix.
+          const now = performance.now()
+          // Insertion order is close order and the clock is monotonic, so the
+          // expired ones are a prefix.
           for (const [webContentsId, tombstone] of retiredWebContentsIds) {
             if (now - tombstone.closedAt < RETIRED_WEB_CONTENTS_TTL_MS) break
             retiredWebContentsIds.delete(webContentsId)
