@@ -319,4 +319,16 @@ describe('verification: the conversation file itself', () => {
     await writeFile(join(dir, '2026-09-27T00-00-00-000Z_thread-3.jsonl'), `${JSON.stringify({ type: 'message', id: 'thread-3', cwd })}\n`)
     await expect(new PiConversationSource({ env: {}, homeDirectory: home }).prompts('thread-3', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
   })
+
+  it('Pi: a parseable session header with an invalid id is damaged, not absent', async () => {
+    // #1434 verification b's exact repro: Pi's own resolver rejects a header
+    // whose id is not a string (sessionPaths.ts), so the locator skips it. Only
+    // a real header for THIS id may mean "another cwd"; `id: null` is damage.
+    const home = join(corpus.opencodeDataDir, '..', 'v-pi-home-null-id')
+    const cwd = join(home, 'project')
+    const dir = join(home, '.pi', 'agent', 'sessions', encodeCwdForSessionDir(cwd))
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, '2026-09-27T00-00-00-000Z_thread-1.jsonl'), `${JSON.stringify({ type: 'session', id: null, cwd })}\n`)
+    await expect(new PiConversationSource({ env: {}, homeDirectory: home }).prompts('thread-1', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+  })
 })
