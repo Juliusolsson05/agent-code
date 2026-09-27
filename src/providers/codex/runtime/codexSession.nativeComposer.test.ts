@@ -40,15 +40,16 @@ async function sessionAt(until: number, bytes?: string[]): Promise<Replayed> {
   const terminal = (headless as unknown as { terminal: { attach(): void; snapshotComposerCells(): unknown } }).terminal
   terminal.attach()
   const chunks = bytes ?? recording.events.filter(event => event.dir === 'out' && event.t < until).map(event => event.data!)
-  // One recorded chunk at a time, draining between them, as a PTY delivers
-  // them (#1343 reviews A and B). A synchronous burst of ~630 events plus a
-  // 2 s wall-clock wait returned a half-painted frame under load (the tall
-  // draft stopped at line 10 or 18), and could leave pendingWrites stuck
-  // (HeadlessTerminal's documented write-callback stall).
+  // Recorded chunks in batches of 50, draining xterm between batches (#1343
+  // reviews). A synchronous burst of ~630 events plus a 2 s wall-clock wait
+  // returned a half-painted frame under load (the tall draft stopped at line
+  // 10 or 18); one chunk per drain cost ~630 scheduler ticks and ran past the
+  // 5 s test timeout under load. Batches keep the queue shallow and the
+  // replay to ~13 drains.
   const pending = () => (terminal as unknown as { pendingWrites: number }).pendingWrites
   const feed = async (more: string[]) => {
-    for (const chunk of more) {
-      for (const listener of listeners) listener(chunk)
+    for (let start = 0; start < more.length; start += 50) {
+      for (const chunk of more.slice(start, start + 50)) for (const listener of listeners) listener(chunk)
       while (pending() !== 0) await new Promise(resolve => setImmediate(resolve))
     }
   }
