@@ -147,8 +147,15 @@ export function appendSemanticHistory(
  * replay then quiets before T's content re-arrives, replacing by turnId swapped
  * the full archived T for the empty copy, and with no durable assistant entry
  * yet the answer vanished from the feed. Here the reopened copy only replaces
- * the archived one when it carries at least as much renderable content (text
- * and blocks). Otherwise the archived row stays, still exactly one per turnId.
+ * the archived one when it carries at least as much renderable content;
+ * otherwise the archived row stays, still exactly one per turnId.
+ *
+ * WHY content size and not counts (#1391 review a, round 2): the reopened
+ * copy's BLOCKS can be empty too. Replay re-emits `block_started` for index 0
+ * and quiets before `text_delta`, so an equal block count held an empty block
+ * where the archived turn held the answer. renderableSize measures what the
+ * feed can actually paint (turn text plus each block's text, thinking, tool
+ * input and tool result).
  *
  * Only the bootstrap-complete path uses this: on the live fold paths a newer
  * copy of the same turn is the authoritative one and should win.
@@ -158,13 +165,17 @@ export function archiveReplayedTurn(
   turn: SemanticLiveTurn,
 ): SemanticRuntimeState['history'] {
   const archived = history.find(existing => existing.turnId === turn.turnId)
-  if (
-    archived &&
-    (turn.text.length < archived.text.length || turn.blockOrder.length < archived.blockOrder.length)
-  ) {
-    return history
-  }
+  if (archived && renderableSize(turn) < renderableSize(archived)) return history
   return appendSemanticHistory(history, turn)
+}
+
+function renderableSize(turn: SemanticLiveTurn): number {
+  let size = turn.text.length
+  for (const block of Object.values(turn.blocks)) {
+    size += (block.text?.length ?? 0) + (block.thinking?.length ?? 0) +
+      (block.inputJson?.length ?? 0) + (block.resultContent?.length ?? 0)
+  }
+  return size
 }
 
 /** True when the turn is still live — hasn't received its
