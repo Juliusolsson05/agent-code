@@ -4,6 +4,7 @@ const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   order: [] as string[],
   queueFeedDebugAppend: vi.fn<(sessionId: string, entries: unknown[], epochMs?: number) => Promise<void>>(async () => {}),
+  forgetFeedDebugSession: vi.fn<(sessionId: string) => void>(),
   saveDebugBundle: vi.fn(async () => {
     harness.order.push('save')
     return { bundlePath: '/tmp/test-bundle' }
@@ -27,6 +28,7 @@ vi.mock('@main/storage/debugBundleLog.js', () => ({
 }))
 vi.mock('@main/storage/feedDebugLog.js', () => ({
   queueFeedDebugAppend: harness.queueFeedDebugAppend,
+  forgetFeedDebugSession: harness.forgetFeedDebugSession,
 }))
 vi.mock('@main/storage/proxyEventsReader.js', () => ({
   readProxyEventsForBundle: vi.fn(async () => null),
@@ -171,4 +173,29 @@ describe('debug:append-feed-log forwarding (#770)', () => {
     await expect(appendHandler()({}, { sessionId: 's', entries: [entry], epochMs: 1 }))
       .rejects.toThrow('unknown size')
   })
+})
+
+// #1392: the renderer's release of a closed pane's feed-debug log.
+describe('debug:forget-feed-log', () => {
+  const forgetHandler = () => {
+    registerDebugIpc({} as never, {} as never)
+    const handler = harness.handlers.get('debug:forget-feed-log')
+    if (!handler) throw new Error('debug:forget-feed-log was not registered')
+    return handler
+  }
+
+  it('forgets the named session in main', () => {
+    harness.forgetFeedDebugSession.mockClear()
+    forgetHandler()({}, { sessionId: 'closed-pane' })
+    expect(harness.forgetFeedDebugSession).toHaveBeenCalledExactlyOnceWith('closed-pane')
+  })
+
+  it.each([undefined, null, {}, { sessionId: '' }, { sessionId: 7 }, { sessionId: ['a'] }])(
+    'ignores malformed input %j',
+    params => {
+      harness.forgetFeedDebugSession.mockClear()
+      expect(() => forgetHandler()({}, params)).not.toThrow()
+      expect(harness.forgetFeedDebugSession).not.toHaveBeenCalled()
+    },
+  )
 })

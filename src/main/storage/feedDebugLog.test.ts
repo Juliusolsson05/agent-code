@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // `.then` advances the cursor and never resends. The comment described an
 // intention the code did not implement, and nothing was watching.
 
-let statResult: { mode: 'real' } | { mode: 'throw'; code: string } = { mode: 'real' }
+let statResult: { mode: 'real' } | { mode: 'throw'; code: string } | { mode: 'hold'; gate: Promise<void>; reached: () => void } = { mode: 'real' }
 let stateDir = ''
 
 vi.mock('node:fs/promises', async () => {
@@ -19,6 +19,11 @@ vi.mock('node:fs/promises', async () => {
     ...real,
     default: real,
     stat: async (path: Parameters<typeof real.stat>[0]) => {
+      if (statResult.mode === 'hold') {
+        const held = statResult
+        held.reached()
+        await held.gate
+      }
       if (statResult.mode === 'throw') {
         const err = new Error('stat refused') as NodeJS.ErrnoException
         err.code = statResult.code
@@ -203,5 +208,27 @@ describe('forget racing a queued append, other interleavings (#1392)', () => {
     statResult = { mode: 'throw', code: 'EACCES' }
     await expect(queueFeedDebugAppend('still-unknown', [entry(1)], 1_000)).rejects.toThrow()
     await expect(queueFeedDebugAppend('still-unknown', [entry(2)], 1_000)).rejects.toThrow()
+  })
+})
+
+// #1392 review a, round 3: process exit forgets the session while the pane
+// (and its log) stay live. A forget landing during the first `stat` used to
+// drop the batch and RESOLVE, so the renderer advanced its cursor past rows
+// that were never written.
+describe('a forget during the first size check (#1392)', () => {
+  it('still writes the batch, then leaves no state behind', async () => {
+    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
+    let release!: () => void
+    let reached!: () => void
+    const atStat = new Promise<void>(resolve => { reached = resolve })
+    statResult = { mode: 'hold', gate: new Promise<void>(resolve => { release = resolve }), reached }
+    const write = queueFeedDebugAppend('exit-during-stat', [entry(1)], 1_000)
+    await atStat
+    forgetFeedDebugSession('exit-during-stat')
+    statResult = { mode: 'real' }
+    release()
+    await write
+    expect(await readFile(logPath('exit-during-stat'), 'utf8')).toContain('"id":1')
+    expect(feedDebugSessionStateSizesForTest('exit-during-stat')).toEqual({ ids: 0, epochs: 0, caps: 0, tokens: 0 })
   })
 })

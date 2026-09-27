@@ -284,9 +284,15 @@ export function queueFeedDebugAppend(
         feedDebugCapState.set(sessionId, capState)
         const startingBytes = await loadInitialFileBytes(filePath)
         if (feedDebugCapState.get(sessionId) !== capState) {
-          // forgetFeedDebugSession ran during the stat await — the session is
-          // gone. Drop this final batch rather than resurrect state for it.
-          return
+          // forgetFeedDebugSession ran during the stat await. This used to
+          // `return`, dropping the batch, and that RESOLVED the IPC: the
+          // renderer advanced its cursor past rows that were never written
+          // (#1392 review a, round 3). The forget comes from PROCESS exit
+          // while the pane, and its log, are still live, so the rows are
+          // real. Write them: re-install this placeholder (appends are
+          // serialized per session, so nothing else can own it) and let the
+          // retired token drop the state again when this append settles.
+          feedDebugCapState.set(sessionId, capState)
         }
         if (startingBytes === null) {
           // Unknown on-disk size (stat failed, not-ENOENT). Fail CLOSED:

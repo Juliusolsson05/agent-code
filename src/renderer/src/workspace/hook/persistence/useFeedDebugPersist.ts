@@ -139,15 +139,23 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
     //
     // Entries not yet flushed when the runtime was removed are lost, as they
     // were before: this changes only what is forgotten, not what is written.
+    //
+    // An id leaves `known` only once main has ACKNOWLEDGED the release: a
+    // failed IPC is retried on the next tick (#1392 review a, round 3), or
+    // main would keep that session's state until the process exits.
+    // `releasing` stops a slow acknowledgement from sending it twice.
     const known = new Set<SessionId>()
+    const releasing = new Set<SessionId>()
     const releaseGone = (): void => {
       const runtimes = refs.latestRuntimesRef.current
       for (const sessionId of known) {
-        if (runtimes[sessionId]) continue
-        known.delete(sessionId)
+        if (runtimes[sessionId] || releasing.has(sessionId)) continue
         delete refs.persistedFeedDebugIdRef.current[sessionId]
         delete refs.inFlightFeedDebugIdRef.current[sessionId]
-        void window.api.forgetFeedDebugLog({ sessionId }).catch(() => {})
+        releasing.add(sessionId)
+        void window.api.forgetFeedDebugLog({ sessionId })
+          .then(() => { if (!refs.latestRuntimesRef.current[sessionId]) known.delete(sessionId) }, () => {})
+          .finally(() => releasing.delete(sessionId))
       }
     }
 

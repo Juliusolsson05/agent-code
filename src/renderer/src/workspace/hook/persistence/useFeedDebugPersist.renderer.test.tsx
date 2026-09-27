@@ -298,6 +298,35 @@ describe('releasing a session whose runtime is gone (#1392)', () => {
     expect(forget).toHaveBeenCalledTimes(1)
   })
 
+  it('retries a release main did not acknowledge', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    forget.mockRejectedValueOnce(new Error('ipc down'))
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    await advance(1_000)
+    expect(forget).toHaveBeenCalledTimes(2)
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops the in-flight reservation, so a re-added id can flush again', async () => {
+    const pending = deferred()
+    append.mockReturnValueOnce(pending.promise)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'first') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(refs.inFlightFeedDebugIdRef.current.a).toBe(1)
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    expect(refs.inFlightFeedDebugIdRef.current).not.toHaveProperty('a')
+    refs.latestRuntimesRef.current = { a: add(emptyRuntime(), 'new generation') }
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(2)
+    pending.resolve()
+  })
+
   it('does not forget a session that never had a runtime while mounted', async () => {
     const refs = makeRefs({})
     renderHook(() => useFeedDebugPersist(refs))
