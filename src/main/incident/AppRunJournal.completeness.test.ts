@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fsHarness = vi.hoisted(() => ({
   appendFileSync: vi.fn(),
@@ -143,9 +143,31 @@ describe('AppRunJournal completeness snapshot', () => {
 // closes the retention boot gate BEFORE requesting that prune, so the request
 // is held rather than run during the session herd.
 describe('AppRunJournal boot prune', () => {
+  // start() points Node's fatal reports at the run directory; with only the
+  // fs mocked that path is the owner's real incident store (#1351 review a),
+  // so the process setting is put back after each start().
+  const report = process.report
+  const saved = report ? { directory: report.directory, reportOnFatalError: report.reportOnFatalError } : null
+  afterEach(() => {
+    if (report && saved) {
+      report.directory = saved.directory
+      report.reportOnFatalError = saved.reportOnFatalError
+    }
+  })
+
   it('holds retention before requesting the run-start prune', async () => {
     retentionCalls.length = 0
     await makeJournal().start()
     expect(retentionCalls).toEqual(['hold', 'prune:incident-run-start'])
+  })
+
+  // #1351 review a/b: an unwritable incident directory degrades the journal,
+  // but the other retention buckets may be writable and index.ts still asks
+  // for a startup prune. The gate must be closed anyway.
+  it('holds retention even when the incident journal cannot start', async () => {
+    retentionCalls.length = 0
+    fsHarness.mkdir.mockRejectedValueOnce(Object.assign(new Error('read-only'), { code: 'EROFS' }))
+    await makeJournal().start()
+    expect(retentionCalls).toEqual(['hold'])
   })
 })

@@ -59,8 +59,11 @@ describe('boot prune gate (#775)', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     expect(existsSync(expired)).toBe(true)
     retention.noteWorkspaceRecovered()
+    // A second window reporting later must not move the open (#1351 review
+    // c): the gate opens a fixed time after the FIRST recovery.
+    await vi.advanceTimersByTimeAsync(30_000)
     retention.noteWorkspaceRecovered()
-    await vi.advanceTimersByTimeAsync(retention.DEBUG_PRUNE_AFTER_RECOVERY_MS - 1)
+    await vi.advanceTimersByTimeAsync(retention.DEBUG_PRUNE_AFTER_RECOVERY_MS - 30_000 - 1)
     expect(existsSync(expired)).toBe(true)
     await vi.advanceTimersByTimeAsync(1)
     await settle()
@@ -88,5 +91,39 @@ describe('boot prune gate (#775)', () => {
     retention.holdDebugStoragePruneUntilRecovered()
     retention.scheduleDebugStoragePrune('feed-debug-append')
     await settle()
+  })
+
+  // #1351 review c: the held assertions above race real file I/O under fake
+  // timers, so a gate that did nothing could still look held. With real
+  // timers and time for a prune to finish, nothing may be deleted while the
+  // gate is closed.
+  it('deletes nothing while the gate is closed, given real time to do so', async () => {
+    vi.useRealTimers()
+    retention.holdDebugStoragePruneUntilRecovered()
+    retention.scheduleDebugStoragePrune('incident-run-start')
+    await new Promise(resolve => setTimeout(resolve, 500))
+    expect(existsSync(expired)).toBe(true)
+    expect(pruned).toEqual([])
+  })
+
+  // #1351 review b: a gate timer must never keep a quitting process alive.
+  it('never keeps the process alive with its timers', async () => {
+    vi.useRealTimers()
+    const timers: Array<{ hasRef?: () => boolean }> = []
+    const realSetTimeout = globalThis.setTimeout
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) => {
+      const timer = realSetTimeout(handler, ms)
+      timers.push(timer as unknown as { hasRef?: () => boolean })
+      return timer
+    }) as typeof setTimeout)
+    try {
+      retention.holdDebugStoragePruneUntilRecovered()
+      retention.noteWorkspaceRecovered()
+      // A second window's report arms nothing more (#1351 review c: without
+      // the guard it added a redundant timer per report).
+      retention.noteWorkspaceRecovered()
+    } finally { spy.mockRestore() }
+    expect(timers).toHaveLength(2)
+    expect(timers.every(timer => timer.hasRef?.() === false)).toBe(true)
   })
 })

@@ -160,19 +160,26 @@ function ttlHours(): number {
 //
 // WHY: the first prune of every run used to start about 1 s after launch
 // (AppRunJournal.start), while the first window's workspace was still
-// rehydrating (`rehydrate.complete` at 2.6-23 s in the owner's 50 recorded
-// runs), so its statfs, directory walk and rm -rf competed with the session
-// herd coming back; one recorded boot freed 5.8 GB at 38 s. Nothing about
-// retention is urgent at boot: the budget is 3% of the disk and the TTL is
-// days, so waiting a minute past recovery costs nothing.
+// rehydrating, so its statfs, directory walk and rm -rf competed with the
+// session herd coming back. In the owner's 50 journaled runs every
+// run-start prune landed before that run's first `rehydrate.complete`
+// (reported 2.2-70.5 s after start); the largest journaled one freed
+// 1.98 GiB at 25.4 s. Nothing about retention is urgent at boot: the budget
+// is 3% of the disk and the TTL is days, so waiting past recovery costs
+// nothing.
 //
 // Closed only by holdDebugStoragePruneUntilRecovered() (the run's boot, once
 // per process), so every other caller and test keeps the old behavior.
 // While closed, requests coalesce into ONE pending prune, keeping the first
-// reason. It opens a minute after the first window reports
-// `rehydrate.complete`, or after a fallback, so a run with no window (or a
-// renderer that never reports) still prunes.
-export const DEBUG_PRUNE_AFTER_RECOVERY_MS = 60_000
+// reason. It opens a while after the first window reports
+// `rehydrate.complete`, or after a fallback, so a run with no window (5 of
+// the 50 journaled runs never reported one) still prunes.
+//
+// WHY 120 s after recovery (#1351 review c): session wakes continue past
+// 60 s after `rehydrate.complete` in 19 of 45 journaled runs (the densest
+// burst is inside 60 s; the tail runs to ~280 s and may be user-initiated).
+// 120 s covers most of it; the 5-minute fallback bounds the whole wait.
+export const DEBUG_PRUNE_AFTER_RECOVERY_MS = 120_000
 export const DEBUG_PRUNE_BOOT_FALLBACK_MS = 5 * 60_000
 
 type BootGate = {

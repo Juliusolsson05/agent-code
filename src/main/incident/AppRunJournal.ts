@@ -124,6 +124,12 @@ export class AppRunJournal {
   async start(): Promise<void> {
     if (this.started) return
     this.started = true
+    // The run's first prune waits until the workspace has recovered (#775).
+    // Closed FIRST, before any I/O here can fail (#1351 review a/b): a run
+    // whose incident directory is unwritable degrades to no journal, but the
+    // other retention buckets may still be writable, and `startup` (index.ts)
+    // would otherwise prune immediately during recovery.
+    holdDebugStoragePruneUntilRecovered()
     try {
       await mkdir(this.runDir, { recursive: true })
       await writeFile(join(this.runDir, 'manifest.json'), `${JSON.stringify(this.manifest, null, 2)}\n`, 'utf8')
@@ -199,11 +205,7 @@ export class AppRunJournal {
       },
     })
     await this.writeHeartbeat()
-    // The run's first prune waits until the workspace has recovered (#775):
-    // closing the gate here, in the one boot-only place that owns the first
-    // prune, holds it and every other early request (startup, feed-debug
-    // appends) as one pending prune.
-    holdDebugStoragePruneUntilRecovered()
+    // Held by the gate closed at the top of start() (#775).
     scheduleDebugStoragePrune('incident-run-start')
   }
 
