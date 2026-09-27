@@ -5,7 +5,7 @@ import fixture from '../../../../testing/fixtures/ghosts/codex/message-item-iden
 import { ghostsFromSemanticTurn, reconcileUpstream } from '@renderer/session-runtime/ghosts'
 import { mountCodexPane } from '@renderer/session-runtime/semantic/testing/proxyPaneDrivers'
 import type { Frame } from '@renderer/session-runtime/semantic/testing/proxyPaneDrivers'
-import { mapCodexRolloutToFeedEntries } from '@providers/codex/renderer/transcript/rollout'
+import { createCodexTranscriptEntryMapper } from '@providers/codex/renderer/transcript/mapper'
 
 // #1231: a Codex text ghost is keyed by the proxy response id (`resp_…`), and
 // the committed rollout entry never carried anything that equals it, so no
@@ -14,7 +14,12 @@ import { mapCodexRolloutToFeedEntries } from '@providers/codex/renderer/transcri
 // response_item. The fixture is one real 0.157.1 assistant message seen from
 // both sides (see its `evidence`). It drives the REAL codex proxy adapter and
 // the REAL semantic fold, as the desktop hook does, then the REAL rollout
-// mapper.
+// mapper, through the same stateful wrapper all three production ingest
+// surfaces use (review c: a bare mapper call would stay green if stamping
+// moved into the wrapper).
+const mapRollout = (record: unknown) =>
+  createCodexTranscriptEntryMapper().map(record as Record<string, unknown>).entries
+
 function ghostFromRecordedStream() {
   const pane = mountCodexPane()
   pane.request('req-1')
@@ -35,7 +40,7 @@ describe('Codex text ghosts are superseded by their committed rollout entry (#12
     expect(turn.turnId).toBe((fixture.sseFrames[0] as { response: { id: string } }).response.id)
     expect(textGhosts).toHaveLength(1)
 
-    const [entry] = mapCodexRolloutToFeedEntries(fixture.rolloutRecord as Record<string, unknown>)
+    const [entry] = mapRollout(fixture.rolloutRecord)
     expect(entry?.uuid).toBeTruthy()
     const next = reconcileUpstream(entry!, ghosts)
     expect(next.get(textGhosts[0]!.uuid)?._atp.supersededBy).toBe(entry!.uuid)
@@ -45,7 +50,7 @@ describe('Codex text ghosts are superseded by their committed rollout entry (#12
     const { ghosts, textGhosts } = ghostFromRecordedStream()
     const other = structuredClone(fixture.rolloutRecord) as { payload: { id: string } }
     other.payload.id = other.payload.id.replace(/.$/, c => (c === '0' ? '1' : '0'))
-    const [entry] = mapCodexRolloutToFeedEntries(other as unknown as Record<string, unknown>)
+    const [entry] = mapRollout(other)
     const next = reconcileUpstream(entry!, ghosts)
     expect(next.get(textGhosts[0]!.uuid)?._atp.supersededBy).toBeUndefined()
   })

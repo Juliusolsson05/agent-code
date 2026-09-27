@@ -40,10 +40,12 @@
 // Codex: the ghost's turnId is the proxy response id (`resp_…`), which
 // the rollout never records, so turn-level matching is impossible
 // (#1231). Instead each ghost records its block's provider item id
-// (`msg_…`, `rs_…`, `fc_…`) in `context.itemId`, and the rollout mapper
+// (`msg_…`, `fc_…`, `ctc_…`) in `context.itemId`, and the rollout mapper
 // stamps the same id on each committed entry as `codexItemId`
 // (`stampCodexItemId` in providers/codex/renderer/transcript/rollout.ts).
-// Match is by that id, one block at a time. Tool blocks can also still
+// Match is by that id, one block at a time. Reasoning ghosts (`rs_…`) are
+// NOT matched: a reasoning rollout item maps to no feed entry, so they still
+// orphan and stay hidden by the render rules, as before. Tool blocks can also still
 // pair by tool_use_id / call_id.
 //
 // -----------------------------------------------------------------------------
