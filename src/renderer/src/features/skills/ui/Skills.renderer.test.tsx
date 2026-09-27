@@ -123,6 +123,31 @@ afterEach(() => {
 })
 
 describe('Settings → Skills grid (#1161)', () => {
+  // #1250 row 14: Reveal State File dropped main's { ok: false, message }.
+  it('says why the managed skill state file could not be revealed', async () => {
+    const recovering = { ...installed, recovery: { message: 'The managed skill state file could not be read.', stateFilePath: '/state/skills.json' } }
+    api.auditAgentCodeInstalledSkills.mockResolvedValue(recovering)
+    api.getAgentCodeInstalledSkills.mockResolvedValue(recovering)
+    useSkillsStore.setState({ installed: recovering })
+    Object.assign(window, { api: { ...window.api, revealAgentCodeInstalledSkillsRecoveryFile: vi.fn(async () => ({ ok: false, message: 'No managed skill recovery file exists.' })) } })
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    const reveal = await screen.findByRole('button', { name: 'Reveal State File' })
+    fireEvent.click(reveal)
+    expect(await screen.findByText('No managed skill recovery file exists.')).toBeTruthy()
+    // Inside the recovery panel, beside the button (#1424 review b), not in
+    // the grid's footer line below every skill row.
+    expect(reveal.closest('[role="alert"]')).toHaveTextContent('No managed skill recovery file exists.')
+    // Steering q111: that refusal belongs to THIS recovery. Recovery clears,
+    // then a new one appears: its panel starts without the old message.
+    act(() => { useSkillsStore.setState({ installed }) })
+    expect(screen.queryByText('No managed skill recovery file exists.')).toBeNull()
+    act(() => { useSkillsStore.setState({ installed: { ...installed, recovery: { message: 'The managed skill state file could not be read.', stateFilePath: '/state/skills-2.json' } } }) })
+    const again = await screen.findByRole('button', { name: 'Reveal State File' })
+    expect(again.closest('[role="alert"]')).not.toHaveTextContent('No managed skill recovery file exists.')
+    api.auditAgentCodeInstalledSkills.mockResolvedValue(installed)
+    api.getAgentCodeInstalledSkills.mockResolvedValue(installed)
+  })
+
   it('shows columns for enabled providers that support skills, never Grok', async () => {
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
     await waitFor(() => expect(api.auditAgentCodeInstalledSkills).toHaveBeenCalled())

@@ -1,4 +1,5 @@
 import { Switch } from '@renderer/components/ui/switch'
+import { RECOVERY_REVEAL_FAILED, revealMessage, useRecoveryActionGate, useRecoveryEpisode } from '@renderer/features/settings/lib/recoveryStateActions'
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
 import { EmptyState } from '@renderer/components/ui/empty-state'
@@ -82,6 +83,12 @@ export function SkillsGrid({ settings, onChange }: Props) {
   const supported = useSupportedSkillProviders()
   const [filter, setFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [recoveryError, setRecoveryError] = useState<string | null>(null)
+  const recoveryActions = useRecoveryActionGate()
+  // A refusal about one state file must not greet the next recovery panel
+  // (steering q111): cleared, and in-flight reveals retired, when it changes.
+  const recoveryIdentity = installed?.recovery ? `${installed.recovery.stateFilePath}\n${installed.recovery.message}` : null
+  useRecoveryEpisode(recoveryIdentity, recoveryActions, () => setRecoveryError(null))
   const [busy, setBusy] = useState(false)
   const [externalOpen, setExternalOpen] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
@@ -262,8 +269,15 @@ export function SkillsGrid({ settings, onChange }: Props) {
       {installed?.recovery ? (
         <div role="alert" className="flex flex-col gap-2 border-b border-danger px-3 py-2 text-[10px] text-danger">
           <span>{installed.recovery.message}</span>
+          {/* Beside the controls that produced it (#1424 review b): the
+              grid's own error line is below every skill row, out of view on
+              a long list. */}
+          {recoveryError ? <span data-testid="recovery-action-error">{recoveryError}</span> : null}
           <div className="flex flex-wrap gap-2">
-            <Button size="xs" variant="outline" onClick={() => void window.api.revealAgentCodeInstalledSkillsRecoveryFile()}>Reveal State File</Button>
+            <Button size="xs" variant="outline" onClick={() => void recoveryActions.run(window.api.revealAgentCodeInstalledSkillsRecoveryFile, {
+              onLatest: result => setRecoveryError(revealMessage(result)),
+              onRejected: () => setRecoveryError(RECOVERY_REVEAL_FAILED),
+            })}>Reveal State File</Button>
             <Button size="xs" variant="outline" onClick={async () => {
               if (!(await requestConfirm({
                 title: 'Reset all Agent Code-managed skill state?',

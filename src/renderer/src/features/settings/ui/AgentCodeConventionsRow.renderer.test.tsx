@@ -131,3 +131,71 @@ describe('AgentCodeConventionsRow', () => {
     expect(screen.getByRole('button', { name: /On/ })).not.toBeDisabled()
   })
 })
+
+// #1250 row 14: the recovery panel's actions dropped their answers. Main's
+// refusal message is curated and shown as it is; a rejected reset is IPC text
+// and gets fixed words.
+describe('AgentCodeConventionsRow recovery actions', () => {
+  const recovering = (): AgentCodeConventionsSnapshot => ({
+    ...disabledSnapshot(),
+    health: 'recovery-required',
+    recovery: { message: 'The conventions state file could not be read.', stateFilePath: '/state/conventions.json' },
+  })
+
+  it('says why the state file could not be revealed', async () => {
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        auditAgentCodeConventions: vi.fn().mockResolvedValue(recovering()),
+        revealAgentCodeConventionsRecoveryFile: vi.fn().mockResolvedValue({ ok: false, message: 'No conventions recovery file exists.' }),
+      },
+    })
+    render(<AgentCodeConventionsRow />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal State File' }))
+    expect(await screen.findByText('No conventions recovery file exists.')).toBeTruthy()
+  })
+
+  // Steering q111: a slower Reveal started BEFORE a Reset must not speak
+  // after it, whether it ends in success or failure. Deferred real actions,
+  // through the real row.
+  it.each([
+    ['success', { ok: true }],
+    ['failure', { ok: false, message: 'The state file is no longer there. Refresh to check again.' }],
+  ] as const)('keeps the newer reset failure when an older reveal ends in %s', async (_name, revealAnswer) => {
+    vi.spyOn(await import('@renderer/components/ui/confirm-dialog'), 'requestConfirm').mockResolvedValue(true)
+    let answerReveal!: (value: { ok: boolean; message?: string }) => void
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        auditAgentCodeConventions: vi.fn().mockResolvedValue(recovering()),
+        revealAgentCodeConventionsRecoveryFile: vi.fn(() => new Promise(resolve => { answerReveal = resolve })),
+        resetAgentCodeConventionsRecovery: vi.fn().mockRejectedValue(new Error('EACCES')),
+      },
+    })
+    render(<AgentCodeConventionsRow />)
+    const reveal = await screen.findByRole('button', { name: 'Reveal State File' })
+    const reset = screen.getByRole('button', { name: 'Reset State' })
+    await act(async () => { fireEvent.click(reveal) })
+    await act(async () => { fireEvent.click(reset) })
+    expect(await screen.findByText("Couldn't reset the state. Try again.")).toBeTruthy()
+    await act(async () => { answerReveal(revealAnswer) })
+    expect(screen.getByText("Couldn't reset the state. Try again.")).toBeTruthy()
+    expect(screen.queryByText('The state file is no longer there. Refresh to check again.')).toBeNull()
+  })
+
+  it('says a rejected reset in fixed words', async () => {
+    vi.spyOn(await import('@renderer/components/ui/confirm-dialog'), 'requestConfirm').mockResolvedValue(true)
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        auditAgentCodeConventions: vi.fn().mockResolvedValue(recovering()),
+        resetAgentCodeConventionsRecovery: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'agent-code-conventions:reset-recovery': EACCES")),
+      },
+    })
+    render(<AgentCodeConventionsRow />)
+    const reset = await screen.findByRole('button', { name: 'Reset State' })
+    await act(async () => { fireEvent.click(reset) })
+    expect(await screen.findByText("Couldn't reset the state. Try again.")).toBeTruthy()
+    expect(document.body.textContent).not.toContain('EACCES')
+  })
+})
