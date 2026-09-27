@@ -27,3 +27,9 @@ Consequences, all in tests:
 - **Fail-first:** a test that disposes a service while a slow store write is in flight asserts that the write finished before `dispose()` resolved, and that nothing was scheduled afterwards. It fails on main, where there is no drain.
 - A negative made real: after a held turn, `whenSettled()` resolves and delivery is still 0. Mutating `whenSettled` to resolve immediately must turn some test red; the proof is recorded in the PR.
 - The GoalLoopService worker must log zero ENOENT warnings in a full run of the three files. The run is checked by grepping its output.
+
+## Review of #1371 (round 1: a, b and c, all FIX-BEFORE-MERGE)
+- **A queued continuation bypassed dispose (a, b, c).** A continuation that finished its persist replayed a queued one from its `finally` straight into `maybeContinue`, past `requestContinue`'s disposed check. **Fixed:** `maybeContinue` itself returns when disposed, and every delivery starts there. Pinned by the reviewers' sequence: a gated persist, the turn closed by the provider's hooks, then a queued Resume.
+- **Manager listeners outlived dispose (b, c).** A late `removed` paused the loop and wrote into a removed directory. **Fixed:** `start` keeps the listeners and `dispose` detaches them (`off` added to the manager port; `SessionManager` and the test fakes are EventEmitters).
+- **Surviving mutations (a, b, c):** `control()`'s persist was untracked, and `dispose` didn't clear timers. Both are now pinned.
+

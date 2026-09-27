@@ -135,6 +135,11 @@ type GoalLoopManagerPort = {
    *  continuation (#1033) — the same source getProcessStateSnapshot reads, so
    *  a held loop can never disagree with the level it is waiting on. */
   on(event: 'process-state', listener: (payload: { sessionId: string; active: boolean }) => void): unknown
+  /** Detach what `start` attached; `dispose` uses these (#1371 review). */
+  off(event: 'semantic-event', listener: (payload: { sessionId: string; event: unknown }) => void): unknown
+  off(event: 'removed', listener: (payload: { sessionId: string }) => void): unknown
+  off(event: 'exit', listener: (payload: { sessionId: string }) => void): unknown
+  off(event: 'process-state', listener: (payload: { sessionId: string; active: boolean }) => void): unknown
   deliverPromptToAgent: SessionManager['deliverPromptToAgent']
   /** Is the provider visibly working right now? Read at delivery time. */
   getProcessStateSnapshot: SessionManager['getProcessStateSnapshot']
@@ -266,6 +271,8 @@ export class GoalLoopService extends EventEmitter {
   /** Every timer this service owns, with the settle hook of a zero-delay one; `dispose` clears them. */
   private readonly timers = new Map<ReturnType<typeof setTimeout>, (() => void) | undefined>()
   private disposed = false
+  /** Detaches the manager listeners `start` attached; see dispose. */
+  private detachManager: (() => void) | undefined
   /** Sessions whose last continuation was QUEUED by the provider rather than
    * started as a turn, and has not been seen to start yet.
    *
@@ -328,20 +335,32 @@ export class GoalLoopService extends EventEmitter {
         : loop)
     }
     const { manager } = this.deps
-    manager.on('semantic-event', ({ sessionId, event }: { sessionId: string; event: unknown }) => {
+    const onSemantic = ({ sessionId, event }: { sessionId: string; event: unknown }) => {
       this.signal(sessionId, event)
-    })
+    }
     // A quiet edge makes a held continuation land promptly instead of waiting
     // out the poll. It is an OPTIMISATION, never the mechanism: the poll re-
     // reads the level, so a provider that stops emitting edges (or never emits
     // this one) still resolves its hold.
-    manager.on('process-state', ({ sessionId, active }: { sessionId: string; active: boolean }) => {
+    const onProcessState = ({ sessionId, active }: { sessionId: string; active: boolean }) => {
       if (active || !this.heldSince.has(sessionId)) return
       this.requestContinue(sessionId)
-    })
+    }
+    const onEnded = ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId)
+    manager.on('semantic-event', onSemantic)
+    manager.on('process-state', onProcessState)
     // `removed` is the reliable end (forwarder.ts); `exit` can precede it.
-    manager.on('removed', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
-    manager.on('exit', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
+    manager.on('removed', onEnded)
+    manager.on('exit', onEnded)
+    // WHY dispose detaches these (#1371 review, b and c): a `removed` arriving after dispose()
+    // resolved paused the loop and started a fresh persist, which recreated a directory the caller
+    // had already removed — the race #1341 is about, just later.
+    this.detachManager = () => {
+      manager.off('semantic-event', onSemantic)
+      manager.off('process-state', onProcessState)
+      manager.off('removed', onEnded)
+      manager.off('exit', onEnded)
+    }
     await this.persist()
   }
 
@@ -947,6 +966,10 @@ export class GoalLoopService extends EventEmitter {
   }
 
   private async maybeContinue(sessionId: string): Promise<void> {
+    // WHY here and not only in requestContinue (#1371 review, a/b/c): a continuation finishing its
+    // persist replays a queued one straight from its finally block, which bypassed requestContinue's
+    // check and delivered a prompt after dispose() had begun. Every path to a delivery starts here.
+    if (this.disposed) return
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active' || this.continuing.has(sessionId)) return
     this.continuing.add(sessionId)
@@ -1053,6 +1076,8 @@ export class GoalLoopService extends EventEmitter {
    */
   async dispose(): Promise<void> {
     this.disposed = true
+    this.detachManager?.()
+    this.detachManager = undefined
     for (const timer of [...this.timers.keys()]) this.cancel(timer)
     this.continueCheckTimers.clear()
     this.holdPolls.clear()

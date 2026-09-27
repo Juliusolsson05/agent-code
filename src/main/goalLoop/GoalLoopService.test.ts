@@ -115,6 +115,87 @@ describe('GoalLoopService drain (#1341)', () => {
     expect(deliver).not.toHaveBeenCalled()
   })
 
+  // #1371 review (a, b, c): a continuation replays a queued one from its finally block, which went
+  // straight to maybeContinue and past the disposed check — a second prompt was delivered after
+  // dispose() had begun.
+  it('delivers no queued continuation once dispose has begun', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager, deliver } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    // The first continuation is parked in its persist. Its turn starts and ends (the provider's own
+    // hooks), so the gate would let a second continuation through; this Resume queues it.
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    svc.control('s1', { action: 'resume' })
+    const disposing = svc.dispose()
+    open()
+    await disposing
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  // #1371 review (b, c): the manager listeners outlived dispose(), so a late `removed` paused the
+  // loop and started a fresh persist into a directory the caller had already removed.
+  it('ignores manager events after dispose', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await svc.dispose()
+    const writes = store.writes
+    manager.emit('removed', { sessionId: 's1' })
+    manager.emit('exit', { sessionId: 's1' })
+    idleTurn(manager)
+    await svc.whenSettled()
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+    expect(store.writes).toBe(writes)
+    expect(manager.listenerCount('removed') + manager.listenerCount('semantic-event')).toBe(0)
+  })
+
+  // #1371 review (a, c), a surviving mutation: control()'s persist was not pinned as tracked work.
+  it('dispose waits for a control action\'s persist', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    const before = store.writes
+    svc.control('s1', { action: 'pause' })
+    let disposed = false
+    const disposing = svc.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(disposed).toBe(false)
+    open()
+    await disposing
+    expect(store.writes).toBeGreaterThan(before)
+  })
+
+  // #1371 review (b), a surviving mutation: nothing asserted that dispose cancels the timers it owns.
+  it('dispose cancels a held loop\'s poll timer', async () => {
+    const { svc, manager, processState } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      processState.active = true
+      idleTurn(manager)
+      await vi.advanceTimersByTimeAsync(0)
+      await svc.whenSettled()
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      await svc.dispose()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('whenSettled waits for a zero-delay continuation check before resolving', async () => {
     const { svc, manager, deliver } = await service()
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
