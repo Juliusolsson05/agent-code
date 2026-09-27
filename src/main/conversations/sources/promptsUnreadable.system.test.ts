@@ -265,3 +265,23 @@ describe('round 1: unknown is never "no prompts"', () => {
     expect(await source.prompts(real.nativeId, real.cwd!)).toEqual(expected)
   })
 })
+
+// #1434 review c: the ABSENT half of the rule, on a real fresh install (the
+// Pi probe's `missing -> []` survived a mutation because every fixture created
+// the directories first), and ENOTDIR — a path component that is a plain file
+// — which is absence too, never "unreadable".
+describe('round 1 c: absence stays "no prompts"', () => {
+  it('Pi on a home with no .pi at all answers no prompts', async () => {
+    const home = join(corpus.opencodeDataDir, '..', 'r1c-fresh-pi-home')
+    await mkdir(home, { recursive: true })
+    const source = new PiConversationSource({ env: {}, homeDirectory: home })
+    expect(await source.prompts('session-1', join(home, 'project'))).toEqual([])
+  })
+
+  it('a store path through a plain file (ENOTDIR) is absent, not unreadable', async () => {
+    const file = join(corpus.opencodeDataDir, '..', 'r1c-plain-file')
+    await writeFile(file, 'not a directory')
+    expect(await new OpencodeConversationSource({ dataDir: join(file, 'opencode') }).prompts('ses_x', '/fixture/repo')).toEqual([])
+    expect(await new CodexConversationSource({ codexHome: join(file, 'codex') }).prompts('019-x', '')).toEqual([])
+  })
+})

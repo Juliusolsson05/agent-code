@@ -79,6 +79,9 @@ describe('ConversationService', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await expect(s.prompts({ provider: 'claude', nativeId: row.nativeId, cwd: row.cwd! })).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+      // The cause is logged in main, once (#1434 review c: the log was not
+      // asserted, so removing the service's catch passed every test).
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('prompts'), expect.anything())
       const hits = await s.list({ cwd: '/fixture/repo', scope: 'repository', query: needle, includeChildren: true, limit: 5000 })
       expect(hits.rows.some(r => r.nativeId === other.nativeId)).toBe(true)
     } finally {
