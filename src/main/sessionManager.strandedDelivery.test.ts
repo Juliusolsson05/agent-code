@@ -189,12 +189,23 @@ it('does not mark a delivery that was refused before writing', async () => {
 // #1358 review b: only Claude's delivery can reclaim a stranded composer, so
 // only a Claude session is marked; inspection must not promise a reclaim no
 // delivery will perform.
+//
+// WHY Pi and not Codex: the guard is only reachable by a non-Claude failure
+// that reports promptWritten && !enterWritten. Codex writes paste + Enter in
+// ONE atomic PTY write (codex/runtime/promptDelivery.ts), so any Codex failure
+// after writing is already enterWritten and never reaches the kind check (a
+// Codex version of this test passed with the guard deleted). Pi's bridge
+// answers "unknown" when the request reached pi with no evidence back, which
+// pi/runtime/promptDelivery.ts reports as exactly that pair.
 it('does not mark a stranded delivery for a provider that cannot reclaim it', async () => {
-  const { manager, session } = claudeLike()
-  const codexLike = { ...session, write: (data: string) => { if (data.includes('earlier')) throw new Error('EPIPE') } }
-  ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { kind: 'codex', session: codexLike })
+  const { manager } = claudeLike()
+  const unknownOutcome = Object.assign(new Error('bridge went quiet'), { code: 'pi-terminal-unknown' })
+  ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { kind: 'pi', session: {
+    isExited: () => false,
+    write: () => {},
+    deliverPromptText: async () => { throw unknownOutcome },
+  } })
   const result = await manager.deliverPromptToAgent('s1', 'an earlier prompt that painted late')
-  expect(result).toMatchObject({ ok: false, promptWritten: true })
+  expect(result).toMatchObject({ ok: false, promptWritten: true, enterWritten: false })
   expect(manager.hasStrandedDelivery('s1')).toBe(false)
 })
-
