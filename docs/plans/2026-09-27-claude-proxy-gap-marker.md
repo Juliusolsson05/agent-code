@@ -285,3 +285,12 @@ Residual surfaces outside this PR, filed:
   - the live subscription.
   - Mutations caught: bridge drop, missing candidates, the fold dropping
     the interruption, history ingest dropping the gaps.
+
+## Hold lifted: pointer bumped to claude-code-headless#69's merge (0928344e)
+- #69 merged after its own round 1. Reviewers a and b found real defects, fixed fail-first there:
+  - `since` is now the previous poll's START time, a true lower bound;
+  - a request-only flow is kept until its first post-gap chunk, and streams if that chunk opens with `message_start`;
+  - the phase owner is sealed last, so a concurrent seal no longer clears an `awaiting-tool` phase.
+- The app calls only `sealFlowsForTransportGap()`, whose signature did not change, so no app code changes.
+- No lockfile resync: `package.json` and `package-lock.json` have no `claude-code-headless` entry (the app resolves it through a path alias), and the package's own manifests are unchanged.
+- `npx tsc -b` is clean. The Claude provider, main sessions and renderer workspace-hook suites pass 739/739.
