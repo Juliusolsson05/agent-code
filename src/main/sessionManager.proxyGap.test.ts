@@ -86,4 +86,27 @@ describe('a Claude proxy transport gap', () => {
       context: { sessionId: 's1', lostGenerations: 3 },
     }))
   })
+
+  // Focused review of #1376 (c): a replaced session's late gap must not be recorded against the
+  // session id its successor now owns.
+  it('ignores a gap from a session that has been replaced', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const first = new FakeAgentSession()
+    const second = new FakeAgentSession()
+    createSession.mockImplementationOnce(() => first).mockImplementationOnce(() => second)
+    const incidents: Array<{ kind: string }> = []
+    const journal = { recordIncident: (incident: { kind: string }) => { incidents.push(incident) }, record: vi.fn(), recordError: vi.fn() }
+    const manager = new SessionManager(null, null, journal as never)
+    const gaps: unknown[] = []
+    manager.on('proxy-transport-gap', gap => { gaps.push(gap) })
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    first.emit('exit', { exitCode: 0 })
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    first.emit('proxy-transport-gap', { lostGenerations: 1 })
+
+    expect(gaps).toEqual([])
+    expect(incidents.filter(incident => incident.kind === 'claude.proxy_transport_gap')).toEqual([])
+  })
 })
+

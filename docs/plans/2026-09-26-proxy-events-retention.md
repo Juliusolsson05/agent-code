@@ -47,7 +47,8 @@ issue still has open:
     only be at `.1`.
   - Pinned by a test that rotates before every path-level await point.
 - **Gap policy: a bounded, reported gap, not an acknowledgement protocol** (q53 asked us to choose).
-  - Each generation carries its number in a header line, `{"kind":"generation","generation":n}`, created atomically with the live file. The tail strips it.
+  - Each generation created by a rotation carries its number in a header line, `{"kind":"generation","generation":n}`, created atomically with the live file. Generation 0 (the run's first file) has none; the tail reads a missing header as generation 0 and strips the line when present.
+  - The bound holds under the default `PROXY_EVENTS_ROTATE_BYTES`; setting it to 0 (the forensic override) disables rotation.
   - This replaced a first design with a `proxy-events.rotations` counter file, which a reader could pair with the wrong generation (round 2 of #64).
   - When the poller stalls through more rotations than it can hold or drain (about 1 GiB of traffic at the default), the generations deleted unread are counted as `lostGenerations`. `ProxyServer` surfaces them as a `transport-gap` event plus one warning.
   - An ack protocol would need a second writer in the app. A stalled or dead app would then let the proxy's disk grow without bound again, which is this issue.
