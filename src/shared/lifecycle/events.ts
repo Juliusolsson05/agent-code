@@ -637,6 +637,9 @@ export const KILL_CALLERS = [
   // the spawn — or a successor whose source pane disappeared mid-swap.
   'replace.predecessor',
   'replace.orphaned-successor',
+  // Reload Agents: a successor whose agent was closed or replaced while it
+  // was respawning (#1282).
+  'reload.orphaned-successor',
   // Dangerous-mode toggle reloading every running agent.
   'reload.agent-sessions',
 ] as const

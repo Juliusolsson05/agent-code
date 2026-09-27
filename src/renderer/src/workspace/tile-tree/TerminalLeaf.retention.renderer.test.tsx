@@ -176,4 +176,36 @@ describe('TerminalLeaf retention', () => {
     expect(resize).toHaveBeenCalledTimes(2)
     expect(resize).toHaveBeenLastCalledWith('shell-1', 120, 40)
   })
+
+  // #1281 / #1283 (terminal half): main keeps a shell's view reference across
+  // the shell's exit and a same-id respawn, so the leaf's unmount is what
+  // releases it. Without the release main forwards the shell's bytes to
+  // nobody until the page reloads.
+  it('releases its view of the shell when it unmounts', async () => {
+    const view = render(
+      <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} showStatusMode={false} />,
+    )
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    expect(window.api.detachTerminal).not.toHaveBeenCalled()
+    view.unmount()
+    expect(window.api.detachTerminal).toHaveBeenCalledExactlyOnceWith('shell-1')
+  })
+
+  it('releases an attach that lands after the leaf is gone', async () => {
+    const view = render(
+      <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} showStatusMode={false} />,
+    )
+    // Let the mount's wake settle so the attach is in flight.
+    await act(async () => { await Promise.resolve() })
+    view.unmount()
+    expect(window.api.detachTerminal).not.toHaveBeenCalled()
+    await act(async () => {
+      attach.resolve('late replay')
+      await attach.promise
+    })
+    expect(window.api.detachTerminal).toHaveBeenCalledExactlyOnceWith('shell-1')
+  })
 })

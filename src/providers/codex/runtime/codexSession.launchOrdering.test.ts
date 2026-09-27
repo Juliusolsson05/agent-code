@@ -19,6 +19,11 @@ const launch = vi.hoisted(() => ({
   // event ladder via `recordTrustInEvents`.
   trustCalls: [] as string[],
   recordTrustInEvents: false,
+  // #1319 review B: the fake keeps its listeners and a composer reading, so
+  // a test can drive a real 'screen' event through a started session.
+  listeners: new Map<string, (payload: unknown) => void>(),
+  composer: 'unknown' as 'empty' | 'drafted' | 'unknown',
+  screen: '',
 }))
 
 vi.mock('node-pty', () => ({
@@ -45,7 +50,14 @@ vi.mock('codex-headless', () => {
       launch.headlessOptions = options
     }
 
-    on(): this { return this }
+    on(event: string, listener: (payload: unknown) => void): this {
+      launch.listeners.set(event, listener)
+      return this
+    }
+    getComposerState() { return launch.composer }
+    getScreen() { return launch.screen }
+    getSettledScreen() { return launch.screen }
+    getConditionSnapshot() { return { provider: 'codex', conditions: {}, ts: 0 } }
     async start() {
       launch.events.push('headless:start')
       return { sessionsDir: '/recorded/codex/sessions' }
@@ -151,6 +163,9 @@ beforeEach(() => {
   })
   launch.profileBarrier = Promise.resolve()
   launch.releaseProfile = () => undefined
+  launch.listeners = new Map()
+  launch.composer = 'unknown'
+  launch.screen = ''
 })
 
 describe('CodexSession resume launch attestation ordering', () => {
@@ -471,5 +486,32 @@ describe('CodexSession resume launch attestation ordering', () => {
       await secondOutcome
       await session.stop()
     }
+  })
+})
+
+// #1319 review B: publication must run from the headless 'screen' listener
+// itself; a test calling publishNativeComposer directly passed with the
+// listener's call deleted.
+describe('CodexSession native composer publication', () => {
+  it('publishes a native draft as composer-occupied from the screen event, and ready once cleared', async () => {
+    const session = new CodexSession({ binary: 'recorded-codex', cwd: '/recorded/worktree', useProxy: false })
+    const readiness: Array<{ ready: boolean; reason?: string }> = []
+    session.on('input-readiness', state => readiness.push(state))
+    await session.start()
+    const screen = launch.listeners.get('screen')!
+    expect(screen).toBeDefined()
+    launch.composer = 'empty'
+    launch.screen = '› Ask Codex to do anything\n\n  gpt · /recorded/worktree\n  ? for shortcuts'
+    screen({ plain: launch.screen })
+    expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
+    launch.composer = 'drafted'
+    launch.screen = '› please review the draft\n\n  gpt · /recorded/worktree'
+    screen({ plain: launch.screen })
+    expect(readiness.at(-1)).toEqual({ ready: false, reason: 'composer-occupied' })
+    launch.composer = 'empty'
+    launch.screen = '› Ask Codex to do anything\n\n  gpt · /recorded/worktree\n  ? for shortcuts'
+    screen({ plain: launch.screen })
+    expect(readiness.at(-1)).toEqual({ ready: true, reason: 'ready' })
+    await session.stop()
   })
 })
