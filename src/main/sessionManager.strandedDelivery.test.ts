@@ -180,6 +180,29 @@ it('waits for the stranded text to paint before writing, then clears it', async 
   expect(writes.slice(1)).toEqual(['\x15', 'the next task', '\r'])
 })
 
+// #1358 verification b: the window must cover the recorded lag, measured
+// from the failure. One fake clock throughout (a second useFakeTimers() resets
+// the clock, which put strandedAt in the future and let any positive window
+// pass). The next delivery starts 6 s after the strand and the text paints at
+// +7 s, inside the 0.7-3.8 s recorded lag's 8 s window; a window shorter than
+// that writes the new prompt beside the unpainted bytes.
+it('still waits for the late paint when the next delivery starts seconds after the strand', async () => {
+  const { manager, session, writes } = claudeLike()
+  vi.useFakeTimers()
+  const first = manager.deliverPromptToAgent('s1', 'an earlier prompt that painted late')
+  await vi.advanceTimersByTimeAsync(8_000)
+  expect(await first).toMatchObject({ ok: false, code: 'absorption-timeout' })
+  // The failure, not the end of the advance above, is where the lag starts.
+  const { at: strandedAt } = (manager as unknown as { strandedDeliveries: Map<string, { at: number }> }).strandedDeliveries.get('s1')!
+  await vi.advanceTimersByTimeAsync(strandedAt + 6_000 - Date.now())
+  const next = manager.deliverPromptToAgent('s1', 'the next task')
+  await vi.advanceTimersByTimeAsync(1_000)
+  session.paintLate()
+  await vi.advanceTimersByTimeAsync(10_000)
+  await expect(next).resolves.toMatchObject({ ok: true })
+  expect(writes.slice(1)).toEqual(['\x15', 'the next task', '\r'])
+})
+
 // #1358 reviews a and c: whether Ctrl+U removes an image pill is not
 // established, so an image delivery's leftovers are never reclaimed.
 it('does not mark an image delivery that stranded', async () => {
