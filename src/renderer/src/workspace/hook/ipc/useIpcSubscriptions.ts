@@ -5,7 +5,7 @@ import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
 } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind'
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
@@ -206,7 +206,7 @@ const claudeQueueBySession = new Map<SessionId, ClaudeQueueState>()
  */
 function settleClaudeQueueIfIdle(
   sessionId: SessionId,
-  sessionKind: AgentProviderKind | undefined,
+  sessionKind: SessionKind | undefined,
   idle: boolean,
 ): ClaudeQueueState | null {
   if (sessionKind !== 'claude' || !idle) return null

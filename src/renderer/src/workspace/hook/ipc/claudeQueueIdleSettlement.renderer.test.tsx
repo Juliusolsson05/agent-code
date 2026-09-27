@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { act, useRef } from 'react'
@@ -8,7 +11,6 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
-import fixture from '../../../../../../testing/fixtures/queue-operations/exact-remove-after-open-dequeue-debt.json'
 import { useIpcSubscriptions } from './useIpcSubscriptions'
 import { makeWorkspaceRefsForTest as makeRefs } from './testing/workspaceRefsForTest'
 
@@ -24,6 +26,12 @@ afterEach(() => {
   vi.useRealTimers()
   Object.defineProperty(window, 'api', { configurable: true, value: originalWindowApi })
 })
+
+// Read, not imported: the fixture sits outside the web tsconfig's file list.
+const fixture = JSON.parse(readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../../../../../../testing/fixtures/queue-operations/exact-remove-after-open-dequeue-debt.json'),
+  'utf8',
+)) as { events: Array<{ op: string; content?: string; timestamp: string }> }
 
 const NOTIFICATION = '<task-notification>\n<task-id>t-1</task-id>\n<status>completed</status>\n</task-notification>'
 const PROMPT = 'queued prompt'
