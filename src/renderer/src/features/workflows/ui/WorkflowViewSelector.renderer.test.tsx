@@ -363,6 +363,39 @@ describe('WorkflowViewSelector', () => {
       expect(calls.filter(id => id === 'run-a')).toHaveLength(1)
     })
 
+    // #1440 review c: the failure path. A failed read proves nothing (the
+    // tab stays Active) and is forgotten, so a later change asks again.
+    it('keeps a tab active when its read fails, and asks again on a later change', async () => {
+      let failures = 1
+      const calls: string[] = []
+      const client: WorkflowClient = {
+        ...unavailableWorkflowClient,
+        available: true,
+        getSnapshot: vi.fn<WorkflowClient['getSnapshot']>(async ({ runId }) => {
+          calls.push(runId)
+          if (runId === 'run-a' && failures-- > 0) throw new Error('IPC unavailable')
+          return runId === 'run-a' ? null : { runId, cwd: '/repo', cursor: 0, state: createWorkflowState(runId) }
+        }),
+      }
+      const { rerender } = render(mount(client, [ref('run-a')]))
+      await waitFor(() => expect(calls).toEqual(['run-a']))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'active')
+      rerender(mount(client, [ref('run-a'), ref('run-b')]))
+      await waitFor(() => expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'inactive'))
+      expect(calls.filter(id => id === 'run-a')).toHaveLength(2)
+    })
+
+    // #1440 review c: a reference that names its own project is looked up
+    // there, not in the session's.
+    it('asks in the reference\'s own project when it names one', async () => {
+      const getSnapshot = vi.fn<WorkflowClient['getSnapshot']>(async () => null)
+      const client: WorkflowClient = { ...unavailableWorkflowClient, available: true, getSnapshot }
+      render(mount(client, [{ ...ref('run-elsewhere'), cwd: '/other-project' }]))
+      await waitFor(() => expect(getSnapshot).toHaveBeenCalled())
+      expect(getSnapshot.mock.calls[0]![0]).toMatchObject({ cwd: '/other-project', runId: 'run-elsewhere' })
+    })
+
     it('shows one tab expired while another tab\'s read is still pending', async () => {
       const client: WorkflowClient = {
         ...unavailableWorkflowClient,

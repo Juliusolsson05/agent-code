@@ -293,6 +293,18 @@ describe('WorkflowRunView', () => {
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
   })
 
+  // #1440 review c: a reference that launched `running` but whose run is gone
+  // offers no Cancel either (it would silently do nothing).
+  it('offers no Cancel for a missing run that its reference says is running', async () => {
+    render(
+      <WorkflowClientProvider value={missingClient()}>
+        <WorkflowRunView reference={{ runId: 'run-ui', cwd: '/repo', status: 'running' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+  })
+
   // The lookup is global by run id (review b), so a reference without its
   // own cwd whose run is gone is expired too.
   it('calls a missing run without its own cwd expired as well', async () => {
