@@ -33,6 +33,9 @@ vi.mock('@main/workspaceDirectory.js', () => ({
   MissingWorkspaceDirectoryError: class extends Error {}, assertWorkspaceDirectoryExists: vi.fn(async () => {}),
 }))
 vi.mock('@main/setup/toolchain.js', () => ({ getToolPath: () => '/usr/bin/true' }))
+// workspace:save records the window's geometry; the fake BrowserWindow here has
+// no bounds, and geometry is not what the handoff-lease case is about.
+vi.mock('@main/window/windowGeometry.js', () => ({ captureWindowGeometry: () => ({ bounds: null, displayId: null, fullScreen: false }) }))
 vi.mock('@main/subagents/index.js', () => ({
   SubAgentWatcherManager: class { observeParentEntry() {} stop() {} },
 }))
@@ -43,6 +46,7 @@ import { screenInterest } from '@main/sessions/screenInterest.js'
 import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerSessionRoutingIpc } from '@main/ipc/sessionRouting.js'
 import { abandonPendingBequest, recordPendingBequest, registerWindowIpc } from '@main/ipc/window.js'
+import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 
 let manager: SessionManager & EventEmitter
 let forwarder: ReturnType<typeof wireSessionForwarder>
@@ -294,6 +298,32 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     expect(registry.windowForSession(options.sessionId)).toBeNull()
     realForwarder.flush()
     real.removeAllListeners()
+  })
+
+  // #1283 item 2, through the real registry and the real workspace:save
+  // handler: a committed Codex same-rollout handoff retires its predecessor,
+  // and the renderer never calls killOwnedSession for it (main already
+  // stopped its process), so the save that commits the handoff is where the
+  // predecessor's display claim ends. The save may come from ANOTHER window:
+  // the commit is process-wide (#1338 review c), so the release must not
+  // depend on who saved. The manager's commit decision itself is pinned in
+  // sessionManager.codexReplacement.test.ts.
+  it('ends a retired handoff predecessor\'s claim at the save that commits it, whichever window saves', async () => {
+    const left = registry.createAppWindow()
+    registry.createAppWindow()
+    registry.claimSessionForWindow('predecessor', left)
+    registry.claimSessionForWindow('bystander', left)
+    let retired = ['predecessor']
+    const committing = Object.assign(new EventEmitter(), {
+      acknowledgePersistedSessionOwnership: () => { const once = retired; retired = []; return once },
+    })
+    registerWorkspaceIpc(committing as never, {
+      saveSlice: async () => undefined,
+      sessionIds: () => new Set(['successor', 'bystander']),
+    } as never)
+    await harness.handlers.get('workspace:save')!({ sender: harness.built[1]!.webContents }, '{"workspace":{}}')
+    expect(registry.windowForSession('predecessor')).toBeNull()
+    expect(registry.windowForSession('bystander')).not.toBeNull()
   })
 
   it('keeps the claim while a Codex replacement reservation still owns the session (#935 Codex review)', async () => {

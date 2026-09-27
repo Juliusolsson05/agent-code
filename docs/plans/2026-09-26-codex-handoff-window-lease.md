@@ -3,12 +3,12 @@
 ## Problem
 In a Codex same-rollout replacement, main kills the predecessor P inside `spawn` (`executeCodexReplacementHandoff`), and the renderer then skips `killOwnedSession(P)` (`mainHandledPredecessor`). That call was the only release of P's `SessionWindowRouter` lease, so P stays owned by its window for the rest of the app run.
 
-What the leaked lease costs:
-- a `renderer_replaced` gap is recorded and flushed for P on every renderer reload;
+What the leaked lease costs (wording corrected after review c):
+- P keeps an entry in the router's owner map for the whole app run;
+- every renderer reload revisits it and records a `renderer_replaced` gap for it (normally invisible, since no pane shows P);
 - a window close bequeaths the dead P to the surviving window;
-- late events for P are delivered instead of quarantined;
-- requests scoped to P still route to that window (Orchestration, AgentManagement, Workflow bridges);
-- another window cannot claim P.
+- another window cannot claim P;
+- until the owning window's first reload, late events for P and P-scoped requests (Orchestration, AgentManagement, Workflow bridges) still route to that window. After a reload they are quarantined against the stale generation.
 
 ## Evidence
 - The lease is claimed when the id is minted in `session:spawn` (`ipc/session.ts`). It is released on a failed spawn, `session:kill`, `session:kill-owned` (only when the manager no longer retains ownership), and an abandoned bequest.
@@ -26,3 +26,12 @@ What the leaked lease costs:
 ## Tests
 - **Manager:** a committed handoff reports its predecessor exactly once; an unacknowledged successor reports none.
 - **IPC:** `workspace:save` releases the window lease of each committed predecessor and of nothing else.
+
+## Round 1 review decisions
+- **b: three untested safety conditions.** Each survived a one-line mutation:
+  - acknowledging before the durable write: a test with a failing write checks that nothing is committed or released;
+  - dropping the successor-presence guard: another window's save naming neither id retires nothing;
+  - releasing only the first of two retirements: the IPC test now retires two predecessors.
+- **b: no end-to-end check through the real registry.** A `sessionRoutingComposition.test.ts` case now claims through the real registry, saves through the real `workspace:save`, and expects `windowForSession(P)` to be null while a bystander keeps its claim.
+- **c: the cost of the leak was overstated.** The plan and the code comment are corrected.
+- **c: the release must not depend on which window saved.** The composition case saves from the other window. A same-window-only mutation now fails.

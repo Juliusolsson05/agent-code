@@ -1266,6 +1266,9 @@ describe('SessionManager Codex replacement handoff', () => {
     })
     // The renderer has not saved the successor yet: nothing is retired.
     expect(manager.acknowledgePersistedSessionOwnership(new Set([first.sessionId]))).toEqual([])
+    // Nor does another window's save that names neither id (#1338 review b:
+    // dropping the successor-presence guard survived the case above).
+    expect(manager.acknowledgePersistedSessionOwnership(new Set(['another-window-agent']))).toEqual([])
     expect(manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))).toEqual([first.sessionId])
     // Every later save acknowledges the same set; the commit is not repeated.
     expect(manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))).toEqual([])

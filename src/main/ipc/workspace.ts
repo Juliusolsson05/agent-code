@@ -64,11 +64,14 @@ export function registerWorkspaceIpc(
     // because main already stopped their process, so this is the only place
     // their window lease can be released. Before this commit the lease had to
     // stay (a failed successor start restores the predecessor); after it,
-    // nothing displays the old id. Left alone, it kept a routing claim for the
-    // whole app run: routing gaps recorded on every reload, a window close
-    // bequeathing the dead id, and late events for it delivered instead of
-    // quarantined. A stale renderer that later recovers the id claims a fresh
-    // lease through session:recover like any recovery.
+    // nothing displays the old id. Left alone, it kept an entry in the
+    // router's owner map for the whole app run: revisited (and a gap recorded
+    // for it) on every renderer reload, bequeathed to the surviving window on
+    // a window close, refusing another window's claim, and, until the owning
+    // window's first reload, still routing late events and P-scoped requests
+    // to it (#1338 review c). The release is process-wide, whichever window's
+    // save committed the handoff. A stale renderer that later recovers the id
+    // claims a fresh lease through session:recover like any recovery.
     for (const sessionId of retired) releaseSession(captureSessionWindowLease(sessionId))
   })
 

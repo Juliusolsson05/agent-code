@@ -110,11 +110,30 @@ describe('workspace IPC addressing', () => {
     windowIdFor.mockReturnValue('left')
     releaseSession.mockClear()
     const store = fakeStore({ sessionIds: () => new Set(['successor', 'bystander']) })
+    // Two handoffs can commit in one save (#1338 review b: releasing only the
+    // first survived a one-predecessor test).
     registerWorkspaceIpc({
-      acknowledgePersistedSessionOwnership: () => ['predecessor'],
+      acknowledgePersistedSessionOwnership: () => ['first-predecessor', 'second-predecessor'],
     } as never, store as never)
     await (handlerFor('workspace:save') as unknown as SaveHandler)({ sender: { id: 1 } }, '{"workspace":{}}')
-    expect(releaseSession.mock.calls).toEqual([[{ sessionId: 'predecessor', windowId: 'left' }]])
+    expect(releaseSession.mock.calls).toEqual([
+      [{ sessionId: 'first-predecessor', windowId: 'left' }],
+      [{ sessionId: 'second-predecessor', windowId: 'left' }],
+    ])
+  })
+
+  // #1338 review b: the commit, and with it the release, must follow the
+  // durable write. A save that fails has made nothing durable, so the
+  // predecessor keeps its claim (compensation may still restore it).
+  it('neither commits nor releases anything when the write fails', async () => {
+    windowIdFor.mockReturnValue('left')
+    releaseSession.mockClear()
+    const acknowledge = vi.fn(() => ['predecessor'])
+    const store = fakeStore({ saveSlice: vi.fn(async () => { throw new Error('disk full') }) })
+    registerWorkspaceIpc({ acknowledgePersistedSessionOwnership: acknowledge } as never, store as never)
+    await expect((handlerFor('workspace:save') as unknown as SaveHandler)({ sender: { id: 1 } }, '{"workspace":{}}')).rejects.toThrow('disk full')
+    expect(acknowledge).not.toHaveBeenCalled()
+    expect(releaseSession).not.toHaveBeenCalled()
   })
 
   it('acknowledges in save admission order', async () => {
