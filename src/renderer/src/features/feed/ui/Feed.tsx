@@ -258,10 +258,9 @@ export type FeedProps = Props
 //
 // That duplicate class is now prevented at its source. The ghost
 // reducer (`reconcileUpstream` in src/renderer/src/session-runtime/ghosts.ts)
-// supersedes Codex text ghosts by rollout response id once the
-// rollout mapper stamps `codexTurnId` on committed entries
-// (src/renderer/src/workspace/workspaceStore.ts::codexTurnIdFromRollout
-// + stampCodexTurnId). The live view and the merged feed are split
+// supersedes Codex text ghosts by provider item id, which the rollout
+// mapper stamps on committed entries as `codexItemId` (#1231; the earlier
+// turn-id match could never succeed). The live view and the merged feed are split
 // by turn ownership (src/renderer/src/session-runtime/mergedEntries.ts), so
 // there is no longer any path by which the same assistant text can
 // reach both surfaces at once.
@@ -476,6 +475,33 @@ function FeedImpl({
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
+    const loadOlderNearTop = () => {
+      if (
+        el.scrollTop < 160 &&
+        hasOlderHistory &&
+        !loadingOlderHistory &&
+        !loadingOlderRef.current &&
+        !tailMode &&
+        onLoadOlderHistory
+      ) {
+        loadingOlderRef.current = true
+        const beforeHeight = el.scrollHeight
+        const beforeTop = el.scrollTop
+        void onLoadOlderHistory()
+          .then(() => {
+            requestAnimationFrame(() => {
+              const next = scrollerRef.current
+              if (!next) return
+              const delta = next.scrollHeight - beforeHeight
+              next.scrollTop = beforeTop + Math.max(0, delta)
+              lastScrollTopRef.current = next.scrollTop
+            })
+          })
+          .finally(() => {
+            loadingOlderRef.current = false
+          })
+      }
+    }
     const onScroll = () => {
       if (tailMode) {
         el.scrollTop = el.scrollHeight
@@ -520,34 +546,41 @@ function FeedImpl({
         onScrollInfo({ fraction })
       }
 
-      if (
-        el.scrollTop < 160 &&
-        hasOlderHistory &&
-        !loadingOlderHistory &&
-        !loadingOlderRef.current &&
-        !tailMode &&
-        onLoadOlderHistory
-      ) {
-        loadingOlderRef.current = true
-        const beforeHeight = el.scrollHeight
-        const beforeTop = el.scrollTop
-        void onLoadOlderHistory()
-          .then(() => {
-            requestAnimationFrame(() => {
-              const next = scrollerRef.current
-              if (!next) return
-              const delta = next.scrollHeight - beforeHeight
-              next.scrollTop = beforeTop + Math.max(0, delta)
-              lastScrollTopRef.current = next.scrollTop
-            })
-          })
-          .finally(() => {
-            loadingOlderRef.current = false
-          })
-      }
+      loadOlderNearTop()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
+    // WHY a wheel trigger too (#1413 review a, b): the loader used to fire only
+    // on a `scroll` event. At scrollTop 0 an upward wheel or trackpad gesture
+    // moves nothing, so no scroll event fires, and after a failed page the
+    // pane's "Scroll up again to retry" could not be done without first
+    // scrolling down. An upward wheel AT the top is the same request.
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0 && el.scrollTop <= 0) loadOlderNearTop()
+    }
+    el.addEventListener('wheel', onWheel, { passive: true })
+    // The touch form of the same gesture (#1413 verification b): a finger
+    // dragging DOWN at the top asks for older content and, at the boundary,
+    // fires no scroll event either.
+    let touchStartY: number | null = null
+    const onTouchStart = (event: TouchEvent) => {
+      touchStartY = event.touches[0]?.clientY ?? null
+    }
+    const onTouchMove = (event: TouchEvent) => {
+      const y = event.touches[0]?.clientY
+      if (touchStartY === null || y === undefined) return
+      if (y > touchStartY && el.scrollTop <= 0) {
+        touchStartY = null
+        loadOlderNearTop()
+      }
+    }
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+    }
   }, [
     sessionId,
     onScrollInfo,

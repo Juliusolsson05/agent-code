@@ -212,7 +212,7 @@ describe('SessionManager restart wake recovery', () => {
 
   it('launches a TLDR agent without the skill when the TLDR skill cannot deploy, and says so', async () => {
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const journal = journalSpy()
     const skillError = new Error('TLDR skill destination is user-owned')
     const reconcile = vi.fn(async () => [{ skill: 'tldr' as const, error: skillError }])
@@ -230,6 +230,10 @@ describe('SessionManager restart wake recovery', () => {
     // the way the old abort path revoked it. Losing the skill costs guidance,
     // and the tool still brings its own server instructions.
     expect(host.revokeSession).not.toHaveBeenCalled()
+    // #1328 q52: the reporting identity is pinned in the stores' write
+    // queues BEFORE the session is registered (becomes live), never after.
+    expect(host.pinReportingIdentity).toHaveBeenCalledWith(expect.objectContaining({ tldrIdentity: 'summary-agent', domains: ['tldr'] }))
+    expect(host.pinReportingIdentity.mock.invocationCallOrder[0]!).toBeLessThan(host.registerSession.mock.invocationCallOrder[0]!)
     expect(warnings).toEqual([{ sessionId: result.sessionId, skills: ['tldr'] }])
     // The raw error stays in main's journal, keyed by which step failed.
     // Keyed by ids.sessionId like the `.degraded` row, so triage filtering on
@@ -249,7 +253,7 @@ describe('SessionManager restart wake recovery', () => {
 
   it('launches a Goal-only agent the same way when the Goal skill cannot deploy', async () => {
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const reconcile = vi.fn(async () => [{ skill: 'goal' as const, error: new Error('Goal skill destination is user-owned') }])
     const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, null, reconcile)
     const warnings: unknown[] = []
@@ -268,7 +272,7 @@ describe('SessionManager restart wake recovery', () => {
     // the user informed, where silence would bring back the omission the old
     // strict rule existed to prevent.
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const journal = journalSpy()
     const reconcile = vi.fn(async () => { throw new Error('managed skills state unreadable') })
     const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journal as never, reconcile)
@@ -289,6 +293,35 @@ describe('SessionManager restart wake recovery', () => {
     expect(journal.recordError).toHaveBeenCalledTimes(2)
   })
 
+  // #1328 q52/q56: the reporting pin must be SETTLED before the session is
+  // registered (a pin still in the store queue protects nothing yet), and a
+  // spawn cancelled after pinning must release the pin, since no
+  // registration exists for revokeSession to release it through.
+  it('registers only after the reporting pin settles, and releases it when the spawn is cancelled', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    let settlePin!: () => void
+    const pinGate = new Promise<void>(resolve => { settlePin = resolve })
+    const release = vi.fn()
+    const host = {
+      pinReportingIdentity: vi.fn(async () => { await pinGate; return release }),
+      registerSession: vi.fn((_scope: { sessionId: string }) => []),
+      revokeSession: vi.fn(),
+    }
+    const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journalSpy() as never, vi.fn(async () => []))
+    const recovering = manager.recover({ sessionId: 'closing-pane', kind: 'claude', cwd: '/tmp/project', builtInMcpDomains: ['goal'] })
+    await vi.waitFor(() => expect(host.pinReportingIdentity).toHaveBeenCalledTimes(1))
+    // Still pinning: nothing may be registered yet.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(host.registerSession).not.toHaveBeenCalled()
+    // The pane closes while the pin is in the store queue.
+    const killing = manager.kill('closing-pane')
+    settlePin()
+    await killing
+    await expect(recovering).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    expect(host.registerSession).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
   it('neither warns nor journals a degraded launch for a restore cancelled during the reconcile', async () => {
     // The reconcile serializes behind other skill writes, so a pane can close
     // while it runs. That session never launches. A `.degraded` row or a toast
@@ -296,7 +329,7 @@ describe('SessionManager restart wake recovery', () => {
     // reconcile's own `.error` row still lands, because the skill really is
     // broken machine-wide.
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const journal = journalSpy()
     let releaseReconcile!: () => void
     const reconcileGate = new Promise<void>(resolve => { releaseReconcile = resolve })

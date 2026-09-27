@@ -6,6 +6,7 @@ import { FileIcon, FolderIcon } from '@renderer/features/editor/lib/fileIcon'
 // shape. See @shared/types/editorFs.
 import type { EditorFsEntry } from '@shared/types/editorFs'
 import { withVisibleControls } from '@shared/text/visibleControls'
+import { LAYERS } from '@renderer/ui/layers'
 
 type TreeNode = {
   entry: EditorFsEntry
@@ -683,7 +684,7 @@ export function ExplorerPane({
       {mutationError && (
         <div
           role="alert"
-          className="flex items-start gap-2 border-b border-border bg-danger/10 px-2 py-1 text-[10px] text-danger"
+          className="flex items-start gap-2 border-b border-border bg-danger-soft px-2 py-1 text-[10px] text-danger"
         >
           <span className="min-w-0 flex-1 break-words">{mutationError}</span>
           <button
@@ -779,7 +780,7 @@ export function ExplorerPane({
           // pointer or the tree row (Shift+F10), which Radix DropdownMenu can
           // only fake with a virtual anchor, and its own roving focus, Escape
           // and Tab-closes behaviour are already keyboard-complete (M4).
-          className="fixed z-[1150] min-w-[160px] rounded-float overflow-hidden border border-popover-border bg-popover-bg py-1 shadow-[0_8px_24px_var(--theme-shadow-color)]"
+          className={`fixed ${LAYERS.menu} min-w-[160px] rounded-float overflow-hidden border border-popover-border bg-popover-bg py-1 shadow-[0_8px_24px_var(--theme-shadow-color)]`}
           style={{ left: menu.x, top: menu.y }}
           onMouseDown={event => event.stopPropagation()}
           onBlur={event => {

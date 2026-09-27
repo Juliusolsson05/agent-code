@@ -29,7 +29,9 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
     lines.push(
       dump.gitMissing
         ? 'Status: no usable git executable on this machine — Git features disabled'
-        : 'Status: not a Git repository or no worktree information is available',
+        : dump.gitTimedOut
+          ? 'Status: git took too long to answer (timed out); not a verdict on the repository'
+          : 'Status: not a Git repository or no worktree information is available',
     )
     return lines.join('\n')
   }
@@ -63,7 +65,7 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
     lines.push(`### ${row.branch ?? '(detached)'}`)
     lines.push(`- Path: ${row.path}`)
     lines.push(`- Status: ${labelFor(row.liveAgents.some(agent => agent.live) ? 'live' : row.category)}`)
-    lines.push(`- Dirty: ${row.dirty ? 'yes' : 'no'}`)
+    lines.push(`- Dirty: ${row.statusTimedOut ? 'unknown (git timed out; kept out of cleanup)' : row.dirty ? 'yes' : 'no'}`)
     if (row.ahead !== null && row.behind !== null) {
       lines.push(`- Ahead/behind main: +${row.ahead} / -${row.behind}`)
     } else {

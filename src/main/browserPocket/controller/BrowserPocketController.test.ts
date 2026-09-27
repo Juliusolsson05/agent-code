@@ -366,8 +366,216 @@ describe('review round 2 (review A)', () => {
     await tick()
     c.cancelPick('p1')
     hold.release()
-    expect(await picking).toBeNull()
+    expect(await picking).toEqual({ kind: 'cancelled' })
     expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
+  })
+
+  // #1431 review a: a pick ended by the lifecycle (the feature switched off
+  // while it waited in the queue) is not the user's cancel.
+  it('says a queued pick ended by the feature switching off as unavailable', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    hold.release()
+    expect(await picking).toEqual({ kind: 'failed', reason: 'unavailable' })
+  })
+
+  // #1431 review a: with DevTools opened after a pick armed, a second pick
+  // settles the first instead of leaving it to its 60 s wait.
+  it('settles an armed pick when a second pick finds DevTools open', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const first = c.pick('p1')
+    await vi.waitFor(() => expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(true))
+    g.openDevTools()
+    expect(await c.pick('p1')).toEqual({ kind: 'failed', reason: 'devtools-open' })
+    expect(await first).toEqual({ kind: 'failed', reason: 'devtools-open' })
+  })
+
+  // #1431 review a: a pick cancelled while still queued left its abort handle
+  // behind, so later cancels and resets called a stale closure.
+  it('clears the abort handle of a pick cancelled in the queue', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.cancelPick('p1')
+    hold.release()
+    expect(await picking).toEqual({ kind: 'cancelled' })
+    expect((c as unknown as { pockets: Map<string, { pickAbort: unknown }> }).pockets.get('p1')!.pickAbort).toBeNull()
+  })
+
+  // A pick that runs to completion, driven through the real picker against the
+  // fake debugger: the user clicks a node, and the CDP calls that resolve it
+  // answer as Chromium does. `gate` holds one method until released.
+  function completingGuest(gate?: { method: string; promise: Promise<void> }) {
+    const g = fakeGuest()
+    const answer = (method: string): unknown => {
+      if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'frame-1' } } }
+      if (method === 'Page.createIsolatedWorld') return { executionContextId: 7 }
+      if (method === 'DOM.resolveNode') return { object: { objectId: 'node-1' } }
+      if (method === 'Runtime.callFunctionOn') return { result: { value: { path: [{ tag: 'button', id: 'save', nth: 1 }], role: 'button', name: 'Save' } } }
+      return {}
+    }
+    g.dbg.sendCommand.mockImplementation(async (method: string, params?: any) => {
+      g.sent.push({ method, params })
+      if (gate && method === gate.method) await gate.promise
+      return answer(method)
+    })
+    return g
+  }
+  const armed = (g: ReturnType<typeof fakeGuest>) =>
+    vi.waitFor(() => expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(true))
+
+  // #1431 review c: no test drove a pick to completion.
+  it('answers picked with the element for a completed pick', async () => {
+    const { c } = controller()
+    const g = completingGuest()
+    c.register('p1', 's1', g.guest)
+    const picking = c.pick('p1')
+    await armed(g)
+    g.emit('Overlay.inspectNodeRequested', { backendNodeId: 42 })
+    expect(await picking).toMatchObject({ kind: 'picked', result: { selector: '#save', role: 'button', name: 'Save' } })
+  })
+
+  // #1431 review b: after the node is chosen the picker resolves it through
+  // more CDP calls with no abort hook. An abort landing then must still win.
+  it.each([
+    ['a cancel', (c: BrowserPocketController) => c.cancelPick('p1'), { kind: 'cancelled' }],
+    ['the feature switching off', (c: BrowserPocketController) => c.setFlags({ enabled: false, allowEvaluate: false }), { kind: 'failed', reason: 'unavailable' }],
+  ] as const)('lets %s during node resolution win over the picked element', async (_name, abort, expected) => {
+    const { c } = controller()
+    let release!: () => void
+    const g = completingGuest({ method: 'Page.getFrameTree', promise: new Promise<void>(resolve => { release = resolve }) })
+    c.register('p1', 's1', g.guest)
+    const picking = c.pick('p1')
+    await armed(g)
+    g.emit('Overlay.inspectNodeRequested', { backendNodeId: 42 })
+    await vi.waitFor(() => expect(g.sent.some(s => s.method === 'Page.getFrameTree')).toBe(true))
+    abort(c)
+    release()
+    expect(await picking).toEqual(expected)
+  })
+
+  // #1431 verification a, b: the FIRST abort decides, in both orders; and the
+  // abort also wins when node resolution then REJECTS.
+  it('keeps a user cancel silent when a switch-off follows it', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const hold = holdQueue(c, 's1')
+    const picking = c.pick('p1')
+    await tick()
+    c.cancelPick('p1')
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    hold.release()
+    expect(await picking).toEqual({ kind: 'cancelled' })
+  })
+
+  it('lets a switch-off during node resolution win when resolution then rejects', async () => {
+    const { c } = controller()
+    let fail!: () => void
+    const g = completingGuest({ method: 'Page.getFrameTree', promise: new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('Target closed')) }) })
+    c.register('p1', 's1', g.guest)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const picking = c.pick('p1')
+      await armed(g)
+      g.emit('Overlay.inspectNodeRequested', { backendNodeId: 42 })
+      await vi.waitFor(() => expect(g.sent.some(s => s.method === 'Page.getFrameTree')).toBe(true))
+      c.setFlags({ enabled: false, allowEvaluate: false })
+      fail()
+      expect(await picking).toEqual({ kind: 'failed', reason: 'unavailable' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // #1431 review c: a guest destroyed mid-pick used to leave the pick armed
+  // for its 60 s, with no way to cancel it, then a silent cancel.
+  it('settles an armed pick as unavailable when its guest is destroyed', async () => {
+    const { c } = controller()
+    const g = fakeGuest()
+    c.register('p1', 's1', g.guest)
+    const picking = c.pick('p1')
+    await armed(g)
+    const destroyed = g.guest.once.mock.calls.find(call => call[0] === 'destroyed')![1] as () => void
+    destroyed()
+    expect(await picking).toEqual({ kind: 'failed', reason: 'unavailable' })
+  })
+
+  // #1431 review c: the DevTools re-check when a pick is REJECTED, the first
+  // abort's reason winning over a later reasonless one, and the main-side warn.
+  it('says DevTools for a pick rejected while DevTools opened, and warns the raw error', async () => {
+    const { c } = controller()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const d = fakeGuest()
+      c.register('pd', 'sd', d.guest)
+      const hold = holdQueue(c, 'sd')
+      const picking = c.pick('pd')
+      await tick()
+      d.openDevTools()
+      // With DevTools holding the page, the pick's first CDP command fails.
+      d.dbg.sendCommand.mockImplementation(async (method: string) => {
+        if (method === 'Overlay.enable') throw new Error('Overlay is not available while DevTools is open')
+        return {}
+      })
+      hold.release()
+      expect(await picking).toEqual({ kind: 'failed', reason: 'devtools-open' })
+      expect(warn).toHaveBeenCalledWith('[browser-pocket] pick failed:', expect.any(Error))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('keeps the first abort reason over a later cancel', async () => {
+    const { c } = controller()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const e = fakeGuest()
+      c.register('pe', 'se', e.guest)
+      const holdE = holdQueue(c, 'se')
+      const second = c.pick('pe')
+      await tick()
+      c.setFlags({ enabled: false, allowEvaluate: false })
+      c.cancelPick('pe')
+      holdE.release()
+      expect(await second).toEqual({ kind: 'failed', reason: 'unavailable' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // #1305: every pick failure used to answer null, which the renderer reads
+  // as the user's own cancel. Each now says what happened.
+  it('answers why a pick failed instead of a cancel-shaped null', async () => {
+    const { c } = controller()
+    // No pocket.
+    expect(await c.pick('nope')).toEqual({ kind: 'failed', reason: 'unavailable' })
+    // DevTools open: the debugger cannot attach, and the overlay never arms.
+    const d = fakeGuest()
+    c.register('pd', 'sd', d.guest)
+    d.openDevTools()
+    expect(await c.pick('pd')).toEqual({ kind: 'failed', reason: 'devtools-open' })
+    expect(d.sent.some(s => s.method === 'Overlay.setInspectMode')).toBe(false)
+    // Any other CDP failure.
+    const e = fakeGuest()
+    c.register('pe', 'se', e.guest)
+    e.dbg.attach.mockImplementation(() => { throw new Error('Debugger attach failed') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await c.pick('pe')).toEqual({ kind: 'failed', reason: 'error' })
+    warn.mockRestore()
+    // The feature switched off.
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    expect(await c.pick('pe')).toEqual({ kind: 'failed', reason: 'unavailable' })
   })
 
   it('#4 a cancel that lands while the overlay is being enabled never arms it', async () => {
@@ -379,7 +587,7 @@ describe('review round 2 (review A)', () => {
       if (method === 'Overlay.enable') c.cancelPick('p1')
       return send(method, params)
     })
-    expect(await c.pick('p1')).toBeNull()
+    expect(await c.pick('p1')).toEqual({ kind: 'cancelled' })
     expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
   })
 

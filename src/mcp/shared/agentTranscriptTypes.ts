@@ -83,12 +83,26 @@ export type AgentTranscriptItem =
       command: string
       exitCode?: number
       outputExcerpt?: string
+      /** Present only when the command was READ FROM SCRIPT SOURCE rather
+       *  than recorded as run: Codex code-mode `exec` scripts (#1362).
+       *  `'unknown'` means the script contains this call, but nothing in
+       *  the transcript proves it executed. A call in a branch that never
+       *  ran looks exactly like one that did, and Codex's combined script
+       *  output does not say which. Absent means the provider recorded the
+       *  command itself (the default for every other source). Steering q86:
+       *  a reader must never present an unexecuted branch as a command that
+       *  ran, so the uncertainty travels on the entry, not only in the tool
+       *  description. */
+      executed?: 'unknown'
     }
   | {
       kind: 'patch'
       timestamp?: number
       files: string[]
       summary?: string
+      /** As on `shell_command`: the patch call was read from script source
+       *  and is not proven to have run. */
+      executed?: 'unknown'
     }
   | {
       kind: 'test_run'

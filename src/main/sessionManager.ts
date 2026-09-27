@@ -195,6 +195,7 @@ type ManagerEvents = {
     observation?: AgentTranscriptObservationMetadata
   }]
   'jsonl-error': [{ sessionId: string; error: Error }]
+  'proxy-transport-gap': [{ sessionId: string; lostGenerations: number }]
   /** Durable-history generation boundary (grok). Never completion or idle;
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
   'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
@@ -568,6 +569,11 @@ export type ResolveConditionResult =
       lastState?: unknown
       failedAtStep?: string
     }
+
+/** The one Claude-only event SessionManager subscribes to (ClaudeSessionEvents declares it). */
+type ProxyGapSource = {
+  on(event: 'proxy-transport-gap', listener: (gap: { lostGenerations: number }) => void): unknown
+}
 
 export class SessionManager extends EventEmitter {
   private readonly monitorResponses = new ResponseTracker(mainOperations)
@@ -3046,13 +3052,28 @@ export class SessionManager extends EventEmitter {
         if (!this.builtInMcpHost) {
           throw new Error('Built-in MCP host is not available')
         }
-        builtInMcpServers = this.builtInMcpHost.registerSession({
+        const mcpScope = {
           sessionId,
           cwd: options.cwd,
           providerKind: kind,
           domains: options.builtInMcpDomains,
           tldrIdentity: options.tldrIdentity,
-        })
+        }
+        // Pinned in the TLDR/Goal stores' write queues BEFORE the session
+        // becomes live, so a store at its cap can never be mid-way through
+        // evicting this identity's record once it is (#1328 q52).
+        const releasePin = await this.builtInMcpHost.pinReportingIdentity(mcpScope)
+        try {
+          this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+          // The registration owns the pin from here: it releases it on revoke,
+          // or at once if policy leaves no domain to register.
+          builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope, releasePin)
+        } catch (error) {
+          // Not registered, so revokeSession will never release this pin;
+          // left, it would protect the identity forever (#1328 q56).
+          releasePin()
+          throw error
+        }
         mcpRegistered = true
       }
       const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
@@ -3326,6 +3347,21 @@ export class SessionManager extends EventEmitter {
           }, undefined, agentEntry.lifecycle.runId)
         }
         this.emit('jsonl-error', { sessionId, error })
+      })
+      // claude-code-headless#64 / review of #1376: proxy events deleted before the app read them.
+      // Recorded as an always-on incident (debug bundles carry the journal) and re-emitted, so a
+      // hole in the live Claude feed is never silent.
+      // Claude-only (its ClaudeSessionEvents declares it; other providers have no proxy tail), so it
+      // is subscribed through that type rather than widening every provider's event map.
+      if (kind === 'claude') (session as unknown as ProxyGapSource).on('proxy-transport-gap', (gap: { lostGenerations: number }) => {
+        if (!ownsEntry()) return
+        this.journal?.recordIncident({
+          kind: 'claude.proxy_transport_gap',
+          severity: 'warn',
+          reason: 'events_deleted_unread',
+          context: { sessionId, lostGenerations: gap.lostGenerations },
+        })
+        this.emit('proxy-transport-gap', { sessionId, lostGenerations: gap.lostGenerations })
       })
       session.on('transcript-diagnostic', (diagnostic: unknown) => {
         if (!ownsEntry()) return

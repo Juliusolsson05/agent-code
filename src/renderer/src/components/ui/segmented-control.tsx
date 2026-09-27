@@ -76,7 +76,10 @@ export function SegmentedControl<T extends string>({
               size === 'sm' ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-[11px]',
               index > 0 && 'border-l border-control-border',
               selected
-                ? 'bg-control-active-bg text-control-active-fg'
+                // Inset ring in the fill's own foreground: the group clips an
+                // offset, and an accent ring vanishes on the accent segment
+                // (focus ring on an accent fill (Claude review of #1221, reviewer C F1)).
+                ? 'bg-control-active-bg text-control-active-fg focus-visible:ring-control-active-fg'
                 : 'bg-control-bg text-control-fg hover:bg-control-hover-bg hover:text-ink',
             )}
           >

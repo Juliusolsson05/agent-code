@@ -111,6 +111,43 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     disposition: { kind: 'specialized', rendererId: 'shared.compaction', protocolId: 'compaction.live' },
     why: 'GRADUATED Phase 10 from the captured structured Codex semantic item: prefix/final lifecycle paints compaction progress without screen parsing, and the later durable compacted rollout remains the replay source of truth for boundary + summary.',
   }),
+  // #1289: the committed compaction a `compacted` rollout line maps to. It
+  // never rendered before: the mapper returned early on the line's typeless
+  // payload. Same shared.compaction dispositions as Claude's durable entries.
+  'codex.entry.system-compact-boundary.v1': defineRenderShape({
+    id: 'codex.entry.system-compact-boundary.v1',
+    provider: 'codex',
+    fingerprints: ["fp2-c5b90915"],
+    eventTypes: ["system:compact_boundary"],
+    planes: ["transcript-entry"] as const,
+    lifecycles: ["durable"] as const,
+    observed: {
+      providerVersions: ['0.157.0'],
+      models: [],
+      firstSeen: '2026-07-13',
+      lastSeen: '2026-09-25',
+    },
+    fixtures: { final: ["rendering-shapes/codex/compaction/committed-compacted.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'shared.compaction', protocolId: 'compaction.boundary' },
+    why: 'Codex durable-entry dispatch owns the boundary a committed `compacted` line maps to (timestamped, no retained history) and delegates only the provider-neutral grammar to shared.compaction. The durable rollout line is the replay source of truth.',
+  }),
+  'codex.entry.compact-summary.v1': defineRenderShape({
+    id: 'codex.entry.compact-summary.v1',
+    provider: 'codex',
+    fingerprints: ["fp2-85ed68b2"],
+    eventTypes: ["user"],
+    planes: ["transcript-entry"] as const,
+    lifecycles: ["durable"] as const,
+    observed: {
+      providerVersions: [],
+      models: [],
+      firstSeen: '2026-07-13',
+      lastSeen: '2026-07-13',
+    },
+    fixtures: { final: ["rendering-shapes/codex/compaction/committed-compacted.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'shared.compaction', protocolId: 'compaction.summary' },
+    why: 'Only older Codex CLIs write a readable compaction `message` (56 of about 1,500 local compactions); 0.15x encrypts the summary. When present it is the committed summary, painted by shared.compaction.',
+  }),
   'codex.semantic.exec.v1': defineRenderShape({
     id: 'codex.semantic.exec.v1',
     provider: 'codex',
@@ -497,10 +534,25 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json"], prefixes: [] },
+    fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-shapes/codex/wait/committed-function-call.json"], prefixes: [] },
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Unknown or uncorrelated results remain visibly formatted by the shared result fallback.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      // #645: Codex runs `wait` as a PLAIN function_call most of the time (3,257
+      // in the local corpus, against its custom-output form), so its result
+      // lands in THIS envelope, not only in fp2-8571cc95. The dispatcher
+      // deliberately shows a wait result with visible output as a "Command
+      // continuation" row, and absorbs an envelope-only one (a still-running
+      // cell: "Script running … Output:" with nothing after, 587 real
+      // sightings) into the wait row. Both routes were catalogued for the
+      // custom-output sibling only, so every plain wait result was reported
+      // known-misrouted (45 sightings, 2026-08-26). Both are pinned from real
+      // recordings by wait.plainResult.evidence.renderer.test.tsx. Known
+      // residual: this envelope carries no tool name, so a future dispatcher
+      // bug that tags a non-wait plain result `command.continuation` would
+      // also be accepted.
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'command.continuation', reason: 'An envelope-only acknowledgement of a still-running wait is represented by its continuation invocation row.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },

@@ -15,7 +15,14 @@ import {
 import { GOAL_LOOP_STORE_LIMIT, GoalLoopStore } from './GoalLoopStore.js'
 
 const directories: string[] = []
-afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))) })
+// Every service a test creates, disposed BEFORE its directory is removed (#1341): a persist still
+// renaming its temp file into a removed directory logged ENOENT 13 times per CI run.
+const services: GoalLoopService[] = []
+const tracked = (svc: GoalLoopService) => { services.push(svc); return svc }
+afterEach(async () => {
+  await Promise.all(services.splice(0).map(svc => svc.dispose()))
+  await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })))
+})
 
 type Deliver = SessionManager['deliverPromptToAgent']
 type FakeManager = EventEmitter & { deliverPromptToAgent: Deliver; getProcessStateSnapshot: () => { active: boolean } }
@@ -37,7 +44,7 @@ async function service(deliver: Deliver = vi.fn(async () => ({ ok: true } as Pro
   // boundary, not about #1033's delivery hold.
   const processState = { active: false }
   const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: deliver, getProcessStateSnapshot: () => processState }) as FakeManager
-  const svc = new GoalLoopService({ manager, store: store ?? new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') })
+  const svc = tracked(new GoalLoopService({ manager, store: store ?? new GoalLoopStore(join(directory, 'goal-loop.json')), now: () => new Date('2026-09-18T00:00:00.000Z') }))
   await svc.start()
   return { svc, manager, deliver, processState, storePath: join(directory, 'goal-loop.json') }
 }
@@ -54,6 +61,243 @@ const subagentFlowInToolGap = (manager: FakeManager) => {
   manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
   manager.emit('semantic-event', { sessionId: 's1', event: { type: 'flow_ignored', flowId: 'f-sub', reason: 'subagent' } })
 }
+
+describe('GoalLoopService drain (#1341)', () => {
+  // A store whose writes wait on a gate: the persist is IN FLIGHT for as long as the test says.
+  class GatedStore extends GoalLoopStore {
+    gate = Promise.resolve()
+    writes = 0
+    override async write(...args: Parameters<GoalLoopStore['write']>) {
+      await this.gate
+      this.writes += 1
+      return super.write(...args)
+    }
+    readGate = Promise.resolve()
+    override async read(...args: Parameters<GoalLoopStore['read']>) {
+      await this.readGate
+      return super.read(...args)
+    }
+  }
+
+  it('dispose waits for an in-flight persist, then starts nothing new', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager, deliver } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    const before = store.writes
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    let disposed = false
+    const disposing = svc.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    // The delivery's persist is parked on the gate, so dispose must still be waiting.
+    expect(disposed).toBe(false)
+    open()
+    await disposing
+    expect(store.writes).toBeGreaterThan(before)
+    // A disposed service ignores a new turn boundary.
+    idleTurn(manager)
+    await svc.whenSettled()
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('a disposed service ignores a held loop\'s quiet edge, which continues directly', async () => {
+    // The process-state edge calls requestContinue with no timer in between, so only the service's
+    // own disposed check stands between it and a delivery.
+    const { svc, manager, deliver, processState } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    processState.active = true
+    idleTurn(manager)
+    await svc.whenSettled()
+    expect(deliver).not.toHaveBeenCalled()
+    await svc.dispose()
+    processState.active = false
+    manager.emit('process-state', { sessionId: 's1', active: false })
+    await svc.whenSettled()
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
+  // #1371 review (a, b, c): a continuation replays a queued one from its finally block, which went
+  // straight to maybeContinue and past the disposed check — a second prompt was delivered after
+  // dispose() had begun.
+  it('delivers no queued continuation once dispose has begun', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager, deliver } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    // The first continuation is parked in its persist. Its turn starts and ends (the provider's own
+    // hooks), so the gate would let a second continuation through; this Resume queues it.
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    svc.observeProviderHook('s1', 'stop', { blocked: false })
+    svc.control('s1', { action: 'resume' })
+    const disposing = svc.dispose()
+    open()
+    await disposing
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  // #1371 review (b, c): the manager listeners outlived dispose(), so a late `removed` paused the
+  // loop and started a fresh persist into a directory the caller had already removed.
+  it('ignores manager events after dispose', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await svc.dispose()
+    const writes = store.writes
+    manager.emit('removed', { sessionId: 's1' })
+    manager.emit('exit', { sessionId: 's1' })
+    idleTurn(manager)
+    await svc.whenSettled()
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+    expect(store.writes).toBe(writes)
+    expect(manager.listenerCount('removed') + manager.listenerCount('semantic-event')).toBe(0)
+  })
+
+  // #1371 review (a, c), a surviving mutation: control()'s persist was not pinned as tracked work.
+  it('dispose waits for a control action\'s persist', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    const before = store.writes
+    svc.control('s1', { action: 'pause' })
+    let disposed = false
+    const disposing = svc.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(disposed).toBe(false)
+    open()
+    await disposing
+    expect(store.writes).toBeGreaterThan(before)
+  })
+
+  // #1371 review (b, round 1), a surviving mutation: interrupt()'s persist (a session removed or
+  // exited) was not pinned as tracked work, so an untracked write could outlive dispose.
+  it('dispose waits for an interrupt\'s persist', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    const before = store.writes
+    manager.emit('removed', { sessionId: 's1' })
+    let disposed = false
+    const disposing = svc.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(disposed).toBe(false)
+    open()
+    await disposing
+    expect(store.writes).toBeGreaterThan(before)
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
+  })
+
+  // #1371 review (b), a surviving mutation: nothing asserted that dispose cancels the timers it owns.
+  it('dispose cancels a held loop\'s poll timer', async () => {
+    const { svc, manager, processState } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      processState.active = true
+      idleTurn(manager)
+      await vi.advanceTimersByTimeAsync(0)
+      await svc.whenSettled()
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      await svc.dispose()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #1371 review round 2 (a, b, c): the entry guard stopped NEW continuations, but one suspended in
+  // its delivery resumed after dispose() began and retried — a second prompt, then a backoff timer.
+  it('a delivery in flight when dispose begins neither retries nor schedules a backoff', async () => {
+    let release!: (result: PromptDeliveryResult) => void
+    const deliver = vi.fn(() => new Promise<PromptDeliveryResult>(resolve => { release = resolve }))
+    const { svc, manager } = await service(deliver as unknown as Deliver)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    idleTurn(manager)
+    await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const disposing = svc.dispose()
+      release({ ok: false, retrySafe: true, message: 'not ready', disposition: 'retry-same-session' } as PromptDeliveryResult)
+      await disposing
+      expect(deliver).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #1371 review round 2 (b): start() awaiting its read while dispose() finished attached the
+  // manager listeners and persisted afterwards.
+  it('a start still reading when dispose finishes attaches nothing and writes nothing', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    let open!: () => void
+    store.readGate = new Promise(resolve => { open = resolve })
+    const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) })
+    const svc = tracked(new GoalLoopService({ manager, store }))
+    const starting = svc.start()
+    await svc.dispose()
+    open()
+    await starting
+    expect(manager.listenerCount('removed') + manager.listenerCount('semantic-event')).toBe(0)
+    expect(store.writes).toBe(0)
+  })
+
+  // #1371 review round 2 (a, b, c): the public entry points still wrote or scheduled after dispose.
+  it('refuses public mutations after dispose', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    await svc.dispose()
+    const writes = store.writes
+    await expect(svc.startLoop('s2', { goal: 'G.', loopPrompt: 'P.' })).rejects.toThrow(/shut down/)
+    await expect(svc.complete('s1', 'done', 'x')).rejects.toThrow(/shut down/)
+    await expect(svc.carry('s1', 's3')).rejects.toThrow(/shut down/)
+    expect(svc.control('s1', { action: 'pause' })).toBeNull()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      svc.observeProviderHook('s1', 'stop', { blocked: false })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+    await svc.whenSettled()
+    expect(store.writes).toBe(writes)
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
+  })
+
+  it('whenSettled waits for a zero-delay continuation check before resolving', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    idleTurn(manager)
+    // No waitFor: the continuation is scheduled on a zero-delay timer and then persisted. If
+    // whenSettled resolved before that timer ran, this would see 0.
+    await svc.whenSettled()
+    expect(deliver).toHaveBeenCalledTimes(1)
+    expect(svc.snapshot()['s1']?.continuationsDelivered).toBe(1)
+  })
+})
 
 describe('GoalLoopService', () => {
   it('delivers the continuation prompt when the session goes idle without completion', async () => {
@@ -73,7 +317,7 @@ describe('GoalLoopService', () => {
     // (another Stop hook blocked ours and the model kept going).
     processState.active = true
     idleTurn(manager)
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await svc.whenSettled()
     expect(deliver).not.toHaveBeenCalled()
     expect(svc.snapshot()['s1']).toMatchObject({ phase: 'active' })
 
@@ -83,7 +327,7 @@ describe('GoalLoopService', () => {
     manager.emit('process-state', { sessionId: 's1', active: false })
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
     manager.emit('process-state', { sessionId: 's1', active: false })
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await svc.whenSettled()
     expect(deliver).toHaveBeenCalledTimes(1)
   })
   it('is not stopped by a latched activity detector — the screen is outvoted (#1033 round 2)', async () => {
@@ -214,7 +458,7 @@ describe('GoalLoopService', () => {
     // The turn that was already running now ends. Our continuation is still
     // in the queue, so this Stop is not ours to answer.
     svc.observeProviderHook('s1', 'stop', { blocked: false })
-    await new Promise(resolve => setTimeout(resolve, 300))
+    await svc.whenSettled()
     expect(deliver).toHaveBeenCalledTimes(1)
 
     // The queue drains: the provider submits our prompt, which is a new turn,
@@ -340,6 +584,8 @@ describe('GoalLoopService', () => {
     // re-evaluates every second, so a latch released by that edge delivers
     // with no further hook at all.
     subagentFlowInToolGap(manager)
+    // A real 1 s hold poll must fire first, so this is a positive wait on a timer, not a guess
+    // that async work has finished (whenSettled deliberately does not wait for future polls).
     await new Promise(resolve => setTimeout(resolve, 1_500))
     expect(deliver).toHaveBeenCalledTimes(1)
   })
@@ -527,7 +773,7 @@ describe('GoalLoopService', () => {
       consecutiveDeliveryFailures: 0, startedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
     } })
     const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) })
-    const svc = new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) })
+    const svc = tracked(new GoalLoopService({ manager, store: new GoalLoopStore(join(directory, 'goal-loop.json')) }))
     await svc.start()
     expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
   })
@@ -548,7 +794,10 @@ describe('GoalLoopService', () => {
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     idleTurn(manager)
     await vi.waitFor(() => expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'error' }))
-    // Longer than DELIVERY_RETRY_DELAY_MS: a scheduled backoff would land here.
+    // Longer than DELIVERY_RETRY_DELAY_MS: a scheduled backoff would land here. Sound, not a
+    // guess: Node fires timers in expiry order, so a retry timer set earlier with a shorter delay
+    // runs before this one. The async work before it is drained first.
+    await svc.whenSettled()
     await new Promise(resolve => setTimeout(resolve, 400))
     expect(deliver).toHaveBeenCalledTimes(1)
   })
@@ -642,7 +891,7 @@ describe('GoalLoopService', () => {
     const file = join(directory, 'goal-loop.json')
     await new GoalLoopStore(file).write(persisted)
     const manager = Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) })
-    const svc = new GoalLoopService({ manager, store: new GoalLoopStore(file) })
+    const svc = tracked(new GoalLoopService({ manager, store: new GoalLoopStore(file) }))
     await svc.start()
     await svc.startLoop('fresh', { goal: 'G.', loopPrompt: 'P.' })
     const kept = svc.snapshot()
@@ -662,7 +911,7 @@ describe('GoalLoopService', () => {
     await writeFile(file, '{broken')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const store = new GoalLoopStore(file)
-    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store })
+    const svc = tracked(new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store }))
     await svc.start()
     warn.mockRestore()
     // start() persists immediately, which used to replace the bad file.
@@ -687,7 +936,7 @@ describe('GoalLoopService', () => {
     await mkdir(join(directory, 'goal-loop.json.corrupt'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const store = new GoalLoopStore(file)
-    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store })
+    const svc = tracked(new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store }))
     await svc.start()
     // The valid loop is live; the unreadable one is not.
     expect(Object.keys(svc.snapshot())).toEqual([kept])
@@ -711,7 +960,7 @@ describe('GoalLoopService', () => {
     await writeFile(file, '{broken')
     await mkdir(join(directory, 'goal-loop.json.corrupt'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const svc = new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store: new GoalLoopStore(file) })
+    const svc = tracked(new GoalLoopService({ manager: Object.assign(new EventEmitter(), { deliverPromptToAgent: vi.fn(), getProcessStateSnapshot: () => ({ active: false }) }), store: new GoalLoopStore(file) }))
     await svc.start()
     warn.mockRestore()
     expect(await readFile(file, 'utf8')).toBe('{broken')
@@ -736,7 +985,7 @@ describe('GoalLoopService idle-blip retraction', () => {
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'requesting' } })
-    await new Promise(resolve => setTimeout(resolve, 25))
+    await svc.whenSettled()
     expect(deliver).not.toHaveBeenCalled()
     expect(svc.snapshot()['s1']?.phase).toBe('active')
   })
@@ -745,7 +994,7 @@ describe('GoalLoopService idle-blip retraction', () => {
     await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'block_started', kind: 'tool_use', toolUseId: 't1' } })
     manager.emit('semantic-event', { sessionId: 's1', event: { type: 'stream_phase', phase: 'idle' } })
-    await new Promise(resolve => setTimeout(resolve, 25))
+    await svc.whenSettled()
     expect(deliver).not.toHaveBeenCalled()
   })
 })
