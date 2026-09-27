@@ -18,3 +18,11 @@ Only `enqueue` is idempotent, via `(timestamp, content)`. A replayed content-fre
 ## Shape if confirmed
 - **Package:** `FileTailer` passes `{ fileGenerationId, byteOffset }` with every entry. The generation is minted per `(dev, ino)` and bumped on truncation or relocation mismatch. `ClaudeCodeHeadless` emits it beside `jsonl-entry`, exactly as codex-headless does.
 - **App:** main forwards it (the observation sidecar already exists). `applyQueueOperation` takes the cursor and ignores a record whose cursor it already applied. The applied-cursor set is bounded, and is keyed per generation, so a legitimate batch of same-timestamp removes (distinct offsets) is never swallowed.
+
+## Evidence-stage conclusion (2026-09-27)
+No current path redelivers a record into the same live queue state:
+- **Package:** relocation keeps the byte cursor, and a divergence errors instead of replaying.
+- **Main:** the forwarder has no resend.
+- **Renderer:** queue state is keyed by session id. A successor gets a fresh one, and a same-id respawn is preceded by `onSessionExit`, which deletes it. A reload clears the map. History never applies queue operations.
+
+The 200-line resume replay therefore REBUILDS a new session's queue. Posted on #675 with a `needs-evidence` proposal. The shape above stays ready if a recording shows a duplicate remove debt.
