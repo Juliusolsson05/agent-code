@@ -197,6 +197,8 @@ describe('switchAgentProvider', () => {
       // translated at all (#821).
       strategy: 'native',
       shrinkSummary: null,
+      // Nothing was projected, so there is no report to carry (#927).
+      projectionFidelity: null,
     })
 
     expect(switchProvider).toHaveBeenCalledWith(expect.objectContaining({

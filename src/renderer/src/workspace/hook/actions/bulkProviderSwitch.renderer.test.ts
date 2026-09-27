@@ -6,6 +6,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import type { ProviderSwitchBatch } from '@renderer/workspace/types'
 import { useBulkProviderSwitchActions } from '@renderer/workspace/hook/actions/bulkProviderSwitch'
+import { DEMOTING_SWITCH_FIDELITY } from '@renderer/workspace/hook/actions/testing/recordedProjectionFidelity'
 
 const { switchAgentProvider } = vi.hoisted(() => ({ switchAgentProvider: vi.fn() }))
 // WHY the constant is restated here instead of pulled through `importOriginal`:
@@ -257,6 +258,19 @@ describe('bulk switch reporting', () => {
     // fine for "Returned 1 agent" and useless for a sentence telling the user
     // what their switch cost (review of #998: the disclosure existed and nobody
     // could read it).
+    expect(toastDurations[0]).toBe(10_000)
+  })
+
+  // #927: a return whose fit shrank nothing can still be a lossy projection.
+  // The recorded Claude -> Codex summary demotes 19 entries with a null
+  // shrinkSummary; before #927 the batch toasted it as clean.
+  it('surfaces projection loss even when nothing was shrunk', async () => {
+    switchAgentProvider.mockResolvedValue({ status: 'switched', shrinkSummary: null, projectionFidelity: DEMOTING_SWITCH_FIDELITY })
+    const { result, toasts, toastDurations } = harness(batchOf('a'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toasts[0]).toContain('history: 19 demoted')
     expect(toastDurations[0]).toBe(10_000)
   })
 

@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { NativeProjectionFidelity } from '@shared/types/projectionFidelity.js'
 import {
   compactionAvailability,
   conversationAfterLatestPortableCompaction,
@@ -16,6 +17,7 @@ import type {
 } from 'agent-transcript-parser'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
+import { summarizeProjectionReport } from '@main/providerSwitch/projectionFidelity.js'
 
 export type SwitchProviderRequest = {
   sourceKind: AgentProviderKind
@@ -108,6 +110,10 @@ export type SwitchProviderResult =
        * the host is the only layer that can put the loss in front of a user.
        */
       shrinkSummary: string | null
+      /** What the native-resume projector preserved, dropped, demoted,
+       *  repaired or synthesized (#927). Independent of `shrinkSummary`: a
+       *  switch that needed no shrinking can still be a lossy projection. */
+      projectionFidelity: NativeProjectionFidelity
     }
   | {
       kind: 'source-empty'
@@ -364,6 +370,9 @@ export async function switchProvider(
     now: new Date().toISOString(),
     targetProfile,
   })
+  // Summarized BEFORE the write, so the evidence exists even if publication
+  // fails (#918 §6.2); the report is otherwise discarded with `projection`.
+  const projectionFidelity = summarizeProjectionReport(projection)
   const targetProviderSessionId = target.sessionId(projection)
   const targetFilePath = await target.write(targetCwd, projection)
 
@@ -376,6 +385,7 @@ export async function switchProvider(
     truncatedBeforeSwitch,
     strategy,
     shrinkSummary,
+    projectionFidelity,
   }
 }
 

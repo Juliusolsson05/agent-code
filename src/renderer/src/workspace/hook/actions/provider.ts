@@ -1,4 +1,5 @@
 import { describeRewindAttachmentLoss } from '@renderer/workspace/hook/actions/rewindAttachmentLoss'
+import { materialProjectionLoss } from '@shared/types/projectionFidelity'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
@@ -96,9 +97,16 @@ export function useProviderActions(
       // lossless case should not add noise to every switch; the two lossy
       // strategies name themselves, and `shrunk` carries the one line saying
       // what the ladder had to remove.
-      const note = result.strategy === 'native'
+      // #927: the projector's own loss rides the same toast. It is independent
+      // of the strategy: a `native` fit (nothing shrunk) can still drop or
+      // demote content the target cannot carry (Codex -> Claude drops foreign
+      // reasoning and developer messages on every recorded sequence), so
+      // before this a lossy switch could toast as a clean one.
+      const loss = materialProjectionLoss(result.projectionFidelity)
+      const note = (result.strategy === 'native'
         ? ''
-        : ` · ${result.strategy}${result.shrinkSummary ? ` (${result.shrinkSummary})` : ''}`
+        : ` · ${result.strategy}${result.shrinkSummary ? ` (${result.shrinkSummary})` : ''}`)
+        + (loss ? ` · ${loss}` : '')
       showPaneToast(
         result.newSessionId,
         `Switched to ${providerChoiceLabel(result.targetKind, targetProviderRuntime)}${note}`,

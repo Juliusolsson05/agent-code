@@ -4,6 +4,7 @@ import type { CommandContext } from '@renderer/features/command-palette/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
+import { DEMOTING_SWITCH_FIDELITY, OPAQUE_ONLY_DUPLICATE_FIDELITY } from '@renderer/workspace/hook/actions/testing/recordedProjectionFidelity'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -74,6 +75,33 @@ describe('Duplicate Agent command', () => {
       },
     )
     expect(closePalette).toHaveBeenCalledOnce()
+  })
+
+  // #927: a duplicate is re-projected, not byte-copied, and can lose content.
+  // Material loss is named on the source pane; the recorded opaque-only Codex
+  // copy stays silent because the placed copy is its own evidence.
+  it.each([
+    ['names material projection loss on the source pane', DEMOTING_SWITCH_FIDELITY, 'Duplicated · history: 19 demoted'],
+    ['stays silent when only opaque records were dropped', OPAQUE_ONLY_DUPLICATE_FIDELITY, null],
+  ] as const)('%s', async (_label, projectionFidelity, toast) => {
+    const duplicateSession = vi.fn().mockResolvedValue({ newProviderSessionId: 'provider-clone', projectionFidelity })
+    Object.defineProperty(window, 'api', { configurable: true, value: { duplicateSession } })
+    const showPaneToast = vi.fn()
+    const workspace = {
+      state: {
+        activeTabId: 'tab-klay',
+        stage: oneLaneStage('source'), pinnedSessionIds: [],
+        sessions: { source: { cwd: '/projects/klay', kind: 'codex', providerSessionId: 'provider-source', projectId: 'tab-klay', joinedAt: 0 } },
+        tabs: [{ id: 'tab-klay' }],
+      },
+      splitFocused: vi.fn().mockResolvedValue(undefined),
+      showPaneToast,
+    } as unknown as Workspace
+    const context = { workspace, ui: { closePalette: vi.fn() }, flags: {} } as unknown as CommandContext
+    const command = sessionCommands.find(candidate => candidate.id === 'duplicate-agent')!
+    await command.run(context)
+    if (toast) expect(showPaneToast).toHaveBeenCalledWith('source', toast, 8000)
+    else expect(showPaneToast).not.toHaveBeenCalled()
   })
 
   it('never hands a clone the root-management grant', async () => {

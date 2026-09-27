@@ -27,6 +27,7 @@ import {
   ROOT_MANAGEMENT_DOMAIN,
   rootManagementReloadLabels,
 } from '@renderer/features/workspace/lib/rootManagement'
+import { materialProjectionLoss } from '@shared/types/projectionFidelity'
 
 function targetSupportsBuiltInMcpDomain(
   workspace: CommandContext['workspace'],
@@ -819,12 +820,17 @@ export const sessionCommands: CommandDef[] = [
       if (!getProviderFeatures(kind).transcriptDuplicate) return
       if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
       try {
-        const { newProviderSessionId } = await window.api.duplicateSession({
+        const { newProviderSessionId, projectionFidelity } = await window.api.duplicateSession({
           provider: kind,
           sourceProviderSessionId: meta.providerSessionId,
           cwd: meta.cwd,
         })
         ui.closePalette()
+        // #927: a duplicate is not automatically lossless. The projector
+        // rebuilds the transcript, and a Codex -> Codex copy already drops
+        // opaque records. Only MATERIAL loss is named (see
+        // materialProjectionLoss); the full summary is on the result.
+        const duplicateLoss = materialProjectionLoss(projectionFidelity)
         // Open the clone as a SIBLING pane (vertical split) of the
         // source. Using `workspace.newTab` would push the clone into
         // a new tab and hide the source behind a tab switch — not
@@ -872,9 +878,13 @@ export const sessionCommands: CommandDef[] = [
           // Unplaced means nothing on screen changed, so say where it went.
           // (A targeted pane toast also shows globally while the source is
           // off screen — see targetedCommandContext.)
-          workspace.showPaneToast(sessionId, 'Duplicated — the copy is marked new in the Sessions list', 4000)
+          workspace.showPaneToast(sessionId, `Duplicated — the copy is marked new in the Sessions list${duplicateLoss ? ` · ${duplicateLoss}` : ''}`, duplicateLoss ? 8000 : 4000)
         } else {
           await workspace.splitFocused(kind, continuation)
+          // The placed copy is its own evidence, so a clean duplicate stays
+          // silent here. A lossy one is not a faithful copy, and the source
+          // pane says so (#927).
+          if (duplicateLoss) workspace.showPaneToast(sessionId, `Duplicated · ${duplicateLoss}`, 8000)
         }
       } catch (err) {
         // Surface the failure as a pane toast, not just console.warn. Native

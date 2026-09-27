@@ -1,4 +1,5 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { NativeProjectionFidelity } from '@shared/types/projectionFidelity.js'
 import type {
   ListRewindPromptsRequest,
   RewindPrompt,
@@ -67,6 +68,9 @@ export const providerApi = {
     /** One human-readable line describing what `shrunk` cost, else null. The
      *  renderer shows it per pane and counts strategies in a batch summary. */
     shrinkSummary: string | null
+    /** The native-resume projector's report, summarized (#927). Independent
+     *  of `shrinkSummary`, which only covers context reduction. */
+    projectionFidelity: NativeProjectionFidelity
   } | {
     /** A provider id can identify a pre-created but still blank session. */
     kind: 'source-empty'
@@ -128,6 +132,8 @@ export const providerApi = {
     provider: AgentProviderKind
     newProviderSessionId: string
     newFilePath: string
+    /** What the projector did to the copy (#927). */
+    projectionFidelity: NativeProjectionFidelity
   }> => ipcRenderer.invoke('session:duplicate', params),
 
   /**
@@ -198,5 +204,7 @@ export const providerApi = {
       name: string | null
     }>
     promptTimestamp: string | null
+    /** What the projector did to the rewound copy (#927). */
+    projectionFidelity: NativeProjectionFidelity
   }> => ipcRenderer.invoke('session:rewind-to-prompt', params),
 }
