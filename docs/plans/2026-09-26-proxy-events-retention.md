@@ -47,13 +47,13 @@ issue still has open:
     only be at `.1`.
   - Pinned by a test that rotates before every path-level await point.
 - **Gap policy: a bounded, reported gap, not an acknowledgement protocol** (q53 asked us to choose).
-  - The addon bumps `proxy-events.rotations` before each rename.
-  - When the poller stalls through more rotations than it can hold or drain (about 1 GiB of traffic at
-    the default), the generations deleted unread are counted as `lostGenerations`. `ProxyServer`
-    surfaces them as a `transport-gap` event plus one warning. The claim is "exactly once, or an
-    explicit gap".
-  - An ack protocol would need a second writer in the app. A stalled or dead app would then let the
-    proxy's disk grow without bound again, which is this issue.
+  - Each generation carries its number in a header line, `{"kind":"generation","generation":n}`, created atomically with the live file. The tail strips it.
+  - This replaced a first design with a `proxy-events.rotations` counter file, which a reader could pair with the wrong generation (round 2 of #64).
+  - When the poller stalls through more rotations than it can hold or drain (about 1 GiB of traffic at the default), the generations deleted unread are counted as `lostGenerations`. `ProxyServer` surfaces them as a `transport-gap` event plus one warning.
+  - An ack protocol would need a second writer in the app. A stalled or dead app would then let the proxy's disk grow without bound again, which is this issue.
+- **Known limitation** (accepted by the manager under the final-pass cap, stated in claude-code-headless#64):
+  - A process crash between renaming the live file to `.1` and publishing the next header is repaired when the addon restarts (`2218918`).
+  - If the addon is never restarted, the rotated generation's unread events are not delivered and **not** reported as a gap.
 - **Addon hardening** (same review):
   - `_write` never raises out of a mitmproxy hook, since the stream tap carries the user's live
     response;
@@ -81,6 +81,7 @@ issue still has open:
 
 ## Delivery
 
-claude-code-headless#64 (addon + tailer), three reviews plus verification, then the agent-code PR
-bumping the pointer (lockfile resync for the `file:` dep) with this plan, after #1332 merges.
-`Fixes #1273` goes on the agent-code PR only if both residual items are covered.
+claude-code-headless#64 (addon + tailer): three reviews, verification, and a final round 3, MERGED (`f52fc82`). This agent-code PR only bumps the pointer. #1332 (W1's rotation-safe bundle reader) is already on main.
+- **No lockfile resync is needed.** The app consumes claude-code-headless from source (tsconfig and Vite aliases), not as a `file:` dependency, and its runtime dependencies (`chokidar`, `@xterm/headless`) are already root dependencies. The bump changes only the package's own devDependencies; `npm install --package-lock-only` leaves `package-lock.json` unchanged.
+- **The generation header** is one more JSON line with an unknown `kind` to the app's only direct reader (the bundle reader, which ships raw bytes). The addon recreates `proxy-events.jsonl` immediately, so `debugRetention`'s run detection is unaffected.
+- **Both residual items are covered:** the live file is bounded by rotation, and a live run's disk use is bounded. So this PR carries `Fixes #1273`.
