@@ -1,5 +1,5 @@
 {
- "evidence": "Two real Codex rollout `compacted` lines: a codex-cli 0.157.0 one (empty message; replacement_history ends in an encrypted `compaction` item) and an older one whose `message` is a readable summary. Every key, the item types/roles/phases, window numbers and opaque ids are verbatim; every other string (instructions, prompts, summary text, encrypted content, paths) is replaced by the same number of x characters.",
+ "evidence": "Two real Codex rollout `compacted` lines: a codex-cli 0.157.0 one (empty message; replacement_history ends in an encrypted `compaction` item) and an older one whose `message` is a readable summary. Every key (except each line's top-level numeric `ordinal`, omitted: neither the mapper nor codexRolloutIdentity reads it), the item types/roles/phases, window numbers and opaque ids are verbatim; every other string (instructions, prompts, summary text, encrypted content, paths) is replaced by the same number of x characters.",
  "records": [
   {
    "timestamp": "2026-09-25T06:07:41.275Z",
