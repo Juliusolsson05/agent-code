@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { SessionManager } from './sessionManager.js'
+// Static, not imported inside the test (#1358 review b): a dynamic import of
+// the control stack took over 5 s on a loaded machine and timed the test out.
+import { terminalBackendCapabilities } from '@main/sessions/terminalControl.js'
 
 // #1350, end to end through the manager and the real Claude delivery code.
 // Recorded shape (lifecycle journal, three incidents on 2026-09-27): a
@@ -82,7 +85,6 @@ it('treats the composer as a human draft again once anyone else has written to i
 })
 
 it('reports our own stranded write to input inspection', async () => {
-  const { terminalBackendCapabilities } = await import('@main/sessions/terminalControl.js')
   const { manager } = claudeLike()
   await strand(manager)
   vi.spyOn(manager, 'getBackendSnapshot').mockReturnValue({
@@ -172,3 +174,27 @@ it('marks a delivery whose write threw, and forgets it when the process exits', 
   ;(manager as unknown as { cleanupSessionState(id: string, kind: string): void }).cleanupSessionState('s1', 'claude')
   expect(manager.hasStrandedDelivery('s1')).toBe(false)
 })
+
+// #1358 review b (surviving mutant): a delivery refused before writing leaves
+// the composer as it was, so it must not create a mark.
+it('does not mark a delivery that was refused before writing', async () => {
+  const { manager, session, writes } = claudeLike()
+  session.paintLate()
+  const result = await manager.deliverPromptToAgent('s1', 'the next task')
+  expect(result).toMatchObject({ ok: false, code: 'not-ready', promptWritten: false })
+  expect(writes).toEqual([])
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
+})
+
+// #1358 review b: only Claude's delivery can reclaim a stranded composer, so
+// only a Claude session is marked; inspection must not promise a reclaim no
+// delivery will perform.
+it('does not mark a stranded delivery for a provider that cannot reclaim it', async () => {
+  const { manager, session } = claudeLike()
+  const codexLike = { ...session, write: (data: string) => { if (data.includes('earlier')) throw new Error('EPIPE') } }
+  ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', { kind: 'codex', session: codexLike })
+  const result = await manager.deliverPromptToAgent('s1', 'an earlier prompt that painted late')
+  expect(result).toMatchObject({ ok: false, promptWritten: true })
+  expect(manager.hasStrandedDelivery('s1')).toBe(false)
+})
+

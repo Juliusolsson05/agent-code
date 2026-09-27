@@ -46,3 +46,7 @@ In all three, the composer turned occupied 0.7–3.8 s after the delivery gave u
 - **Suspicions kept as residuals:**
   - headless-internal writers (trust, resume, permission) that bypass `recordInputWrite`: no app consumer was found;
   - a mark set after a throw before any bytes crossed: harmless, since the next gate reads ready and nothing is killed.
+- **b (after the first round):**
+  - the inspection test's dynamic import timed out under load, so it is now a static import;
+  - a refusal that wrote nothing is now pinned not to set a mark;
+  - only Claude sessions are marked, because only Claude's delivery reclaims, and inspection must not promise a reclaim no delivery performs. Test added; the mutant is killed.

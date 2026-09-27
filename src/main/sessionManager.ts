@@ -4116,6 +4116,11 @@ export class SessionManager extends EventEmitter {
     // or read a pill-only composer wrongly. Such a session stays as before:
     // occupied until someone clears it.
     if (hadImages) return
+    // Only a provider whose delivery reclaims a stranded composer (#1358
+    // review b). Today that is Claude's (promptDelivery.ts); marking another
+    // provider would make inputInspect promise "the next delivery clears it"
+    // when no delivery will. A provider that adds a reclaim joins here.
+    if (entry.kind !== 'claude') return
     this.strandedDeliveries.set(sessionId, { entry, at: Date.now() })
   }
 
