@@ -105,15 +105,19 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
   // What older CLIs put in UserMessage items (sometimes injected context or a
   // command wrapper) is what the index lists too; firstUnwrappedPrompt and
   // classify decide what is a label, as for every other source.
-  const pending = { legacy: new Map<string, number>(), item: new Map<string, number>() }
-  const noteUser = (carrier: 'legacy' | 'item', text: string, timestamp: unknown) => {
+  // WHY a pair is matched only within a few records (#1407 verification a):
+  // matching identical text anywhere in the head collapsed a prompt the user
+  // really repeated in a later turn. Codex writes the two carriers of ONE
+  // prompt back to back, so the other carrier's record must be close.
+  const PAIR_WINDOW_RECORDS = 4
+  const pending = { legacy: [] as Array<{ text: string; at: number }>, item: [] as Array<{ text: string; at: number }> }
+  const noteUser = (carrier: 'legacy' | 'item', text: string, timestamp: unknown, recordIndex: number) => {
     const other = carrier === 'legacy' ? pending.item : pending.legacy
-    const matched = other.get(text) ?? 0
-    if (matched > 0) {
-      other.set(text, matched - 1)
+    const match = other.findIndex(candidate => candidate.text === text && recordIndex - candidate.at <= PAIR_WINDOW_RECORDS)
+    if (match >= 0) {
+      other.splice(match, 1)
     } else {
-      const own = pending[carrier]
-      own.set(text, (own.get(text) ?? 0) + 1)
+      pending[carrier].push({ text, at: recordIndex })
       if (out.userTexts.length < 6) out.userTexts.push(text)
     }
     const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
@@ -134,7 +138,7 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
       out.source = typeof payload.source === 'string' ? payload.source : payload.source ? JSON.stringify(payload.source) : null
     } else {
       const user = userPromptOf(record, payload)
-      if (user !== null) noteUser(user.carrier, user.text, record.timestamp)
+      if (user !== null) noteUser(user.carrier, user.text, record.timestamp, records)
     }
     // WHY the limit is unconditional: a rollout whose first two hundred
     // records hold no user event (exec runs, synthesized transcripts) has
@@ -159,42 +163,66 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
   return out
 }
 
-// Bytes read from the end of a rollout for the newest user timestamp. A
-// Codex turn's own records (reasoning, tool calls, outputs) fill this many
-// bytes long before the next prompt in the usual case; a prompt further back
-// than this keeps the head's time, which is at worst the old behaviour.
-const TAIL_ACTIVITY_BYTES = 512 * 1024
+// The newest user timestamp is found by reading the rollout BACKWARD in
+// chunks until a user record appears (#1407 verification a). A fixed 512 KiB
+// tail missed it in 10 of 46 local 0.157 files whose latest prompt was past
+// the head (a long agent turn can write megabytes after one prompt), and it
+// dropped a record straddling the window's start. Reading back in chunks,
+// carrying the partial line across each boundary, finds the newest one wherever
+// it is. The scan is bounded: a file with no user record in its last
+// TAIL_ACTIVITY_MAX_BYTES keeps the head's time, which is at worst the old
+// behaviour. It runs only for heads that hit their record bound, and the
+// result is cached by mtime with the head.
+const TAIL_ACTIVITY_CHUNK_BYTES = 512 * 1024
+const TAIL_ACTIVITY_MAX_BYTES = 32 * 1024 * 1024
 
 async function newestUserTimestampInTail(file: string): Promise<number | null> {
   let handle
   try {
     handle = await open(file, 'r')
     const { size } = await handle.stat()
-    const start = Math.max(0, size - TAIL_ACTIVITY_BYTES)
-    const buffer = Buffer.alloc(size - start)
-    await handle.read(buffer, 0, buffer.length, start)
-    const lines = buffer.toString('utf8').split('\n')
-    // The first line of a mid-file window is partial; the last may be too.
-    if (start > 0) lines.shift()
-    let newest: number | null = null
-    for (const line of lines) {
-      if (!line.includes('"user_message"') && !line.includes('"UserMessage"')) continue
-      let record: Record<string, unknown>
-      try {
-        record = JSON.parse(line) as Record<string, unknown>
-      } catch {
-        continue
-      }
-      if (userPromptOf(record, asRecord(record.payload)) === null) continue
-      const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
-      if (Number.isFinite(ts)) newest = Math.max(newest ?? ts, ts)
+    let end = size
+    // Bytes of the line that starts before the current chunk and was cut off.
+    let carry = Buffer.alloc(0)
+    while (end > 0 && size - end < TAIL_ACTIVITY_MAX_BYTES) {
+      const start = Math.max(0, end - TAIL_ACTIVITY_CHUNK_BYTES)
+      const chunk = Buffer.alloc(end - start)
+      await handle.read(chunk, 0, chunk.length, start)
+      const window = Buffer.concat([chunk, carry])
+      const text = window.toString('utf8')
+      // Unless this chunk starts the file, its first line is incomplete: keep
+      // its bytes for the next (earlier) chunk rather than dropping it.
+      const firstBreak = start > 0 ? window.indexOf(0x0a) : -1
+      const complete = firstBreak >= 0 ? window.subarray(firstBreak + 1).toString('utf8') : text
+      carry = firstBreak >= 0 ? window.subarray(0, firstBreak) : Buffer.alloc(0)
+      const newest = newestUserTimestampIn(complete.split('\n'))
+      if (newest !== null) return newest
+      if (start === 0) break
+      end = start
     }
-    return newest
+    return null
   } catch {
     return null
   } finally {
     await handle?.close().catch(() => {})
   }
+}
+
+function newestUserTimestampIn(lines: string[]): number | null {
+  let newest: number | null = null
+  for (const line of lines) {
+    if (!line.includes('"user_message"') && !line.includes('"UserMessage"')) continue
+    let record: Record<string, unknown>
+    try {
+      record = JSON.parse(line) as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (userPromptOf(record, asRecord(record.payload)) === null) continue
+    const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
+    if (Number.isFinite(ts)) newest = Math.max(newest ?? ts, ts)
+  }
+  return newest
 }
 
 /** The user prompt a rollout record carries, and through which carrier. */

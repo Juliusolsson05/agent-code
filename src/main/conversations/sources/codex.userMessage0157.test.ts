@@ -15,7 +15,7 @@ import { CodexConversationSource } from './codex.js'
 // `item.type: 'UserMessage'`. Every 0.157 row came back with no prompt, was
 // classified `empty`, and was hidden from the default listing.
 //
-// The fixture is a REAL, CONTIGUOUS 0.157.1 rollout head (see its evidence),
+// The fixture is a REAL, CONTIGUOUS 0.157.0 rollout head (see its evidence),
 // with its expected first prompt recorded independently of the parser under
 // test. The later cases compose synthetic records AROUND that real head, and
 // say so.
@@ -87,4 +87,46 @@ it('takes user activity from the tail when the head bound hides a later prompt',
   const row = await discoverRow([...records, ...filler, userMessage(later, [text('much later prompt')])])
   expect(row.userTexts).toEqual(['x'.repeat(expected.firstPromptLength)])
   expect(row.lastUserActivityAt).toBe(Date.parse(later))
+})
+
+it('finds the newest prompt far behind a long agent turn', async () => {
+  // #1407 verification a: in 10 local 0.157 files the latest prompt lay
+  // wholly before a fixed 512 KiB tail. Here 4 MiB of agent output follow it.
+  const later = at(46.6 * 3600 * 1000)
+  const bulk = 'y'.repeat(64 * 1024)
+  const filler = (n: number, from: number) => Array.from({ length: n }, (_, i) => ({ timestamp: at(from + i), type: 'response_item', payload: { type: 'reasoning', summary: [], content: bulk } }))
+  const row = await discoverRow([...records, ...filler(250, 10), userMessage(later, [text('much later prompt')]), ...filler(64, 46.6 * 3600 * 1000 + 1)])
+  expect(row.lastUserActivityAt).toBe(Date.parse(later))
+})
+
+it('finds the newest prompt when its line straddles a read-chunk boundary', async () => {
+  // #1407 verification a: the tail reader dropped a record that started
+  // before its window. Lay the file out so the prompt's line ends exactly half
+  // inside the last 512 KiB chunk: bytes after the line = 512 KiB - half.
+  const later = at(46.6 * 3600 * 1000)
+  const bulk = 'y'.repeat(64 * 1024)
+  const head = [...records, ...Array.from({ length: 250 }, (_, i) => ({ timestamp: at(10 + i), type: 'response_item', payload: { type: 'reasoning', summary: [], content: bulk } }))]
+  const prompt = userMessage(later, [text('much later prompt')])
+  const promptLine = JSON.stringify(prompt)
+  const bytesAfter = 512 * 1024 - Math.floor(promptLine.length / 2)
+  // After the prompt line: '\n' + tailLine + '\n' (discoverRow's join and final newline).
+  const base = { timestamp: at(46.6 * 3600 * 1000 + 1), type: 'response_item', payload: { type: 'reasoning', summary: [], content: '' } }
+  const pad = bytesAfter - 2 - JSON.stringify(base).length
+  const tail = { ...base, payload: { ...base.payload, content: 'y'.repeat(pad) } }
+  expect(Buffer.byteLength(JSON.stringify(tail)) + 2).toBe(bytesAfter)
+  const row = await discoverRow([...head, prompt, tail])
+  expect(row.lastUserActivityAt).toBe(Date.parse(later))
+})
+
+it('keeps a prompt the user really repeated in a later turn', async () => {
+  // #1407 verification a: identical text in a LATER turn is a new prompt, not
+  // the other carrier of an earlier one. Only a nearby pair is one prompt.
+  const row = await discoverRow([
+    ...records,
+    legacyMessage(at(1000), 'repeat'),
+    legacyMessage(at(2000), 'different'),
+    ...Array.from({ length: 10 }, (_, i) => ({ timestamp: at(3000 + i), type: 'event_msg', payload: { type: 'token_count', info: null } })),
+    userMessage(at(48 * 3600 * 1000), [text('repeat')]),
+  ])
+  expect(row.userTexts.slice(1)).toEqual(['repeat', 'different', 'repeat'])
 })

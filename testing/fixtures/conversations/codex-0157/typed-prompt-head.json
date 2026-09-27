@@ -1,6 +1,6 @@
 {
- "evidence": "A real, CONTIGUOUS Codex 0.157.1 rollout head (#1363, rebuilt for #1407 reviews a and b): all 10 records from session_meta through the first event_msg item_completed whose item.type is UserMessage, in file order, nothing removed or reordered. It is the one local 0.157 file whose first UserMessage is a typed prompt; the other 421 open with an orchestration hand-off. Codex 0.157 writes no event_msg user_message. Keys, types, roles, CLI version, originator, model provider, timestamps and uuid ids are verbatim; every other string is replaced by the same number of x characters (newlines kept).",
- "cliVersion": "0.157.1",
+ "evidence": "A real, CONTIGUOUS Codex 0.157.0 rollout head (its session_meta.cli_version; an earlier label said 0.157.1) (#1363, rebuilt for #1407 reviews a and b): all 10 records from session_meta through the first event_msg item_completed whose item.type is UserMessage, in file order, nothing removed or reordered. It is the one local 0.157 file whose first UserMessage is a typed prompt; the other 421 open with an orchestration hand-off. Codex 0.157 writes no event_msg user_message. Keys, types, roles, CLI version, originator, model provider, timestamps and uuid ids are verbatim; every other string is replaced by the same number of x characters (newlines kept).",
+ "cliVersion": "0.157.0",
  "expected": {
   "firstPromptLength": 464,
   "firstPromptTimestamp": "2026-09-25T05:44:03.249Z",

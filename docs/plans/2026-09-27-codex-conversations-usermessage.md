@@ -22,3 +22,9 @@ The fixture `testing/fixtures/conversations/codex-0157/typed-prompt-head.json` i
 - **Comment narrowed.** Older CLIs' UserMessage items can hold injected context or command wrappers. The index lists those too, and `firstUnwrappedPrompt` and classify decide what labels a row.
 - **Fixture rebuilt as a CONTIGUOUS real head.** It holds all 10 records from `session_meta` through the first UserMessage of the one local 0.157 file whose first prompt is typed. The expected length and timestamp are recorded independently in the fixture. Composed cases say they are composed.
 - **Filed, not fixed here (pre-existing):** #1418 (0.149–0.151 rollouts with no prompt event) and #1419 (search matches injected context).
+
+## Verification a (round 2)
+- **The tail pass missed prompts far back.** In 10 of 46 local 0.157 files with a prompt past the head, that prompt lay wholly before the last 512 KiB, and a record straddling the window's start was dropped. The reader now scans BACKWARD in 512 KiB chunks, carrying each cut line into the next (earlier) chunk, until it finds a user record. It is bounded at 32 MiB, runs only for truncated heads, and is cached by mtime.
+- **De-duplication collapsed a prompt repeated in a later turn.** A cross-carrier pair is now matched only within 4 records, since Codex writes the two carriers of one prompt back to back. No local file has both carriers, so there was no recorded distance to calibrate against.
+- **Fixture label.** The fixture's `session_meta.cli_version` is 0.157.0; the label is corrected.
+- **Tests (red on the previous commit):** a prompt followed by 4 MiB of output; a prompt whose line straddles the last chunk boundary, laid out deterministically; a prompt repeated in a later turn. Dropping the carried partial line fails the straddle test.
