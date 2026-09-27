@@ -9,7 +9,7 @@ Undo Close respawns a closed pane under a NEW session id. `GoalLoopService` keys
 
 ## Decisions (defaults)
 - **Same rule as #1287:** a restored pane whose successor has `goal_loop` gets its loop carried (main pauses it on carry). One without it gets the old loop stopped, because nothing could ever complete it. Every Undo Close restore resumes the SAME conversation, so there is no newConversation exception.
-- **Shared helpers:** `carryGoalLoops` / `stopGoalLoops` move from `session.ts` into the shared `successorCarry.ts` (renamed from #1325's `workflowCarry.ts`), with one `handOverGoalLoops(idMap, capable)` rule used by Reload Agents and Undo Close.
+- **Shared helpers:** `carryGoalLoops` / `stopGoalLoops` move from `session.ts` into the shared `successorCarry.ts` (renamed from #1325's `workflowCarry.ts`), with one `handOverGoalLoops(idMap, capable)` rule that Undo Close uses. Reload Agents keeps its inline copy of the same rule for now: #1324 and #1326 are rewriting that function, so switching it waits until they land.
 - **Timing:** after the commit, like replace, so a restore that bails (project closed mid-spawn) keeps the loop where it was.
 - **Stacked on #1325** (base `fix/workflow-runs-follow-pane`): both edit the same Undo Close commit sites.
 

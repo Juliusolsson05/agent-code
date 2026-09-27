@@ -1,4 +1,4 @@
-import { carryWorkflowRuns } from '@renderer/workspace/hook/actions/workflowCarry'
+import { carryWorkflowRuns, handOverGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
@@ -202,6 +202,17 @@ export function useUndoCloseAction(
     [sessionActions],
   )
 
+  // Whether a restored session's process has Goal Loop tools. WHY read the
+  // successor's meta instead of resolving the closed pane's choices again:
+  // `spawn` resolves the domains against CURRENT Settings (see respawn) and
+  // writes the result into the meta it files, so that meta is the only
+  // record of what the new process can actually call.
+  const hasGoalLoopTools = useCallback(
+    (sessionId: string) =>
+      refs.stateRef.current.sessions[sessionId as SessionId]?.builtInMcpDomains?.includes('goal_loop') === true,
+    [refs.stateRef],
+  )
+
   const restoreSessionEntry = useCallback(
     async (entry: ClosedSession, publish: PublishLineage): Promise<RestoreResult> => {
       // The project is a session's only anchor: the index files each row under
@@ -302,9 +313,12 @@ export function useUndoCloseAction(
       // The same conversation is back (--resume), so its workflow runs come
       // back with it (#1325 review A3); they are filed under the closed id.
       carryWorkflowRuns(new Map([[entry.sessionId, newSessionId]]))
+      // Its goal loop too (#1320): GoalLoopService keys loops by session id,
+      // so without this the restored pane could neither Resume nor Stop it.
+      handOverGoalLoops(new Map([[entry.sessionId, newSessionId]]), hasGoalLoopTools)
       return 'restored'
     },
-    [refs.stateRef, respawn, sessionActions, setState, showToast],
+    [hasGoalLoopTools, refs.stateRef, respawn, sessionActions, setState, showToast],
   )
 
   const restoreTabEntry = useCallback(
@@ -414,9 +428,12 @@ export function useUndoCloseAction(
       })
       // Every restored agent resumed its conversation; its runs follow it.
       carryWorkflowRuns(idMap)
+      // And its goal loop (#1320); a member that did not come back is not in
+      // idMap, so its loop stays with the entry the stack may retry.
+      handOverGoalLoops(idMap, hasGoalLoopTools)
       return 'restored'
     },
-    [respawn, setState, showToast],
+    [hasGoalLoopTools, respawn, setState, showToast],
   )
 
   const restoreSingleEntry = useCallback(
