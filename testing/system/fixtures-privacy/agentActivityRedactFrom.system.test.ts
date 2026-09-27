@@ -6,6 +6,8 @@ import { promisify } from 'node:util'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { homePlaceholder } from '../../../scripts/agent-activity-redaction-policy'
+
 // SYSTEM tier: runs the real extractor script as a process, the way the regeneration is documented
 // (steering q74). The script writes to `<cwd>/testing/fixtures/agent-activity/runtime-states.json`,
 // so each case runs in a temp cwd holding a sentinel file there; the tracked fixture is never touched.
@@ -71,6 +73,89 @@ async function extract(args: string[]): Promise<{ code: number; stderr: string }
     return { code: failed.code ?? -1, stderr: failed.stderr ?? '' }
   }
 }
+
+// A debug bundle in the layout the live extraction reads: <HOME>/.config/agent-code/debug-bundles/
+// <dir>/{manifest,state-snapshot}.json. `home` is the user segment the paths claim to live under.
+async function liveBundle(snapshot: Record<string, unknown>, projectDir: string): Promise<void> {
+  const dir = join(cwd!, '.config/agent-code/debug-bundles/2026-09-27T00-00-00-000-abcdef12')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify({ sessionId: 'abcdef12', kind: 'claude', capturedAt: 1, projectDir }))
+  await writeFile(join(dir, 'state-snapshot.json'), JSON.stringify(snapshot))
+}
+
+// Review of #1353, final round a (a valid blocker, steering q79): a no-argument LIVE run wrote a
+// private project outside Development/ into the tracked fixture. Live output is now an explicit,
+// git-ignored staging path; the tracked file is never a live output.
+const STAGED = 'temp/fixture-staging/runtime-states.json'
+const staged = () => join(cwd!, STAGED)
+
+describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (live)', () => {
+  // The A reproduction itself: a private project outside Development/, run with no arguments.
+  it('refuses a no-argument run and leaves the tracked fixture unchanged', async () => {
+    const { output } = await stage()
+    const me = cwd!.split('/').pop()!
+    await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Projects/secretproject/private-task` }, `/Users/${me}/Projects/secretproject/private-task`)
+    const result = await extract([])
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toMatch(/needs exactly --out/)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+  }, 60_000)
+
+  it('refuses --out pointing at the tracked fixture', async () => {
+    const { output } = await stage()
+    const me = cwd!.split('/').pop()!
+    await liveBundle({ provider: 'claude' }, `/Users/${me}/Desktop/x`)
+    const result = await extract(['--out', 'testing/fixtures/agent-activity/runtime-states.json'])
+    expect(result.code).not.toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+  }, 60_000)
+
+  it('refuses an --out inside a repository that git would commit', async () => {
+    await stage()
+    execFileSync('git', ['init', '-q'], { cwd: cwd! })
+    const result = await extract(['--out', 'testing/fixtures/agent-activity/elsewhere.json'])
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toMatch(/not git-ignored/)
+  }, 60_000)
+
+  it('stages to an ignored path without touching the tracked fixture', async () => {
+    const { output } = await stage()
+    execFileSync('git', ['init', '-q'], { cwd: cwd! })
+    await writeFile(join(cwd!, '.gitignore'), '/temp/\n')
+    const me = cwd!.split('/').pop()!
+    await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Desktop/Development/agent-code` }, `/Users/${me}/Desktop/x`)
+    expect((await extract(['--out', STAGED])).code).toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+    expect(await readFile(staged(), 'utf8')).not.toContain(me)
+  }, 60_000)
+
+  it('refuses a bundle whose homes are not this machine user\'s', async () => {
+    await stage()
+    await liveBundle({ provider: 'claude', worktreePath: '/Users/someoneelse/Desktop/Development/agent-code' }, '/Users/someoneelse/x')
+    const result = await extract(['--out', STAGED])
+    expect(result.code).not.toBe(0)
+    await expect(readFile(staged(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 60_000)
+
+  // Only the SOURCE check can catch this one: a foreign user named exactly like this machine user's
+  // placeholder passes through the pass unchanged and looks like the placeholder afterwards.
+  it('refuses a bundle whose foreign home is spelled like the placeholder', async () => {
+    await stage()
+    const me = cwd!.split('/').pop()!
+    await liveBundle({ provider: 'claude', worktreePath: `/Users/${homePlaceholder(me)}/Desktop/Development/secret` }, `/Users/${me}/Desktop/x`)
+    const result = await extract(['--out', STAGED])
+    expect(result.code).not.toBe(0)
+    await expect(readFile(staged(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 60_000)
+
+  it('refuses a bundle with a home spelling the pass does not rewrite', async () => {
+    await stage()
+    await liveBundle({ provider: 'claude', note: '%2FUsers%2Fsomeoneelse%2Fsecret' }, '')
+    const result = await extract(['--out', STAGED])
+    expect(result.code).not.toBe(0)
+    await expect(readFile(staged(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 60_000)
+})
 
 describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes --redact-from', () => {
   it('refuses without --home-user and leaves the output untouched', async () => {

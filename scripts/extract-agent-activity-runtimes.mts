@@ -40,13 +40,21 @@
 // `promptDelivery` objects. Those are the shapes a hand-written fixture would
 // smooth over.
 //
-// Usage: npx tsx scripts/extract-agent-activity-runtimes.mts
+// Usage (steering q79 — the tracked fixture is never a live output):
+//   Stage a live extraction (git-ignored path; a person audits it before any copy):
+//     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts --out temp/fixture-staging/runtime-states.json
+//   Reproduce the committed fixture from the one recorded corpus (the only writer of the tracked file):
+//     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts --redact-from <15e43abe^ blob> --home-user <recorder>
+//   Promotion of a staged live file into testing/fixtures/agent-activity/runtime-states.json is a
+//   MANUAL copy after a key-by-key privacy audit, never a script step.
 
-import { readdir, readFile, writeFile, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-import process from 'node:process'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { mkdir, readdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import process from 'node:process'
 
 import {
   assertHomesBelongTo,
@@ -62,6 +70,42 @@ const BUNDLE_ROOTS = [
   join(homedir(), '.config/agent-code/debug-bundles/autosave'),
 ]
 const OUT = join(process.cwd(), 'testing/fixtures/agent-activity/runtime-states.json')
+/**
+ * Where a LIVE extraction may write: an explicit `--out`, never the tracked fixture, and never a
+ * path the repository would commit.
+ *
+ * WHY (review of #1353, final round a — a valid blocker per the manager, steering q79): the
+ * pattern-based pass cannot recognise every private identifier a new corpus might hold (a project
+ * outside `Development/`, `/Users/<me>/Projects/secret/task`, a bare `{ "user": … }`), and the live
+ * run used to write straight into the tracked `runtime-states.json`. It was proven correct only for
+ * the one recorded corpus. So the live run stages its output somewhere git ignores
+ * (`temp/fixture-staging/…` or outside the repo). The tracked fixture changes only through
+ * `--redact-from` (the pinned corpus) or a manual copy of a staged file after a person's key-by-key
+ * privacy audit, as the committed corpus had.
+ */
+function liveOutputPath(argv: readonly string[]): string {
+  const index = argv.indexOf('--out')
+  const value = index === -1 ? undefined : argv[index + 1]
+  if (value === undefined || value.startsWith('--') || argv.length !== 2) {
+    throw new Error('a live extraction needs exactly --out <path>, a git-ignored staging file (e.g. temp/fixture-staging/runtime-states.json)')
+  }
+  const out = resolve(value)
+  if (out === resolve(OUT)) throw new Error('a live extraction never writes the tracked fixture; stage it, audit it, then copy it')
+  // Inside a git work tree the path must be ignored, so the staged, un-audited file cannot be
+  // committed by accident. `git check-ignore` exits 0 when ignored, 1 when not, 128 when the path
+  // is outside any repository (then nothing can commit it from here, and it is allowed).
+  const ignored = spawnSync('git', ['check-ignore', '-q', out], { cwd: existingDirectory(out) })
+  if (ignored.status === 1) throw new Error('--out is inside the repository and not git-ignored; use temp/fixture-staging/ or a path outside the repo')
+  if (ignored.status !== 0 && ignored.status !== 128) throw new Error('could not check --out against git; refusing to write')
+  return out
+}
+
+/** The nearest existing ancestor directory of a path (git needs a real cwd). */
+function existingDirectory(path: string): string {
+  let dir = dirname(path)
+  while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir)
+  return dir
+}
 
 /** sha256 of `git show 15e43abe^:testing/fixtures/agent-activity/runtime-states.json` (blob d2653405). */
 const RECORDED_CORPUS_SHA256 = '39d3fac8b937604410ca5f0728351ba5d684ac2ecfea31c35c790b3d1853f867'
@@ -150,7 +194,7 @@ async function readJson(path: string): Promise<Record<string, unknown> | null> {
   }
 }
 
-async function main(): Promise<void> {
+async function main(out: string): Promise<void> {
   const records: unknown[] = []
   const seen = new Set<string>()
 
@@ -232,8 +276,9 @@ async function main(): Promise<void> {
   assertHomesBelongTo(JSON.stringify(fixture), homeUser)
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
   assertNoForeignHome(redacted, homeUser)
-  await writeFile(OUT, redacted, 'utf8')
-  console.log(`wrote ${records.length} runtime states to ${OUT}`)
+  await mkdir(dirname(out), { recursive: true })
+  await writeFile(out, redacted, 'utf8')
+  console.log(`staged ${records.length} runtime states in ${out}: audit every key and string before copying it over ${OUT}`)
   console.log(fixture.totals)
 }
 
@@ -299,10 +344,13 @@ if (argv.includes('--redact-from')) {
     console.error((error as Error).message)
     process.exit(2)
   }
-} else if (argv.length > 0) {
-  // An unknown flag is a typo of the mode above, never a request for a live extraction.
-  console.error(`unknown arguments: ${argv.length}; only --redact-from <file> --home-user <recorder> is accepted`)
-  process.exit(2)
 } else {
-  await main()
+  // Live extraction. No arguments is NOT a live run any more (steering q79): the output path is
+  // required and validated before any bundle is read.
+  try {
+    await main(liveOutputPath(argv))
+  } catch (error) {
+    console.error((error as Error).message)
+    process.exit(2)
+  }
 }

@@ -95,10 +95,18 @@ that leak developer data. Each item below is taken from the issue, with its curr
        not to redact arbitrary corpora.
        - A process test reproduces the committed file byte for byte from the blob. It is skipped on a
          shallow checkout.
-     - **Stated residual:** the LIVE extraction still uses the pattern-based pass. It can't recognise
-       every identifier: one with no path around it in a non-text field, or a project outside
-       `Development/`. A new live corpus therefore needs its own per-key audit before it is
-       committed, as this one had.
+     - **Live mode never writes the tracked fixture** (final round a, a valid blocker; steering q79).
+       A no-argument live run wrote a private project outside `Development/` straight into the
+       tracked `runtime-states.json`.
+       - The live extraction now needs `--out <path>`. It refuses the tracked fixture, and it refuses
+         any path inside the repository that git would commit. `temp/fixture-staging/` is ignored.
+       - The tracked fixture changes only through `--redact-from` (the pinned corpus) or a MANUAL
+         copy of a staged file after a key-by-key privacy audit.
+       - Process tests: the A reproduction, where a no-argument run is refused and the tracked file is
+         unchanged (red on `6b042b7b`); the tracked `--out`; a non-ignored `--out`; a staged run; and
+         three foreign-home bundles. Removing any one live guard turns a test red.
+     - **Stated residual:** the pattern-based pass itself can't recognise every identifier a new live
+       corpus might hold, which is why the staged file needs a person's audit before any copy.
    - The fleet fixtures:
      - `startup` in live-fleet and `bringdown` in both are same-length placeholders.
      - Their `provenance` now says so.
