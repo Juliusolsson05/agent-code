@@ -499,13 +499,17 @@ export async function cachedManualLegacyBundlePaths(
   const key = `${file}\0${identity}`
   if (legacyLedgerCache?.key === key) return legacyLedgerCache.paths
   const paths = await load(file)
-  // WHY a second stat (review of #1417, a): the load is a separate operation.
-  // A ledger renamed away between the stat and the read made readFile hit
-  // ENOENT, which the loader rightly calls "no ledger", and that empty set was
-  // then cached under the identity of the file that WAS there, so a manual
-  // bundle became deletable. The parse is trusted only if the file it read is
-  // the file the stat saw, before and after; any change (gone, replaced,
-  // edited mid-read) is 'unknown': protective for this prune, never cached.
+  // WHY a second stat (review of #1417, round 1, a): the load is a separate
+  // operation, so the file it reads need not be the file the first stat saw.
+  // In round 1 the loader still answered ENOENT with an empty set, and a
+  // ledger renamed away between the stat and the read cached that empty set
+  // under the identity of the file that WAS there, so a manual bundle became
+  // deletable. The loader now answers ENOENT with 'unknown' (round 2), which
+  // closes that exact case, but a ledger REPLACED mid-read (renamed over, or
+  // edited) still parses successfully as some other content. So the parse is
+  // trusted only if the identity is the same before and after the read; any
+  // change (gone, replaced, edited mid-read) is 'unknown': protective for this
+  // prune, never cached.
   if (paths === 'unknown' || (await ledgerIdentity(file)) !== identity) {
     legacyLedgerCache = null
     return 'unknown'
