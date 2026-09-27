@@ -178,6 +178,45 @@ function claudeUserEntryText(raw: unknown): string | null {
 // once per burst.
 const claudeQueueBySession = new Map<SessionId, ClaudeQueueState>()
 
+/**
+ * The idle settlement of a Claude session's queue, or null when nothing
+ * changed (#677). Callers commit a non-null result to claudeQueueBySession
+ * AFTER setRuntimes returns (the rule above) and paint `result.pending`.
+ *
+ * WHY one helper with three callers: settlement (settle both debts, then mark
+ * unattributed survivors stale) is how a queue item that already departed
+ * stops being displayed, and exact-evidence carriers (content-bearing
+ * `remove`, `popAll(content)`) deliberately leave their debt for it. It used
+ * to be reachable only from a semantic event that arrived while the session
+ * was already idle. When the turn's last semantic event lands while the
+ * process is still active and the process then goes idle, or a bootstrap
+ * replay ends with debt open (production bootstrap gets no replayed semantic
+ * events), nothing settled and the chip stayed until the next turn, or
+ * forever for a session with no next turn. Every transition INTO idle now
+ * asks the same question: the semantic event, the process-state flip, and
+ * bootstrap-complete.
+ *
+ * WHY not settle inline in the carriers instead: that inline settlement was
+ * the bug those carriers were fixed for. It consumed the very item the
+ * carrier named and left an unrelated item pending forever (#670).
+ *
+ * Only an EXISTING reconciler state is settled. A session with no map entry
+ * has no queue, and defaulting to a fresh state compared unequal on every idle
+ * tick (the no-op bail regression noted at the semantic call site).
+ */
+function settleClaudeQueueIfIdle(
+  sessionId: SessionId,
+  sessionKind: AgentProviderKind | undefined,
+  idle: boolean,
+): ClaudeQueueState | null {
+  if (sessionKind !== 'claude' || !idle) return null
+  const existing = claudeQueueBySession.get(sessionId)
+  if (existing === undefined) return null
+  const marked = markStaleWhenIdle(existing, true)
+  // markStaleWhenIdle is reference-stable, so identity is the change test.
+  return marked === existing ? null : marked
+}
+
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
 const jsonlProviderStreamBySession = new Map<SessionId, JsonlProviderStreamState>()
 
@@ -1117,9 +1156,21 @@ export function useIpcSubscriptions(
       ({ sessionId, active, status }) => {
         if (quarantinesSessionFeed(sessionId)) return
         flushSemanticEventQueue()
+        // Captured by the updater, committed after setRuntimes returns.
+        let pendingIdleQueue: ClaudeQueueState | null = null
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
+          // #677: this flip is often the LAST transition into idle, because
+          // the turn's final semantic event landed while the process was
+          // still active. awaitingAssistant is cleared just below, so idle
+          // here is the process and the stream phase.
+          const idleQueue = settleClaudeQueueIfIdle(
+            sessionId,
+            sessionKind,
+            !active && current.streamPhase === 'idle',
+          )
+          pendingIdleQueue = idleQueue
           const shouldClearIdleQueue = shouldClearIdleQueuedMessages({
             awaitingAssistant: false,
             processActive: active,
@@ -1145,7 +1196,9 @@ export function useIpcSubscriptions(
                 awaitingAssistant: false,
                 queuedMessages: shouldClearIdleQueue
                   ? []
-                  : current.queuedMessages,
+                  : idleQueue
+                    ? idleQueue.pending
+                    : current.queuedMessages,
               },
               {
                 layer: 'STATE',
@@ -1161,12 +1214,14 @@ export function useIpcSubscriptions(
                   clearedQueuedMessages: shouldClearIdleQueue
                     ? current.queuedMessages.length
                     : 0,
+                  settledClaudeQueue: idleQueue !== null,
                 },
               },
             ),
           )
           return { ...prev, [sessionId]: next }
         })
+        if (pendingIdleQueue !== null) claudeQueueBySession.set(sessionId, pendingIdleQueue)
       },
     )
 
@@ -1408,18 +1463,13 @@ export function useIpcSubscriptions(
         // created state and compared it against `undefined` — which read as
         // "changed" on every idle event, wiping queuedMessages to the empty
         // pending list and defeating the no-op bail below.
-        const existingQueue = claudeQueueBySession.get(sessionId)
-        const claudeQueueIdle =
-          sessionKind === 'claude' &&
-          existingQueue !== undefined &&
-          !current.processActive &&
-          streamPhase === 'idle' &&
-          !nextAwaitingAssistant
-        const markedQueue =
-          claudeQueueIdle && existingQueue ? markStaleWhenIdle(existingQueue, true) : null
-        // markStaleWhenIdle is reference-stable, so identity is the change test.
-        const staleChanged = markedQueue !== null && markedQueue !== existingQueue
-        if (staleChanged) pendingStaleQueue = markedQueue
+        const markedQueue = settleClaudeQueueIfIdle(
+          sessionId,
+          sessionKind,
+          !current.processActive && streamPhase === 'idle' && !nextAwaitingAssistant,
+        )
+        const staleChanged = markedQueue !== null
+        pendingStaleQueue = markedQueue
 
         // A completed turn is the one unambiguous proof that the limit episode
         // is over: the provider answered. `turn_stopped` deliberately does NOT
@@ -2664,6 +2714,8 @@ export function useIpcSubscriptions(
       if (existing) clearTimeout(existing)
       const timer = setTimeout(() => {
         refs.bootstrapTimersRef.current.delete(sessionId)
+        // Captured by the updater, committed after setRuntimes returns (#677).
+        let pendingIdleQueue: ClaudeQueueState | null = null
         setRuntimes(prev => {
           const current = prev[sessionId]
           if (!current || !current.bootstrapping) return prev
@@ -2722,6 +2774,21 @@ export function useIpcSubscriptions(
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
           let next = current
           const reconciled: string[] = []
+
+          // #677: replay can end with Claude queue debt open (the recorded
+          // exact-remove-after-open-dequeue-debt sequence finishes with 3
+          // pending and debt.count = 3), and production bootstrap receives no
+          // replayed semantic events to settle it. awaitingAssistant is NOT
+          // part of idleness here: queue-op replay itself forces it true
+          // (case 1 above), so requiring it false would never settle. Runs
+          // before the awaitingAssistant clear so a queue that settlement
+          // empties lets that clear follow.
+          const idleQueue = settleClaudeQueueIfIdle(sessionId, sessionKind, !hasLiveSignal)
+          pendingIdleQueue = idleQueue
+          if (idleQueue !== null) {
+            next = { ...next, queuedMessages: idleQueue.pending }
+            reconciled.push('claudeQueue')
+          }
 
           if (
             !hasLiveSignal &&
@@ -2816,6 +2883,7 @@ export function useIpcSubscriptions(
             ),
           }
         })
+        if (pendingIdleQueue !== null) claudeQueueBySession.set(sessionId, pendingIdleQueue)
       }, 150)
       refs.bootstrapTimersRef.current.set(sessionId, timer)
       closeSpan({
