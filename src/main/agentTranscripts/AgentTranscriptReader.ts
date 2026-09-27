@@ -818,7 +818,7 @@ function extractCodexItems(raw: JsonRecord, timestamp: number | undefined): Agen
       return text ? [{ kind: 'assistant_message', timestamp, text, final: phase === 'final_answer' }] : []
     }
   }
-  if (type === 'message' || type === 'function_call' || type === 'function_call_output' || type === 'custom_tool_call' || type === 'custom_tool_call_output') {
+  if (type === 'message' || type === 'function_call' || type === 'function_call_output') {
     return extractCodexResponseItem(raw, timestamp, stringField(raw, 'phase'))
   }
   return []
@@ -932,6 +932,11 @@ function extractCodexExecScript(script: string, timestamp: number | undefined): 
         if (command.workdir) shellItem.cwd = command.workdir
         items.push(shellItem)
       } else if (commandIndex === 0) {
+        // One item for the whole script, not one copy per call. Today the
+        // reader's adjacent-duplicate collapse (acceptDedupedItem) would also
+        // fold the copies, so removing this guard changes no test (#1368
+        // review a, verified). It stays so this function's contract does not
+        // depend on a collapse that keys on timestamp and text.
         items.push({ kind: 'shell_command', timestamp, command: script })
       }
       commandIndex += 1
@@ -962,10 +967,34 @@ function execScriptPatchFiles(script: string, patchCalls: Array<{ argument: stri
     // `\n`, inside a template they are real newlines; a header ends at
     // either, or at the string's closing quote.
     for (const match of script.matchAll(/\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)(?=\\n|\n|["'`]|$)/g)) {
-      if (match[1]?.trim()) files.push(match[1].trim())
+      const file = resolveInterpolatedPath(script, match[1]?.trim() ?? '')
+      if (file) files.push(file)
     }
   }
   return [...new Set(files)]
+}
+
+/**
+ * A header path read from a template may be interpolated:
+ * `*** Update File: ${path}`, with `const path="/abs/file.ts"` earlier in the
+ * script (#1368 review a: recorded, 4 of 734 patch scripts in a 40-rollout
+ * sample). Each `${name}` is resolved when the script binds that name exactly
+ * once to a double-quoted literal that ends the expression (`const p="x"+y`
+ * is not `x`). Anything else (a computed binding, two
+ * bindings, an expression) makes the path unknown, and it is dropped rather
+ * than reported as the literal text `${path}`.
+ */
+function resolveInterpolatedPath(script: string, path: string): string | null {
+  if (!path) return null
+  if (!path.includes('${')) return path
+  let unresolved = false
+  const resolved = path.replace(/\$\{\s*([A-Za-z_$][\w$]*)\s*\}/g, (_whole, name: string) => {
+    const bindings = [...script.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${name.replace(/\$/g, '\\$')}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")(?=[ \\t]*(?:[;,\\n]|$))`, 'g'))]
+    const value = bindings.length === 1 ? decodeDoubleQuotedLiteral(bindings[0]![1]!) : null
+    if (value === null) unresolved = true
+    return value ?? ''
+  })
+  return unresolved || resolved.includes('${') ? null : resolved
 }
 
 // Pi rows are the session file's own JSON (pi-terminal-headless

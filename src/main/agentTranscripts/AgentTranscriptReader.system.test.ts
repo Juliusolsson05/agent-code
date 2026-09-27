@@ -151,6 +151,13 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
   //   lexical scan skips string contents.
   // - A script calling only an MCP tool is recorded as a script, targeted at
   //   the tool it called.
+  // - #1368 review a: two `apply_patch` calls with `${path}` headers around a
+  //   real command. The path resolves through its `const path="…"` binding (it
+  //   used to be reported as the literal `${path}`), and the two calls make
+  //   ONE patch item.
+  // - #1368 review a: four `exec_command` calls, two with template commands.
+  //   One undecodable call makes the whole script ONE command, not four
+  //   copies of it.
   it('reads the other recorded custom-call forms without inventing commands', async () => {
     const path = jsonl('codex-custom-call-forms.jsonl', readFileSync(join(import.meta.dirname,
       '../../../testing/fixtures/agent-transcripts/codex-custom-call-forms.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)))
@@ -160,6 +167,8 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
       `${home}/feed-render-rewrite/testing/fixtures/feed-presentation/operation-families.json`,
       `${home}/feed-render-rewrite/testing/unit/scripts/renderingFixtureTools.test.ts`,
     ]
+    const records = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { payload: { input: string } })
+    const titles = `${home}/auto-agent-titles`
     const result = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'timeline' })
     expect(result.ok && result.items).toEqual([
       { kind: 'patch', timestamp: Date.parse('2026-09-27T01:27:05.044Z'), files: [edited], summary: `apply_patch: ${edited}` },
@@ -172,6 +181,9 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
         target: 'mcp__agent_code__orchestration_wait_agents',
         excerpt: expect.stringContaining('tools.mcp__agent_code__orchestration_wait_agents('),
       },
+      { kind: 'patch', timestamp: Date.parse('2026-09-25T04:28:55.297Z'), files: [`${titles}/src/mcp/runtime/BuiltInMcpHttpHost.ts`], summary: `apply_patch: ${titles}/src/mcp/runtime/BuiltInMcpHttpHost.ts` },
+      { kind: 'shell_command', timestamp: Date.parse('2026-09-25T04:28:55.297Z'), command: "npx vitest run src/main/tldr/enforcement.system.test.ts -t 'keeps TLDR enforcement responsive'", cwd: titles },
+      { kind: 'shell_command', timestamp: Date.parse('2026-09-27T00:23:21.087Z'), command: records[5]!.payload.input },
     ])
   })
 

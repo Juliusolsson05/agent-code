@@ -65,3 +65,17 @@ The reader runs in main over files, so the tests exercise the real entry point. 
 - **c (minor): two contract parts were untested.**
   - The test now asserts the joined text of a multi-block output.
   - A recorded MCP-only script pins the `tool_read` target.
+- **b (major): the same false-call root cause as c.** The lexer fixes b's reproduction and both of its recorded `tools.find` / `tools.some` rows (checked directly).
+- **a (MERGE-READY; minors) and steering q83: `${path}` headers were reported as the literal file `${path}`.**
+  - `resolveInterpolatedPath` resolves `${name}` only through exactly one `const/let/var name = "literal"` binding that ends the expression. Otherwise the path is dropped (fails closed).
+  - Recorded case: 2026-09-24, line 2453. Removing the resolution fails the test with `${path}`.
+- **a: survivors pinned with recorded rows.**
+  - One patch item for two `apply_patch` calls: same row; the mutation fails the test.
+  - One whole-script item for four calls: row 21738. That guard is behaviour-equivalent at the reader boundary, because `acceptDedupedItem` folds adjacent identical items on both the read and search paths. It is kept, with a comment saying so.
+  - The `tool_read` target and joined outputs are pinned (see c).
+- **a: the top-level (unwrapped) `custom_tool_call` dispatch was unpinned and has no recorded use.** Removed.
+- **a: the test cited a fixture README that did not exist.** Added `testing/fixtures/agent-transcripts/README.md` with every record's provenance.
+- **Residuals:**
+  - search returns long items head-truncated (predates this PR);
+  - an `exec` call with empty input yields an empty `tool_read` (no recorded case);
+  - `Move to` headers, spaced `tools . x (` forms and `cmd`/`command` precedence are not covered by any recording.
