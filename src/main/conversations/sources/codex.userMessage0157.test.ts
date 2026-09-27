@@ -152,3 +152,17 @@ it('finds a newest prompt whose single line is longer than two read chunks', asy
   const row = await discoverRow([...head, huge])
   expect(row.lastUserActivityAt).toBe(Date.parse(later))
 })
+
+it('never pairs carriers across another prompt', async () => {
+  // #1407 verification b: `repeat` (legacy), `different` (item), `repeat`
+  // (item) within a few seconds. The second repeat's previous user record is
+  // `different`, so it is a new prompt, not the other carrier of the first.
+  const row = await discoverRow([
+    ...records,
+    legacyMessage(at(1000), 'start'),
+    legacyMessage(at(1100), 'repeat'),
+    userMessage(at(1200), [text('different')]),
+    userMessage(at(1300), [text('repeat')]),
+  ])
+  expect(row.userTexts.slice(1)).toEqual(['start', 'repeat', 'different', 'repeat'])
+})

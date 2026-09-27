@@ -101,7 +101,8 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
   // read and merged, not "legacy wins" (#1407 reviews a and b): a file with
   // both carriers (a session resumed across writer versions) could then lose
   // a prompt only the items hold. The same prompt written by both carriers is
-  // counted once: each carrier consumes a pending match from the other.
+  // counted once: see the pairing rule below (the immediately previous user
+  // record, the other carrier, within 4 records and 5 s).
   // What older CLIs put in UserMessage items (sometimes injected context or a
   // command wrapper) is what the index lists too; firstUnwrappedPrompt and
   // classify decide what is a label, as for every other source.
@@ -114,18 +115,21 @@ async function readRolloutHead(file: string): Promise<RolloutHead> {
   // pass for the other carrier. One prompt's carriers share its instant.
   const PAIR_WINDOW_RECORDS = 4
   const PAIR_WINDOW_MS = 5_000
-  const pending = { legacy: [] as Array<{ text: string; at: number; ts: number }>, item: [] as Array<{ text: string; at: number; ts: number }> }
+  let lastUser: { carrier: 'legacy' | 'item'; text: string; at: number; ts: number; paired: boolean } | null = null
   const noteUser = (carrier: 'legacy' | 'item', text: string, timestamp: unknown, recordIndex: number) => {
     const ts = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
-    const other = carrier === 'legacy' ? pending.item : pending.legacy
-    const match = other.findIndex(candidate =>
-      candidate.text === text &&
-      recordIndex - candidate.at <= PAIR_WINDOW_RECORDS &&
-      Number.isFinite(ts) && Number.isFinite(candidate.ts) && Math.abs(ts - candidate.ts) <= PAIR_WINDOW_MS)
-    if (match >= 0) {
-      other.splice(match, 1)
+    // ...and never across another user prompt (#1407 verification b): the
+    // other carrier must be the IMMEDIATELY previous user record, so
+    // `repeat, different, repeat` inside a few seconds keeps both repeats.
+    const previous = lastUser
+    const pairs = previous !== null && previous.carrier !== carrier && !previous.paired &&
+      previous.text === text &&
+      recordIndex - previous.at <= PAIR_WINDOW_RECORDS &&
+      Number.isFinite(ts) && Number.isFinite(previous.ts) && Math.abs(ts - previous.ts) <= PAIR_WINDOW_MS
+    if (pairs) {
+      previous.paired = true
     } else {
-      pending[carrier].push({ text, at: recordIndex, ts })
+      lastUser = { carrier, text, at: recordIndex, ts, paired: false }
       if (out.userTexts.length < 6) out.userTexts.push(text)
     }
     if (Number.isFinite(ts)) out.lastUserAt = Math.max(out.lastUserAt ?? ts, ts)

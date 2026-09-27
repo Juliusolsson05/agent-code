@@ -33,3 +33,7 @@ The fixture `testing/fixtures/conversations/codex-0157/typed-prompt-head.json` i
 - **The exact reported repeat (two records on, 48 h later) still paired.** The pair window is now records AND time: at most 4 records apart and at most 5 s apart. One prompt's two carriers share its instant.
 - **A user line longer than two read chunks was lost.** A window with no newline is all one line, so all of it is carried to the next, earlier chunk, and nothing is parsed or dropped.
 - **One of 452 files has its newest prompt 55.8 MB from the end, past the 32 MiB bound. Kept by design.** This is the degraded no-index path, rollouts reach gigabytes, and an unbounded scan per discovery is exactly the store-sized cost the head limit prevents. The WHY comment says so.
+
+## Verification b (at bb183091)
+- **A pair crossed an intervening prompt** (`repeat`, `different`, `repeat`, seconds apart). Fixed: a carrier pairs only with the IMMEDIATELY previous user record, which must be the other carrier, within 4 records and 5 s. Test: `start, repeat, different, repeat` keeps all four. It is red on `456e6e1b`.
+- **The 32 MiB residual** (the same one file) is the deliberate bound documented at `456e6e1b`.
