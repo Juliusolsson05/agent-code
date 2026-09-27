@@ -98,6 +98,25 @@ export function sortUsageRows(rows: UsageLimitRow[]): UsageLimitRow[] {
   })
 }
 
+/**
+ * The whole sentences Agent Code itself throws from the usage readers, and
+ * nothing else (#1451 q132). Each is fixed text with no path, token or
+ * provider-supplied part; see sanitizeUsageError. Kept here, not imported from
+ * each reader, because the readers import this module.
+ */
+const FIRST_PARTY_USAGE_MESSAGES: ReadonlySet<string> = new Set([
+  'Claude usage currently requires macOS Keychain credentials.',
+  'Claude Keychain credentials were empty.',
+  'Claude Keychain credentials do not include an OAuth access token.',
+  'Codex auth.json does not include an access token.',
+  'Grok auth.json is unexpectedly large; refusing to read it.',
+  'Grok auth.json does not include a login key.',
+  'OpenCode auth.json is unexpectedly large; refusing to read it.',
+  'opencode auth.json has no zai-coding-plan key.',
+  // grokUsage.ts GROK_LOGIN_EXPIRED_COPY: its copy tells the user the fix.
+  'Grok login expired — start any Grok session to refresh it.',
+])
+
 export function sanitizeUsageError(err: unknown, fallback: string): string {
   if (!(err instanceof Error)) return fallback
   const message = err.message.trim()
@@ -113,20 +132,18 @@ export function sanitizeUsageError(err: unknown, fallback: string): string {
   if (message.includes('401') || message.includes('403')) return 'Provider rejected the current auth token.'
   if (message.includes('404')) return 'Provider usage endpoint was not found.'
   if (message.includes('429')) return 'Provider usage endpoint rate limited the request.'
-  if (message.includes('Keychain')) return message
-  // Only the fixed messages Agent Code itself throws about an auth file keep
-  // their words (exact provider prefix). Anything else that mentions
-  // auth.json — an fs error carrying the ABSOLUTE credential path, or a
-  // provider's own message — is one curated sentence (#1451 review a, q22):
-  // the usage MCP domain hands this text to agents, and it was a loose
-  // substring gate any provider text could pass by naming the file.
-  if (/^(Codex|Grok|OpenCode|opencode) auth\.json /.test(message)) return message
+  // EXACT first-party sentences only (#1451 steering q132, SECURITY). The
+  // earlier gates were prefixes and substrings — "contains Keychain", "starts
+  // with Codex auth.json", "starts with Grok login expired" — and a prefix
+  // proves nothing about the rest of the sentence: "Codex auth.json
+  // /Users/alice/.codex/auth.json token=abc" passed whole, and the usage MCP
+  // domain hands this row to agents. A message is kept only when it IS one of
+  // the sentences Agent Code throws, character for character; everything else
+  // is fixed text. A throw site whose wording drifts falls to the fixed text,
+  // which is the safe direction.
+  if (FIRST_PARTY_USAGE_MESSAGES.has(message)) return message
+  if (/keychain/i.test(message)) return "Claude's Keychain credentials could not be read."
   if (message.includes('auth.json')) return 'Its auth file (auth.json) could not be read.'
-  // The Grok expiry row is only useful because its copy tells the user the
-  // actual fix (run any Grok session to refresh auth.json); the generic
-  // fallback would erase that. Exact-prefix match, not a loose substring, so
-  // provider noise cannot smuggle arbitrary text through this gate.
-  if (message.startsWith('Grok login expired')) return message
   return fallback
 }
 

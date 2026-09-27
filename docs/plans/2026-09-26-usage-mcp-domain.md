@@ -57,3 +57,14 @@ Choosing providers automatically from quota (the issue's separate follow-up).
   `readUsageSnapshotForTools({ force: true })` is not caught. The
   composition line is untested, but the tool has no `force` input, and the
   shared reader's default is no force.
+- **Steering q132 (SECURITY): prefix-shaped errors.** The gates were
+  prefixes and substrings ("contains Keychain", "starts with <Provider>
+  auth.json", "starts with Grok login expired"). "Codex auth.json
+  /Users/alice/… token=abc" passed whole to agents.
+  - `sanitizeUsageError` now keeps only EXACT first-party sentences
+    (`FIRST_PARTY_USAGE_MESSAGES`).
+  - Everything else is fixed text: the Keychain sentence, the auth-file
+    sentence, or the per-provider fallback.
+  - `usageErrorBoundary.test.ts` pins five prefix-shaped messages at the
+    sanitizer, through the real Usage reader's error row, and through the
+    real `usage_read` tool. All 10 cases were red on the previous head.
