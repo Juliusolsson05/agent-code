@@ -252,3 +252,20 @@ it('restores an agent with its derived TLDR identity, and an explicit one unchan
   harness.unmount()
 })
 
+// #1356 review b: the project-restore call site passes each MEMBER's closed id;
+// a fresh id there survived the single-pane case above.
+it('restores each agent of a project with its own derived TLDR identity', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  const meta = { cwd: '/projects/agent-code', kind: 'claude' as const, projectId: 'closed-tab', joinedAt: 1, builtInMcpDomains: ['goal'] as never }
+  refs.undoStackRef.current.push({
+    type: 'tab', closedAt: Date.now(), tab: { id: 'closed-tab', title: 'agent-code' }, tabIndex: 0,
+    sessions: [{ sessionId: 'derived-member', meta }, { sessionId: 'explicit-member', meta: { ...meta, tldrIdentity: 'tldr-explicit-member' } }],
+  })
+  const spawn = vi.fn().mockResolvedValueOnce('restored-one').mockResolvedValueOnce('restored-two')
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  expect(spawn.mock.calls.map(([, opts]) => (opts as { tldrIdentity?: string }).tldrIdentity)).toEqual(['derived-member', 'tldr-explicit-member'])
+  harness.unmount()
+})
+
