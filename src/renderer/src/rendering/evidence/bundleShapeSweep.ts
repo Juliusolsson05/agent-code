@@ -240,10 +240,19 @@ export function sweepCuratedShapeFixture(
     }
     const transcriptEntry = asRecord(carrier.transcriptEntry)
     if (transcriptEntry && typeof transcriptEntry.type === 'string') {
+      // Same event-type rule as the bundle sweep above (EntryRow's
+      // `type:subtype` for non-conversation entries). The curated path used
+      // the bare type, which no fixture exercised until the first curated
+      // system entry (Codex's compact boundary, #1289); a catalog entry for
+      // `system:compact_boundary` then could never match its own fixture.
+      const isConversation = transcriptEntry.type === 'user' || transcriptEntry.type === 'assistant'
+      const subtype = !isConversation && typeof transcriptEntry.subtype === 'string'
+        ? `:${transcriptEntry.subtype}`
+        : ''
       observe(
         'transcript-entry',
         'durable',
-        transcriptEntry.type,
+        `${transcriptEntry.type}${subtype}`,
         transcriptEntry,
       )
     }

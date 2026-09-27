@@ -196,17 +196,59 @@ function codexConversationEntryFromMessageItem(
   }
 }
 
+// WHY no `compactMetadata` (#1289): the boundary used to carry the whole
+// `compacted` payload, including `replacement_history` (the retained developer
+// instructions, AGENTS.md, earlier user prompts, and an encrypted summary of
+// 13–23 KB). That kept a second copy of that text in memory and in every debug
+// bundle, and nothing in the app reads a Codex boundary's metadata; its uuid
+// already identifies the rollout line. A varying metadata object also made
+// each boundary a different rendering shape.
 function codexCompactBoundaryEntry(
   uuid: string,
-  payload: Record<string, unknown>,
+  timestamp: string | undefined,
 ): Entry {
   return {
     type: 'system',
     subtype: 'compact_boundary',
     content: 'Conversation compacted',
     uuid,
-    compactMetadata: payload,
+    // WHY a timestamp (#1289): rendering/model/order.ts sorts timestamp-less
+    // rows to the end of their phase, so without it the boundary painted at
+    // the bottom of the feed instead of where the compaction happened.
+    timestamp,
   }
+}
+
+// A committed Codex compaction: a timestamped boundary, then the summary when
+// the CLI wrote a readable one (#1289).
+//
+// WHY `replacement_history` is not mapped here: in the common case it is not
+// new conversation. It is the context Codex keeps across the compaction
+// (developer instructions, the AGENTS.md block, earlier user prompts, and from
+// 0.155 an encrypted `compaction` summary item). Mapped, it repainted prompts
+// already in the feed: 17,326 of 20,343 sampled replacement messages
+// duplicated an earlier user message.
+//
+// KNOWN GAP (review a of #1386, follow-up #1393): it is NOT
+// always a duplicate. 82 local rollouts (68 sessions) are resumed files that
+// START with a `compacted` line, so its retained user prompts are the only
+// copy of that earlier conversation in the file. This line-at-a-time mapper
+// cannot tell that case apart (a paged older-history load can also start a
+// page with a `compacted` line that has predecessors in the previous page),
+// so the fix belongs where the loader knows it is mapping from file offset 0.
+// Before #1386 no `compacted` line rendered at all, so this is not a
+// regression. WHY the summary is conditional: `message` is empty in every
+// 0.15x rollout, where the summary is encrypted; only 56 of about 1,500 local
+// compactions (older CLIs) carry readable text.
+function mapCodexCompacted(
+  uuid: string,
+  timestamp: string | undefined,
+  payload: Record<string, unknown>,
+): Entry[] {
+  const out: Entry[] = [codexCompactBoundaryEntry(`${uuid}:compact-boundary`, timestamp)]
+  const message = typeof payload.message === 'string' ? payload.message.trim() : ''
+  if (message) out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
+  return out
 }
 
 function codexCompactSummaryEntry(
@@ -294,6 +336,11 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
   const uuid = codexRolloutIdentity(entry)
   const timestamp =
     typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+
+  // WHY before the payload.type guard (#1289): a `compacted` line's payload
+  // has no `type` (every one of about 1,500 local lines), so that guard
+  // returned [] for all of them and Codex compaction never rendered.
+  if (entry.type === 'compacted' && payload) return mapCodexCompacted(uuid, timestamp, payload)
 
   if (!payload || typeof payload.type !== 'string') return []
 
@@ -395,33 +442,6 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
     }
 
     return []
-  }
-
-  if (entry.type === 'compacted') {
-    const out: Entry[] = [
-      codexCompactBoundaryEntry(`${uuid}:compact-boundary`, payload),
-    ]
-
-    const message = typeof payload.message === 'string' ? payload.message.trim() : ''
-    if (message) {
-      out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
-    }
-
-  const replacementHistory = Array.isArray(payload.replacement_history)
-      ? payload.replacement_history
-      : []
-    for (let i = 0; i < replacementHistory.length; i += 1) {
-      const item = asRecord(replacementHistory[i])
-      if (!item) continue
-      const mapped = codexConversationEntryFromMessageItem(
-        `${uuid}:replacement:${i}`,
-        timestamp,
-        item,
-      )
-      if (mapped) out.push(mapped)
-    }
-
-    return out
   }
 
   if (entry.type !== 'response_item') return []
