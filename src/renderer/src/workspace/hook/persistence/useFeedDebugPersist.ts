@@ -95,8 +95,16 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
   // still wrote one last batch to disk).
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
+  // The release bookkeeping (see releaseGone) lives in a ref, not in the
+  // effect: the effect re-runs whenever persistence is switched on or off,
+  // and a set recreated there forgot every id it was tracking, so a pane
+  // closed across a persistence toggle was never released (#1392 review c).
+  const releaseStateRef = useRef({
+    known: new Set<SessionId>(),
+    releasing: new Set<SessionId>(),
+    seenSinceRelease: new Set<SessionId>(),
+  })
   useEffect(() => {
-    if (!enabled) return
     const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
       if (runtime.feedDebugLog.length === 0) return
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
@@ -180,15 +188,15 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
     // the ACK then leaves the id in `known`, and the next absence sends a new
     // release.
     //
-    // Known residuals: a release that fails during the hook's own teardown
-    // (workspace unmount) has no later tick to retry it; and this effect only
-    // runs while persistence is on (#767), so a session removed while
-    // persistence is off is not released. Either way main keeps that one
-    // session's few numbers until it exits (main only has state for sessions
-    // that appended while persistence was on).
-    const known = new Set<SessionId>()
-    const releasing = new Set<SessionId>()
-    const seenSinceRelease = new Set<SessionId>()
+    // Releasing keeps running while persistence is OFF (#767): it writes
+    // nothing to disk, it only tells main to forget, and a session that
+    // appended while persistence was on still has state in main after the
+    // user switches persistence off (#1392 review c).
+    //
+    // Known residual: a release that fails during the hook's own teardown
+    // (workspace unmount) has no later tick to retry it. Main keeps that one
+    // session's few numbers until it exits.
+    const { known, releasing, seenSinceRelease } = releaseStateRef.current
     const releaseGone = (): void => {
       const runtimes = refs.latestRuntimesRef.current
       for (const sessionId of known) {
@@ -211,7 +219,8 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       for (const [sessionId, runtime] of Object.entries(refs.latestRuntimesRef.current)) {
         known.add(sessionId)
         if (releasing.has(sessionId)) seenSinceRelease.add(sessionId)
-        flushSession(sessionId, runtime)
+        // Disk writes only while persistence is on; releases always.
+        if (enabled) flushSession(sessionId, runtime)
       }
       releaseGone()
     }
@@ -231,6 +240,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
       // Not when persistence was just switched off: the user asked for no
       // more disk writes.
       if (enabledRef.current) flush()
+      else releaseGone()
     }
   }, [
     enabled,

@@ -377,6 +377,35 @@ describe('releasing a session whose runtime is gone (#1392)', () => {
     await expect(advance(3_000)).resolves.toBeUndefined()
   })
 
+  // Review c: switching persistence off destroyed the release bookkeeping, so
+  // a pane closed across the toggle was never released, one leaked entry per
+  // such session for the life of main.
+  it('releases a session that closed while persistence was off', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'persisted row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(1)
+    act(() => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }) })
+    refs.latestRuntimesRef.current = {}
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a' })
+    expect(append).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases it after persistence is switched back on too', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'persisted row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    forget.mockRejectedValue(new Error('ipc down'))
+    act(() => { useDevDebugConfig.setState({ enabled: false, sessionRecordingEnabled: false }) })
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    forget.mockResolvedValue(undefined)
+    act(() => { useDevDebugConfig.setState({ enabled: true, sessionRecordingEnabled: false }) })
+    await advance(2_000)
+    expect(forget.mock.calls.at(-1)).toEqual([{ sessionId: 'a' }])
+  })
+
   it('does not forget a session that never had a runtime while mounted', async () => {
     const refs = makeRefs({})
     renderHook(() => useFeedDebugPersist(refs))
