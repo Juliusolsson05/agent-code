@@ -121,14 +121,14 @@ that leak developer data. Each item below is taken from the issue, with its curr
          (`GIT_CEILING_DIRECTORIES`, a bogus `GIT_DIR`), and "no answer" was read as "outside". The
          check is now an ancestor walk for a `.git` entry from the realpath'd root to `/`, with no
          git process at all. Process tests for both environments are red at `980a78ba`.
-     - **Stated residuals (final-pass cap):**
-       - A concurrent process running as the same user can rename the just-created staging directory
-         and put a symlink in its place between `mkdtemp` and the write, redirecting the write. Binding
-         the write to the directory inode needs `openat`, which Node doesn't expose. An attacker with
-         that access can write anywhere the user can.
-       - The `wx` flag on the staged file is defensive only: in a directory created a moment before,
-         nothing can pre-exist except through that same race, so no deterministic test can tell `wx`
-         from `w`.
+     - **q82 (round 5 a, a valid blocker):** a concurrent process could swap the fresh staging
+       directory for a symlink before the by-path write. Now there is no staging directory:
+       `writeStagedFile` (`scripts/agent-activity-staging.ts`) opens ONE new file,
+       `agent-activity-staging-<uuid>.json`, with `wx` and mode 0600 under the checked root. It writes
+       through that descriptor and closes it, never by path.
+       - A unit test swaps the path for a symlink between the open and the write. The bytes stay in
+         the created file and the symlink's target is untouched.
+       - Mutations killed: writing by path, and mode 0644.
      - **Stated residual:** the pattern-based pass itself can't recognise every identifier a new live
        corpus might hold, which is why the staged file needs a person's audit before any copy.
    - The fleet fixtures:

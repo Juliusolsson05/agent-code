@@ -95,8 +95,9 @@ afterEach(async () => {
   stagingParent = undefined
 })
 async function stagedFiles(): Promise<string[]> {
-  const dirs = (await readdir(stagingParent!)).filter(name => name.startsWith('agent-activity-staging-'))
-  return dirs.map(dir => join(stagingParent!, dir, 'runtime-states.json'))
+  return (await readdir(stagingParent!))
+    .filter(name => name.startsWith('agent-activity-staging-'))
+    .map(name => join(stagingParent!, name))
 }
 async function live(args: string[] = []) {
   stagingParent = await mkdtemp(join(tmpdir(), 'aas-'))
@@ -106,7 +107,7 @@ async function live(args: string[] = []) {
 describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes (live)', () => {
   // The A reproduction (a private project outside Development/) plus the q80 one: a symlink planted
   // at the OLD staging path, pointing at the tracked fixture. Neither can reach the tracked file.
-  it('stages into a fresh temp directory and never touches the tracked fixture, even through a planted symlink', async () => {
+  it('stages into one new temp file and never touches the tracked fixture, even through a planted symlink', async () => {
     const { output } = await stage()
     const me = cwd!.split('/').pop()!
     await liveBundle({ provider: 'claude', worktreePath: `/Users/${me}/Projects/secretproject/private-task` }, `/Users/${me}/Projects/secretproject/private-task`)

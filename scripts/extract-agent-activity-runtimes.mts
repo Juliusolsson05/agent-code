@@ -41,7 +41,8 @@
 // smooth over.
 //
 // Usage (steering q79 — the tracked fixture is never a live output):
-//   Stage a live extraction (into a fresh temp directory it prints; a person audits it before any copy):
+//   Stage a live extraction (into one new 0600 file under the temp dir, printed; a person audits it
+//   before any copy):
 //     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts
 //   Reproduce the committed fixture from the one recorded corpus (the only writer of the tracked file):
 //     npx tsx --tsconfig tsconfig.node.json scripts/extract-agent-activity-runtimes.mts --redact-from <15e43abe^ blob> --home-user <recorder>
@@ -50,7 +51,7 @@
 
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
-import { mkdtemp, readdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { readdir, readFile, writeFile, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -62,6 +63,7 @@ import {
   requireHomeUser,
   RUNTIME_STATES_PROVENANCE,
 } from './agent-activity-redaction-policy.js'
+import { writeStagedFile } from './agent-activity-staging.js'
 
 const BUNDLE_ROOTS = [
   join(homedir(), '.config/agent-code/debug-bundles'),
@@ -69,21 +71,16 @@ const BUNDLE_ROOTS = [
   join(homedir(), '.config/agent-code/debug-bundles/autosave'),
 ]
 const OUT = join(process.cwd(), 'testing/fixtures/agent-activity/runtime-states.json')
-/**
- * Where a LIVE extraction writes: a fresh directory it creates itself under the system temp dir,
- * never an existing path and never the repository.
- *
- * WHY no output path at all (review of #1353; steering q79/q80 — a scope NARROWING after two
- * rounds of path validation each had a bypass): the live run wrote the tracked fixture directly,
- * then an `--out` staging path could be a symlink (or sit under one) that points back at it. A
- * directory `mkdtemp` has just created cannot already contain a link, and nothing about it needs
- * checking. The tracked `runtime-states.json` changes ONLY through `--redact-from` (the one
- * recorded corpus) or a person copying a staged file in after a key-by-key privacy audit.
+
+/*
+ * Where a LIVE extraction writes (steering q79/q80/q82): never a path the caller names. The live run
+ * used to write the tracked fixture directly (q79); an `--out` staging path was then bypassed through
+ * a symlink (q80); a fresh staging directory could be swapped for a symlink before the by-path write
+ * (q82). What is left: one new file, opened exclusively under a temp root that is not inside a
+ * working tree, and written through its descriptor (scripts/agent-activity-staging.ts). The tracked
+ * `runtime-states.json` changes ONLY through `--redact-from` (the one recorded corpus) or a person
+ * copying the staged file in after a key-by-key privacy audit.
  */
-async function stagingFile(root: string): Promise<string> {
-  const dir = await mkdtemp(join(root, 'agent-activity-staging-'))
-  return join(dir, 'runtime-states.json')
-}
 
 /**
  * The real temp root, refused when it lies inside a git worktree.
@@ -282,9 +279,8 @@ async function main(): Promise<void> {
   assertHomesBelongTo(JSON.stringify(fixture), homeUser)
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
   assertNoForeignHome(redacted, homeUser)
-  const out = await stagingFile(root)
-  // 'wx': the file is new in a directory made a moment ago; anything already there is refused.
-  await writeFile(out, redacted, { encoding: 'utf8', flag: 'wx' })
+  // One exclusive file under the checked root, written through its descriptor (see writeStagedFile).
+  const out = await writeStagedFile(root, redacted)
   console.log(`staged ${records.length} runtime states in ${out}: audit every key and string before copying it over ${OUT}`)
   console.log(fixture.totals)
 }
