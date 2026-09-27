@@ -35,16 +35,18 @@ describe('SubAgentWatcher', () => {
       )
       await writeFile(jsonlPath, assistantToolUseLine(0).slice(0, -1), 'utf8')
 
+      // WHY await refresh() instead of polling a deadline (#1296): refresh()
+      // returns the coalesced drain, which runs another full pass for any
+      // request made while a pass is in flight — so once it resolves, a pass
+      // that STARTED after this point has emitted. The previous 1.5 s
+      // wall-clock loop measured the machine's load, not the watcher.
       watcher.start()
-      await eventually(() => {
-        expect(emissions.at(-1)?.['tool-parent']?.toolCalls).toEqual([])
-      })
+      await watcher.refresh()
+      expect(emissions.at(-1)?.['tool-parent']?.toolCalls).toEqual([])
 
       await appendFile(jsonlPath, '\n', 'utf8')
-      watcher.refresh()
-      await eventually(() => {
-        expect(emissions.at(-1)?.['tool-parent']?.toolCalls).toHaveLength(1)
-      })
+      await watcher.refresh()
+      expect(emissions.at(-1)?.['tool-parent']?.toolCalls).toHaveLength(1)
 
       // WHY 520 entries instead of a tiny fixture:
       //
@@ -65,17 +67,15 @@ describe('SubAgentWatcher', () => {
         Array.from({ length: 520 }, (_, i) => assistantToolUseLine(i + 1)).join(''),
         'utf8',
       )
-      watcher.refresh()
+      await watcher.refresh()
 
-      await eventually(() => {
-        const state = emissions.at(-1)?.['tool-parent']
-        expect(state?.toolCalls).toHaveLength(40)
-        expect(state?.droppedToolCalls).toBe(481)
-        expect(state?.toolCalls.at(-1)).toMatchObject({
-          name: 'Read',
-          headline: '/tmp/file-520.txt',
-          status: 'running',
-        })
+      const state = emissions.at(-1)?.['tool-parent']
+      expect(state?.toolCalls).toHaveLength(40)
+      expect(state?.droppedToolCalls).toBe(481)
+      expect(state?.toolCalls.at(-1)).toMatchObject({
+        name: 'Read',
+        headline: '/tmp/file-520.txt',
+        status: 'running',
       })
     } finally {
       watcher.stop()
@@ -99,19 +99,4 @@ function assistantToolUseLine(i: number): string {
       ],
     },
   })}\n`
-}
-
-async function eventually(assertion: () => void): Promise<void> {
-  const deadline = Date.now() + 1500
-  let lastError: unknown
-  while (Date.now() < deadline) {
-    try {
-      assertion()
-      return
-    } catch (err) {
-      lastError = err
-      await new Promise(resolve => setTimeout(resolve, 25))
-    }
-  }
-  throw lastError
 }

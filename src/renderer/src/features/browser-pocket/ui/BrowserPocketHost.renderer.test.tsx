@@ -310,10 +310,13 @@ describe('guest lifecycle', () => {
     view.rerender(<GlobalToastProvider><BrowserPocketHost workspace={moved.ws} /></GlobalToastProvider>)
     await flush()
     act(() => { guest().dispatchEvent(new Event('render-process-gone')) })
-    await act(async () => { await new Promise(r => setTimeout(r, 400)) })
-    await flush()
-    expect(log).toContain('unregister(guests=1)')
-    expect(guest().getAttribute('src')).toBe('http://localhost:3000/dashboard')
+    // Wait for the restart itself (the first crash backs off nextCrashDelay =
+    // 250 ms), not a fixed 400 ms sleep that a loaded machine can outrun (#1296).
+    await vi.waitFor(async () => {
+      await flush()
+      expect(log).toContain('unregister(guests=1)')
+      expect(guest().getAttribute('src')).toBe('http://localhost:3000/dashboard')
+    })
   })
 
   it('a detached pocket keeps its guest mounted until main has unregistered it', async () => {
