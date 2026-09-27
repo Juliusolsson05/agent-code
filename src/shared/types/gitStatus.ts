@@ -43,6 +43,9 @@ export type GitBarStatusResult =
       files: GitNumstatLine[]
       commits: GitRecentCommit[]
       submodules?: GitSubmoduleStatus[]
+      /** A git command after the branch probe hit the runner's timeout, so
+       *  the files or commits may be missing (#1250 row 11). */
+      incomplete?: boolean
     }
   | {
       ok: false
@@ -58,4 +61,7 @@ export type GitBarStatusResult =
        *  Required, not optional: the producer must decide, and the
        *  renderer must branch. */
       gitMissing: boolean
+      /** The probe hit the runner's timeout: git is slow here, which is not
+       *  "not a git repository" (#1250 row 11). */
+      timedOut?: boolean
     }

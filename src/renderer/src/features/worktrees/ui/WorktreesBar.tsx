@@ -271,7 +271,10 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
               surface because the poll would re-fire a toast forever. */}
           {dump?.gitMissing
             ? 'Git not found — Git features are disabled.'
-            : 'Not a Git repository.'}
+            : dump?.gitTimedOut
+              // A slow repo is not "not a repository" (#1250 row 11).
+              ? 'Git took too long to answer here. It will try again.'
+              : 'Not a Git repository.'}
         </div>
       )}
 
@@ -343,7 +346,11 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
         {shortenPath(row.path)}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-muted">
-        {row.dirty && <span className="text-warning">dirty</span>}
+        {/* A row whose git timed out is a guess, counted as dirty so it is
+            never offered for cleanup; say which it is (#1250 row 11). */}
+        {row.statusTimedOut
+          ? <span className="text-warning" title="Git took too long for this worktree; it is kept out of cleanup until it answers.">status unknown (git timed out)</span>
+          : row.dirty && <span className="text-warning">dirty</span>}
         {row.ahead !== null && row.behind !== null && (
           <span>
             +{row.ahead} / -{row.behind}

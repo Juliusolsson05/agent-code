@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { ipcMain } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -49,6 +50,9 @@ type CacheEntry<T> = {
   expiresAt: number
   settled: boolean
   promise: Promise<T>
+  /** Set before `promise` resolves when git timed out computing it (#1250
+   *  row 11), so every caller sharing the entry sees it. Never cached. */
+  timedOut?: boolean
 }
 
 type QueuedGitCommand = {
@@ -56,6 +60,25 @@ type QueuedGitCommand = {
   args: string[]
   resolve: (stdout: string) => void
   reject: (err: unknown) => void
+  trace: GitTrace | undefined
+}
+
+// WHY a timeout trace (#1250 row 11): every failure returns '' by contract
+// (see `git()`), so a command that hit the 5 s timeout read as "no output":
+// a dirty worktree as CLEAN, a branch with unmerged patches as
+// patch-equivalent (a cleanup suggestion), a slow repo as "not a git
+// repository". The '' stays, so no caller changes; a caller that must know
+// runs its commands inside `gitTrace.run(trace, ...)` and reads
+// `trace.timedOut` afterwards. The store is read SYNCHRONOUSLY in `git()`
+// and carried on the queued item, because the command itself may run later
+// from another caller's drain, outside this async context.
+type GitTrace = { timedOut: boolean }
+const gitTrace = new AsyncLocalStorage<GitTrace>()
+
+async function traced<T>(run: () => Promise<T>): Promise<{ value: T; timedOut: boolean }> {
+  const trace: GitTrace = { timedOut: false }
+  const value = await gitTrace.run(trace, run)
+  return { value, timedOut: trace.timedOut }
 }
 
 const worktreeListCache = new Map<string, CacheEntry<WorktreeIdentity[]>>()
@@ -99,6 +122,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
       args,
       resolve,
       reject: () => resolve(''),
+      trace: gitTrace.getStore(),
     })
     drainGitQueue()
   })
@@ -108,7 +132,7 @@ function drainGitQueue(): void {
   while (activeGitProcesses < GIT_PROCESS_CONCURRENCY && gitQueue.length > 0) {
     const next = gitQueue.shift()!
     activeGitProcesses += 1
-    void runGitCommand(next.cwd, next.args)
+    void runGitCommand(next.cwd, next.args, next.trace)
       .then(next.resolve, next.reject)
       .finally(() => {
         activeGitProcesses -= 1
@@ -117,7 +141,7 @@ function drainGitQueue(): void {
   }
 }
 
-async function runGitCommand(cwd: string, args: string[]): Promise<string> {
+async function runGitCommand(cwd: string, args: string[], trace?: GitTrace): Promise<string> {
   try {
     // WHY every git command shares one process-wide limiter:
     // per-feature limits are not enough when WorktreesBar, GitBar, history
@@ -154,7 +178,10 @@ async function runGitCommand(cwd: string, args: string[]): Promise<string> {
     // is safe here because every command this runner issues is read-only
     // plumbing (no hooks run), so no repo content can echo these strings
     // back at us.
-    const failure = err as NodeJS.ErrnoException & { stderr?: unknown }
+    const failure = err as NodeJS.ErrnoException & { stderr?: unknown; killed?: boolean; signal?: string | null }
+    // execFile's `timeout` kills the child with SIGTERM and reports
+    // `killed: true`; that is the only way this runner kills a command.
+    if (trace && failure?.killed === true && failure.signal === 'SIGTERM') trace.timedOut = true
     const cltShimFailure =
       typeof failure?.stderr === 'string' &&
       /xcrun|xcode-select|no developer tools|invalid active developer path/i.test(
@@ -211,9 +238,18 @@ function parseWorktreePorcelain(out: string): WorktreeIdentity[] {
 }
 
 export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity[]> {
+  return (await listWorktreesForCwdDetailed(cwd)).worktrees
+}
+
+/** The list plus whether `git worktree list` timed out, which an empty list
+ *  alone cannot tell apart from "not a git repository" (#1250 row 11). */
+async function listWorktreesForCwdDetailed(cwd: string): Promise<{ worktrees: WorktreeIdentity[]; timedOut: boolean }> {
   const now = Date.now()
   const cached = worktreeListCache.get(cwd)
-  if (cached && (!cached.settled || cached.expiresAt > now)) return cloneWorktrees(await cached.promise)
+  if (cached && (!cached.settled || cached.expiresAt > now)) {
+    const worktrees = cloneWorktrees(await cached.promise)
+    return { worktrees, timedOut: cached.timedOut === true }
+  }
 
   // Worktree identity is stable on human timescales but several hot paths
   // ask for it back-to-back: WorktreesBar status, WorktreeActivity summary,
@@ -227,10 +263,11 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
     settled: false,
     promise: Promise.resolve([]),
   }
-  entry.promise = git(cwd, ['worktree', 'list', '--porcelain'])
-    .then(out => {
+  entry.promise = traced(() => git(cwd, ['worktree', 'list', '--porcelain']))
+    .then(({ value: out, timedOut }) => {
+      entry.timedOut = timedOut
       const worktrees = out.trim() ? parseWorktreePorcelain(out) : []
-      cacheableResult = worktrees.length > 0
+      cacheableResult = worktrees.length > 0 && !timedOut
       if (cacheableResult) {
         // WHY alias every returned worktree path to the same probe: during
         // multi-agent orchestration, siblings often ask from different checkout
@@ -264,13 +301,21 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
       entry.expiresAt = cacheableResult ? Date.now() + WORKTREE_CACHE_TTL_MS : 0
     })
   worktreeListCache.set(cwd, entry)
-  return cloneWorktrees(await entry.promise)
+  const worktrees = cloneWorktrees(await entry.promise)
+  return { worktrees, timedOut: entry.timedOut === true }
 }
 
 export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
+  return (await getWorktreeStatusForCwdDetailed(cwd)).worktrees
+}
+
+async function getWorktreeStatusForCwdDetailed(cwd: string): Promise<{ worktrees: GitWorktreeStatus[]; timedOut: boolean }> {
   const now = Date.now()
   const cached = worktreeStatusCache.get(cwd)
-  if (cached && (!cached.settled || cached.expiresAt > now)) return cloneStatuses(await cached.promise)
+  if (cached && (!cached.settled || cached.expiresAt > now)) {
+    const worktrees = cloneStatuses(await cached.promise)
+    return { worktrees, timedOut: cached.timedOut === true }
+  }
 
   let cacheableResult = false
   const entry: CacheEntry<GitWorktreeStatus[]> = {
@@ -279,8 +324,11 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
     promise: Promise.resolve([]),
   }
   entry.promise = computeWorktreeStatusForCwd(cwd)
-    .then(statuses => {
-      cacheableResult = statuses.length > 0
+    .then(({ statuses, listTimedOut }) => {
+      entry.timedOut = listTimedOut
+      // A row whose git timed out is a guess (#1250 row 11): retry it on the
+      // next poll instead of serving it for the cache's 30 s.
+      cacheableResult = statuses.length > 0 && !statuses.some(status => status.statusTimedOut)
       if (cacheableResult) {
         seedCacheAliases(worktreeStatusCache, [
           cwd,
@@ -295,97 +343,119 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
       entry.expiresAt = cacheableResult ? Date.now() + WORKTREE_CACHE_TTL_MS : 0
     })
   worktreeStatusCache.set(cwd, entry)
-  return cloneStatuses(await entry.promise)
+  const worktrees = cloneStatuses(await entry.promise)
+  return { worktrees, timedOut: entry.timedOut === true }
 }
 
-async function computeWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
-  const worktrees = await listWorktreesForCwd(cwd)
-  return await mapWithConcurrency(worktrees, WORKTREE_STATUS_CONCURRENCY, async worktree => {
-    const branch = worktree.branch
-    const [statusOut, lastCommitRaw] = await Promise.all([
-      // WHY keep untracked-files=normal instead of the faster -uno:
-      // the Worktrees panel is a cleanup tool, so brand-new files in an agent
-      // branch are real user work and must keep the row "dirty". The expensive
-      // part we can safely trim is submodule worktree inspection: for cleanup
-      // triage, a submodule's recorded commit is the repository-level signal,
-      // while scanning every submodule's own untracked/modified files across
-      // many sibling worktrees multiplies filesystem work during orchestration.
-      git(worktree.path, [
-        'status',
-        '--porcelain',
-        '--untracked-files=normal',
-        '--ignore-submodules=dirty',
-      ]),
-      git(worktree.path, ['log', '-1', '--format=%ct%x00%cr']),
-    ])
-    const dirty = statusOut.trim().length > 0
-    const [lastCommitAtRaw = '', lastCommitRelativeRaw = ''] = lastCommitRaw.trim().split('\0')
-    const lastCommitRelative = lastCommitRelativeRaw || null
-    const lastCommitAt =
-      /^\d+$/.test(lastCommitAtRaw) ? Number(lastCommitAtRaw) * 1000 : null
+async function computeWorktreeStatusForCwd(cwd: string): Promise<{ statuses: GitWorktreeStatus[]; listTimedOut: boolean }> {
+  const { worktrees, timedOut: listTimedOut } = await listWorktreesForCwdDetailed(cwd)
+  const statuses = await mapWithConcurrency(worktrees, WORKTREE_STATUS_CONCURRENCY, worktree =>
+    // Each row under its own trace: one slow worktree must not mark others.
+    traced(() => computeWorktreeRow(cwd, worktree)).then(({ value, timedOut }) => {
+      if (!timedOut) return value
+      // WHY conservative (#1250 row 11): '' from a timed-out `git status`
+      // read as a clean tree, and '' from a timed-out `git cherry` as "no
+      // patch-unique commits", so a worktree holding real work could be
+      // offered for cleanup. A timed-out row is never a cleanup category;
+      // `computeWorktreeRow` already treated a timed-out status as dirty.
+      return { ...value, statusTimedOut: true, category: value.category === 'main' ? 'main' : 'review' } satisfies GitWorktreeStatus
+    }),
+  )
+  return { statuses, listTimedOut }
+}
 
-    let mergedToMain: boolean | null = null
-    let ahead: number | null = null
-    let behind: number | null = null
-    let patchUniqueAhead: number | null = null
-    if (branch && branch !== 'main') {
-      const counts = parseRevListCounts(
-        await git(cwd, ['rev-list', '--left-right', '--count', `main...${branch}`]),
-      )
-      behind = counts?.behind ?? null
-      ahead = counts?.ahead ?? null
-      if (ahead === 0) {
-        mergedToMain = true
-        patchUniqueAhead = 0
-      } else if (ahead !== null) {
-        mergedToMain = false
-        // Raw ahead/behind is ancestry-based. Squash merges and
-        // cherry-picks leave old branch commits "ahead" by SHA even
-        // when their patches already exist on main. `git cherry`
-        // answers the cleanup question we actually care about:
-        // does this branch contain any patch-unique work? We only need it when
-        // rev-list says the branch has commits ahead; ahead==0 is already the
-        // cheap merged-to-main proof and avoids one subprocess per branch.
-        patchUniqueAhead = parsePatchUniqueAhead(
-          await git(cwd, ['cherry', 'main', branch]),
-        )
-      }
-    } else if (branch === 'main') {
+async function computeWorktreeRow(cwd: string, worktree: WorktreeIdentity): Promise<GitWorktreeStatus> {
+  const branch = worktree.branch
+  const [statusOut, lastCommitRaw] = await Promise.all([
+    // WHY keep untracked-files=normal instead of the faster -uno:
+    // the Worktrees panel is a cleanup tool, so brand-new files in an agent
+    // branch are real user work and must keep the row "dirty". The expensive
+    // part we can safely trim is submodule worktree inspection: for cleanup
+    // triage, a submodule's recorded commit is the repository-level signal,
+    // while scanning every submodule's own untracked/modified files across
+    // many sibling worktrees multiplies filesystem work during orchestration.
+    // Its own trace: '' from a timed-out status would read as CLEAN.
+    traced(() => git(worktree.path, [
+      'status',
+      '--porcelain',
+      '--untracked-files=normal',
+      '--ignore-submodules=dirty',
+    ])),
+    git(worktree.path, ['log', '-1', '--format=%ct%x00%cr']),
+  ])
+  // A timed-out status is unknown, so dirty: never offer it for cleanup.
+  // The row's own trace is marked too (a nested run hides it from there).
+  if (statusOut.timedOut) {
+    const rowTrace = gitTrace.getStore()
+    if (rowTrace) rowTrace.timedOut = true
+  }
+  const dirty = statusOut.timedOut || statusOut.value.trim().length > 0
+  const [lastCommitAtRaw = '', lastCommitRelativeRaw = ''] = lastCommitRaw.trim().split('\0')
+  const lastCommitRelative = lastCommitRelativeRaw || null
+  const lastCommitAt =
+    /^\d+$/.test(lastCommitAtRaw) ? Number(lastCommitAtRaw) * 1000 : null
+
+  let mergedToMain: boolean | null = null
+  let ahead: number | null = null
+  let behind: number | null = null
+  let patchUniqueAhead: number | null = null
+  if (branch && branch !== 'main') {
+    const counts = parseRevListCounts(
+      await git(cwd, ['rev-list', '--left-right', '--count', `main...${branch}`]),
+    )
+    behind = counts?.behind ?? null
+    ahead = counts?.ahead ?? null
+    if (ahead === 0) {
       mergedToMain = true
-      ahead = 0
-      behind = 0
       patchUniqueAhead = 0
+    } else if (ahead !== null) {
+      mergedToMain = false
+      // Raw ahead/behind is ancestry-based. Squash merges and
+      // cherry-picks leave old branch commits "ahead" by SHA even
+      // when their patches already exist on main. `git cherry`
+      // answers the cleanup question we actually care about:
+      // does this branch contain any patch-unique work? We only need it when
+      // rev-list says the branch has commits ahead; ahead==0 is already the
+      // cheap merged-to-main proof and avoids one subprocess per branch.
+      patchUniqueAhead = parsePatchUniqueAhead(
+        await git(cwd, ['cherry', 'main', branch]),
+      )
     }
+  } else if (branch === 'main') {
+    mergedToMain = true
+    ahead = 0
+    behind = 0
+    patchUniqueAhead = 0
+  }
 
-    const category: GitWorktreeStatus['category'] =
-      branch === 'main'
-        ? 'main'
-        : worktree.detached
-          ? 'detached'
-          : dirty
-            ? 'dirty'
-            : mergedToMain === true && ahead === 0
-              ? 'cleanup-merged'
-              : patchUniqueAhead === 0 && (ahead ?? 0) > 0
-                ? 'patch-equivalent'
-                : (patchUniqueAhead ?? 0) > 0 && (behind ?? 0) > 0
-                  ? 'stale-review'
-                  : (patchUniqueAhead ?? 0) > 0
-                    ? 'active-unmerged'
-                    : 'review'
+  const category: GitWorktreeStatus['category'] =
+    branch === 'main'
+      ? 'main'
+      : worktree.detached
+        ? 'detached'
+        : dirty
+          ? 'dirty'
+          : mergedToMain === true && ahead === 0
+            ? 'cleanup-merged'
+            : patchUniqueAhead === 0 && (ahead ?? 0) > 0
+              ? 'patch-equivalent'
+              : (patchUniqueAhead ?? 0) > 0 && (behind ?? 0) > 0
+                ? 'stale-review'
+                : (patchUniqueAhead ?? 0) > 0
+                  ? 'active-unmerged'
+                  : 'review'
 
-    return {
-      ...worktree,
-      dirty,
-      mergedToMain,
-      ahead,
-      behind,
-      patchUniqueAhead,
-      lastCommitAt,
-      lastCommitRelative,
-      category,
-    }
-  })
+  return {
+    ...worktree,
+    dirty,
+    mergedToMain,
+    ahead,
+    behind,
+    patchUniqueAhead,
+    lastCommitAt,
+    lastCommitRelative,
+    category,
+  }
 }
 
 async function mapWithConcurrency<T, R>(
@@ -497,82 +567,97 @@ export function registerGitIpc(): void {
   // { ok:false } — and the Worktrees panel then renders "not a git
   // repository", the same lie A5 fixed on GitBar. The flag is read AFTER
   // the probes ran, so a latch set by this very call is already visible.
+  // `timedOut` (#1250 row 11): an empty answer from a list that timed out is
+  // "git took too long", not "not a git repository".
   ipcMain.handle('git:worktrees', async (_evt, cwd: string) => {
+    let timedOut = false
     try {
-      const worktrees = await listWorktreesForCwd(cwd)
-      if (worktrees.length === 0) throw new Error('not a git worktree')
-      return { ok: true as const, worktrees }
+      const result = await listWorktreesForCwdDetailed(cwd)
+      timedOut = result.timedOut
+      if (result.worktrees.length === 0) throw new Error('not a git worktree')
+      return { ok: true as const, worktrees: result.worktrees }
     } catch {
-      return { ok: false as const, gitMissing }
+      return { ok: false as const, gitMissing, timedOut }
     }
   })
 
   ipcMain.handle('git:worktree-status', async (_evt, cwd: string) => {
+    let timedOut = false
     try {
-      const worktrees = await getWorktreeStatusForCwd(cwd)
-      if (worktrees.length === 0) throw new Error('not a git worktree')
-      return { ok: true as const, worktrees }
+      const result = await getWorktreeStatusForCwdDetailed(cwd)
+      timedOut = result.timedOut
+      if (result.worktrees.length === 0) throw new Error('not a git worktree')
+      return { ok: true as const, worktrees: result.worktrees }
     } catch {
-      return { ok: false as const, gitMissing }
+      return { ok: false as const, gitMissing, timedOut }
     }
   })
 
   // Return annotated with the shared contract so a field change here is a
   // compile error rather than silent drift from preload/renderer.
   ipcMain.handle('git:status', async (_evt, cwd: string): Promise<GitBarStatusResult> => {
-    try {
-      // Parent repo — branch is the cheap "is this a git repo at all"
-      // probe; if it returns empty we bail to { ok: false } instead of
-      // returning a half-filled shape.
-      const branchOut = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
-      if (!branchOut.trim()) throw new Error('not a git repo')
-
-      const diffStat = await git(cwd, ['diff', 'HEAD', '--numstat'])
-      const logOut = await git(cwd, ['log', '--oneline', '--format=%h\t%s\t%an\t%cr', '-5'])
-
-      const submodulePaths = await readSubmodulePaths(cwd)
-      const submodules: SubmoduleInfo[] = []
-      for (const subPath of submodulePaths) {
-        const info = await inspectSubmodule(cwd, subPath)
-        if (info) submodules.push(info)
-      }
-
-      // Parent file list: drop gitlink lines for the submodule paths
-      // we just surfaced in detail — showing them twice (once as
-      // "+1 -1 on <path>" and once as a full submodule section) is
-      // redundant.
-      const submoduleSet = new Set(submodulePaths)
-      const files = parseNumstat(diffStat).filter(f => !submoduleSet.has(f.file))
-
-      const commits: GitRecentCommit[] = []
-      for (const line of logOut.trim().split('\n')) {
-        if (!line) continue
-        const [hash, subject, author, relativeDate] = line.split('\t')
-        if (!hash) continue
-        commits.push({
-          hash,
-          subject: subject ?? '',
-          author: author ?? '',
-          relativeDate: relativeDate ?? '',
-        })
-      }
-
-      return {
-        ok: true as const,
-        branch: branchOut.trim(),
-        files,
-        commits,
-        // Undefined instead of [] when there are no changed
-        // submodules so the renderer can cheaply gate on
-        // `data.submodules?.length` without drawing an empty heading.
-        submodules: submodules.length > 0 ? submodules : undefined,
-      }
-    } catch {
-      // gitMissing rides the failure result so GitBar can distinguish
-      // "not a repo" from "no git on this machine" (#495 A5). It is read
-      // AFTER the probes above ran, so a fresh latch from this very call
-      // is already visible.
-      return { ok: false as const, gitMissing }
-    }
+    const trace: GitTrace = { timedOut: false }
+    return await gitTrace.run(trace, () => gitBarStatus(cwd, trace))
   })
+}
+
+async function gitBarStatus(cwd: string, trace: GitTrace): Promise<GitBarStatusResult> {
+  try {
+    // Parent repo — branch is the cheap "is this a git repo at all"
+    // probe; if it returns empty we bail to { ok: false } instead of
+    // returning a half-filled shape.
+    const branchOut = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    if (!branchOut.trim()) throw new Error('not a git repo')
+    // Anything after this point that timed out makes the status partial:
+    // the diff or log read as empty (#1250 row 11).
+
+    const diffStat = await git(cwd, ['diff', 'HEAD', '--numstat'])
+    const logOut = await git(cwd, ['log', '--oneline', '--format=%h\t%s\t%an\t%cr', '-5'])
+
+    const submodulePaths = await readSubmodulePaths(cwd)
+    const submodules: SubmoduleInfo[] = []
+    for (const subPath of submodulePaths) {
+      const info = await inspectSubmodule(cwd, subPath)
+      if (info) submodules.push(info)
+    }
+
+    // Parent file list: drop gitlink lines for the submodule paths
+    // we just surfaced in detail — showing them twice (once as
+    // "+1 -1 on <path>" and once as a full submodule section) is
+    // redundant.
+    const submoduleSet = new Set(submodulePaths)
+    const files = parseNumstat(diffStat).filter(f => !submoduleSet.has(f.file))
+
+    const commits: GitRecentCommit[] = []
+    for (const line of logOut.trim().split('\n')) {
+      if (!line) continue
+      const [hash, subject, author, relativeDate] = line.split('\t')
+      if (!hash) continue
+      commits.push({
+        hash,
+        subject: subject ?? '',
+        author: author ?? '',
+        relativeDate: relativeDate ?? '',
+      })
+    }
+
+    return {
+      ok: true as const,
+      branch: branchOut.trim(),
+      files,
+      commits,
+      // Undefined instead of [] when there are no changed
+      // submodules so the renderer can cheaply gate on
+      // `data.submodules?.length` without drawing an empty heading.
+      submodules: submodules.length > 0 ? submodules : undefined,
+      ...(trace.timedOut ? { incomplete: true } : {}),
+    }
+  } catch {
+    // gitMissing rides the failure result so GitBar can distinguish
+    // "not a repo" from "no git on this machine" (#495 A5). It is read
+    // AFTER the probes above ran, so a fresh latch from this very call
+    // is already visible. `timedOut`: the branch probe itself took too
+    // long, which is not "not a repo" either (#1250 row 11).
+    return { ok: false as const, gitMissing, timedOut: trace.timedOut }
+  }
 }
