@@ -39,3 +39,11 @@ The parent is left with an idle child that never received its brief. It was told
 | **b1, major:** the parent was checked once, at adoption; a parent that closed during a retry delay still had its brief delivered | valid | `OrchestrationBridge.isParentAttached` (the dispatch lease), checked before EVERY late attempt, with a `create_agent_late_bootstrap_parent_gone` incident. System test red with the check removed. |
 | **b2, minor:** the FAILED late-answer fixtures lacked `type`, so the `!response.ok` guard was never reached, and its removal survived | valid | Both fixtures carry `type: 'create-agent'`; removing the guard is red (2 tests). |
 | **b survivor:** removing every `lateCreates.delete` passed (the long-lived bridge would keep each create's continuation) | valid | Pinned: the map empties after an in-time create and after a late one. Removing the deletes is red. |
+
+## Review round 1, c (codex at `cacd7ec0`): FIX-BEFORE-MERGE
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **c1, major:** a parent closing during a retry delay still got its brief delivered | valid, **already fixed** in `5f54f8c0` (b1) | The parent is re-checked before every late attempt; c reviewed the prior head. |
+| **c2, minor:** the timeout reply promised more than the contract (a renderer that never answers means no delivery at all) | valid | The reply now says delivery is *attempted* if the renderer later confirms the child, names the ways it can fail, and tells the parent to check `orchestration_list_agents` and `orchestration_read_agent` (`promptSubmitted`) before sending. |
+| **c survivor:** shrinking the last backoff delay to 1 ms passed (only the total count was checked) | valid | Each wait is pinned exactly (no attempt 1 ms early, one exactly on time), with microtasks drained without moving the clock. The last-delay and first-delay mutants are both red. |

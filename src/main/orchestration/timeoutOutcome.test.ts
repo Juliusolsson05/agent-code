@@ -196,8 +196,8 @@ describe('a late-created child still gets its bootstrap prompt (#1370)', () => {
     expect(error).toBeInstanceOf(OrchestrationOutcomeUnknownError)
     // Otherwise the parent's next move — sending the brief once list_agents shows the child —
     // would deliver it twice.
-    expect(String(error)).toMatch(/delivers its bootstrap prompt to it automatically/)
-    expect(String(error)).toMatch(/Check orchestration_read_agent for promptSubmitted before sending it yourself/)
+    expect(String(error)).toMatch(/If the renderer later confirms the child, Agent Code tries to deliver its bootstrap prompt/)
+    expect(String(error)).toMatch(/check orchestration_list_agents and orchestration_read_agent \(promptSubmitted\) before sending the brief yourself/)
     expect(late).not.toHaveBeenCalled()
 
     bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)

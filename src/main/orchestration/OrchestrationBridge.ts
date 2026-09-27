@@ -326,10 +326,12 @@ export class OrchestrationBridge {
         error.requestId,
         error.requestType,
         error.parentSessionId,
-        // Honest about what automatic means (review of #1375, a): a child that is
-        // never ready, or whose parent is gone, is not delivered to, so the
-        // parent is told how to check rather than promised a delivery.
-        'If the child is created late, Agent Code delivers its bootstrap prompt to it automatically, retrying while it starts. Check orchestration_read_agent for promptSubmitted before sending it yourself, or it may arrive twice.',
+        // Honest about what automatic means (review of #1375, a and c): delivery
+        // is only ATTEMPTED, and only if the renderer later confirms a live
+        // child; a renderer that never answers, a child never ready, or a
+        // parent that closed means no delivery. So the parent is told how to
+        // check rather than promised one.
+        'If the renderer later confirms the child, Agent Code tries to deliver its bootstrap prompt automatically, retrying for about a minute while it starts. That can fail (the child never answers, is never ready, or you close first), so check orchestration_list_agents and orchestration_read_agent (promptSubmitted) before sending the brief yourself, or it may arrive twice.',
       )
     }
     this.lateCreates.delete(attempt.requestId)

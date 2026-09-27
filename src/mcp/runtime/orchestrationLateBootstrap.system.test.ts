@@ -89,8 +89,8 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
       const reply = await call
       const text = ((reply.content as Array<{ text: string }>)[0]!).text
       expect(text).toMatch(/UNKNOWN/)
-      expect(text).toMatch(/delivers its bootstrap prompt to it automatically/)
-      expect(text).toMatch(/Check orchestration_read_agent for promptSubmitted/)
+      expect(text).toMatch(/tries to deliver its bootstrap prompt automatically/)
+      expect(text).toMatch(/orchestration_read_agent \(promptSubmitted\)/)
       expect(deliverPromptToAgent).not.toHaveBeenCalled()
 
       // The provider finally starts and the renderer answers.
@@ -167,7 +167,21 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
     const run = await lateCreate(deliverPromptToAgent, journal)
     try {
       await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
-      for (const delay of [2_000, 4_000, 8_000, 16_000, 30_000]) await vi.advanceTimersByTimeAsync(delay)
+      // Each wait is pinned, not only the total (review of #1375, c: shrinking the last delay to
+      // 1 ms survived): an attempt must NOT come early, and must come on time.
+      // `settle` drains the delivery's promise chain WITHOUT moving the clock: vi.waitFor would
+      // advance fake time while it polls and blur the exact boundaries checked here.
+      const settle = async () => { for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0) }
+      await settle()
+      const delays = [2_000, 4_000, 8_000, 16_000, 30_000]
+      for (const [index, delay] of delays.entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1)
+        await settle()
+        expect(deliverPromptToAgent).toHaveBeenCalledTimes(index + 1)
+        await vi.advanceTimersByTimeAsync(1)
+        await settle()
+        expect(deliverPromptToAgent).toHaveBeenCalledTimes(index + 2)
+      }
       await vi.waitFor(() => expect(journal.recordIncident).toHaveBeenCalledWith(expect.objectContaining({ reason: 'create_agent_late_bootstrap_never_ready' })))
       expect(deliverPromptToAgent).toHaveBeenCalledTimes(6)
       await vi.advanceTimersByTimeAsync(120_000)
