@@ -53,6 +53,21 @@ type OpenDocumentParams = {
   language: string
   workspaceRoot: string
   filePath?: string | null
+  /**
+   * Re-check, at the moment of use, that `filePath` still resolves physically
+   * inside `workspaceRoot` (#1268). Throws when it no longer does.
+   *
+   * WHY a callback from the caller and not a check here: the IPC layer owns
+   * authorization (editor roots, AI Workspace entries) and ran the physical
+   * check once, BEFORE this open awaited server startup. A cold server spawn
+   * can take seconds, and in that window a directory under the root can be
+   * swapped for a symlink to an outside directory, so the lexical URI built
+   * after startup would name an escaped file. Calling the same authority
+   * again inside the per-document queue, immediately before didOpen, closes
+   * that window to the one await this check itself takes. Keeping the
+   * filesystem out of the manager also keeps its unit tests on fake roots.
+   */
+  assertPhysicalTarget?: () => Promise<void>
 }
 
 type OpenDocumentRecord = {
@@ -194,13 +209,18 @@ function hashText(input: string): string {
   return Math.abs(hash).toString(16)
 }
 
+/** The root-relative directory virtual (pathless) documents are named under.
+ *  Exported because the IPC layer's physical re-check guards it (#1268). */
+export const LSP_VIRTUAL_DIR = '.agent-code-lsp'
+
+/** The file name a pathless document is given under LSP_VIRTUAL_DIR. Exported
+ *  so the IPC layer checks exactly the leaf didOpen will name (#1412 review c). */
+export function lspVirtualDocumentName(clientUri: string, language: string): string {
+  return `virtual-${hashText(clientUri)}.${languageFileExtension(language)}`
+}
+
 function makeVirtualServerUri(workspaceRoot: string, clientUri: string, language: string): string {
-  const ext = languageFileExtension(language)
-  const filePath = resolve(
-    workspaceRoot,
-    '.agent-code-lsp',
-    `virtual-${hashText(clientUri)}.${ext}`,
-  )
+  const filePath = resolve(workspaceRoot, LSP_VIRTUAL_DIR, lspVirtualDocumentName(clientUri, language))
   return pathToFileURL(filePath).href
 }
 
@@ -537,6 +557,20 @@ export class LspManager extends EventEmitter {
     // could not fan out for us — this URI had no record when it ran.
     this.notifyDocumentIntent(key)
     return await this.serializeServerDocument(key, async () => {
+      // The caller's physical re-check runs FIRST, for every open (#1268). A
+      // refusal fails open like every other LSP failure here: the editor keeps
+      // working, without LSP for this document. Review a of #1412: running it
+      // only before a NEW document's didOpen let an open that JOINED an
+      // existing shared document (another alias of the same file) pass after
+      // a swap and send didChange for the now-escaped URI.
+      if (params.assertPhysicalTarget) {
+        try {
+          await params.assertPhysicalTarget()
+        } catch {
+          return false
+        }
+        if (server.closed) return false
+      }
       const existing = this.docs.get(params.clientUri)
       if (existing) {
         if (existing.serverKey !== server.key || existing.serverUri !== serverUri) {
