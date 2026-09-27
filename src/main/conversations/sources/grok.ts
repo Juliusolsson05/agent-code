@@ -7,7 +7,8 @@ import { loadGrokSnapshotAt } from '@main/providerSwitch/grokTranscript.js'
 
 import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { ConversationPromptsUnreadable, isMissingFileError, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
+import { ConversationPromptsUnreadable, isMissingFileError, isPresent, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
+import { dirname, join } from 'node:path'
 
 // Grok conversation discovery: native's own sessions index. Every session
 // directory under the Grok home carries a summary.json (id, cwd, titles,
@@ -52,13 +53,39 @@ export class GrokConversationSource implements ConversationSource {
     // actually typed — never workspace metadata, never raw tags. Newest first
     // per the source contract (search reads the first 40). The resolve itself
     // can throw on a deleted cwd, hence the whole body inside the try.
-    let snapshot: Awaited<ReturnType<typeof loadGrokSnapshotAt>>
+    let snapshot: Awaited<ReturnType<typeof loadGrokSnapshotAt>> | undefined
+    let path: string
     try {
-      snapshot = await loadGrokSnapshotAt(resolveGrokTranscriptPath(cwd, nativeId, this.deps.grokHome))
+      path = resolveGrokTranscriptPath(cwd, nativeId, this.deps.grokHome)
     } catch (error) {
-      // #1306: only a missing file is "no prompts"; a damaged one is said.
       if (isMissingFileError(error)) return []
       throw new ConversationPromptsUnreadable('grok', error)
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        snapshot = await loadGrokSnapshotAt(path)
+        break
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          // #1306: only a MISSING session is "no prompts". The loader reads
+          // summary.json first, so a lost summary beside a transcript that is
+          // still there used to read as missing too (#1434 round 1, a): an
+          // incomplete store, not an empty conversation. Either file present
+          // means this session exists and could not be read.
+          const either = await isPresent('grok', path) || await isPresent('grok', join(dirname(path), 'summary.json'))
+          if (either) throw new ConversationPromptsUnreadable('grok', error)
+          return []
+        }
+        // A read racing Grok's own writer (an unterminated last record, or the
+        // file changing during the read) is normal while it works, not damage
+        // (#1434 round 1, a, minor). Two short retries let the turn settle;
+        // a transcript still unstable after that is said, never "no prompts".
+        if (attempt < 2 && isGrokWriteInProgress(error)) {
+          await new Promise(resolve => setTimeout(resolve, 150))
+          continue
+        }
+        throw new ConversationPromptsUnreadable('grok', error)
+      }
     }
     const texts: string[] = []
     for (const entry of snapshot.conversation.entries) {
@@ -102,4 +129,12 @@ export class GrokConversationSource implements ConversationSource {
       file: null,
     }
   }
+}
+
+/** The two refusals loadGrokSnapshotAt raises while Grok's writer is mid-turn
+ *  (providerSwitch/grokTranscript.ts readStableGrokFile / the unterminated-
+ *  record guard). Matched on their fixed text: they are our own messages. */
+function isGrokWriteInProgress(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : ''
+  return message.includes('changed while reading') || message.includes('unterminated record')
 }

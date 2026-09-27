@@ -149,3 +149,119 @@ describe('finding a conversation file that cannot be listed', () => {
     expect(await source.prompts('session-1', cwd)).toEqual([])
   })
 })
+
+// #1434 review round 1 (a, b): paths where "unknown" still became "no prompts"
+// one level below the first fix — existsSync reads EACCES as absent, the
+// providers' own walks and resolvers skip what they cannot read, and a
+// transcript whose every line is garbage folded to nothing. Real files: the
+// recorded corpus's rollouts and databases, locked or damaged.
+describe('round 1: unknown is never "no prompts"', () => {
+  const scratch = (name: string) => join(corpus.opencodeDataDir, '..', `r1-${name}`)
+  async function locked<T>(dir: string, run: () => Promise<T>): Promise<T> {
+    await chmod(dir, 0o000)
+    try {
+      return await run()
+    } finally {
+      await chmod(dir, 0o700)
+    }
+  }
+
+  it('Codex: a known rollout under a locked day directory is unreadable, and reads once it opens', async () => {
+    const source = new CodexConversationSource({ codexHome: corpus.codexHome })
+    const family = await resolveFamily('/fixture/repo', 'repository', { listWorktrees })
+    const rows = await source.discover({ scope: 'repository', family })
+    const paths = (source as unknown as { rolloutPaths: Map<string, string> }).rolloutPaths
+    const row = rows.find(r => paths.has(r.nativeId) && existsSync(paths.get(r.nativeId)!))!
+    const before = await source.prompts(row.nativeId, row.cwd ?? '')
+    const day = join(paths.get(row.nativeId)!, '..')
+    await expect(locked(day, () => source.prompts(row.nativeId, row.cwd ?? ''))).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    expect(await source.prompts(row.nativeId, row.cwd ?? '')).toEqual(before)
+  })
+
+  it('Codex: a state index that is there but cannot be opened, with no rollout found, is unreadable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const codexHome = scratch('codex-bad-index')
+      await mkdir(join(codexHome, 'sessions'), { recursive: true })
+      await writeFile(join(codexHome, 'state_5.sqlite'), 'this is not an sqlite database')
+      await expect(new CodexConversationSource({ codexHome }).prompts('019-missing', '')).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+      // No index at all and no rollout: genuinely not here.
+      const bare = scratch('codex-no-index')
+      await mkdir(join(bare, 'sessions'), { recursive: true })
+      expect(await new CodexConversationSource({ codexHome: bare }).prompts('019-missing', '')).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('OpenCode: a real database in an inaccessible directory is unreadable, not absent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const dataDir = scratch('opencode-locked')
+      await mkdir(dataDir, { recursive: true })
+      const { copyFile } = await import('node:fs/promises')
+      await copyFile(join(corpus.opencodeDataDir, 'opencode.db'), join(dataDir, 'opencode.db'))
+      const source = new OpencodeConversationSource({ dataDir })
+      await expect(locked(dataDir, () => source.prompts('ses_x', '/fixture/repo'))).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+      expect(await source.prompts('ses_x', '/fixture/repo')).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('Pi: a session named for this id whose header is damaged is unreadable; a readable header for another cwd is not this session', async () => {
+    const home = scratch('pi-home')
+    const cwd = join(home, 'project')
+    const dir = join(home, '.pi', 'agent', 'sessions', encodeCwdForSessionDir(cwd))
+    await mkdir(dir, { recursive: true })
+    const source = new PiConversationSource({ env: {}, homeDirectory: home })
+    await writeFile(join(dir, '2026-09-27T00-00-00-000Z_thread-1.jsonl'), '{bad json}\n')
+    await expect(source.prompts('thread-1', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    await writeFile(join(dir, '2026-09-27T00-00-00-000Z_thread-2.jsonl'), `${JSON.stringify({ type: 'session', id: 'thread-2', cwd: '/elsewhere' })}\n`)
+    expect(await source.prompts('thread-2', cwd)).toEqual([])
+  })
+
+  it('Grok: a transcript whose summary is gone is unreadable; a transcript mid-write settles and reads', async () => {
+    const grokHome = scratch('grok-home')
+    const cwd = scratch('grok-project')
+    await mkdir(cwd, { recursive: true })
+    const lost = '33333333-3333-4333-8333-333333333333'
+    const lostFile = resolveGrokTranscriptPath(cwd, lost, grokHome)
+    await mkdir(join(lostFile, '..'), { recursive: true })
+    await writeFile(lostFile, '')
+    const source = new GrokConversationSource({ grokHome })
+    await expect(source.prompts(lost, cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+
+    const writing = '44444444-4444-4444-8444-444444444444'
+    const file = resolveGrokTranscriptPath(cwd, writing, grokHome)
+    await mkdir(join(file, '..'), { recursive: true })
+    await writeFile(join(file, '..', 'summary.json'), JSON.stringify({ info: { id: writing, cwd }, chat_format_version: 1 }))
+    await writeFile(file, '{"partial":')
+    // Grok's writer finishes the record while the reader waits.
+    setTimeout(() => { void writeFile(file, '') }, 100)
+    expect(await source.prompts(writing, cwd)).toEqual([])
+  })
+
+  it('Claude: a transcript whose every line is garbage is unreadable; one good record keeps it readable', async () => {
+    const projectsDir = scratch('claude-projects')
+    const cwd = '/fixture/garbled'
+    const dir = join(projectsDir, sanitizePath(cwd))
+    await mkdir(dir, { recursive: true })
+    const source = new ClaudeConversationSource({ projectsDir, history: new ClaudeHistoryIndex(join(projectsDir, 'history.jsonl')) })
+    await writeFile(join(dir, '55555555-5555-4555-8555-555555555555.jsonl'), '{not-json}\n{also not json}\n')
+    await expect(source.prompts('55555555-5555-4555-8555-555555555555', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    // A recorded transcript with one garbage line in front: still readable,
+    // the same prompts as the original (bad lines are skipped, as before).
+    const recorded = new ClaudeConversationSource({ projectsDir: join(corpus.claudeConfigDir, 'projects'), history: new ClaudeHistoryIndex(join(corpus.claudeConfigDir, 'history.jsonl')) })
+    const family = await resolveFamily('/fixture/repo', 'cwd', { listWorktrees })
+    const real = (await recorded.discover({ scope: 'cwd', family })).find(r => (r.promptCount ?? 0) > 0 && r.cwd)!
+    const { readFile } = await import('node:fs/promises')
+    const original = await readFile(join(corpus.claudeConfigDir, 'projects', sanitizePath(real.cwd!), `${real.nativeId}.jsonl`), 'utf8')
+    const mixedDir = join(projectsDir, sanitizePath(real.cwd!))
+    await mkdir(mixedDir, { recursive: true })
+    await writeFile(join(mixedDir, `${real.nativeId}.jsonl`), `{not-json}\n${original}`)
+    const expected = await recorded.prompts(real.nativeId, real.cwd!)
+    expect(expected.length).toBeGreaterThan(0)
+    expect(await source.prompts(real.nativeId, real.cwd!)).toEqual(expected)
+  })
+})

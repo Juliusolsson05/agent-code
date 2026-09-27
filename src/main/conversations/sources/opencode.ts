@@ -6,7 +6,7 @@ import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { parseJsonRecord } from '@shared/lib/asRecord.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { openReadOnlySqlite } from './sqlite.js'
-import { ConversationPromptsUnreadable, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
+import { ConversationPromptsUnreadable, isPresent, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
 
 // OpenCode keeps every session in ~/.local/share/opencode/opencode.db:
 // `session` (id, parent_id, directory, title, time_created, time_updated,
@@ -139,15 +139,25 @@ export class OpencodeConversationSource implements ConversationSource {
     if (!opened.ok) {
       // #1306: no database at all is "no prompts"; one that is there but
       // cannot be opened or read is said (the reason names the path, so it
-      // stays on the error's cause, never in the message).
-      if (!existsSync(dbPath)) return []
+      // stays on the error's cause, never in the message). isPresent, not
+      // existsSync (#1434 round 1, a/b): existsSync answers false when the
+      // data directory itself is inaccessible, which read as "no database".
+      if (!(await isPresent('opencode', dbPath))) return []
       throw new ConversationPromptsUnreadable('opencode', new Error(opened.reason))
     }
     try {
-      const rows = opened.db.prepare(
-        `select p.data as part, m.data as message, m.time_created as created from part p join message m on m.id = p.message_id
-         where m.session_id = ? order by m.time_created desc, p.time_created desc`,
-      ).all(nativeId) as unknown as Array<{ part: string; message: string; created: number | null }>
+      // A read that fails after the open succeeded (a damaged page, a lock
+      // taken mid-query) is unknown too, and typed (#1434 round 1 suspicion
+      // a/b): a raw SQLite error must not reach the source contract.
+      let rows: Array<{ part: string; message: string; created: number | null }>
+      try {
+        rows = opened.db.prepare(
+          `select p.data as part, m.data as message, m.time_created as created from part p join message m on m.id = p.message_id
+           where m.session_id = ? order by m.time_created desc, p.time_created desc`,
+        ).all(nativeId) as unknown as Array<{ part: string; message: string; created: number | null }>
+      } catch (error) {
+        throw new ConversationPromptsUnreadable('opencode', error)
+      }
       const out: ConversationPrompt[] = []
       for (const r of rows) {
         const message = parseJsonRecord(r.message)

@@ -150,13 +150,26 @@ export class PiConversationSource implements ConversationSource {
         }))
           .find(candidate => sessionIdFromFileName(basename(candidate)) === nativeId)
         if (named) {
-          let handle
+          // The resolver skipped a file named for this session. Either it is
+          // unreadable, its header is damaged, or its header is readable and
+          // names another cwd. Only the last is "not this session"; the first
+          // two are this conversation, present and unreadable (#1434 round 1,
+          // a: a `{bad json}` header used to read as "no prompts").
+          let header: string
           try {
-            handle = await open(named, 'r')
+            header = await readFirstLine(named)
           } catch (error) {
             throw new ConversationPromptsUnreadable('pi', error)
           }
-          await handle.close()
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(header)
+          } catch (error) {
+            throw new ConversationPromptsUnreadable('pi', error)
+          }
+          if (!parsed || typeof parsed !== 'object') {
+            throw new ConversationPromptsUnreadable('pi', new Error('the session header is not a JSON object'))
+          }
         }
         return []
       }
@@ -210,5 +223,21 @@ export class PiConversationSource implements ConversationSource {
       available: true,
       file,
     }
+  }
+}
+
+/** The first line of a session file (its header), bounded: a header is one
+ *  small JSON record, so 64 KiB without a newline is itself damage. */
+async function readFirstLine(file: string): Promise<string> {
+  const handle = await open(file, 'r')
+  try {
+    const buf = Buffer.alloc(64 * 1024)
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
+    const newline = text.indexOf('\n')
+    if (newline < 0 && bytesRead === buf.length) throw new Error('the session header exceeds 64 KiB')
+    return newline < 0 ? text : text.slice(0, newline)
+  } finally {
+    await handle.close()
   }
 }

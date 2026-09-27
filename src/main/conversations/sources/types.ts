@@ -1,6 +1,8 @@
 import type { ConversationPrompt, ConversationScope } from '@shared/conversations/types.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { RepositoryFamily } from '@main/conversations/family.js'
+import { readdir, stat } from 'fs/promises'
+import { join } from 'path'
 
 // Raw, provider-shaped ingredients. No label, no kind, no order: the catalog
 // decides those (docs/decomposition/conversations.md §4). An adapter reports
@@ -70,6 +72,48 @@ export class ConversationPromptsUnreadable extends Error {
 export function isMissingFileError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+/**
+ * Whether a path is there, telling ABSENT from UNKNOWN (#1434 round 1, a/b).
+ *
+ * WHY not existsSync: it answers false for EACCES too, so an inaccessible
+ * database or rollout read as "absent" and the prompts as `[]` — the exact
+ * #1306 failure, one level up. Absence (ENOENT/ENOTDIR) is false; anything
+ * else is unknown and throws the typed error, never "no prompts".
+ */
+export async function isPresent(provider: AgentProviderKind, path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch (error) {
+    if (isMissingFileError(error)) return false
+    throw new ConversationPromptsUnreadable(provider, error)
+  }
+}
+
+/**
+ * List every directory under `root`, `depth` levels down, and throw the typed
+ * error on the first one that cannot be listed (#1434 round 1, a/b).
+ *
+ * WHY: the providers' own walks (codex-headless's rollout locator) swallow
+ * every readdir error below their root, so a locked `sessions/2026/01/01`
+ * made a known conversation read as "not here". This runs only on the MISS
+ * path — after the walk found nothing — so its cost is paid only when the
+ * answer would otherwise be the unsafe "no prompts". An absent root is fine.
+ */
+export async function assertTreeListable(provider: AgentProviderKind, root: string, depth: number): Promise<void> {
+  let entries
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch (error) {
+    if (isMissingFileError(error)) return
+    throw new ConversationPromptsUnreadable(provider, error)
+  }
+  if (depth <= 0) return
+  for (const entry of entries) {
+    if (entry.isDirectory()) await assertTreeListable(provider, join(root, entry.name), depth - 1)
+  }
 }
 
 export interface ConversationSource {
