@@ -144,8 +144,20 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
     // failed IPC is retried on the next tick (#1392 review a, round 3), or
     // main would keep that session's state until the process exits.
     // `releasing` stops a slow acknowledgement from sending it twice.
+    //
+    // A release covers only the lifetime it was SENT for (#1392 review b,
+    // round 4): if the id reappears (and appends, re-creating main's state)
+    // while an acknowledgement is still in flight, that late ACK must not
+    // retire the later lifetime. `seenSinceRelease` records a reappearance;
+    // the ACK then leaves the id in `known`, and the next absence sends a new
+    // release.
+    //
+    // Known residual: a release that fails during the hook's own teardown
+    // (workspace unmount) has no later tick to retry it. Main keeps that one
+    // session's few numbers until it exits.
     const known = new Set<SessionId>()
     const releasing = new Set<SessionId>()
+    const seenSinceRelease = new Set<SessionId>()
     const releaseGone = (): void => {
       const runtimes = refs.latestRuntimesRef.current
       for (const sessionId of known) {
@@ -153,8 +165,13 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
         delete refs.persistedFeedDebugIdRef.current[sessionId]
         delete refs.inFlightFeedDebugIdRef.current[sessionId]
         releasing.add(sessionId)
-        void window.api.forgetFeedDebugLog({ sessionId })
-          .then(() => { if (!refs.latestRuntimesRef.current[sessionId]) known.delete(sessionId) }, () => {})
+        seenSinceRelease.delete(sessionId)
+        // Promise.resolve().then: a synchronous throw (a test double without
+        // the method) becomes a rejection, retried like any failed release,
+        // instead of escaping the interval with `releasing` held.
+        void Promise.resolve()
+          .then(() => window.api.forgetFeedDebugLog({ sessionId }))
+          .then(() => { if (!seenSinceRelease.has(sessionId)) known.delete(sessionId) }, () => {})
           .finally(() => releasing.delete(sessionId))
       }
     }
@@ -162,6 +179,7 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
     const flush = (): void => {
       for (const [sessionId, runtime] of Object.entries(refs.latestRuntimesRef.current)) {
         known.add(sessionId)
+        if (releasing.has(sessionId)) seenSinceRelease.add(sessionId)
         flushSession(sessionId, runtime)
       }
       releaseGone()

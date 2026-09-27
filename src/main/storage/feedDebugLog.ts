@@ -1,4 +1,4 @@
-import { mkdir, stat, writeFile } from 'fs/promises'
+import { mkdir, open, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { FEED_DEBUG_DIR } from '@main/storage/paths.js'
@@ -72,6 +72,44 @@ async function loadInitialFileBytes(filePath: string): Promise<number | null> {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : null
   }
+}
+
+// The drop count of the last tombstone row in an already-capped file, or 0.
+//
+// WHY (#1392 review a, round 4): cap state is process-local and is rebuilt
+// whenever a session is forgotten and appends again (process exit with the
+// pane still open, a same-id wake, a forget during the first `stat`). A
+// rebuilt state started at `droppedEntries: 0`, so its first tombstone
+// reported 1 drop after an earlier row had reported thousands, and the LAST
+// marker in the file, which the doubling rule promises is within 2x of the
+// truth, understated it by orders of magnitude. Re-statting bytes restores the
+// size decision; this restores the count. Only the file's tail is read (the
+// tombstone rows are the last lines of a capped file), and any failure falls
+// back to 0, the old behaviour.
+const TOMBSTONE_TAIL_BYTES = 64 * 1024
+async function readLastTombstoneDrops(filePath: string, size: number): Promise<number> {
+  try {
+    const handle = await open(filePath, 'r')
+    try {
+      const length = Math.min(size, TOMBSTONE_TAIL_BYTES)
+      const buffer = Buffer.alloc(length)
+      await handle.read(buffer, 0, length, size - length)
+      const lines = buffer.toString('utf8').split('\n')
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]!.includes('"__feedDebugCapped":true')) continue
+        // From the row's first `{`: a tail can start mid-row, and a file that
+        // was preallocated or torn can carry NUL bytes before the row.
+        const row = lines[i]!.slice(lines[i]!.indexOf('{'))
+        const drops = (JSON.parse(row) as { droppedEntriesSoFar?: unknown }).droppedEntriesSoFar
+        return typeof drops === 'number' && Number.isFinite(drops) && drops > 0 ? drops : 0
+      }
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    // Unreadable tail or a torn row: the pre-#1392 count of 0.
+  }
+  return 0
 }
 
 // Per-session feed-debug log writer.
@@ -312,6 +350,9 @@ export function queueFeedDebugAppend(
           throw new Error(`feed-debug: unknown size for ${sessionId}, refusing to append`)
         }
         capState.bytesWritten = startingBytes
+        if (startingBytes >= MAX_FEED_DEBUG_FILE_BYTES) {
+          capState.droppedEntries = await readLastTombstoneDrops(filePath, startingBytes)
+        }
       }
 
       // Already capped in a prior batch — count, drop, and keep the on-disk

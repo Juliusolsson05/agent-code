@@ -327,6 +327,50 @@ describe('releasing a session whose runtime is gone (#1392)', () => {
     pending.resolve()
   })
 
+  it('sends one release while its acknowledgement is pending', async () => {
+    const ack = deferred()
+    forget.mockReturnValueOnce(ack.promise)
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    refs.latestRuntimesRef.current = {}
+    await advance(4_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+    ack.resolve()
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let a late acknowledgement retire a later lifetime of the same id', async () => {
+    const ack = deferred()
+    forget.mockReturnValueOnce(ack.promise)
+    const first = add(emptyRuntime(), 'first lifetime')
+    const refs = makeRefs({ a: first })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    refs.latestRuntimesRef.current = {}
+    await advance(1_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+    // The id comes back and appends (main re-creates its state), then goes
+    // away again, all before the first release is acknowledged.
+    refs.latestRuntimesRef.current = { a: add(emptyRuntime(), 'second lifetime') }
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(2)
+    refs.latestRuntimesRef.current = {}
+    ack.resolve()
+    await advance(2_000)
+    expect(forget).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not throw from the interval when the API lacks the release method', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append } })
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    refs.latestRuntimesRef.current = {}
+    await expect(advance(3_000)).resolves.toBeUndefined()
+  })
+
   it('does not forget a session that never had a runtime while mounted', async () => {
     const refs = makeRefs({})
     renderHook(() => useFeedDebugPersist(refs))

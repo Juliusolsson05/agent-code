@@ -232,3 +232,49 @@ describe('a forget during the first size check (#1392)', () => {
     expect(feedDebugSessionStateSizesForTest('exit-during-stat')).toEqual({ ids: 0, epochs: 0, caps: 0, tokens: 0 })
   })
 })
+
+// #1392 review a, round 4: cap state is rebuilt whenever a session is
+// forgotten and appends again. A rebuilt state started its drop count at 0,
+// so its tombstone reported 1 drop after an earlier row had reported 1,000.
+describe('a rebuilt cap state keeps the file\'s drop count', () => {
+  async function cappedFileWithMarker(sessionId: string, drops: number) {
+    await mkdir(join(stateDir, 'feed-debug'), { recursive: true })
+    await writeFile(logPath(sessionId), '')
+    await truncate(logPath(sessionId), 128 * 1024 * 1024)
+    await writeFile(logPath(sessionId), JSON.stringify({ sessionId, __feedDebugCapped: true, droppedEntriesSoFar: drops }) + '\n', { flag: 'a' })
+  }
+  async function lastMarkerDrops(sessionId: string): Promise<number> {
+    const handle = await open(logPath(sessionId), 'r')
+    try {
+      const size = (await handle.stat()).size
+      const tail = Buffer.alloc(4096)
+      await handle.read(tail, 0, 4096, size - 4096)
+      const rows = tail.toString('utf8').split('\n').filter(row => row.includes('__feedDebugCapped'))
+      return (JSON.parse(rows.at(-1)!) as { droppedEntriesSoFar: number }).droppedEntriesSoFar
+    } finally {
+      await handle.close()
+    }
+  }
+
+  it('after a forget and a new append', async () => {
+    await cappedFileWithMarker('capped-rebuilt', 1_000)
+    forgetFeedDebugSession('capped-rebuilt')
+    await queueFeedDebugAppend('capped-rebuilt', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('capped-rebuilt')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  it('after a forget during the first size check', async () => {
+    await cappedFileWithMarker('capped-during-stat', 1_000)
+    let release!: () => void
+    let reached!: () => void
+    const atStat = new Promise<void>(resolve => { reached = resolve })
+    statResult = { mode: 'hold', gate: new Promise<void>(resolve => { release = resolve }), reached }
+    const write = queueFeedDebugAppend('capped-during-stat', [entry(1)], 1_000)
+    await atStat
+    forgetFeedDebugSession('capped-during-stat')
+    statResult = { mode: 'real' }
+    release()
+    await write
+    expect(await lastMarkerDrops('capped-during-stat')).toBeGreaterThanOrEqual(1_001)
+  })
+})
