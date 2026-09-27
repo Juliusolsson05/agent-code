@@ -220,6 +220,52 @@ describe('OpencodeTerminalSession', () => {
     expect(session.write('k')).toBe(false)
   })
 
+  // #1397 review a (survivors A3-A5): `start()` after `stop()` is allowed, so
+  // the hold must start over per spawn. A latch left `true` from the first
+  // TUI would let input reach an unpainted second TUI; input held for the
+  // first would be flushed into the second; a late paint from the dead first
+  // PTY would latch and flush the second's hold.
+  it('starts the hold over for a restarted TUI and ignores the old PTY', async () => {
+    const first = fakePty()
+    ptyState.spawn.mockReturnValue(first)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    first.emitData('\x1b[?1049h')
+    await session.stop()
+    const firstOnData = first.onData.mock.calls[0]?.[0] as (data: string) => void
+    const second = fakePty()
+    ptyState.spawn.mockReturnValue(second)
+    await session.start()
+    // Held input from a previous generation must not survive into this one.
+    session.write('for the second TUI')
+    expect(second.write).not.toHaveBeenCalled()
+    expect(headlessState.options.at(-1)?.tuiOutputSeen?.()).toBe(false)
+    // The dead first PTY's listener firing late must not release the hold.
+    firstOnData('late paint from the first TUI')
+    expect(second.write).not.toHaveBeenCalled()
+    second.emitData('\x1b[?1049h')
+    expect(second.write.mock.calls.map(call => call[0])).toEqual(['for the second TUI'])
+  })
+
+  // #1397 review a (survivor A4): stop clears the hold itself, not only the
+  // PTY subscription. The per-spawn reset also covers a restart, so the
+  // stop-time clear is pinned directly: a stopped pane must not keep up to
+  // 64 KiB of typed text alive for its lifetime.
+  it('clears input held before a stop, and never replays it into a restarted TUI', async () => {
+    const first = fakePty()
+    ptyState.spawn.mockReturnValue(first)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    session.write('meant for the first TUI')
+    await session.stop()
+    expect((session as unknown as { heldInput: string[] }).heldInput).toEqual([])
+    const second = fakePty()
+    ptyState.spawn.mockReturnValue(second)
+    await session.start()
+    second.emitData('\x1b[?1049h')
+    expect(second.write).not.toHaveBeenCalled()
+  })
+
   it('clears held input when the TUI exits before painting', async () => {
     const pty = fakePty()
     ptyState.spawn.mockReturnValue(pty)

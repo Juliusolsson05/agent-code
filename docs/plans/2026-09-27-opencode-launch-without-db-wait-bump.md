@@ -35,3 +35,13 @@ Unit and system tests with fake PTYs and the real package. The app is not launch
 - **Ruling: a refusal is final, not retried.** A retry could land after newer keystrokes, out of order. The user is told which input failed: "What you typed while the terminal was attaching didn't reach the agent."
 - **The forwarder's copy is neutral:** "That input didn't reach the agent." Main answers only a boolean (no backend, a delivery reservation, a full pre-paint hold), so naming any one cause would be false for the others.
 - **Test:** a Submit queued before attach, with `sendInput` resolving false on flush, shows the flush message. Red with the flush reverted.
+
+## Review round 1, reviewer a (MERGE-READY, minors)
+- **P3 (package):** the reader's `onError` gate release was unpinned. Pinned in opencode-terminal-headless#11.
+- **A3–A5 (app):** the per-spawn latch reset, the stop-time clear and the `onData` generation guard were unpinned. `start()` after `stop()` is allowed, so each is reachable.
+  - Pinned by a restart test: a fresh hold, and the dead PTY's late paint is ignored.
+  - Pinned by a stop test: the hold is empty after stop.
+  - Each test fails under its mutation.
+- **Stale doc:** the `deliverPromptText` doc claimed a PTY paste. It now says HTTP, held until the durable reader positions.
+- **Unbounded hold:** already bounded (q97).
+- **A6 (latch set after the flush):** left alone, as a says; the flush is synchronous.

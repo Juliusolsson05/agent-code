@@ -681,8 +681,11 @@ export interface AgentSession extends AgentSessionEmitter {
   ): Promise<PromptReadinessOutcome>
 
   /** Optional (OpenCode today): deliver a user prompt through the concrete
-   *  runtime's transport. Structured OpenCode uses HTTP; OpenCode Terminal
-   *  performs a readiness-gated bracketed paste into its PTY. Keeping both
+   *  runtime's transport. Both OpenCode runtimes deliver over the server's
+   *  HTTP API (Terminal since #877, never a PTY paste); OpenCode Terminal's
+   *  headless additionally holds delivery until its durable reader has
+   *  positioned (#1114), so a prompt cannot commit behind the reader's
+   *  starting head. Keeping both
    *  behind one provider-owned capability lets SessionManager stay ignorant
    *  of which OpenCode runtime was selected. Claude/Codex leave it undefined
    *  and their provider policies write through io.write instead. */
