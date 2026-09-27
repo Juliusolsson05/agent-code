@@ -677,27 +677,38 @@ function isProtectedFromDebugPrune(artifact: Artifact): boolean {
 }
 
 async function loadManualLegacyBundlePaths(file: string = DEBUG_BUNDLE_LOG_FILE): Promise<ManualLegacyBundlePaths> {
-  const manual = new Set<string>()
   let raw: string
   try {
     raw = await readFile(file, 'utf8')
   } catch (error) {
     // Only a missing ledger means "no manual bundles"; any other failure is
     // unknown and fails closed (steering q109).
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? manual : 'unknown'
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? new Set<string>() : 'unknown'
   }
+  return parseManualLegacyBundlePaths(raw)
+}
 
+export function parseManualLegacyBundlePaths(raw: string): Set<string> {
+  const manual = new Set<string>()
   for (const line of raw.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed) continue
-    let entry: DebugBundleLogEntry
+    let parsed: unknown
     try {
-      entry = JSON.parse(trimmed) as DebugBundleLogEntry
+      parsed = JSON.parse(trimmed)
     } catch {
       continue
     }
-    if (entry.event !== 'saved') continue
-    if (isAutosaveDebugBundleReason(entry.reason)) continue
+    // WHY a shape check and not only the JSON.parse guard (#1251 row 13): a
+    // line can be valid JSON and still not an entry (`null`, a number, a row
+    // from a build that wrote bundlePath differently). Such a row threw here,
+    // which rejected collectArtifacts and stopped every prune pass for every
+    // bucket. Skipping it can only fail to protect a bundle the row does not
+    // name, so it never exposes a manual bundle to deletion.
+    if (typeof parsed !== 'object' || parsed === null) continue
+    const entry = parsed as Partial<DebugBundleLogEntry> & { bundlePath?: unknown; reason?: unknown }
+    if (entry.event !== 'saved' || typeof entry.bundlePath !== 'string') continue
+    if (isAutosaveDebugBundleReason(typeof entry.reason === 'string' ? entry.reason : null)) continue
     // WHY manual legacy classification comes from the old mixed ledger instead
     // of folder contents: every bundle contains a manifest, but reading
     // thousands of manifests during retention would turn a cheap directory

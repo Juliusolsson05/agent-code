@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { cachedManualLegacyBundlePaths, collectSessionRecordingDirs, legacyDebugBundleBucketForPath, removeEmptyProxyParents, runPrunePasses } from './debugRetention.js'
+import { cachedManualLegacyBundlePaths, collectSessionRecordingDirs, legacyDebugBundleBucketForPath, parseManualLegacyBundlePaths, removeEmptyProxyParents, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -323,5 +323,46 @@ describe('legacy ledger classification fails closed (steering q109)', () => {
     expect(statSync(ledger).size).toBe(before.size)
     expect(statSync(ledger).mtimeMs).toBe(before.mtimeMs)
     expect(await cachedManualLegacyBundlePaths(ledger)).toEqual(new Set(['/bundles/2026-01-01T00-00-02']))
+  })
+})
+
+describe('parseManualLegacyBundlePaths (#1251 row 13)', () => {
+  // The legacy ledger is append-only JSONL written across many app versions.
+  // A row that parses as JSON but is not a saved-entry object (a bare `null`,
+  // a number, an entry without a string bundlePath) used to throw out of the
+  // loop (`null.event`, `resolve(undefined)`), which rejected collectArtifacts
+  // and so stopped EVERY prune pass, for every bucket, on every trigger.
+  it('keeps every readable manual row and skips rows that are not saved-entry objects', () => {
+    const raw = [
+      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: '/bundles/2026-01-01T00-00-00' }),
+      'null',
+      '42',
+      '"saved"',
+      JSON.stringify({ event: 'saved', reason: 'manual' }),
+      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: 42 }),
+      JSON.stringify({ event: 'saved', reason: 7, bundlePath: '/bundles/2026-01-03T00-00-00' }),
+      '{not json',
+      JSON.stringify({ event: 'saved', reason: 'autosave-crash', bundlePath: '/bundles/2026-01-02T00-00-00' }),
+      JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: '/bundles/2026-01-04T00-00-00' }),
+    ].join('\n')
+    expect([...parseManualLegacyBundlePaths(raw)]).toEqual([
+      '/bundles/2026-01-01T00-00-00',
+      // A non-string reason is not an autosave label, and an unlabelled save
+      // was user-triggered in the versions that wrote this ledger, so it stays
+      // protected: when in doubt, retention keeps the bundle.
+      '/bundles/2026-01-03T00-00-00',
+      '/bundles/2026-01-04T00-00-00',
+    ])
+  })
+
+  // Review of #1411 (b), a surviving mutation: the parser test alone could not
+  // see the loader stop using it. This goes through the real loader and cache.
+  it('classifies through the real loader, past rows that are not entries', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    const manualBundle = join(root, '2026-01-01T00-00-00')
+    writeFileSync(ledger, ['null', JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: manualBundle }), ''].join('\n'))
+    const paths = await cachedManualLegacyBundlePaths(ledger)
+    expect(legacyDebugBundleBucketForPath(manualBundle, paths)).toBe('debug-bundles-manual')
+    expect(legacyDebugBundleBucketForPath(join(root, '2026-01-02T00-00-00'), paths)).toBe('debug-bundles-legacy')
   })
 })
