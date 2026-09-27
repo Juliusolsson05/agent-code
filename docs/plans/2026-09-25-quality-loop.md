@@ -543,6 +543,27 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (23:50 local) — **Merged since 21:13:** #1325 (Refs #1280; body corrected after merge, q77), #1331 (Fixes #1320), #1342 (Refs #1302), agent-transcript-parser#37 (Refs #1295), workflow-mcp#67, plus four package Dependabot groups (opencode-headless#17, agent-transcript-parser#39, claude-code-headless#65, codex-headless#61).
+  - **Blocked on the owner:**
+    - #1353, the fleet titles (q73); its privacy fix is manager-verified (q82);
+    - #1340, the dictation deadlines and wording;
+    - #1351, 120 s / 5 min;
+    - #1328, the "No goal yet" residual;
+    - #1330, the retention window;
+    - #1275 and wfm#65, parked for their TTL/Resume;
+    - wfm#63, A/B;
+    - #1332, its defaults;
+    - #1339, its default;
+    - q69, the public fixture history;
+    - #1349;
+    - #1323, which needs an owner.
+  - **Fleet ops:**
+    - #1350: stranded prompts are cleared by reloading the worker (W1–W4 were each reloaded at least once);
+    - a WiFi drop killed three workers, which were revived;
+    - load peaked at ~330, from 60+ finished reviewer agents plus a proxy-folder grep. Fixed by closing reviewers, a 3-reviewer cap per worker, and a no-whole-proxy-grep rule.
+  - **Gate hardening:** merge-gate.sh (owner items, 0 behind, stale-body tripwire, exact-head CI, verdicts, manager-verify files).
+  - **Final-pass cap outcomes:** cch#64's crash-only gap is accepted as stated; wfm#65 is parked.
+
 - 2026-09-26 (21:13 local) — Since the last entry: **#1332 MERGED** (Fixes #372: the Codex mirror bound and the provider-neutral proxy reader; q68 found 3 UNCONFIRMED defaults merged without the owner's OK, now put to the owner), **codex-headless#57 MERGED** (a tall draft is still a draft; merged 6 commits behind, but main CI was green afterwards), **#1343 MERGED** (Refs #1327). Merges now go only through `temp/manager/merge-gate.sh`, which enforces UNCONFIRMED/owner, 0-behind, exact-head CI, disposition, labels and review verdicts. Filed #1350 (prompts stranded after an absorption timeout block delivery as a "human draft"; 3 workers affected; assignment files are the workaround) and #1355 (OpenCode serve spawn timeouts under load). q69: the public fixture history exposure has no secrets and is an owner decision. The machine is overloaded (load 40–60); rule: one tsc per worker.
 
 - 2026-09-26 (19:47) — **Batch #1345 MERGED** (`ba29fb98`): #1326 (Reload Agents re-checks ownership; Fixes #1282), #1333 (a terminal survives a same-id respawn; Fixes #1281), #1337 (the GoalLoop grace test; Fixes #1314). Each member had 3 reviewers with verified blockers and a disposition; clean merges on main `b3a2c481`; the batch CI on exact head `5df3bf3a` was green. Local runs failed only on the known `stream` import quirk plus one timing test that passed in CI. Next batch (B): #1338, then #1325/#1331 after the q42 orphan-carry integration, then #1332 after the #56 pointer. q66 holds wfm#65 and the #1275 app half.
