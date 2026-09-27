@@ -91,4 +91,36 @@ describe('AgentActivityStore', () => {
 
     expect(await store.readSuspensions()).toEqual([{ suspendedAt: 100, resumedAt: 500 }])
   })
+
+  // #1342 verification b and c: a crash can leave a torn last line. The next
+  // append used to continue it, and the reader then dropped the torn bytes
+  // AND the first new record as one bad line.
+  it('keeps the first alias appended after a torn last line', async () => {
+    await appendFile(join(dir, 'aliases.jsonl'), '{"f":"torn","t":')
+    await new AgentActivityStore(dir).appendAliases([['old-session', 'stable-identity']])
+    const store = new AgentActivityStore(dir)
+    await store.appendInterval({ context: { ...context, agentKey: 'old-session' }, startedAt: 0, endedAt: HOUR })
+    await store.appendInterval({ context: { ...context, agentKey: 'stable-identity' }, startedAt: HOUR, endedAt: 2 * HOUR })
+    const keys = new Set((await new AgentActivityStore(dir).readIntervals(0, 3 * HOUR)).map(interval => interval.context.agentKey))
+    expect(keys.size).toBe(1)
+  })
+
+  it('keeps the first interval appended after a torn last line', async () => {
+    const start = Date.parse('2026-09-10T09:00:00Z')
+    await appendFile(join(dir, '2026-09.jsonl'), '{"t":"i","c":1,"s":')
+    await new AgentActivityStore(dir).appendInterval({ context, startedAt: start, endedAt: start + HOUR })
+    expect(await new AgentActivityStore(dir).readIntervals(start, start + 2 * HOUR)).toHaveLength(1)
+  })
+
+  // Edges can point both ways (a name given after an identity); every key an
+  // edge connects is one agent, whichever key a row was written under.
+  it('groups keys joined by aliases in either direction, cycles included', async () => {
+    const store = new AgentActivityStore(dir)
+    await store.appendAliases([['child', 'tldr-x']])
+    await store.appendAliases([['tldr-x', 'child']])
+    await store.appendInterval({ context: { ...context, agentKey: 'child' }, startedAt: 0, endedAt: HOUR })
+    await store.appendInterval({ context: { ...context, agentKey: 'tldr-x' }, startedAt: HOUR, endedAt: 2 * HOUR })
+    const keys = new Set((await new AgentActivityStore(dir).readIntervals(0, 3 * HOUR)).map(interval => interval.context.agentKey))
+    expect(keys.size).toBe(1)
+  })
 })

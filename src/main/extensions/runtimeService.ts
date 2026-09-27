@@ -54,6 +54,11 @@ export type ExtensionRuntimeOptions = {
 // therefore cannot destroy extension-wide state. No extension receives the host
 // preload or a generic IPC channel: the dedicated runtime preload exposes only
 // this module's schema-validated, sender-bound transport.
+/** How long an extension runtime may take to finish starting before it is
+ *  retired. Exported so the Electron harness can bound its own activation
+ *  waits by the same value instead of racing a shorter one (#1334/#1436). */
+export const EXTENSION_RUNTIME_STARTUP_TIMEOUT_MS = 10_000
+
 export class ExtensionRuntimeService {
   private readonly runtimes = new Map<string, ManagedRuntime>()
   private readonly senders = new Map<number, ManagedRuntime>()
@@ -293,7 +298,7 @@ export class ExtensionRuntimeService {
       installation, revision, window, senderId: window.webContents.id, session: isolated,
       url: `agent-code-ext://${extensionId}/__bundle/${encodeURIComponent(revision)}/${RUNTIME_DOCUMENT}`,
       state: 'starting', ready, resolveReady, rejectReady,
-      startupTimer: setTimeout(() => this.retire(runtime, 'Extension runtime did not finish starting before the deadline.'), this.options.startupTimeoutMs ?? 10_000),
+      startupTimer: setTimeout(() => this.retire(runtime, 'Extension runtime did not finish starting before the deadline.'), this.options.startupTimeoutMs ?? EXTENSION_RUNTIME_STARTUP_TIMEOUT_MS),
       pending: new Map(), viewStates: new Map(), apiInFlight: 0, credits: 128, creditedAt: performance.now(),
     }
     this.runtimes.set(extensionId, runtime)

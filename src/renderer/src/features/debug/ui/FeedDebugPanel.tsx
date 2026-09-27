@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { FeedDebugEntry, FeedDebugLayer, SessionRuntime } from '@renderer/session-runtime/state'
+import { DebugPanelHeader } from './DebugPanelHeader'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 type Props = {
   sessionId: string
@@ -55,27 +57,8 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
   }, [])
 
   return (
-    <div className="
-      h-full w-[540px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col overflow-hidden
-      text-[10px] font-code
-    ">
-      <div className="
-        flex items-center justify-between
-        px-3 py-2 border-b border-border
-        text-[9px] text-danger uppercase tracking-wider
-        select-none flex-shrink-0
-      ">
-        <span>debug logs — {kind} pane</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-muted hover:text-ink text-[14px] leading-none"
-        >
-          ×
-        </button>
-      </div>
+    <SidePanel label="Debug logs" className="w-[540px] text-[10px] font-code">
+      <DebugPanelHeader title={`debug logs — ${kind} pane`} closeLabel="Close debug logs" onClose={onClose} />
 
       <div className="border-b border-border bg-surface px-3 py-1.5 flex items-center gap-2 text-[10px]">
         <span className="text-muted uppercase tracking-[0.12em]">session</span>
@@ -154,7 +137,7 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
           })
         )}
       </div>
-    </div>
+    </SidePanel>
   )
 }
 

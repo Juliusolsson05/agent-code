@@ -1,4 +1,4 @@
-import { mkdir, stat, writeFile } from 'fs/promises'
+import { mkdir, open, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { FEED_DEBUG_DIR } from '@main/storage/paths.js'
@@ -74,6 +74,65 @@ async function loadInitialFileBytes(filePath: string): Promise<number | null> {
   }
 }
 
+// The drop count of the file's last tombstone row (0 if none), and whether
+// the file ends with a complete row.
+//
+// WHY (#1392 review a, round 4): cap state is process-local and is rebuilt
+// whenever a session is forgotten and appends again (process exit with the
+// pane still open, a same-id wake, a forget during the first `stat`). A
+// rebuilt state started at `droppedEntries: 0`, so its first tombstone
+// reported 1 drop after an earlier row had reported thousands, and the LAST
+// marker in the file, which the doubling rule promises is within 2x of the
+// truth, understated it by orders of magnitude. Re-statting bytes restores the
+// size decision; this restores the count. Only the file's tail is read, and
+// any failure falls back to 0, the old behaviour.
+const TOMBSTONE_TAIL_BYTES = 64 * 1024
+async function readFileTail(filePath: string, size: number): Promise<{ drops: number; endsWithNewline: boolean }> {
+  // Round-5 review a hardened this reader three ways:
+  //  - it runs for ANY non-empty file, not only one at the cap: an entry too
+  //    big to fit can write a short marker and leave the file BELOW the cap;
+  //  - a row counts only if its PARSED top level is a tombstone. An ordinary
+  //    entry can carry the marker text inside `data`, and a substring match
+  //    let it hide the real marker;
+  //  - an unparsable row (torn by a failed append) is skipped, not fatal, so
+  //    an earlier complete marker is still found.
+  // Cost: one read of at most 64 KiB per session per process, at its first
+  // append. A marker further back than that (more than 64 KiB of ordinary
+  // rows written after it) is not found, which is the old behaviour.
+  const result = { drops: 0, endsWithNewline: true }
+  try {
+    const handle = await open(filePath, 'r')
+    try {
+      const length = Math.min(size, TOMBSTONE_TAIL_BYTES)
+      const buffer = Buffer.alloc(length)
+      await handle.read(buffer, 0, length, size - length)
+      result.endsWithNewline = length === 0 || buffer[length - 1] === 0x0a
+      const lines = buffer.toString('utf8').split('\n')
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i]!
+        if (!line.includes('__feedDebugCapped')) continue
+        // From the row's first `{`: a tail can start mid-row, and a file that
+        // was preallocated or torn can carry NUL bytes before the row.
+        let row: { __feedDebugCapped?: unknown; droppedEntriesSoFar?: unknown }
+        try {
+          row = JSON.parse(line.slice(line.indexOf('{')))
+        } catch {
+          continue
+        }
+        if (row.__feedDebugCapped !== true) continue
+        const drops = row.droppedEntriesSoFar
+        result.drops = typeof drops === 'number' && Number.isFinite(drops) && drops > 0 ? drops : 0
+        break
+      }
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    // Unreadable tail: the pre-#1392 count of 0.
+  }
+  return result
+}
+
 // Per-session feed-debug log writer.
 //
 // Why a per-session serialized queue instead of fire-and-forget writes:
@@ -122,6 +181,51 @@ const lastWrittenFeedDebugId = new Map<string, number>()
  */
 const lastWrittenFeedDebugEpoch = new Map<string, number>()
 
+/**
+ * One token per live session, captured by each append when it is QUEUED
+ * (#1207). forgetFeedDebugSession deletes it.
+ *
+ * WHY: an append queued before the forget, and not started yet, used to run
+ * afterwards and write the three maps above back; queue settlement only reaps
+ * `feedDebugWriteQueues`, so they stayed for the life of the process (a few
+ * numbers per closed session, unbounded). An append that finds its token gone
+ * once it has run belongs to a forgotten session and deletes that state again.
+ * The token map is cleared by the same forget.
+ *
+ * An append that ARRIVES after the forget mints a fresh token and keeps its
+ * state; that is correct when the pane is still open (a same-id wake reuses
+ * the id, see sessionManager's agentPtyAttachCounts note), and the renderer
+ * releases the id when the pane really goes away (`debug:forget-feed-log`,
+ * sent by useFeedDebugPersist after the session's runtime is removed). That
+ * release, not a cap here, is what bounds these maps (#1392).
+ *
+ * WHY not a cap on remembered sessions: round 2 of review found an LRU cap
+ * broke three ways. Evicting a session whose append was inside its `stat`
+ * deleted the cap placeholder its identity check relies on, so the append
+ * resolved WITHOUT writing and the renderer advanced its cursor past lost
+ * rows; eviction reset a capped file's drop count, so its next tombstone
+ * under-reported drops by orders of magnitude; and appends already queued for
+ * evicted ids kept their state while a stalled `stat` held them. A remembered
+ * set of FORGOTTEN ids fails too: the same-id wake makes a forgotten id live
+ * again, and every one of its appends would be treated as late.
+ */
+const feedDebugSessionTokens = new Map<string, object>()
+
+function feedDebugSessionToken(sessionId: string): object {
+  let token = feedDebugSessionTokens.get(sessionId)
+  if (!token) {
+    token = {}
+    feedDebugSessionTokens.set(sessionId, token)
+  }
+  return token
+}
+
+function dropFeedDebugSessionState(sessionId: string): void {
+  lastWrittenFeedDebugId.delete(sessionId)
+  lastWrittenFeedDebugEpoch.delete(sessionId)
+  feedDebugCapState.delete(sessionId)
+}
+
 // One shape for both the first tombstone and the doubling refreshes so
 // readers grep for a single `__feedDebugCapped` marker. `fileBytesAtCap` is
 // the counter value at emit time — on a refresh row it reflects the file
@@ -163,9 +267,19 @@ export function queueFeedDebugAppend(
   epochMs?: number,
 ): Promise<void> {
   const previous = feedDebugWriteQueues.get(sessionId) ?? Promise.resolve()
+  const token = feedDebugSessionToken(sessionId)
   const next = previous
     .catch(() => {})
     .then(async () => {
+      try {
+        await writeQueuedFeedDebugAppend()
+      } finally {
+        // Forgotten while this append waited or ran: the state it wrote
+        // belongs to a closed session (#1207, see feedDebugSessionTokens).
+        if (feedDebugSessionTokens.get(sessionId) !== token) dropFeedDebugSessionState(sessionId)
+      }
+    })
+  async function writeQueuedFeedDebugAppend(): Promise<void> {
       if (entries.length === 0) return
       if (epochMs !== undefined) {
         const knownEpoch = lastWrittenFeedDebugEpoch.get(sessionId)
@@ -191,7 +305,7 @@ export function queueFeedDebugAppend(
       const freshEntries = entries.filter(entry => entry.id > lastWritten)
       if (freshEntries.length === 0) return
       await mkdir(FEED_DEBUG_DIR, { recursive: true })
-      const filePath = join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
+      const filePath = feedDebugFilePath(sessionId)
 
       // Per-file cap bookkeeping. The counter is process-local: the on-disk
       // file might already contain bytes from a previous run (feed-debug lives
@@ -229,9 +343,15 @@ export function queueFeedDebugAppend(
         feedDebugCapState.set(sessionId, capState)
         const startingBytes = await loadInitialFileBytes(filePath)
         if (feedDebugCapState.get(sessionId) !== capState) {
-          // forgetFeedDebugSession ran during the stat await — the session is
-          // gone. Drop this final batch rather than resurrect state for it.
-          return
+          // forgetFeedDebugSession ran during the stat await. This used to
+          // `return`, dropping the batch, and that RESOLVED the IPC: the
+          // renderer advanced its cursor past rows that were never written
+          // (#1392 review a, round 3). The forget comes from PROCESS exit
+          // while the pane, and its log, are still live, so the rows are
+          // real. Write them: re-install this placeholder (appends are
+          // serialized per session, so nothing else can own it) and let the
+          // retired token drop the state again when this append settles.
+          feedDebugCapState.set(sessionId, capState)
         }
         if (startingBytes === null) {
           // Unknown on-disk size (stat failed, not-ENOENT). Fail CLOSED:
@@ -251,6 +371,18 @@ export function queueFeedDebugAppend(
           throw new Error(`feed-debug: unknown size for ${sessionId}, refusing to append`)
         }
         capState.bytesWritten = startingBytes
+        if (startingBytes > 0) {
+          const tail = await readFileTail(filePath, startingBytes)
+          capState.droppedEntries = tail.drops
+          if (!tail.endsWithNewline) {
+            // A torn last row (a failed append) has no newline, so this
+            // session's first row would be glued onto it and neither would
+            // parse. Close the torn row first. Best effort: if this fails the
+            // append below fails the same way and the renderer retries.
+            await writeFile(filePath, '\n', { encoding: 'utf8', flag: 'a' })
+            capState.bytesWritten += 1
+          }
+        }
       }
 
       // Already capped in a prior batch — count, drop, and keep the on-disk
@@ -362,7 +494,7 @@ export function queueFeedDebugAppend(
         `tombstone ${capState.tombstoneWritten ? 'written' : 'write FAILED (will retry)'}, ` +
         'dropping further appends this run',
       )
-    })
+  }
   feedDebugWriteQueues.set(sessionId, next)
 
   // Reap the queue entry once it settles — but only if no NEWER
@@ -383,21 +515,78 @@ export function queueFeedDebugAppend(
   return next
 }
 
+/** Sizes of the per-session maps (or, given an id, whether each map holds
+ *  it), for the #1207/#1392 leak tests only. The per-id form exists because
+ *  whole-map sizes stop being comparable once the recency cap starts
+ *  evicting other tests' sessions. */
+export function feedDebugSessionStateSizesForTest(sessionId?: string): { ids: number; epochs: number; caps: number; tokens: number } {
+  const count = (map: Map<string, unknown>) => (sessionId === undefined ? map.size : Number(map.has(sessionId)))
+  return { ids: count(lastWrittenFeedDebugId), epochs: count(lastWrittenFeedDebugEpoch), caps: count(feedDebugCapState), tokens: count(feedDebugSessionTokens) }
+}
+
 /** Drop in-memory bookkeeping for a session that has ended. The
  *  on-disk JSONL is intentionally LEFT IN PLACE — debug bundles for
  *  long-since-closed panes still benefit from reading the trail. The
  *  unified sweep in storage/debugRetention.ts is what eventually
  *  deletes the file. */
-export function forgetFeedDebugSession(sessionId: string): void {
+function feedDebugFilePath(sessionId: string): string {
+  return join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
+}
+
+/**
+ * Write the drops a capped session counted since its last on-disk marker,
+ * before its in-memory count is forgotten (#1392 review b, round 5).
+ *
+ * WHY: drops are persisted only at a doubling, so up to half of them live
+ * only in memory. Every forget (process exit with the pane open, a same-id
+ * wake, the renderer's release) used to discard them, and a session that
+ * crossed a few forgets reported a fraction of its true total in its last
+ * marker, breaking the 2x promise. Chained on the session's write queue so it
+ * lands after any append already queued, which makes it the file's LAST
+ * marker (the one readFileTail and forensics read). Best effort: a
+ * failed write loses only what the old code always lost.
+ *
+ * Residual: a crash or a kill of main still loses the unmarked drops. Only a
+ * write per drop could avoid that, which is what the doubling rule exists to
+ * prevent.
+ */
+function flushUnmarkedDrops(sessionId: string, capState: FeedDebugCapState | undefined): void {
+  if (!capState?.tombstoneWritten || capState.droppedEntries <= capState.lastTombstoneDrops) return
+  const line = buildTombstoneLine(sessionId, capState)
+  const previous = feedDebugWriteQueues.get(sessionId) ?? Promise.resolve()
+  const next = previous
+    .catch(() => {})
+    .then(() => writeFile(feedDebugFilePath(sessionId), line, { encoding: 'utf8', flag: 'a' }))
+    .catch(() => {})
+  feedDebugWriteQueues.set(sessionId, next)
+  void next.then(() => {
+    if (feedDebugWriteQueues.get(sessionId) === next) feedDebugWriteQueues.delete(sessionId)
+  })
+}
+
+export function forgetFeedDebugSession(
+  sessionId: string,
+  /** `persistUnmarkedDrops: false` when the caller's user has persistence
+   *  switched OFF (#1392 review c, round 2): the final drop marker is a disk
+   *  write, and "off" means none. Those unmarked drop counts are then lost,
+   *  which is what switching persistence off asks for. Defaults to true, the
+   *  process-exit forget's behaviour. */
+  options: { persistUnmarkedDrops?: boolean } = {},
+): void {
   // We never delete `feedDebugWriteQueues` synchronously here —
   // there might be an in-flight write that still owns the chain.
   // The settle-time reaper in queueFeedDebugAppend handles the queue
   // entry; what we own here is the cursor.
+  //
+  // Retiring the token tells any append queued before this call (and still
+  // pending) to delete what it writes (#1207).
+  feedDebugSessionTokens.delete(sessionId)
   lastWrittenFeedDebugId.delete(sessionId)
   lastWrittenFeedDebugEpoch.delete(sessionId)
   // Drop the cap-state entry too. If the same sessionId is re-registered later
   // in this process, we'll re-stat the on-disk file and prime a fresh counter;
   // never carrying stale cap state across "session forgotten" boundaries keeps
   // the map from growing unbounded across long-lived main processes.
+  if (options.persistUnmarkedDrops !== false) flushUnmarkedDrops(sessionId, feedDebugCapState.get(sessionId))
   feedDebugCapState.delete(sessionId)
 }

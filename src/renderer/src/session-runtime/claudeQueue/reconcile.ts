@@ -71,7 +71,94 @@ function previewOf(content: string): string {
 }
 
 export function createClaudeQueueState(): ClaudeQueueState {
-  return { pending: [], decisions: [], debt: null, removeDebt: null, nextSeq: 0 }
+  return { pending: [], decisions: [], droppedDecisions: 0, episodeHead: [], episodeStart: null, debt: null, removeDebt: null, nextSeq: 0 }
+}
+
+/**
+ * How many of the most recent decisions a session keeps once its queue is empty (#676).
+ *
+ * WHY a window and not the whole session: the log was append-only for a session's lifetime, and
+ * every departure copied the whole array, so a long-lived session paid memory and O(n) per
+ * departure for history nothing reads (no UI, no debug bundle — the state lives in a renderer map).
+ * P4 ("the diagnosis IS this record") is about explaining what the queue is doing NOW.
+ *
+ * WHY 500 (review of #1364, c): the recorded corpus already has a session with 175 decisions, so 200
+ * left 25 slots of margin. 500 keeps every recorded session whole with room to spare.
+ */
+export const QUEUE_DECISION_WINDOW = 500
+
+/**
+ * The bound while any queue item is still pending (review of #1364, c).
+ *
+ * WHY: a window of recent decisions alone could evict every decision that explains a row still
+ * stranded in the queue — the replay of `divergence-stranded-background-commands` plus 200 ordinary
+ * cycles kept the two stranded rows and none of the 164 decisions around them. While something is
+ * pending, its episode is not over, so the log may grow past the window to this ceiling. It is
+ * still a ceiling: a row stranded forever cannot bring back the unbounded growth #676 fixed (the
+ * oldest evidence of an episode longer than this is the stated residual).
+ */
+export const QUEUE_DECISION_CEILING = 2_000
+
+/**
+ * How many of a pending episode's FIRST decisions survive eviction (review of #1364, round 2 c).
+ *
+ * WHY: the ceiling alone only postponed the loss — 2,200 unrelated departures while two rows stayed
+ * stranded left none of the 164 decisions that explain them. The decisions that open an episode are
+ * the ones that show how its rows were (mis)attributed, so they are kept aside, up to this many, for
+ * as long as anything is pending. Counted within the ceiling, so the bound is unchanged.
+ */
+export const QUEUE_EPISODE_HEAD = 200
+
+/**
+ * The one place decisions are appended: append, trim, count what was dropped.
+ * `pendingAfter` is the queue as it stands once this change lands; it picks the bound and says
+ * whether the current episode is still open.
+ */
+function withDecisions(
+  state: ClaudeQueueState,
+  added: readonly QueueDecision[],
+  pendingAfter: readonly PendingItem[],
+): Pick<ClaudeQueueState, 'decisions' | 'droppedDecisions' | 'episodeHead' | 'episodeStart'> {
+  const combined = [...state.decisions, ...added]
+  if (pendingAfter.length === 0) {
+    // The episode is over: its kept head ages out, and the log trims to the window.
+    const drop = Math.max(0, combined.length - QUEUE_DECISION_WINDOW)
+    return {
+      decisions: drop === 0 ? combined : combined.slice(drop),
+      droppedDecisions: state.droppedDecisions + drop + state.episodeHead.length,
+      episodeHead: [],
+      episodeStart: null,
+    }
+  }
+  // Still pending: the head and the log together stay under the ceiling.
+  let overflow = state.episodeHead.length + combined.length - QUEUE_DECISION_CEILING
+  if (overflow <= 0) {
+    return { decisions: combined, droppedDecisions: state.droppedDecisions, episodeHead: state.episodeHead, episodeStart: state.episodeStart }
+  }
+  // Everything before decisions[0] is either dropped or in the head, so that is its absolute index.
+  const firstIndex = state.droppedDecisions + state.episodeHead.length
+  const episodeHead = [...state.episodeHead]
+  let dropped = 0
+  let cut = 0
+  // Take from the oldest end. A decision of the current episode moves into the head while it has
+  // room (that frees no slot, so the loop goes on); anything else is evicted, which does.
+  while (overflow > 0 && cut < combined.length) {
+    const absolute = firstIndex + cut
+    const episodic = state.episodeStart !== null && absolute >= state.episodeStart
+    if (episodic && episodeHead.length < QUEUE_EPISODE_HEAD) {
+      episodeHead.push(combined[cut]!)
+    } else {
+      dropped += 1
+      overflow -= 1
+    }
+    cut += 1
+  }
+  return {
+    decisions: combined.slice(cut),
+    droppedDecisions: state.droppedDecisions + dropped,
+    episodeHead,
+    episodeStart: state.episodeStart,
+  }
 }
 
 function decide(
@@ -311,10 +398,9 @@ function settleDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
   return {
     ...state,
     pending: without(state.pending, removed),
-    decisions: [
-      ...state.decisions,
+    ...withDecisions(state, [
       ...removed.map(i => decide(i, 'delivered-inferred', [], debt.at)),
-    ],
+    ], without(state.pending, removed)),
     debt: null,
   }
 }
@@ -356,7 +442,7 @@ function settleRemoveDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
   return {
     ...state,
     pending,
-    decisions: decisions.length > 0 ? [...state.decisions, ...decisions] : state.decisions,
+    ...withDecisions(state, decisions, pending),
     removeDebt: null,
   }
 }
@@ -381,7 +467,12 @@ function applyEnqueue(state: ClaudeQueueState, op: QueueOperationRecord): Claude
     isSlashCommand: isSlashCommand(content),
     stale: false,
   }
-  return { ...state, pending: [...state.pending, item], nextSeq: state.nextSeq + 1 }
+  // An item entering an empty queue opens an episode; its decisions are the ones worth keeping
+  // while anything stays pending (see QUEUE_EPISODE_HEAD).
+  const episodeStart = state.pending.length === 0
+    ? state.decisions.length + state.droppedDecisions + state.episodeHead.length
+    : state.episodeStart
+  return { ...state, pending: [...state.pending, item], nextSeq: state.nextSeq + 1, episodeStart }
 }
 
 function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQueueState {
@@ -439,10 +530,9 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
     return {
       ...state,
       pending: without(state.pending, [victim]),
-      decisions: [
-        ...state.decisions,
+      ...withDecisions(state, [
         decide(victim, 'consumed-observed', ['queue-operation content'], op.timestamp ?? null),
-      ],
+      ], without(state.pending, [victim])),
     }
   }
 
@@ -519,10 +609,9 @@ function applyPopAll(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   return {
     ...state,
     pending: without(state.pending, [target]),
-    decisions: [
-      ...state.decisions,
+    ...withDecisions(state, [
       decide(target, 'popped-to-composer', ['popAll content'], op.timestamp ?? null),
-    ],
+    ], without(state.pending, [target])),
   }
 }
 
@@ -578,15 +667,14 @@ export function applyQueuedCommandObservation(
   return {
     ...state,
     pending: without(state.pending, [claimed]),
-    decisions: [
-      ...state.decisions,
+    ...withDecisions(state, [
       decide(
         claimed,
         'consumed-observed',
         [observation.uuid ?? 'queued-command attachment'],
         debt.at,
       ),
-    ],
+    ], without(state.pending, [claimed])),
     removeDebt: remaining > 0 ? { ...debt, count: remaining } : null,
   }
 }
@@ -607,10 +695,9 @@ export function applyCommittedUserEntry(
     return {
       ...state,
       pending: without(state.pending, [claimed]),
-      decisions: [
-        ...state.decisions,
+      ...withDecisions(state, [
         decide(claimed, 'delivered-observed', [entry.uuid ?? 'committed-entry'], state.debt.at),
-      ],
+      ], without(state.pending, [claimed])),
       debt: remaining > 0 ? { ...state.debt, count: remaining, entriesSeen: 0 } : null,
     }
   }
@@ -640,14 +727,14 @@ export function markStaleWhenIdle(state: ClaudeQueueState, idle: boolean): Claud
   const settled = settleRemoveDebtByCohort(settleDebtByCohort(state))
   // Only items that have already survived at least one departure are suspect.
   // A queue that has simply never been drained is not stale, it is waiting.
-  if (settled.decisions.length === 0) return settled
+  // Counted with the dropped ones: an evicted departure still happened (#676).
+  if (settled.decisions.length + settled.droppedDecisions + settled.episodeHead.length === 0) return settled
   if (settled.pending.every(i => i.stale)) return settled
   return {
     ...settled,
     pending: settled.pending.map(i => (i.stale ? i : { ...i, stale: true })),
-    decisions: [
-      ...settled.decisions,
+    ...withDecisions(settled, [
       ...settled.pending.filter(i => !i.stale).map(i => decide(i, 'stale-unattributed', [], null)),
-    ],
+    ], settled.pending),
   }
 }

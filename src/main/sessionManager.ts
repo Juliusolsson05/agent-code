@@ -195,6 +195,7 @@ type ManagerEvents = {
     observation?: AgentTranscriptObservationMetadata
   }]
   'jsonl-error': [{ sessionId: string; error: Error }]
+  'proxy-transport-gap': [{ sessionId: string; lostGenerations: number }]
   /** Durable-history generation boundary (grok). Never completion or idle;
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
   'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
@@ -569,6 +570,11 @@ export type ResolveConditionResult =
       failedAtStep?: string
     }
 
+/** The one Claude-only event SessionManager subscribes to (ClaudeSessionEvents declares it). */
+type ProxyGapSource = {
+  on(event: 'proxy-transport-gap', listener: (gap: { lostGenerations: number }) => void): unknown
+}
+
 export class SessionManager extends EventEmitter {
   private readonly monitorResponses = new ResponseTracker(mainOperations)
   private readonly sessions = new Map<string, RegistryEntry>()
@@ -808,7 +814,14 @@ export class SessionManager extends EventEmitter {
   // cappedTextBuffer.ts — the string version copied the whole cap on every
   // chunk and retained sliced-string parents (#726).
   private readonly terminalBuffers = new Map<string, TerminalReplayBuffer>()
-  private readonly terminalAttached = new Set<string>()
+  // How many renderer views of each shell are attached. A count, not a flag,
+  // because two views in the receiving renderer (a lane and a retained
+  // Spotlight copy) can show one shell and one closing must
+  // not cut the other off; and it describes the VIEWS, not the process, so
+  // process cleanup leaves it alone (#1281, see cleanupSessionState).
+  // detachTerminal is the only release, and the IPC layer releases a
+  // renderer page's references when it reloads or is destroyed (#1283).
+  private readonly terminalAttachCounts = new Map<string, number>()
 
   // Shell activity producer (#865). Emits on a channel of its own, NOT
   // 'process-state': the remote tap and the recorder subscribe to
@@ -1093,7 +1106,14 @@ export class SessionManager extends EventEmitter {
     this.sessionSizes.delete(sessionId)
     if (kind === 'terminal') {
       this.terminalBuffers.delete(sessionId)
-      this.terminalAttached.delete(sessionId)
+      // NOT terminalAttachCounts (#1281, terminal half): a TerminalLeaf stays
+      // mounted while its shell exits and is respawned under the SAME id (a
+      // delivery, a control call or a wake goes through recover without
+      // remounting it), and it attaches only once per id. Deleting the count
+      // here stopped forwarding to it: the xterm stayed on the dead shell
+      // while keystrokes reached the new one unseen. The agent PTY count
+      // below is kept for the same reason. The leaf's own detachTerminal (on
+      // unmount, pane close included) is the release.
       this.terminalForeground.untrack(sessionId)
     } else {
       this.agentPtyBuffers.delete(sessionId)
@@ -1624,8 +1644,17 @@ export class SessionManager extends EventEmitter {
   /**
    * Advance successful handoffs only after the renderer's ownership map is on
    * disk. The workspace IPC calls this after its atomic rename, never before.
+   *
+   * Returns the predecessor ids this call committed, each exactly once. WHY
+   * (#1283 item 2): the renderer skips killOwnedSession for a predecessor
+   * main already handed off, and that call was the only release of the
+   * predecessor's window lease, so it leaked for the app run. Until this
+   * commit the lease must stay (compensation can restore the predecessor);
+   * from here on nothing displays it, so the caller releases it. The manager
+   * itself never touches the window registry.
    */
-  acknowledgePersistedSessionOwnership(sessionIds: ReadonlySet<string>): void {
+  acknowledgePersistedSessionOwnership(sessionIds: ReadonlySet<string>): string[] {
+    const committed: string[] = []
     for (const reservation of this.codexReplacements.reservations()) {
       const predecessorSessionId = reservation.predecessorSessionId
       if (reservation.spawnOutcome !== 'successor-live') continue
@@ -1669,7 +1698,9 @@ export class SessionManager extends EventEmitter {
         ok: true,
         reason: 'workspace-persisted',
       })
+      committed.push(predecessorSessionId)
     }
+    return committed
   }
 
   /**
@@ -3021,13 +3052,28 @@ export class SessionManager extends EventEmitter {
         if (!this.builtInMcpHost) {
           throw new Error('Built-in MCP host is not available')
         }
-        builtInMcpServers = this.builtInMcpHost.registerSession({
+        const mcpScope = {
           sessionId,
           cwd: options.cwd,
           providerKind: kind,
           domains: options.builtInMcpDomains,
           tldrIdentity: options.tldrIdentity,
-        })
+        }
+        // Pinned in the TLDR/Goal stores' write queues BEFORE the session
+        // becomes live, so a store at its cap can never be mid-way through
+        // evicting this identity's record once it is (#1328 q52).
+        const releasePin = await this.builtInMcpHost.pinReportingIdentity(mcpScope)
+        try {
+          this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
+          // The registration owns the pin from here: it releases it on revoke,
+          // or at once if policy leaves no domain to register.
+          builtInMcpServers = this.builtInMcpHost.registerSession(mcpScope, releasePin)
+        } catch (error) {
+          // Not registered, so revokeSession will never release this pin;
+          // left, it would protect the identity forever (#1328 q56).
+          releasePin()
+          throw error
+        }
         mcpRegistered = true
       }
       const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
@@ -3301,6 +3347,21 @@ export class SessionManager extends EventEmitter {
           }, undefined, agentEntry.lifecycle.runId)
         }
         this.emit('jsonl-error', { sessionId, error })
+      })
+      // claude-code-headless#64 / review of #1376: proxy events deleted before the app read them.
+      // Recorded as an always-on incident (debug bundles carry the journal) and re-emitted, so a
+      // hole in the live Claude feed is never silent.
+      // Claude-only (its ClaudeSessionEvents declares it; other providers have no proxy tail), so it
+      // is subscribed through that type rather than widening every provider's event map.
+      if (kind === 'claude') (session as unknown as ProxyGapSource).on('proxy-transport-gap', (gap: { lostGenerations: number }) => {
+        if (!ownsEntry()) return
+        this.journal?.recordIncident({
+          kind: 'claude.proxy_transport_gap',
+          severity: 'warn',
+          reason: 'events_deleted_unread',
+          context: { sessionId, lostGenerations: gap.lostGenerations },
+        })
+        this.emit('proxy-transport-gap', { sessionId, lostGenerations: gap.lostGenerations })
       })
       session.on('transcript-diagnostic', (diagnostic: unknown) => {
         if (!ownsEntry()) return
@@ -3585,7 +3646,7 @@ export class SessionManager extends EventEmitter {
       // replayed when the renderer calls attachTerminal. See the
       // block comment on terminalBuffers for why this is
       // race-free.
-      if (this.terminalAttached.has(sessionId)) {
+      if ((this.terminalAttachCounts.get(sessionId) ?? 0) > 0) {
         this.emit('terminal-data', { sessionId, data })
       }
     })
@@ -3731,16 +3792,17 @@ export class SessionManager extends EventEmitter {
    *      see the queue logic in TerminalLeaf.
    *   3. Subsequent live events write directly to xterm.
    *
-   * Returns '' if the session doesn't exist or isn't a terminal —
-   * silently safe so a stale attach call on a dead session doesn't
-   * error.
+   * Returns the replay buffer and takes one view reference, or NULL when no
+   * reference was taken (the id is not a terminal). A session that does not
+   * exist right now DOES take a reference and returns '': a TerminalLeaf can
+   * mount while its shell is down, and a later respawn under the same id must
+   * forward to it (#1281). The IPC layer records only references main took,
+   * so a renderer's detach can never release one it does not hold.
    */
-  attachTerminal(sessionId: string): string {
+  attachTerminal(sessionId: string): string | null {
     const entry = this.sessions.get(sessionId)
     if (!entry) {
-      // Caller is asking to attach to a session that's already gone.
-      // Silent empty-string is fine here; any TerminalLeaf that mounts
-      // for a dead session will simply see an empty xterm.
+      this.terminalAttachCounts.set(sessionId, (this.terminalAttachCounts.get(sessionId) ?? 0) + 1)
       return ''
     }
     if (entry.kind !== 'terminal') {
@@ -3755,15 +3817,28 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] attachTerminal called on non-terminal session`,
         { sessionId, kind: entry.kind },
       )
-      return ''
+      return null
     }
     // replay(), not read(): the modes the evicted bytes set come first (#843).
     const buffer = this.terminalBuffers.get(sessionId)?.replay() ?? ''
-    // Flip the attach flag in the SAME synchronous block as reading
+    // Take the reference in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
     // can only happen on a later tick, so nothing can sneak in.
-    this.terminalAttached.add(sessionId)
+    this.terminalAttachCounts.set(sessionId, (this.terminalAttachCounts.get(sessionId) ?? 0) + 1)
     return buffer
+  }
+
+  /**
+   * Release one terminal view reference (a TerminalLeaf unmounting, or the
+   * IPC layer releasing a reloaded or destroyed renderer's references). The
+   * last one stops live forwarding; the buffer keeps accumulating for the
+   * next attach's replay. Works whether or not a shell exists right now,
+   * because the reference outlives the process (#1281).
+   */
+  detachTerminal(sessionId: string): void {
+    const attachCount = this.terminalAttachCounts.get(sessionId) ?? 0
+    if (attachCount > 1) this.terminalAttachCounts.set(sessionId, attachCount - 1)
+    else this.terminalAttachCounts.delete(sessionId)
   }
 
   /**

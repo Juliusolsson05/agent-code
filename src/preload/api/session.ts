@@ -120,8 +120,15 @@ export const sessionApi = {
    * and attach response are silently missed. See TerminalLeaf.tsx
    * for the queue pattern.
    */
+  // Both carry this page's document, like the agent PTY calls below: main
+  // owns each terminal view reference per page, releases a reloaded page's,
+  // and ignores a dead page's late detach (#1281 / #1283).
   attachTerminal: (sessionId: string): Promise<string> =>
-    ipcRenderer.invoke('session:terminal-attach', sessionId),
+    ipcRenderer.invoke('session:terminal-attach', sessionId, screenLeaseDocument),
+
+  /** Release this leaf's view of a shell (TerminalLeaf unmount). */
+  detachTerminal: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:terminal-detach', sessionId, screenLeaseDocument),
 
   /**
    * Attach this renderer to an agent runtime's raw PTY terminal.

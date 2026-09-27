@@ -143,21 +143,21 @@ export default function App() {
             RetainedWorkspaceSurface: a <webview> that is ever detached from
             the DOM is destroyed, so no layout change or takeover may own it.
             Each guest is its own fixed element at z-index 20 — above the lanes
-            it overlays, below every z-50 overlay and modal after this line. */}
+            it overlays, below every pane overlay and app layer
+            (ui/layers.ts). */}
         <BrowserPocketHost workspace={workspace} />
-        {/* Mount order here IS the z-order contract: overlays and modals
-            are fixed-position siblings and mostly share z-50, so DOM
-            order is the paint-order tiebreaker. Overlays render first
-            (paint under); anything that must sit at a specific height
-            within the modal stack lives in modalSurfaces at an explicit
-            index — see app/surfaces/registry.tsx. Do not swap these. */}
+        {/* Stacking is by named layer (ui/layers.ts), and within the dialog
+            layer by OPEN order: each Radix Dialog portals into <body> when it
+            opens, so the one opened last paints on top. Render order here only
+            breaks same-commit ties; see the note in app/surfaces/registry.tsx.
+            Keep overlays before modals so those ties stay as they were. */}
         <GlobalOverlays />
         <GlobalModals />
         {/* Voice-dictation guide modal, opened by the "Configure Voice
-            Dictation" nudge and by a future command-palette entry. Sits
-            after GlobalModals in DOM order so it paints on top of the
-            other overlay stacks without competing with the modalSurfaces
-            registry — the guide is entirely local, no z-index tricks. */}
+            Dictation" nudge and by a future command-palette entry. It is a
+            dialog like the registry's, so it paints above them when opened
+            after them (open order, see above); its position here only breaks
+            a same-commit tie. */}
         <DictationGuideModal />
       </div>
     </WorkspaceProvider>

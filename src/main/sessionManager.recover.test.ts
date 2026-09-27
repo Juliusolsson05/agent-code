@@ -419,7 +419,7 @@ describe('SessionManager recover', () => {
     createSession.mockImplementationOnce(() => {
       throw new Error('secret-token-from-provider-constructor')
     })
-    const manager = new SessionManager(null, { registerSession, revokeSession } as never)
+    const manager = new SessionManager(null, { pinReportingIdentity: async () => () => {}, registerSession, revokeSession } as never)
 
     await expect(manager.recover({
       sessionId: 'constructor-failure',
@@ -487,6 +487,7 @@ describe('SessionManager recover', () => {
     const revokeSession = vi.fn()
     const sessionDomains = vi.fn(() => ['orchestration'])
     const manager = new SessionManager(null, {
+      pinReportingIdentity: async () => () => {},
       registerSession,
       revokeSession,
       sessionDomains,
@@ -520,7 +521,7 @@ describe('SessionManager recover', () => {
       cwd: '/tmp/project',
       providerKind: 'claude',
       domains: ['orchestration'],
-    })
+    }, expect.any(Function))
     expect(sessionDomains).toHaveBeenCalledWith('mcp-session')
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
       builtInMcpServers: [serverConfig],
@@ -608,7 +609,7 @@ describe('SessionManager recover', () => {
     createSession.mockImplementation(() => session)
     const registerSession = vi.fn(() => [])
     const revokeSession = vi.fn()
-    const manager = new SessionManager(null, { registerSession, revokeSession } as never)
+    const manager = new SessionManager(null, { pinReportingIdentity: async () => () => {}, registerSession, revokeSession } as never)
 
     const recovery = manager.recover({
       sessionId: 'cancelled-session',

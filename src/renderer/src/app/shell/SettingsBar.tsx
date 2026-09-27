@@ -21,7 +21,9 @@ import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 // outline variant's hover (control fill, ink text) cannot wash out an active
 // toggle while the pointer is over it; tailwind-merge drops the variant's
 // conflicting ones.
-const SETTINGS_BAR_ON = 'border-accent bg-accent text-accent-fg hover:border-accent hover:bg-accent hover:text-accent-fg'
+// The offset keeps the focus ring visible on the accent fill (Claude review
+// of #1221, reviewer C F1).
+const SETTINGS_BAR_ON = 'border-accent bg-accent text-accent-fg hover:border-accent hover:bg-accent hover:text-accent-fg focus-visible:ring-offset-1 focus-visible:ring-offset-surface'
 
 export function SettingsBar() {
   const settings = useAppStore(state => state.settings)
