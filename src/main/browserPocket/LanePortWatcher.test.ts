@@ -335,3 +335,47 @@ describe('#1452: the settle window counts observed time only', () => {
     expect(h.probe.mock.calls.map(c => c[0])).toEqual([4173])
   })
 })
+
+// #1452 round-2 review A: a scan that was waiting on lsof when the plan was
+// emptied must not write its listeners' ages back after the clear.
+describe('#1452: an obsolete scan writes nothing', () => {
+  it('a scan in flight across an empty plan does not restore listener age', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    h.listListeners.mockImplementationOnce(async pids => { await gate; return h.owned(pids) })
+    h.watcher.setSessions(h.plan)
+    const inFlight = h.watcher.scan()
+    // Empty the plan only once the scan has captured the old roots and is
+    // inside lsof; emptying it earlier leaves the scan nothing to look up.
+    await vi.waitFor(() => expect(h.listListeners).toHaveBeenCalledTimes(1))
+    h.watcher.setSessions([])
+    release()
+    await inFlight
+    h.clock.t = PROBE_SETTLE_MS
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    expect(h.probe).not.toHaveBeenCalled()
+  })
+
+  it('a probe answer that lands after the plan was emptied is not cached', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    h.clock.t = PROBE_SETTLE_MS
+    let answer!: () => void
+    const gate = new Promise<void>(r => { answer = r })
+    h.probe.mockImplementationOnce(async port => { await gate; return probes.get(port)! })
+    const inFlight = h.watcher.scan()
+    await vi.waitFor(() => expect(h.probe).toHaveBeenCalledTimes(1))
+    h.watcher.setSessions([])
+    answer()
+    await inFlight
+    // Restored and settled again: the old answer was not kept, so it is asked again.
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    h.clock.t = 2 * PROBE_SETTLE_MS
+    await h.watcher.scan()
+    expect(h.probe).toHaveBeenCalledTimes(2)
+  })
+})

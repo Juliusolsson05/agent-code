@@ -192,12 +192,24 @@ export class LanePortWatcher {
       // When these listeners were actually observed; see PROBE_SETTLE_MS for
       // why this is not `started`.
       const observedAt = this.deps.now()
+      // WHY a scan from an older plan writes NOTHING from here on (#1452
+      // round-2 review A): setSessions([]) forgets every age and probe
+      // answer, but a scan that was already waiting on lsof resumed after
+      // that clear and wrote its listeners' ages back, dated before the
+      // unwatched gap. A listener then counted the gap as settled time and was
+      // probed on the first scan of the restored plan. So an obsolete scan
+      // neither records ages, probes, caches nor prunes. Its only effect is
+      // the immediate rescan the finally block schedules for the new plan.
+      const current = () => generation === this.planGeneration
+      if (!current()) return
       const attributed = attributePorts({ listeners, parentOf, roots })
 
       const out: Record<string, LanePort[]> = {}
       for (const [sessionId, ports] of Object.entries(attributed)) {
         const rows: LanePort[] = []
         for (const p of ports) {
+          // Probes await, so the plan can change mid-loop too.
+          if (!current()) return
           const key = `${p.pid}:${p.port}`
           const seenAt = this.firstSeen.get(key) ?? observedAt
           this.firstSeen.set(key, seenAt)
@@ -208,7 +220,7 @@ export class LanePortWatcher {
             nextSettleAt = nextSettleAt === null ? settleAt : Math.min(nextSettleAt, settleAt)
             continue
           }
-          const kind = classifyProbe(await this.probeOnce(p.pid, p.port))
+          const kind = classifyProbe(await this.probeOnce(p.pid, p.port, current))
           if (kind === 'ignore') continue
           rows.push({ port: p.port, pid: p.pid, url: `http://localhost:${p.port}/`, kind })
         }
@@ -217,10 +229,11 @@ export class LanePortWatcher {
       }
       // Probe cache entries for listeners that are gone would otherwise pin
       // a restarted server's old answer to a reused port.
+      if (!current()) return
       const live = new Set(listeners.map(l => `${l.pid}:${l.port}`))
       for (const key of this.probeCache.keys()) if (!live.has(key)) this.probeCache.delete(key)
       for (const key of this.firstSeen.keys()) if (!live.has(key)) this.firstSeen.delete(key)
-      if (generation === this.planGeneration) this.emit(out)
+      this.emit(out)
     } catch (error) {
       // Nothing is pruned or broadcast on failure: the chips and the ages
       // from the last good scan stand until a scan succeeds.
@@ -244,12 +257,14 @@ export class LanePortWatcher {
     return this.sessions.some(s => s.tmuxNames.length > 0)
   }
 
-  private async probeOnce(pid: number, port: number): Promise<ProbeResult> {
+  private async probeOnce(pid: number, port: number, current: () => boolean): Promise<ProbeResult> {
     const key = `${pid}:${port}`
     const cached = this.probeCache.get(key)
     if (cached) return cached
     const result = await this.deps.probe(port).catch((): ProbeResult => ({ status: null, contentType: null }))
-    this.probeCache.set(key, result)
+    // The plan may have been emptied (and the cache cleared) while the probe
+    // was in flight; see `current` in runScan.
+    if (current()) this.probeCache.set(key, result)
     return result
   }
 
