@@ -1012,6 +1012,63 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     expect((await lstat(file)).isSymbolicLink()).toBe(true)
   })
 
+  // r3 round 3 (review a): the guard walked only DEFINED inputs. An agent
+  // edit that drops an input keeps its blob (agents never prune), and that
+  // orphaned blob was then invisible to the guard, so mcp_servers_remove
+  // deleted it. Every blob on disk for the server is covered now; one with no
+  // input can prove no binding, so it counts as withheld.
+  it('an agent cannot remove a server whose dropped input still holds a secret', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const tokBytes = await blob(id, 'tok')
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: 'https://${input:trusted-host}/mcp' } }, inputs: [{ id: 'trusted-host', description: 'host' }] } as UserMcpSaveInput, 'agent')
+    // The user re-enters the remaining input, so the ORPHAN is the only
+    // secret the guard can protect.
+    expect((await service().setSecret(id, 'trusted-host', 'trusted.example')).ok).toBe(true)
+    expect((await service().delete(id, 'agent')).ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    expect((await service().delete(id)).ok).toBe(true)
+  })
+
+  // q131: the orphan -> re-add route. The agent drops every reference, then
+  // re-adds the input and supplies a value in the same save; the orphaned
+  // blob must survive byte-for-byte.
+  it('an agent re-adding a dropped input cannot replace its orphaned secret', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const tokBytes = await blob(id, 'tok')
+    const bare = { ...endpoint(), entry: { command: 'node', args: ['client.js'], env: {} }, inputs: [] }
+    expect((await service().save({ id, ...bare } as UserMcpSaveInput, 'agent')).ok).toBe(true)
+    expect((await service().snapshot()).servers[0]!.inputs).toEqual([])
+    const readd = await service().save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_3131' } } as UserMcpSaveInput, 'agent')
+    expect(readd.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+  })
+
+  // q131: an unlistable directory (0o300: writable and searchable, not
+  // listable) must refuse the orphan re-add. Two strict reads stand here:
+  // the guard's blob listing (storedInputIds) and save's snapshotServer.
+  // Making the listing lenient alone does NOT fail this test, because the
+  // snapshot still refuses; the test pins the route, and removing both
+  // strict reads fails it.
+  it('an agent re-add is refused when the secrets directory cannot be listed', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const tokBytes = await blob(id, 'tok')
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client.js'], env: {} }, inputs: [] } as UserMcpSaveInput, 'agent')
+    const serverDir = join(dir, 'mcp-secrets', id)
+    await chmod(serverDir, 0o300)
+    try {
+      expect((await service().save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_3232' } } as UserMcpSaveInput, 'agent')).ok).toBe(false)
+    } finally {
+      await chmod(serverDir, 0o700)
+    }
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+  })
+
   // Gap 2 (B6): both guards had no committed test.
   it('confirm refuses a record bound to ANOTHER destination, and Settings shows it as not set', async () => {
     const live = service()

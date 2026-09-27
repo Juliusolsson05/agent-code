@@ -135,6 +135,23 @@ export class UserMcpSecretStore {
   }
 
   /**
+   * The input ids that have a blob on disk for this server, whether or not the
+   * server still defines them (r3 round 3: an agent edit that drops an input
+   * keeps its blob). Strict like snapshotServer: only a missing directory
+   * means none; any other failure throws, so a guard built on it fails closed.
+   */
+  async storedInputIds(serverId: string): Promise<string[]> {
+    let files: string[]
+    try {
+      files = await readdir(join(this.dir, serverId))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    return files.filter(file => file.endsWith('.bin')).map(file => file.slice(0, -'.bin'.length))
+  }
+
+  /**
    * The stored value whatever it is bound to, ONLY for computing other
    * records' bindings (service.ts bindingFor): the digest has to see the value
    * the next launch would substitute. Never handed to a launch.

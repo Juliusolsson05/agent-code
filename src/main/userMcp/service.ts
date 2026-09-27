@@ -400,12 +400,18 @@ export class UserMcpService {
   private async withheldInputIds(server: UserMcpServer): Promise<string[]> {
     const bindings = await this.bindingsFor(server)
     const withheld: string[] = []
-    for (const input of server.inputs) {
+    // Defined inputs AND every blob on disk (r3 round 3, review a): an agent
+    // edit that drops an input keeps its blob, and a guard walking only the
+    // defined inputs let mcp_servers_remove delete it. A blob with no input
+    // can prove no binding, so it is withheld.
+    const ids = [...new Set([...server.inputs.map(input => input.id), ...await this.secrets.storedInputIds(server.id)])]
+    for (const id of ids) {
       // Raw presence, not a decrypted value (q130): a blob that exists but
       // cannot be decrypted is a secret the user may still recover, so it
       // counts as withheld. Only ENOENT means there is nothing to protect.
-      if (!(await this.secrets.present(server.id, input.id))) continue
-      if (await this.secrets.get(server.id, input.id, bindings[input.id]!) === null) withheld.push(input.id)
+      if (!(await this.secrets.present(server.id, id))) continue
+      const binding = bindings[id]
+      if (!binding || await this.secrets.get(server.id, id, binding) === null) withheld.push(id)
     }
     return withheld
   }

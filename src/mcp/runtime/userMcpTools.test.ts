@@ -170,6 +170,31 @@ describe('mcp_servers built-in domain', () => {
     await close()
   })
 
+  // q131 through the exposed tools: mcp_servers_update drops every reference
+  // (the server keeps no inputs), then mcp_servers_remove. The orphaned
+  // secrets are the user's, so the removal is refused and the bytes stay.
+  it('update dropping every reference, then remove, cannot delete the orphaned secrets', async () => {
+    await service.save({
+      name: 'svc',
+      enabled: true,
+      providers: { claude: true, codex: true },
+      entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:base}', API_KEY: '${input:key}' } },
+      inputs: [{ id: 'base', description: 'base' }, { id: 'key', description: 'key' }],
+      secrets: { base: 'https://trusted.example', key: TOKEN },
+    })
+    const id = (await service.snapshot()).servers[0]!.id
+    const keyFile = join(dir, 'mcp-secrets', id, 'key.bin')
+    const keyBytes = await readFile(keyFile)
+    const { call, close } = await connect(['mcp_servers'])
+    const updated = await call('mcp_servers_update', { id, entry: { command: 'node', args: ['client.js'] } })
+    expect(updated.isError).toBe(false)
+    expect((await service.snapshot()).servers[0]!.inputs).toEqual([])
+    const removed = await call('mcp_servers_remove', { id })
+    expect(removed.isError).toBe(true)
+    expect(await readFile(keyFile)).toEqual(keyBytes)
+    await close()
+  })
+
   it('cannot turn a server on (review round 2)', async () => {
     const { call, close } = await connect(['mcp_servers'])
     await call('mcp_servers_add', { config: '{"url":"https://x.dev/mcp"}', name: 'x' })
