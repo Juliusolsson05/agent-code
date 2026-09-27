@@ -345,7 +345,7 @@ export class CodexConversationSource implements ConversationSource {
         // list (RolloutLocator.collectMatches), so "not found" can mean "in a
         // locked sessions/YYYY/MM/DD". Prove the tree was listable before
         // calling it absent (#1434 round 1, a/b). Only on this miss path.
-        await assertTreeListable('codex', sessionsDir, 3)
+        await assertTreeListable('codex', sessionsDir, 3, name => name.endsWith('.jsonl') && name.includes(nativeId))
         if (indexUnknown) throw new ConversationPromptsUnreadable('codex', new Error('the Codex state index exists but could not be opened, and no rollout was found by walking'))
       }
     }

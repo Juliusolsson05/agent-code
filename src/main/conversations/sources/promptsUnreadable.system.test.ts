@@ -250,6 +250,9 @@ describe('round 1: unknown is never "no prompts"', () => {
     const source = new ClaudeConversationSource({ projectsDir, history: new ClaudeHistoryIndex(join(projectsDir, 'history.jsonl')) })
     await writeFile(join(dir, '55555555-5555-4555-8555-555555555555.jsonl'), '{not-json}\n{also not json}\n')
     await expect(source.prompts('55555555-5555-4555-8555-555555555555', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    // And again from the prompt folder's cache (#1434 verification a: the
+    // cache-hit path's check was unpinned).
+    await expect(source.prompts('55555555-5555-4555-8555-555555555555', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
     // A recorded transcript with one garbage line in front: still readable,
     // the same prompts as the original (bad lines are skipped, as before).
     const recorded = new ClaudeConversationSource({ projectsDir: join(corpus.claudeConfigDir, 'projects'), history: new ClaudeHistoryIndex(join(corpus.claudeConfigDir, 'history.jsonl')) })
@@ -283,5 +286,37 @@ describe('round 1 c: absence stays "no prompts"', () => {
     await writeFile(file, 'not a directory')
     expect(await new OpencodeConversationSource({ dataDir: join(file, 'opencode') }).prompts('ses_x', '/fixture/repo')).toEqual([])
     expect(await new CodexConversationSource({ codexHome: join(file, 'codex') }).prompts('019-x', '')).toEqual([])
+  })
+})
+
+// #1434 verification a.
+describe('verification: the conversation file itself', () => {
+  it('Codex: its own rollout with an unreadable mode in a listable tree is unreadable, not absent', async () => {
+    const { copyFile } = await import('node:fs/promises')
+    const id = 'ff781eb7-f74e-4308-8edb-bda07505686f'
+    const codexHome = join(corpus.opencodeDataDir, '..', 'v-codex-locked-file')
+    const day = join(codexHome, 'sessions', '2026', '04', '13')
+    await mkdir(day, { recursive: true })
+    const file = join(day, `rollout-2026-04-13T16-52-23-${id}.jsonl`)
+    // A real recorded rollout (the corpus's), no index, no cached path.
+    await copyFile(join(__dirname, '../../../../testing/fixtures/conversations/codex/sessions/2026/04/13', `rollout-2026-04-13T16-52-23-${id}.jsonl`), file)
+    const source = new CodexConversationSource({ codexHome })
+    const readable = await source.prompts(id, '')
+    await chmod(file, 0o000)
+    try {
+      await expect(new CodexConversationSource({ codexHome }).prompts(id, '')).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    } finally {
+      await chmod(file, 0o600)
+    }
+    expect(await new CodexConversationSource({ codexHome }).prompts(id, '')).toEqual(readable)
+  })
+
+  it('Pi: a named file whose first row is not this session\'s header is damaged, not absent', async () => {
+    const home = join(corpus.opencodeDataDir, '..', 'v-pi-home')
+    const cwd = join(home, 'project')
+    const dir = join(home, '.pi', 'agent', 'sessions', encodeCwdForSessionDir(cwd))
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, '2026-09-27T00-00-00-000Z_thread-3.jsonl'), `${JSON.stringify({ type: 'message', id: 'thread-3', cwd })}\n`)
+    await expect(new PiConversationSource({ env: {}, homeDirectory: home }).prompts('thread-3', cwd)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
   })
 })

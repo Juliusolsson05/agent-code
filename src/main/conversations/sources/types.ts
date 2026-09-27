@@ -102,7 +102,17 @@ export async function isPresent(provider: AgentProviderKind, path: string): Prom
  * path — after the walk found nothing — so its cost is paid only when the
  * answer would otherwise be the unsafe "no prompts". An absent root is fine.
  */
-export async function assertTreeListable(provider: AgentProviderKind, root: string, depth: number): Promise<void> {
+export async function assertTreeListable(
+  provider: AgentProviderKind,
+  root: string,
+  depth: number,
+  /** A file this conversation would be stored in. #1434 verification a: the
+   *  locator also skips a FILE it cannot open, so a listable tree holding the
+   *  conversation's own file under an unreadable mode read as "absent". A name
+   *  that matches here means the file is present and the walk could not read
+   *  it: unknown, never "no prompts". */
+  namesThisConversation?: (name: string) => boolean,
+): Promise<void> {
   let entries
   try {
     entries = await readdir(root, { withFileTypes: true })
@@ -110,9 +120,12 @@ export async function assertTreeListable(provider: AgentProviderKind, root: stri
     if (isMissingFileError(error)) return
     throw new ConversationPromptsUnreadable(provider, error)
   }
-  if (depth <= 0) return
   for (const entry of entries) {
-    if (entry.isDirectory()) await assertTreeListable(provider, join(root, entry.name), depth - 1)
+    if (entry.isDirectory()) {
+      if (depth > 0) await assertTreeListable(provider, join(root, entry.name), depth - 1, namesThisConversation)
+    } else if (namesThisConversation?.(entry.name)) {
+      throw new ConversationPromptsUnreadable(provider, new Error('the conversation file is present but the provider walk could not read it'))
+    }
   }
 }
 

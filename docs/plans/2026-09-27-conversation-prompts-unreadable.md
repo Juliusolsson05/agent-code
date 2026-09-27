@@ -67,3 +67,16 @@ View Prompts on a conversation whose transcript or store is there but unreadable
 - b (minor), declined: an unrelated inaccessible Claude project aborts the
   fallback walk. That is the stated contract (unknown is never "no
   prompts"), and c judged it a design stance, not a defect.
+
+## Verification a (FIX-BEFORE-MERGE), fixed fail-first
+
+- **Codex:** the conversation's own rollout with an unreadable mode, in a
+  listable tree, still read as absent. The locator skips a file it cannot
+  open, and the tree check only listed directories. `assertTreeListable`
+  now also fails on a file named for this conversation.
+- **Pi:** a named file whose first row parses but is not this session's
+  header (another type, another id) still read as absent. Only a real
+  `session` header for this id can say "another cwd".
+- **Tests:** the OpenCode typed query error and the prompt folder's
+  cache-hit check are pinned.
+- Each of the four mutations is red.

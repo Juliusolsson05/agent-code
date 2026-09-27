@@ -167,8 +167,13 @@ export class PiConversationSource implements ConversationSource {
           } catch (error) {
             throw new ConversationPromptsUnreadable('pi', error)
           }
-          if (!parsed || typeof parsed !== 'object') {
-            throw new ConversationPromptsUnreadable('pi', new Error('the session header is not a JSON object'))
+          // Only a real session header (type 'session', this id) can say "not
+          // this session" — its cwd simply differs. Any other first row (a
+          // message row, another id, no type) means the header itself is
+          // damaged: present, unreadable (#1434 verification a).
+          const row = parsed as { type?: unknown; id?: unknown } | null
+          if (!row || typeof row !== 'object' || row.type !== 'session' || row.id !== nativeId) {
+            throw new ConversationPromptsUnreadable('pi', new Error('the session header is damaged'))
           }
         }
         return []
