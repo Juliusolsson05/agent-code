@@ -26,6 +26,7 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
+import { worktreesForAttribution } from '@renderer/workspace/work-context/worktreesForAttribution'
 
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.
@@ -109,7 +110,9 @@ export function useHistoryActions(
         }
         const prepend: Entry[] = []
         const worktreesResult = await window.api.gitWorktrees(meta.cwd)
-        const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+        // #1430: null = git timed out, family unknown → skip attribution (see
+        // worktreesForAttribution).
+        const worktrees = worktreesForAttribution(worktreesResult)
         let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
@@ -130,7 +133,7 @@ export function useHistoryActions(
           // Older-history pagination walks records that predate the current
           // tail. Use them only to backfill an unknown badge; never let old
           // worktree evidence replace fresher live/current context.
-          if (!workContext) {
+          if (!workContext && worktrees !== null) {
             workActivity = ingestWorktreeRawEvent({
               state: workActivity,
               raw: rawEntry,

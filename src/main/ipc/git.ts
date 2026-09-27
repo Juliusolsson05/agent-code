@@ -243,7 +243,7 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
 
 /** The list plus whether `git worktree list` timed out, which an empty list
  *  alone cannot tell apart from "not a git repository" (#1250 row 11). */
-async function listWorktreesForCwdDetailed(cwd: string): Promise<{ worktrees: WorktreeIdentity[]; timedOut: boolean }> {
+export async function listWorktreesForCwdDetailed(cwd: string): Promise<{ worktrees: WorktreeIdentity[]; timedOut: boolean }> {
   const now = Date.now()
   const cached = worktreeListCache.get(cwd)
   if (cached && (!cached.settled || cached.expiresAt > now)) {

@@ -410,3 +410,22 @@ describe('ConversationsPicker', () => {
   })
 })
 
+
+// #1430: git timed out listing the repository's worktrees, so main built the
+// list from this folder alone. The rows are complete for this folder but may
+// be missing the siblings' conversations — said in a muted status line.
+describe('ConversationsPicker when git timed out', () => {
+  it('says conversations from other worktrees may be missing', async () => {
+    install(vi.fn(async () => response({ family: { repoRoot: '/fixture/repo/.worktrees/extension-platform', roots: ['/fixture/repo/.worktrees/extension-platform'], gitTimedOut: true } })))
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    const note = await screen.findByText("Git didn't answer in time. Conversations from this repository's other worktrees may be missing.")
+    expect(note).toHaveAttribute('role', 'status')
+  })
+
+  it('says nothing when git answered', async () => {
+    install()
+    render(<ConversationsPicker open focusSearch={false} workspace={workspace()} onClose={vi.fn()} />)
+    await screen.findByText('Project context bootstrapping')
+    expect(screen.queryByText(/Git didn't answer in time/)).toBeNull()
+  })
+})

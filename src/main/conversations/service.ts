@@ -11,7 +11,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { buildListing, HIDDEN_KINDS } from './catalog/listing.js'
 import { normalizeConversation } from './catalog/normalize.js'
 import { unwrapUserText } from './catalog/unwrap.js'
-import { resolveFamily, type RepositoryFamily } from './family.js'
+import { resolveFamily, type ListedWorktrees, type RepositoryFamily } from './family.js'
 import type { ConversationLedger } from './ledger/ledger.js'
 import type { LedgerRow } from './ledger/types.js'
 import { ClaudeConversationSource } from './sources/claude.js'
@@ -56,7 +56,7 @@ const SEARCH_BYTES_PER_ROW = 128 * 1024
 
 type Discovery = { at: number; key: string; family: RepositoryFamily; sources: SourceConversation[] }
 
-export type ListWorktrees = (cwd: string) => Promise<ReadonlyArray<{ path: string }>>
+export type ListWorktrees = (cwd: string) => Promise<ListedWorktrees>
 
 export class ConversationService {
   private discovery: Discovery | null = null
@@ -95,7 +95,10 @@ export class ConversationService {
           return [] as SourceConversation[]
         })))
         const discovery: Discovery = { at: Date.now(), key, family, sources: perSource.flat() }
-        this.discovery = discovery
+        // #1430: a family built while git timed out is a guess (the cwd alone), so it answers this
+        // request and is not kept — the next one asks git again instead of serving the guess for
+        // DISCOVERY_FRESH_MS.
+        if (!family.gitTimedOut) this.discovery = discovery
         this.discoveries++
         span.end({ rows: discovery.sources.length })
         return discovery

@@ -250,7 +250,12 @@ export class AgentActivityRecorder {
       provider: placement?.kind ?? entry.kind ?? 'unknown',
       tabId: placement?.tabId ?? null,
       tabTitle: placement?.tabTitle ?? null,
-      repoRoot: cwd ? await this.deps.resolveRepoRoot(cwd).catch(() => cwd) : '',
+      // #1430: a rejection is "repository unknown" (git timed out twice). This
+      // interval is filed under its cwd and that is said; the next asks again.
+      repoRoot: cwd ? await this.deps.resolveRepoRoot(cwd).catch((error: unknown) => {
+        console.warn('[agent-activity] repository unknown for this interval, filed under its folder:', error instanceof Error ? error.message : error)
+        return cwd
+      }) : '',
       cwd,
     }
   }

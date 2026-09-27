@@ -37,6 +37,10 @@ const SCOPES: Array<{ id: ConversationScope; label: string }> = [
   { id: 'everywhere', label: 'Everywhere' },
 ]
 
+// Fixed words (#1430). Only outside 'cwd' scope: there siblings are not
+// wanted anyway, so a timed-out sibling list changes nothing.
+export const GIT_TIMED_OUT_NOTE = "Git didn't answer in time. Conversations from this repository's other worktrees may be missing."
+
 export function ConversationsPicker({ open, focusSearch, workspace, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState<ConversationScope>('repository')
@@ -282,6 +286,15 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
           <KbdLegend items={[{ keys: ['Up', 'Down'], label: 'move' }, { keys: ['Enter'], label: 'resume' }]} className="text-[10px]" />
         </div>
         {banner && <div role="alert" className="border-b border-danger-border bg-danger-soft px-4 py-2 text-[12px] text-danger">{banner}</div>}
+        {/* #1430: git timed out listing this repository's worktrees, so the
+            list was built from this folder alone (and main did not cache it).
+            Said, because rows are MISSING, not absent: a muted status line,
+            not an error, since the next open asks git again. */}
+        {response?.family.gitTimedOut && scope !== 'cwd' && (
+          <div role="status" className="border-b border-border px-4 py-1.5 text-[11px] text-muted">
+            {GIT_TIMED_OUT_NOTE}
+          </div>
+        )}
         <div className="flex min-h-0 flex-1">
           <div
             ref={listRef}

@@ -36,3 +36,31 @@ describe('worktrees.read and a git timeout', () => {
     expect(await read({ ok: false, gitMissing: false })).toMatchObject({ gitUnavailable: true, gitMissing: false, gitTimedOut: false })
   })
 })
+
+// #1430: git answered the status, but listing worktrees for the activity index
+// then timed out. That used to read as "activity unavailable", the same as a
+// missing index; it now says the git timeout, to agents and in the dump.
+describe('worktrees.read when the activity lookup times out', () => {
+  async function readWithActivity(activity: unknown) {
+    const gitWorktreeStatus = vi.fn(async () => ({ ok: true, worktrees: [] }))
+    Object.defineProperty(window, 'api', { configurable: true, value: { gitWorktreeStatus, worktreeActivitySummary: vi.fn(async () => activity) } })
+    useAppStore.setState({ workspaceState: { ...originalStore.workspaceState, sessions: { agent: { cwd: '/repo', kind: 'claude' } } } } as never)
+    const workspace = { state: { tabs: [], sessions: {}, pinnedSessionIds: [] }, runtimes: {} } as unknown as Workspace
+    const [capability] = worktreeControlCapabilities(() => workspace)
+    const result = await capability!.execute({ sessionId: 'agent' }, {} as never)
+    expect(result.ok).toBe(true)
+    return (result as { value: Record<string, unknown> }).value
+  }
+
+  it('says a git timeout apart from a missing activity index', async () => {
+    expect(await readWithActivity({ ok: false, timedOut: true })).toMatchObject({ activityUnavailable: true, activityTimedOut: true })
+    expect(await readWithActivity({ ok: false })).toMatchObject({ activityUnavailable: true, activityTimedOut: false })
+  })
+
+  it('and the text dump says it too', async () => {
+    const { formatWorktreeDump } = await import('./lib/formatWorktreeDump')
+    const base = { cwd: '/repo', generatedAt: 0, rows: [], indexStatus: null, gitUnavailable: false, gitMissing: false, activityUnavailable: true }
+    expect(formatWorktreeDump({ ...base, activityTimedOut: true } as never)).toContain('- Agent activity: unavailable (Git timed out)')
+    expect(formatWorktreeDump(base as never)).toContain('- Agent activity: unavailable\n')
+  })
+})

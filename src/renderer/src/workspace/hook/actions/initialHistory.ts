@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
 import { emptyRuntime } from '@renderer/session-runtime/state'
+import { worktreesForAttribution } from '@renderer/workspace/work-context/worktreesForAttribution'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -300,7 +301,9 @@ export async function loadInitialHistoryForSession({
       historyRead,
       window.api.gitWorktrees(meta.cwd),
     ])
-    const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+    // #1430: null = git timed out, family unknown → skip attribution for this
+    // chunk (see worktreesForAttribution).
+    const worktrees = worktreesForAttribution(worktreesResult)
     if (superseded()) {
       span.end({ fetched: chunk.entries.length, hasMore: chunk.hasMore, superseded: true })
       return settleSuperseded()
@@ -339,13 +342,15 @@ export async function loadInitialHistoryForSession({
       const toolResultIndex = current.toolResultIndex
 
       for (const [rawIndex, raw] of chunk.entries.entries()) {
-        workActivity = ingestWorktreeRawEvent({
-          state: workActivity,
-          raw,
-          worktrees,
-          sessionCwd: meta.cwd,
-        })
-        workContext = deriveAgentWorkContext(workActivity)
+        if (worktrees !== null) {
+          workActivity = ingestWorktreeRawEvent({
+            state: workActivity,
+            raw,
+            worktrees,
+            sessionCwd: meta.cwd,
+          })
+          workContext = deriveAgentWorkContext(workActivity)
+        }
 
         const { entries: mapped, historyMarker: marker } = mapper.map(raw)
         // Marker policy (site-owned): the FIRST kept line of the
