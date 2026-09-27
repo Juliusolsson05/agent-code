@@ -11,7 +11,7 @@ import { Button } from '@renderer/components/ui/button'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
-import { missingRunCopy } from '../model/missingRun'
+import { MISSING_RUN } from '../model/missingRun'
 import {
   workflowRunActivity,
   workflowRunStatusLabel,
@@ -195,7 +195,7 @@ export function WorkflowHistoryDialog({
                 status: reference.status,
                 loading: false,
               }
-              const missing = details.missing ? missingRunCopy(reference) : null
+              const missing = details.missing ? MISSING_RUN : null
               // A run whose data is gone is certainly not running, whatever
               // its reference said at launch (#1348).
               const activity = missing ? 'inactive' : workflowRunActivity(details.status)

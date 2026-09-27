@@ -13,3 +13,9 @@
 ## Not done
 - No day count in the text: the windows live in workflow-mcp and differ by lineage, so a copied number would drift.
 - Resume racing retention (the run removed after the view loaded) still shows the store's `run-not-found` message. That window is minutes wide against a 30-day retention, and a message match on the error text would be fragile.
+
+## Review round 1 (a + b), fixed
+- **One label.** workflow-mcp looks the manifest up GLOBALLY by run id before checking the project scope (a run in another project is `scope-forbidden`, not null), so `null` always means the run is gone from this app's store. The Expired/Unavailable split by `cwd` misdescribed that and is removed: every missing run is Expired.
+- **No action while loading.** Resume and Cancel appear only once the store has answered. While loading, the header shows the reference's launch-time status, and a Resume clicked then on a run that turned out to be gone failed with run-not-found.
+- **The selector agrees.** A tab labelled Active from its launch-time reference now checks, once, whether its run still exists (`useMissingRunIds`: only tabs that claim to be active, at most three). A missing run's tab is Inactive · Expired. A failed read changes nothing.
+

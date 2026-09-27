@@ -5,7 +5,7 @@ import { Button } from '@renderer/components/ui/button'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
-import { missingRunCopy } from '../model/missingRun'
+import { MISSING_RUN } from '../model/missingRun'
 import { mergeWorkflowLineage } from '../model/workflowLineage'
 import { useWorkflowRun } from '../model/workflowRunStore'
 import { WorkflowPhaseSection } from './WorkflowPhaseSection'
@@ -80,8 +80,13 @@ export function WorkflowRunView({
   // A run the store reports missing has no live status, and the reference's
   // launch-time `failed` would keep offering Resume, which can only fail with
   // run-not-found (#1348). Its label replaces the status; nothing is active.
-  const missing = view.phase === 'missing' ? missingRunCopy(reference) : null
-  const active = !missing && (status === 'pending' || status === 'running' || status === 'cancellation_requested')
+  const missing = view.phase === 'missing' ? MISSING_RUN : null
+  // No action until the store has answered (#1440 review a): while loading,
+  // the header shows the reference's launch-time status, and a Resume or
+  // Cancel clicked then on a run that turns out to be gone failed with
+  // run-not-found.
+  const answered = view.phase !== 'loading'
+  const active = answered && !missing && (status === 'pending' || status === 'running' || status === 'cancellation_requested')
   const now = useRunClock(active)
   const elapsed = elapsedLabel(snapshot.startedAt, snapshot.completedAt, now)
   const workflow = snapshot.workflow ?? reference.workflow
@@ -150,7 +155,7 @@ export function WorkflowRunView({
   }
 
   const unassigned = agentsByPhase.get('__unassigned__') ?? []
-  const canResume = !missing && ['failed', 'cancelled', 'interrupted'].includes(status)
+  const canResume = answered && !missing && ['failed', 'cancelled', 'interrupted'].includes(status)
 
   return (
     <div

@@ -171,7 +171,11 @@ describe('WorkflowViewSelector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     expect(await screen.findByRole('dialog', { name: 'Workflow History' })).toBeInTheDocument()
-    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(5))
+    // Five dialog reads (one per history entry) plus the selector's single
+    // check of the one tab that claims to be running (run-5), which is how a
+    // tab learns its run is gone (#1440). Completed tabs are not checked.
+    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(6))
+    expect(getSnapshot.mock.calls.filter(([scope]) => scope.runId === 'run-5')).toHaveLength(2)
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
 
     expect(screen.getAllByRole('listitem')).toHaveLength(5)
@@ -197,7 +201,7 @@ describe('WorkflowViewSelector', () => {
     const historyReferences: WorkflowRunReference[] = [
       { runId: 'run-missing', cwd: '/repo', status: 'queued', workflow: { name: 'missing' } },
       { runId: 'run-error', cwd: '/repo', status: 'running', workflow: { name: 'error' } },
-      // No cwd of its own: looked up in the session's project (#1348).
+      // No cwd of its own: still a global lookup by run id (#1440 review b).
       { runId: 'run-elsewhere', status: 'failed', workflow: { name: 'elsewhere' } },
     ]
     let errorAttempts = 0
@@ -231,7 +235,10 @@ describe('WorkflowViewSelector', () => {
     render(
       <WorkflowClientProvider value={client}>
         <WorkflowViewSelector
-          references={historyReferences}
+          // The tabs show only the missing run: the selector reads what its
+          // tabs claim is live, and run-error's read sequence belongs to the
+          // dialog below.
+          references={historyReferences.filter(reference => reference.runId === 'run-missing')}
           historyReferences={historyReferences}
           cwd="/repo"
           selectedRunId={null}
@@ -240,6 +247,12 @@ describe('WorkflowViewSelector', () => {
       </WorkflowClientProvider>,
     )
 
+    // #1440 reviews a+b: the TAB must agree with the dialog. A reference that
+    // launched `queued` but whose run is gone is not Active.
+    const missingTab = screen.getByRole('tab', { name: /missing/ })
+    await waitFor(() => expect(missingTab).toHaveAttribute('data-workflow-activity', 'inactive'))
+    expect(within(missingTab).getByLabelText('Status: Inactive (Expired)')).toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
     const historyList = screen.getByRole('list', { name: 'Previous workflow runs' })
@@ -247,15 +260,14 @@ describe('WorkflowViewSelector', () => {
       .closest('[role="listitem"]') as HTMLElement
     const errorRow = within(historyList).getByText('error')
       .closest('[role="listitem"]') as HTMLElement
-    // #1348: a run retention removed is expired and inactive, not a fault,
-    // whatever its launch-time `queued` said. Only a reference with its own
-    // cwd proves that; one without is only unavailable in this project.
+    // #1348: a run whose stored data is gone is expired and inactive, not a
+    // fault, whatever its launch-time `queued` said. The lookup is global by
+    // run id (review b), so a reference without its own cwd is expired too.
     expect(within(missingRow).getByText('Inactive · Expired')).toBeInTheDocument()
     expect(within(missingRow).getByText(/stored data is gone/)).toBeInTheDocument()
     const elsewhereRow = within(historyList).getByText('elsewhere')
       .closest('[role="listitem"]') as HTMLElement
-    expect(within(elsewhereRow).getByText('Inactive · Unavailable')).toBeInTheDocument()
-    expect(within(elsewhereRow).getByText(/not found in this project/)).toBeInTheDocument()
+    expect(within(elsewhereRow).getByText('Inactive · Expired')).toBeInTheDocument()
     expect(within(errorRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
     expect(within(errorRow).getByRole('alert')).toHaveTextContent('Could not load details.')
 

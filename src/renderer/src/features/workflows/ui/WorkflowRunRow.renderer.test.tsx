@@ -275,16 +275,33 @@ describe('WorkflowRunView', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
-  // Without its own cwd the reference is looked up in the SESSION's project,
-  // so "not found" does not prove retention removed it. Say only what is known.
-  it('calls a missing run without its own project unavailable, not expired', async () => {
+  // #1440 review a: while the snapshot is still loading, the header falls
+  // back to the reference's `failed`, and Resume was clickable into a
+  // run-not-found. No action is offered until the store has answered.
+  it('offers no Resume while the snapshot is still loading, and none once it says expired', async () => {
+    let answer!: (value: null) => void
+    const pending: WorkflowClient = { ...clientFor(completedState()), getSnapshot: () => new Promise(resolve => { answer = resolve }) }
+    render(
+      <WorkflowClientProvider value={pending}>
+        <WorkflowRunView reference={{ runId: 'run-ui', cwd: '/repo', status: 'failed' }} cwd="/repo" onReferenceChange={() => {}} />
+      </WorkflowClientProvider>,
+    )
+    expect(await screen.findByText('Loading workflow activity…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    answer(null)
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+
+  // The lookup is global by run id (review b), so a reference without its
+  // own cwd whose run is gone is expired too.
+  it('calls a missing run without its own cwd expired as well', async () => {
     render(
       <WorkflowClientProvider value={missingClient()}>
         <WorkflowRunView reference={{ runId: 'run-ui', status: 'failed' }} cwd="/repo" onReferenceChange={() => {}} />
       </WorkflowClientProvider>,
     )
-    expect(await screen.findByText('Unavailable')).toBeInTheDocument()
-    expect(screen.queryByText('Expired')).toBeNull()
+    expect(await screen.findByText('Expired')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
   })
 
