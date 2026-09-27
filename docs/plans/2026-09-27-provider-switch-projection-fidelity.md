@@ -24,9 +24,9 @@ All 13 `packages/agent-transcript-parser/fixtures/evidence/observed-sequences/*`
 - **`src/main/providerSwitch/projectionFidelity.ts`:** `summarizeProjectionReport(result: NativeResumeProjectionResult): NativeProjectionFidelity`. It is pure and is called right after each `projectNativeResume`, before `write`, so the summary exists even if publication fails later. (Receipts are B07; nothing here pretends to persist one.)
 - **Results:** `SwitchProviderResult` (the `switched` arm), `DuplicateSessionResult` and `RewindSessionResult` gain `projectionFidelity: NativeProjectionFidelity`. The preload types use the shared type.
 - **`materialProjectionLoss(f): string | null`**, one line for toasts, or null.
-  - **UNCONFIRMED default:** material means `dropped` changes other than `native-resume.opaque.dropped`, plus every `demoted` change.
+  - **OWNER-APPROVED (B6 proxy, 2026-09-27):** material means `dropped` changes other than `native-resume.opaque.dropped`, plus every `demoted` change.
   - Opaque records, repairs and synthesized framing are not disclosed in the toast; they remain inspectable in the result.
-  - **Format, UNCONFIRMED wording:** `history: 12 dropped, 19 demoted`.
+  - **Format, OWNER-APPROVED (B6 proxy, 2026-09-27):** `history: 12 dropped, 19 demoted`. It is wording only, no data change.
 - **Renderer:**
   - The switch pane toast (`workspace/hook/actions/provider.ts`) appends the line and uses the longer lossy duration when it is present.
   - The bulk switch summary (`bulkProviderSwitch.ts`) adds it to its notes.
@@ -47,7 +47,7 @@ All 13 `packages/agent-transcript-parser/fixtures/evidence/observed-sequences/*`
   - the duplicate toast includes it.
 
 ## Verification boundary
-Main-process tests drive the real entry points with real projectors; the app is not launched. Whether the toast wording reads well is the owner's call (UNCONFIRMED).
+Main-process tests drive the real entry points with real projectors; the app is not launched. The toast wording is OWNER-APPROVED (B6 proxy, 2026-09-27).
 
 ## Out of scope
 - **B07 receipts / operation records:** no receipt store exists yet. The summary is on the result, which is what the client can inspect today.
