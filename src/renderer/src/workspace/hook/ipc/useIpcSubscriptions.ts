@@ -22,10 +22,9 @@ import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
 import {
+  archiveReplayedTurn,
   hasPendingSemanticTools,
   isSemanticTurnRunning,
-  semanticHistoryRow,
-  SEMANTIC_HISTORY_CAP,
   withDerivedSessionStatus,
 } from '@renderer/session-runtime/semantic/helpers'
 import { stepLiveSemantic } from '@renderer/session-runtime/ingest/liveSemantic'
@@ -2781,10 +2780,15 @@ export function useIpcSubscriptions(
               ...next,
               semantic: {
                 ...next.semantic,
-                history: [
-                  ...next.semantic.history,
-                  semanticHistoryRow(closedTurn),
-                ].slice(-SEMANTIC_HISTORY_CAP),
+                // WHY appendSemanticHistory and not a raw append (#1290):
+                // every other archive path replaces by turnId. A replayed
+                // turn already in history can reopen as currentTurn (the
+                // ledger hides the copy while it is live); a raw append here
+                // then held that turn twice, repeating its `sem:T:i`
+                // candidate ids and `semantic-block:T:i` React keys.
+                // …and never lets a THINNER replay copy displace the archived
+                // one (#1391 review a): see archiveReplayedTurn.
+                history: archiveReplayedTurn(next.semantic.history, closedTurn),
                 currentTurn: null,
               },
             }

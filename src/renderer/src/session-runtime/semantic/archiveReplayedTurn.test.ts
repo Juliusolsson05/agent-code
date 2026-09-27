@@ -1,0 +1,214 @@
+import { expect, it } from 'vitest'
+
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import { groupSemanticActivity } from '@renderer/features/feed/ui/semantic/renderUnits'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
+import { archiveReplayedTurn, semanticHistoryRow } from './helpers'
+
+// #1391 (review a rounds 1-3, steering q93): at bootstrap-complete a replay
+// copy of an archived turn is MERGED field-wise (longer string wins, objects
+// merge key by key, id lists union), so nothing the archived row painted can
+// vanish, and anything the replay added is kept. Asserted through the REAL
+// ledger adapter: what matters is what the feed would paint.
+//
+// Limit (q93): no recorded bootstrap-overlap sequence exists in the fixture
+// corpus, so the turn states are built deterministically from the event shapes
+// the reviewer traced (foldEvent's turn_started/block_started with no deltas
+// yet). No claim is made about how often they occur.
+type Block = Record<string, unknown>
+const turn = (text: string, blocks: Block[], endedAt: number | null = 2) => ({
+  turnId: 'T', source: 'rollout' as const, text,
+  blocks: Object.fromEntries(blocks.map((block, index) => [index, { blockIndex: index, kind: 'text', status: 'completed', finalized: true, ...block }])),
+  blockOrder: blocks.map((_, index) => index),
+  stopReason: null, usage: null,
+  task: { todos: [], doneCount: 0, totalCount: 0, inProgressToolUseIds: [], activeToolNames: [] },
+  startedAt: 1, endedAt,
+  lookups: { toolCallsById: {}, toolUseIdsInOrder: [], resolvedToolUseIds: [], erroredToolUseIds: [] },
+}) as never
+
+/** What the feed would paint for this history: candidate id -> painted text. */
+function painted(history: ReturnType<typeof archiveReplayedTurn>, provider: 'claude' | 'codex' = 'claude'): Record<string, string> {
+  const bundle = createLedgerInputAdapter()({
+    provider, sessionId: 's', entries: [], semanticCurrent: null, semanticHistory: history as never,
+    ghosts: new Map(), streamPhase: 'idle', lastJsonlEntryAtMs: null,
+  })
+  return Object.fromEntries(bundle.input.live.map(candidate => [candidate.id, candidate.textKey ?? '']))
+}
+
+// Round 1: a repeated turn_started reopens T with empty turn text (blockless).
+it('keeps a blockless archived answer when the replay reopened it empty', () => {
+  const history = archiveReplayedTurn([semanticHistoryRow(turn('answer', []))], turn('', [], 3))
+  expect(history.map(row => row.turnId)).toEqual(['T'])
+  expect(Object.values(painted(history))).toContain('answer')
+})
+
+// Round 2: the replay re-emitted block_started for index 0, no text_delta yet.
+it('keeps the archived block when the replay reopened the same block empty', () => {
+  const history = archiveReplayedTurn([semanticHistoryRow(turn('', [{ text: 'answer' }]))], turn('', [{ text: '', status: 'in_progress', finalized: false }], 3))
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+// Round 3 (a): a Codex reasoning block painted from reasoningSummary.
+it('keeps a provider-specific drawable field (Codex reasoningSummary)', () => {
+  const archived = turn('', [{ kind: 'thinking', reasoningSummary: 'reasoned answer' }])
+  const reopened = turn('', [{ kind: 'thinking', reasoningSummary: '' }], 3)
+  const history = archiveReplayedTurn([semanticHistoryRow(archived)], reopened)
+  expect((history[0]!.blocks[0] as Block).reasoningSummary).toBe('reasoned answer')
+})
+
+// Round 3 (b): the ledger ignores turn text when blocks exist, so longer turn
+// text must not stand in for the missing answer block.
+it('keeps the answer block even when the replay carries longer (unpainted) turn text', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'answer' }]))],
+    turn('answer with extra words', [{ text: '', status: 'in_progress', finalized: false }], 3),
+  )
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+// q93: mixed progress. The archive has block 0; the replay has block 0 still
+// empty but ALSO a block the archive never saw. Both must paint.
+it('keeps archived content and the replay\'s new block together (mixed progress)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'first part' }]))],
+    turn('', [{ text: '', status: 'in_progress', finalized: false }, { text: 'second part' }], 3),
+  )
+  expect(painted(history)).toMatchObject({ 'sem:T:0': 'first part', 'sem:T:1': 'second part' })
+  expect(history).toHaveLength(1)
+})
+
+it('takes the replay copy where it is longer, and archives a turn not in history yet', () => {
+  const history = archiveReplayedTurn([semanticHistoryRow(turn('', [{ text: 'answer' }]))], turn('', [{ text: 'answer, continued' }], 3))
+  expect(painted(history)['sem:T:0']).toBe('answer, continued')
+  expect(archiveReplayedTurn([], turn('answer', [])).map(row => row.turnId)).toEqual(['T'])
+})
+
+// The string rule is prefix-extension, not "longer wins": a reopened block's
+// status 'in_progress' is LONGER than 'completed', and taking it would drop
+// the block's text ownership key (textKey is set only for completed text).
+// The archived block is completed WITHOUT finalized, the Codex shape
+// semantic.ts documents (#492), so status is the only terminal evidence.
+it('does not reopen a completed block through its longer status string', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'answer', finalized: undefined }]))],
+    turn('', [{ text: 'answer', status: 'in_progress', finalized: false }], 3),
+  )
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+// A replay that reopened only block 0 must not drop the archived block 1:
+// blockOrder is unioned, not replaced.
+it('keeps an archived block the replay has not re-emitted yet', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'first part' }, { text: 'second part' }]))],
+    turn('', [{ text: 'first part' }], 3),
+  )
+  expect(painted(history)).toMatchObject({ 'sem:T:0': 'first part', 'sem:T:1': 'second part' })
+})
+
+// Round 4 (review a): lifecycle fields take the MORE advanced value from
+// either copy. The archive can be cut while a block is still streaming and the
+// replay can complete it; keeping the archived lifecycle left the merged block
+// without its ownership key, so it double-rendered beside the JSONL answer.
+it('takes a completion the replay reached (Codex status)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'answer', status: 'in_progress', finalized: false }], null))],
+    turn('', [{ text: 'answer', status: 'completed', finalized: false }], 3),
+  )
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+it('takes a completion the replay reached (Claude finalized, no status)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(turn('', [{ text: 'answer', status: undefined, finalized: false }], null))],
+    turn('', [{ text: 'answer', status: undefined, finalized: true }], 3),
+  )
+  expect(painted(history)['sem:T:0']).toBe('answer')
+})
+
+// A Read the archive saw pending and the replay resolved must not paint as
+// running; nor may a reopened replay make a resolved one run again.
+function readTurn(state: 'in_progress' | 'completed', endedAt: number | null) {
+  const base = turn('', [{ kind: 'tool_use', toolName: 'Read', toolUseId: 'r1', inputJson: '{"file_path":"/a"}', status: undefined, finalized: true }], endedAt) as ReturnType<typeof turn> & Record<string, never>
+  const t = base as unknown as SemanticLiveTurn
+  return {
+    ...t,
+    task: { ...t.task, inProgressToolUseIds: state === 'in_progress' ? ['r1'] : [], activeToolNames: state === 'in_progress' ? ['Read'] : [] },
+    lookups: {
+      toolCallsById: { r1: { toolUseId: 'r1', blockIndex: 0, kind: 'tool_use', toolName: 'Read', status: state, inputJson: '{"file_path":"/a"}', resultContent: state === 'completed' ? 'contents' : null } },
+      toolUseIdsInOrder: ['r1'],
+      resolvedToolUseIds: state === 'completed' ? ['r1'] : [],
+      erroredToolUseIds: [],
+    },
+  } as SemanticLiveTurn
+}
+const running = (history: ReturnType<typeof archiveReplayedTurn>) => {
+  const row = history[0] as unknown as SemanticLiveTurn
+  const blocks = row.blockOrder.map(index => row.blocks[index]!)
+  return groupSemanticActivity(blocks, row).some(unit => unit.type === 'collapsed_activity' && unit.isRunning)
+}
+
+it.each([
+  ['archived pending, replay resolved', 'in_progress', 'completed'],
+  ['archived resolved, replay reopened', 'completed', 'in_progress'],
+] as const)('%s: the merged Read is not running', (_label, archivedState, replayState) => {
+  const history = archiveReplayedTurn([semanticHistoryRow(readTurn(archivedState, 2))], readTurn(replayState, 3))
+  expect(running(history)).toBe(false)
+  const row = history[0] as unknown as SemanticLiveTurn
+  expect(row.task.inProgressToolUseIds).toEqual([])
+  expect(row.task.activeToolNames).toEqual([])
+})
+
+// Round 5 (review a) / steering q95: a tool result is ONE unit taken from the
+// copy with the later resultAt (the replay on a tie). Field by field, an
+// archived error followed by a corrected result kept resultIsError (OR) and
+// the `error` lookup status beside the corrected text: a success painted red.
+function resultTurn(result: { content: string; isError: boolean; at: number }, endedAt: number) {
+  const t = turn('', [{
+    kind: 'tool_use', toolName: 'Bash', toolUseId: 'r1', inputJson: '{}', status: undefined, finalized: true,
+    resultContent: result.content, resultIsError: result.isError, resultAt: result.at,
+  }], endedAt) as unknown as SemanticLiveTurn
+  return {
+    ...t,
+    lookups: {
+      toolCallsById: { r1: { toolUseId: 'r1', blockIndex: 0, kind: 'tool_use', toolName: 'Bash', status: result.isError ? 'error' : 'completed', inputJson: '{}', resultContent: result.content } },
+      toolUseIdsInOrder: ['r1'],
+      resolvedToolUseIds: result.isError ? [] : ['r1'],
+      erroredToolUseIds: result.isError ? ['r1'] : [],
+    },
+  } as SemanticLiveTurn
+}
+const resultOf = (history: ReturnType<typeof archiveReplayedTurn>) => {
+  const row = history[0] as unknown as SemanticLiveTurn
+  const block = row.blocks[0]!
+  return {
+    content: block.resultContent, isError: block.resultIsError, at: block.resultAt,
+    status: row.lookups.toolCallsById.r1?.status,
+    errored: row.lookups.erroredToolUseIds.includes('r1'),
+    resolved: row.lookups.resolvedToolUseIds.includes('r1'),
+  }
+}
+
+it('takes a corrected result the replay received later as one unit (review a round 5)', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(resultTurn({ content: 'error', isError: true, at: 2 }, 2))],
+    resultTurn({ content: 'error corrected', isError: false, at: 3 }, 3),
+  )
+  expect(resultOf(history)).toEqual({ content: 'error corrected', isError: false, at: 3, status: 'completed', errored: false, resolved: true })
+})
+
+it('keeps the archived result when it is the later one', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(resultTurn({ content: 'fixed', isError: false, at: 5 }, 5))],
+    resultTurn({ content: 'fixed, but failed earlier', isError: true, at: 3 }, 6),
+  )
+  expect(resultOf(history)).toEqual({ content: 'fixed', isError: false, at: 5, status: 'completed', errored: false, resolved: true })
+})
+
+it('takes the replay result on a tie', () => {
+  const history = archiveReplayedTurn(
+    [semanticHistoryRow(resultTurn({ content: 'ok', isError: false, at: 4 }, 4))],
+    resultTurn({ content: 'failed', isError: true, at: 4 }, 5),
+  )
+  expect(resultOf(history)).toEqual({ content: 'failed', isError: true, at: 4, status: 'error', errored: true, resolved: false })
+})
