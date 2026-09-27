@@ -884,6 +884,61 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     expect((await service().snapshot()).servers[0]!.pendingReview).toBeUndefined()
   })
 
+  // Fresh r3 reviews a+b (blocker): an agent's later entry edit is a
+  // destination change, and save() cleared every blob, deleting a secret the
+  // user had not yet confirmed or re-entered. Since q113 the read-time binding
+  // keeps an old token away from a new destination, so an agent's save no
+  // longer deletes anything: the blobs stay (useless for the new entry until
+  // the user re-enters them) and only the user's own edits forget or prune.
+  it('an agent entry edit after a value change keeps the withheld token on disk, and never launches it', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const tokBytes = await blob(id, 'tok')
+    const edited = await service().save({ id, ...endpoint(), entry: { ...endpoint().entry, args: ['client-v2.js'] } } as UserMcpSaveInput, 'agent')
+    expect(edited).toMatchObject({ ok: true, pendingReview: true })
+    expect(edited).not.toHaveProperty('secretsCleared')
+    const restarted = service()
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    await restarted.setEnabled(id, true)
+    expect(await launched(service())).not.toContain(TOKEN)
+    // Dropping the reference altogether does not prune it either.
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client-v2.js'], env: { MCP_ENDPOINT: 'https://${input:trusted-host}/mcp' } }, inputs: [{ id: 'trusted-host', description: 'host' }] } as UserMcpSaveInput, 'agent')
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+  })
+
+  // Review b (surviving mutation): the review flag is saved BEFORE an agent's
+  // value. If the document write fails, the value must not have landed; with
+  // the order reversed, a restart saw the old enabled document next to the
+  // agent's value and launched it.
+  it('an agent value never lands next to an unflagged document when the document write fails', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const internals = live as unknown as { persist: () => Promise<void> }
+    const realPersist = internals.persist.bind(live)
+    let failures = 1
+    internals.persist = async () => { if (failures-- > 0) throw new Error('EIO'); return realPersist() }
+    expect((await live.setSecret(id, 'svc-API_BASE_URL', EVIL, 'agent')).ok).toBe(false)
+    const out = await launched(service())
+    expect(out).not.toContain(EVIL)
+    expect(out).toContain(TOKEN)
+  })
+
+  // Review b (surviving mutation): the direct service contract for an agent
+  // save that supplies values on an EXISTING server.
+  it('an agent save that supplies a value on an existing server needs review and withholds the sibling', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const result = await live.save({ id, ...imported(), secrets: { 'svc-API_BASE_URL': EVIL } } as UserMcpSaveInput, 'agent')
+    expect(result).toMatchObject({ ok: true, pendingReview: true })
+    const [server] = (await service().snapshot()).servers
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets['svc-API_KEY']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+  })
+
   // Gap 2 (B6): both guards had no committed test.
   it('confirm refuses a record bound to ANOTHER destination, and Settings shows it as not set', async () => {
     const live = service()

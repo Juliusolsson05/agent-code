@@ -190,11 +190,14 @@ export class UserMcpService {
       // and launch already refuses to attach the server until it is set.
       const problems = validateServer(server, others)
       if (problems.length > 0) return { ok: false, error: problems[0]!.message, problems }
-      // Changing WHERE a server connects forgets its stored secrets (review
-      // round 1). Otherwise an edit — or an agent's mcp_servers_update after a
-      // prompt injection — could keep `${input:token}` and point the entry at
+      // Changing WHERE a server connects must not carry its tokens along
+      // (review round 1): otherwise an agent's mcp_servers_update after a
+      // prompt injection could keep `${input:token}`, point the entry at
       // another host or command, and the next launch would hand the token to
-      // it: exfiltration without ever reading a secret. Secrets supplied in
+      // it. Since q113 that is enforced at READ time by the destination
+      // binding. A user's move also forgets the old secrets (their intent is a
+      // new server); an agent's move keeps the blobs, withheld, so it cannot
+      // delete credentials either (fresh r3 reviews a+b). Secrets supplied in
       // this same save are set afterwards, so an intentional move that
       // re-enters the token still works in one step.
       // SECURITY INVARIANT (q110, #1420 review a): a destination is never
@@ -202,10 +205,12 @@ export class UserMcpService {
       // token that was not saved for it. The order below is what holds it:
       //   1. snapshot the server's current secrets (strictly: an unreadable
       //      directory aborts here, before anything changes);
-      //   2. on a destination change, CLEAR the old secrets while the old
-      //      destination is still the published one, on disk and in memory;
+      //   2. on a USER destination change, CLEAR the old secrets while the old
+      //      destination is still the published one, on disk and in memory
+      //      (an agent's change clears nothing; see forgetsSecrets below. The
+      //      q113 read-time binding is what holds the invariant either way);
       //   3. only then publish the new document (memory, then disk);
-      //   4. write the new secrets and prune.
+      //   4. write the new secrets and (user only) prune.
       // A crash anywhere leaves at worst a server with NO secret: fail closed.
       // The earlier order (document first, then clear) had a window, and a
       // failed rollback made it durable, in which the NEW destination sat on
@@ -218,11 +223,19 @@ export class UserMcpService {
       const previousSecrets = existing
         ? await this.secrets.snapshotServer(server.id)
         : new Map<string, Buffer>()
+      // Only the USER's edits forget secrets (fresh r3 reviews a+b). An agent's
+      // edit used to clear too, which deleted a secret already WITHHELD for
+      // the user's confirmation: a prompt-injected agent could erase a
+      // credential without review. Since q113 the read-time binding keeps an
+      // old token away from a new destination, so the agent's edit leaves the
+      // blobs on disk (unusable for the new entry until the user re-enters
+      // them, usable again if the edit is reverted) and deletes nothing.
+      const forgetsSecrets = destinationChanged && actor === 'user'
       this.pendingSecretRestore = {
         run: () => this.secrets.restoreServer(server.id, previousSecrets),
-        safeWithNewDocument: !destinationChanged,
+        safeWithNewDocument: !forgetsSecrets,
       }
-      if (destinationChanged) await this.secrets.clearServer(server.id)
+      if (forgetsSecrets) await this.secrets.clearServer(server.id)
       this.document = {
         version: 1,
         servers: existing
@@ -233,11 +246,13 @@ export class UserMcpService {
       const supplied = Object.fromEntries(Object.entries(input.secrets ?? {})
         .filter(([inputId]) => server.inputs.some(candidate => candidate.id === inputId)))
       await this.writeValues(server, supplied, actor)
-      await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
+      // Pruning orphans is the user's housekeeping for the same reason: an
+      // agent dropping a reference must not delete that secret.
+      if (actor === 'user') await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
       return {
         ok: true,
         id: server.id,
-        ...(destinationChanged ? { secretsCleared: true } : {}),
+        ...(forgetsSecrets ? { secretsCleared: true } : {}),
         ...(pendingReview ? { pendingReview: true } : {}),
       }
     })

@@ -122,7 +122,7 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_update', {
     title: 'Update an MCP server',
-    description: 'Change one server: its name, its config entry (the full entry object, same shape as mcp_servers_add accepts; keep ${input:…} references for secrets), which providers new agents get it on, or turn it OFF. Changing the entry\'s URL, command, arguments or environment forgets its stored secrets and switches it off until the user reviews it. You cannot turn a server on.',
+    description: 'Change one server: its name, its config entry (the full entry object, same shape as mcp_servers_add accepts; keep ${input:…} references for secrets), which providers new agents get it on, or turn it OFF. Changing the entry\'s URL, command, arguments or environment switches it off until the user reviews it; its stored secrets are kept but not used with the changed config until the user enters them again. You cannot turn a server on.',
     inputSchema: {
       id: z.string().min(1).max(64),
       name: z.string().min(1).max(64).optional(),
