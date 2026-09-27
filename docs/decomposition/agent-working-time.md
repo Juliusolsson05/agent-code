@@ -241,8 +241,9 @@ Conclusion: the analytics needs a new, small, durable record. Backfill was rejec
 - **Agent:** `sessionId` is replaced by reload/switch/rewind/resume (over-counts);
   `provider:nativeId` changes on switch/rewind and is missing for terminals;
   `agentNameId` is carried across replacement and new only for duplicates, but is
-  renderer-owned and can be absent when names are off. Counting key:
-  `agentNameId ?? sessionId`. Orchestration role from `orchestrationParentId`.
+  renderer-owned and can be absent when names are off. `tldrIdentity` is carried
+  across exactly the replacements that continue one conversation and is present on
+  nearly every agent (#1302). Counting key: `agentNameId ?? tldrIdentity ?? sessionId`. Orchestration role from `orchestrationParentId`.
 
 ---
 
