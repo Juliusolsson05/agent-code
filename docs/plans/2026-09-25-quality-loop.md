@@ -543,6 +543,8 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-27 (01:50 local) — **Owner decided all 12 items** (temp/manager/owner-decisions-2026-09-27.md: keep the fixtures, 90-day retention, never delete resumable runs, and the rest as recommended; approvals are recorded as OWNER-APPROVED comments). **Merged:** #1338 (Refs #1283), claude-code-headless#64 (Refs #1273, crash-only residual stated), and **batch C #1378** (`d5d71d0a`): #1351, #1328 (Fixes #1277), #1340 (Refs #243). New owner asks: deleting 23 leftover plaintext TLS key-log dirs (q91), and the #1384 toast. #1371 manager-verified. #1323 (B31's keyboard follow-ups) owner-approved; B31 is merging it.
+
 - 2026-09-26 (23:50 local) — **Merged since 21:13:** #1325 (Refs #1280; body corrected after merge, q77), #1331 (Fixes #1320), #1342 (Refs #1302), agent-transcript-parser#37 (Refs #1295), workflow-mcp#67, plus four package Dependabot groups (opencode-headless#17, agent-transcript-parser#39, claude-code-headless#65, codex-headless#61).
   - **Blocked on the owner:**
     - #1353, the fleet titles (q73); its privacy fix is manager-verified (q82);
