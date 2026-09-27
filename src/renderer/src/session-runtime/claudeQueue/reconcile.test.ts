@@ -9,6 +9,7 @@ import {
   createClaudeQueueState,
   markStaleWhenIdle,
   QUEUE_DECISION_CEILING,
+  QUEUE_EPISODE_HEAD,
   QUEUE_DECISION_WINDOW,
 } from './reconcile'
 import { derivePriority } from './priority'
@@ -834,6 +835,51 @@ describe('decision window', () => {
     expect(state.decisions.slice(0, episode)).toEqual(stranded.decisions)
   })
 
+  // Review of #1364, round 2 (c): the ceiling alone only postponed the loss — after 2,200 unrelated
+  // departures none of the 164 decisions around the two stranded rows remained. The episode's
+  // first decisions are now kept aside for as long as anything is pending.
+  it('keeps the start of a stranded episode even past the ceiling', () => {
+    const stranded = replay(loadFixture('divergence-stranded-background-commands').events)
+    const start = stranded.episodeStart!
+    expect(stranded.droppedDecisions).toBe(0)
+    const opening = stranded.decisions.slice(start, start + QUEUE_EPISODE_HEAD)
+    expect(opening.length).toBeGreaterThan(0)
+    let state = stranded
+    for (let index = 0; index < QUEUE_DECISION_CEILING + 200; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `churn ${index}`, timestamp: `t${index}` })
+      state = applyQueueOperation(state, { operation: 'remove', content: `churn ${index}`, timestamp: `t${index}.5` })
+    }
+    expect(state.pending.map(item => item.seq)).toEqual(stranded.pending.map(item => item.seq))
+    expect(state.episodeHead.slice(0, opening.length)).toEqual(opening)
+    expect(state.episodeHead.length + state.decisions.length).toBeLessThanOrEqual(QUEUE_DECISION_CEILING)
+  })
+
+  // Review of #1364, round 2 (c), two unpinned mutations on the idle-marking path: stale marks at
+  // the ceiling must stay bounded, and must be bounded by the PENDING queue (not the empty-queue
+  // window, which would cut a live episode down to 500).
+  it('bounds stale marks at the ceiling by the pending queue', () => {
+    const stranded = replay(loadFixture('divergence-stranded-background-commands').events)
+    let state = stranded
+    for (let index = 0; index < QUEUE_DECISION_WINDOW + 100; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `churn ${index}`, timestamp: `t${index}` })
+      state = applyQueueOperation(state, { operation: 'remove', content: `churn ${index}`, timestamp: `t${index}.5` })
+    }
+    const before = state.decisions.length
+    expect(before).toBeGreaterThan(QUEUE_DECISION_WINDOW)
+    state = markStaleWhenIdle(state, true)
+    expect(state.pending.every(item => item.stale)).toBe(true)
+    expect(state.decisions.length).toBeGreaterThan(QUEUE_DECISION_WINDOW)
+    expect(state.decisions.slice(0, stranded.decisions.length)).toEqual(stranded.decisions)
+
+    let full = applyQueueOperation(createClaudeQueueState(), { operation: 'enqueue', content: 'stranded', timestamp: '0' })
+    for (let index = 0; index < QUEUE_DECISION_CEILING; index += 1) {
+      full = applyQueueOperation(full, { operation: 'enqueue', content: `churn ${index}`, timestamp: `t${index}` })
+      full = applyQueueOperation(full, { operation: 'remove', content: `churn ${index}`, timestamp: `t${index}.5` })
+    }
+    full = markStaleWhenIdle(full, true)
+    expect(full.episodeHead.length + full.decisions.length).toBeLessThanOrEqual(QUEUE_DECISION_CEILING)
+  })
+
   it('still bounds the log at the ceiling when rows stay pending forever', () => {
     let state = applyQueueOperation(createClaudeQueueState(), { operation: 'enqueue', content: 'stranded', timestamp: '0' })
     for (let index = 0; index < QUEUE_DECISION_CEILING + 50; index += 1) {
@@ -841,7 +887,10 @@ describe('decision window', () => {
       state = applyQueueOperation(state, { operation: 'remove', content: `churn ${index}`, timestamp: `t${index}.5` })
     }
     expect(state.pending).toHaveLength(1)
-    expect(state.decisions).toHaveLength(QUEUE_DECISION_CEILING)
+    // The episode's head and the recent log share the ceiling.
+    expect(state.episodeHead.length + state.decisions.length).toBe(QUEUE_DECISION_CEILING)
+    expect(state.episodeHead).toHaveLength(QUEUE_EPISODE_HEAD)
+    expect(state.episodeHead[0]?.preview).toBe('churn 0')
     expect(state.droppedDecisions).toBe(50)
   })
 

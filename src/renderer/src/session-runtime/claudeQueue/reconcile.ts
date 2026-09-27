@@ -71,7 +71,7 @@ function previewOf(content: string): string {
 }
 
 export function createClaudeQueueState(): ClaudeQueueState {
-  return { pending: [], decisions: [], droppedDecisions: 0, debt: null, removeDebt: null, nextSeq: 0 }
+  return { pending: [], decisions: [], droppedDecisions: 0, episodeHead: [], episodeStart: null, debt: null, removeDebt: null, nextSeq: 0 }
 }
 
 /**
@@ -100,22 +100,65 @@ export const QUEUE_DECISION_WINDOW = 500
 export const QUEUE_DECISION_CEILING = 2_000
 
 /**
+ * How many of a pending episode's FIRST decisions survive eviction (review of #1364, round 2 c).
+ *
+ * WHY: the ceiling alone only postponed the loss — 2,200 unrelated departures while two rows stayed
+ * stranded left none of the 164 decisions that explain them. The decisions that open an episode are
+ * the ones that show how its rows were (mis)attributed, so they are kept aside, up to this many, for
+ * as long as anything is pending. Counted within the ceiling, so the bound is unchanged.
+ */
+export const QUEUE_EPISODE_HEAD = 200
+
+/**
  * The one place decisions are appended: append, trim, count what was dropped.
- * `pendingAfter` is the queue as it stands once this change lands; it picks the bound.
+ * `pendingAfter` is the queue as it stands once this change lands; it picks the bound and says
+ * whether the current episode is still open.
  */
 function withDecisions(
   state: ClaudeQueueState,
   added: readonly QueueDecision[],
   pendingAfter: readonly PendingItem[],
-): Pick<ClaudeQueueState, 'decisions' | 'droppedDecisions'> {
-  if (added.length === 0) return { decisions: state.decisions, droppedDecisions: state.droppedDecisions }
-  const limit = pendingAfter.length > 0 ? QUEUE_DECISION_CEILING : QUEUE_DECISION_WINDOW
-  const combined = state.decisions.length + added.length
-  const drop = Math.max(0, combined - limit)
-  const decisions = drop === 0
-    ? [...state.decisions, ...added]
-    : [...state.decisions, ...added].slice(drop)
-  return { decisions, droppedDecisions: state.droppedDecisions + drop }
+): Pick<ClaudeQueueState, 'decisions' | 'droppedDecisions' | 'episodeHead' | 'episodeStart'> {
+  const combined = [...state.decisions, ...added]
+  if (pendingAfter.length === 0) {
+    // The episode is over: its kept head ages out, and the log trims to the window.
+    const drop = Math.max(0, combined.length - QUEUE_DECISION_WINDOW)
+    return {
+      decisions: drop === 0 ? combined : combined.slice(drop),
+      droppedDecisions: state.droppedDecisions + drop + state.episodeHead.length,
+      episodeHead: [],
+      episodeStart: null,
+    }
+  }
+  // Still pending: the head and the log together stay under the ceiling.
+  let overflow = state.episodeHead.length + combined.length - QUEUE_DECISION_CEILING
+  if (overflow <= 0) {
+    return { decisions: combined, droppedDecisions: state.droppedDecisions, episodeHead: state.episodeHead, episodeStart: state.episodeStart }
+  }
+  // Everything before decisions[0] is either dropped or in the head, so that is its absolute index.
+  const firstIndex = state.droppedDecisions + state.episodeHead.length
+  const episodeHead = [...state.episodeHead]
+  let dropped = 0
+  let cut = 0
+  // Take from the oldest end. A decision of the current episode moves into the head while it has
+  // room (that frees no slot, so the loop goes on); anything else is evicted, which does.
+  while (overflow > 0 && cut < combined.length) {
+    const absolute = firstIndex + cut
+    const episodic = state.episodeStart !== null && absolute >= state.episodeStart
+    if (episodic && episodeHead.length < QUEUE_EPISODE_HEAD) {
+      episodeHead.push(combined[cut]!)
+    } else {
+      dropped += 1
+      overflow -= 1
+    }
+    cut += 1
+  }
+  return {
+    decisions: combined.slice(cut),
+    droppedDecisions: state.droppedDecisions + dropped,
+    episodeHead,
+    episodeStart: state.episodeStart,
+  }
 }
 
 function decide(
@@ -424,7 +467,12 @@ function applyEnqueue(state: ClaudeQueueState, op: QueueOperationRecord): Claude
     isSlashCommand: isSlashCommand(content),
     stale: false,
   }
-  return { ...state, pending: [...state.pending, item], nextSeq: state.nextSeq + 1 }
+  // An item entering an empty queue opens an episode; its decisions are the ones worth keeping
+  // while anything stays pending (see QUEUE_EPISODE_HEAD).
+  const episodeStart = state.pending.length === 0
+    ? state.decisions.length + state.droppedDecisions + state.episodeHead.length
+    : state.episodeStart
+  return { ...state, pending: [...state.pending, item], nextSeq: state.nextSeq + 1, episodeStart }
 }
 
 function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQueueState {
@@ -680,7 +728,7 @@ export function markStaleWhenIdle(state: ClaudeQueueState, idle: boolean): Claud
   // Only items that have already survived at least one departure are suspect.
   // A queue that has simply never been drained is not stale, it is waiting.
   // Counted with the dropped ones: an evicted departure still happened (#676).
-  if (settled.decisions.length + settled.droppedDecisions === 0) return settled
+  if (settled.decisions.length + settled.droppedDecisions + settled.episodeHead.length === 0) return settled
   if (settled.pending.every(i => i.stale)) return settled
   return {
     ...settled,

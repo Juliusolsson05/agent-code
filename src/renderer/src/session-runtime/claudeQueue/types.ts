@@ -135,6 +135,15 @@ export type ClaudeQueueState = {
    * equal.
    */
   droppedDecisions: number
+  /**
+   * The FIRST decisions of the current pending episode, kept when the bounded log evicts them
+   * (review of #1364, round 2 c). An episode starts when an item is enqueued into an empty queue and
+   * ends when the queue is empty again; this is released (and counted in droppedDecisions) then.
+   * Older than every entry in `decisions`, and at most QUEUE_EPISODE_HEAD long.
+   */
+  episodeHead: QueueDecision[]
+  /** Total decisions recorded when the current episode began (null: the queue is empty). */
+  episodeStart: number | null
   debt: QueueDebt | null
   removeDebt: QueueRemoveDebt | null
   nextSeq: number

@@ -52,3 +52,12 @@ long session pays O(n) per departure and O(n²) overall.
 - `markStaleWhenIdle`'s "has anything departed" guard now counts evicted decisions too.
 - Mutations killed: a batch counted as one, `popAll` bypassing the bound, no pending ceiling.
 
+## Review of #1364 (round 2: a and b MERGE-READY, c FIX-BEFORE-MERGE)
+- **The ceiling only postponed the loss (c).** After 2 200 unrelated departures, none of the 164 decisions around the two stranded rows remained.
+  - An episode opens when an item enters an empty queue (`episodeStart`) and closes when the queue is empty again.
+  - While it is open, the FIRST decisions of the episode move into `episodeHead` (up to `QUEUE_EPISODE_HEAD = 200`) instead of being evicted.
+  - The head and the log share the 2 000 ceiling. When the episode closes, the head is released and counted as dropped.
+- **Two unpinned idle-path mutations (c):** stale marks must be bounded, and bounded by the pending queue. Both are now pinned.
+- Mutations killed: no episode head, stale marks bounded by the empty window, stale marks unbounded, the head outside the ceiling.
+- **Stated residual:** an episode's middle (after its first 200 decisions, before its most recent ~1 800) can still be evicted.
+
