@@ -135,6 +135,12 @@ export class LanePortWatcher {
 
   stop(): void {
     this.stopped = true
+    // Invalidate a scan already in flight, exactly as a plan change does: the
+    // obsolete-scan fence in runScan compares generations, and without this
+    // bump a scan awaiting lsof or a probe would, after stop(), still cache
+    // its answer, record ages into the maps cleared below, and broadcast a
+    // chip (#1452 round-3 review A).
+    this.planGeneration++
     this.cancel?.()
     this.cancel = null
     this.forgetListeners()

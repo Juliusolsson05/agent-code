@@ -379,3 +379,27 @@ describe('#1452: an obsolete scan writes nothing', () => {
     expect(h.probe).toHaveBeenCalledTimes(2)
   })
 })
+
+// #1452 round-3 review A: stop() must invalidate a scan in flight the same way
+// an empty plan does. The user-visible effect is a chip broadcast after the
+// watcher was stopped. A cached answer or age left behind is not observable
+// through the API (a stopped watcher never scans again), so the broadcast is
+// what this pins.
+describe('#1452: stop() fences a scan in flight', () => {
+  it('a probe answer that lands after stop() is not broadcast', async () => {
+    const h = preciseHarness(ancestorClaude(4173))
+    h.watcher.setSessions(h.plan)
+    await h.watcher.scan()
+    h.clock.t = PROBE_SETTLE_MS
+    let answer!: () => void
+    const gate = new Promise<void>(r => { answer = r })
+    h.probe.mockImplementationOnce(async port => { await gate; return probes.get(port)! })
+    const inFlight = h.watcher.scan()
+    await vi.waitFor(() => expect(h.probe).toHaveBeenCalledTimes(1))
+    const broadcasts = h.broadcast.mock.calls.length
+    h.watcher.stop()
+    answer()
+    await inFlight
+    expect(h.broadcast.mock.calls.length).toBe(broadcasts)
+  })
+})
