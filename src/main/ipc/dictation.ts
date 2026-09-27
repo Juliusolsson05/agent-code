@@ -25,7 +25,13 @@ import {
 import { sendToWindow, windowIdFor } from '@main/window/windowRegistry.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
-import type { DictationDebugEventInput } from '@preload/api/types.js'
+import type { DictationDebugEventInput, DictationStartResult, DictationStopResult } from '@preload/api/types.js'
+import {
+  classifyProviderFailure,
+  DICTATION_DEADLINES_MS,
+  dictationReasonMessage,
+  type DictationOutcomeReason,
+} from '@shared/types/dictation.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import { wrapWithSttTag } from 'agent-voice-dictation/composer'
 import type { SpeechTraceEvent } from 'agent-voice-dictation/speech'
@@ -269,22 +275,18 @@ export function registerDictationIpc(deps: {
           reason: 'non-deepgram-provider',
           provider: params.provider,
         })
-        return { kind: 'error', message: 'Only Deepgram streaming is wired in Agent Code v1.' }
+        return startRejected('config.unsupported-provider')
       }
 
       const apiKey = await readDeepgramApiKeyForRuntime()
       // The key lookup may finish after cleanup closed admission and cleared
       // the active map. Never publish a late socket/session behind that drain.
-      if (shutdownAdmitted) return { kind: 'error', message: 'Agent Code is shutting down.' }
+      if (shutdownAdmitted) return startRejected('cancelled.shutdown')
       if (!apiKey) {
         emit(debugSessionId, 'ERROR', 'stream-start:rejected', {
           reason: 'missing-api-key',
         })
-        return {
-          kind: 'error',
-          message:
-            'No Deepgram API key configured. Open Settings → Dictation and paste a key.',
-        }
+        return startRejected('config.missing-api-key')
       }
 
       const id = randomUUID()
@@ -377,7 +379,7 @@ export function registerDictationIpc(deps: {
         }
       }
 
-      return { kind: 'started', id }
+      return { kind: 'started', id } satisfies DictationStartResult
     }),
   )
 
@@ -458,7 +460,8 @@ export function registerDictationIpc(deps: {
     admittedDictation(async (_evt: IpcMainInvokeEvent, params: { id: string; audioDurationMs?: number }) => {
       const session = activeSessions.get(params.id)
       if (!session) {
-        return { kind: 'error', message: 'Dictation session is no longer active.' }
+        // Cancelled (or shut down) under a stop that was still in flight.
+        return stopFailed('delivery.abandoned', 'Dictation session is no longer active.')
       }
       activeSessions.delete(params.id)
 
@@ -470,11 +473,12 @@ export function registerDictationIpc(deps: {
         emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
           streamId: params.id,
           reason: session.chunkCount === 0 ? 'no-chunks' : 'too-short',
+          code: 'no-speech.too-short' satisfies DictationOutcomeReason,
           audioDurationMs: params.audioDurationMs ?? null,
           chunkCount: session.chunkCount,
         })
         if (session.streamingId) deepgramStreaming().cancel(session.streamingId)
-        return { kind: 'no-speech' }
+        return { kind: 'no-speech', reason: 'no-speech.too-short' } satisfies DictationStopResult
       }
 
       const streamingId = session.streamingId
@@ -496,6 +500,15 @@ export function registerDictationIpc(deps: {
       }
       const batchAbort = new AbortController()
       pendingTranscriptions.add(batchAbort)
+      // The final-phase deadline (#243): 30 s against a recorded maximum of
+      // 14.3 s. It aborts through the SAME controller quit uses, so a hung
+      // provider cannot hold the "transcribing…" pill forever; the flag is
+      // what tells this abort apart from a quit's.
+      let finalDeadlineHit = false
+      const finalDeadline = setTimeout(() => {
+        finalDeadlineHit = true
+        batchAbort.abort()
+      }, DICTATION_DEADLINES_MS.final)
 
       if (DICTATION_DUMP_ENABLED) {
         // eslint-disable-next-line no-console
@@ -542,10 +555,11 @@ export function registerDictationIpc(deps: {
           emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
             streamId: params.id,
             reason: 'provider-returned-empty',
+            code: 'no-speech.provider-empty' satisfies DictationOutcomeReason,
             chunkCount: session.chunkCount,
             audioBytes: session.audioBytes,
           })
-          return { kind: 'no-speech' }
+          return { kind: 'no-speech', reason: 'no-speech.provider-empty' } satisfies DictationStopResult
         }
 
         const cleanText = outcome.raw.trim()
@@ -553,10 +567,11 @@ export function registerDictationIpc(deps: {
           emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
             streamId: params.id,
             reason: 'provider-text-empty-after-trim',
+            code: 'no-speech.provider-empty' satisfies DictationOutcomeReason,
             chunkCount: session.chunkCount,
             audioBytes: session.audioBytes,
           })
-          return { kind: 'no-speech' }
+          return { kind: 'no-speech', reason: 'no-speech.provider-empty' } satisfies DictationStopResult
         }
 
         emit(session.debugSessionId, 'PROVIDER', 'batch:upload:ok', {
@@ -594,6 +609,7 @@ export function registerDictationIpc(deps: {
 
         emit(session.debugSessionId, 'OUTCOME', 'success', {
           streamId: params.id,
+          code: 'success' satisfies DictationOutcomeReason,
           audioBytes: session.audioBytes,
           chunkCount: session.chunkCount,
           // Truncate at 4 KB defensively. The file is local and the
@@ -607,11 +623,13 @@ export function registerDictationIpc(deps: {
           kind: 'success',
           raw: cleanText,
           text: wrapWithSttTag(cleanText),
-          provider: outcome.transcript.provider,
+          // The session's provider, i.e. the app's narrow DictationProvider: main
+          // only ever starts Deepgram, while the package's field is its wider union.
+          provider: session.provider,
           audioBytes: session.audioBytes,
           chunkCount: session.chunkCount,
           sttMs: Date.now() - startedAt,
-        }
+        } satisfies DictationStopResult
       } catch (err) {
         emit(session.debugSessionId, 'ERROR', 'batch:upload:throw', {
           streamId: params.id,
@@ -657,22 +675,34 @@ export function registerDictationIpc(deps: {
           emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
             streamId: params.id,
             reason: 'too-short-provider-rejected',
+            code: 'no-speech.provider-rejected-short' satisfies DictationOutcomeReason,
             chunkCount: session.chunkCount,
             audioBytes: session.audioBytes,
             audioDurationMs: params.audioDurationMs ?? null,
           })
-          return { kind: 'no-speech' }
+          return { kind: 'no-speech', reason: 'no-speech.provider-rejected-short' } satisfies DictationStopResult
         }
 
+        // The code, not the text, is what reaches the user (#243, q22): the
+        // recorded journals show the text was the package's constant
+        // "Deepgram transcription failed" for 400s and 408s alike, or the
+        // network layer's "fetch failed". An abort is our own final deadline
+        // unless quit caused it.
+        const reason: DictationOutcomeReason = finalDeadlineHit
+          ? 'final.timeout'
+          : shutdownAdmitted
+            ? 'cancelled.shutdown'
+            : classifyProviderFailure(typeof status === 'number' ? status : undefined)
+        const message = err instanceof Error ? err.message : 'Dictation failed.'
         emit(session.debugSessionId, 'OUTCOME', 'error', {
           streamId: params.id,
-          message: err instanceof Error ? err.message : 'Dictation failed.',
+          code: reason,
+          ...(typeof status === 'number' ? { status } : {}),
+          message,
         })
-        return {
-          kind: 'error',
-          message: err instanceof Error ? err.message : 'Dictation failed.',
-        }
+        return stopFailed(reason, message)
       } finally {
+        clearTimeout(finalDeadline)
         pendingTranscriptions.delete(batchAbort)
       }
     }),
@@ -680,10 +710,12 @@ export function registerDictationIpc(deps: {
 
   ipcMain.handle('dictation:stream-cancel', async (_evt, params: { id: string }) => {
     const session = activeSessions.get(params.id)
-    // Emit BEFORE delete so the lookup succeeds. The journal entry then
-    // gives us a terminal record even for canceled / accidental-tap
-    // sessions, which is exactly the window we want visibility into.
-    emit(session?.debugSessionId ?? null, 'OUTCOME', 'cancel', {
+    // Emit BEFORE delete so the lookup succeeds. An IPC row, not OUTCOME
+    // (#243): a cancel is always the renderer's decision, and the renderer
+    // writes that session's one OUTCOME row with its code (short press,
+    // hidden, unmount, a failed deadline). Two terminal rows per session made
+    // "how did this end" ambiguous.
+    emit(session?.debugSessionId ?? null, 'IPC', 'stream-cancel', {
       streamId: params.id,
       chunkCount: session?.chunkCount ?? 0,
       audioBytes: session?.audioBytes ?? 0,
@@ -691,6 +723,16 @@ export function registerDictationIpc(deps: {
     activeSessions.delete(params.id)
     return { kind: 'ok' }
   })
+}
+
+// Every non-success IPC answer carries its code (#243). `message` stays for
+// diagnostics only; the renderer shows dictationReasonMessage(reason).
+function startRejected(reason: DictationOutcomeReason): DictationStartResult {
+  return { kind: 'error', reason, message: dictationReasonMessage(reason) ?? reason }
+}
+
+function stopFailed(reason: DictationOutcomeReason, message: string): DictationStopResult {
+  return { kind: 'error', reason, message }
 }
 
 export async function cleanupDictationIpcResources(): Promise<void> {

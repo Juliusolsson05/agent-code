@@ -1,0 +1,888 @@
+{
+ "source": "Owner's dictation-debug journals (~/Library/Application Support/agent-code/dictation-debug), recorded 2026-09; one session per terminal shape in the #243 census. Lifecycle rows only: AUDIO_LEVEL samples, CHUNK rows, recorder:dataavailable, Deepgram preview-socket rows and TRANSCRIPT rows (which hold dictated text) are dropped; 64-hex device ids are zeroed at the same length. Device labels, the user agent and provider error bodies are kept after review; the owner's first name in one device label and the Deepgram request_id are replaced at the same length.",
+ "sessions": {
+  "mic-opened-late": {
+   "session": "028f6c14-b0bc-4913-9c31-7bf123d76fb7",
+   "rows": [
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "session:created",
+     "data": {
+      "provider": "deepgram",
+      "focused": true,
+      "baseInputLen": 1,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) agent-code/0.0.2-beta.1 Chrome/150.0.7871.114 Electron/43.1.1 Safari/537.36",
+      "platform": "MacIntel"
+     }
+    },
+    {
+     "tMs": 3,
+     "layer": "META",
+     "event": "start:begin",
+     "data": {
+      "lifecycle": "idle",
+      "provider": "deepgram",
+      "focused": true
+     }
+    },
+    {
+     "tMs": 1095,
+     "layer": "META",
+     "event": "stop:called",
+     "data": {
+      "lifecycle": "starting",
+      "hasRecording": false,
+      "heldMs": 1098
+     }
+    },
+    {
+     "tMs": 3051,
+     "layer": "DEVICE",
+     "event": "enumerate:audioinput",
+     "data": {
+      "count": 5,
+      "labels": [
+       "Default - MacBook Air Microphone (Built-in)",
+       "EarPods Microphone (05ac:110b)",
+       "Person \u2013 iPhone Microphone",
+       "BlackHole 2ch (Virtual)",
+       "MacBook Air Microphone (Built-in)"
+      ]
+     }
+    },
+    {
+     "tMs": 3052,
+     "layer": "DEVICE",
+     "event": "select:built-in",
+     "data": {
+      "label": "Default - MacBook Air Microphone (Built-in)"
+     }
+    },
+    {
+     "tMs": 3283,
+     "layer": "DEVICE",
+     "event": "start:get-user-media:done",
+     "data": {
+      "lifecycle": "starting",
+      "ms": 3280,
+      "forcedDeviceId": "default",
+      "tracks": [
+       {
+        "label": "Default - MacBook Air Microphone (Built-in)",
+        "enabled": true,
+        "muted": false,
+        "readyState": "live"
+       }
+      ]
+     }
+    },
+    {
+     "tMs": 3286,
+     "layer": "RECORDER",
+     "event": "start:recorder-created",
+     "data": {
+      "lifecycle": "starting",
+      "requestedMimeType": "audio/webm;codecs=opus",
+      "recorderMimeType": "audio/webm;codecs=opus",
+      "state": "inactive"
+     }
+    },
+    {
+     "tMs": 3288,
+     "layer": "RECORDER",
+     "event": "recorder:start-called",
+     "data": {
+      "lifecycle": "starting",
+      "state": "recording",
+      "timesliceMs": 120
+     }
+    },
+    {
+     "tMs": 3348,
+     "layer": "META",
+     "event": "stop:called",
+     "data": {
+      "lifecycle": "recording",
+      "hasRecording": true,
+      "heldMs": 3350
+     }
+    },
+    {
+     "tMs": 3348,
+     "layer": "RECORDER",
+     "event": "stop:stopping-recorder",
+     "data": {
+      "lifecycle": "stopping",
+      "id": null,
+      "recorderState": "recording",
+      "queuedChunks": 0,
+      "pendingPushes": 0
+     }
+    },
+    {
+     "tMs": 3349,
+     "layer": "RECORDER",
+     "event": "stop:request-data",
+     "data": {
+      "lifecycle": "stopping",
+      "id": null
+     }
+    },
+    {
+     "tMs": 3350,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stop-called",
+     "data": {
+      "lifecycle": "stopping",
+      "id": null
+     }
+    },
+    {
+     "tMs": 3352,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stopped",
+     "data": {
+      "lifecycle": "stopping",
+      "id": null,
+      "queuedChunks": 0,
+      "pendingPushes": 0
+     }
+    },
+    {
+     "tMs": 3352,
+     "layer": "IPC",
+     "event": "stop:pending-pushes-settled",
+     "data": {
+      "lifecycle": "stopping",
+      "id": null,
+      "queuedChunks": 0,
+      "pendingPushes": 0,
+      "hasStreamStartPromise": false
+     }
+    },
+    {
+     "tMs": 3352,
+     "layer": "META",
+     "event": "cleanup",
+     "data": {
+      "lifecycle": "stopping",
+      "id": null,
+      "recorderState": "inactive"
+     }
+    }
+   ]
+  },
+  "mic-unavailable": {
+   "session": "262c7ed0-4822-431d-ac0d-23a728ff31e7",
+   "rows": [
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "session:created",
+     "data": {
+      "provider": "deepgram",
+      "focused": true,
+      "baseInputLen": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) agent-code/0.0.2-beta.1 Chrome/150.0.7871.114 Electron/43.1.1 Safari/537.36",
+      "platform": "MacIntel"
+     }
+    },
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "start:begin",
+     "data": {
+      "lifecycle": "idle",
+      "provider": "deepgram",
+      "focused": true
+     }
+    },
+    {
+     "tMs": 0,
+     "layer": "DEVICE",
+     "event": "select:configured",
+     "data": {
+      "label": "EarPods Microphone (05ac:110b)",
+      "systemDefault": false
+     }
+    },
+    {
+     "tMs": 73,
+     "layer": "ERROR",
+     "event": "start:get-user-media:error",
+     "data": {
+      "lifecycle": "starting",
+      "name": "OverconstrainedError",
+      "message": ""
+     }
+    },
+    {
+     "tMs": 73,
+     "layer": "ERROR",
+     "event": "start:error",
+     "data": {
+      "lifecycle": "starting",
+      "message": "The selected microphone (EarPods Microphone (05ac:110b)) is unavailable. Reconnect it or choose another in Settings \u2192 Dictation \u2192 Audio Input Device."
+     }
+    }
+   ]
+  },
+  "network": {
+   "session": "0bf78da4-0443-439c-af68-23c17435643f",
+   "rows": [
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "session:created",
+     "data": {
+      "provider": "deepgram",
+      "focused": true,
+      "baseInputLen": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) agent-code/0.1.3 Chrome/150.0.7871.250 Electron/43.7.4 Safari/537.36",
+      "platform": "MacIntel"
+     }
+    },
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "start:begin",
+     "data": {
+      "lifecycle": "idle",
+      "provider": "deepgram",
+      "focused": true
+     }
+    },
+    {
+     "tMs": 0,
+     "layer": "DEVICE",
+     "event": "select:configured",
+     "data": {
+      "label": "System default",
+      "systemDefault": true
+     }
+    },
+    {
+     "tMs": 138,
+     "layer": "DEVICE",
+     "event": "start:get-user-media:done",
+     "data": {
+      "lifecycle": "starting",
+      "ms": 120,
+      "forcedDeviceId": null,
+      "tracks": [
+       {
+        "label": "Default - MacBook Air Microphone (Built-in)",
+        "enabled": true,
+        "muted": false,
+        "readyState": "live"
+       }
+      ]
+     }
+    },
+    {
+     "tMs": 138,
+     "layer": "RECORDER",
+     "event": "start:recorder-created",
+     "data": {
+      "lifecycle": "starting",
+      "requestedMimeType": "audio/webm;codecs=opus",
+      "recorderMimeType": "audio/webm;codecs=opus",
+      "state": "inactive"
+     }
+    },
+    {
+     "tMs": 138,
+     "layer": "RECORDER",
+     "event": "recorder:start-called",
+     "data": {
+      "lifecycle": "starting",
+      "state": "recording",
+      "timesliceMs": 120
+     }
+    },
+    {
+     "tMs": 302,
+     "layer": "IPC",
+     "event": "stream:start:request",
+     "data": {
+      "lifecycle": "recording",
+      "mimeType": "audio/webm;codecs=opus",
+      "queuedChunks": 1,
+      "recorderState": "recording"
+     }
+    },
+    {
+     "tMs": 302,
+     "layer": "PROVIDER",
+     "event": "stream:start",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "streamingId": null,
+      "provider": "deepgram",
+      "phase": "stream:start",
+      "runId": "8b1f46fd-49cd-41ca-95b4-e6eb9c989518",
+      "model": "flux-general-en",
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 302,
+     "layer": "PROVIDER",
+     "event": "streaming:start:ok",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "streamingId": "8b1f46fd-49cd-41ca-95b4-e6eb9c989518",
+      "provider": "deepgram",
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 302,
+     "layer": "IPC",
+     "event": "stream-start:accepted",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "provider": "deepgram",
+      "mimeType": "audio/webm;codecs=opus",
+      "streamingId": "8b1f46fd-49cd-41ca-95b4-e6eb9c989518",
+      "hasApiKey": true
+     }
+    },
+    {
+     "tMs": 303,
+     "layer": "IPC",
+     "event": "stream:start:result",
+     "data": {
+      "lifecycle": "recording",
+      "kind": "started",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "message": null
+     }
+    },
+    {
+     "tMs": 303,
+     "layer": "IPC",
+     "event": "stream:drain-and-publish",
+     "data": {
+      "lifecycle": "recording",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "drained": 1
+     }
+    },
+    {
+     "tMs": 842,
+     "layer": "META",
+     "event": "stop:called",
+     "data": {
+      "lifecycle": "recording",
+      "hasRecording": true,
+      "heldMs": 841
+     }
+    },
+    {
+     "tMs": 842,
+     "layer": "RECORDER",
+     "event": "stop:stopping-recorder",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "recorderState": "recording",
+      "queuedChunks": 0,
+      "pendingPushes": 4
+     }
+    },
+    {
+     "tMs": 842,
+     "layer": "RECORDER",
+     "event": "stop:request-data",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380"
+     }
+    },
+    {
+     "tMs": 842,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stop-called",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380"
+     }
+    },
+    {
+     "tMs": 861,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stopped",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "queuedChunks": 0,
+      "pendingPushes": 5
+     }
+    },
+    {
+     "tMs": 861,
+     "layer": "IPC",
+     "event": "stop:pending-pushes-settled",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "queuedChunks": 0,
+      "pendingPushes": 5,
+      "hasStreamStartPromise": true
+     }
+    },
+    {
+     "tMs": 861,
+     "layer": "PROVIDER",
+     "event": "stream:stop",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "streamingId": "8b1f46fd-49cd-41ca-95b4-e6eb9c989518",
+      "provider": "deepgram",
+      "phase": "stream:stop",
+      "runId": "8b1f46fd-49cd-41ca-95b4-e6eb9c989518",
+      "chunkCount": 5,
+      "audioBytes": 393,
+      "ms": 559,
+      "closeGraceMs": 0,
+      "endOfTurnWatchdogMs": 1500
+     }
+    },
+    {
+     "tMs": 862,
+     "layer": "PROVIDER",
+     "event": "batch:upload:start",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "provider": "deepgram",
+      "audioBytes": 393,
+      "chunkCount": 5,
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 953,
+     "layer": "ERROR",
+     "event": "streaming:stop:throw",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "streamingId": "8b1f46fd-49cd-41ca-95b4-e6eb9c989518",
+      "message": "getaddrinfo ENOTFOUND api.deepgram.com",
+      "ms": 651
+     }
+    },
+    {
+     "tMs": 965,
+     "layer": "ERROR",
+     "event": "batch:upload:throw",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "message": "fetch failed",
+      "ms": 663
+     }
+    },
+    {
+     "tMs": 965,
+     "layer": "OUTCOME",
+     "event": "error",
+     "data": {
+      "streamId": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "message": "fetch failed"
+     }
+    },
+    {
+     "tMs": 966,
+     "layer": "IPC",
+     "event": "stop:ipc-result",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "kind": "error",
+      "audioDurationMs": 844
+     }
+    },
+    {
+     "tMs": 966,
+     "layer": "META",
+     "event": "cleanup",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "1a18c5f1-66de-4a6d-89f9-79b69e92d380",
+      "recorderState": "inactive"
+     }
+    }
+   ]
+  },
+  "provider-400": {
+   "session": "5c710ebf-3853-4112-9849-b2e1946818c9",
+   "rows": [
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "session:created",
+     "data": {
+      "provider": "deepgram",
+      "focused": true,
+      "baseInputLen": 56,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) agent-code/0.0.2-beta.1 Chrome/150.0.7871.114 Electron/43.1.1 Safari/537.36",
+      "platform": "MacIntel"
+     }
+    },
+    {
+     "tMs": 1,
+     "layer": "META",
+     "event": "start:begin",
+     "data": {
+      "lifecycle": "idle",
+      "provider": "deepgram",
+      "focused": true
+     }
+    },
+    {
+     "tMs": 31,
+     "layer": "DEVICE",
+     "event": "enumerate:audioinput",
+     "data": {
+      "count": 4,
+      "labels": [
+       "Default - MacBook Air Microphone (Built-in)",
+       "Person \u2013 iPhone Microphone",
+       "BlackHole 2ch (Virtual)",
+       "MacBook Air Microphone (Built-in)"
+      ]
+     }
+    },
+    {
+     "tMs": 31,
+     "layer": "DEVICE",
+     "event": "select:built-in",
+     "data": {
+      "label": "MacBook Air Microphone (Built-in)"
+     }
+    },
+    {
+     "tMs": 201,
+     "layer": "DEVICE",
+     "event": "start:get-user-media:done",
+     "data": {
+      "lifecycle": "starting",
+      "ms": 199,
+      "forcedDeviceId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tracks": [
+       {
+        "label": "MacBook Air Microphone (Built-in)",
+        "enabled": true,
+        "muted": false,
+        "readyState": "live"
+       }
+      ]
+     }
+    },
+    {
+     "tMs": 204,
+     "layer": "RECORDER",
+     "event": "start:recorder-created",
+     "data": {
+      "lifecycle": "starting",
+      "requestedMimeType": "audio/webm;codecs=opus",
+      "recorderMimeType": "audio/webm;codecs=opus",
+      "state": "inactive"
+     }
+    },
+    {
+     "tMs": 206,
+     "layer": "RECORDER",
+     "event": "recorder:start-called",
+     "data": {
+      "lifecycle": "starting",
+      "state": "recording",
+      "timesliceMs": 120
+     }
+    },
+    {
+     "tMs": 398,
+     "layer": "IPC",
+     "event": "stream:start:request",
+     "data": {
+      "lifecycle": "recording",
+      "mimeType": "audio/webm;codecs=opus",
+      "queuedChunks": 1,
+      "recorderState": "recording"
+     }
+    },
+    {
+     "tMs": 401,
+     "layer": "PROVIDER",
+     "event": "stream:start",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "streamingId": null,
+      "provider": "deepgram",
+      "phase": "stream:start",
+      "runId": "557abbbf-055a-4af6-b8aa-2f5a19b60ed3",
+      "model": "flux-general-en",
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 401,
+     "layer": "PROVIDER",
+     "event": "streaming:start:ok",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "streamingId": "557abbbf-055a-4af6-b8aa-2f5a19b60ed3",
+      "provider": "deepgram",
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 403,
+     "layer": "IPC",
+     "event": "stream-start:accepted",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "provider": "deepgram",
+      "mimeType": "audio/webm;codecs=opus",
+      "streamingId": "557abbbf-055a-4af6-b8aa-2f5a19b60ed3",
+      "hasApiKey": true
+     }
+    },
+    {
+     "tMs": 403,
+     "layer": "IPC",
+     "event": "stream:start:result",
+     "data": {
+      "lifecycle": "recording",
+      "kind": "started",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "message": null
+     }
+    },
+    {
+     "tMs": 404,
+     "layer": "IPC",
+     "event": "stream:drain-and-publish",
+     "data": {
+      "lifecycle": "recording",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "drained": 1
+     }
+    },
+    {
+     "tMs": 5428,
+     "layer": "META",
+     "event": "stop:called",
+     "data": {
+      "lifecycle": "recording",
+      "hasRecording": true,
+      "heldMs": 5429
+     }
+    },
+    {
+     "tMs": 5428,
+     "layer": "RECORDER",
+     "event": "stop:stopping-recorder",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "recorderState": "recording",
+      "queuedChunks": 0,
+      "pendingPushes": 34
+     }
+    },
+    {
+     "tMs": 5428,
+     "layer": "RECORDER",
+     "event": "stop:request-data",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d"
+     }
+    },
+    {
+     "tMs": 5429,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stop-called",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d"
+     }
+    },
+    {
+     "tMs": 5434,
+     "layer": "RECORDER",
+     "event": "stop:recorder-stopped",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "queuedChunks": 0,
+      "pendingPushes": 35
+     }
+    },
+    {
+     "tMs": 5435,
+     "layer": "IPC",
+     "event": "stop:pending-pushes-settled",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "queuedChunks": 0,
+      "pendingPushes": 35,
+      "hasStreamStartPromise": true
+     }
+    },
+    {
+     "tMs": 5435,
+     "layer": "PROVIDER",
+     "event": "stream:stop",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "streamingId": "557abbbf-055a-4af6-b8aa-2f5a19b60ed3",
+      "provider": "deepgram",
+      "phase": "stream:stop",
+      "runId": "557abbbf-055a-4af6-b8aa-2f5a19b60ed3",
+      "chunkCount": 35,
+      "audioBytes": 2019,
+      "ms": 5036,
+      "closeGraceMs": 0,
+      "endOfTurnWatchdogMs": 1500
+     }
+    },
+    {
+     "tMs": 5435,
+     "layer": "PROVIDER",
+     "event": "batch:upload:start",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "provider": "deepgram",
+      "audioBytes": 2019,
+      "chunkCount": 35,
+      "mimeType": "audio/webm;codecs=opus"
+     }
+    },
+    {
+     "tMs": 5894,
+     "layer": "ERROR",
+     "event": "batch:upload:throw",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "message": "Deepgram transcription failed",
+      "status": 400,
+      "provider": "deepgram",
+      "details": "{\"err_code\":\"Bad Request\",\"err_msg\":\"Bad Request: failed to process audio: corrupt or unsupported data\",\"request_id\":\"00000000-0000-0000-0000-000000000000\"}",
+      "ms": 5493
+     }
+    },
+    {
+     "tMs": 5894,
+     "layer": "OUTCOME",
+     "event": "error",
+     "data": {
+      "streamId": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "message": "Deepgram transcription failed"
+     }
+    },
+    {
+     "tMs": 5894,
+     "layer": "IPC",
+     "event": "stop:ipc-result",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "kind": "error",
+      "audioDurationMs": 5690
+     }
+    },
+    {
+     "tMs": 5895,
+     "layer": "META",
+     "event": "cleanup",
+     "data": {
+      "lifecycle": "stopping",
+      "id": "f44f88ee-e726-4a7b-8adb-67b80ba21b0d",
+      "recorderState": "inactive"
+     }
+    }
+   ]
+  },
+  "tap-while-starting": {
+   "session": "011bfc0e-d173-4492-9d1a-ba6854a3cb71",
+   "rows": [
+    {
+     "tMs": 0,
+     "layer": "META",
+     "event": "session:created",
+     "data": {
+      "provider": "deepgram",
+      "focused": true,
+      "baseInputLen": 0,
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) agent-code/0.0.2-beta.1 Chrome/150.0.7871.114 Electron/43.1.1 Safari/537.36",
+      "platform": "MacIntel"
+     }
+    },
+    {
+     "tMs": 1,
+     "layer": "META",
+     "event": "start:begin",
+     "data": {
+      "lifecycle": "idle",
+      "provider": "deepgram",
+      "focused": true
+     }
+    },
+    {
+     "tMs": 15,
+     "layer": "DEVICE",
+     "event": "enumerate:audioinput",
+     "data": {
+      "count": 4,
+      "labels": [
+       "Default - MacBook Air Microphone (Built-in)",
+       "Person \u2013 iPhone Microphone",
+       "BlackHole 2ch (Virtual)",
+       "MacBook Air Microphone (Built-in)"
+      ]
+     }
+    },
+    {
+     "tMs": 15,
+     "layer": "DEVICE",
+     "event": "select:built-in",
+     "data": {
+      "label": "MacBook Air Microphone (Built-in)"
+     }
+    },
+    {
+     "tMs": 49,
+     "layer": "META",
+     "event": "stop:called",
+     "data": {
+      "lifecycle": "starting",
+      "hasRecording": false,
+      "heldMs": 49
+     }
+    },
+    {
+     "tMs": 190,
+     "layer": "DEVICE",
+     "event": "start:get-user-media:done",
+     "data": {
+      "lifecycle": "starting",
+      "ms": 190,
+      "forcedDeviceId": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tracks": [
+       {
+        "label": "MacBook Air Microphone (Built-in)",
+        "enabled": true,
+        "muted": false,
+        "readyState": "live"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

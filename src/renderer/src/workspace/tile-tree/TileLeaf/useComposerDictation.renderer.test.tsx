@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -6,6 +8,7 @@ import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedC
 import { useComposerDictation } from './useComposerDictation'
 import { useAppStore } from '@renderer/app-state/store'
 import type { ComposerDictationController } from './useComposerDictation'
+import { beginDictationHold, endDictationHold } from './dictationHotkeyRegistry'
 
 // Regression net for the cold-start audio-loss bug.
 //
@@ -391,5 +394,120 @@ describe('composer dictation chunk delivery', () => {
     })
 
     expect(captured).toEqual([[0x01], [0x02], [0x03], [0x04]])
+  })
+})
+
+// #243: every dictation ends with exactly one OUTCOME row carrying a code, and
+// the user reads the code's sentence. Timings come from the owner's recorded
+// journals (testing/fixtures/dictation/lifecycle-sessions-2026-09.json).
+describe('dictation outcome codes (#243)', () => {
+  type Row = { tMs: number; layer: string; event: string; data?: Record<string, unknown> }
+  const recorded = JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../../../../testing/fixtures/dictation/lifecycle-sessions-2026-09.json'), 'utf8')) as {
+    sessions: Record<string, { rows: Row[] }>
+  }
+  const at = (session: string, event: string) => recorded.sessions[session]!.rows.find(row => row.event === event)!
+  let journal: Array<{ layer: string; event: string; data?: Record<string, unknown> }> = []
+  const outcomes = () => journal.filter(row => row.layer === 'OUTCOME')
+  const mount = () => render(<SessionFeedProvider value={createFakeSessionFeed()}><Harness /></SessionFeedProvider>)
+  beforeEach(() => {
+    journal = []
+    ;(window as unknown as { api: { recordDictationDebugEvent: unknown } }).api.recordDictationDebugEvent =
+      (_id: string, row: { layer: string; event: string; data?: Record<string, unknown> }) => { journal.push(row) }
+  })
+  afterEach(() => { vi.useRealTimers() })
+  const slowMicrophone = (ms: number) => {
+    const real = vi.mocked(navigator.mediaDevices.getUserMedia).getMockImplementation()!
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(async constraints => {
+      await wait(ms)
+      return real(constraints)
+    })
+  }
+
+  // Recorded: released at 49 ms while getUserMedia (190 ms) was still opening.
+  // start() discarded it and wrote nothing; 13 recorded sessions ended so.
+  it('records a tap released while the microphone opens as cancelled.short-press', async () => {
+    const releasedAt = at('tap-while-starting', 'stop:called').tMs
+    const micMs = at('tap-while-starting', 'start:get-user-media:done').data!.ms as number
+    mount()
+    await act(async () => {})
+    slowMicrophone(micMs)
+    await act(async () => { beginDictationHold('keyboard') })
+    await act(async () => { await wait(releasedAt); endDictationHold() })
+    await act(async () => { await wait(micMs + 50) })
+    expect(outcomes()).toEqual([expect.objectContaining({ event: 'cancel', data: expect.objectContaining({ code: 'cancelled.short-press' }) })])
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
+  // Recorded: the key was held 3.35 s, but getUserMedia took 3,280 ms of it, the
+  // recorder ran 60 ms and captured nothing, and the user was told "No speech
+  // detected". The speech happened before the microphone was open.
+  it('says the microphone opened late instead of "No speech detected"', async () => {
+    const micMs = at('mic-opened-late', 'start:get-user-media:done').data!.ms as number
+    mount()
+    await act(async () => {})
+    slowMicrophone(micMs)
+    await act(async () => { beginDictationHold('keyboard') })
+    // Released while the microphone was still opening, as recorded.
+    await act(async () => { await wait(at('mic-opened-late', 'stop:called').tMs); endDictationHold() })
+    await act(async () => { await wait(micMs) })
+    expect(outcomes()).toEqual([expect.objectContaining({ event: 'error', data: expect.objectContaining({ code: 'mic.opened-late' }) })])
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining(`the microphone took ${(micMs / 1000).toFixed(1)} s to open`))
+    expect(onMessage).not.toHaveBeenCalledWith('No speech detected')
+  }, 10_000)
+
+  // Recorded: the selected EarPods were unplugged (OverconstrainedError).
+  it('records an unavailable microphone as mic.unavailable', async () => {
+    const name = at('mic-unavailable', 'start:get-user-media:error').data!.name as string
+    mount()
+    await act(async () => {})
+    useAppStore.getState().setSettings({ dictationAudioInput: { deviceId: 'gone', label: 'EarPods Microphone (05ac:110b)' } })
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(new DOMException('', name))
+    await act(async () => { controller?.toggle() })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'mic.unavailable' }) })])
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('EarPods Microphone'))
+  })
+
+  // First-audio deadline: the recorded maximum is 626 ms; a recorder that
+  // produces nothing for 2 s is a capture failure, not silence.
+  it('ends a recording whose microphone produces no audio within the first-audio deadline', async () => {
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    expect(FakeMediaRecorder.instances.at(-1)?.state).toBe('recording')
+    await act(async () => { await wait(2_100) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'recorder.no-audio' }) })])
+    expect(onMessage).toHaveBeenCalledWith(expect.stringContaining('produced no audio'))
+    expect(FakeMediaRecorder.instances.at(-1)?.state).toBe('inactive')
+  })
+
+  // Connect deadline: the recorded maximum is 55 ms; a stream-start that never
+  // answers (main's keychain read hangs) must end the recording, not leave a
+  // pill that never resolves.
+  it('ends a recording whose stream never starts within the connect deadline', async () => {
+    ;(window as unknown as { api: { startDictationStream: unknown } }).api.startDictationStream = () => new Promise(() => {})
+    // Fake timers that still follow real time, so the recorder and chunk
+    // plumbing run as usual and only the 10 s deadline is fast-forwarded.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await act(async () => { vi.advanceTimersByTime(10_000); await wait(10) })
+    expect(outcomes()).toEqual([expect.objectContaining({ data: expect.objectContaining({ code: 'connect.timeout' }) })])
+    expect(onMessage).toHaveBeenCalledWith('Dictation could not start in time. Try again.')
+  })
+
+  // Main's answer: the sentence comes from its code, never its text.
+  it('shows the code’s sentence for a provider failure, not main’s text', async () => {
+    ;(window as unknown as { api: { stopDictationStream: unknown } }).api.stopDictationStream =
+      async () => ({ kind: 'error', reason: 'provider.bad-audio', message: 'Deepgram transcription failed' })
+    mount()
+    await act(async () => {})
+    await act(async () => { controller?.toggle() })
+    await act(async () => { FakeMediaRecorder.instances.at(-1)!.emit(bytes(8, 1)); await wait(250) })
+    await act(async () => { controller?.toggle(); await wait(20) })
+    expect(onMessage).toHaveBeenCalledWith('Deepgram could not process this recording. Try again.')
+    expect(onMessage).not.toHaveBeenCalledWith('Deepgram transcription failed')
   })
 })
